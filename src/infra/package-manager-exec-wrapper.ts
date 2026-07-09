@@ -31,12 +31,6 @@ const NPM_EXEC_SUBCOMMANDS = new Set(["exec", "x"]);
 // invocations and "exec" is a shell-string carrier, so neither may unwrap.
 const BUN_EXEC_SUBCOMMANDS = new Set(["x"]);
 
-// "--cwd" unwraps like the npm/pnpm "-C" cwd options do: inner binding stays
-// on the delegated executable, matching the sibling wrapper cases' contract.
-const BUN_OPTIONS_WITH_VALUE = new Set(["--config", "--cwd", "--env-file", "-c"]);
-
-const BUN_FLAG_OPTIONS = new Set(["--bun", "--silent", "-b"]);
-
 export const PNPM_OPTIONS_WITH_VALUE = new Set([
   "--config",
   "--dir",
@@ -355,6 +349,10 @@ function unwrapNpmExecInvocation(argv: string[]): string[] | null {
   return unwrapDirectPackageExecInvocation(["npx", ...tail]);
 }
 
+// Mirrors Bun's root dispatch: the command selector skips dash-prefixed
+// tokens without consuming space-separated option values, so the first
+// non-dash token decides whether "x" (bunx) runs. A space-valued global like
+// "--cwd ./pkg" therefore makes "./pkg" the selected command, not "x".
 function resolveBunExecInvocation(argv: string[]): PackageManagerExecInvocation {
   let idx = 1;
   while (idx < argv.length) {
@@ -363,43 +361,28 @@ function resolveBunExecInvocation(argv: string[]): PackageManagerExecInvocation 
       idx += 1;
       continue;
     }
-    if (!token.startsWith("-")) {
-      if (!BUN_EXEC_SUBCOMMANDS.has(token)) {
-        return { kind: "not-exec" };
-      }
-      const tail = argv.slice(idx + 1);
-      if (tail[0] === "--") {
-        return tail.length > 1
-          ? { kind: "unwrapped", argv: tail.slice(1) }
-          : { kind: "unsafe-exec" };
-      }
-      // Tail parsing delegates to the shared bunx path so "bun x" and "bunx"
-      // accept and reject identical forms (unknown tail options fail closed).
-      const unwrapped = unwrapDirectPackageExecInvocation(["bunx", ...tail]);
-      return unwrapped ? { kind: "unwrapped", argv: unwrapped } : { kind: "unsafe-exec" };
+    if (token === "--") {
+      // Whether Bun's selector still picks a subcommand after "--" is not a
+      // contract we can rely on; fail closed if an exec token follows.
+      return containsSubcommandToken(argv.slice(idx + 1), BUN_EXEC_SUBCOMMANDS)
+        ? { kind: "unsafe-exec" }
+        : { kind: "not-exec" };
     }
-    const flag = normalizeOptionFlag(token);
-    if (BUN_OPTIONS_WITH_VALUE.has(flag)) {
-      if (token.includes("=")) {
-        idx += 1;
-        continue;
-      }
-      // Bun's root dispatch does not consume space-separated option values when
-      // locating the subcommand, so a value token of "x" may actually dispatch
-      // bunx. Fail closed instead of guessing either parse.
-      if (BUN_EXEC_SUBCOMMANDS.has(argv[idx + 1]?.trim() ?? "")) {
-        return { kind: "unsafe-exec" };
-      }
-      idx += 2;
-      continue;
-    }
-    if (BUN_FLAG_OPTIONS.has(flag)) {
+    if (token.startsWith("-")) {
       idx += 1;
       continue;
     }
-    return containsSubcommandToken(argv.slice(idx + 1), BUN_EXEC_SUBCOMMANDS)
-      ? { kind: "unsafe-exec" }
-      : { kind: "not-exec" };
+    if (!BUN_EXEC_SUBCOMMANDS.has(token)) {
+      return { kind: "not-exec" };
+    }
+    const tail = argv.slice(idx + 1);
+    if (tail[0] === "--") {
+      return tail.length > 1 ? { kind: "unwrapped", argv: tail.slice(1) } : { kind: "unsafe-exec" };
+    }
+    // Tail parsing delegates to the shared bunx path so "bun x" and "bunx"
+    // accept and reject identical forms (unknown tail options fail closed).
+    const unwrapped = unwrapDirectPackageExecInvocation(["bunx", ...tail]);
+    return unwrapped ? { kind: "unwrapped", argv: unwrapped } : { kind: "unsafe-exec" };
   }
   return { kind: "not-exec" };
 }

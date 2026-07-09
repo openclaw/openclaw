@@ -369,13 +369,36 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
   });
 
-  it("keeps bun option-value hidden-x carriers one-shot", async () => {
+  it("keeps bun x carriers behind space-valued globals one-shot", async () => {
     const dir = makeTempDir();
     for (const executable of ["bun", "sh", "echo"]) {
       makeExecutable(dir, executable);
     }
     const env = makePathEnv(dir);
     const command = "bun -c x sh -c 'echo warmup-ok'";
+    const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+    const decision = resolveAllowAlwaysPersistenceDecision({
+      segments: plannedSegments(plan),
+      commandText: command,
+      cwd: dir,
+      env,
+      platform: process.platform,
+      authorizationPlan: plan,
+    });
+
+    expect(decision).toEqual({
+      kind: "one-shot",
+      reasons: expect.arrayContaining(["no-reusable-pattern"]),
+    });
+  });
+
+  it("keeps bun space-valued cwd selector forms out of inner persistence", async () => {
+    const dir = makeTempDir();
+    makeExecutable(dir, "bun");
+    makeExecutable(dir, "tsx");
+    const env = makePathEnv(dir);
+    const command = "bun --cwd ./pkg x tsx ./run.ts";
     const plan = await planShellAuthorization({ command, cwd: dir, env });
 
     const decision = resolveAllowAlwaysPersistenceDecision({

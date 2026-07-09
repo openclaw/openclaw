@@ -14,17 +14,33 @@ describe("resolveKnownPackageManagerExecInvocation", () => {
       );
     });
 
-    it("unwraps bun x behind known global options and double-dash tails", () => {
+    it("unwraps bun x when the dispatch selector picks x", () => {
       expect(
         resolveKnownPackageManagerExecInvocation(["bun", "--silent", "x", "tsx", "./run.ts"]),
       ).toEqual({ kind: "unwrapped", argv: ["tsx", "./run.ts"] });
       expect(
-        resolveKnownPackageManagerExecInvocation(["bun", "--cwd", "./pkg", "x", "tsx", "./run.ts"]),
+        resolveKnownPackageManagerExecInvocation(["bun", "--cwd=./pkg", "x", "tsx", "./run.ts"]),
       ).toEqual({ kind: "unwrapped", argv: ["tsx", "./run.ts"] });
       expect(
         resolveKnownPackageManagerExecInvocation(["bun", "x", "--", "tsx", "./run.ts"]),
       ).toEqual({ kind: "unwrapped", argv: ["tsx", "./run.ts"] });
     });
+
+    it.each(["-c", "--config", "--cwd", "--env-file", "--unknown-global-option"])(
+      "selects the token after the space-valued global %s like bun dispatch does",
+      (flag) => {
+        // A literal "x" in value position is what bun's selector dispatches
+        // to bunx, so the tail unwraps to the inner command.
+        expect(
+          resolveKnownPackageManagerExecInvocation(["bun", flag, "x", "sh", "-c", "id > marker"]),
+        ).toEqual({ kind: "unwrapped", argv: ["sh", "-c", "id > marker"] });
+        // A non-"x" token after the global is the selected command (bun runs
+        // it as an ordinary invocation), so no package-exec unwrapping.
+        expect(
+          resolveKnownPackageManagerExecInvocation(["bun", flag, "./pkg", "x", "tsx", "./run.ts"]),
+        ).toEqual({ kind: "not-exec" });
+      },
+    );
 
     it("keeps non-exec bun invocations out of unwrapping", () => {
       expect(resolveKnownPackageManagerExecInvocation(["bun", "run", "build"])).toEqual({
@@ -46,26 +62,11 @@ describe("resolveKnownPackageManagerExecInvocation", () => {
         kind: "unsafe-exec",
       });
       expect(
-        resolveKnownPackageManagerExecInvocation(["bun", "--unknown-global-option", "x", "sh"]),
-      ).toEqual({ kind: "unsafe-exec" });
-      expect(
         resolveKnownPackageManagerExecInvocation(["bun", "x", "--call", "sh -c 'id'"]),
       ).toEqual({ kind: "unsafe-exec" });
-    });
-
-    it.each(["-c", "--config", "--cwd", "--env-file"])(
-      "fails closed when the %s option value hides x",
-      (flag) => {
-        expect(
-          resolveKnownPackageManagerExecInvocation(["bun", flag, "x", "sh", "-c", "id > marker"]),
-        ).toEqual({ kind: "unsafe-exec" });
-      },
-    );
-
-    it("still unwraps when valued options use inline values", () => {
-      expect(
-        resolveKnownPackageManagerExecInvocation(["bun", "--cwd=./pkg", "x", "tsx", "./run.ts"]),
-      ).toEqual({ kind: "unwrapped", argv: ["tsx", "./run.ts"] });
+      expect(resolveKnownPackageManagerExecInvocation(["bun", "--", "x", "tsx"])).toEqual({
+        kind: "unsafe-exec",
+      });
     });
   });
 });

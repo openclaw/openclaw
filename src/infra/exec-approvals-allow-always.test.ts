@@ -1055,7 +1055,7 @@ $0 \\"$1\\"" touch {marker}`,
     ).toBe(true);
   });
 
-  it("rejects stale bun allow-always entries when option values hide x", async () => {
+  it("rejects stale bun allow-always entries when a space-valued global puts x in dispatch position", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -1087,7 +1087,7 @@ $0 \\"$1\\"" touch {marker}`,
     ).toBe(true);
   });
 
-  it("rejects stale bun allow-always entries when unknown options hide x", async () => {
+  it("rejects stale bun allow-always entries when unknown globals precede x", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -1508,6 +1508,18 @@ $0 \\"$1\\"" touch {marker}`,
       platform: process.platform,
     });
     expect(bunInner.allowlistSatisfied).toBe(true);
+
+    // "--cwd ./pkg" makes "./pkg" bun's selected command, not "x", so the
+    // inner-executable entry must not authorize this form.
+    const bunCwdSelector = await evaluateShellAllowlistWithAuthorization({
+      command: "bun --cwd ./pkg x tsx ./run.ts",
+      allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(bunCwdSelector.allowlistSatisfied).toBe(false);
   });
 
   it("prevents allow-always bypass for sandbox-exec wrapper chains", async () => {
