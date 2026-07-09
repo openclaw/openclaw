@@ -355,4 +355,145 @@ describe("bundle LSP runtime", () => {
     await runtime.dispose();
     expect(killProcessTreeMock).not.toHaveBeenCalled();
   });
+
+  describe("oversized Content-Length handling", () => {
+    it("signals oversizeSeen for oversized Content-Length with partial body", async () => {
+      const { parseLspMessages } = await import("./agent-bundle-lsp-runtime.js");
+      const oversizeCl = 10 * 1024 * 1024 + 1;
+      const buffer = Buffer.from(`Content-Length: ${oversizeCl}\r\n\r\n`);
+
+      const { oversizeSeen, remaining } = parseLspMessages(buffer);
+
+      expect(oversizeSeen).toBe(true);
+      expect(remaining.length).toBe(0);
+    });
+
+    it("drains full oversized frame and stops parsing at the fatal boundary", async () => {
+      const { parseLspMessages } = await import("./agent-bundle-lsp-runtime.js");
+      const oversizeCl = 10 * 1024 * 1024 + 1;
+      const oversizedFrame = `Content-Length: ${oversizeCl}\r\n\r\n${"x".repeat(oversizeCl)}`;
+      const validMsg = { jsonrpc: "2.0", id: 1, result: {} };
+      const validFrame = encodeLspMessage(validMsg);
+      const buffer = Buffer.from(oversizedFrame + validFrame);
+
+      const { messages, remaining, oversizeSeen } = parseLspMessages(buffer);
+
+      expect(oversizeSeen).toBe(true);
+      // No messages returned — oversized frame stops parsing immediately
+      expect(messages).toHaveLength(0);
+      // The oversized body is drained; the valid frame stays in remaining
+      // but is never parsed because we returned early with oversizeSeen.
+      expect(remaining.length).toBeGreaterThan(0);
+    });
+
+    it("signals oversizeSeen for non-safe integer Content-Length", async () => {
+      const { parseLspMessages } = await import("./agent-bundle-lsp-runtime.js");
+      const unsafeLength = "9".repeat(400);
+      const buffer = Buffer.from(`Content-Length: ${unsafeLength}\r\n\r\n`);
+
+      const { oversizeSeen, remaining } = parseLspMessages(buffer);
+
+      expect(oversizeSeen).toBe(true);
+      expect(remaining.length).toBe(0);
+    });
+
+    it("returns valid messages before an unsafe Content-Length header", async () => {
+      const { parseLspMessages } = await import("./agent-bundle-lsp-runtime.js");
+      const validMsgRaw = { jsonrpc: "2.0", id: 1, result: { value: 42 } };
+      const validFrame = encodeLspMessage(validMsgRaw);
+      const unsafeLength = "9".repeat(400);
+      const buffer = Buffer.from(validFrame + `Content-Length: ${unsafeLength}\r\n\r\n`);
+
+      const { messages, oversizeSeen } = parseLspMessages(buffer);
+
+      // Valid message before the bad header should still be returned
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toEqual(validMsgRaw);
+      expect(oversizeSeen).toBe(true);
+    });
+
+    it("fails LSP session on oversized Content-Length through runtime handler path", async () => {
+      configureSingleLspServer();
+      const child = new MockChildProcess();
+      spawnMock.mockReturnValue(child);
+      const { createBundleLspToolRuntime } = await import("./agent-bundle-lsp-runtime.js");
+
+      const runtime = await createBundleLspToolRuntime({ workspaceDir: "/tmp/workspace" });
+      const hoverTool = runtime.tools.find((t) => t.name === "lsp_hover_typescript");
+      expect(hoverTool).toBeDefined();
+
+      // Send oversized Content-Length through stdout
+      const oversizeCl = 10 * 1024 * 1024 + 1;
+      child.stdout.write(`Content-Length: ${oversizeCl}\r\n\r\n`);
+
+      // Subsequent requests should fail because the session was failed
+      await expect(
+        hoverTool!.execute("1", { uri: "file:///test.ts", line: 0, character: 0 }),
+      ).rejects.toThrow(/oversized/i);
+
+      await runtime.dispose();
+    });
+
+    it("dispatches valid response before failing session on oversized Content-Length", async () => {
+      configureSingleLspServer();
+      const child = new MockChildProcess();
+      spawnMock.mockReturnValue(child);
+      const { createBundleLspToolRuntime } = await import("./agent-bundle-lsp-runtime.js");
+
+      const runtime = await createBundleLspToolRuntime({ workspaceDir: "/tmp/workspace" });
+      const hoverTool = runtime.tools.find((t) => t.name === "lsp_hover_typescript");
+      expect(hoverTool).toBeDefined();
+
+      // Start a hover request
+      const hoverParams = { uri: "file:///test.ts", line: 0, character: 0 };
+      const hoverPromise = hoverTool!.execute("1", hoverParams);
+
+      // Write a mixed chunk: valid hover response followed by oversized header
+      const safeResponse = encodeLspMessage({
+        jsonrpc: "2.0",
+        id: 2,
+        result: { contents: "hover data" },
+      });
+      const oversizeCl = 10 * 1024 * 1024 + 1;
+      child.stdout.write(safeResponse + `Content-Length: ${oversizeCl}\r\n\r\n`);
+
+      // The hover response should be resolved (dispatched before session failure)
+      await expect(hoverPromise).resolves.toMatchObject({
+        details: { lspServer: "typescript", lspMethod: "hover" },
+      });
+
+      // Subsequent requests should fail because the session was failed
+      await expect(
+        hoverTool!.execute("2", { uri: "file:///test.ts", line: 0, character: 0 }),
+      ).rejects.toThrow(/oversized/i);
+
+      await runtime.dispose();
+    });
+
+    it("fails the session immediately on a partial oversized frame before the full body arrives", async () => {
+      configureSingleLspServer();
+      const child = new MockChildProcess();
+      spawnMock.mockReturnValue(child);
+      const { createBundleLspToolRuntime } = await import("./agent-bundle-lsp-runtime.js");
+
+      const runtime = await createBundleLspToolRuntime({ workspaceDir: "/tmp/workspace" });
+      const hoverTool = runtime.tools.find((t) => t.name === "lsp_hover_typescript");
+      expect(hoverTool).toBeDefined();
+
+      // Send an oversized header with only a partial body
+      const oversizeCl = 10 * 1024 * 1024 + 1;
+      child.stdout.write(`Content-Length: ${oversizeCl}\r\n\r\n` + "x".repeat(256));
+
+      // Give the handler time to process and fail the session
+      await new Promise((resolve) => queueMicrotask(resolve));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Subsequent requests must reject immediately
+      await expect(
+        hoverTool!.execute("1", { uri: "file:///test.ts", line: 0, character: 0 }),
+      ).rejects.toThrow(/oversized/i);
+
+      await runtime.dispose();
+    });
+  });
 });

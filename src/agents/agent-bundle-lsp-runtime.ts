@@ -179,7 +179,7 @@ function encodeLspMessage(body: unknown): string {
   return `Content-Length: ${Buffer.byteLength(json, "utf-8")}\r\n\r\n${json}`;
 }
 
-function parseLspMessages(buffer: Buffer): { messages: unknown[]; remaining: Buffer } {
+export function parseLspMessages(buffer: Buffer): { messages: unknown[]; remaining: Buffer; oversizeSeen: boolean } {
   const messages: unknown[] = [];
   let remaining = buffer;
   const headerSeparator = Buffer.from("\r\n\r\n", "ascii");
@@ -203,6 +203,22 @@ function parseLspMessages(buffer: Buffer): { messages: unknown[]; remaining: Buf
       continue;
     }
     const contentLength = Number.parseInt(contentLengthText, 10);
+
+    // Reject oversized/invalid Content-Length: drain the frame body
+    // (whatever is available), signal oversizeSeen, and stop parsing
+    // so post-violation frames are never dispatched.
+    const isUnsafe = !Number.isSafeInteger(contentLength) || contentLength < 0;
+    const MAX_LSP_MESSAGE_BYTES = 10 * 1024 * 1024; // 10 MB
+    if (isUnsafe || contentLength > MAX_LSP_MESSAGE_BYTES) {
+      const bodyStart = headerEnd + headerSeparator.length;
+      const bodyEnd = bodyStart + contentLength;
+      if (remaining.length >= bodyEnd) {
+        remaining = remaining.subarray(bodyEnd);
+      } else {
+        remaining = Buffer.alloc(0);
+      }
+      return { messages, remaining, oversizeSeen: true };
+    }
     const bodyStart = headerEnd + headerSeparator.length;
     const bodyEnd = bodyStart + contentLength;
 
@@ -219,7 +235,7 @@ function parseLspMessages(buffer: Buffer): { messages: unknown[]; remaining: Buf
     remaining = remaining.subarray(bodyEnd);
   }
 
-  return { messages, remaining };
+  return { messages, remaining, oversizeSeen: false };
 }
 
 function lspAbortError(signal?: AbortSignal): Error {
@@ -276,9 +292,13 @@ function handleIncomingData(session: LspSession, chunk: Buffer | string) {
     session.buffer,
     typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk,
   ]);
-  const { messages, remaining } = parseLspMessages(session.buffer);
+  const { messages, remaining, oversizeSeen } = parseLspMessages(session.buffer);
   session.buffer = remaining.length === 0 ? Buffer.alloc(0) : Buffer.from(remaining);
 
+  // Dispatch completed responses before potentially failing the session.
+  // If a valid response arrived before the oversized/invalid header in the
+  // same chunk, it should be delivered — not discarded by a premature
+  // session failure.
   for (const msg of messages) {
     if (typeof msg !== "object" || msg === null) {
       continue;
@@ -299,6 +319,17 @@ function handleIncomingData(session: LspSession, chunk: Buffer | string) {
     if ("method" in record && !("id" in record)) {
       logDebug(`bundle-lsp:${session.serverName}: notification ${String(record.method)}`);
     }
+  }
+
+  // Fail the session immediately on an oversized or invalid Content-Length
+  // header. The parser has drained whatever body bytes were available.
+  // Future chunks are ignored because the session is marked as failed.
+  if (oversizeSeen) {
+    session.buffer = Buffer.alloc(0);
+    failLspSession(
+      session,
+      new Error(`LSP server "${session.serverName}" sent an oversized response or invalid Content-Length value`),
+    );
   }
 }
 
