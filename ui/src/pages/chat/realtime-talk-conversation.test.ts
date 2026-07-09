@@ -28,24 +28,24 @@ describe("realtime Talk conversation", () => {
     ]);
   });
 
-  it("inserts spacing after punctuation-ended transcript fragments", () => {
+  it("inserts spacing after punctuation-ended user transcript fragments", () => {
     let state = createRealtimeTalkConversationState();
 
     state = updateRealtimeTalkConversation(state, {
-      role: "assistant",
+      role: "user",
       text: "Ready.",
       final: false,
       nowMs: 1,
     });
     state = updateRealtimeTalkConversation(state, {
-      role: "assistant",
+      role: "user",
       text: "What next?",
       final: false,
       nowMs: 2,
     });
 
     expect(state.entries).toMatchObject([
-      { role: "assistant", text: "Ready. What next?", isStreaming: true },
+      { role: "user", text: "Ready. What next?", isStreaming: true },
     ]);
   });
 
@@ -67,10 +67,10 @@ describe("realtime Talk conversation", () => {
     ]);
   });
 
-  it("keeps per-character assistant deltas readable", () => {
+  it("keeps per-character assistant deltas verbatim across punctuation boundaries", () => {
     let state = createRealtimeTalkConversationState();
 
-    for (const [index, char] of "Hello there.".split("").entries()) {
+    for (const [index, char] of "Version 1.2 is on docs.openclaw.ai today.".split("").entries()) {
       state = updateRealtimeTalkConversation(state, {
         role: "assistant",
         text: char,
@@ -80,7 +80,7 @@ describe("realtime Talk conversation", () => {
     }
 
     expect(state.entries).toMatchObject([
-      { role: "assistant", text: "Hello there.", isStreaming: true },
+      { role: "assistant", text: "Version 1.2 is on docs.openclaw.ai today.", isStreaming: true },
     ]);
   });
 

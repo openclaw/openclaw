@@ -204,10 +204,11 @@ function shouldStartNewRealtimeUserEntry(
   return true;
 }
 
-// Assistant transcripts are verbatim fragment streams (providers concatenate
-// deltas into the transcript), unlike user ASR updates that re-send or rewrite
-// utterances. The user-side word-boundary spacing heuristic must not run here:
-// model deltas split inside words, so it would mangle "ChatGPT" into "Chat G PT".
+// Assistant transcripts are verbatim fragment streams: providers concatenate
+// deltas into the exact transcript (OpenAI audio-transcript deltas, Google Live
+// outputTranscription chunks). Never synthesize characters between fragments —
+// the user-side ASR spacing heuristic would mangle "ChatGPT" into "Chat G PT"
+// and "Version 1.2" into "Version 1. 2".
 function mergeAssistantTranscriptText(
   existing: string,
   incoming: string,
@@ -217,7 +218,7 @@ function mergeAssistantTranscriptText(
     return incoming.trimStart();
   }
   if (!isFinal) {
-    return `${existing}${assistantFragmentSeparator(existing, incoming)}${incoming}`;
+    return `${existing}${incoming}`;
   }
   // Final shape differs by provider: OpenAI-style finals carry the full
   // transcript (replace), Google Live finals carry only the last fragment
@@ -228,13 +229,7 @@ function mergeAssistantTranscriptText(
   if (looksLikeTranscriptReplacement(existing, incoming)) {
     return incoming;
   }
-  return `${existing}${assistantFragmentSeparator(existing, incoming)}${incoming}`;
-}
-
-// Space only sentence-boundary joins ("Ready." + "What next?"): TTS phrases can
-// arrive as separate fragments without whitespace. Mid-word joins stay verbatim.
-function assistantFragmentSeparator(existing: string, incoming: string): string {
-  return /[.!?…]$/.test(existing) && /^[\p{L}\p{N}]/u.test(incoming) ? " " : "";
+  return `${existing}${incoming}`;
 }
 
 function mergeRealtimeTranscriptText(existing: string, incoming: string, isFinal: boolean): string {
