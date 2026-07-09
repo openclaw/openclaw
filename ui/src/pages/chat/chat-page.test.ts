@@ -2,12 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./chat-pane.ts", () => {
-  if (!customElements.get("openclaw-chat-pane")) {
-    customElements.define("openclaw-chat-pane", class extends HTMLElement {});
-  }
-  return {};
-});
+vi.mock("./chat-pane.ts", () => ({}));
 
 import { loadSettings } from "../../app/settings.ts";
 import type { ResizableDivider } from "../../components/resizable-divider.ts";
