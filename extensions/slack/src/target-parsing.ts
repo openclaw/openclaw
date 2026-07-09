@@ -58,13 +58,24 @@ export function resolveSlackChannelId(raw: string): string {
 }
 
 export function normalizeSlackMessagingTarget(raw: string): string | undefined {
-  return parseSlackTarget(raw, { defaultKind: "channel" })?.normalized;
+  const target = parseSlackTarget(raw, { defaultKind: "channel" });
+  if (!target) {
+    return undefined;
+  }
+  // Use target.id (case-preserved) instead of target.normalized (lowered).
+  // Slack channel IDs are case-sensitive; the lowered form would break API calls
+  // when the normalized form is used as a channel identifier downstream.
+  return `${target.kind}:${target.id}`;
 }
 
 export function slackTargetsMatch(left: string, right: string): boolean {
   const leftTarget = normalizeSlackMessagingTarget(left);
   const rightTarget = normalizeSlackMessagingTarget(right);
-  return Boolean(leftTarget && rightTarget && leftTarget === rightTarget);
+  // normalizeSlackMessagingTarget preserves the original case of target IDs;
+  // compare case-insensitively for matching purposes.
+  return Boolean(
+    leftTarget && rightTarget && leftTarget.toLowerCase() === rightTarget.toLowerCase(),
+  );
 }
 
 export function looksLikeSlackTargetId(raw: string): boolean {

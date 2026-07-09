@@ -66,7 +66,7 @@ describe("resolveSlackChannelId", () => {
 
 describe("normalizeSlackMessagingTarget", () => {
   it("defaults raw ids to channels", () => {
-    expect(normalizeSlackMessagingTarget("C123")).toBe("channel:c123");
+    expect(normalizeSlackMessagingTarget("C123")).toBe("channel:C123");
   });
 });
 
