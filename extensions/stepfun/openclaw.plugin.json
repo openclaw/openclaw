@@ -37,6 +37,21 @@
               "output": 1.15,
               "cacheRead": 0.04,
               "cacheWrite": 0
+            },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["low", "medium", "high"],
+              "reasoningEffortMap": {
+                "off": "low",
+                "none": "low",
+                "minimal": "low",
+                "low": "low",
+                "medium": "medium",
+                "high": "high",
+                "xhigh": "high",
+                "adaptive": "high",
+                "max": "high"
+              }
             }
           },
           {
@@ -51,6 +66,21 @@
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
+            },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["low", "medium", "high"],
+              "reasoningEffortMap": {
+                "off": "low",
+                "none": "low",
+                "minimal": "low",
+                "low": "low",
+                "medium": "medium",
+                "high": "high",
+                "xhigh": "high",
+                "adaptive": "high",
+                "max": "high"
+              }
             }
           }
         ]

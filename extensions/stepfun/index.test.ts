@@ -1,10 +1,12 @@
 // Stepfun tests cover index plugin behavior.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { describe, expect, it } from "vitest";
 import stepfunPlugin from "./index.js";
 import {
@@ -39,6 +41,9 @@ describe("stepfun provider registration", () => {
     const plan = buildStepFunPlanProvider();
     const standardModel = standard.models?.find((model) => model.id === "step-3.7-flash");
     const planModel = plan.models?.find((model) => model.id === "step-3.7-flash");
+    if (!standardModel) {
+      throw new Error("StepFun Standard catalog did not provide Step 3.7 Flash");
+    }
 
     expect(STEPFUN_DEFAULT_MODEL_REF).toBe("stepfun/step-3.5-flash");
     expect(STEPFUN_PLAN_DEFAULT_MODEL_REF).toBe("stepfun-plan/step-3.5-flash");
@@ -48,6 +53,11 @@ describe("stepfun provider registration", () => {
       contextWindow: 262144,
       maxTokens: 262144,
       cost: { input: 0.2, output: 1.15, cacheRead: 0.04, cacheWrite: 0 },
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high"],
+        reasoningEffortMap: expect.objectContaining({ off: "low", medium: "medium", max: "high" }),
+      },
     });
     expect(planModel).toMatchObject({
       reasoning: true,
@@ -55,7 +65,28 @@ describe("stepfun provider registration", () => {
       contextWindow: 262144,
       maxTokens: 262144,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high"],
+        reasoningEffortMap: expect.objectContaining({ off: "low", medium: "medium", max: "high" }),
+      },
     });
+
+    const transportModel = {
+      ...standardModel,
+      provider: "stepfun",
+      api: "openai-completions",
+      baseUrl: standard.baseUrl,
+    } as Model<"openai-completions">;
+    const context = { messages: [{ role: "user", content: "hi", timestamp: 1 }] } as Context;
+    expect(
+      buildOpenAICompletionsParams(transportModel, context, { reasoning: "off" } as never)
+        .reasoning_effort,
+    ).toBe("low");
+    expect(
+      buildOpenAICompletionsParams(transportModel, context, { reasoning: "high" } as never)
+        .reasoning_effort,
+    ).toBe("high");
   });
 
   it("keeps manifest auth choices aligned with runtime provider methods", async () => {
