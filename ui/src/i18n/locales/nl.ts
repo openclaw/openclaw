@@ -270,6 +270,7 @@ export const nl: TranslationMap = {
     model: "Model",
     provider: "Provider",
     runtime: "Runtime",
+    runDuration: "Uitvoeringsduur",
     surface: "Oppervlak",
     subject: "Onderwerp",
     room: "Ruimte",

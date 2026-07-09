@@ -268,6 +268,7 @@ export const es: TranslationMap = {
     model: "Modelo",
     provider: "Proveedor",
     runtime: "Tiempo de ejecución",
+    runDuration: "Duración de ejecución",
     surface: "Superficie",
     subject: "Asunto",
     room: "Sala",

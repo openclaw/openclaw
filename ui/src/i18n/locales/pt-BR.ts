@@ -267,6 +267,7 @@ export const pt_BR: TranslationMap = {
     model: "Modelo",
     provider: "Provedor",
     runtime: "Runtime",
+    runDuration: "Duração da execução",
     surface: "Superfície",
     subject: "Assunto",
     room: "Sala",

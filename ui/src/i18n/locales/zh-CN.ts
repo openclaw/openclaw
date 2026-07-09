@@ -265,6 +265,7 @@ export const zh_CN: TranslationMap = {
     model: "模型",
     provider: "提供商",
     runtime: "运行时",
+    runDuration: "运行时长",
     surface: "界面",
     subject: "主题",
     room: "房间",

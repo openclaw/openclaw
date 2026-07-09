@@ -265,6 +265,7 @@ export const zh_TW: TranslationMap = {
     model: "模型",
     provider: "提供者",
     runtime: "執行階段",
+    runDuration: "執行時間",
     surface: "介面",
     subject: "主旨",
     room: "聊天室",

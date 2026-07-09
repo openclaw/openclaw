@@ -266,6 +266,7 @@ export const ar: TranslationMap = {
     model: "النموذج",
     provider: "المزود",
     runtime: "وقت التشغيل",
+    runDuration: "مدة التشغيل",
     surface: "السطح",
     subject: "الموضوع",
     room: "الغرفة",

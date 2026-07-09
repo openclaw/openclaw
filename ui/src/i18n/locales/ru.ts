@@ -270,6 +270,7 @@ export const ru: TranslationMap = {
     model: "Модель",
     provider: "Поставщик",
     runtime: "Среда выполнения",
+    runDuration: "Продолжительность выполнения",
     surface: "Поверхность",
     subject: "Тема",
     room: "Комната",

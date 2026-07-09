@@ -267,6 +267,7 @@ export const vi: TranslationMap = {
     model: "Mô hình",
     provider: "Nhà cung cấp",
     runtime: "Runtime",
+    runDuration: "Thời lượng chạy",
     surface: "Bề mặt",
     subject: "Chủ đề",
     room: "Phòng",

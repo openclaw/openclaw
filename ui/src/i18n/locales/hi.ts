@@ -267,6 +267,7 @@ export const hi: TranslationMap = {
     model: "मॉडल",
     provider: "प्रदाता",
     runtime: "रनटाइम",
+    runDuration: "चलने की अवधि",
     surface: "सतह",
     subject: "विषय",
     room: "रूम",

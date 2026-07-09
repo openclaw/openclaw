@@ -271,6 +271,7 @@ export const tr: TranslationMap = {
     model: "Model",
     provider: "Sağlayıcı",
     runtime: "Çalışma zamanı",
+    runDuration: "Çalışma süresi",
     surface: "Yüzey",
     subject: "Konu",
     room: "Oda",

@@ -267,6 +267,7 @@ export const id: TranslationMap = {
     model: "Model",
     provider: "Penyedia",
     runtime: "Runtime",
+    runDuration: "Durasi berjalan",
     surface: "Permukaan",
     subject: "Subjek",
     room: "Ruang",
