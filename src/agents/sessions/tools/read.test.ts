@@ -4,6 +4,7 @@ import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -150,18 +151,33 @@ describe("read tool", () => {
     expect(textContent(result)).toBe("alpha\n\n[2 more lines in file. Use offset=2 to continue.]");
   });
 
-  it("rejects non-positive offsets instead of reading from the first line", async () => {
+  it.each([0, -1, 1.5])("rejects invalid offset %s before accessing the file", async (offset) => {
+    const access = vi.fn(async () => {});
+    const detectImageMimeType = vi.fn(async () => null);
+    const readFile = vi.fn(async () => Buffer.from("alpha\nbeta\ngamma"));
     const tool = createReadToolDefinition("/workspace", {
       operations: {
-        access: async () => {},
-        detectImageMimeType: async () => null,
-        readFile: async () => Buffer.from("alpha\nbeta\ngamma"),
+        access,
+        detectImageMimeType,
+        readFile,
       },
     });
 
     await expect(
-      tool.execute("call-1", { path: "notes.txt", offset: 0 }, undefined, undefined, {} as never),
+      tool.execute("call-1", { path: "notes.txt", offset }, undefined, undefined, {} as never),
     ).rejects.toThrow("Offset must be an integer at least 1");
+    expect(access).not.toHaveBeenCalled();
+    expect(detectImageMimeType).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it("declares offsets as positive integers in the tool schema", () => {
+    const tool = createReadToolDefinition("/workspace");
+
+    expect(Value.Check(tool.parameters, { path: "notes.txt", offset: 1 })).toBe(true);
+    for (const offset of [0, -1, 1.5]) {
+      expect(Value.Check(tool.parameters, { path: "notes.txt", offset })).toBe(false);
+    }
   });
 
   it("uses the shared Windows decoder for local filesystem reads", async () => {
