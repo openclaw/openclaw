@@ -152,11 +152,16 @@ function createRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
 function resolveMcpLoopbackAuthProfileStore(
   cfg: OpenClawConfig,
   sessionKey: string,
-): ReturnType<typeof loadAuthProfileStoreForSecretsRuntime> | undefined {
+):
+  | { authProfileStore: ReturnType<typeof loadAuthProfileStoreForSecretsRuntime>; agentDir: string }
+  | undefined {
   try {
     const { sessionAgentId } = resolveSessionAgentIds({ config: cfg, sessionKey });
     const agentDir = resolveAgentDir(cfg, sessionAgentId);
-    return loadAuthProfileStoreForSecretsRuntime(agentDir);
+    const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir, {
+      excludeMainOverlay: true,
+    });
+    return { authProfileStore, agentDir };
   } catch {
     // Auth-profile loading is best-effort for loopback tool availability.
     // Missing or unreadable stores fall back to the previous behavior.
@@ -247,7 +252,12 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         const cfg = getRuntimeConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
         const yieldContext = resolveMcpLoopbackYieldContext(cliRequestCaptureHandle);
-        const authProfileStore = resolveMcpLoopbackAuthProfileStore(cfg, requestContext.sessionKey);
+        const authProfileResult = resolveMcpLoopbackAuthProfileStore(
+          cfg,
+          requestContext.sessionKey,
+        );
+        const authProfileStore = authProfileResult?.authProfileStore;
+        const agentDir = authProfileResult?.agentDir;
         const scopedTools = toolCache.resolve({
           cfg,
           sessionKey: requestContext.sessionKey,
@@ -265,6 +275,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           requireExplicitMessageTarget: requestContext.requireExplicitMessageTarget,
           senderIsOwner: requestContext.senderIsOwner,
           authProfileStore,
+          agentDir,
         });
 
         logMcpLoopbackTraffic("request", {

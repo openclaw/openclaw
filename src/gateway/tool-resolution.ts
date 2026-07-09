@@ -67,6 +67,7 @@ export function resolveGatewayScopedTools(params: {
   disablePluginTools?: boolean;
   gatewayRequestedTools?: string[];
   authProfileStore?: AuthProfileStore;
+  agentDir?: string;
 }) {
   const {
     agentId,
@@ -190,6 +191,7 @@ export function resolveGatewayScopedTools(params: {
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
     disablePluginTools: params.disablePluginTools,
+    agentDir: params.agentDir,
     wrapBeforeToolCallHook: false,
     config: params.cfg,
     workspaceDir,

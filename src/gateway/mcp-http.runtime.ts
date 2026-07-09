@@ -43,6 +43,7 @@ type McpLoopbackScopeParams = {
   requireExplicitMessageTarget?: boolean;
   senderIsOwner: boolean | undefined;
   authProfileStore?: AuthProfileStore;
+  agentDir?: string;
 };
 
 /** Resolves loopback-visible tools after applying gateway scope and native-tool exclusions. */
@@ -88,6 +89,7 @@ export class McpLoopbackToolCache {
           ? "non-owner"
           : "unknown-owner",
       authProfileIds.join(","),
+      params.agentDir ?? "",
     ].join("\u0000");
     const now = Date.now();
     for (const [key, entry] of this.#entries) {

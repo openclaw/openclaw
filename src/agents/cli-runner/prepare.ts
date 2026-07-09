@@ -38,7 +38,10 @@ import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
-import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
+import {
+  loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreForSecretsRuntime,
+} from "../auth-profiles/store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
   buildBootstrapInjectionStats,
@@ -359,6 +362,15 @@ export async function prepareCliRunContext(
         provider: params.provider,
         ...(options.profileId ? { profileId: options.profileId } : {}),
       }),
+    });
+  const loadLoopbackAuthStore = (options: { profileId?: string } = {}) =>
+    loadAuthProfileStoreForSecretsRuntime(agentDir, {
+      externalCli: externalCliDiscoveryForProviderAuth({
+        cfg: params.config,
+        provider: params.provider,
+        ...(options.profileId ? { profileId: options.profileId } : {}),
+      }),
+      excludeMainOverlay: true,
     });
   if (effectiveAuthProfileId) {
     authStore = loadScopedAuthStore({ profileId: effectiveAuthProfileId });
@@ -703,6 +715,8 @@ export async function prepareCliRunContext(
         : {}),
       ...(preparedCleanup ? { cleanup: preparedCleanup } : {}),
     };
+    const loopbackAuthStore =
+      bundleMcpEnabled && mcpLoopbackRuntime ? loadLoopbackAuthStore() : undefined;
     const promptTools =
       bundleMcpEnabled && mcpLoopbackRuntime
         ? prepareDeps.resolveMcpLoopbackScopedTools({
@@ -720,7 +734,8 @@ export async function prepareCliRunContext(
             sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
             requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
             senderIsOwner: undefined,
-            authProfileStore: authStore,
+            authProfileStore: loopbackAuthStore,
+            agentDir,
           }).tools
         : [];
     const promptToolNamesHash =

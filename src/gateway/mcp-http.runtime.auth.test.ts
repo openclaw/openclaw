@@ -4,10 +4,12 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const resolveGatewayScopedToolsMock = vi.hoisted(() =>
-  vi.fn((_params: { authProfileStore?: AuthProfileStore }) => ({
-    agentId: "main",
-    tools: [],
-  })),
+  vi.fn(
+    (_params: { authProfileStore?: AuthProfileStore; agentDir?: string; surface?: string }) => ({
+      agentId: "main",
+      tools: [],
+    }),
+  ),
 );
 
 vi.mock("./tool-resolution.js", () => ({
@@ -36,8 +38,9 @@ describe("resolveMcpLoopbackScopedTools auth profile plumbing", () => {
     resolveGatewayScopedToolsMock.mockClear();
   });
 
-  it("forwards authProfileStore to resolveGatewayScopedTools", () => {
+  it("forwards authProfileStore and agentDir to resolveGatewayScopedTools", () => {
     const authProfileStore = createAuthProfileStore();
+    const agentDir = "/tmp/agent-main";
     resolveMcpLoopbackScopedTools({
       cfg: { tools: { profile: "minimal" } } as OpenClawConfig,
       sessionKey: "agent:main",
@@ -51,6 +54,7 @@ describe("resolveMcpLoopbackScopedTools auth profile plumbing", () => {
       sourceReplyDeliveryMode: undefined,
       senderIsOwner: undefined,
       authProfileStore,
+      agentDir,
     });
 
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(1);
@@ -58,10 +62,11 @@ describe("resolveMcpLoopbackScopedTools auth profile plumbing", () => {
     expect(passedParams).toMatchObject({
       surface: "loopback",
       authProfileStore,
+      agentDir,
     });
   });
 
-  it("does not pass authProfileStore when omitted", () => {
+  it("does not pass authProfileStore or agentDir when omitted", () => {
     resolveMcpLoopbackScopedTools({
       cfg: { tools: { profile: "minimal" } } as OpenClawConfig,
       sessionKey: "agent:main",
@@ -79,5 +84,6 @@ describe("resolveMcpLoopbackScopedTools auth profile plumbing", () => {
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(1);
     const passedParams = resolveGatewayScopedToolsMock.mock.calls[0]?.[0];
     expect(passedParams.authProfileStore).toBeUndefined();
+    expect(passedParams.agentDir).toBeUndefined();
   });
 });

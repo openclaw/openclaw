@@ -75,11 +75,13 @@ async function main(): Promise<void> {
   );
 
   const authProfileStore = createXaiOAuthProfileStore();
+  const agentDir = "/tmp/xai-oauth-proof/agent-main";
   const result = resolveGatewayScopedTools({
     cfg: { tools: { profile: "coding" } } as OpenClawConfig,
     sessionKey: "agent:main",
     surface: "loopback",
     authProfileStore,
+    agentDir,
   });
 
   const toolNames = result.tools.map((tool) => tool.name).toSorted();

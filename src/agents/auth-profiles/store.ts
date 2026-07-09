@@ -57,6 +57,8 @@ type LoadAuthProfileStoreOptions = {
   syncExternalCli?: boolean;
   externalCliProviderIds?: Iterable<string>;
   externalCliProfileIds?: Iterable<string>;
+  /** When true, agent-local loads do not inherit persisted main-store OAuth profiles. */
+  excludeMainOverlay?: boolean;
 };
 
 type SaveAuthProfileStoreOptions = {
@@ -818,7 +820,7 @@ export function loadAuthProfileStoreForRuntime(
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
   const externalCli = resolveExternalCliOverlayOptions(options);
-  if (!agentDir || authPath === mainAuthPath) {
+  if (!agentDir || authPath === mainAuthPath || options?.excludeMainOverlay === true) {
     return overlayExternalAuthProfiles(store, {
       agentDir,
       ...externalCli,
@@ -842,7 +844,11 @@ export function loadAuthProfileStoreForSecretsRuntime(
   agentDir?: string,
   options?: Pick<
     LoadAuthProfileStoreOptions,
-    "config" | "externalCli" | "externalCliProviderIds" | "externalCliProfileIds"
+    | "config"
+    | "externalCli"
+    | "externalCliProviderIds"
+    | "externalCliProfileIds"
+    | "excludeMainOverlay"
   >,
 ): AuthProfileStore {
   return loadAuthProfileStoreForRuntime(agentDir, {

@@ -79,32 +79,36 @@ describe("resolveGatewayScopedTools auth profile plumbing", () => {
     vi.clearAllMocks();
   });
 
-  it("forwards authProfileStore to createOpenClawTools on loopback surfaces", () => {
+  it("forwards authProfileStore and agentDir to createOpenClawTools on loopback surfaces", () => {
     const authProfileStore = createAuthProfileStore();
+    const agentDir = "/tmp/agent-main";
     resolveGatewayScopedTools({
       cfg: { tools: { profile: "minimal" } } as OpenClawConfig,
       sessionKey: "agent:main:telegram:group:-100123",
       surface: "loopback",
       authProfileStore,
+      agentDir,
     });
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     const passedOptions = createOpenClawToolsMock.mock.calls[0]?.[0];
-    expect(passedOptions).toMatchObject({ authProfileStore });
+    expect(passedOptions).toMatchObject({ authProfileStore, agentDir });
   });
 
-  it("forwards authProfileStore to createOpenClawTools on http surfaces", () => {
+  it("forwards authProfileStore and agentDir to createOpenClawTools on http surfaces", () => {
     const authProfileStore = createAuthProfileStore();
+    const agentDir = "/tmp/agent-main";
     resolveGatewayScopedTools({
       cfg: { tools: { profile: "minimal" } } as OpenClawConfig,
       sessionKey: "agent:main:telegram:group:-100123",
       surface: "http",
       authProfileStore,
+      agentDir,
     });
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     const passedOptions = createOpenClawToolsMock.mock.calls[0]?.[0];
-    expect(passedOptions).toMatchObject({ authProfileStore });
+    expect(passedOptions).toMatchObject({ authProfileStore, agentDir });
   });
 
   it("omits authProfileStore from createOpenClawTools when not provided", () => {
