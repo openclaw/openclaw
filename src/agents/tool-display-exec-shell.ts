@@ -325,6 +325,9 @@ export function scanTopLevelChars(
 ): void {
   let quote: '"' | "'" | undefined;
   let escaped = false;
+  let atWordStart = true;
+  let arithmeticDepth = 0;
+  let plainSubshellDepth = 0;
   let pendingHeredocs: HeredocMarker[] = [];
 
   for (let i = 0; i < command.length; i += 1) {
@@ -332,6 +335,9 @@ export function scanTopLevelChars(
 
     if (escaped) {
       escaped = false;
+      if (char !== "\n") {
+        atWordStart = false;
+      }
       continue;
     }
     if (char === "\\") {
@@ -348,12 +354,31 @@ export function scanTopLevelChars(
 
     if (char === '"' || char === "'") {
       quote = char;
+      atWordStart = false;
       continue;
     }
 
-    const heredoc = parseHeredocMarker(command, i);
-    if (heredoc) {
-      pendingHeredocs.push(heredoc);
+    if (char === "#" && atWordStart && arithmeticDepth === 0) {
+      const newline = command.indexOf("\n", i + 1);
+      if (newline === -1) {
+        return;
+      }
+      i = newline - 1;
+      continue;
+    }
+
+    const startsArithmetic =
+      arithmeticDepth === 0 &&
+      char === "(" &&
+      command[i + 1] === "(" &&
+      (command[i - 1] === "$" || atWordStart);
+    const inArithmetic = arithmeticDepth > 0 || startsArithmetic;
+
+    if (!inArithmetic) {
+      const heredoc = parseHeredocMarker(command, i);
+      if (heredoc) {
+        pendingHeredocs.push(heredoc);
+      }
     }
 
     if (char === "\n" && pendingHeredocs.length > 0) {
@@ -378,8 +403,46 @@ export function scanTopLevelChars(
       }
     }
 
-    if (visit(char, i) === false) {
+    if (!inArithmetic && visit(char, i) === false) {
       return;
+    }
+
+    if (char === "(" && (arithmeticDepth > 0 || startsArithmetic)) {
+      arithmeticDepth += 1;
+      continue;
+    }
+    if (char === ")" && arithmeticDepth > 0) {
+      arithmeticDepth -= 1;
+      continue;
+    }
+    if (inArithmetic) {
+      continue;
+    }
+
+    if (/\s/u.test(char)) {
+      atWordStart = true;
+    } else if (char === "(") {
+      const previous = command[i - 1];
+      const isWordExpansion = previous === "$" || previous === "<" || previous === ">";
+      if (isWordExpansion) {
+        // The expansion is part of the surrounding word, but its body starts a fresh command.
+        atWordStart = true;
+      } else if (atWordStart) {
+        plainSubshellDepth += 1;
+        atWordStart = true;
+      }
+    } else if (char === ")") {
+      if (plainSubshellDepth > 0) {
+        plainSubshellDepth -= 1;
+        atWordStart = true;
+      } else {
+        // Command and process substitutions remain part of the word that opened them.
+        atWordStart = false;
+      }
+    } else if (/[;&|<>]/u.test(char)) {
+      atWordStart = true;
+    } else {
+      atWordStart = false;
     }
   }
 }

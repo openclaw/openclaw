@@ -4,7 +4,11 @@
  */
 import { describe, expect, it } from "vitest";
 import { resolveToolSearchCodeDisplayTarget } from "./tool-display-common.js";
-import { splitTopLevelPipes, splitTopLevelStages } from "./tool-display-exec-shell.js";
+import {
+  scanTopLevelChars,
+  splitTopLevelPipes,
+  splitTopLevelStages,
+} from "./tool-display-exec-shell.js";
 import { resolveExecDetail } from "./tool-display-exec.js";
 import { formatToolDetail, formatToolSummary, resolveToolDisplay } from "./tool-display.js";
 
@@ -587,6 +591,68 @@ describe("tool display details", () => {
       resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
     );
     expect(detail).toContain("run build");
+  });
+
+  it("ignores heredoc-looking tokens inside shell comments", () => {
+    const command = [
+      "export MODE=test # next block uses <<EOF && this is still a comment",
+      "cat <<EOF",
+      "body && data",
+      "EOF",
+      "npm test && npm build",
+    ].join("\n");
+
+    const detail = formatToolDetail(
+      resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
+    );
+    expect(detail).toBe("show <<EOF → run tests → run build");
+
+    expect(splitTopLevelStages("echo foo\\ #bar && npm test")).toEqual([
+      "echo foo\\ #bar",
+      "npm test",
+    ]);
+    expect(splitTopLevelStages("echo prefix$(printf suffix)#bar && npm test")).toEqual([
+      "echo prefix$(printf suffix)#bar",
+      "npm test",
+    ]);
+
+    const bodies: string[] = [];
+    const scanBodies = (input: string) => {
+      scanTopLevelChars(
+        input,
+        () => true,
+        (_operatorIndex, start, end) => bodies.push(input.slice(start, end)),
+      );
+    };
+    scanBodies(["(printf ok)# comment uses <<STOP", "npm test && npm build", "STOP"].join("\n"));
+    scanBodies(["echo $(# comment uses <<STOP", "printf ok", ") && npm test"].join("\n"));
+    expect(bodies).toEqual([]);
+
+    for (const expansion of [
+      "echo $(printf suffix)#tag",
+      "echo <(printf suffix)#tag",
+      "echo $(case x in x) printf ok;; esac)#tag",
+    ]) {
+      const withHeredoc = [expansion + " <<STOP", "body", "STOP"].join("\n");
+      scanBodies(withHeredoc);
+    }
+    expect(bodies).toEqual(["body\nSTOP", "body\nSTOP", "body\nSTOP"]);
+  });
+
+  it("does not treat arithmetic bitshifts as heredocs", () => {
+    for (const firstLine of ["echo $((flags << true ))", "((flags << true ))"]) {
+      const command = [firstLine, "npm test && npm build", "true", "pnpm test"].join("\n");
+
+      expect(splitTopLevelStages(command)).toEqual([
+        [firstLine, "npm test"].join("\n"),
+        ["npm build", "true", "pnpm test"].join("\n"),
+      ]);
+
+      const detail = formatToolDetail(
+        resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
+      );
+      expect(detail).toContain("run build");
+    }
   });
 
   it("keeps heredoc body pipes out of top-level stage summaries", () => {
