@@ -53,7 +53,7 @@ function resolvePath(cwd: string, path: string): string {
 }
 
 /** Convert user-facing timeout seconds into a positive, timer-safe millisecond delay. */
-function resolveExecTimeoutMs(timeoutSeconds: unknown): number | undefined {
+export function resolveExecTimeoutMs(timeoutSeconds: unknown): number | undefined {
   if (
     typeof timeoutSeconds !== "number" ||
     !Number.isFinite(timeoutSeconds) ||
