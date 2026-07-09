@@ -27,6 +27,14 @@ const NPM_EXEC_FLAG_OPTIONS = new Set([
 
 const NPM_EXEC_SUBCOMMANDS = new Set(["exec", "x"]);
 
+// Only "x" is package exec for bun; "run"/file operands are runtime script
+// invocations and "exec" is a shell-string carrier, so neither may unwrap.
+const BUN_EXEC_SUBCOMMANDS = new Set(["x"]);
+
+const BUN_OPTIONS_WITH_VALUE = new Set(["--config", "--cwd", "--env-file", "-c"]);
+
+const BUN_FLAG_OPTIONS = new Set(["--bun", "--silent", "-b"]);
+
 export const PNPM_OPTIONS_WITH_VALUE = new Set([
   "--config",
   "--dir",
@@ -345,6 +353,42 @@ function unwrapNpmExecInvocation(argv: string[]): string[] | null {
   return unwrapDirectPackageExecInvocation(["npx", ...tail]);
 }
 
+function unwrapBunExecInvocation(argv: string[]): string[] | null {
+  let idx = 1;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (!token.startsWith("-")) {
+      if (!BUN_EXEC_SUBCOMMANDS.has(token)) {
+        return null;
+      }
+      idx += 1;
+      break;
+    }
+    const flag = normalizeOptionFlag(token);
+    if (BUN_OPTIONS_WITH_VALUE.has(flag)) {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    if (BUN_FLAG_OPTIONS.has(flag)) {
+      idx += 1;
+      continue;
+    }
+    return null;
+  }
+  if (idx >= argv.length) {
+    return null;
+  }
+  const tail = argv.slice(idx);
+  if (tail[0] === "--") {
+    return tail.length > 1 ? tail.slice(1) : null;
+  }
+  return unwrapDirectPackageExecInvocation(["bunx", ...tail]);
+}
+
 function unwrapYarnDlxInvocation(argv: string[]): string[] | null {
   let idx = 0;
   while (idx < argv.length) {
@@ -441,6 +485,21 @@ export function resolveKnownPackageManagerExecInvocation(
     case "bunx": {
       const unwrapped = unwrapDirectPackageExecInvocation(argv);
       return unwrapped ? { kind: "unwrapped", argv: unwrapped } : { kind: "unsafe-exec" };
+    }
+    case "bun": {
+      const unwrapped = unwrapBunExecInvocation(argv);
+      if (unwrapped) {
+        return { kind: "unwrapped", argv: unwrapped };
+      }
+      const firstSubcommand = firstSubcommandAfterOptions(argv, {
+        optionsWithValue: BUN_OPTIONS_WITH_VALUE,
+        flagOptions: BUN_FLAG_OPTIONS,
+      });
+      return BUN_EXEC_SUBCOMMANDS.has(firstSubcommand ?? "")
+        ? { kind: "unsafe-exec" }
+        : firstSubcommand === null && containsSubcommandToken(argv.slice(1), BUN_EXEC_SUBCOMMANDS)
+          ? { kind: "unsafe-exec" }
+          : { kind: "not-exec" };
     }
     case "pnpm": {
       const unwrapped = unwrapPnpmExecInvocation(argv);
