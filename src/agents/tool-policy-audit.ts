@@ -1,10 +1,10 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /**
  * Tool policy audit logging helpers.
  * Emits bounded, sanitized logs when allow/deny policy filters remove tools or
  * block sandbox tool execution.
  */
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { truncateUtf16Safe } from "../utils.js";
 import type { SandboxConfig } from "./sandbox/types.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import { normalizeToolList, normalizeToolName, type ToolPolicyLike } from "./tool-policy.js";
