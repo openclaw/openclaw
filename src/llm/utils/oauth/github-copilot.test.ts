@@ -263,3 +263,50 @@ describe("GitHub Copilot OAuth bounded reads", () => {
     expect(cancel).toHaveBeenCalled();
   });
 });
+
+describe("GitHub Copilot OAuth error body redaction", () => {
+  it("redacts raw JSON response body from non-2xx error messages", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: "invalid_grant",
+              error_description: "The authorization code is invalid or expired.",
+            }),
+            { status: 400, headers: { "Content-Type": "application/json" } },
+          ),
+      ),
+    );
+
+    await expect(refreshGitHubCopilotToken("refresh-token")).rejects.toThrow(
+      "GitHub Copilot token refresh request failed with status 400",
+    );
+    // Raw JSON body keys must not appear in the error message
+    await expect(refreshGitHubCopilotToken("refresh-token")).rejects.not.toThrow(
+      /error_description/,
+    );
+  });
+
+  it("includes redacted structured error detail when the body is valid JSON", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: { code: "rate_limited", message: "Too many requests" },
+            }),
+            { status: 429, headers: { "Content-Type": "application/json" } },
+          ),
+      ),
+    );
+
+    await expect(refreshGitHubCopilotToken("refresh-token")).rejects.toThrow(
+      /GitHub Copilot token refresh request failed with status 429/,
+    );
+    // Structured code is preserved but raw JSON keys are not leaked
+    await expect(refreshGitHubCopilotToken("refresh-token")).rejects.toThrow(/code=rate_limited/);
+  });
+});
