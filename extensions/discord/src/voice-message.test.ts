@@ -1,14 +1,13 @@
 // Discord tests cover voice message plugin behavior.
 import fs from "node:fs/promises";
-import { createServer, type Server } from "node:http";
-import type { Socket } from "node:net";
 import path from "node:path";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RequestClient } from "./internal/discord.js";
+import { DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS } from "./monitor/timeouts.js";
 import type { VoiceMessageMetadata } from "./voice-message.js";
 
-const DISCORD_VOICE_UPLOAD_REQUEST_TIMEOUT_MS = 120_000;
-const GUARDED_FETCH_TEST_TIMEOUT_CLAMP_MS = 500;
+const GUARDED_FETCH_TEST_TIMEOUT_MS = 250;
 
 const runFfprobeMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<string>>());
 const runFfmpegMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<void>>());
@@ -18,59 +17,22 @@ const fetchWithSsrFGuardMock = vi.hoisted(() =>
       url: string;
       init?: RequestInit;
       timeoutMs?: number;
-      signal?: AbortSignal;
       policy?: { allowRfc2544BenchmarkRange?: boolean; allowIpv6UniqueLocalRange?: boolean };
       auditContext?: string;
-    }) => ({
-      response: await fetchWithGuardedTestTimeout(params),
-      release: async () => {},
-    }),
+    }) => {
+      if (!Number.isFinite(params.timeoutMs) || (params.timeoutMs ?? 0) <= 0) {
+        throw new Error("guarded voice upload fetch requires a finite timeout");
+      }
+      return {
+        response: await globalThis.fetch(params.url, {
+          ...params.init,
+          signal: AbortSignal.timeout(GUARDED_FETCH_TEST_TIMEOUT_MS),
+        }),
+        release: async () => {},
+      };
+    },
   ),
 );
-
-function fetchWithGuardedTestTimeout(params: {
-  url: string;
-  init?: RequestInit;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-}): Promise<Response> {
-  if (!params.timeoutMs && !params.signal && !params.init?.signal) {
-    return globalThis.fetch(params.url, params.init);
-  }
-
-  const controller = new AbortController();
-  const onAbort = () => controller.abort();
-  const signals = [params.signal, params.init?.signal].filter((signal): signal is AbortSignal =>
-    Boolean(signal),
-  );
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  for (const signal of signals) {
-    if (signal.aborted) {
-      controller.abort();
-    } else {
-      signal.addEventListener("abort", onAbort, { once: true });
-    }
-  }
-  if (params.timeoutMs) {
-    timeout = setTimeout(
-      () => {
-        const error = new Error(`request timed out after ${params.timeoutMs}ms`);
-        error.name = "TimeoutError";
-        controller.abort(error);
-      },
-      Math.min(params.timeoutMs, GUARDED_FETCH_TEST_TIMEOUT_CLAMP_MS),
-    );
-  }
-
-  return globalThis.fetch(params.url, { ...params.init, signal: controller.signal }).finally(() => {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-    for (const signal of signals) {
-      signal.removeEventListener("abort", onAbort);
-    }
-  });
-}
 
 vi.mock("openclaw/plugin-sdk/temp-path", async () => {
   return {
@@ -123,30 +85,6 @@ function cancelTrackedResponse(
     response: new Response(stream, init),
     wasCanceled: () => canceled,
   };
-}
-
-async function listenLoopbackServer(server: Server): Promise<string> {
-  return await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("expected loopback TCP address"));
-        return;
-      }
-      resolve(`http://127.0.0.1:${address.port}`);
-    });
-  });
-}
-
-async function closeLoopbackServer(server: Server, sockets: Set<Socket>): Promise<void> {
-  for (const socket of sockets) {
-    socket.destroy();
-  }
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
 }
 
 describe("ensureOggOpus", () => {
@@ -309,7 +247,7 @@ describe("sendDiscordVoiceMessage", () => {
 
   function createRest(post = vi.fn(async () => ({ id: "msg-1", channel_id: "channel-1" }))) {
     return {
-      options: { baseUrl: "https://discord.test/api/v10" },
+      options: { baseUrl: "https://discord.test/api/v10", timeout: 17 },
       post,
     } as unknown as RequestClient;
   }
@@ -526,98 +464,59 @@ describe("sendDiscordVoiceMessage", () => {
   });
 
   it.each([
-    {
-      label: "upload URL request",
-      expectedHangingRoute: "POST /api/v10/channels/channel-1/attachments",
-      hangUploadUrl: true,
-    },
-    {
-      label: "PUT upload request",
-      expectedHangingRoute: "PUT /upload",
-      hangUploadUrl: false,
-    },
-  ])("times out a hanging $label", async ({ expectedHangingRoute, hangUploadUrl }) => {
-    const sockets = new Set<Socket>();
-    const requests: string[] = [];
-    const closedResponses: string[] = [];
+    ["upload URL request", "POST /api/v10/channels/channel-1/attachments", 37],
+    ["PUT upload request", "PUT /upload", DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS],
+  ])("times out a hanging %s", async (_label, hangingRoute, expectedTimeoutMs) => {
+    const closedResponses = vi.fn();
     let baseUrl = "";
-    const server = createServer((req, res) => {
-      const route = `${req.method ?? "GET"} ${req.url ?? "/"}`;
-      requests.push(route);
-      res.on("close", () => {
-        closedResponses.push(route);
-      });
-
-      if (route === "POST /api/v10/channels/channel-1/attachments") {
-        if (hangUploadUrl) {
+    await withServer(
+      (req, res) => {
+        req.resume();
+        const route = `${req.method ?? "GET"} ${req.url ?? "/"}`;
+        res.on("close", () => closedResponses(route));
+        if (route === hangingRoute) {
+          return;
+        }
+        if (route !== "POST /api/v10/channels/channel-1/attachments") {
+          res.statusCode = 500;
+          res.end(`unexpected ${route}`);
           return;
         }
         res.setHeader("content-type", "application/json");
         res.end(
           JSON.stringify({
             attachments: [
-              {
-                id: 0,
-                upload_url: `${baseUrl}/upload`,
-                upload_filename: "uploaded.ogg",
-              },
+              { id: 0, upload_url: `${baseUrl}/upload`, upload_filename: "uploaded.ogg" },
             ],
           }),
         );
-        return;
-      }
+      },
+      async (url) => {
+        baseUrl = url;
+        const rest = {
+          options: { baseUrl: `${baseUrl}/api/v10`, timeout: 37 },
+          post: vi.fn(async () => ({ id: "msg-1", channel_id: "channel-1" })),
+        } as unknown as RequestClient;
 
-      if (route === "PUT /upload") {
-        return;
-      }
+        await expect(
+          sendDiscordVoiceMessage(
+            rest,
+            "channel-1",
+            Buffer.from("ogg"),
+            metadata,
+            undefined,
+            async (fn) => await fn(),
+            false,
+            "bot-token",
+          ),
+        ).rejects.toThrow(/timed out|abort/i);
 
-      res.statusCode = 500;
-      res.end(`unexpected ${route}`);
-    });
-    server.on("connection", (socket) => {
-      sockets.add(socket);
-      socket.on("close", () => {
-        sockets.delete(socket);
-      });
-    });
-    baseUrl = await listenLoopbackServer(server);
-
-    try {
-      const rest = {
-        options: { baseUrl: `${baseUrl}/api/v10` },
-        post: vi.fn(async () => ({ id: "msg-1", channel_id: "channel-1" })),
-      } as unknown as RequestClient;
-
-      const startedAt = Date.now();
-      await expect(
-        sendDiscordVoiceMessage(
-          rest,
-          "channel-1",
-          Buffer.from("ogg"),
-          metadata,
-          undefined,
-          async (fn) => await fn(),
-          false,
-          "bot-token",
-        ),
-      ).rejects.toThrow(/timed out|abort/i);
-
-      expect(Date.now() - startedAt).toBeLessThan(5_000);
-      expect(requests).toContain(expectedHangingRoute);
-      await vi.waitFor(() => expect(closedResponses).toContain(expectedHangingRoute));
-      expect(
-        fetchWithSsrFGuardMock.mock.calls.map(([params]) => ({
-          auditContext: params.auditContext,
-          timeoutMs: params.timeoutMs,
-        })),
-      ).toContainEqual({
-        auditContext: hangUploadUrl
-          ? "discord.voice.upload-url"
-          : "discord.voice.attachment-upload",
-        timeoutMs: DISCORD_VOICE_UPLOAD_REQUEST_TIMEOUT_MS,
-      });
-    } finally {
-      await closeLoopbackServer(server, sockets);
-    }
+        await vi.waitFor(() => expect(closedResponses).toHaveBeenCalledWith(hangingRoute));
+        const guardedCall = fetchWithSsrFGuardMock.mock.calls.find(
+          ([params]) => `${params.init?.method} ${new URL(params.url).pathname}` === hangingRoute,
+        );
+        expect(guardedCall?.[0].timeoutMs).toBe(expectedTimeoutMs);
+      },
+    );
   });
 });
