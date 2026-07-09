@@ -1,6 +1,6 @@
 // Slack plugin module implements approval handler behavior.
 import type { App } from "@slack/bolt";
-import type { Block, KnownBlock } from "@slack/web-api";
+import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import type {
   ChannelApprovalCapabilityHandlerContext,
   ExecApprovalExpiredView,
@@ -57,6 +57,13 @@ type SlackExecApprovalConfig = NonNullable<
 
 type SlackApprovalHandlerContext = {
   app: App;
+  // Per-account Web API client bound to this account's own bot token. When
+  // the Bolt App is shared across accounts (same app token installed in
+  // multiple workspaces), app.client authenticates as whichever account
+  // created the App — approval messages must go through this client instead.
+  // Optional for contexts registered before this field existed; those fall
+  // back to app.client via resolveSlackApprovalClient.
+  client?: WebClient;
   config: SlackExecApprovalConfig;
 };
 
@@ -70,6 +77,10 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
     return null;
   }
   return { accountId, context };
+}
+
+function resolveSlackApprovalClient(context: SlackApprovalHandlerContext): WebClient {
+  return context.client ?? context.app.client;
 }
 
 function truncateSlackMrkdwn(text: string, maxChars: number): string {
@@ -408,14 +419,14 @@ function buildSlackExpiredBlocks(view: ExpiredApprovalView): SlackBlock[] {
 }
 
 async function updateMessage(params: {
-  app: App;
+  client: WebClient;
   channelId: string;
   messageTs: string;
   text: string;
   blocks: SlackBlock[];
 }): Promise<void> {
   try {
-    await params.app.client.chat.update({
+    await params.client.chat.update({
       channel: params.channelId,
       ts: params.messageTs,
       text: truncateSlackText(params.text, SLACK_CHAT_UPDATE_TEXT_LIMIT),
@@ -496,7 +507,7 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
         accountId: resolved.accountId,
         threadTs: preparedTarget.threadTs,
         blocks: pendingPayload.blocks,
-        client: resolved.context.app.client,
+        client: resolveSlackApprovalClient(resolved.context),
       });
       return {
         channelId: message.channelId,
@@ -510,7 +521,7 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
       }
       const nextPayload = payload;
       await updateMessage({
-        app: resolved.context.app,
+        client: resolveSlackApprovalClient(resolved.context),
         channelId: entry.channelId,
         messageTs: entry.messageTs,
         text: nextPayload.text,

@@ -12,6 +12,9 @@ function createTestContext(params?: {
   groupDmEnabled?: boolean;
   groupDmChannels?: string[];
   appClient?: App["client"];
+  teamId?: string;
+  isSharedSocketGroup?: boolean;
+  accountAbortSignal?: AbortSignal;
 }) {
   return createSlackMonitorContext({
     cfg: {
@@ -25,9 +28,11 @@ function createTestContext(params?: {
     // reuse the same mock so existing appClient assertions keep observing it.
     client: (params?.appClient ?? {}) as WebClient,
     runtime: {} as RuntimeEnv,
+    accountAbortSignal: params?.accountAbortSignal,
+    isSharedSocketGroup: params?.isSharedSocketGroup,
     botUserId: "U_BOT",
     botId: "B_BOT",
-    teamId: "T_EXPECTED",
+    teamId: params?.teamId ?? "T_EXPECTED",
     apiAppId: "A_EXPECTED",
     historyLimit: 0,
     sessionScope: "per-sender",
@@ -90,6 +95,50 @@ describe("createSlackMonitorContext shouldDropMismatchedSlackEvent", () => {
       ctx.shouldDropMismatchedSlackEvent({
         api_app_id: "A_EXPECTED",
         team: { id: "T_EXPECTED" },
+      }),
+    ).toBe(false);
+  });
+
+  it("drops everything once the account's own abort signal fires", () => {
+    const controller = new AbortController();
+    const ctx = createTestContext({ accountAbortSignal: controller.signal });
+
+    // Fully matching payloads pass while the account is alive.
+    const matching = { api_app_id: "A_EXPECTED", team_id: "T_EXPECTED" };
+    expect(ctx.shouldDropMismatchedSlackEvent(matching)).toBe(false);
+
+    // Bolt has no listener-removal API: once the account is stopped its
+    // handlers stay registered on the (shared or solo) App, so the gate must
+    // drop even perfectly matching events — and malformed/empty bodies too.
+    controller.abort();
+    expect(ctx.shouldDropMismatchedSlackEvent(matching)).toBe(true);
+    expect(ctx.shouldDropMismatchedSlackEvent(undefined)).toBe(true);
+  });
+
+  it("fails closed on a shared socket group when teamId is unresolved", () => {
+    const ctx = createTestContext({ teamId: "", isSharedSocketGroup: true });
+
+    // Without a resolved teamId the account cannot demux its own workspace's
+    // traffic from its siblings' on the shared connection: drop everything,
+    // even events that would otherwise pass the api_app_id check.
+    expect(
+      ctx.shouldDropMismatchedSlackEvent({
+        api_app_id: "A_EXPECTED",
+        team_id: "T_ANY",
+      }),
+    ).toBe(true);
+    expect(ctx.shouldDropMismatchedSlackEvent({})).toBe(true);
+  });
+
+  it("keeps the historical lenient behavior for a solo account without teamId", () => {
+    const ctx = createTestContext({ teamId: "", isSharedSocketGroup: false });
+
+    // A solo account owns its whole connection, so an unresolved teamId only
+    // disables the team check — events still flow (pre-existing semantics).
+    expect(
+      ctx.shouldDropMismatchedSlackEvent({
+        api_app_id: "A_EXPECTED",
+        team_id: "T_ANY",
       }),
     ).toBe(false);
   });

@@ -183,4 +183,96 @@ describe("monitorSlackProvider shared Socket Mode group", () => {
       await stopBothTeamAccounts(harness);
     }
   });
+
+  it("stops processing a stopped member's events while the shared socket stays up for siblings", async () => {
+    const client1 = getSlackClientForToken(TEAM1_BOT_TOKEN);
+    const client2 = getSlackClientForToken(TEAM2_BOT_TOKEN);
+    client1.auth.test.mockResolvedValue({
+      user_id: "U_BOT1",
+      bot_id: "B_BOT1",
+      team_id: "T1",
+      api_app_id: "A0SHARED",
+    });
+    client2.auth.test.mockResolvedValue({
+      user_id: "U_BOT2",
+      bot_id: "B_BOT2",
+      team_id: "T2",
+      api_app_id: "A0SHARED",
+    });
+
+    const harness = startBothTeamAccounts(sharedGroupConfig());
+    try {
+      const handler = await getSlackHandlerOrThrow("message");
+      await flush();
+      await flush();
+
+      // Stop ONLY team2 (per-account stop) while team1 keeps the shared
+      // socket alive. Bolt has no listener-removal API, so team2's handler
+      // physically stays registered on the shared App — the abort-signal
+      // gate in shouldDropMismatchedSlackEvent is what must keep the stopped
+      // account from acting like a zombie and still replying in Slack.
+      harness.controller2.abort();
+      await harness.run2;
+
+      harness.setStatus1.mockClear();
+      harness.setStatus2.mockClear();
+
+      await handler({
+        event: makeDirectMessageEvent({ channel: "C_T2", ts: "333.003", text: "after stop" }),
+        body: { api_app_id: "A0SHARED", team_id: "T2" },
+      });
+      expect(harness.setStatus2).not.toHaveBeenCalled();
+
+      // The surviving sibling still processes its own workspace's traffic.
+      await handler({
+        event: makeDirectMessageEvent({ channel: "C_T1", ts: "444.004", text: "still alive" }),
+        body: { api_app_id: "A0SHARED", team_id: "T1" },
+      });
+      expect(harness.setStatus1).toHaveBeenCalled();
+    } finally {
+      await stopBothTeamAccounts(harness);
+    }
+  });
+
+  it("fails closed for a shared-group account whose boot auth.test could not resolve a teamId", async () => {
+    const client1 = getSlackClientForToken(TEAM1_BOT_TOKEN);
+    const client2 = getSlackClientForToken(TEAM2_BOT_TOKEN);
+    client1.auth.test.mockResolvedValue({
+      user_id: "U_BOT1",
+      bot_id: "B_BOT1",
+      team_id: "T1",
+      api_app_id: "A0SHARED",
+    });
+    // team2's bot token is broken: no identity, hence no teamId to demux by.
+    client2.auth.test.mockRejectedValue(new Error("invalid_auth"));
+
+    const harness = startBothTeamAccounts(sharedGroupConfig());
+    try {
+      const handler = await getSlackHandlerOrThrow("message");
+      await flush();
+      await flush();
+
+      harness.setStatus1.mockClear();
+      harness.setStatus2.mockClear();
+
+      // With teamId unresolved, team2's mismatch filter would previously
+      // skip the team check entirely and process BOTH workspaces' events.
+      // On a shared connection that is a cross-tenant leak, so the account
+      // must drop everything instead — even its own workspace's traffic.
+      await handler({
+        event: makeDirectMessageEvent({ channel: "C_T2", ts: "555.005", text: "to broken team" }),
+        body: { api_app_id: "A0SHARED", team_id: "T2" },
+      });
+      await handler({
+        event: makeDirectMessageEvent({ channel: "C_T1", ts: "666.006", text: "to team1" }),
+        body: { api_app_id: "A0SHARED", team_id: "T1" },
+      });
+
+      expect(harness.setStatus2).not.toHaveBeenCalled();
+      // team1 (healthy) still handles its own events.
+      expect(harness.setStatus1).toHaveBeenCalled();
+    } finally {
+      await stopBothTeamAccounts(harness);
+    }
+  });
 });

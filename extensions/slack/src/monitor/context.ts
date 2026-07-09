@@ -237,6 +237,17 @@ export function createSlackMonitorContext(params: {
   client: WebClient;
   runtime: RuntimeEnv;
   channelRuntime?: ChannelRuntimeSurface;
+  // This account's own stop signal. Bolt has no listener-removal API, so when
+  // one account of a shared-App group is stopped individually its handlers
+  // stay registered on the shared App; shouldDropMismatchedSlackEvent (the
+  // gate every event surface already passes through) uses this signal to
+  // drop everything once the account has been aborted.
+  accountAbortSignal?: AbortSignal;
+  // True when this account shares its Bolt App / Socket Mode connection with
+  // sibling accounts on the same app token. In that mode an unknown teamId
+  // must fail closed (drop all events) instead of falling through leniently,
+  // or the account would process BOTH workspaces' traffic.
+  isSharedSocketGroup?: boolean;
 
   botUserId: string;
   botId?: string;
@@ -721,6 +732,25 @@ export function createSlackMonitorContext(params: {
   };
 
   const shouldDropMismatchedSlackEvent = (body: unknown) => {
+    // A stopped account must not keep acting on events. Bolt offers no way to
+    // unregister listeners, so when this account was stopped while its (shared
+    // or solo) App stays connected, its handlers are still invoked — drop at
+    // the gate instead. Universally correct semantics, so no shared/solo split.
+    if (params.accountAbortSignal?.aborted) {
+      logVerbose(`slack: drop event for stopped account ${params.accountId}`);
+      return true;
+    }
+    // On a shared App an account without a resolved teamId (boot auth.test
+    // failed) has no way to demux its own workspace's traffic from its
+    // siblings'. Processing anyway would act on OTHER tenants' events, so
+    // fail closed until restart with a valid bot token. Solo accounts keep
+    // the historical lenient behavior below.
+    if (params.isSharedSocketGroup && !params.teamId) {
+      logVerbose(
+        `slack: drop event for account ${params.accountId} (teamId unresolved on shared socket group)`,
+      );
+      return true;
+    }
     if (!body || typeof body !== "object") {
       return false;
     }
