@@ -925,15 +925,39 @@ export async function processGatewayAllowlist(
       turnSourceThreadId: params.turnSourceThreadId,
       direct: params.approvalFollowupMode === "direct",
     });
+    const denyApprovalStateWriteFailure = async () => {
+      emitGatewayExecApprovalSecurityEvent({
+        action: "exec.approval.denied",
+        outcome: "error",
+        severity: "high",
+        agentId: params.agentId,
+        reason: "approval-state-write-failed",
+        hostSecurity,
+        hostAsk,
+        host: "gateway",
+        segmentCount: allowlistEval.segments.length,
+        trigger: params.trigger,
+      });
+      await sendExecApprovalFollowupResult(
+        followupTarget,
+        `Exec denied (gateway id=${approvalId}, approval-state-write-failed): ${params.command}`,
+      );
+    };
 
     void (async () => {
-      const approvalDecision = await resolveApprovalForExecution(
-        () =>
-          void sendExecApprovalFollowupResult(
-            followupTarget,
-            `Exec denied (gateway id=${approvalId}, approval-request-failed): ${params.command}`,
-          ),
-      );
+      let approvalDecision: Awaited<ReturnType<typeof resolveApprovalForExecution>>;
+      try {
+        approvalDecision = await resolveApprovalForExecution(
+          () =>
+            void sendExecApprovalFollowupResult(
+              followupTarget,
+              `Exec denied (gateway id=${approvalId}, approval-request-failed): ${params.command}`,
+            ),
+        );
+      } catch {
+        await denyApprovalStateWriteFailure();
+        return;
+      }
       if (approvalDecision.requestFailed) {
         return;
       }
@@ -946,7 +970,12 @@ export async function processGatewayAllowlist(
         return;
       }
 
-      await recordMatchedAllowlistUse(resolvedPath ?? undefined);
+      try {
+        await recordMatchedAllowlistUse(resolvedPath ?? undefined);
+      } catch {
+        await denyApprovalStateWriteFailure();
+        return;
+      }
 
       let run: Awaited<ReturnType<typeof runExecProcess>> | null;
       try {

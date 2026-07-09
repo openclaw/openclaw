@@ -1843,13 +1843,12 @@ function applyRecordedAllowlistUse(params: {
       return entry;
     }
     changed = true;
-    return {
-      ...entry,
+    return Object.assign({}, entry, {
       id: entry.id ?? crypto.randomUUID(),
       lastUsedAt: Date.now(),
       lastUsedCommand: params.command,
       lastResolvedPath: params.resolvedPath,
-    };
+    });
   });
   return changed
     ? {

@@ -1471,6 +1471,33 @@ EOF`,
     expect(requireSentFollowupText(0)).toContain("done");
   });
 
+  it("fails closed when detached approval metadata cannot be persisted", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    recordAllowlistMatchesUseMock.mockRejectedValueOnce(new Error("approval lock unavailable"));
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+
+    const result = await runGatewayAllowlist({ command: "echo approved" });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
+    });
+    expect(requireSentFollowupText(0)).toContain("approval-state-write-failed");
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+    expect(emitTrustedSecurityEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "exec.approval.denied",
+        outcome: "error",
+        policy: expect.objectContaining({ reason: "approval-state-write-failed" }),
+      }),
+    );
+  });
+
   it("waits inline for webchat approval so the exec tool can return real output to the model", async () => {
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
     createExecApprovalDecisionStateMock.mockReturnValue({
