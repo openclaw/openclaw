@@ -24,6 +24,7 @@ import { deliveryContextFromSession } from "../../utils/delivery-context.shared.
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   clearCronJobActive,
+  getCronActiveJobGeneration,
   isCronActiveJobMarkerCurrent,
   markCronJobActive,
   type CronActiveJobMarker,
@@ -158,6 +159,7 @@ type StartupDeferredJob = {
 };
 
 type StartupCatchupPlan = {
+  activeJobGeneration: number;
   candidates: StartupCatchupCandidate[];
   deferredJobs: StartupDeferredJob[];
 };
@@ -1835,9 +1837,10 @@ async function planStartupCatchup(
     state.deps.maxMissedJobsPerRestart ?? DEFAULT_MAX_MISSED_JOBS_PER_RESTART,
   );
   return locked(state, async () => {
+    const activeJobGeneration = getCronActiveJobGeneration();
     await ensureLoaded(state, { skipRecompute: true });
     if (state.stopped || !state.store) {
-      return { candidates: [], deferredJobs: [] };
+      return { activeJobGeneration, candidates: [], deferredJobs: [] };
     }
 
     const now = state.deps.nowMs();
@@ -1853,7 +1856,7 @@ async function planStartupCatchup(
       if (deferredBackoffMissedSlot) {
         await persist(state);
       }
-      return { candidates: [], deferredJobs: [] };
+      return { activeJobGeneration, candidates: [], deferredJobs: [] };
     }
     const sorted = missed.toSorted(
       (a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0),
@@ -1910,6 +1913,7 @@ async function planStartupCatchup(
     await persist(state);
 
     return {
+      activeJobGeneration,
       candidates: startupCandidates.map((job) => ({
         jobId: job.id,
         job,
@@ -1926,7 +1930,11 @@ async function executeStartupCatchupPlan(
 ): Promise<TimedCronRunOutcome[]> {
   const outcomes: TimedCronRunOutcome[] = [];
   for (const candidate of plan.candidates) {
-    if (state.stopped) {
+    if (
+      state.stopped ||
+      state.restartRecoveryPending ||
+      getCronActiveJobGeneration() !== plan.activeJobGeneration
+    ) {
       break;
     }
     const outcome = await runStartupCatchupCandidate(state, candidate);
@@ -2058,10 +2066,12 @@ async function applyStartupCatchupOutcomes(
         plan,
         outcomes,
       );
+      const deferredJobs =
+        getCronActiveJobGeneration() === plan.activeJobGeneration ? plan.deferredJobs : [];
       for (const result of finalizedOutcomes) {
         applyOutcomeToStoredJob(state, result);
       }
-      if (finalizedOutcomes.length === 0 && plan.deferredJobs.length === 0) {
+      if (finalizedOutcomes.length === 0 && deferredJobs.length === 0) {
         if (releasedReservations) {
           recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
           await persist(state);
@@ -2069,10 +2079,10 @@ async function applyStartupCatchupOutcomes(
         return;
       }
 
-      if (plan.deferredJobs.length > 0) {
+      if (deferredJobs.length > 0) {
         const baseNow = state.deps.nowMs();
         let offset = staggerMs;
-        for (const deferred of plan.deferredJobs) {
+        for (const deferred of deferredJobs) {
           const jobId = deferred.jobId;
           const job = state.store.jobs.find((entry) => entry.id === jobId);
           if (!job || !isJobEnabled(job)) {

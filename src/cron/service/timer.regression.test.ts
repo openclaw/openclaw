@@ -2923,7 +2923,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("does not admit startup catch-up jobs into a newer generation while persisting the start timestamp", async () => {
+  it("does not admit a startup catch-up plan into a newer generation while persisting the start timestamp", async () => {
     resetTaskRegistryForTests();
     const originalPersist = cronServiceStore.persist;
     const persistStarted = createDeferred<void>();
@@ -2947,7 +2947,20 @@ describe("cron service timer regressions", () => {
         nowMs: missedAt,
         nextRunAtMs: missedAt,
       });
-      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+      const secondJob = createDueIsolatedJob({
+        id: "startup-start-persist-generation-second",
+        nowMs: missedAt,
+        nextRunAtMs: missedAt + 1,
+      });
+      const deferredJob = createDueIsolatedJob({
+        id: "startup-start-persist-generation-deferred",
+        nowMs: missedAt,
+        nextRunAtMs: missedAt + 2,
+      });
+      await saveCronStore(store.storePath, {
+        version: 1,
+        jobs: [job, secondJob, deferredJob],
+      });
 
       let now = missedAt + 60_000;
       const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
@@ -2962,6 +2975,7 @@ describe("cron service timer regressions", () => {
         enqueueSystemEvent: vi.fn(),
         requestHeartbeat: vi.fn(),
         runIsolatedAgentJob,
+        maxMissedJobsPerRestart: 2,
       });
 
       const missedJobs = runMissedJobs(state);
@@ -2974,10 +2988,17 @@ describe("cron service timer regressions", () => {
       const persistedJob = persisted.jobs.find((entry) => entry.id === job.id);
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
       expect(
-        listTaskRecords().find((entry) => entry.runtime === "cron" && entry.sourceId === job.id),
-      ).toBeUndefined();
+        listTaskRecords().filter(
+          (entry) =>
+            entry.runtime === "cron" && [job.id, secondJob.id].includes(entry.sourceId ?? ""),
+        ),
+      ).toEqual([]);
       expect(persistedJob?.state.lastStatus).toBeUndefined();
       expect(persistedJob?.state.runningAtMs).toBeUndefined();
+      expect(
+        persisted.jobs.find((entry) => entry.id === secondJob.id)?.state.runningAtMs,
+      ).toBeUndefined();
+      expect(state.pendingCatchupDeferralJobIds.has(deferredJob.id)).toBe(false);
     } finally {
       persistSpy.mockRestore();
       resetCronActiveJobs();
