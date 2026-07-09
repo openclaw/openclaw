@@ -79,11 +79,12 @@ export function getWorkboardLifecycle(
       sourceUpdatedAt: sessionUpdatedAtValue(session),
     };
   }
-  // Shared `isSessionRunActive` keeps paused (sessions_yield) sessions in the
-  // running lifecycle: a paused session still has a queued continuation, so
-  // reporting it done/review would mark the yield resolved while the runner
-  // is about to drain the continuation.
-  if (isSessionRunActive(session)) {
+  // Paused (sessions_yield) rows report hasActiveRun:false while a queued
+  // continuation is pending; `isSessionRunActive` keeps them in the running
+  // lifecycle so preset/health filters and execution-status sync do not
+  // resolve the card to idle mid-yield. Keep the raw running-status check so
+  // a running row without a live-run flag stays running until staleness.
+  if (isSessionRunActive(session) || session.status === "running") {
     return {
       session,
       state: "running",

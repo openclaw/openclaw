@@ -4476,6 +4476,21 @@ describe("workboard controller", () => {
         createGatewaySession({ hasActiveRun: false }),
         { state: "running", targetStatus: "running" },
       ],
+      // Paused (sessions_yield) sessions report hasActiveRun:false while a
+      // queued continuation is pending; the card must stay in the running
+      // lifecycle instead of resolving to idle mid-yield.
+      [
+        "paused mid-yield",
+        linked,
+        createGatewaySession({ hasActiveRun: false, status: "paused" }),
+        { state: "running", targetStatus: "running" },
+      ],
+      [
+        "paused with stale timestamp",
+        linked,
+        createGatewaySession({ hasActiveRun: false, status: "paused", updatedAt: staleAt }),
+        { state: "running", targetStatus: "running" },
+      ],
       [
         "completed",
         linked,
