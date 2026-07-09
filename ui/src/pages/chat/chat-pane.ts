@@ -1012,7 +1012,7 @@ class ChatPane extends OpenClawLightDomElement {
       disabledReason,
       error: state.lastError,
       sessions: state.sessionsResult,
-      providerQuota: {
+      providerUsage: {
         basePath: state.basePath,
         modelAuthStatusResult: state.modelAuthStatusResult,
       },

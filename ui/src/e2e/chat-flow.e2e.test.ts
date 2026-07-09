@@ -263,9 +263,11 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           splitEntry.evaluate((node) => node.closest(".agent-chat__composer-shell") == null),
         )
         .toBe(true);
+      const topbar = page.locator(".topbar");
+      // Desktop renders no topbar row until split view needs the toolbar row.
+      await expect.poll(() => topbar.isVisible()).toBe(false);
       await splitEntry.click();
 
-      const topbar = page.locator(".topbar");
       const toolbar = page.locator(".chat-split-toolbar");
       const toolbarPanes = page.locator(".chat-split-toolbar__pane");
       await expect.poll(() => page.locator(".chat-split-view__pane").count()).toBe(2);
@@ -278,7 +280,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           return visible.every(Boolean);
         })
         .toBe(true);
-      await expect.poll(() => page.locator(".dashboard-header").isVisible()).toBe(false);
+      // The empty topbar returns as the split toolbar's backdrop row.
+      await expect.poll(() => topbar.isVisible()).toBe(true);
       await expect.poll(() => splitEntry.count()).toBe(0);
 
       const [topbarBox, toolbarBox] = await Promise.all([

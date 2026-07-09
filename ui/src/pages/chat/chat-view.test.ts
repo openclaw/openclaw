@@ -1530,7 +1530,7 @@ describe("chat loading skeleton", () => {
 
   it("places context usage after the composer controls in the bottom row", () => {
     const container = renderChatView({
-      providerQuota: {
+      providerUsage: {
         basePath: "/rosita",
         modelAuthStatusResult: {
           ts: Date.now(),
@@ -1540,7 +1540,7 @@ describe("chat loading skeleton", () => {
               displayName: "OpenAI",
               status: "ok",
               profiles: [{ profileId: "openai", type: "oauth", status: "ok" }],
-              usage: { windows: [{ label: "Week", usedPercent: 72 }] },
+              usage: { providerId: "openai", windows: [{ label: "Week", usedPercent: 72 }] },
             },
           ],
         },
@@ -1578,16 +1578,17 @@ describe("chat loading skeleton", () => {
     expect(context).toBeInstanceOf(HTMLElement);
     expect(context?.closest(".agent-chat__composer-meta")).not.toBeNull();
     expect(context?.closest(".agent-chat__composer-footer")).not.toBeNull();
-    expect(container.querySelector(".context-usage__stats--cost")?.textContent).toContain(
-      "$0.0010",
-    );
+    // The session provider matches a plan-usage group, so dollar estimates
+    // yield to the subscription windows.
+    expect(container.querySelector(".context-usage__stats--cost")).toBeNull();
     expect(container.querySelector(".context-usage__model")?.textContent).toContain("openai");
     expect(container.querySelector(".agent-chat__composer-header")).toBeNull();
-    const quota = container.querySelector<HTMLAnchorElement>(
+    const limitRow = container.querySelector(".context-usage__limit");
+    expect(limitRow?.textContent?.replace(/\s+/g, " ").trim()).toBe("Weekly · all models 72%");
+    const usageLink = container.querySelector<HTMLAnchorElement>(
       ".context-usage__popover [data-chat-provider-usage='true']",
     );
-    expect(quota?.textContent?.replace(/\s+/g, " ").trim()).toBe("Usage Remaining 28%");
-    expect(quota?.getAttribute("href")).toBe("/rosita/usage");
+    expect(usageLink?.getAttribute("href")).toBe("/rosita/usage");
   });
 
   it("does not show prompt-bar progress for another session send", () => {

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 @testable import OpenClaw
 import Testing
@@ -27,6 +28,7 @@ struct DashboardWindowSmokeTests {
 
     @Test func `dashboard navigation stays on same endpoint`() throws {
         let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let staleEndpoint = try #require(URL(string: "http://127.0.0.1:18790/control/chat"))
         #expect(try DashboardWindowController.shouldAllowNavigation(
             to: #require(URL(string: "http://127.0.0.1:18789/control/chat")),
             dashboardURL: dashboard
@@ -34,6 +36,15 @@ struct DashboardWindowSmokeTests {
         #expect(try !DashboardWindowController.shouldAllowNavigation(
             to: #require(URL(string: "https://docs.openclaw.ai/")),
             dashboardURL: dashboard
+        ))
+        #expect(!DashboardWindowController.shouldAllowNavigation(
+            to: staleEndpoint,
+            dashboardURL: dashboard
+        ))
+        #expect(!DashboardWindowController.shouldOpenExternalDashboardNavigation(
+            staleEndpoint,
+            navigationType: .backForward,
+            buttonNumber: 1
         ))
     }
 
@@ -224,6 +235,24 @@ struct DashboardWindowSmokeTests {
         #expect(chromeScript.source.contains(".topbar"))
         #expect(chromeScript.source.contains("max-width: 1100px"))
         #expect(chromeScript.source.contains("--openclaw-native-titlebar-height"))
+    }
+
+    @Test func `dashboard titlebar hosts back and forward controls`() throws {
+        let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let controller = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        let accessories = try #require(controller.window?.titlebarAccessoryViewControllers)
+        let buttons = accessories.flatMap { accessory in
+            accessory.view.subviews.compactMap { $0 as? NSButton }
+        }
+        let back = try #require(buttons.first { $0.accessibilityLabel() == "Back" })
+        let forward = try #require(buttons.first { $0.accessibilityLabel() == "Forward" })
+        // Nothing to traverse on a fresh webview: both stay disabled until the
+        // back-forward list gains entries (the SPA pushes history entries).
+        #expect(!back.isEnabled)
+        #expect(!forward.isEnabled)
+        #expect(controller._testAllowsBackForwardGestures)
     }
 
     @Test func `dashboard failure state opens in dashboard window`() throws {
