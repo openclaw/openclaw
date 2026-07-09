@@ -69,6 +69,28 @@ describe("safe gateway restart coordinator", () => {
     expect(preflight.summary).toContain("taskId=task-1");
   });
 
+  it("keeps truncated task titles on complete UTF-16 code points", () => {
+    const preflight = createSafeGatewayRestartPreflight({
+      getQueueSize: () => 0,
+      getPendingReplies: () => 0,
+      getEmbeddedRuns: () => 0,
+      getCronRuns: () => 0,
+      getActiveTasks: () => 1,
+      getTaskBlockers: () => [
+        {
+          taskId: "task-emoji",
+          status: "running",
+          runtime: "acp",
+          title: `${"t".repeat(79)}🚀`,
+        },
+      ],
+    });
+
+    expect(preflight.blockers[0]?.message).toBe(
+      `taskId=task-emoji status=running runtime=acp title=${"t".repeat(79)}`,
+    );
+  });
+
   it("schedules one restart request and marks active work as deferred", () => {
     scheduleGatewaySigusr1Restart.mockReturnValueOnce({
       ok: true,
