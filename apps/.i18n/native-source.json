@@ -17323,7 +17323,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 294,
+      "line": 302,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Close Canvas",
       "surface": "apple",
@@ -17331,7 +17331,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 294,
+      "line": 302,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Open Canvas",
       "surface": "apple",
