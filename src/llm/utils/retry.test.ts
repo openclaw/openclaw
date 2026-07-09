@@ -54,4 +54,19 @@ describe("isRetryableAssistantError", () => {
       ),
     ).toBe(true);
   });
+
+  it.each([
+    "model gpt-5.5-preview-0429 not found",
+    "Image dimensions 1504x1504 exceed the maximum allowed size",
+    "invalid api key sk-proj-abc502xyz",
+  ])("does not retry permanent errors with embedded digit runs: %s", (text) => {
+    expect(isRetryableAssistantError(errorMessage(text))).toBe(false);
+  });
+
+  it.each(["HTTP 429 Too Many Requests", "502 Bad Gateway", "503 service unavailable"])(
+    "still retries genuine transient status codes: %s",
+    (text) => {
+      expect(isRetryableAssistantError(errorMessage(text))).toBe(true);
+    },
+  );
 });
