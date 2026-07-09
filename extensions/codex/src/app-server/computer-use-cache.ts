@@ -5,7 +5,7 @@ import type { ResolvedCodexComputerUseConfig } from "./config.js";
 
 export type CodexComputerUsePluginCacheRepairResult =
   | {
-      status: "disabled" | "independent" | "source_missing" | "shared";
+      status: "disabled" | "explicit_marketplace" | "independent" | "source_missing" | "shared";
       changed: boolean;
       message: string;
       cachePath?: string;
@@ -42,6 +42,12 @@ export async function ensureCodexComputerUseSharedPluginCache(params: {
     return skippedCacheResult(
       "independent",
       "Computer Use cache sharing skipped because pluginCacheMode is independent.",
+    );
+  }
+  if (params.config.marketplaceName || params.config.marketplacePath) {
+    return skippedCacheResult(
+      "explicit_marketplace",
+      "Computer Use cache sharing skipped because an explicit marketplace is configured.",
     );
   }
 
@@ -132,7 +138,7 @@ async function ensureRealDirectoryCopy(
 }
 
 function skippedCacheResult(
-  status: "disabled" | "independent" | "source_missing",
+  status: "disabled" | "explicit_marketplace" | "independent" | "source_missing",
   message: string,
 ): CodexComputerUsePluginCacheRepairResult {
   return {

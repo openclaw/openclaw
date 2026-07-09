@@ -43,13 +43,15 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function requestCalls(
-  request: CodexComputerUseRequest,
-): ReadonlyArray<
+function requestCalls(request: CodexComputerUseRequest): ReadonlyArray<
   readonly [
     method: string,
     params?: unknown,
-    options?: { timeoutMs?: number; allowComputerUseMcpProbe?: boolean },
+    options?: {
+      timeoutMs?: number;
+      allowComputerUseMcpProbe?: boolean;
+      computerUseMcpServerName?: string;
+    },
   ]
 > {
   return vi.mocked(request).mock.calls;
@@ -134,7 +136,11 @@ describe("Codex Computer Use setup", () => {
         tool: "list_apps",
         arguments: {},
       },
-      { timeoutMs: 60_000, allowComputerUseMcpProbe: true },
+      {
+        timeoutMs: 60_000,
+        allowComputerUseMcpProbe: true,
+        computerUseMcpServerName: "computer-use",
+      },
     );
     expect(request).toHaveBeenCalledWith(
       "thread/unsubscribe",

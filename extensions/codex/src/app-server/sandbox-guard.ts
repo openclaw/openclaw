@@ -76,6 +76,7 @@ export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
   method: string;
   requestParams?: unknown;
   allowComputerUseMcpProbe?: boolean;
+  computerUseMcpServerName?: string;
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
@@ -84,7 +85,7 @@ export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
   if (
     params.allowComputerUseMcpProbe === true &&
     params.method === "mcpServer/tool/call" &&
-    isComputerUseListAppsProbe(params.requestParams)
+    isComputerUseListAppsProbe(params.requestParams, params.computerUseMcpServerName)
   ) {
     return undefined;
   }
@@ -198,7 +199,14 @@ function hasOpenClawSandboxEnvironmentSelection(value: unknown): boolean {
   );
 }
 
-function isComputerUseListAppsProbe(value: unknown): boolean {
+function isComputerUseListAppsProbe(
+  value: unknown,
+  expectedServerName: string | undefined,
+): boolean {
+  const expectedServer = expectedServerName?.trim();
+  if (!expectedServer) {
+    return false;
+  }
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
@@ -211,8 +219,7 @@ function isComputerUseListAppsProbe(value: unknown): boolean {
   if (
     typeof record.threadId !== "string" ||
     record.threadId.trim().length === 0 ||
-    typeof record.server !== "string" ||
-    record.server.trim().length === 0 ||
+    record.server !== expectedServer ||
     record.tool !== "list_apps"
   ) {
     return false;

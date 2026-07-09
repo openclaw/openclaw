@@ -82,6 +82,41 @@ describe("requestCodexAppServerJson sandbox guard", () => {
           arguments: {},
         },
         allowComputerUseMcpProbe: true,
+        computerUseMcpServerName: "computer-use",
+        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+        sessionKey: "sandboxed-session",
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    await expect(
+      requestCodexAppServerJson({
+        method: "mcpServer/tool/call",
+        requestParams: {
+          threadId: "thread-1",
+          server: "other-server",
+          tool: "list_apps",
+          arguments: {},
+        },
+        allowComputerUseMcpProbe: true,
+        computerUseMcpServerName: "computer-use",
+        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+        sessionKey: "sandboxed-session",
+      }),
+    ).rejects.toThrow(
+      "Codex-native app-server method `mcpServer/tool/call` is unavailable because OpenClaw sandboxing is active for this session.",
+    );
+
+    await expect(
+      requestCodexAppServerJson({
+        method: "mcpServer/tool/call",
+        requestParams: {
+          threadId: "thread-1",
+          server: "desktop-control",
+          tool: "list_apps",
+          arguments: {},
+        },
+        allowComputerUseMcpProbe: true,
+        computerUseMcpServerName: "desktop-control",
         config: { agents: { defaults: { sandbox: { mode: "all" } } } },
         sessionKey: "sandboxed-session",
       }),
@@ -97,6 +132,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
           arguments: { app: "Google Chrome" },
         },
         allowComputerUseMcpProbe: true,
+        computerUseMcpServerName: "computer-use",
         config: { agents: { defaults: { sandbox: { mode: "all" } } } },
         sessionKey: "sandboxed-session",
       }),
@@ -113,6 +149,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
           arguments: {},
         },
         allowComputerUseMcpProbe: true,
+        computerUseMcpServerName: "computer-use",
         config: { agents: { defaults: { sandbox: { mode: "all" } } } },
         sessionKey: "sandboxed-session",
       }),

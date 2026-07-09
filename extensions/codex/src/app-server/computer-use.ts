@@ -40,6 +40,7 @@ export type CodexComputerUseRequest = <T = JsonValue | undefined>(
   options?: {
     timeoutMs?: number;
     allowComputerUseMcpProbe?: boolean;
+    computerUseMcpServerName?: string;
   },
 ) => Promise<T>;
 
@@ -488,6 +489,7 @@ export async function runCodexComputerUseLiveTest(params: {
         {
           timeoutMs: params.config.toolCallTimeoutMs,
           allowComputerUseMcpProbe: true,
+          computerUseMcpServerName: params.config.mcpServerName,
         },
       );
       return {
@@ -1139,6 +1141,7 @@ function createComputerUseRequest(params: {
     options?: {
       timeoutMs?: number;
       allowComputerUseMcpProbe?: boolean;
+      computerUseMcpServerName?: string;
     },
   ) =>
     await requestCodexAppServerJson<T>({
@@ -1146,6 +1149,7 @@ function createComputerUseRequest(params: {
       requestParams,
       timeoutMs: options?.timeoutMs ?? params.timeoutMs ?? runtime.requestTimeoutMs,
       allowComputerUseMcpProbe: options?.allowComputerUseMcpProbe,
+      computerUseMcpServerName: options?.computerUseMcpServerName,
       pluginConfig: params.pluginConfig,
       startOptions: runtime.start,
     });

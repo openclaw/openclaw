@@ -168,6 +168,60 @@ describe("Codex Computer Use shared plugin cache", () => {
       removedStaleVersions: [],
     });
   });
+
+  it("preserves an explicitly named marketplace cache", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-computer-use-cache-"));
+    cleanupPaths.push(root);
+    const codexHome = path.join(root, "agent", "codex-home");
+    const cacheRoot = path.join(codexHome, "plugins", "cache", "desktop-tools", "computer-use");
+    await fs.mkdir(path.join(cacheRoot, "1.0.101"), { recursive: true });
+    await fs.mkdir(path.join(cacheRoot, "1.0.102"), { recursive: true });
+
+    const result = await ensureCodexComputerUseSharedPluginCache({
+      codexHome,
+      bundledMarketplacePath: path.join(root, "missing-bundled-marketplace"),
+      config: computerUseConfig({ marketplaceName: "desktop-tools" }),
+    });
+
+    expect(result).toMatchObject({
+      status: "explicit_marketplace",
+      changed: false,
+      removedStaleVersions: [],
+    });
+    await expect(fs.access(path.join(cacheRoot, "1.0.101"))).resolves.toBe(undefined);
+    await expect(fs.access(path.join(cacheRoot, "1.0.102"))).resolves.toBe(undefined);
+  });
+
+  it("preserves the default namespace when marketplacePath is explicit", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-computer-use-cache-"));
+    cleanupPaths.push(root);
+    const codexHome = path.join(root, "agent", "codex-home");
+    const cacheRoot = path.join(codexHome, "plugins", "cache", "openai-bundled", "computer-use");
+    await fs.mkdir(path.join(cacheRoot, "1.0.101"), { recursive: true });
+    await fs.mkdir(path.join(cacheRoot, "1.0.102"), { recursive: true });
+
+    const result = await ensureCodexComputerUseSharedPluginCache({
+      codexHome,
+      bundledMarketplacePath: path.join(root, "missing-bundled-marketplace"),
+      config: computerUseConfig({
+        marketplacePath: path.join(
+          root,
+          "custom-marketplace",
+          ".agents",
+          "plugins",
+          "marketplace.json",
+        ),
+      }),
+    });
+
+    expect(result).toMatchObject({
+      status: "explicit_marketplace",
+      changed: false,
+      removedStaleVersions: [],
+    });
+    await expect(fs.access(path.join(cacheRoot, "1.0.101"))).resolves.toBe(undefined);
+    await expect(fs.access(path.join(cacheRoot, "1.0.102"))).resolves.toBe(undefined);
+  });
 });
 
 function computerUseConfig(

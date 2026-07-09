@@ -24,6 +24,7 @@ export async function requestCodexAppServerJson<M extends CodexAppServerRequestM
   requestParams: CodexAppServerRequestParams<M>;
   timeoutMs?: number;
   allowComputerUseMcpProbe?: boolean;
+  computerUseMcpServerName?: string;
   pluginConfig?: unknown;
   startOptions?: CodexAppServerStartOptions;
   authProfileId?: string | null;
@@ -38,6 +39,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   requestParams?: unknown;
   timeoutMs?: number;
   allowComputerUseMcpProbe?: boolean;
+  computerUseMcpServerName?: string;
   pluginConfig?: unknown;
   startOptions?: CodexAppServerStartOptions;
   authProfileId?: string | null;
@@ -52,6 +54,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   requestParams?: unknown;
   timeoutMs?: number;
   allowComputerUseMcpProbe?: boolean;
+  computerUseMcpServerName?: string;
   pluginConfig?: unknown;
   startOptions?: CodexAppServerStartOptions;
   authProfileId?: string | null;
@@ -65,6 +68,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
     method: params.method,
     requestParams: params.requestParams,
     allowComputerUseMcpProbe: params.allowComputerUseMcpProbe,
+    computerUseMcpServerName: params.computerUseMcpServerName,
     config: params.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
