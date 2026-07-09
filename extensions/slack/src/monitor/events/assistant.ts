@@ -104,7 +104,7 @@ async function persistAssistantThreadMetadata(params: {
 }) {
   const { ctx, assistantThread } = params;
   try {
-    const response = (await ctx.app.client.conversations.replies({
+    const response = (await ctx.client.conversations.replies({
       token: ctx.botToken,
       channel: assistantThread.assistantChannelId,
       ts: assistantThread.threadTs,
@@ -126,7 +126,7 @@ async function persistAssistantThreadMetadata(params: {
     if (!initialMessage?.ts) {
       return;
     }
-    await ctx.app.client.chat.update({
+    await ctx.client.chat.update({
       token: ctx.botToken,
       channel: assistantThread.assistantChannelId,
       ts: initialMessage.ts,

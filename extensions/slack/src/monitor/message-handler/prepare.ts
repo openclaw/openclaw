@@ -183,9 +183,7 @@ async function restoreSlackAssistantThreadContextFromMetadata(params: {
     return undefined;
   }
   try {
-    const response = (await (
-      params.eventScope?.client ?? params.ctx.app.client
-    ).conversations.replies({
+    const response = (await (params.eventScope?.client ?? params.ctx.client).conversations.replies({
       channel: params.message.channel,
       ts: threadTs,
       oldest: threadTs,
@@ -323,7 +321,7 @@ async function resolveSlackHistoryMediaForPendingRecord(params: {
     isThreadReply: params.isThreadReply,
     threadStarter: params.threadStarter,
     isBotMessage: params.isBotMessage,
-    client: params.eventScope?.client ?? params.ctx.app.client,
+    client: params.eventScope?.client ?? params.ctx.client,
     botToken: params.ctx.botToken,
     mediaMaxBytes: Math.min(params.ctx.mediaMaxBytes, SLACK_HISTORY_MEDIA_MAX_BYTES),
     mediaReadIdleTimeoutMs: SLACK_HISTORY_MEDIA_IDLE_TIMEOUT_MS,
@@ -417,7 +415,7 @@ async function resolveSlackExplicitMentionState(params: {
   const explicitlyMentionedBotSubteam =
     Boolean(params.ctx.botUserId && params.hasSubteamMention) &&
     (await isSlackSubteamMentionForBot({
-      client: params.eventScope?.client ?? params.ctx.app.client,
+      client: params.eventScope?.client ?? params.ctx.client,
       text: params.messageText,
       botUserId: params.ctx.botUserId,
       teamId: params.eventScope?.teamId ?? params.ctx.teamId,
@@ -611,7 +609,7 @@ async function authorizeSlackInboundMessage(params: {
         await sendMessageSlack(message.channel, text, {
           cfg: ctx.cfg,
           token: ctx.botToken,
-          client: params.eventScope?.client ?? ctx.app.client,
+          client: params.eventScope?.client ?? ctx.client,
           accountId: account.accountId,
         });
       },
@@ -650,7 +648,7 @@ export async function prepareSlackMessage(params: {
   };
 }): Promise<PreparedSlackMessage | null> {
   const { ctx, account, message, opts } = params;
-  const slackClient = opts.eventScope?.client ?? ctx.app.client;
+  const slackClient = opts.eventScope?.client ?? ctx.client;
   const threadStarterWorkspaceScope = opts.eventScope
     ? { accountId: account.accountId, teamId: opts.eventScope.teamId }
     : undefined;

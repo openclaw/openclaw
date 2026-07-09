@@ -416,7 +416,7 @@ function shouldUseStreaming(params: {
 }
 
 async function resolveSlackStreamRecipientTeamId(params: {
-  client: Pick<PreparedSlackMessage["ctx"]["app"]["client"], "users">;
+  client: Pick<PreparedSlackMessage["ctx"]["client"], "users">;
   token: string;
   userId?: PreparedSlackMessage["message"]["user"];
   fallbackTeamId?: string;
@@ -445,7 +445,7 @@ async function resolveSlackStreamRecipientTeamId(params: {
 
 export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessage) {
   const { ctx, account, message, route } = prepared;
-  const slackClient = prepared.eventScope?.client ?? ctx.app.client;
+  const slackClient = prepared.eventScope?.client ?? ctx.client;
   const slackStreamFallbackTeamId = prepared.eventScope?.teamId ?? ctx.teamId;
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
