@@ -123,6 +123,17 @@ describe("write tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("finished\n");
   });
 
+  it("normalizes file_path aliases before writing files", async () => {
+    await createTempPath("placeholder.txt");
+    const tool = createWriteTool(tmpDir);
+    const prepared = tool.prepareArguments?.({ file_path: "alias.txt", content: "finished\n" });
+
+    expect(prepared).toEqual({ path: "alias.txt", content: "finished\n" });
+    await tool.execute("call-file-path", prepared as never, undefined);
+
+    await expect(fs.readFile(path.join(tmpDir, "alias.txt"), "utf-8")).resolves.toBe("finished\n");
+  });
+
   it("returns terminal no-op when writing identical content to existing file", async () => {
     const filePath = await createTempPath("identical.txt");
     await fs.writeFile(filePath, "hello\n", "utf-8");

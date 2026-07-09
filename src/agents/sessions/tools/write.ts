@@ -26,6 +26,7 @@ import {
   shortenPath,
   str,
 } from "./render-utils.js";
+import type { WriteToolInput } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 const writeSchema = Type.Object({
@@ -112,6 +113,19 @@ class WriteCallRenderComponent extends Text {
 }
 
 const WRITE_PARTIAL_FULL_HIGHLIGHT_LINES = 50;
+
+function prepareWriteArguments(input: unknown): WriteToolInput {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return input as WriteToolInput;
+  }
+  const args = input as Record<string, unknown>;
+  if (typeof args.path === "string" || typeof args.file_path !== "string") {
+    return input as WriteToolInput;
+  }
+  const { file_path, ...rest } = args;
+  void file_path;
+  return { ...rest, path: args.file_path } as WriteToolInput;
+}
 
 function highlightSingleLine(line: string, lang: string): string {
   const highlighted = highlightCode(line, lang);
@@ -390,6 +404,7 @@ export function createWriteToolDefinition(
     promptSnippet: "Create or overwrite files",
     promptGuidelines: ["Use write only for new files or complete rewrites."],
     parameters: writeSchema,
+    prepareArguments: prepareWriteArguments,
     async execute(
       toolCallId,
       { path, content }: { path: string; content: string },

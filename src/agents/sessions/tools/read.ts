@@ -32,7 +32,7 @@ import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/type
 import { normalizePositiveLimit } from "./limits.js";
 import { resolveReadPath } from "./path-utils.js";
 import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
-import type { ReadToolDetails } from "./tool-contracts.js";
+import type { ReadToolDetails, ReadToolInput } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.js";
 
@@ -85,6 +85,19 @@ export interface ReadToolOptions {
 }
 
 type ReadRenderArgs = { path?: string; file_path?: string; offset?: number; limit?: number };
+
+function prepareReadArguments(input: unknown): ReadToolInput {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return input as ReadToolInput;
+  }
+  const args = input as Record<string, unknown>;
+  if (typeof args.path === "string" || typeof args.file_path !== "string") {
+    return input as ReadToolInput;
+  }
+  const { file_path, ...rest } = args;
+  void file_path;
+  return { ...rest, path: args.file_path } as ReadToolInput;
+}
 
 function formatReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): string {
   if (args?.offset === undefined && args?.limit === undefined) {
@@ -263,6 +276,7 @@ export function createReadToolDefinition(
     promptSnippet: "Read file contents",
     promptGuidelines: ["Use read to examine files instead of cat or sed."],
     parameters: readSchema,
+    prepareArguments: prepareReadArguments,
     async execute(
       toolCallId,
       { path, offset, limit }: { path: string; offset?: number; limit?: number },

@@ -72,6 +72,7 @@ const editSchema = Type.Object(
 export type { EditToolDetails, EditToolInput } from "./tool-contracts.js";
 
 type LegacyEditToolInput = Record<string, unknown> & {
+  file_path?: unknown;
   edits?: unknown;
   oldText?: unknown;
   newText?: unknown;
@@ -110,6 +111,11 @@ function prepareEditArguments(input: unknown): EditToolInput {
   }
 
   const args = { ...(input as Record<string, unknown>) };
+  const legacyPath = typeof args.file_path === "string" ? args.file_path : undefined;
+  if (typeof args.path !== "string" && legacyPath) {
+    args.path = legacyPath;
+  }
+  delete args.file_path;
 
   // Some models (Opus 4.6, GLM-5.1) send edits as a JSON string instead of an array
   if (typeof args.edits === "string") {

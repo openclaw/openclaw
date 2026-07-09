@@ -103,6 +103,25 @@ describe("read tool", () => {
     );
   });
 
+  it("normalizes file_path aliases before reading files", async () => {
+    const tempDir = tempDirs.make("openclaw-read-file-path-");
+    await fs.writeFile(path.join(tempDir, "notes.txt"), "alpha\nbeta", "utf-8");
+    decodeWindowsTextFileBufferMock.mockReturnValueOnce("alpha\nbeta");
+    const tool = createReadToolDefinition(tempDir);
+    const prepared = tool.prepareArguments?.({ file_path: "notes.txt", limit: 1 });
+
+    expect(prepared).toEqual({ path: "notes.txt", limit: 1 });
+    const result = await tool.execute(
+      "call-file-path",
+      prepared as never,
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toBe("alpha\n\n[1 more lines in file. Use offset=2 to continue.]");
+  });
+
   it("shell-quotes the long-first-line fallback path", async () => {
     // The fallback command is shown to the model; quote the path so suggested
     // follow-up commands cannot execute path text as shell syntax.
@@ -214,6 +233,6 @@ describe("read tool", () => {
     );
 
     expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
-    expect(textContent(result)).toBe("/workspace/legacy.txt:c4e3bac3");
+    expect(textContent(result)).toBe(`${path.resolve("/workspace", "legacy.txt")}:c4e3bac3`);
   });
 });

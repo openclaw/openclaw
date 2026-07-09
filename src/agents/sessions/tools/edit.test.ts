@@ -243,6 +243,23 @@ describe("edit tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("after\n");
   });
 
+  it("normalizes file_path aliases before applying edits", async () => {
+    await createTempFile("before\n");
+    const tool = createEditTool(tmpDir);
+    const prepared = tool.prepareArguments?.({
+      file_path: "demo.txt",
+      edits: [{ oldText: "before", newText: "after" }],
+    });
+
+    expect(prepared).toEqual({
+      path: "demo.txt",
+      edits: [{ oldText: "before", newText: "after" }],
+    });
+    expect(Value.Check(tool.parameters, prepared)).toBe(true);
+    await tool.execute("call-file-path", prepared as never, undefined);
+    await expect(fs.readFile(path.join(tmpDir, "demo.txt"), "utf-8")).resolves.toBe("after\n");
+  });
+
   it("renders previews through custom edit operations", async () => {
     // Preview rendering must use injected operations so remote/sandbox files are
     // shown without accidentally reading from the host filesystem.
@@ -275,7 +292,7 @@ describe("edit tool", () => {
     const component = tool.renderCall?.(args, testTheme, context);
     await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
 
-    expect(readFile).toHaveBeenCalledWith(path.join("/workspace", "remote.txt"));
+    expect(readFile).toHaveBeenCalledWith(path.resolve("/workspace", "remote.txt"));
     expect((component as { preview?: { diff?: string } } | undefined)?.preview?.diff).toContain(
       "remote changed",
     );
