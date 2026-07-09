@@ -2658,13 +2658,19 @@ describe("google transport stream", () => {
   });
 
   it.each([
-    ["image first", ["screenshot", "weather"]],
-    ["image last", ["weather", "screenshot"]],
+    ["bare Gemini 2.5 image first", "gemini-2.5-flash", ["screenshot", "weather"]],
+    ["bare Gemini 2.5 image last", "gemini-2.5-flash", ["weather", "screenshot"]],
+    [
+      "provider-prefixed Gemini 2.5 image first",
+      "google/gemini-2.5-pro",
+      ["screenshot", "weather"],
+    ],
+    ["models-prefixed Gemini 2.5 image last", "models/gemini-2.5-pro", ["weather", "screenshot"]],
   ] as const)(
-    "keeps parallel function responses immediate and retains the deferred %s result",
-    (_label, resultOrder) => {
+    "keeps parallel function responses immediate and retains the deferred result for %s",
+    (_label, modelId, resultOrder) => {
       const params = buildGoogleGenerativeAiParams(
-        buildGeminiModel({ id: "gemini-2.5-flash", input: ["text", "image"] }),
+        buildGeminiModel({ id: modelId, input: ["text", "image"] }),
         {
           messages: [
             { role: "user", content: "Screenshot the page and check the weather.", timestamp: 0 },
