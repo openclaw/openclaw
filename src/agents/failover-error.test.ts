@@ -15,6 +15,7 @@ import {
   isTimeoutError,
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
+  resolveModelFallbackError,
 } from "./failover-error.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
@@ -1355,11 +1356,22 @@ describe("failover-error", () => {
         code: "RATE_LIMITED",
         message: "too many requests",
       };
-      const wrapper = Object.assign(new Error("rate limited"), {
+      const wrapper = Object.assign(new Error("cleanup takeover"), {
         name: "EmbeddedAttemptSessionTakeoverError",
         promptError: rateLimitPromptErr,
       });
       expect(isNonProviderRuntimeCoordinationError(wrapper)).toBe(false);
+      const resolution = resolveModelFallbackError(wrapper);
+      expect(resolution).toMatchObject({
+        kind: "failover",
+        error: {
+          message: "too many requests",
+          reason: "rate_limit",
+          status: 429,
+          code: "RATE_LIMITED",
+        },
+      });
+      expect(resolution.error).toHaveProperty("cause", wrapper);
     });
 
     it("returns true when takeover wrapper holds an unclassifiable promptError", () => {

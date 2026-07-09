@@ -4209,79 +4209,61 @@ describe("runWithImageModelFallback", () => {
     ]);
   });
 
-  it("falls back when a takeover wrapper carries classifiable provider timeout in promptError (#99963)", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.5",
-            fallbacks: ["anthropic/claude-sonnet-4-6"],
-          },
-        },
-      },
-    });
-
-    // Simulate EmbeddedAttemptPromptErrorWithCleanupTakeoverError: name matches
-    // EmbeddedAttemptSessionTakeoverError, but the real cause is in .promptError.
-    const takeoverTimeoutError = Object.assign(new Error("request timed out"), {
-      name: "EmbeddedAttemptSessionTakeoverError",
+  it.each([
+    {
+      label: "timeout",
       promptError: Object.assign(new Error("request timed out"), { name: "TimeoutError" }),
-    });
-    const run = vi.fn().mockRejectedValueOnce(takeoverTimeoutError).mockResolvedValueOnce("ok");
-
-    const result = await runWithModelFallback({
-      cfg,
-      provider: "openai",
-      model: "gpt-5.5",
-      run,
-    });
-
-    // The fallback chain should NOT abort on this takeover wrapper — it should
-    // recognize the underlying timeout in .promptError and try the next candidate.
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(result.attempts).toHaveLength(1);
-    expect(result.attempts[0].reason).toBe("timeout");
-  });
-
-  it("falls back when a takeover wrapper carries rate_limit in promptError and classifies reason correctly", async () => {
-    const cfg = makeCfg({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.5",
-            fallbacks: ["anthropic/claude-sonnet-4-6"],
+      expected: { message: "request timed out", reason: "timeout", status: 408 },
+    },
+    {
+      label: "rate limit",
+      promptError: { status: 429, code: "RATE_LIMITED", message: "too many requests" },
+      expected: {
+        message: "too many requests",
+        reason: "rate_limit",
+        status: 429,
+        code: "RATE_LIMITED",
+      },
+    },
+  ])(
+    "falls back with the preserved $label prompt error (#99963)",
+    async ({ promptError, expected }) => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.5",
+              fallbacks: ["anthropic/claude-sonnet-4-6"],
+            },
           },
         },
-      },
-    });
+      });
+      const takeoverError = Object.assign(new Error("cleanup takeover"), {
+        name: "EmbeddedAttemptSessionTakeoverError",
+        promptError,
+      });
+      const run = vi.fn().mockRejectedValueOnce(takeoverError).mockResolvedValueOnce("ok");
+      const onError = vi.fn();
 
-    // Simulate EmbeddedAttemptPromptErrorWithCleanupTakeoverError with a
-    // rate_limit promptError. The classifier sees the classifiable cause in
-    // .promptError and allows fallback; downstream coerceToFailoverError
-    // classifies it via the wrapper message as reason=rate_limit.
-    const rateLimitPromptErr = {
-      status: 429,
-      message: "too many requests",
-    };
-    const takeoverRateLimitError = Object.assign(new Error("too many requests"), {
-      name: "EmbeddedAttemptSessionTakeoverError",
-      promptError: rateLimitPromptErr,
-    });
-    const run = vi.fn().mockRejectedValueOnce(takeoverRateLimitError).mockResolvedValueOnce("ok");
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.5",
+        run,
+        onError,
+      });
 
-    const result = await runWithModelFallback({
-      cfg,
-      provider: "openai",
-      model: "gpt-5.5",
-      run,
-    });
-
-    expect(result.result).toBe("ok");
-    expect(run).toHaveBeenCalledTimes(2);
-    expect(result.attempts).toHaveLength(1);
-    expect(result.attempts[0].reason).toBe("rate_limit");
-  });
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(result.attempts[0]).toMatchObject({
+        error: expected.message,
+        reason: expected.reason,
+      });
+      const observedError = onError.mock.calls[0]?.[0]?.error;
+      expect(observedError).toMatchObject({ name: "FailoverError", ...expected });
+      expect(observedError).toHaveProperty("cause", takeoverError);
+    },
+  );
 
   it("still aborts fallback for a pure takeover error without promptError (regression)", async () => {
     const cfg = makeCfg({

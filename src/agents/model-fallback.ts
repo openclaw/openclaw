@@ -42,6 +42,7 @@ import {
   describeFailoverError,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
+  resolveModelFallbackError,
 } from "./failover-error.js";
 import {
   shouldAllowCooldownProbeForReason,
@@ -412,7 +413,13 @@ async function runFallbackCandidate<T>(params: {
     if (isCommandLaneTaskTimeoutError(err)) {
       throw err;
     }
-    if (isNonProviderRuntimeCoordinationError(err)) {
+    const fallbackError = resolveModelFallbackError(err, {
+      provider: params.provider,
+      model: params.model,
+      sessionId: params.attribution?.sessionId,
+      lane: params.attribution?.lane,
+    });
+    if (fallbackError.kind === "coordination") {
       throw err;
     }
     if (isTerminalAbort(params.abortSignal) || isCallerAbortSignal(params.abortSignal)) {
@@ -424,15 +431,10 @@ async function runFallbackCandidate<T>(params: {
     if (isTerminalAbortFromError(err)) {
       throw err;
     }
-    // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
-    // so they become FailoverErrors and continue the fallback loop instead of aborting.
-    const normalizedFailover = coerceToFailoverError(err, {
-      provider: params.provider,
-      model: params.model,
-      sessionId: params.attribution?.sessionId,
-      lane: params.attribution?.lane,
-    });
-    return { ok: false, error: normalizedFailover ?? err };
+    return {
+      ok: false,
+      error: fallbackError.kind === "failover" ? fallbackError.error : err,
+    };
   }
 }
 

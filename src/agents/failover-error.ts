@@ -329,6 +329,15 @@ function isEmbeddedAttemptSessionTakeover(err: unknown): boolean {
   );
 }
 
+function resolveFailoverSourceError(err: unknown): unknown {
+  if (!isEmbeddedAttemptSessionTakeover(err) || !err || typeof err !== "object") {
+    return err;
+  }
+  // Cleanup takeover is a secondary failure when the wrapper preserves the
+  // prompt error. Classify and report that provider-facing source instead.
+  return "promptError" in err ? err.promptError : err;
+}
+
 function hasEmbeddedAttemptSessionTakeover(err: unknown, seen: Set<object> = new Set()): boolean {
   if (isEmbeddedAttemptSessionTakeover(err)) {
     return true;
@@ -402,33 +411,7 @@ function hasMissingToolResultFailure(err: unknown): boolean {
  * same local condition. See #83510 and #95474.
  */
 export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
-  if (
-    !hasSessionWriteLockContention(err) &&
-    !hasEmbeddedAttemptSessionTakeover(err) &&
-    !hasMissingToolResultFailure(err)
-  ) {
-    return false;
-  }
-  if (isFailoverError(err)) {
-    return false;
-  }
-  if (isEmbeddedAttemptSessionTakeover(err)) {
-    // A wrapper like EmbeddedAttemptPromptErrorWithCleanupTakeoverError sets
-    // name="EmbeddedAttemptSessionTakeoverError" but preserves the real cause in
-    // .promptError. If the underlying prompt error is a provider-level failure
-    // (timeout / rate_limit / auth / …), fallback must still be allowed — the
-    // takeover is a downstream cleanup side-effect, not the root cause.
-    if (
-      err &&
-      typeof err === "object" &&
-      "promptError" in err &&
-      resolveFailoverClassificationFromError(err.promptError) !== null
-    ) {
-      return false;
-    }
-    return true;
-  }
-  return resolveFailoverClassificationFromError(err) === null;
+  return resolveModelFallbackError(err).kind === "coordination";
 }
 
 function hasTimeoutHint(err: unknown): boolean {
@@ -744,46 +727,55 @@ export function describeFailoverError(err: unknown): {
   };
 }
 
+type FailoverErrorContext = {
+  provider?: string;
+  model?: string;
+  profileId?: string;
+  authMode?: string;
+  sessionId?: string;
+  lane?: string;
+};
+
+type ModelFallbackErrorResolution =
+  | { kind: "failover"; error: FailoverError }
+  | { kind: "coordination"; error: unknown }
+  | { kind: "unknown"; error: unknown };
+
 /** Convert a classified raw error into a FailoverError with optional request context. */
 export function coerceToFailoverError(
   err: unknown,
-  context?: {
-    provider?: string;
-    model?: string;
-    profileId?: string;
-    authMode?: string;
-    sessionId?: string;
-    lane?: string;
-  },
+  context?: FailoverErrorContext,
 ): FailoverError | null {
-  if (isFailoverError(err)) {
-    if (context?.authMode && !err.authMode) {
-      const message = typeof err.message === "string" ? err.message : String(err);
+  const sourceError = resolveFailoverSourceError(err);
+  if (isFailoverError(sourceError)) {
+    if (context?.authMode && !sourceError.authMode) {
+      const message =
+        typeof sourceError.message === "string" ? sourceError.message : String(sourceError);
       return new FailoverError(message, {
-        reason: err.reason,
-        provider: err.provider,
-        model: err.model,
-        profileId: err.profileId,
+        reason: sourceError.reason,
+        provider: sourceError.provider,
+        model: sourceError.model,
+        profileId: sourceError.profileId,
         authMode: context.authMode,
-        status: err.status,
-        code: err.code,
-        rawError: err.rawError,
-        authProfileFailure: err.authProfileFailure,
-        sessionId: err.sessionId,
-        lane: err.lane,
-        cause: err.cause,
-        suspend: err.suspend,
+        status: sourceError.status,
+        code: sourceError.code,
+        rawError: sourceError.rawError,
+        authProfileFailure: sourceError.authProfileFailure,
+        sessionId: sourceError.sessionId,
+        lane: sourceError.lane,
+        cause: sourceError.cause,
+        suspend: sourceError.suspend,
       });
     }
-    return err;
+    return sourceError;
   }
-  const reason = resolveFailoverReasonFromError(err, context?.provider);
+  const reason = resolveFailoverReasonFromError(sourceError, context?.provider);
   if (!reason) {
     return null;
   }
 
-  const signal = normalizeErrorSignal(err);
-  const message = signal.message ?? String(err);
+  const signal = normalizeErrorSignal(sourceError);
+  const message = signal.message ?? String(sourceError);
   const status = signal.status ?? resolveFailoverStatus(reason);
   const code = signal.code;
 
@@ -805,4 +797,23 @@ export function coerceToFailoverError(
     cause: err instanceof Error ? err : undefined,
     suspend: shouldSuspend,
   });
+}
+
+/** Classify one candidate failure once so fallback routing and diagnostics share it. */
+export function resolveModelFallbackError(
+  err: unknown,
+  context?: FailoverErrorContext,
+): ModelFallbackErrorResolution {
+  const failoverError = coerceToFailoverError(err, context);
+  if (failoverError) {
+    return { kind: "failover", error: failoverError };
+  }
+  if (
+    hasSessionWriteLockContention(err) ||
+    hasEmbeddedAttemptSessionTakeover(err) ||
+    hasMissingToolResultFailure(err)
+  ) {
+    return { kind: "coordination", error: err };
+  }
+  return { kind: "unknown", error: err };
 }
