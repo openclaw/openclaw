@@ -70,13 +70,13 @@ An already paired administrator can create the iOS/Android connection QR without
 
 <Steps>
   <Step title="Open mobile pairing">
-    Select **Nodes**, then click **Pair mobile device** in the **Devices** card.
+    Select **Nodes**, then click **Pair mobile device** in the **Nodes & devices** card.
   </Step>
   <Step title="Connect the phone">
     In the OpenClaw mobile app, open **Settings** → **Gateway** and scan the QR code. You can copy and paste the setup code instead.
   </Step>
   <Step title="Confirm the connection">
-    The official iOS/Android app connects automatically. If **Devices** shows a pending request, review its role and scopes before approving it.
+    The official iOS/Android app connects automatically. If **Pending approval** shows a request, review its role and scopes before approving it.
   </Step>
 </Steps>
 
@@ -147,7 +147,7 @@ A **Search** field at the top of the sidebar opens the command palette (⌘K). T
     - Cron jobs: list/add/edit/run/enable/disable plus run history (`cron.*`).
     - Tasks: live active and recent background task ledger with linked sessions and cancellation (`tasks.*`).
     - Skills: status, enable/disable, install, API key updates (`skills.*`).
-    - Nodes: list plus caps (`node.list`), create mobile setup codes, and approve device pairing (`device.pair.*`).
+    - Nodes: one **Nodes & devices** inventory that joins paired device records with the node catalog (`node.list`, `device.pair.list`) — one entry per machine with roles, live link status, tokens, and capabilities. Duplicate pairings of the same client collapse into an expandable group, and **Clean up N stale** removes superseded offline pairings in bulk. Entries can be removed (`node.pair.remove`, `device.pair.remove`), device pairing and node re-approvals handled inline (`device.pair.*`, `node.pair.approve`/`reject`), and mobile setup codes created from the same card.
     - Exec approvals: edit gateway or node allowlists and ask policy for `exec host=gateway/node` (`exec.approvals.*`).
 
   </Accordion>

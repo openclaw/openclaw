@@ -42,7 +42,7 @@ Gateway has not been configured yet, run `openclaw onboard` first so setup-code
 creation has a token or password auth path.
 
 2. Open the [Control UI](/web/control-ui), select **Nodes**, and click
-   **Pair mobile device** in the **Devices** card.
+   **Pair mobile device** in the **Nodes & devices** card.
 
 3. In the iOS app, open **Settings** -> **Gateway**, scan the QR code (or paste
    the setup code), and connect.
@@ -50,7 +50,7 @@ creation has a token or password auth path.
    If the setup code contains both LAN and Tailscale Serve routes, the app
    probes them in order and saves the first reachable endpoint.
 
-4. The official app connects automatically. If **Devices** shows a pending
+4. The official app connects automatically. If **Pending approval** shows a
    request, review its role and scopes before approving it.
 
 The Apple Watch companion does not have a separate OpenClaw pairing approval.
