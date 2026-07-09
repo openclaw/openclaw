@@ -21,10 +21,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -62,6 +64,7 @@ internal fun SkillWorkshopSettingsScreen(
   var query by rememberSaveable { mutableStateOf("") }
   var selectedAgentId by rememberSaveable { mutableStateOf("") }
   var selectedProposalId by rememberSaveable { mutableStateOf<String?>(null) }
+  var pendingAction by remember { mutableStateOf<SkillWorkshopPendingAction?>(null) }
   val selectedAgentParam = selectedAgentId.trim().takeIf { it.isNotEmpty() }
   val visibleProposals = skillWorkshopVisibleProposals(summary, selectedAgentParam)
   val filteredProposals = skillWorkshopFilteredProposals(visibleProposals, statusFilter, query)
@@ -85,6 +88,39 @@ internal fun SkillWorkshopSettingsScreen(
     if (isConnected && selectedProposal != null && selectedProposal.content == null) {
       viewModel.inspectSkillWorkshopProposal(proposalId = selectedProposal.id, agentId = selectedAgentParam)
     }
+  }
+
+  LaunchedEffect(selectedProposal?.id, pendingAction?.proposalId) {
+    if (pendingAction != null && selectedProposal?.id != pendingAction?.proposalId) {
+      pendingAction = null
+    }
+  }
+
+  pendingAction?.let { action ->
+    SkillWorkshopActionConfirmDialog(
+      action = action,
+      onDismiss = { pendingAction = null },
+      onConfirm = {
+        pendingAction = null
+        when (action.action) {
+          SkillWorkshopProposalAction.Apply ->
+            viewModel.applySkillWorkshopProposal(
+              proposalId = action.proposalId,
+              agentId = selectedAgentParam,
+            )
+          SkillWorkshopProposalAction.Reject ->
+            viewModel.rejectSkillWorkshopProposal(
+              proposalId = action.proposalId,
+              agentId = selectedAgentParam,
+            )
+          SkillWorkshopProposalAction.Quarantine ->
+            viewModel.quarantineSkillWorkshopProposal(
+              proposalId = action.proposalId,
+              agentId = selectedAgentParam,
+            )
+        }
+      },
+    )
   }
 
   SettingsDetailFrame(
@@ -174,19 +210,74 @@ internal fun SkillWorkshopSettingsScreen(
               viewModel.inspectSkillWorkshopProposal(proposalId = proposal.id, agentId = selectedAgentParam)
             },
             onApply = {
-              viewModel.applySkillWorkshopProposal(proposalId = proposal.id, agentId = selectedAgentParam)
+              pendingAction =
+                SkillWorkshopPendingAction(
+                  action = SkillWorkshopProposalAction.Apply,
+                  proposalId = proposal.id,
+                  title = proposal.title,
+                )
             },
             onReject = {
-              viewModel.rejectSkillWorkshopProposal(proposalId = proposal.id, agentId = selectedAgentParam)
+              pendingAction =
+                SkillWorkshopPendingAction(
+                  action = SkillWorkshopProposalAction.Reject,
+                  proposalId = proposal.id,
+                  title = proposal.title,
+                )
             },
             onQuarantine = {
-              viewModel.quarantineSkillWorkshopProposal(proposalId = proposal.id, agentId = selectedAgentParam)
+              pendingAction =
+                SkillWorkshopPendingAction(
+                  action = SkillWorkshopProposalAction.Quarantine,
+                  proposalId = proposal.id,
+                  title = proposal.title,
+                )
             },
           )
         }
       }
     }
   }
+}
+
+private enum class SkillWorkshopProposalAction(val label: String) {
+  Apply("Apply"),
+  Reject("Reject"),
+  Quarantine("Quarantine"),
+}
+
+private data class SkillWorkshopPendingAction(
+  val action: SkillWorkshopProposalAction,
+  val proposalId: String,
+  val title: String,
+)
+
+@Composable
+private fun SkillWorkshopActionConfirmDialog(
+  action: SkillWorkshopPendingAction,
+  onDismiss: () -> Unit,
+  onConfirm: () -> Unit,
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text("${action.action.label} proposal?") },
+    text = {
+      Text(
+        text =
+          "This will ${action.action.label.lowercase()} \"${action.title}\" and refresh Skill Workshop state from the gateway.",
+      )
+    },
+    confirmButton = {
+      TextButton(onClick = onConfirm) {
+        Text(action.action.label)
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss) {
+        Text("Cancel")
+      }
+    },
+  )
 }
 
 @Composable
@@ -411,7 +502,7 @@ private fun SkillWorkshopProposalDetail(
       )
       if (!operatorAdminScopeAvailable) {
         Text(
-          text = "Apply, reject, and quarantine require operator.admin scope.",
+          text = "Apply, reject, and quarantine require operator.admin scope. Reconnect with shared gateway auth or approve an operator scope upgrade to enable lifecycle actions.",
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.warning,
         )

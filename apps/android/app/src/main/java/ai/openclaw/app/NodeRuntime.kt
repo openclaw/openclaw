@@ -3863,16 +3863,36 @@ class NodeRuntime private constructor(
       return
     }
     try {
-      requestGatewayData(
-        gatewayScope,
-        "skills.proposals.$action",
-        skillWorkshopParams(agentId = agentId, proposalId = proposalId).toString(),
-      )
+      val res =
+        requestGatewayData(
+          gatewayScope,
+          "skills.proposals.$action",
+          skillWorkshopParams(agentId = agentId, proposalId = proposalId).toString(),
+        )
+      val updatedProposal =
+        parseSkillWorkshopProposalActionResult(
+          root = json.parseToJsonElement(res).asObjectOrNull(),
+          previous =
+            _skillWorkshopSummary.value
+              .takeIf { it.agentId == requestAgentId }
+              ?.proposals
+              ?.firstOrNull { it.id == proposalId },
+        )
+      val expectedStatus = skillWorkshopActionStatus(action)
+      var mutationConfirmed = false
       publishGatewayData(gatewayScope) {
         if (skillWorkshopMutationSeq.get() == mutationSeq && _skillWorkshopSummary.value.agentId == requestAgentId) {
-          _skillWorkshopNoticeText.value = skillWorkshopActionNotice(action)
+          if (updatedProposal?.status == expectedStatus) {
+            _skillWorkshopSummary.value = _skillWorkshopSummary.value.withProposal(updatedProposal)
+            _skillWorkshopNoticeText.value = skillWorkshopActionNotice(action)
+            mutationConfirmed = true
+          } else {
+            val statusLabel = updatedProposal?.status?.takeIf { it.isNotBlank() } ?: "unknown"
+            _skillWorkshopErrorText.value = "Gateway returned status '$statusLabel' after ${skillWorkshopActionVerb(action)}."
+          }
         }
       }
+      if (!mutationConfirmed) return
       var refreshStillCurrent = false
       publishGatewayData(gatewayScope) {
         refreshStillCurrent =
@@ -4562,6 +4582,36 @@ class NodeRuntime private constructor(
     )
   }
 
+  private fun parseSkillWorkshopProposalActionResult(
+    root: JsonObject?,
+    previous: GatewaySkillWorkshopProposal?,
+  ): GatewaySkillWorkshopProposal? {
+    val record =
+      root?.get("record").asObjectOrNull()
+        ?: root?.takeIf { it.skillWorkshopString("status") != null }
+        ?: return null
+    val id = record.skillWorkshopString("id") ?: previous?.id ?: return null
+    val target = record["target"].asObjectOrNull()
+    val updatedAt = record.skillWorkshopString("updatedAt").orEmpty()
+    return GatewaySkillWorkshopProposal(
+      id = id,
+      kind = record.skillWorkshopString("kind") ?: previous?.kind ?: "proposal",
+      status = record.skillWorkshopString("status") ?: previous?.status ?: "pending",
+      title = record.skillWorkshopString("title") ?: target?.skillWorkshopString("skillName") ?: previous?.title ?: id,
+      description = record.skillWorkshopString("description") ?: previous?.description,
+      skillName = target?.skillWorkshopString("skillName") ?: previous?.skillName ?: id,
+      skillKey = target?.skillWorkshopString("skillKey") ?: previous?.skillKey ?: id,
+      createdAt = record.skillWorkshopString("createdAt") ?: previous?.createdAt.orEmpty(),
+      updatedAt = updatedAt.ifEmpty { previous?.updatedAt.orEmpty() },
+      scanState =
+        record["scan"].asObjectOrNull()?.skillWorkshopString("state")
+          ?: record.skillWorkshopString("scanState")
+          ?: previous?.scanState,
+      content = previous?.content,
+      supportFiles = previous?.supportFiles.orEmpty(),
+    )
+  }
+
   private fun parseSkillWorkshopSupportFiles(files: JsonArray?): List<GatewaySkillWorkshopSupportFile> {
     val parsed =
       files?.mapNotNull { item ->
@@ -4592,6 +4642,14 @@ class NodeRuntime private constructor(
       "reject" -> "Proposal rejected."
       "quarantine" -> "Proposal quarantined."
       else -> "Proposal updated."
+    }
+
+  private fun skillWorkshopActionStatus(action: String): String =
+    when (action) {
+      "apply" -> "applied"
+      "reject" -> "rejected"
+      "quarantine" -> "quarantined"
+      else -> "pending"
     }
 
   private fun skillWorkshopActionVerb(action: String): String =

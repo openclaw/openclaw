@@ -2,6 +2,9 @@ package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewayEndpoint
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -17,6 +20,8 @@ import java.util.UUID
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class SkillWorkshopAgentScopeRuntimeTest {
+  private val json = Json { ignoreUnknownKeys = true }
+
   @Before
   fun clearPlainPrefs() {
     RuntimeEnvironment
@@ -68,6 +73,48 @@ class SkillWorkshopAgentScopeRuntimeTest {
     assertNull(runtime.skillWorkshopNoticeText.value)
   }
 
+  @Test
+  fun proposalActionResultUsesGatewayReturnedStatusAndPreservesInspectedDetails() {
+    val runtime = createTestRuntime()
+    val supportFiles =
+      listOf(GatewaySkillWorkshopSupportFile(path = "references/proof.md", content = "proof"))
+    val previous =
+      skillWorkshopProposal("proposal-1")
+        .copy(
+          status = "pending",
+          content = "inspected markdown",
+          supportFiles = supportFiles,
+        )
+
+    val rejected =
+      parseSkillWorkshopActionResult(
+        runtime,
+        """
+        {
+          "record": {
+            "id": "proposal-1",
+            "kind": "create",
+            "status": "rejected",
+            "title": "Rejected proposal",
+            "description": "Gateway action response",
+            "createdAt": "2026-07-08T00:00:00Z",
+            "updatedAt": "2026-07-09T00:00:00Z",
+            "scan": { "state": "clean" },
+            "target": { "skillName": "Rejected Skill", "skillKey": "rejected-skill" }
+          }
+        }
+        """.trimIndent(),
+        previous,
+      )
+
+    assertEquals("rejected", rejected?.status)
+    assertEquals("2026-07-09T00:00:00Z", rejected?.updatedAt)
+    assertEquals("Rejected Skill", rejected?.skillName)
+    assertEquals("clean", rejected?.scanState)
+    assertEquals("inspected markdown", rejected?.content)
+    assertEquals(supportFiles, rejected?.supportFiles)
+  }
+
   private fun createTestRuntime(): NodeRuntime {
     val app = RuntimeEnvironment.getApplication()
     val securePrefs =
@@ -96,6 +143,26 @@ class SkillWorkshopAgentScopeRuntimeTest {
       updatedAt = "2026-07-08T00:00:00Z",
       scanState = null,
     )
+
+  private fun parseSkillWorkshopActionResult(
+    runtime: NodeRuntime,
+    payloadJson: String,
+    previous: GatewaySkillWorkshopProposal,
+  ): GatewaySkillWorkshopProposal? {
+    val method =
+      runtime.javaClass.getDeclaredMethod(
+        "parseSkillWorkshopProposalActionResult",
+        JsonObject::class.java,
+        GatewaySkillWorkshopProposal::class.java,
+      )
+    method.isAccessible = true
+    @Suppress("UNCHECKED_CAST")
+    return method.invoke(
+      runtime,
+      json.parseToJsonElement(payloadJson).jsonObject,
+      previous,
+    ) as GatewaySkillWorkshopProposal?
+  }
 
   private fun waitUntil(condition: () -> Boolean) {
     repeat(50) {
