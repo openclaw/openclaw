@@ -246,6 +246,29 @@ describe("gateway/node-command-policy", () => {
     expect(macAllowlist.has("system.run")).toBe(false);
     expect(macAllowlist.has("system.which")).toBe(false);
     expect(macAllowlist.has("screen.snapshot")).toBe(false);
+
+    const watchAllowlist = resolveNodeCommandAllowlist(cfg, {
+      platform: "watchOS 11.5.0",
+      deviceFamily: "Apple Watch",
+    });
+    expect(watchAllowlist.has("device.info")).toBe(true);
+    expect(watchAllowlist.has("device.status")).toBe(true);
+    expect(watchAllowlist.has("system.notify")).toBe(true);
+    expect(watchAllowlist.has("camera.list")).toBe(false);
+    expect(watchAllowlist.has("system.run")).toBe(false);
+  });
+
+  it("requires matching watchOS platform and device-family metadata", () => {
+    const cfg = {} as OpenClawConfig;
+    const mismatch = resolveNodeCommandAllowlist(cfg, {
+      platform: "watchOS 11.5.0",
+      deviceFamily: "iPhone",
+    });
+    expect(mismatch.has("device.info")).toBe(false);
+
+    const familyOnly = resolveNodeCommandAllowlist(cfg, { deviceFamily: "Apple Watch" });
+    expect(familyOnly.has("device.info")).toBe(true);
+    expect(familyOnly.has("system.run")).toBe(false);
   });
 
   it("keeps explicitly approved host commands for desktop platforms", () => {

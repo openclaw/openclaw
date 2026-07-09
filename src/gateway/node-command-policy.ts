@@ -94,6 +94,7 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...MOTION_COMMANDS,
     ...IOS_SYSTEM_COMMANDS,
   ],
+  watchos: [...DEVICE_COMMANDS, ...IOS_SYSTEM_COMMANDS],
   android: [
     ...CAMERA_COMMANDS,
     ...LOCATION_COMMANDS,
@@ -131,10 +132,11 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
   unknown: [...UNKNOWN_PLATFORM_COMMANDS],
 };
 
-type PlatformId = "ios" | "android" | "macos" | "windows" | "linux" | "unknown";
+type PlatformId = "ios" | "watchos" | "android" | "macos" | "windows" | "linux" | "unknown";
 
 const CANONICAL_PLATFORM_IDS = new Set<Exclude<PlatformId, "unknown">>([
   "ios",
+  "watchos",
   "android",
   "macos",
   "windows",
@@ -146,6 +148,7 @@ const DEVICE_FAMILY_TOKEN_RULES: ReadonlyArray<{
   tokens: readonly string[];
 }> = [
   { id: "ios", tokens: ["iphone", "ipad", "ios"] },
+  { id: "watchos", tokens: ["apple watch", "watchos"] },
   { id: "android", tokens: ["android"] },
   { id: "macos", tokens: ["mac"] },
   { id: "windows", tokens: ["windows"] },
@@ -166,6 +169,8 @@ function platformMatchesDeviceFamily(
   switch (platformId) {
     case "ios":
       return family === "" || /^(?:iphone|ipad|ios)$/.test(family);
+    case "watchos":
+      return family === "apple watch" || family === "watchos";
     case "android":
       return family === "" || family === "android";
     case "macos":
@@ -184,6 +189,9 @@ function resolvePlatformIdByNativeLabel(
 ): Exclude<PlatformId, "unknown"> | undefined {
   if (/^(?:ios|ipados) \d+(?:\.\d+){0,2}$/.test(platform)) {
     return /^(?:iphone|ipad|ios)$/.test(deviceFamily) ? "ios" : undefined;
+  }
+  if (/^watchos \d+(?:\.\d+){0,2}$/.test(platform)) {
+    return /^(?:apple watch|watchos)$/.test(deviceFamily) ? "watchos" : undefined;
   }
   if (/^macos \d+(?:\.\d+){0,2}$/.test(platform)) {
     return deviceFamily === "mac" ? "macos" : undefined;
