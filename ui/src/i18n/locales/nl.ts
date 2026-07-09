@@ -270,6 +270,7 @@ export const nl: TranslationMap = {
     model: "Model",
     provider: "Provider",
     runtime: "Runtime",
+    runDuration: "Uitvoeringsduur",
     surface: "Oppervlak",
     subject: "Onderwerp",
     room: "Ruimte",
@@ -659,6 +660,57 @@ export const nl: TranslationMap = {
     unavailableTitle: "Plugin panel unavailable",
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
+  },
+  codexSessions: {
+    eyebrow: "Codex-vloot",
+    title: "Sessies op al je computers",
+    subtitle:
+      "Een alleen-lezen weergave van Codex-sessies op deze Gateway en elke verbonden computer die ze deelt.",
+    summaryLabel: "Overzicht van Codex-sessies",
+    summary: {
+      sessions: "sessies",
+      onlineHosts: "online",
+      hosts: "hosts",
+    },
+    searchLabel: "Codex-sessies zoeken",
+    searchPlaceholder: "Sessietitels zoeken",
+    scopeLabel: "Archieffilter voor sessies",
+    scope: {
+      active: "Actief",
+      archived: "Gearchiveerd",
+    },
+    refresh: "Vernieuwen",
+    disconnected: "Maak opnieuw verbinding met de Gateway om Codex-sessies te vernieuwen.",
+    partial: "Onbeschikbare hosts: {count}. Andere hosts blijven beschikbaar.",
+    loading: "Codex-sessies laden…",
+    loadMore: "Meer laden",
+    loadingMore: "Laden…",
+    untitled: "Codex-sessie zonder titel",
+    threadId: "Thread",
+    status: {
+      active: "Actief",
+      idle: "Inactief",
+      archived: "Gearchiveerd",
+      notLoaded: "Opgeslagen",
+      systemError: "Systeemfout",
+      unknown: "Onbekend",
+    },
+    host: {
+      gateway: "Gateway",
+      node: "Node",
+      connected: "Verbonden",
+      offline: "Offline",
+      unavailable: "Sessiecatalogus niet beschikbaar",
+      sessionCount: "{count} getoond",
+    },
+    empty: {
+      title: "Geen Codex-hosts gevonden",
+      subtitle:
+        "Schakel het delen van Codex-sessies in op de Gateway of een gekoppelde computer en vernieuw daarna deze weergave.",
+      search: "Geen sessies op deze host komen overeen met je zoekopdracht.",
+      active: "Geen actieve sessies op deze host.",
+      archived: "Geen gearchiveerde sessies op deze host.",
+    },
   },
   logbook: {
     duration: {

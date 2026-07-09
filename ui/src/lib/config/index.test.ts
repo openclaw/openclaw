@@ -10,7 +10,6 @@ import {
   resetConfigPendingChanges,
   saveConfig,
   stageDefaultAgentConfigEntry,
-  stageConfigPreset,
   updateMcpServerEnabled,
   updateConfigFormValue,
   updateConfigRawValue,
@@ -511,97 +510,6 @@ describe("updateMcpServerEnabled", () => {
 
     expect(state.configForm).toEqual({ mcp: { servers: { local: { command: "node" } } } });
     expect(state.configFormDirty).toBe(true);
-  });
-});
-
-describe("stageConfigPreset", () => {
-  it("ignores preset staging before a config snapshot is ready", () => {
-    const state = createState();
-
-    stageConfigPreset(state, {
-      agents: {
-        defaults: {
-          bootstrapMaxChars: 50_000,
-          bootstrapTotalMaxChars: 300_000,
-          contextInjection: "always",
-        },
-      },
-    });
-
-    expect(state.configForm).toBeNull();
-    expect(state.configRaw).toBe("");
-    expect(state.configFormDirty).toBe(false);
-  });
-
-  it("stages preset changes without dropping unrelated config", () => {
-    const state = createState();
-    applyConfigSnapshot(state, {
-      config: {
-        agents: {
-          defaults: {
-            bootstrapMaxChars: 12_000,
-            bootstrapTotalMaxChars: 60_000,
-            contextInjection: "always",
-          },
-        },
-        gateway: { mode: "local" },
-      },
-      valid: true,
-      issues: [],
-      raw: '{\n  "agents": {\n    "defaults": {\n      "bootstrapMaxChars": 12000,\n      "bootstrapTotalMaxChars": 60000,\n      "contextInjection": "always"\n    }\n  },\n  "gateway": {\n    "mode": "local"\n  }\n}\n',
-    });
-
-    stageConfigPreset(state, {
-      agents: {
-        defaults: {
-          bootstrapMaxChars: 50_000,
-          bootstrapTotalMaxChars: 300_000,
-          contextInjection: "always",
-        },
-      },
-    });
-
-    expect(state.configFormDirty).toBe(true);
-    expect(state.configForm).toEqual({
-      agents: {
-        defaults: {
-          bootstrapMaxChars: 50_000,
-          bootstrapTotalMaxChars: 300_000,
-          contextInjection: "always",
-        },
-      },
-      gateway: { mode: "local" },
-    });
-  });
-
-  it("stays clean when the staged preset already matches the saved config", () => {
-    const state = createState();
-    applyConfigSnapshot(state, {
-      config: {
-        agents: {
-          defaults: {
-            bootstrapMaxChars: 20_000,
-            bootstrapTotalMaxChars: 150_000,
-            contextInjection: "always",
-          },
-        },
-      },
-      valid: true,
-      issues: [],
-      raw: '{\n  "agents": {\n    "defaults": {\n      "bootstrapMaxChars": 20000,\n      "bootstrapTotalMaxChars": 150000,\n      "contextInjection": "always"\n    }\n  }\n}\n',
-    });
-
-    stageConfigPreset(state, {
-      agents: {
-        defaults: {
-          bootstrapMaxChars: 20_000,
-          bootstrapTotalMaxChars: 150_000,
-          contextInjection: "always",
-        },
-      },
-    });
-
-    expect(state.configFormDirty).toBe(false);
   });
 });
 

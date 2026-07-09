@@ -25,6 +25,13 @@ type BundledPluginTabView = {
 
 // Keyed by pluginId/tabId: tab ids are only unique within their plugin.
 const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
+  "codex-supervisor/sessions": async () => {
+    const [view, controller] = await Promise.all([
+      import("./codex-sessions-view.ts"),
+      import("./codex-sessions-controller.ts"),
+    ]);
+    return { render: view.renderCodexSessions, stop: controller.stopCodexSessionsPolling };
+  },
   "logbook/logbook": async () => {
     const [view, controller] = await Promise.all([
       import("./logbook-view.ts"),
@@ -48,6 +55,7 @@ export class PluginPage extends LitElement {
   @state() private bundledView: BundledPluginTabView | null = null;
 
   private bundledViewId: string | null = null;
+  private bundledViewLoadToken: object | null = null;
   private stopGatewaySubscription: (() => void) | undefined;
 
   override connectedCallback() {
@@ -67,6 +75,10 @@ export class PluginPage extends LitElement {
     return pluginTabKey({ pluginId: this.pluginId, id: this.tabId });
   }
 
+  protected loadBundledView(key: string): Promise<BundledPluginTabView> {
+    return BUNDLED_TAB_VIEWS[key]();
+  }
+
   override willUpdate() {
     const key = this.tabKey();
     const hasBundledDescriptor = this.tabInfo() !== undefined && key in BUNDLED_TAB_VIEWS;
@@ -77,9 +89,15 @@ export class PluginPage extends LitElement {
       this.stopBundledView();
     }
     if (this.bundledViewId === null && hasBundledDescriptor) {
+      const loadToken = {};
       this.bundledViewId = key;
-      void BUNDLED_TAB_VIEWS[key]().then((view) => {
-        if (this.bundledViewId === this.tabKey()) {
+      this.bundledViewLoadToken = loadToken;
+      void this.loadBundledView(key).then((view) => {
+        if (
+          this.bundledViewLoadToken === loadToken &&
+          this.bundledViewId === key &&
+          this.tabKey() === key
+        ) {
           this.bundledView = view;
         }
       });
@@ -90,6 +108,7 @@ export class PluginPage extends LitElement {
     this.bundledView?.stop(this);
     this.bundledView = null;
     this.bundledViewId = null;
+    this.bundledViewLoadToken = null;
   }
 
   private tabInfo(): GatewayControlUiPluginTab | undefined {

@@ -810,17 +810,12 @@
 
 /* nth-child is 1-based and includes the checkbox column (col 1). The optional
    Group column in category mode shifts later indexes; grouping is a desktop
-   workflow, so the hide rules target the default 8-column roster. */
+   workflow, so the hide rules target the default 7-column roster. */
 
-/* ≤900px: hide Runtime (col 5); tighten padding */
+/* ≤900px: tighten padding */
 @media (max-width: 900px) {
   .data-table.sessions-table {
-    min-width: 700px;
-  }
-
-  .sessions-table th:nth-child(5),
-  .sessions-table td:nth-child(5) {
-    display: none;
+    min-width: 640px;
   }
 
   .data-table th,
@@ -829,14 +824,14 @@
   }
 }
 
-/* ≤768px: also hide Tokens (col 7); tighten padding; stack pagination */
+/* ≤768px: hide Tokens (col 6); tighten padding; stack pagination */
 @media (max-width: 768px) {
   .data-table.sessions-table {
-    min-width: 540px;
+    min-width: 500px;
   }
 
-  .sessions-table th:nth-child(7),
-  .sessions-table td:nth-child(7) {
+  .sessions-table th:nth-child(6),
+  .sessions-table td:nth-child(6) {
     display: none;
   }
 
@@ -906,7 +901,7 @@
   }
 }
 
-/* ≤500px: also hide Kind (col 3) and Updated (col 6); keep live status visible */
+/* ≤500px: also hide Kind (col 3) and Updated (col 5); keep live status visible */
 @media (max-width: 500px) {
   .data-table.sessions-table {
     min-width: 320px;
@@ -914,8 +909,8 @@
 
   .sessions-table th:nth-child(3),
   .sessions-table td:nth-child(3),
-  .sessions-table th:nth-child(6),
-  .sessions-table td:nth-child(6) {
+  .sessions-table th:nth-child(5),
+  .sessions-table td:nth-child(5) {
     display: none;
   }
 
