@@ -24,6 +24,10 @@ import type { GatewayRestartHandoff } from "./restart-handoff.js";
 const tempDirs: string[] = [];
 type GatewayRestartHandoffDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_handoff">;
 
+function hasLoneSurrogate(value: string): boolean {
+  return /[\uD800-\uDFFF]/.test(value.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/gu, ""));
+}
+
 function createHandoffEnv(): NodeJS.ProcessEnv {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-restart-handoff-"));
   tempDirs.push(dir);
@@ -240,6 +244,33 @@ describe("gateway restart handoff", () => {
     insertHandoffRow(env, { intentId: "too-long", createdAt: 1_000, expiresAt: 61_001 });
 
     expect(readGatewayRestartHandoffSync(env, 1_001)).toBeNull();
+  });
+
+  it("does not split UTF-16 surrogate pairs when truncating long reasons", () => {
+    const env = createHandoffEnv();
+    const prefix = "a".repeat(199);
+    const reason = `${prefix}😀suffix`;
+
+    const handoff = expectWrittenHandoff({
+      env,
+      pid: 12_345,
+      reason,
+      restartKind: "full-process",
+      supervisorMode: "external",
+      createdAt: 1_000,
+    });
+
+    expect(handoff.reason).toBeDefined();
+    expect(handoff.reason!.length).toBeLessThanOrEqual(200);
+    expect(hasLoneSurrogate(handoff.reason!)).toBe(false);
+
+    const row = readHandoffRow(env);
+    expect(row?.reason).toBe(handoff.reason);
+    expect(hasLoneSurrogate(row?.reason ?? "")).toBe(false);
+
+    const persisted = readGatewayRestartHandoffSync(env, 1_500);
+    expect(persisted?.reason).toBe(handoff.reason);
+    expect(hasLoneSurrogate(persisted?.reason ?? "")).toBe(false);
   });
 
   it("overwrites the previous pending handoff row", () => {
