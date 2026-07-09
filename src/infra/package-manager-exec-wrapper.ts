@@ -386,6 +386,8 @@ function unwrapBunExecInvocation(argv: string[]): string[] | null {
   if (tail[0] === "--") {
     return tail.length > 1 ? tail.slice(1) : null;
   }
+  // Tail parsing delegates to the shared bunx path so "bun x" and "bunx"
+  // accept and reject identical forms (unknown tail options fail closed).
   return unwrapDirectPackageExecInvocation(["bunx", ...tail]);
 }
 
