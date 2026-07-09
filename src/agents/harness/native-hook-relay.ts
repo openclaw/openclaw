@@ -24,6 +24,7 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
@@ -1925,11 +1926,14 @@ function snapshotString(value: string, state: { remainingStringLength: number })
     MAX_NATIVE_HOOK_RELAY_HISTORY_STRING_LENGTH,
     state.remainingStringLength,
   );
-  state.remainingStringLength -= limit;
   if (limit >= value.length) {
+    state.remainingStringLength -= limit;
     return value;
   }
-  return `${value.slice(0, limit)}...[truncated]`;
+  const prefix = truncateUtf16Safe(value, limit);
+  // Charge the retained prefix; a safe boundary may back up one code unit.
+  state.remainingStringLength -= prefix.length;
+  return `${prefix}...[truncated]`;
 }
 
 function normalizeNativeHookInvocation(params: {
@@ -2223,7 +2227,7 @@ function truncateText(value: string, maxLength: number): string {
   if (value.length <= maxLength) {
     return value;
   }
-  return `${value.slice(0, Math.max(0, maxLength - 3))}...`;
+  return `${truncateUtf16Safe(value, Math.max(0, maxLength - 3))}...`;
 }
 
 function resolveOpenClawCliExecutable(): string {

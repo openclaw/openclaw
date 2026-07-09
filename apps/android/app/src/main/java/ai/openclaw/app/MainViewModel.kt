@@ -87,6 +87,19 @@ class MainViewModel(
     return runtime
   }
 
+  internal fun enterScreenshotFixtureMode(scene: AndroidScreenshotScene) {
+    check(BuildConfig.DEBUG) { "Android screenshot fixtures require a debug build" }
+    check(runtimeRef.value == null) { "Screenshot fixture mode must be selected before runtime startup" }
+    prefs.setOnboardingCompleted(true)
+    prefs.setAppearanceThemeMode(AppearanceThemeMode.Dark)
+    prefs.setDisplayName("Pixel")
+    prefs.setSpeakerEnabled(true)
+    val runtime = nodeApp.ensureScreenshotFixtureRuntime()
+    runtime.setForeground(foreground)
+    runtimeRef.value = runtime
+    _requestedHomeDestination.value = scene.homeDestination
+  }
+
   /**
    * Starts the node runtime off the main thread so fresh installs can render
    * the shell before encrypted prefs, device identity, and gateway setup warm up.
