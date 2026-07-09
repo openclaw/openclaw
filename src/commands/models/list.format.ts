@@ -1,4 +1,5 @@
 /** Formatting helpers for model-list terminal tables. */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isRich as isRichTerminal, theme } from "../../../packages/terminal-core/src/theme.js";
 
 /** Enables rich formatting only for non-machine-readable output. */
@@ -43,7 +44,7 @@ export const truncate = (value: string, max: number) => {
     return value;
   }
   if (max <= 3) {
-    return value.slice(0, max);
+    return truncateUtf16Safe(value, max);
   }
-  return `${value.slice(0, max - 3)}...`;
+  return `${truncateUtf16Safe(value, max - 3)}...`;
 };
