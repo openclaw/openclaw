@@ -361,14 +361,11 @@ export function loadActiveCallsFromStore(storePath: string): {
   const rejectedProviderCallIds = new Set<string>();
 
   for (const [callId, call] of callMap) {
-    // Skip terminated calls — they will not receive new events, so their
-    // event IDs do not need dedup tracking. Loading them would accumulate
-    // processedEventIds across all terminated calls without bound.
-    if (TerminalStates.has(call.state)) {
-      continue;
-    }
     for (const eventId of call.processedEventIds) {
       processedEventIds.add(eventId);
+    }
+    if (TerminalStates.has(call.state)) {
+      continue;
     }
     activeCalls.set(callId, call);
     if (call.providerCallId) {
