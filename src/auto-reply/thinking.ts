@@ -111,6 +111,35 @@ function catalogSupportsXHigh(compat: ThinkingCatalogEntry["compat"]): boolean {
   return efforts.some((effort) => normalizeThinkLevel(effort) === "xhigh");
 }
 
+function buildOpenAICompatThinkingProfile(params: {
+  compat: ThinkingCatalogEntry["compat"];
+  defaultLevel?: ThinkLevel | null;
+}): ResolvedThinkingProfile | undefined {
+  const efforts = params.compat?.supportedReasoningEfforts;
+  if (!Array.isArray(efforts)) {
+    return undefined;
+  }
+  if (params.compat?.supportsReasoningEffort === false) {
+    return buildOffOnlyThinkingProfile();
+  }
+  const levels = new Map<ThinkLevel, RankedThinkingLevelOption>([
+    ["off", { id: "off", label: "off", rank: THINKING_LEVEL_RANKS.off }],
+  ]);
+  for (const raw of efforts) {
+    const effort = normalizeThinkLevel(raw);
+    if (effort && effort !== "off" && !levels.has(effort)) {
+      levels.set(effort, { id: effort, label: effort, rank: THINKING_LEVEL_RANKS[effort] });
+    }
+  }
+  if (levels.size <= 1) {
+    return buildOffOnlyThinkingProfile();
+  }
+  const sorted = [...levels.values()].toSorted((a, b) => a.rank - b.rank);
+  const defaultLevel =
+    params.defaultLevel && levels.has(params.defaultLevel) ? params.defaultLevel : undefined;
+  return { levels: sorted, defaultLevel };
+}
+
 function normalizeProfileLevel(
   level: ProviderThinkingProfile["levels"][number],
 ): RankedThinkingLevelOption | undefined {
@@ -223,6 +252,29 @@ export function resolveThinkingProfile(params: {
   }
   if (context.reasoning === false) {
     return buildOffOnlyThinkingProfile();
+  }
+
+  // OpenAI-compatible transports advertise exact accepted reasoning efforts via
+  // compat.supportedReasoningEfforts. Use that contract for custom providers on
+  // this transport so session-level thinking controls stay consistent with the
+  // request-time reasoning-effort normalization path.
+  if (context.api === "openai-completions") {
+    const compatProfile = buildOpenAICompatThinkingProfile({
+      compat: context.compat,
+      defaultLevel:
+        resolveProviderDefaultThinkingLevel({
+          provider: context.normalizedProvider,
+          context: providerContext,
+        }) ??
+        resolveThinkingDefaultForModelFallback({
+          provider: context.normalizedProvider,
+          model: context.modelId,
+          catalog: params.catalog,
+        }),
+    });
+    if (compatProfile) {
+      return compatProfile;
+    }
   }
 
   const defaultLevel = resolveProviderDefaultThinkingLevel({

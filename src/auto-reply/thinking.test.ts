@@ -596,6 +596,57 @@ describe("listThinkingLevels", () => {
     ).toBe(true);
   });
 
+  it("honors catalog compat reasoning efforts for openai-completions custom providers", () => {
+    const catalog = [
+      {
+        provider: "free",
+        id: "gpt-5.5",
+        name: "free gpt-5.5",
+        api: "openai-completions",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+      },
+    ];
+
+    expect(listThinkingLevels("free", "gpt-5.5", catalog)).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    expect(
+      isThinkingLevelSupported({
+        provider: "free",
+        model: "gpt-5.5",
+        level: "medium",
+        catalog,
+      }),
+    ).toBe(true);
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "free",
+        model: "gpt-5.5",
+        level: "medium",
+        catalog,
+      }),
+    ).toBe("medium");
+  });
+
+  it("treats explicit compat reasoning-effort disable as off-only for openai-completions", () => {
+    const catalog = [
+      {
+        provider: "free",
+        id: "gpt-5.5",
+        api: "openai-completions",
+        reasoning: false,
+        compat: { supportsReasoningEffort: false, supportedReasoningEfforts: [] },
+      },
+    ];
+
+    expect(listThinkingLevels("free", "gpt-5.5", catalog)).toEqual(["off"]);
+  });
+
   it("does not let catalog xhigh compat override binary thinking providers", () => {
     providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(true);
     const catalog = [
