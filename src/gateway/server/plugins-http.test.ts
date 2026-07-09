@@ -519,6 +519,33 @@ describe("createGatewayPluginRequestHandler", () => {
       });
     }
   });
+
+  it("does not end a response the plugin already destroyed before throwing", async () => {
+    const log = createPluginLog();
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/destroyed",
+            handler: async (_req, res) => {
+              Object.defineProperty(res, "headersSent", { value: true, configurable: true });
+              res.destroy();
+              throw new Error("boom");
+            },
+          }),
+        ],
+      }),
+      log,
+    });
+    const { res, end } = makeMockHttpResponse();
+
+    const handled = await handler({ url: "/destroyed" } as IncomingMessage, res);
+
+    expect(handled).toBe(true);
+    expect(res.destroyed).toBe(true);
+    expect(end).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith("plugin http route failed (route): Error: boom");
+  });
 });
 
 describe("createGatewayPluginUpgradeHandler", () => {

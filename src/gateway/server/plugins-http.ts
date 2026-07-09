@@ -201,7 +201,7 @@ export function createGatewayPluginRequestHandler(params: {
           res.statusCode = 500;
           res.setHeader("Content-Type", "text/plain; charset=utf-8");
           res.end("Internal Server Error");
-        } else if (!res.writableEnded) {
+        } else if (!res.writableEnded && !res.destroyed) {
           res.end();
         }
         return true;
