@@ -356,18 +356,26 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     return `${provider}\u0000${profileId}`;
   }
 
+  // Ownership token for a deadline-bounded section. The deadline cannot cancel
+  // the running body, only abandon it; once "abandoned" the surrounding
+  // cross-agent file lock is released and a peer refresher may own this key,
+  // so the stale continuation must not persist or mirror credentials.
+  type RefreshSectionOwnership = { state: "owned" | "abandoned" };
+
   async function withRefreshCallTimeout<T>(
     label: string,
     timeoutMs: number,
-    fn: () => Promise<T>,
+    fn: (ownership: RefreshSectionOwnership) => Promise<T>,
   ): Promise<T> {
     let timeoutHandle: NodeJS.Timeout | undefined;
+    const ownership: RefreshSectionOwnership = { state: "owned" };
     try {
       return await new Promise<T>((resolve, reject) => {
         timeoutHandle = setTimeout(() => {
+          ownership.state = "abandoned";
           reject(new Error(`OAuth refresh call "${label}" exceeded hard timeout (${timeoutMs}ms)`));
         }, timeoutMs);
-        fn().then(resolve, reject);
+        fn(ownership).then(resolve, reject);
       });
     } finally {
       if (timeoutHandle) {
@@ -506,7 +514,23 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         withRefreshCallTimeout(
           `${params.provider} oauth refresh critical section`,
           OAUTH_REFRESH_INLOCK_TIMEOUT_MS,
-          async () => {
+          async (sectionOwnership) => {
+            // The in-lock deadline cannot cancel this body; once it fires the
+            // file lock is released and a successor refresher may own this
+            // key. Every persist/mirror below re-checks ownership and no-ops
+            // when abandoned so a stale continuation cannot clobber the
+            // successor's credentials.
+            const writeBackAllowed = (step: "adopt-bootstrap" | "persist" | "mirror"): boolean => {
+              if (sectionOwnership.state === "owned") {
+                return true;
+              }
+              log.debug("discarded abandoned OAuth refresh write-back after in-lock deadline", {
+                profileId: params.profileId,
+                provider: params.provider,
+                step,
+              });
+              return false;
+            };
             const store = loadStoredOAuthRefreshStore(ownerAgentDir);
             const cred = store.profiles[params.profileId];
             if (!cred || cred.type !== "oauth") {
@@ -592,7 +616,8 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
               } else {
                 if (
                   shouldReplaceStoredOAuthCredential(cred, externallyManaged) &&
-                  !areOAuthCredentialsEquivalent(cred, externallyManaged)
+                  !areOAuthCredentialsEquivalent(cred, externallyManaged) &&
+                  writeBackAllowed("adopt-bootstrap")
                 ) {
                   store.profiles[params.profileId] = { ...externallyManaged };
                   await saveOAuthCredentialWithStoreLock({
@@ -640,6 +665,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             if (!refreshedCredentials) {
               return null;
             }
+            if (!writeBackAllowed("persist")) {
+              return null;
+            }
             store.profiles[params.profileId] = refreshedCredentials;
             const persisted = await saveOAuthCredentialWithStoreLock({
               agentDir: ownerAgentDir,
@@ -669,6 +697,11 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
                   credential: recovered,
                 };
               }
+            }
+            // Re-check after the persist await: the deadline may have fired
+            // mid-write, in which case the mirror must not run either.
+            if (!writeBackAllowed("mirror")) {
+              return null;
             }
             if (ownerAgentDir) {
               const mainPath = resolveAuthStorePath(undefined);

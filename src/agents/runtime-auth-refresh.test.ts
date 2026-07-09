@@ -1,8 +1,10 @@
 // Verifies runtime auth refresh timers stay within safe JavaScript timer bounds.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { OAUTH_REFRESH_INLOCK_TIMEOUT_MS } from "./auth-profiles/constants.js";
 import {
   clampRuntimeAuthRefreshDelayMs,
   RUNTIME_AUTH_REFRESH_HARD_TIMEOUT_MS,
+  RuntimeAuthDeadlineError,
   withRuntimeAuthRefreshDeadline,
 } from "./runtime-auth-refresh.js";
 
@@ -33,14 +35,17 @@ describe("withRuntimeAuthRefreshDeadline", () => {
     vi.useRealTimers();
   });
 
-  it("rejects once the deadline elapses when the work never settles", async () => {
+  it("rejects with the typed deadline error once the deadline elapses", async () => {
     vi.useFakeTimers();
     // A provider auth hook that hangs forever — the exact wedge that froze the
-    // gateway. The backstop must reject so the single-flight handle can clear.
+    // gateway. The backstop must reject so the single-flight handle can clear,
+    // and callers rely on the error type to invalidate abandoned continuations.
     const hung = new Promise<string>(() => {});
     const raced = withRuntimeAuthRefreshDeadline(hung, 1_000, "openai");
-    const assertion = expect(raced).rejects.toThrow(
-      /Runtime auth operation for openai exceeded hard deadline \(1000ms\)/,
+    const assertion = expect(raced).rejects.toSatisfy(
+      (err: unknown) =>
+        err instanceof RuntimeAuthDeadlineError &&
+        err.message.includes("Runtime auth operation for openai exceeded hard deadline (1000ms)"),
     );
     await vi.advanceTimersByTimeAsync(1_000);
     await assertion;
@@ -68,8 +73,13 @@ describe("withRuntimeAuthRefreshDeadline", () => {
     );
   });
 
-  it("keeps the default hard timeout at or above the OAuth manager call + stale-lock budget", () => {
-    // OAuth manager: 120s call timeout + 180s peer stale-lock window.
-    expect(RUNTIME_AUTH_REFRESH_HARD_TIMEOUT_MS).toBeGreaterThanOrEqual(120_000 + 180_000);
+  it("keeps the default hard timeout above two serialized in-lock budgets with headroom", () => {
+    // Worst legitimate case: wait out a peer's full in-lock critical section,
+    // then run our own (2 x OAUTH_REFRESH_INLOCK_TIMEOUT_MS). Explicit headroom
+    // ensures legitimate contention never misreports as a hard timeout.
+    const minHeadroomMs = 30_000;
+    expect(RUNTIME_AUTH_REFRESH_HARD_TIMEOUT_MS).toBeGreaterThan(
+      2 * OAUTH_REFRESH_INLOCK_TIMEOUT_MS + minHeadroomMs,
+    );
   });
 });
