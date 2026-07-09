@@ -5,6 +5,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type {
+  ChannelMessageDurableFinalAdapter,
   ChannelMessageSendCommitContext,
   ChannelMessageUnknownSendReconciliationResult,
 } from "../../channels/message/types.js";
@@ -49,6 +50,8 @@ export type RecoverySummary = {
   failed: number;
   skippedMaxRetries: number;
   deferredBackoff: number;
+  /** Ambiguous entries kept pending because no adapter can reconcile the send. */
+  deferredNoReconciler: number;
 };
 
 export type DeliverFn = (
@@ -81,9 +84,7 @@ export type ActiveDeliveryClaimResult<T> =
 
 const MAX_RETRIES = 5;
 
-type UnknownSendReconciliationAttempt =
-  | { status: "unavailable" }
-  | { status: "completed"; result: ChannelMessageUnknownSendReconciliationResult };
+type UnknownSendReconciler = NonNullable<ChannelMessageDurableFinalAdapter["reconcileUnknownSend"]>;
 
 const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /no conversation reference found/i,
@@ -120,6 +121,7 @@ function createEmptyRecoverySummary(): RecoverySummary {
     failed: 0,
     skippedMaxRetries: 0,
     deferredBackoff: 0,
+    deferredNoReconciler: 0,
   };
 }
 
@@ -170,26 +172,35 @@ function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig, 
   } satisfies Parameters<DeliverFn>[0];
 }
 
+/**
+ * Resolves the adapter's unknown-send reconciler for an ambiguous entry, or
+ * null when no adapter declares the capability. Callers use the null result to
+ * skip send-replay pacing for pure deferrals that never contact the platform.
+ */
+function resolveUnknownSendReconciler(
+  entry: QueuedDelivery,
+  cfg: OpenClawConfig,
+): UnknownSendReconciler | null {
+  const adapter = resolveOutboundChannelMessageAdapter({
+    channel: entry.channel,
+    cfg,
+    allowBootstrap: true,
+  });
+  if (adapter?.durableFinal?.capabilities?.reconcileUnknownSend !== true) {
+    return null;
+  }
+  return adapter.durableFinal.reconcileUnknownSend ?? null;
+}
+
 async function reconcileUnknownQueuedDelivery(opts: {
   entry: QueuedDelivery;
   cfg: OpenClawConfig;
   log: RecoveryLogger;
-}): Promise<UnknownSendReconciliationAttempt> {
-  const adapter = resolveOutboundChannelMessageAdapter({
-    channel: opts.entry.channel,
-    cfg: opts.cfg,
-    allowBootstrap: true,
-  });
-  if (adapter?.durableFinal?.capabilities?.reconcileUnknownSend !== true) {
-    return { status: "unavailable" };
-  }
-  const reconcileUnknownSend = adapter?.durableFinal?.reconcileUnknownSend;
-  if (!reconcileUnknownSend) {
-    return { status: "unavailable" };
-  }
+  reconcile: UnknownSendReconciler;
+}): Promise<ChannelMessageUnknownSendReconciliationResult> {
   const { entry } = opts;
   try {
-    const result = await reconcileUnknownSend({
+    const result = await opts.reconcile({
       cfg: opts.cfg,
       queueId: entry.id,
       channel: entry.channel,
@@ -210,21 +221,17 @@ async function reconcileUnknownQueuedDelivery(opts: {
       ...(entry.threadId !== undefined ? { threadId: entry.threadId } : {}),
       ...(entry.silent !== undefined ? { silent: entry.silent } : {}),
     });
-    return {
-      status: "completed",
-      result: result ?? {
+    return (
+      result ?? {
         status: "unresolved",
         error: "adapter returned no unknown-send reconciliation result",
         retryable: true,
-      },
-    };
+      }
+    );
   } catch (err) {
     const error = formatErrorMessage(err);
     opts.log.warn(`Delivery entry ${opts.entry.id} unknown-send reconciliation failed: ${error}`);
-    return {
-      status: "completed",
-      result: { status: "unresolved", error, retryable: true },
-    };
+    return { status: "unresolved", error, retryable: true };
   }
 }
 
@@ -413,21 +420,39 @@ async function drainQueuedEntry(opts: {
   deliver: DeliverFn;
   log: RecoveryLogger;
   stateDir?: string;
+  // Pre-resolved by the caller for ambiguous entries so the pacing decision and
+  // the reconcile call share one adapter lookup; null means no reconciler.
+  reconcile: UnknownSendReconciler | null;
   onRecovered?: (entry: QueuedDelivery) => void;
   onFailed?: (entry: QueuedDelivery, errMsg: string) => void;
-}): Promise<"recovered" | "failed" | "moved-to-failed" | "already-gone"> {
+}): Promise<"recovered" | "failed" | "moved-to-failed" | "deferred" | "already-gone"> {
   const { entry } = opts;
   if (hasAmbiguousSendState(entry)) {
     // A crash after platform send start cannot be blindly replayed; adapters
     // must reconcile whether the platform already committed the message.
-    const reconciliationAttempt = await reconcileUnknownQueuedDelivery({
+    if (!opts.reconcile) {
+      // No reconciliation-capable adapter: keep the entry pending without
+      // consuming retry budget so it is retried once such an adapter loads.
+      // This is a no-op deferral, not a delivery failure.
+      const errMsg = `delivery state is ${entry.recoveryState}; refusing blind replay without adapter reconciliation`;
+      opts.log.warn(`Delivery entry ${entry.id} ${errMsg}`);
+      try {
+        await deferDeliveryRecovery(entry.id, errMsg, opts.stateDir);
+        return "deferred";
+      } catch (deferErr) {
+        if (getErrnoCode(deferErr) === "ENOENT") {
+          return "already-gone";
+        }
+      }
+      return "deferred";
+    }
+    const reconciliation = await reconcileUnknownQueuedDelivery({
       entry,
       cfg: opts.cfg,
       log: opts.log,
+      reconcile: opts.reconcile,
     });
-    const reconciliation =
-      reconciliationAttempt.status === "completed" ? reconciliationAttempt.result : null;
-    if (reconciliation?.status === "sent") {
+    if (reconciliation.status === "sent") {
       try {
         await ackDelivery(entry.id, opts.stateDir);
         await runReconciledSentCommitHooks({
@@ -458,36 +483,17 @@ async function drainQueuedEntry(opts: {
       }
     }
     const reconciliationProvedPreSendFailure =
-      reconciliation?.status === "not_sent" && entry.recoveryState === "send_attempt_started";
-    if (reconciliationProvedPreSendFailure) {
-      opts.log.info(
-        `Delivery entry ${entry.id} reconciled ${entry.recoveryState} as not sent; replaying`,
-      );
-    } else {
-      let errMsg = `delivery state is ${entry.recoveryState}; refusing blind replay without adapter reconciliation`;
-      if (reconciliation?.status === "not_sent") {
+      reconciliation.status === "not_sent" && entry.recoveryState === "send_attempt_started";
+    if (!reconciliationProvedPreSendFailure) {
+      let errMsg = `delivery state is ${entry.recoveryState} and reconciliation is unresolved`;
+      if (reconciliation.status === "not_sent") {
         errMsg = `delivery state is ${entry.recoveryState}; refusing full replay after post-send evidence`;
-      } else if (reconciliation?.status === "unresolved" && reconciliation.error) {
+      } else if (reconciliation.status === "unresolved" && reconciliation.error) {
         errMsg = `delivery state is ${entry.recoveryState} and reconciliation is unresolved: ${reconciliation.error}`;
       }
       opts.log.warn(`Delivery entry ${entry.id} ${errMsg}`);
       opts.onFailed?.(entry, errMsg);
-      if (reconciliationAttempt.status === "unavailable") {
-        try {
-          await deferDeliveryRecovery(entry.id, errMsg, opts.stateDir);
-          return "failed";
-        } catch (deferErr) {
-          if (getErrnoCode(deferErr) === "ENOENT") {
-            return "already-gone";
-          }
-        }
-        return "failed";
-      }
-      const completedReconciliation = reconciliationAttempt.result;
-      if (
-        completedReconciliation.status === "unresolved" &&
-        completedReconciliation.retryable === true
-      ) {
+      if (reconciliation.status === "unresolved" && reconciliation.retryable === true) {
         try {
           await failDelivery(entry.id, errMsg, opts.stateDir);
           return "failed";
@@ -508,6 +514,9 @@ async function drainQueuedEntry(opts: {
       }
       return "failed";
     }
+    opts.log.info(
+      `Delivery entry ${entry.id} reconciled ${entry.recoveryState} as not sent; replaying`,
+    );
   }
   const payloadOutcomes: OutboundPayloadDeliveryOutcome[] = [];
   let postSendState: "marked" | "acked" | "failed" | undefined;
@@ -735,7 +744,16 @@ export async function drainPendingDeliveries(opts: {
           }
         }
 
-        await recoveryReplayPacer.wait();
+        // Resolve reconciliation availability before pacing so a no-reconciler
+        // deferral (a no-op that never contacts the platform) neither waits on
+        // the send-replay spacing floor nor advances its epoch.
+        const reconcile = hasAmbiguousSendState(currentEntry)
+          ? resolveUnknownSendReconciler(currentEntry, opts.cfg)
+          : null;
+        const willContactPlatform = !hasAmbiguousSendState(currentEntry) || reconcile !== null;
+        if (willContactPlatform) {
+          await recoveryReplayPacer.wait();
+        }
 
         const result = await drainQueuedEntry({
           entry: currentEntry,
@@ -743,6 +761,7 @@ export async function drainPendingDeliveries(opts: {
           deliver,
           log: opts.log,
           stateDir: opts.stateDir,
+          reconcile,
           onFailed: (failedEntry, errMsg) => {
             if (isPermanentDeliveryError(errMsg)) {
               opts.log.warn(
@@ -829,10 +848,22 @@ export async function recoverPendingDeliveries(opts: {
         continue;
       }
 
-      const paceResult = await recoveryReplayPacer.wait(deadline);
-      if (paceResult === "deadline-exceeded") {
-        opts.log.warn(`Recovery time budget exceeded — remaining entries deferred to next startup`);
-        break;
+      // Resolve reconciliation availability before pacing so a no-reconciler
+      // deferral (a no-op that never contacts the platform) neither burns the
+      // send-replay spacing floor nor the recovery deadline while stale
+      // ambiguous rows accumulate ahead of recoverable entries.
+      const reconcile = hasAmbiguousSendState(currentEntry)
+        ? resolveUnknownSendReconciler(currentEntry, opts.cfg)
+        : null;
+      const willContactPlatform = !hasAmbiguousSendState(currentEntry) || reconcile !== null;
+      if (willContactPlatform) {
+        const paceResult = await recoveryReplayPacer.wait(deadline);
+        if (paceResult === "deadline-exceeded") {
+          opts.log.warn(
+            `Recovery time budget exceeded — remaining entries deferred to next startup`,
+          );
+          break;
+        }
       }
 
       const result = await drainQueuedEntry({
@@ -841,6 +872,7 @@ export async function recoverPendingDeliveries(opts: {
         deliver: opts.deliver,
         log: opts.log,
         stateDir: opts.stateDir,
+        reconcile,
         onRecovered: (recoveredEntry) => {
           summary.recovered += 1;
           opts.log.info(`Recovered delivery ${recoveredEntry.id} on ${recoveredEntry.channel}`);
@@ -856,6 +888,9 @@ export async function recoverPendingDeliveries(opts: {
           opts.log.warn(`Retry failed for delivery ${failedEntry.id}: ${errMsg}`);
         },
       });
+      if (result === "deferred") {
+        summary.deferredNoReconciler += 1;
+      }
       if (result === "moved-to-failed") {
         continue;
       }
@@ -865,7 +900,7 @@ export async function recoverPendingDeliveries(opts: {
   }
 
   opts.log.info(
-    `Delivery recovery complete: ${summary.recovered} recovered, ${summary.failed} failed, ${summary.skippedMaxRetries} skipped (max retries), ${summary.deferredBackoff} deferred (backoff)`,
+    `Delivery recovery complete: ${summary.recovered} recovered, ${summary.failed} failed, ${summary.skippedMaxRetries} skipped (max retries), ${summary.deferredBackoff} deferred (backoff), ${summary.deferredNoReconciler} deferred (no reconciler)`,
   );
   return summary;
 }

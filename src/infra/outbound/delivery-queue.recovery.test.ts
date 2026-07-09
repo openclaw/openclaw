@@ -113,6 +113,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 0,
     });
 
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
@@ -475,9 +476,10 @@ describe("delivery-queue recovery", () => {
     expect(deliver).not.toHaveBeenCalled();
     expect(result).toEqual({
       recovered: 0,
-      failed: 1,
+      failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 1,
     });
     const entries = await loadPendingDeliveries(tmpDir());
     expect(entries).toHaveLength(1);
@@ -507,9 +509,10 @@ describe("delivery-queue recovery", () => {
     expect(deliver).not.toHaveBeenCalled();
     expect(result).toEqual({
       recovered: 0,
-      failed: 1,
+      failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 1,
     });
     const entries = await loadPendingDeliveries(tmpDir());
     expect(entries).toHaveLength(1);
@@ -539,9 +542,10 @@ describe("delivery-queue recovery", () => {
       const firstRun = await runRecovery({ deliver });
       expect(firstRun.result).toEqual({
         recovered: 0,
-        failed: 1,
+        failed: 0,
         skippedMaxRetries: 0,
         deferredBackoff: 0,
+        deferredNoReconciler: 1,
       });
       for (let i = 0; i < MAX_RETRIES; i += 1) {
         const { result } = await runRecovery({ deliver });
@@ -550,6 +554,7 @@ describe("delivery-queue recovery", () => {
           failed: 0,
           skippedMaxRetries: 0,
           deferredBackoff: 1,
+          deferredNoReconciler: 0,
         });
       }
     } finally {
@@ -564,6 +569,52 @@ describe("delivery-queue recovery", () => {
     expect(entries[0]?.lastAttemptAt).toBe(Date.parse("2026-01-01T00:00:00.000Z"));
     expect(entries[0]?.recoveryState).toBe("unknown_after_send");
     expect(readOutboundQueueStatus(tmpDir(), id)).toBe("pending");
+  });
+
+  it("does not spend replay pacing on unavailable-reconciler deferrals", async () => {
+    vi.useFakeTimers();
+    // Far-future epoch so the leading deliverable pays no spacing wait, then
+    // seeds the pacer epoch to "now". Any later paced entry would sleep
+    // RECOVERY_REPLAY_SPACING_MS under fake timers and never resolve, so this
+    // run only completes if the no-reconciler deferrals skip the pacer.
+    vi.setSystemTime(new Date("2027-01-01T00:00:00.000Z"));
+    try {
+      const deliverableId = await enqueueDelivery(
+        { channel: "demo-channel-a", to: "+1", payloads: [{ text: "send" }] },
+        tmpDir(),
+      );
+      const ambiguousIds: string[] = [];
+      for (const to of ["+2", "+3", "+4"]) {
+        const id = await enqueueDelivery(
+          { channel: "demo-channel-a", to, payloads: [{ text: "maybe sent" }] },
+          tmpDir(),
+        );
+        setQueuedEntryState(tmpDir(), id, {
+          retryCount: 0,
+          platformSendStartedAt: Date.now(),
+          recoveryState: "unknown_after_send",
+        });
+        ambiguousIds.push(id);
+      }
+
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { result } = await runRecovery({ deliver, maxRecoveryMs: 60_000 });
+
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({
+        recovered: 1,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 0,
+        deferredNoReconciler: 3,
+      });
+      const pending = await loadPendingDeliveries(tmpDir());
+      expect(pending.map((entry) => entry.id).toSorted()).toEqual([...ambiguousIds].toSorted());
+      expect(pending.every((entry) => entry.retryCount === 0)).toBe(true);
+      expect(readOutboundQueueStatus(tmpDir(), deliverableId)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rechecks deferred ambiguous entries after the backoff elapses", async () => {
@@ -585,18 +636,20 @@ describe("delivery-queue recovery", () => {
       const firstRun = await runRecovery({ deliver });
       expect(firstRun.result).toEqual({
         recovered: 0,
-        failed: 1,
+        failed: 0,
         skippedMaxRetries: 0,
         deferredBackoff: 0,
+        deferredNoReconciler: 1,
       });
 
       vi.setSystemTime(new Date(start.getTime() + 5_001));
       const secondRun = await runRecovery({ deliver });
       expect(secondRun.result).toEqual({
         recovered: 0,
-        failed: 1,
+        failed: 0,
         skippedMaxRetries: 0,
         deferredBackoff: 0,
+        deferredNoReconciler: 1,
       });
     } finally {
       vi.useRealTimers();
@@ -632,6 +685,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 1,
       deferredBackoff: 0,
+      deferredNoReconciler: 0,
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
@@ -675,6 +729,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 0,
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
   });
@@ -731,6 +786,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 0,
     });
     const reconcileInput = mockCallArg(reconcileUnknownSend) as {
       cfg?: unknown;
@@ -804,6 +860,7 @@ describe("delivery-queue recovery", () => {
       failed: 1,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 0,
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
@@ -899,7 +956,8 @@ describe("delivery-queue recovery", () => {
 
     expect(reconcileUnknownSend).not.toHaveBeenCalled();
     expect(deliver).not.toHaveBeenCalled();
-    expect(result.failed).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(result.deferredNoReconciler).toBe(1);
     const entries = await loadPendingDeliveries(tmpDir());
     expect(entries).toHaveLength(1);
     expect(entries[0]?.id).toBe(id);
@@ -975,9 +1033,10 @@ describe("delivery-queue recovery", () => {
     expect(deliver).not.toHaveBeenCalled();
     expect(result).toEqual({
       recovered: 0,
-      failed: 1,
+      failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 1,
     });
     const entries = await loadPendingDeliveries(tmpDir());
     expect(entries).toHaveLength(1);
@@ -1035,6 +1094,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 0,
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(readOutboundQueueStatus(tmpDir(), id)).toBeUndefined();
@@ -1077,6 +1137,7 @@ describe("delivery-queue recovery", () => {
         failed: 1,
         skippedMaxRetries: 0,
         deferredBackoff: 0,
+        deferredNoReconciler: 0,
       });
       expect(recoveryStateAtAck).toBe("unknown_after_send");
       const pending = await loadPendingDeliveries(tmpDir());
@@ -1167,6 +1228,7 @@ describe("delivery-queue recovery", () => {
         failed: 0,
         skippedMaxRetries: 0,
         deferredBackoff: 0,
+        deferredNoReconciler: 0,
       });
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
       expect(readOutboundQueueStatus(tmpDir(), id)).toBeUndefined();
@@ -1387,6 +1449,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 0,
     });
 
     const remaining = await loadPendingDeliveries(tmpDir());
@@ -1412,6 +1475,7 @@ describe("delivery-queue recovery", () => {
         failed: 0,
         skippedMaxRetries: 0,
         deferredBackoff: 0,
+        deferredNoReconciler: 0,
       });
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(2);
       expectMockMessageContaining(log.warn, "deferred to next startup");
@@ -1439,6 +1503,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 1,
+      deferredNoReconciler: 0,
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(1);
     expectMockMessageContaining(log.info, "not ready for retry yet");
@@ -1470,6 +1535,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 1,
+      deferredNoReconciler: 0,
     });
     expect(deliver).toHaveBeenCalledTimes(1);
     const deliverInput = mockCallArg(deliver) as {
@@ -1504,6 +1570,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 1,
+      deferredNoReconciler: 0,
     });
     expect(firstDeliver).not.toHaveBeenCalled();
 
@@ -1515,6 +1582,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 0,
     });
     expect(secondDeliver).toHaveBeenCalledTimes(1);
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
@@ -1531,6 +1599,7 @@ describe("delivery-queue recovery", () => {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      deferredNoReconciler: 0,
     });
     expect(deliver).not.toHaveBeenCalled();
   });
