@@ -147,7 +147,10 @@ When a device token is issued, `hello-ok` also includes:
 }
 ```
 
-Built-in QR/setup-code bootstrap is a fresh mobile handoff path. A successful
+Built-in QR/setup-code bootstrap is a fresh native-app handoff path. Only
+canonical native client ids whose signed platform/device-family metadata
+matches are eligible (currently the iOS and Android apps and the Even Hub
+glasses node); mismatched metadata falls back to owner approval. A successful
 baseline setup-code connect returns a primary node token plus one bounded
 operator token:
 
@@ -169,7 +172,7 @@ operator token:
 ```
 
 The operator handoff is intentionally bounded so QR onboarding can start the
-mobile operator loop and complete native setup without granting pairing
+native operator loop and complete native setup without granting pairing
 mutation scopes or `operator.admin`. It includes `operator.talk.secrets` so the
 native client can read the Talk configuration it needs after bootstrap. Broader
 pairing and admin access requires a separate approved operator pairing or token
@@ -731,7 +734,7 @@ rather than the pre-handshake defaults.
     without pinning does not qualify.
 - Built-in setup-code bootstrap returns the primary node
   `hello-ok.auth.deviceToken` plus a bounded operator token in
-  `hello-ok.auth.deviceTokens` for trusted mobile handoff. The operator token
+  `hello-ok.auth.deviceTokens` for trusted native handoff. The operator token
   includes `operator.talk.secrets` for native Talk configuration reads, but
   excludes pairing mutation scopes and `operator.admin`.
 - While a non-baseline setup-code bootstrap is waiting for approval, `PAIRING_REQUIRED`

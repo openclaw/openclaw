@@ -1487,6 +1487,17 @@ export function registerControlUiAndPairingSuite(): void {
         modelIdentifier: "Even G2",
       },
     },
+    {
+      name: "Even G2 node id with legacy platform metadata",
+      identityPrefix: "openclaw-bootstrap-even-hub-legacy-platform-",
+      client: {
+        id: "openclaw-even-g2-node",
+        version: "2026.6.2",
+        platform: "even-g2",
+        mode: "node" as const,
+        deviceFamily: "glasses",
+      },
+    },
   ])(
     "requires owner approval for setup-code bootstrap spoof: $name",
     async ({ client, identityPrefix }) => {
