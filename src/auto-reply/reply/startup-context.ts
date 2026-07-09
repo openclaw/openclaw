@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatDateStamp, resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
@@ -89,12 +90,12 @@ function buildStartupMemoryDateStamps(params: {
     : [...localWindow, utcTodayStamp];
 }
 
-function trimStartupMemoryContent(content: string, maxChars: number): string {
+export function trimStartupMemoryContent(content: string, maxChars: number): string {
   const trimmed = content.trim();
   if (trimmed.length <= maxChars) {
     return trimmed;
   }
-  return `${trimmed.slice(0, maxChars)}\n...[truncated]...`;
+  return `${truncateUtf16Safe(trimmed, maxChars)}\n...[truncated]...`;
 }
 
 function escapeQuotedStartupMemory(content: string): string {

@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./startup-context.js";
+import {
+  buildSessionStartupContextPrelude,
+  shouldApplyStartupContext,
+  trimStartupMemoryContent,
+} from "./startup-context.js";
 
 const tmpDirs: string[] = [];
 
@@ -491,5 +495,24 @@ describe("shouldApplyStartupContext", () => {
     } as OpenClawConfig;
     expect(shouldApplyStartupContext({ cfg: applyOnCfg, action: "new" })).toBe(true);
     expect(shouldApplyStartupContext({ cfg: applyOnCfg, action: "reset" })).toBe(false);
+  });
+});
+
+describe("trimStartupMemoryContent", () => {
+  it("returns the original text when it fits within maxChars", () => {
+    expect(trimStartupMemoryContent("hello", 100)).toBe("hello");
+  });
+
+  it("trims whitespace and truncates long content", () => {
+    const input = `  ${"x".repeat(200)}  `;
+    const result = trimStartupMemoryContent(input, 100);
+    expect(result.length).toBeLessThan(input.length);
+    expect(result).toContain("[truncated]");
+  });
+
+  it("does not split a surrogate pair at the boundary", () => {
+    const input = `aa🚀${"b".repeat(200)}`;
+    const result = trimStartupMemoryContent(input, 80);
+    expect(result).not.toContain("�");
   });
 });

@@ -211,3 +211,18 @@ describe("isExecCompletionEvent", () => {
     expect(isExecCompletionEvent("Check: exec completed (last run was yesterday)")).toBe(false);
   });
 });
+
+describe("buildExecEventPrompt truncation", () => {
+  it("does not split surrogate pairs in long event text", () => {
+    const emojiLine = `result: aa🚀${"b".repeat(8_000)}`;
+    const result = buildExecEventPrompt([emojiLine]);
+    expect(result).not.toContain("�");
+    expect(result.length).toBeLessThanOrEqual(8_500); // body + notice
+  });
+
+  it("passes through short event text unchanged", () => {
+    const result = buildExecEventPrompt(["hello"]);
+    expect(result).toContain("hello");
+    expect(result).not.toContain("[truncated]");
+  });
+});
