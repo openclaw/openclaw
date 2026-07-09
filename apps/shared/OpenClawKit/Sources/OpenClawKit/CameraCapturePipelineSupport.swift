@@ -75,7 +75,12 @@ public enum CameraCapturePipelineSupport {
             cameraUnavailableError: cameraUnavailableError(),
             mapSetupError: mapSetupError)
         prepared.session.startRunning()
-        try await self.warmUpCaptureSession()
+        do {
+            try await self.warmUpCaptureSession()
+        } catch {
+            prepared.session.stopRunning()
+            throw error
+        }
         return prepared
     }
 
