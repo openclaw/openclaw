@@ -6,7 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { replaceFileAtomic } from "../infra/replace-file.js";
+import { replaceFileAtomic, replaceFileAtomicSync } from "../infra/replace-file.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -326,4 +326,77 @@ export async function saveCronQuarantineFile(params: {
   const payload = JSON.stringify({ version: 1, jobs: nextJobs }, null, 2);
   await atomicWrite(quarantinePath, payload);
   return quarantinePath;
+}
+
+/**
+ * Sidecar path for the persisted startup catch-up deferral marker set.
+ *
+ * The deferral ids are internal scheduler bookkeeping (they suppress
+ * future-slot repair until a staggered catch-up slot fires) and must NOT be
+ * stored on `CronJobState`, which is exposed in public cron read responses.
+ * A separate sidecar mirrors the cron quarantine sidecar pattern so the
+ * marker survives a process restart without leaking into the public schema.
+ */
+export function resolveCronCatchupDeferralPath(storePath: string): string {
+  if (storePath.endsWith(".json")) {
+    return storePath.replace(/\.json$/, "-catchup-deferral.json");
+  }
+  return `${storePath}-catchup-deferral.json`;
+}
+
+/**
+ * Loads the persisted startup catch-up deferral marker set (empty when absent).
+ * Synchronous to mirror the SQLite-backed cron store load and keep the hot load
+ * path free of async file I/O.
+ */
+export function loadCronCatchupDeferralFile(pathLocal: string): Set<string> {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(pathLocal, "utf-8");
+  } catch (err) {
+    if ((err as { code?: unknown })?.code === "ENOENT") {
+      return new Set<string>();
+    }
+    throw err;
+  }
+  const parsed = parseJsonWithJson5Fallback(raw);
+  if (!isRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.jobIds)) {
+    throw new Error(`Unsupported cron catch-up deferral file shape at ${pathLocal}`);
+  }
+  const jobIds = new Set<string>();
+  for (const id of parsed.jobIds) {
+    if (typeof id === "string") {
+      jobIds.add(id);
+    }
+  }
+  return jobIds;
+}
+
+/**
+ * Persists the current startup catch-up deferral marker set, or removes the
+ * sidecar when the set is empty so a fresh process never observes stale ids.
+ * Synchronous to mirror the SQLite-backed cron store write.
+ */
+export function saveCronCatchupDeferralFile(params: {
+  storePath: string;
+  jobIds: ReadonlySet<string>;
+}): void {
+  const deferralPath = resolveCronCatchupDeferralPath(params.storePath);
+  if (params.jobIds.size === 0) {
+    // Best-effort unlink; `force` makes it a no-op when no sidecar exists yet.
+    fs.rmSync(deferralPath, { force: true });
+    return;
+  }
+  const payload = JSON.stringify(
+    { version: 1, jobIds: [...params.jobIds].toSorted((a, b) => a.localeCompare(b)) },
+    null,
+    2,
+  );
+  replaceFileAtomicSync({
+    filePath: deferralPath,
+    content: payload,
+    dirMode: 0o700,
+    mode: 0o600,
+    tempPrefix: ".openclaw-cron-deferral",
+  });
 }

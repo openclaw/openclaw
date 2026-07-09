@@ -207,6 +207,9 @@ export type CronServiceState = {
   /** Prevents maintenance reads from advancing deferred startup catch-up slots.
    * Entries are removed when the deferred job runs or becomes irrelevant. */
   pendingCatchupDeferralJobIds: Set<string>;
+  /** Stable key of the last marker set written to the catch-up deferral
+   * sidecar, so `persist` can skip the sidecar write when nothing changed. */
+  lastSyncedCatchupDeferralKey: string;
   activeManualRunJobIds: Set<string>;
   manualSetupTimeoutNotified: boolean;
   /** Serializes mutating service operations so store writes and timers stay ordered. */
@@ -222,6 +225,19 @@ export type CronServiceState = {
   storeLoadedAtMs: number | null;
 };
 
+/**
+ * Stable string key for the catch-up deferral marker set, used to detect
+ * whether the persisted sidecar is already in sync so `persist` can skip a
+ * redundant write. Empty set normalizes to the empty string.
+ */
+export function cronCatchupDeferralKey(jobIds: ReadonlySet<string>): string {
+  let key = "";
+  for (const id of [...jobIds].toSorted((a, b) => a.localeCompare(b))) {
+    key += `${id}\n`;
+  }
+  return key;
+}
+
 /** Creates mutable cron service state with a concrete clock dependency. */
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
   return {
@@ -232,6 +248,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     stopped: false,
     restartRecoveryPending: false,
     pendingCatchupDeferralJobIds: new Set<string>(),
+    lastSyncedCatchupDeferralKey: "",
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutNotified: false,
     op: Promise.resolve(),

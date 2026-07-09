@@ -5,14 +5,17 @@ import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import {
+  loadCronCatchupDeferralFile,
   loadCronJobsStoreWithConfigJobs,
+  resolveCronCatchupDeferralPath,
+  saveCronCatchupDeferralFile,
   saveCronQuarantineFile,
   saveCronJobsStore,
   type QuarantinedCronConfigJob,
 } from "../store.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
-import type { CronServiceState } from "./state.js";
+import { cronCatchupDeferralKey, type CronServiceState } from "./state.js";
 
 function invalidateStaleNextRunOnScheduleChange(params: {
   previousJobsById: ReadonlyMap<string, CronJob>;
@@ -165,6 +168,16 @@ export async function ensureLoaded(
   };
   state.storeLoadedAtMs = state.deps.nowMs();
 
+  // Reload persisted startup catch-up deferral markers so a fresh process
+  // (empty in-memory marker set) still suppresses future-slot repair for jobs
+  // whose staggered catch-up slot has not fired yet. The marker set lives in an
+  // internal sidecar, separate from the public CronJobState, so reloading it
+  // here does not leak internal scheduler state into cron read responses (#102236).
+  state.pendingCatchupDeferralJobIds = loadCronCatchupDeferralFile(
+    resolveCronCatchupDeferralPath(state.deps.storePath),
+  );
+  state.lastSyncedCatchupDeferralKey = cronCatchupDeferralKey(state.pendingCatchupDeferralJobIds);
+
   if (quarantinedConfigJobs.length > 0) {
     state.pendingQuarantineConfigJobs = quarantinedConfigJobs;
     const quarantinePath = await flushPendingQuarantine(state, state.storeLoadedAtMs);
@@ -223,6 +236,19 @@ export async function persist(state: CronServiceState, opts?: { stateOnly?: bool
       return;
     }
     flushedPendingQuarantine = true;
+  }
+  // Keep the internal catch-up deferral sidecar in sync with the in-memory
+  // marker set. Gated by a stable key so the common case (no active
+  // deferrals) performs no file I/O. Written before the job store so a failed
+  // write rolls back the in-memory state without leaving the store ahead of
+  // the markers (#102236).
+  const deferralKey = cronCatchupDeferralKey(state.pendingCatchupDeferralJobIds);
+  if (deferralKey !== state.lastSyncedCatchupDeferralKey) {
+    saveCronCatchupDeferralFile({
+      storePath: state.deps.storePath,
+      jobIds: state.pendingCatchupDeferralJobIds,
+    });
+    state.lastSyncedCatchupDeferralKey = deferralKey;
   }
   await saveCronJobsStore(
     state.deps.storePath,

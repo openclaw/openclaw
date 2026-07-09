@@ -2,9 +2,15 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite } from "../service.test-harness.js";
-import { loadCronStore, saveCronStore } from "../store.js";
+import {
+  loadCronCatchupDeferralFile,
+  loadCronStore,
+  resolveCronCatchupDeferralPath,
+  saveCronCatchupDeferralFile,
+  saveCronStore,
+} from "../store.js";
 import type { CronJob } from "../types.js";
-import { findJobOrThrow } from "./jobs.js";
+import { findJobOrThrow, recomputeNextRunsForMaintenance } from "./jobs.js";
 import { createCronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
 
@@ -380,5 +386,61 @@ describe("cron service store seam coverage", () => {
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
 
     expect(findJobOrThrow(state, jobId).state.nextRunAtMs).toBeUndefined();
+  });
+
+  it("preserves a persisted startup catch-up deferral across a simulated process restart (#102236)", async () => {
+    const { storePath } = await makeStorePath();
+    // A non-natural near-future slot, like the staggered startup catch-up slot
+    // `baseNow + offset` the scheduler parks overflow jobs in.
+    const deferredSlot = STORE_TEST_NOW + 5_000;
+    const jobId = "restart-deferred-daily";
+
+    // A previous process parked this overflow daily job at the staggered
+    // catch-up slot and persisted the deferral marker to the internal sidecar.
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [
+        createReloadCronJob({
+          id: jobId,
+          schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+          state: { nextRunAtMs: deferredSlot },
+        }),
+      ],
+    });
+    saveCronCatchupDeferralFile({ storePath, jobIds: new Set([jobId]) });
+
+    // Fresh process: the in-memory marker set starts empty, then loads from disk.
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+
+    expect(state.pendingCatchupDeferralJobIds.has(jobId)).toBe(true);
+
+    // Start-time maintenance would otherwise advance a non-natural future slot
+    // to the next natural run (tomorrow 09:00); the persisted marker must
+    // suppress that repair so the catch-up slot survives the restart.
+    recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+
+    expect(findJobOrThrow(state, jobId).state.nextRunAtMs).toBe(deferredSlot);
+  });
+
+  it("persists the catch-up deferral marker set to an internal sidecar and removes it once drained (#102236)", async () => {
+    const { storePath } = await makeStorePath();
+    const deferralPath = resolveCronCatchupDeferralPath(storePath);
+    await expectPathMissing(deferralPath);
+
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+
+    // The marker set is internal scheduler bookkeeping and must round-trip
+    // through its own sidecar, never through the public CronJobState.
+    state.pendingCatchupDeferralJobIds.add("drained-job");
+    await persist(state);
+    expect([...loadCronCatchupDeferralFile(deferralPath)]).toEqual(["drained-job"]);
+
+    // Once the marker set drains, the sidecar is removed so a later restart
+    // never observes a stale id.
+    state.pendingCatchupDeferralJobIds.delete("drained-job");
+    await persist(state);
+    await expectPathMissing(deferralPath);
   });
 });

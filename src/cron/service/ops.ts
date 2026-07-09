@@ -489,6 +489,7 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
 type CronRollbackSnapshot = {
   store: CronStoreFile | null;
   pendingCatchupDeferralJobIds: Set<string>;
+  lastSyncedCatchupDeferralKey: string;
 };
 
 // Rolls the live scheduler state back to its pre-mutation snapshot when the
@@ -507,6 +508,7 @@ async function persistOrRestore(
   } catch (err) {
     state.store = snapshot.store;
     state.pendingCatchupDeferralJobIds = snapshot.pendingCatchupDeferralJobIds;
+    state.lastSyncedCatchupDeferralKey = snapshot.lastSyncedCatchupDeferralKey;
     throw err;
   }
   for (const notify of postPersistAutoDisableNotifications) {
@@ -518,6 +520,7 @@ function snapshotStoreForRollback(state: CronServiceState): CronRollbackSnapshot
   return {
     store: state.store ? structuredClone(state.store) : null,
     pendingCatchupDeferralJobIds: new Set(state.pendingCatchupDeferralJobIds),
+    lastSyncedCatchupDeferralKey: state.lastSyncedCatchupDeferralKey,
   };
 }
 
