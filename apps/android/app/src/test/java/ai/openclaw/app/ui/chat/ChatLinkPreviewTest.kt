@@ -262,8 +262,9 @@ class ChatLinkPreviewTest {
       coroutineScope {
         server.enqueue(
           MockResponse()
+            // Cancel before OkHttp produces a Response.
             .setHeader("Content-Type", "text/html")
-            .setBodyDelay(30, TimeUnit.SECONDS)
+            .setHeadersDelay(30, TimeUnit.SECONDS)
             .setBody("<title>Never delivered</title>"),
         )
 
@@ -281,6 +282,7 @@ class ChatLinkPreviewTest {
       coroutineScope {
         server.enqueue(
           MockResponse()
+            // Cancel while OkHttp is reading the response body.
             .setHeader("Content-Type", "image/png")
             .setBodyDelay(30, TimeUnit.SECONDS)
             .setBody(Buffer().write(pngBytes(width = 10, height = 10))),
