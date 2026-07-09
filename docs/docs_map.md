@@ -5186,6 +5186,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Download
   - H2: First run
+  - H2: Open dashboard links
   - H2: Choose a Gateway mode
   - H2: What the app owns
   - H2: macOS detail pages
@@ -7686,6 +7687,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Pricing
   - H2: Self-hosted LongCat-2.0
   - H2: Troubleshooting
+  - H2: Related
+
+## providers/meta-model-api.md
+
+- Route: /providers/meta-model-api
+- Headings:
+  - H2: Getting started
+  - H2: Non-interactive setup
+  - H2: Built-in catalog
+  - H2: Manual config
+  - H2: Smoke test
   - H2: Related
 
 ## providers/minimax.md
