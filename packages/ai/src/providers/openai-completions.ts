@@ -425,7 +425,8 @@ export const streamOpenAICompletions: StreamFunction<
         }
 
         const choiceDelta =
-          choice.delta ?? (choice as unknown as { message?: OpenAICompatibleDelta }).message;
+          choice.delta ??
+          (choice as unknown as { message?: ChatCompletionChunk.Choice["delta"] }).message;
         if (choiceDelta) {
           // Some endpoints return reasoning in reasoning_content (llama.cpp),
           // or reasoning (other openai compatible endpoints)
@@ -468,7 +469,7 @@ export const streamOpenAICompletions: StreamFunction<
             // The tool-call lane is also a reasoning boundary; seal the thought
             // before toolcall_start so thinking_end never trails the action.
             sealNativeReasoningBeforeText();
-            for (const toolCall of choiceDelta.tool_calls) {
+            for (const toolCall of choiceDelta.tool_calls ?? []) {
               const block = ensureToolCallBlock(toolCall);
               if (!block.id && toolCall.id) {
                 block.id = toolCall.id;
