@@ -40,6 +40,7 @@ const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
 const WAVEFORM_SAMPLES = 256;
 const DISCORD_OPUS_SAMPLE_RATE_HZ = 48_000;
 const DISCORD_VOICE_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const DISCORD_VOICE_UPLOAD_REQUEST_TIMEOUT_MS = 120_000;
 const DISCORD_VOICE_UPLOAD_SSRF_POLICY: SsrFPolicy = {
   allowRfc2544BenchmarkRange: true,
   allowIpv6UniqueLocalRange: true,
@@ -348,6 +349,7 @@ async function requestVoiceUploadUrl(params: {
   const { response: res, release } = await fetchWithSsrFGuard({
     url,
     init: uploadUrlInit,
+    timeoutMs: DISCORD_VOICE_UPLOAD_REQUEST_TIMEOUT_MS,
     policy: DISCORD_VOICE_UPLOAD_SSRF_POLICY,
     auditContext: "discord.voice.upload-url",
   });
@@ -374,6 +376,7 @@ async function uploadVoiceAttachment(params: {
       },
       body: new Uint8Array(params.audioBuffer),
     },
+    timeoutMs: DISCORD_VOICE_UPLOAD_REQUEST_TIMEOUT_MS,
     policy: DISCORD_VOICE_UPLOAD_SSRF_POLICY,
     auditContext: "discord.voice.attachment-upload",
   });
