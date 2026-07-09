@@ -161,19 +161,7 @@ function resolveAbsoluteScopedPath(value: string, cwd: string): string | undefin
   return path.isAbsolute(candidate) ? path.normalize(candidate) : path.resolve(cwd, candidate);
 }
 
-function isReadToolCallScopedToCwd(
-  params: { toolCall?: { rawInput?: unknown } },
-  toolName: string | undefined,
-  toolTitle: string | undefined,
-  cwd: string,
-): boolean {
-  if (toolName !== "read") {
-    return false;
-  }
-  const rawPath = resolveToolPathCandidate(params, toolName, toolTitle);
-  if (!rawPath) {
-    return false;
-  }
+function isToolPathScopedToCwd(rawPath: string, cwd: string): boolean {
   const absolutePath = resolveAbsoluteScopedPath(rawPath, cwd);
   if (!absolutePath) {
     return false;
@@ -197,12 +185,8 @@ export function classifyAcpToolApproval(params: {
 
   const isTrustedToolId = isKnownCoreToolId(toolName) || TRUSTED_SAFE_TOOL_ALIASES.has(toolName);
   if (toolName === "read" && isTrustedToolId) {
-    const autoApprove = isReadToolCallScopedToCwd(
-      params,
-      toolName,
-      params.toolCall?.title ?? undefined,
-      params.cwd,
-    );
+    const rawPath = resolveToolPathCandidate(params, toolName, params.toolCall?.title ?? undefined);
+    const autoApprove = rawPath ? isToolPathScopedToCwd(rawPath, params.cwd) : false;
     return {
       toolName,
       approvalClass: autoApprove ? "readonly_scoped" : "other",
@@ -210,6 +194,10 @@ export function classifyAcpToolApproval(params: {
     };
   }
   if (SAFE_SEARCH_TOOL_IDS.has(toolName) && isTrustedToolId) {
+    const rawPath = resolveToolPathCandidate(params, toolName, params.toolCall?.title ?? undefined);
+    if (rawPath && !isToolPathScopedToCwd(rawPath, params.cwd)) {
+      return { toolName, approvalClass: "other", autoApprove: false };
+    }
     return { toolName, approvalClass: "readonly_search", autoApprove: true };
   }
   if (EXEC_CAPABLE_TOOL_IDS.has(toolName)) {

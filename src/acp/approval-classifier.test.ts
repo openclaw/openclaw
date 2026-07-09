@@ -58,6 +58,45 @@ describe("classifyAcpToolApproval", () => {
     });
   });
 
+  it("auto-approves alias search when its path stays inside cwd", () => {
+    expect(
+      classify({
+        title: "search: query: TODO, path: src",
+        rawInput: { name: "search", query: "TODO", path: "src" },
+      }),
+    ).toEqual({
+      toolName: "search",
+      approvalClass: "readonly_search",
+      autoApprove: true,
+    });
+  });
+
+  it("does not auto-approve alias search when its rawInput path escapes cwd", () => {
+    expect(
+      classify({
+        title: "search: ignored-by-raw-input",
+        rawInput: { name: "search", query: "key", path: "~/.ssh" },
+      }),
+    ).toEqual({
+      toolName: "search",
+      approvalClass: "other",
+      autoApprove: false,
+    });
+  });
+
+  it("does not auto-approve alias search when its title path escapes cwd", () => {
+    expect(
+      classify({
+        title: "search: path: /etc",
+        rawInput: { name: "search", query: "shadow" },
+      }),
+    ).toEqual({
+      toolName: "search",
+      approvalClass: "other",
+      autoApprove: false,
+    });
+  });
+
   it("classifies process as exec-capable even for readonly-like actions", () => {
     expect(
       classify({

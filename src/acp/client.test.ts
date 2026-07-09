@@ -505,6 +505,56 @@ describe("resolvePermissionRequest", () => {
     expect(prompt).not.toHaveBeenCalled();
   });
 
+  it("auto-approves search when rawInput path resolves inside cwd", async () => {
+    await expectAutoAllowWithoutPrompt({
+      request: {
+        toolCall: {
+          toolCallId: "tool-search-inside-cwd",
+          title: "search: ignored-by-raw-input",
+          status: "pending",
+          rawInput: { name: "search", query: "TODO", path: "src" },
+        },
+      },
+      cwd: "/tmp/openclaw-acp-cwd",
+    });
+  });
+
+  it("prompts for search when rawInput path escapes cwd", async () => {
+    const prompt = vi.fn(async () => false);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-search-escape-cwd",
+          title: "search: ignored-by-raw-input",
+          status: "pending",
+          rawInput: { name: "search", query: "key", path: "../.ssh" },
+        },
+      }),
+      { prompt, log: () => {}, cwd: "/tmp/openclaw-acp-cwd/workspace" },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith("search", "search: ignored-by-raw-input");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+  });
+
+  it("prompts for search when title path escapes cwd", async () => {
+    const prompt = vi.fn(async () => false);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-search-title-escape-cwd",
+          title: "search: path: ~/.ssh",
+          status: "pending",
+          rawInput: { name: "search", query: "key" },
+        },
+      }),
+      { prompt, log: () => {}, cwd: "/tmp/openclaw-acp-cwd/workspace" },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith("search", "search: path: ~/.ssh");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+  });
+
   it("prompts when raw input spoofs a safe tool name for a dangerous title", async () => {
     const prompt = vi.fn(async () => false);
     const res = await resolvePermissionRequest(
