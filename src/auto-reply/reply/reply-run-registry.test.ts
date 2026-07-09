@@ -829,6 +829,40 @@ describe("reply run registry", () => {
     expect(queueMessage).toHaveBeenCalledWith("hello");
   });
 
+  it("queues messages only when the task-suggestion tool surface matches", () => {
+    const queueMessage = vi.fn(async () => {});
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-task-suggestions",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      taskSuggestionDeliveryMode: "gateway",
+      cancel: vi.fn(),
+      isStreaming: () => true,
+      queueMessage,
+    });
+    operation.setPhase("running");
+
+    expect(
+      queueReplyRunMessage("session-task-suggestions", "legacy client", {
+        taskSuggestionDeliveryMode: undefined,
+      }),
+    ).toBe(false);
+    expect(
+      queueReplyRunMessage("session-task-suggestions", "capable client", {
+        taskSuggestionDeliveryMode: "gateway",
+      }),
+    ).toBe(true);
+    expect(queueReplyRunMessage("session-task-suggestions", "internal completion")).toBe(true);
+    expect(queueMessage).toHaveBeenCalledTimes(2);
+    expect(queueMessage).toHaveBeenNthCalledWith(1, "capable client", {
+      taskSuggestionDeliveryMode: "gateway",
+    });
+    expect(queueMessage).toHaveBeenNthCalledWith(2, "internal completion");
+  });
+
   it("queues messages through active non-streaming backends with live stopped state", () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createReplyOperation({

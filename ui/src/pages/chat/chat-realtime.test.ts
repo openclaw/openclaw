@@ -19,7 +19,7 @@ import {
   createInitialChatRealtimeState,
   type ChatRealtimeState,
 } from "./chat-realtime.ts";
-import type { RealtimeTalkCallbacks } from "./realtime-talk.ts";
+import type { RealtimeTalkCallbacks, RealtimeTalkLaunchOptions } from "./realtime-talk.ts";
 
 function mediaDevice(kind: MediaDeviceKind, deviceId: string, label: string): MediaDeviceInfo {
   return { kind, deviceId, label, groupId: "", toJSON: () => ({}) } as MediaDeviceInfo;
@@ -41,7 +41,17 @@ function createState(): ChatRealtimeState {
   return state;
 }
 
-describe("chat realtime microphone selection", () => {
+const vadThresholdCases: Array<[string, string, number | undefined]> = [
+  ["zero", "0", 0],
+  ["ordinary value", "0.35", 0.35],
+  ["blank", "", undefined],
+  ["whitespace", "  ", undefined],
+  ["non-number", "loud", undefined],
+  ["below range", "-0.1", undefined],
+  ["above range", "1.1", undefined],
+];
+
+describe("chat realtime actions", () => {
   beforeEach(() => {
     localStorage.clear();
     realtimeTalkSessionCtor.mockClear();
@@ -54,6 +64,21 @@ describe("chat realtime microphone selection", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
+
+  it.each(vadThresholdCases)(
+    "normalizes a %s VAD threshold at the launch boundary",
+    async (_label, input, expected) => {
+      const state = createState();
+      state.updateRealtimeTalkOptions({ vadThreshold: input });
+
+      await state.toggleRealtimeTalk();
+
+      const launchOptions = (realtimeTalkSessionCtor.mock.calls as unknown[][])[0]?.[3] as
+        | RealtimeTalkLaunchOptions
+        | undefined;
+      expect(launchOptions?.vadThreshold).toBe(expected);
+    },
+  );
 
   it("keeps the selected input in memory when persistence fails and shares it across panes", async () => {
     const firstPane = createState();

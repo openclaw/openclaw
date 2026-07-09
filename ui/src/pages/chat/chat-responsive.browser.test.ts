@@ -371,11 +371,20 @@ function chatHtml(opts: ChatFixtureOptions = {}) {
                         </svg>
                       </summary>
                       <section class="context-usage__popover">
-                        <div class="context-usage__quota">
-                          <a class="chat-controls__quota chat-controls__quota--ok" href="/usage">
-                            <span class="chat-controls__quota-label">Usage Remaining</span>
-                            <span class="chat-controls__quota-value">28%</span>
+                        <div class="context-usage__section-label context-usage__plan-header">
+                          <span>Plan usage</span>
+                          <a class="context-usage__plan-link" href="/usage" data-chat-provider-usage="true">
+                            <span class="context-usage__plan-badge">Max (20x)</span>${iconSvg()}
                           </a>
+                        </div>
+                        <div class="context-usage__limits">
+                          <div class="context-usage__limit">
+                            <div class="context-usage__limit-head">
+                              <span class="context-usage__limit-label">Weekly · all models</span>
+                              <span class="context-usage__limit-meta"><strong>72%</strong></span>
+                            </div>
+                            <div class="context-usage__limit-bar"><span style="width: 72%"></span></div>
+                          </div>
                         </div>
                       </section>
                     </details>

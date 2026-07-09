@@ -1677,6 +1677,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/vault:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/venice:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1978,7 +1984,11 @@ importers:
         specifier: 5.6.2
         version: 5.6.2
 
-  packages/tool-call-repair: {}
+  packages/tool-call-repair:
+    dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/web-content-core: {}
 
@@ -1987,6 +1997,9 @@ importers:
       '@create-markdown/preview':
         specifier: 2.0.3
         version: 2.0.3(shiki@4.3.0)
+      '@lit/context':
+        specifier: 1.1.6
+        version: 1.1.6
       '@noble/ed25519':
         specifier: 3.1.0
         version: 3.1.0
