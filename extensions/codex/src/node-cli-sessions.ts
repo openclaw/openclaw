@@ -296,6 +296,8 @@ async function runCodexExecResume(params: {
     child.stdin.end(params.prompt);
     const exitCode = await new Promise<number | null>((resolve, reject) => {
       child.on("error", reject);
+      child.stdout.on("error", reject);
+      child.stderr.on("error", reject);
       child.on("exit", (code) => resolve(code));
     }).finally(() => {
       clearTimeout(timeout);
