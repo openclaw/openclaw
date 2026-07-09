@@ -134,4 +134,18 @@ describe("registerNodeCli", () => {
       }),
     );
   });
+
+  it("passes an explicit plaintext selection to the node host", async () => {
+    daemonMocks.loadNodeHostConfig.mockResolvedValue({
+      version: 1,
+      nodeId: "node-existing",
+      gateway: { host: "10.0.0.2", port: 19001, tls: true },
+    });
+
+    await createProgram().parseAsync(["node", "run", "--no-tls"], { from: "user" });
+
+    expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({ gatewayTls: false }),
+    );
+  });
 });
