@@ -31,6 +31,8 @@ import {
   removeGroundedShortTermCandidates,
   repairShortTermPromotionArtifacts,
   testing,
+  truncatePromotedSnippet,
+  truncateShortTermSnippet,
 } from "./short-term-promotion.js";
 
 describe("short-term promotion", () => {
@@ -3587,5 +3589,42 @@ describe("short-term promotion", () => {
         expect(memoryText).toContain("Some small existing content.");
       });
     });
+  });
+});
+
+describe("truncateShortTermSnippet", () => {
+  it("returns the original snippet when within the char limit", () => {
+    expect(truncateShortTermSnippet("short")).toBe("short");
+  });
+
+  it("truncates oversize snippets to the cap", () => {
+    const input = "x".repeat(900);
+    const result = truncateShortTermSnippet(input);
+    expect(result.length).toBeLessThanOrEqual(800);
+  });
+
+  it("does not split a surrogate pair at the cap boundary", () => {
+    const input = `${"y".repeat(799)}🚀`;
+    const result = truncateShortTermSnippet(input);
+    expect(result).not.toContain("�");
+  });
+});
+
+describe("truncatePromotedSnippet", () => {
+  it("returns the original snippet when within token limit", () => {
+    const result = truncatePromotedSnippet("short snippet", 100);
+    expect(result).toBe("short snippet");
+  });
+
+  it("truncates and appends ellipsis", () => {
+    const input = "x".repeat(500);
+    const result = truncatePromotedSnippet(input, 10);
+    expect(result.endsWith("...")).toBe(true);
+  });
+
+  it("does not split a surrogate pair at the boundary", () => {
+    const input = `aa🚀. ${"b".repeat(300)}`;
+    const result = truncatePromotedSnippet(input, 15);
+    expect(result).not.toContain("�");
   });
 });

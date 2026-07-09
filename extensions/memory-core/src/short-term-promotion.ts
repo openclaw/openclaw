@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
@@ -355,11 +356,11 @@ function normalizeSnippet(raw: string): string {
   return trimmed.replace(/\s+/g, " ");
 }
 
-function truncateShortTermSnippet(snippet: string): string {
+export function truncateShortTermSnippet(snippet: string): string {
   if (snippet.length <= SHORT_TERM_RECALL_MAX_SNIPPET_CHARS) {
     return snippet;
   }
-  return snippet.slice(0, SHORT_TERM_RECALL_MAX_SNIPPET_CHARS).trimEnd();
+  return truncateUtf16Safe(snippet, SHORT_TERM_RECALL_MAX_SNIPPET_CHARS).trimEnd();
 }
 
 function enforceShortTermRecallSnippetCap(store: ShortTermRecallStore): void {
@@ -2346,12 +2347,12 @@ function resolvePromotedSnippetCharLimit(maxTokens: number): number {
   return tokenLimit * PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE;
 }
 
-function truncatePromotedSnippet(snippet: string, maxTokens: number): string {
+export function truncatePromotedSnippet(snippet: string, maxTokens: number): string {
   const limit = resolvePromotedSnippetCharLimit(maxTokens);
   if (limit === 0 || snippet.length <= limit) {
     return snippet;
   }
-  const hardLimit = snippet.slice(0, limit);
+  const hardLimit = truncateUtf16Safe(snippet, limit);
   const sentenceBoundary = Math.max(
     hardLimit.lastIndexOf(". "),
     hardLimit.lastIndexOf("! "),
@@ -2364,7 +2365,7 @@ function truncatePromotedSnippet(snippet: string, maxTokens: number): string {
       : wordBoundary >= Math.floor(limit * 0.65)
         ? wordBoundary
         : limit;
-  return `${hardLimit.slice(0, cutAt).trimEnd()}...`;
+  return `${truncateUtf16Safe(hardLimit, cutAt).trimEnd()}...`;
 }
 
 function formatPromotedSnippetForMemory(rawSnippet: string, maxTokens: number): string {
