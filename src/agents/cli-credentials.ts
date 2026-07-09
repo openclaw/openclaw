@@ -53,12 +53,16 @@ export type ClaudeCliCredential =
       access: string;
       refresh: string;
       expires: number;
+      subscriptionType?: string;
+      rateLimitTier?: string;
     }
   | {
       type: "token";
       provider: "anthropic";
       token: string;
       expires: number;
+      subscriptionType?: string;
+      rateLimitTier?: string;
     };
 
 /** Credential shape parsed from Codex CLI storage. */
@@ -103,9 +107,24 @@ function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredentia
   if (!claudeOauth || typeof claudeOauth !== "object") {
     return null;
   }
-  const accessToken = (claudeOauth as Record<string, unknown>).accessToken;
-  const refreshToken = (claudeOauth as Record<string, unknown>).refreshToken;
-  const expiresAt = (claudeOauth as Record<string, unknown>).expiresAt;
+  const data = claudeOauth as Record<string, unknown>;
+  const accessToken = data.accessToken;
+  const refreshToken = data.refreshToken;
+  const expiresAt = data.expiresAt;
+  // Plan metadata (e.g. subscriptionType "max", rateLimitTier "default_max_20x")
+  // lets usage surfaces label subscription windows without another API call.
+  const subscriptionType =
+    typeof data.subscriptionType === "string" && data.subscriptionType.trim()
+      ? data.subscriptionType.trim()
+      : undefined;
+  const rateLimitTier =
+    typeof data.rateLimitTier === "string" && data.rateLimitTier.trim()
+      ? data.rateLimitTier.trim()
+      : undefined;
+  const planFields = {
+    ...(subscriptionType ? { subscriptionType } : {}),
+    ...(rateLimitTier ? { rateLimitTier } : {}),
+  };
 
   if (typeof accessToken !== "string" || !accessToken) {
     return null;
@@ -120,6 +139,7 @@ function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredentia
       access: accessToken,
       refresh: refreshToken,
       expires: expiresAt,
+      ...planFields,
     };
   }
   return {
@@ -127,6 +147,7 @@ function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredentia
     provider: "anthropic",
     token: accessToken,
     expires: expiresAt,
+    ...planFields,
   };
 }
 
@@ -138,6 +159,14 @@ function resolveCodexHomePath(codexHome?: string) {
   } catch {
     return home;
   }
+}
+
+function codexAuthJsonUsesChatGptTokens(data: Record<string, unknown>): boolean {
+  const authMode = typeof data.auth_mode === "string" ? data.auth_mode.toLowerCase() : undefined;
+  if (authMode) {
+    return authMode === "chatgpt" || authMode === "chatgptauthtokens";
+  }
+  return typeof data.OPENAI_API_KEY !== "string";
 }
 
 function resolveMiniMaxCliCredentialsPath(homeDir?: string) {
@@ -336,15 +365,9 @@ function readCodexKeychainCredentials(options?: {
   }
 }
 
-function readPortalCliOauthCredentials<TProvider extends string>(
-  credPath: string,
-  provider: TProvider,
-): { type: "oauth"; provider: TProvider; access: string; refresh: string; expires: number } | null {
-  const raw = loadJsonFile(credPath);
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-  const data = raw as Record<string, unknown>;
+function readCliOauthTokenFields(
+  data: Record<string, unknown>,
+): { access: string; refresh: string; expires: number } | null {
   const accessToken = data.access_token;
   const refreshToken = data.refresh_token;
   const expiresAt = data.expiry_date;
@@ -359,13 +382,19 @@ function readPortalCliOauthCredentials<TProvider extends string>(
     return null;
   }
 
-  return {
-    type: "oauth",
-    provider,
-    access: accessToken,
-    refresh: refreshToken,
-    expires: expiresAt,
-  };
+  return { access: accessToken, refresh: refreshToken, expires: expiresAt };
+}
+
+function readPortalCliOauthCredentials<TProvider extends string>(
+  credPath: string,
+  provider: TProvider,
+): { type: "oauth"; provider: TProvider; access: string; refresh: string; expires: number } | null {
+  const raw = loadJsonFile(credPath);
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const tokens = readCliOauthTokenFields(raw as Record<string, unknown>);
+  return tokens ? { type: "oauth", provider, ...tokens } : null;
 }
 
 function readMiniMaxCliCredentials(options?: { homeDir?: string }): MiniMaxCliCredential | null {
@@ -380,17 +409,8 @@ function readGeminiCliCredentials(options?: { homeDir?: string }): GeminiCliCred
     return null;
   }
   const data = raw as Record<string, unknown>;
-  const accessToken = data.access_token;
-  const refreshToken = data.refresh_token;
-  const expiresAt = data.expiry_date;
-
-  if (typeof accessToken !== "string" || !accessToken) {
-    return null;
-  }
-  if (typeof refreshToken !== "string" || !refreshToken) {
-    return null;
-  }
-  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) {
+  const tokens = readCliOauthTokenFields(data);
+  if (!tokens) {
     return null;
   }
 
@@ -408,9 +428,7 @@ function readGeminiCliCredentials(options?: { homeDir?: string }): GeminiCliCred
   return {
     type: "oauth",
     provider: "google-gemini-cli",
-    access: accessToken,
-    refresh: refreshToken,
-    expires: expiresAt,
+    ...tokens,
     ...(identity.email ? { email: identity.email } : {}),
     ...(identity.sub ? { accountId: identity.sub } : {}),
   };
@@ -514,6 +532,9 @@ export function readCodexCliCredentials(options?: {
   }
 
   const data = raw as Record<string, unknown>;
+  if (!codexAuthJsonUsesChatGptTokens(data)) {
+    return null;
+  }
   const tokens = data.tokens as Record<string, unknown> | undefined;
   if (!tokens || typeof tokens !== "object") {
     return null;

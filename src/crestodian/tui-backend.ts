@@ -4,8 +4,11 @@ import type {
   SessionsPatchParams,
   SessionsPatchResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { ChannelsAddOptions } from "../commands/channels/add.js";
+import type { OnboardOptions } from "../commands/onboard-types.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { notifyListeners } from "../shared/listeners.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -13,13 +16,15 @@ import type {
   TuiEvent,
   TuiModelChoice,
   TuiSessionList,
+  TuiSessionCreateOptions,
 } from "../tui/tui-backend.js";
 import { runTui as defaultRunTui } from "../tui/tui.js";
 import type { CrestodianAssistantPlanner } from "./assistant.js";
-import { approvalQuestion, isYes, resolveCrestodianOperation } from "./dialogue.js";
+import { CrestodianChatEngine, type CrestodianChatEngineOptions } from "./chat-engine.js";
+import type { CrestodianModelSetupResult } from "./model-setup.js";
+import { buildOnboardingWelcome } from "./onboarding-welcome.js";
 import {
   executeCrestodianOperation,
-  isPersistentCrestodianOperation,
   type CrestodianCommandDeps,
   type CrestodianOperation,
 } from "./operations.js";
@@ -32,6 +37,27 @@ export type CrestodianTuiOptions = {
   deps?: CrestodianCommandDeps;
   planWithAssistant?: CrestodianAssistantPlanner;
   runTui?: RunTui;
+  /** "onboarding" swaps the greeting for the first-run setup proposal. */
+  welcomeVariant?: "onboarding";
+  /** Workspace override for the proposed first-run setup (from --workspace). */
+  setupWorkspace?: string;
+  /** Risk acknowledgement already collected by the calling onboarding flow. */
+  setupAcceptRisk?: boolean;
+  /** Test seam for the channel-setup wizard hosted by the chat bridge. */
+  runChannelSetupWizard?: CrestodianChatEngineOptions["runChannelSetupWizard"];
+  /** Test seam for masked terminal model setup after the TUI exits. */
+  runModelSetup?: (params: {
+    workspace?: string;
+    prompter: import("../wizard/prompts.js").WizardPrompter;
+    runtime: RuntimeEnv;
+  }) => Promise<CrestodianModelSetupResult>;
+  runGuidedSetup?: (opts: OnboardOptions, runtime: RuntimeEnv) => Promise<void>;
+  runClassicSetup?: (opts: OnboardOptions, runtime: RuntimeEnv) => Promise<void>;
+  runChannelsAdd?: (
+    opts: ChannelsAddOptions,
+    runtime: RuntimeEnv,
+    params?: { hasFlags?: boolean },
+  ) => Promise<unknown>;
 };
 
 type CrestodianHistoryMessage = {
@@ -40,23 +66,26 @@ type CrestodianHistoryMessage = {
   timestamp: number;
 };
 
-type CaptureRuntime = RuntimeEnv & {
-  read: () => string;
-};
-
 const CRESTODIAN_AGENT_ID = "crestodian";
 const CRESTODIAN_SESSION_KEY = buildAgentMainSessionKey({ agentId: CRESTODIAN_AGENT_ID });
 
-function createCaptureRuntime(): CaptureRuntime {
-  const lines: string[] = [];
+function createEmbeddedModelSetupRuntime(runtime: RuntimeEnv): RuntimeEnv {
   return {
-    log: (...args) => lines.push(args.join(" ")),
-    error: (...args) => lines.push(args.join(" ")),
-    exit: (code) => {
-      throw new Error(`Crestodian operation exited with code ${String(code)}`);
+    ...runtime,
+    exit: (code): never => {
+      throw new Error(`embedded model setup exited with code ${String(code)}`);
     },
-    read: () => lines.join("\n").trim(),
   };
+}
+
+function createChatEngine(opts: CrestodianTuiOptions): CrestodianChatEngine {
+  return new CrestodianChatEngine({
+    yes: opts.yes,
+    deps: opts.deps,
+    planWithAssistant: opts.planWithAssistant,
+    surface: "cli",
+    ...(opts.runChannelSetupWizard ? { runChannelSetupWizard: opts.runChannelSetupWizard } : {}),
+  });
 }
 
 async function loadOverviewForTui(opts: CrestodianTuiOptions) {
@@ -98,7 +127,7 @@ class CrestodianTuiBackend implements TuiBackend {
   onGap?: (info: { expected: number; received: number }) => void;
 
   private seq = 0;
-  private pending: CrestodianOperation | null = null;
+  private engine: CrestodianChatEngine;
   private handoff: CrestodianOperation | null = null;
   private requestExit: (() => void) | null = null;
   private readonly messages: CrestodianHistoryMessage[] = [];
@@ -106,7 +135,9 @@ class CrestodianTuiBackend implements TuiBackend {
   constructor(
     private readonly opts: CrestodianTuiOptions,
     welcome: string,
+    engine: CrestodianChatEngine,
   ) {
+    this.engine = engine;
     this.messages.push(message("assistant", welcome));
   }
 
@@ -213,7 +244,9 @@ class CrestodianTuiBackend implements TuiBackend {
   }
 
   async resetSession(): Promise<{ ok: boolean }> {
-    this.pending = null;
+    // Reset drops in-flight approvals/wizards along with the transcript.
+    await this.engine.dispose();
+    this.engine = createChatEngine(this.opts);
     const overview = await loadOverviewForTui(this.opts);
     this.messages.splice(
       0,
@@ -221,6 +254,15 @@ class CrestodianTuiBackend implements TuiBackend {
       message("assistant", formatCrestodianStartupMessage(overview)),
     );
     return { ok: true };
+  }
+
+  async createSession(_opts: TuiSessionCreateOptions) {
+    await this.resetSession();
+    return {
+      ok: true as const,
+      key: CRESTODIAN_SESSION_KEY,
+      entry: { sessionId: "crestodian", updatedAt: Date.now() },
+    };
   }
 
   async getGatewayStatus(): Promise<string> {
@@ -232,13 +274,22 @@ class CrestodianTuiBackend implements TuiBackend {
     return [];
   }
 
+  async dispose(): Promise<void> {
+    await this.engine.dispose();
+  }
+
   private nextSeq(): number {
     this.seq += 1;
     return this.seq;
   }
 
   private emit(event: string, payload: unknown): void {
-    this.onEvent?.({
+    const listener = this.onEvent;
+    if (!listener) {
+      return;
+    }
+    // A renderer failure must not reject the backend's fire-and-forget response path.
+    notifyListeners([listener], {
       event,
       payload,
       seq: this.nextSeq(),
@@ -271,59 +322,57 @@ class CrestodianTuiBackend implements TuiBackend {
 
   private async respond(runId: string, sessionKey: string, text: string): Promise<void> {
     try {
-      const reply = await this.resolveReply(text);
-      this.emitFinal(runId, sessionKey, reply);
+      const reply = await this.engine.handle(text);
+      if ((reply.action === "open-tui" || reply.action === "open-setup") && reply.handoff) {
+        // The outer loop owns interactive handoffs after the Crestodian TUI exits.
+        this.handoff = reply.handoff;
+        queueMicrotask(() => this.requestExit?.());
+      } else if (reply.action === "exit") {
+        queueMicrotask(() => this.requestExit?.());
+      }
+      this.emitFinal(runId, sessionKey, reply.text);
     } catch (error) {
       this.emitError(runId, sessionKey, error);
     }
   }
+}
 
-  private async resolveReply(text: string): Promise<string> {
-    if (this.pending) {
-      // A pending persistent operation consumes the next reply as approval or cancellation.
-      if (isYes(text)) {
-        const pending = this.pending;
-        this.pending = null;
-        const capture = createCaptureRuntime();
-        await executeCrestodianOperation(pending, capture, {
-          approved: true,
-          deps: this.opts.deps,
-        });
-        return capture.read() || "Applied. Audit entry written.";
-      }
-      this.pending = null;
-      return "Skipped. No barnacles on config today.";
-    }
-
-    const capture = createCaptureRuntime();
-    const operation = await resolveCrestodianOperation(text, capture, this.opts);
-
-    if (operation.kind === "open-tui") {
-      // Handoff exits Crestodian's local backend and lets the outer loop open the normal agent TUI.
-      this.handoff = operation;
-      queueMicrotask(() => this.requestExit?.());
-      return "Opening your normal agent TUI. Use /crestodian there to come back.";
-    }
-
-    if (isPersistentCrestodianOperation(operation) && !this.opts.yes) {
-      this.pending = operation;
-      await executeCrestodianOperation(operation, capture, {
-        approved: false,
-        deps: this.opts.deps,
-      });
-      return [capture.read(), approvalQuestion(operation)].filter(Boolean).join("\n\n");
-    }
-
-    await executeCrestodianOperation(operation, capture, {
-      approved: this.opts.yes === true || !isPersistentCrestodianOperation(operation),
-      deps: this.opts.deps,
-    });
-    const reply = capture.read();
-    if (operation.kind === "none" && reply.includes("Bye.")) {
-      queueMicrotask(() => this.requestExit?.());
-    }
-    return reply;
+async function runSetupHandoff(
+  handoff: Extract<CrestodianOperation, { kind: "open-setup" }>,
+  opts: CrestodianTuiOptions,
+  runtime: RuntimeEnv,
+): Promise<void> {
+  if (handoff.target === "guided") {
+    const runGuided =
+      opts.runGuidedSetup ?? (await import("../commands/onboard-guided.js")).runGuidedOnboarding;
+    await runGuided(
+      {
+        ...(opts.setupWorkspace ? { workspace: opts.setupWorkspace } : {}),
+        ...(opts.setupAcceptRisk === true ? { acceptRisk: true } : {}),
+      },
+      runtime,
+    );
+    return;
   }
+  if (handoff.target === "classic") {
+    const runClassic =
+      opts.runClassicSetup ??
+      (await import("../commands/onboard-interactive.js")).runInteractiveSetup;
+    await runClassic(
+      {
+        classic: true,
+        ...(opts.setupWorkspace ? { workspace: opts.setupWorkspace } : {}),
+        ...(opts.setupAcceptRisk === true ? { acceptRisk: true } : {}),
+      },
+      runtime,
+    );
+    return;
+  }
+  const runChannelsAdd =
+    opts.runChannelsAdd ?? (await import("../commands/channels/add.js")).channelsAddCommand;
+  await runChannelsAdd(handoff.channel ? { channel: handoff.channel } : {}, runtime, {
+    hasFlags: false,
+  });
 }
 
 export async function runCrestodianTui(
@@ -331,22 +380,75 @@ export async function runCrestodianTui(
   runtime: RuntimeEnv,
 ): Promise<void> {
   let nextInput: string | undefined;
+  let welcomeVariant = opts.welcomeVariant;
   for (;;) {
-    const overview = await loadOverviewForTui(opts);
-    const backend = new CrestodianTuiBackend(opts, formatCrestodianStartupMessage(overview));
+    // A returned agent request is single-use; a later wizard handoff must not
+    // replay it when Crestodian re-enters the chat shell.
+    const initialMessage = nextInput;
+    nextInput = undefined;
+    const engine = createChatEngine(opts);
+    let welcome: string;
+    if (welcomeVariant === "onboarding") {
+      welcome = await buildOnboardingWelcome({
+        engine,
+        ...(opts.setupWorkspace ? { workspace: opts.setupWorkspace } : {}),
+      });
+    } else {
+      welcome = formatCrestodianStartupMessage(await loadOverviewForTui(opts));
+      engine.noteAssistantMessage(welcome);
+    }
+    // The onboarding greeting applies to the first shell only; re-entry after
+    // an agent handoff uses the normal repair-oriented startup message.
+    welcomeVariant = undefined;
+    const backend = new CrestodianTuiBackend(opts, welcome, engine);
     const runTui = opts.runTui ?? defaultRunTui;
-    await runTui({
-      local: true,
-      session: CRESTODIAN_SESSION_KEY,
-      historyLimit: 200,
-      backend,
-      config: {},
-      title: "openclaw crestodian",
-      ...(nextInput ? { message: nextInput } : {}),
-    });
+    try {
+      await runTui({
+        local: true,
+        session: CRESTODIAN_SESSION_KEY,
+        historyLimit: 200,
+        backend,
+        config: {},
+        title: "openclaw crestodian",
+        ...(initialMessage ? { message: initialMessage } : {}),
+      });
+    } finally {
+      await backend.dispose();
+    }
 
     const handoff = backend.consumeHandoff();
     if (!handoff) {
+      return;
+    }
+    if (handoff.kind === "model-setup") {
+      const [{ createClackPrompter }, { runCrestodianModelSetup }] = await Promise.all([
+        import("../wizard/clack-prompter.js"),
+        import("./model-setup.js"),
+      ]);
+      const runModelSetup = opts.runModelSetup ?? runCrestodianModelSetup;
+      try {
+        const result = await runModelSetup({
+          ...(handoff.workspace ? { workspace: handoff.workspace } : {}),
+          prompter: createClackPrompter(),
+          runtime: createEmbeddedModelSetupRuntime(runtime),
+        });
+        runtime.log(
+          result.model
+            ? `Default model configured: ${result.model}`
+            : "Model provider setup finished without a default model.",
+        );
+      } catch (error) {
+        const { WizardCancelledError } = await import("../wizard/prompts.js");
+        if (!(error instanceof WizardCancelledError)) {
+          runtime.error(
+            `Model provider setup failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      continue;
+    }
+    if (handoff.kind === "open-setup") {
+      await runSetupHandoff(handoff, opts, runtime);
       return;
     }
     const result = await executeCrestodianOperation(handoff, runtime, {

@@ -1,4 +1,5 @@
 // Covers backup archive creation and verification filtering.
+import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +21,7 @@ import {
   formatBackupCreateSummary,
   type BackupCreateResult,
 } from "./backup-create.js";
+import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
 function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
@@ -221,6 +223,70 @@ describe("writeTarArchiveWithRetry", () => {
     expect(log).toHaveBeenCalledTimes(2);
   });
 
+  it("uses a fresh temp archive path when cleanup cannot remove a failed attempt", async () => {
+    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+      path: "/state/sessions/s-abc/transcript.jsonl",
+    });
+    const tempArchivePath = "/tmp/backup.tar.gz.tmp";
+    const runTar = vi
+      .fn<(attemptTempArchivePath: string) => Promise<void>>()
+      .mockRejectedValueOnce(eofErr)
+      .mockResolvedValueOnce(undefined);
+    const log = vi.fn();
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+    const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async () => {
+      throw Object.assign(new Error("resource busy"), { code: "EBUSY" });
+    });
+
+    try {
+      const completedTempArchivePath = await backupCreateInternals.writeTarArchiveWithRetry({
+        tempArchivePath,
+        runTar,
+        log,
+        sleepMs: sleep,
+      });
+
+      expect(runTar).toHaveBeenNthCalledWith(1, tempArchivePath);
+      expect(runTar).toHaveBeenNthCalledWith(2, `${tempArchivePath}.retry-2`);
+      expect(completedTempArchivePath).toBe(`${tempArchivePath}.retry-2`);
+      expect(rmSpy).toHaveBeenCalledWith(tempArchivePath, { force: true });
+      expect(log).toHaveBeenCalledWith(
+        `Backup archiver could not remove temp archive ${tempArchivePath} between retries: EBUSY. Continuing.`,
+      );
+    } finally {
+      rmSpy.mockRestore();
+    }
+  });
+
+  it("cleans retry temp archive paths when a later attempt fails", async () => {
+    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+      path: "/state/sessions/s-abc/transcript.jsonl",
+    });
+    const tempArchivePath = "/tmp/backup.tar.gz.tmp";
+    const runTar = vi
+      .fn<(attemptTempArchivePath: string) => Promise<void>>()
+      .mockRejectedValueOnce(eofErr)
+      .mockRejectedValueOnce(new Error("permission denied"));
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+    const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
+
+    try {
+      await expect(
+        backupCreateInternals.writeTarArchiveWithRetry({
+          tempArchivePath,
+          runTar,
+          sleepMs: sleep,
+        }),
+      ).rejects.toThrow(/permission denied/);
+
+      expect(runTar).toHaveBeenNthCalledWith(1, tempArchivePath);
+      expect(runTar).toHaveBeenNthCalledWith(2, `${tempArchivePath}.retry-2`);
+      expect(rmSpy).toHaveBeenCalledWith(`${tempArchivePath}.retry-2`, { force: true });
+    } finally {
+      rmSpy.mockRestore();
+    }
+  });
+
   it("surfaces the offending path and attempt count after exhausting retries", async () => {
     const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
       path: "/state/logs/gateway.jsonl",
@@ -288,6 +354,52 @@ describe("writeTarArchiveWithRetry", () => {
     ).rejects.toThrow(/permission denied/);
     expect(runTar).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
+  });
+});
+
+describe("createBackupVolatileStatCache", () => {
+  it("lets tar filter a volatile file that disappears before lstat", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-volatile-stat-cache-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const volatilePath = await state.writeText("logs/gateway.log", "live log\n");
+        await state.writeText("settings.json", '{"keep":true}\n');
+        const archivePath = state.path("volatile-stat-cache.tar.gz");
+        const volatilePlan = { stateDirs: [state.stateDir] };
+        const statCache = backupCreateInternals.createBackupVolatileStatCache(volatilePlan);
+        const getCachedStat = statCache.get.bind(statCache);
+        let removedBeforeStat = false;
+
+        statCache.get = (key: string) => {
+          if (path.resolve(key) === path.resolve(volatilePath)) {
+            rmSync(volatilePath, { force: true });
+            removedBeforeStat = true;
+          }
+          return getCachedStat(key);
+        };
+
+        await tar.c(
+          {
+            file: archivePath,
+            gzip: true,
+            portable: true,
+            preservePaths: true,
+            statCache,
+            filter: (entryPath) => !isVolatileBackupPath(entryPath, volatilePlan),
+          },
+          [state.stateDir],
+        );
+
+        const entries = await listArchiveEntries(archivePath);
+        expect(removedBeforeStat).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/settings.json"))).toBe(true);
+        expect(entries.some((entry) => entry.endsWith("/logs/gateway.log"))).toBe(false);
+      },
+    );
   });
 });
 
@@ -1202,5 +1314,44 @@ describe("createBackupArchive", () => {
         }
       },
     );
+  });
+
+  describe.runIf(process.platform !== "win32")("archive permissions", () => {
+    it.each([
+      ["hard link", false],
+      ["copy fallback", true],
+    ] as const)("publishes via %s with owner-only 0o600 permissions", async (_name, forceCopy) => {
+      const linkSpy = forceCopy
+        ? vi
+            .spyOn(fs, "link")
+            .mockRejectedValue(
+              Object.assign(new Error("hard links unsupported"), { code: "EPERM" }),
+            )
+        : undefined;
+      try {
+        await withOpenClawTestState(
+          {
+            layout: "state-only",
+            prefix: "openclaw-backup-mode-",
+            scenario: "minimal",
+          },
+          async (state) => {
+            const outputDir = state.path("backups");
+            await fs.mkdir(outputDir, { recursive: true });
+
+            const result = await createBackupArchive({
+              output: outputDir,
+              includeWorkspace: false,
+              nowMs: Date.UTC(2026, 4, 9, 12, 0, 0),
+            });
+
+            const stat = await fs.stat(result.archivePath);
+            expect(stat.mode & 0o777).toBe(0o600);
+          },
+        );
+      } finally {
+        linkSpy?.mockRestore();
+      }
+    });
   });
 });

@@ -41,6 +41,7 @@ const mockedConvertHeicToJpeg = convertHeicToJpegMock;
 const mockedRunExec = runExecMock;
 
 const TEMP_MEDIA_PREFIX = "openclaw-media-";
+const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
 let suiteTempMediaRootDir = "";
 let tempMediaDirCounter = 0;
 let sharedTempMediaCacheDir = "";
@@ -166,7 +167,7 @@ async function createTempMediaFile(params: { fileName: string; content: Buffer |
   // setup cheap while each case still gets a stable local path.
   const normalizedContent =
     typeof params.content === "string" ? Buffer.from(params.content) : params.content;
-  const contentHash = crypto.createHash("sha1").update(normalizedContent).digest("hex");
+  const contentHash = crypto.createHash("sha256").update(normalizedContent).digest("hex");
   const cacheKey = `${params.fileName}:${contentHash}`;
   const cachedPath = tempMediaFileCache.get(cacheKey);
   if (cachedPath) {
@@ -224,7 +225,7 @@ async function createAudioCtx(params?: {
   } satisfies MsgContext;
 }
 
-async function setupAudioAutoDetectCase(stdout: string): Promise<{
+async function setupAudioAutoDetectCase(stdout?: string): Promise<{
   ctx: MsgContext;
   cfg: OpenClawConfig;
 }> {
@@ -234,11 +235,25 @@ async function setupAudioAutoDetectCase(stdout: string): Promise<{
     content: createSafeAudioFixtureBuffer(2048),
   });
   const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
-  mockedRunExec.mockResolvedValueOnce({
-    stdout,
-    stderr: "",
-  });
+  if (stdout !== undefined) {
+    mockedRunExec.mockResolvedValueOnce({
+      stdout,
+      stderr: "",
+    });
+  }
   return { ctx, cfg };
+}
+
+function mockWhisperCliTranscript(transcript: string) {
+  mockedRunExec.mockImplementationOnce(async (_command, args) => {
+    const outputBaseIndex = args.indexOf("-of");
+    const outputBase = outputBaseIndex >= 0 ? args[outputBaseIndex + 1] : undefined;
+    if (typeof outputBase !== "string") {
+      throw new Error("missing whisper-cli output base");
+    }
+    await fs.writeFile(`${outputBase}.txt`, transcript);
+    return { stdout: "Transcribing with Whisper...\n", stderr: "" };
+  });
 }
 
 async function applyWithDisabledMedia(params: {
@@ -367,6 +382,20 @@ describe("applyMediaUnderstanding", () => {
     suiteTempMediaRootDir = "";
     sharedTempMediaCacheDir = "";
     tempMediaFileCache.clear();
+  });
+
+  it("uses SHA-256 content hashes for cached media fixtures", async () => {
+    const mediaPath = await createTempMediaFile({
+      fileName: "fixture.txt",
+      content: "cached fixture",
+    });
+    const cachedPath = await createTempMediaFile({
+      fileName: "fixture.txt",
+      content: "cached fixture",
+    });
+
+    expect(cachedPath).toBe(mediaPath);
+    expect(path.basename(path.dirname(mediaPath))).toMatch(SHA256_HEX_PATTERN);
   });
 
   it("sets Transcript and replaces Body when audio transcription succeeds", async () => {
@@ -825,7 +854,8 @@ describe("applyMediaUnderstanding", () => {
     const modelPath = path.join(modelDir, "tiny.bin");
     await fs.writeFile(modelPath, "model");
 
-    const { ctx, cfg } = await setupAudioAutoDetectCase("whisper cpp ok\n");
+    const { ctx, cfg } = await setupAudioAutoDetectCase();
+    mockWhisperCliTranscript("whisper cpp ok\n");
 
     await withMediaAutoDetectEnv(
       {
@@ -874,10 +904,7 @@ describe("applyMediaUnderstanding", () => {
       await fs.writeFile(wavPath, Buffer.from("RIFF"));
       return "";
     });
-    mockedRunExec.mockResolvedValueOnce({
-      stdout: "whisper cpp ogg ok\n",
-      stderr: "",
-    });
+    mockWhisperCliTranscript("whisper cpp ogg ok\n");
 
     await withMediaAutoDetectEnv(
       {

@@ -207,6 +207,38 @@ describe("voice-call outbound helpers", () => {
     expect(ctx.activeCalls.get(result.callId)?.sessionKey).toBe(
       `agent:main:voice:call:${result.callId}`,
     );
+    expect(ctx.activeCalls.get(result.callId)?.agentId).toBe("main");
+  });
+
+  it("uses the per-call agent for explicit session normalization", async () => {
+    const ctx = {
+      activeCalls: new Map(),
+      providerCallIdMap: new Map(),
+      provider: {
+        name: "twilio",
+        initiateCall: vi.fn(async () => ({ providerCallId: "provider-1" })),
+      },
+      config: {
+        agentId: "main",
+        maxConcurrentCalls: 3,
+        outbound: { defaultMode: "conversation" },
+        fromNumber: "+14155550100",
+      },
+      storePath: "/tmp/voice-call.json",
+      webhookUrl: "https://example.com/webhook",
+    };
+
+    const result = await initiateCall(
+      ctx as never,
+      "+14155550123",
+      "agent:support:google-meet:meet-1",
+      { agentId: "Support" },
+    );
+
+    expect(ctx.activeCalls.get(result.callId)).toMatchObject({
+      agentId: "support",
+      sessionKey: "agent:support:google-meet:meet-1",
+    });
   });
 
   it("initiates conversation calls with pre-connect DTMF TwiML", async () => {
@@ -321,13 +353,16 @@ describe("voice-call outbound helpers", () => {
       storePath: "/tmp/voice-call.json",
     };
 
-    await expect(speak(ctx as never, "call-1", "hello")).resolves.toEqual({ success: true });
+    await expect(
+      speak(ctx as never, "call-1", "hello", { listenAfterPlayback: true }),
+    ).resolves.toEqual({ success: true });
     expect(transitionStateMock).toHaveBeenCalledWith(call, "speaking");
     expect(playTts).toHaveBeenCalledWith({
       callId: "call-1",
       providerCallId: "provider-1",
       text: "hello",
       voice: "alloy",
+      listenAfterPlayback: true,
     });
     expect(addTranscriptEntryMock).toHaveBeenCalledWith(call, "bot", "hello");
 

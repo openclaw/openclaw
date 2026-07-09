@@ -10,7 +10,9 @@ import { fileURLToPath } from "node:url";
 
 const MIN_NODE_MAJOR = 22;
 const MIN_NODE_MINOR = 19;
-const MIN_NODE_VERSION = `${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}`;
+const MIN_NODE_23_MINOR = 11;
+const RECOMMENDED_NODE_MAJOR = 24;
+const SUPPORTED_NODE_RANGE = ">=22.19.0 <23 or >=23.11.0";
 const MIN_COMPILE_CACHE_NODE_24_MINOR = 15;
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 
@@ -22,9 +24,15 @@ const parseNodeVersion = (rawVersion) => {
   };
 };
 
-const isSupportedNodeVersion = (version) =>
-  version.major > MIN_NODE_MAJOR ||
-  (version.major === MIN_NODE_MAJOR && version.minor >= MIN_NODE_MINOR);
+const isSupportedNodeVersion = (version) => {
+  if (version.major === MIN_NODE_MAJOR) {
+    return version.minor >= MIN_NODE_MINOR;
+  }
+  if (version.major === 23) {
+    return version.minor >= MIN_NODE_23_MINOR;
+  }
+  return version.major > 23;
+};
 
 const isNodeVersionAffectedByCompileCacheDeadlock = (rawVersion) => {
   const version = parseNodeVersion(rawVersion);
@@ -41,11 +49,11 @@ const ensureSupportedNodeVersion = () => {
   }
 
   process.stderr.write(
-    `openclaw: Node.js v${MIN_NODE_VERSION}+ is required (current: v${process.versions.node}).\n` +
+    `openclaw: Node.js ${SUPPORTED_NODE_RANGE} is required (current: v${process.versions.node}).\n` +
       "If you use nvm, run:\n" +
-      `  nvm install ${MIN_NODE_MAJOR}\n` +
-      `  nvm use ${MIN_NODE_MAJOR}\n` +
-      `  nvm alias default ${MIN_NODE_MAJOR}\n`,
+      `  nvm install ${RECOMMENDED_NODE_MAJOR}\n` +
+      `  nvm use ${RECOMMENDED_NODE_MAJOR}\n` +
+      `  nvm alias default ${RECOMMENDED_NODE_MAJOR}\n`,
   );
   process.exit(1);
 };

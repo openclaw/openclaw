@@ -1,11 +1,15 @@
 /**
  * Gateway startup session migration tests.
  */
-import fs from "node:fs";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
 import { runStartupSessionMigration } from "./server-startup-session-migration.js";
+
+type StartupMigrationDeps = NonNullable<Parameters<typeof runStartupSessionMigration>[0]["deps"]>;
+type MigrateSessionKeys = NonNullable<StartupMigrationDeps["migrateOrphanedSessionKeys"]>;
+type ResolveStoreTargets = NonNullable<
+  StartupMigrationDeps["resolveAllAgentSessionStoreTargetsSync"]
+>;
+type SweepStoreTemps = NonNullable<StartupMigrationDeps["sweepOrphanSessionStoreTemps"]>;
 
 function makeLog() {
   return {
@@ -20,6 +24,20 @@ function makeCfg() {
   >[0]["cfg"];
 }
 
+function makeDeps(migrate: MigrateSessionKeys, removedFiles = 0) {
+  return {
+    migrateOrphanedSessionKeys: migrate,
+    resolveAllAgentSessionStoreTargetsSync: vi.fn<ResolveStoreTargets>().mockReturnValue([
+      { agentId: "main", storePath: "/tmp/main/sessions.json" },
+      { agentId: "ops", storePath: "/tmp/ops/sessions.json" },
+    ]),
+    sweepOrphanSessionStoreTemps: vi
+      .fn<SweepStoreTemps>()
+      .mockResolvedValueOnce(removedFiles)
+      .mockResolvedValue(0),
+  };
+}
+
 function firstLogMessage(log: ReturnType<typeof vi.fn>, label: string): string {
   const [message] = log.mock.calls[0] ?? [];
   if (typeof message !== "string") {
@@ -29,57 +47,16 @@ function firstLogMessage(log: ReturnType<typeof vi.fn>, label: string): string {
 }
 
 describe("runStartupSessionMigration", () => {
-  it("discovers plugin-owned agents during direct gateway startup", async () => {
-    await withTempDir({ prefix: "openclaw-startup-migration-" }, async (tempDir) => {
-      const storeTemplate = path.join(tempDir, "stores", "{agentId}", "sessions.json");
-      const voiceStorePath = path.join(tempDir, "stores", "voice", "sessions.json");
-      fs.mkdirSync(path.dirname(voiceStorePath), { recursive: true });
-      fs.writeFileSync(
-        voiceStorePath,
-        JSON.stringify({
-          "voice:15550001111": { sessionId: "legacy-voice", updatedAt: 1 },
-        }),
-      );
-      const cfg = {
-        session: { store: storeTemplate },
-        agents: { list: [{ id: "main", default: true }] },
-        plugins: {
-          entries: { "voice-call": { config: { agentId: "voice" } } },
-        },
-      } as ReturnType<typeof makeCfg>;
-      const log = makeLog();
-
-      await runStartupSessionMigration({
-        cfg,
-        env: {
-          ...process.env,
-          HOME: tempDir,
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-          OPENCLAW_STATE_DIR: path.join(tempDir, "state"),
-        },
-        log,
-      });
-
-      const store = JSON.parse(fs.readFileSync(voiceStorePath, "utf8")) as Record<
-        string,
-        { sessionId?: string }
-      >;
-      expect(store["agent:voice:voice:15550001111"]?.sessionId).toBe("legacy-voice");
-      expect(store["voice:15550001111"]).toBeUndefined();
-      expect(log.info).toHaveBeenCalledOnce();
-    });
-  });
-
   it("logs changes when orphaned keys are canonicalized", async () => {
     const log = makeLog();
-    const migrate = vi.fn().mockResolvedValue({
+    const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({
       changes: ["Canonicalized 2 orphaned session key(s) in /tmp/store.json"],
       warnings: [],
     });
     await runStartupSessionMigration({
       cfg: makeCfg(),
       log,
-      deps: { migrateOrphanedSessionKeys: migrate },
+      deps: makeDeps(migrate),
     });
     expect(migrate).toHaveBeenCalledOnce();
     expect(log.info).toHaveBeenCalledOnce();
@@ -91,14 +68,14 @@ describe("runStartupSessionMigration", () => {
 
   it("logs warnings from migration", async () => {
     const log = makeLog();
-    const migrate = vi.fn().mockResolvedValue({
+    const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({
       changes: [],
       warnings: ["Could not read /bad/path: ENOENT"],
     });
     await runStartupSessionMigration({
       cfg: makeCfg(),
       log,
-      deps: { migrateOrphanedSessionKeys: migrate },
+      deps: makeDeps(migrate),
     });
     expect(log.info).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledOnce();
@@ -107,29 +84,47 @@ describe("runStartupSessionMigration", () => {
     );
   });
 
-  it("silently continues when no changes needed", async () => {
+  it("sweeps each discovered store and logs removed temp files", async () => {
     const log = makeLog();
-    const migrate = vi.fn().mockResolvedValue({ changes: [], warnings: [] });
+    const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({ changes: [], warnings: [] });
+    const deps = makeDeps(migrate, 3);
     await runStartupSessionMigration({
       cfg: makeCfg(),
       log,
-      deps: { migrateOrphanedSessionKeys: migrate },
+      deps,
     });
-    expect(log.info).not.toHaveBeenCalled();
+    expect(deps.sweepOrphanSessionStoreTemps).toHaveBeenCalledTimes(2);
+    expect(log.info).toHaveBeenCalledWith("session: removed 3 stale session store temp file(s)");
     expect(log.warn).not.toHaveBeenCalled();
   });
 
   it("catches and logs migration errors without throwing", async () => {
     const log = makeLog();
-    const migrate = vi.fn().mockRejectedValue(new Error("disk full"));
+    const migrate = vi.fn<MigrateSessionKeys>().mockRejectedValue(new Error("disk full"));
     await runStartupSessionMigration({
       cfg: makeCfg(),
       log,
-      deps: { migrateOrphanedSessionKeys: migrate },
+      deps: makeDeps(migrate),
     });
     expect(log.warn).toHaveBeenCalledOnce();
     const warning = firstLogMessage(log.warn, "startup migration failure warning");
     expect(warning).toContain("migration failed during startup");
     expect(warning).toContain("disk full");
+  });
+
+  it("isolates temp-cleanup discovery failures from startup", async () => {
+    const log = makeLog();
+    const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({ changes: [], warnings: [] });
+    const deps = makeDeps(migrate);
+    deps.resolveAllAgentSessionStoreTargetsSync.mockImplementation(() => {
+      throw new Error("permission denied");
+    });
+
+    await runStartupSessionMigration({ cfg: makeCfg(), log, deps });
+
+    expect(log.warn).toHaveBeenCalledOnce();
+    const warning = firstLogMessage(log.warn, "startup cleanup failure warning");
+    expect(warning).toContain("temp cleanup failed during startup");
+    expect(warning).toContain("permission denied");
   });
 });

@@ -35,6 +35,10 @@ const MODEL_DISCOVERY_PAGE_LIMIT = 100;
 const CODEX_APP_SERVER_SETUP_METHOD_ID = "app-server";
 const CODEX_DEFAULT_MODEL_REF = `${CODEX_PROVIDER_ID}/${FALLBACK_CODEX_MODELS[0].id}`;
 const codexCatalogLog = createSubsystemLogger("codex/catalog");
+const CODEX_REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const GPT_5_PRO_REASONING_EFFORTS = ["medium", "high", "xhigh"] as const;
+
+export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
 
 type CodexModelLister = (options: {
   timeoutMs: number;
@@ -133,14 +137,13 @@ export function buildCodexProvider(options: BuildCodexProviderOptions = {}): Pro
       });
       return buildCodexAppServerUsageSnapshot(rateLimits);
     },
-    resolveThinkingProfile: ({ modelId }) => ({
+    resolveThinkingProfile: ({ modelId, compat }) => ({
       levels: [
         { id: "off" },
-        { id: "minimal" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "high" },
-        ...(isKnownXHighCodexModel(modelId) ? [{ id: "xhigh" as const }] : []),
+        ...resolveCodexThinkingEfforts({
+          modelId,
+          supportedReasoningEfforts: readCodexSupportedReasoningEfforts(compat),
+        }).map((id) => ({ id })),
       ],
     }),
     resolveSystemPromptContribution: ({ config, modelId }) =>
@@ -184,9 +187,7 @@ function resolveCodexDynamicModel(modelId: string) {
       id,
       model: id,
       inputModalities: fallbackModel?.inputModalities ?? ["text"],
-      supportedReasoningEfforts:
-        fallbackModel?.supportedReasoningEfforts ??
-        (shouldDefaultToReasoningModel(id) ? ["medium"] : []),
+      supportedReasoningEfforts: fallbackModel?.supportedReasoningEfforts,
     }),
     provider: CODEX_PROVIDER_ID,
     baseUrl: CODEX_BASE_URL,
@@ -271,16 +272,6 @@ function shouldSkipLiveDiscovery(env: NodeJS.ProcessEnv = process.env): boolean 
   return Boolean(env.VITEST) && override !== "1";
 }
 
-function shouldDefaultToReasoningModel(modelId: string): boolean {
-  const lower = modelId.toLowerCase();
-  return (
-    lower.startsWith("gpt-5") ||
-    lower.startsWith("o1") ||
-    lower.startsWith("o3") ||
-    lower.startsWith("o4")
-  );
-}
-
 function isKnownXHighCodexModel(modelId: string): boolean {
   const lower = modelId.trim().toLowerCase();
   return (
@@ -291,16 +282,92 @@ function isKnownXHighCodexModel(modelId: string): boolean {
   );
 }
 
-/**
- * Returns true for Codex models that use the modern reasoning effort enum and
- * reject the legacy CLI `minimal` default.
- */
+function normalizeCodexReasoningEfforts(
+  efforts: readonly string[] | null | undefined,
+): CodexReasoningEffort[] {
+  if (!efforts) {
+    return [];
+  }
+  const supported = new Set(efforts.map((effort) => effort.trim().toLowerCase()));
+  return CODEX_REASONING_EFFORTS.filter((effort) => supported.has(effort));
+}
+
+/** Read app-server reasoning metadata from a runtime model compat union. */
+export function readCodexSupportedReasoningEfforts(compat: unknown): string[] | undefined {
+  if (!compat || typeof compat !== "object" || Array.isArray(compat)) {
+    return undefined;
+  }
+  const efforts = (compat as { supportedReasoningEfforts?: unknown }).supportedReasoningEfforts;
+  if (!Array.isArray(efforts)) {
+    return undefined;
+  }
+  return efforts.filter((effort): effort is string => typeof effort === "string");
+}
+
+function resolveCodexThinkingEfforts(params: {
+  modelId: string;
+  supportedReasoningEfforts?: readonly string[] | null;
+}): CodexReasoningEffort[] {
+  if (params.supportedReasoningEfforts) {
+    return normalizeCodexReasoningEfforts(params.supportedReasoningEfforts);
+  }
+  const fallbackEfforts = resolveCodexFallbackReasoningEfforts(params.modelId);
+  if (fallbackEfforts) {
+    return [...fallbackEfforts];
+  }
+  return [
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    ...(isKnownXHighCodexModel(params.modelId) ? (["xhigh"] as const) : []),
+    ...(isMaxReasoningCodexModel(params.modelId) ? (["max"] as const) : []),
+  ];
+}
+
+/** Map a requested effort onto the authoritative app-server model contract. */
+export function resolveCodexSupportedReasoningEffort(params: {
+  requested: CodexReasoningEffort;
+  supportedReasoningEfforts: readonly string[];
+}): CodexReasoningEffort | undefined {
+  const supported = normalizeCodexReasoningEfforts(params.supportedReasoningEfforts);
+  if (supported.includes(params.requested)) {
+    return params.requested;
+  }
+  const requestedRank = CODEX_REASONING_EFFORTS.indexOf(params.requested);
+  return (
+    supported.find((effort) => CODEX_REASONING_EFFORTS.indexOf(effort) >= requestedRank) ??
+    supported.at(-1)
+  );
+}
+
+/** Return the known effort contract when app-server model metadata is unavailable. */
+export function resolveCodexFallbackReasoningEfforts(
+  modelId: string,
+): readonly CodexReasoningEffort[] | undefined {
+  const normalized = modelId.trim().toLowerCase();
+  return normalized === "gpt-5.5-pro" || normalized === "gpt-5.4-pro"
+    ? GPT_5_PRO_REASONING_EFFORTS
+    : undefined;
+}
+
+/** Return whether the model uses the modern Codex reasoning profile. */
 export function isModernCodexModel(modelId: string): boolean {
   const lower = modelId.trim().toLowerCase();
   return (
+    lower === "gpt-5.6" ||
+    lower.startsWith("gpt-5.6-") ||
     lower === "gpt-5.5" ||
+    lower === "gpt-5.5-pro" ||
     lower === "gpt-5.4" ||
+    lower === "gpt-5.4-pro" ||
     lower === "gpt-5.4-mini" ||
     lower === "gpt-5.3-codex-spark"
   );
+}
+
+/** Return whether Codex accepts the preview GPT-5.6 `max` reasoning effort. */
+export function isMaxReasoningCodexModel(modelId: string): boolean {
+  const lower = modelId.trim().toLowerCase();
+  return lower === "gpt-5.6" || lower.startsWith("gpt-5.6-");
 }

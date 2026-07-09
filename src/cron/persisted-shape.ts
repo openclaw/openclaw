@@ -6,6 +6,7 @@ export type InvalidPersistedCronJobReason =
   | "missing-id"
   | "missing-schedule"
   | "invalid-schedule"
+  | "invalid-trigger"
   | "missing-payload"
   | "invalid-payload";
 
@@ -31,7 +32,12 @@ export function getInvalidPersistedCronJobReason(
   }
   const scheduleRecord = schedule as Record<string, unknown>;
   const scheduleKind = scheduleRecord.kind;
-  if (scheduleKind !== "at" && scheduleKind !== "every" && scheduleKind !== "cron") {
+  if (
+    scheduleKind !== "at" &&
+    scheduleKind !== "every" &&
+    scheduleKind !== "cron" &&
+    scheduleKind !== "on-exit"
+  ) {
     return "invalid-schedule";
   }
   if (scheduleKind === "at") {
@@ -50,6 +56,27 @@ export function getInvalidPersistedCronJobReason(
     const expr = scheduleRecord.expr;
     if (typeof expr !== "string" || expr.trim().length === 0) {
       return "invalid-schedule";
+    }
+  }
+  if (scheduleKind === "on-exit") {
+    const command = scheduleRecord.command;
+    if (typeof command !== "string" || command.trim().length === 0) {
+      return "invalid-schedule";
+    }
+  }
+  if ("trigger" in candidate) {
+    const trigger = candidate.trigger;
+    if (!trigger || typeof trigger !== "object" || Array.isArray(trigger)) {
+      return "invalid-trigger";
+    }
+    const script = (trigger as Record<string, unknown>).script;
+    if (
+      typeof script !== "string" ||
+      script.trim().length === 0 ||
+      scheduleKind === "at" ||
+      scheduleKind === "on-exit"
+    ) {
+      return "invalid-trigger";
     }
   }
   const payload = candidate.payload;

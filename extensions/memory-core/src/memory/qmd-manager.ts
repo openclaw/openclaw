@@ -2638,6 +2638,13 @@ export class QmdMemoryManager implements MemorySearchManager {
           // its own reranking pipeline and does not accept a minScore parameter.
           searches: this.buildV2Searches(params.query, params.searchCommand),
           limit: params.limit,
+          // "search"/"vsearch" are lexical/vector-only modes (see buildV2Searches):
+          // they must not trigger the LLM reranker. QMD's "query" tool defaults
+          // rerank:true, so disable it explicitly for those modes; full "query"
+          // mode keeps reranking.
+          ...(params.searchCommand === "search" || params.searchCommand === "vsearch"
+            ? { rerank: false }
+            : {}),
         }
       : {
           // QMD 1.x tools accept a flat query string.
@@ -2712,7 +2719,21 @@ export class QmdMemoryManager implements MemorySearchManager {
       throw err;
     }
 
-    const parsedUnknown: unknown = JSON.parse(result.stdout);
+    let parsedUnknown: unknown;
+    try {
+      parsedUnknown = JSON.parse(result.stdout);
+    } catch {
+      // mcporter (subprocess) can emit non-JSON stdout when output is truncated
+      // by maxOutputChars, a daemon warning bleeds onto stdout, or the CLI is
+      // killed early. Wrap the failure so callers get a typed domain error.
+      // The thrown Error and its cause both carry generic messages on purpose:
+      // errors.ts formatErrorMessage walks the .cause chain into the user-visible
+      // path, so the JSON.parse SyntaxError (whose message embeds a raw stdout
+      // snippet) must not sit on .cause, or that snippet leaks to the user.
+      throw new Error("qmd mcporter returned non-JSON stdout", {
+        cause: new Error("mcporter stdout was not valid JSON"),
+      });
+    }
     const parsedRecord = asRecord(parsedUnknown);
     const structuredContent = parsedRecord ? asRecord(parsedRecord.structuredContent) : null;
     const structured: unknown = structuredContent ?? parsedUnknown;

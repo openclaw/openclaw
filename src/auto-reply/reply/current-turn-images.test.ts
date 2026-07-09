@@ -60,4 +60,127 @@ describe("resolveCurrentTurnImages", () => {
       });
     });
   });
+
+  it("preserves the full order when only inline image payloads are present", async () => {
+    const inlineImage = {
+      type: "image" as const,
+      data: Buffer.from("inline").toString("base64"),
+      mimeType: "image/png",
+    };
+
+    const result = await resolveCurrentTurnImages({
+      ctx: { Body: "compare these" } satisfies MsgContext,
+      cfg: {} as OpenClawConfig,
+      images: [inlineImage],
+      imageOrder: ["offloaded", "inline", "offloaded"],
+    });
+
+    expect(result).toEqual({
+      images: [inlineImage],
+      imageOrder: ["offloaded", "inline", "offloaded"],
+    });
+  });
+
+  it("preserves all-offloaded image order without inline payloads", async () => {
+    const result = await resolveCurrentTurnImages({
+      ctx: { Body: "compare these" } satisfies MsgContext,
+      cfg: {} as OpenClawConfig,
+      images: [],
+      imageOrder: ["offloaded", "offloaded"],
+    });
+
+    expect(result).toEqual({
+      imageOrder: ["offloaded", "offloaded"],
+    });
+  });
+
+  it("preserves interleaved offloaded slots around inline image payloads", async () => {
+    const inlineImages = ["first", "second"].map((data) => ({
+      type: "image" as const,
+      data: Buffer.from(data).toString("base64"),
+      mimeType: "image/png",
+    }));
+
+    const result = await resolveCurrentTurnImages({
+      ctx: { Body: "compare these" } satisfies MsgContext,
+      cfg: {} as OpenClawConfig,
+      images: inlineImages,
+      imageOrder: ["inline", "offloaded", "inline"],
+    });
+
+    expect(result).toEqual({
+      images: inlineImages,
+      imageOrder: ["inline", "offloaded", "inline"],
+    });
+  });
+
+  it("appends extracted PDF page images without dropping current image attachments", async () => {
+    await withTempDir({ prefix: "openclaw-current-turn-pdf-images-" }, async (base) => {
+      const imagePath = path.join(base, "photo.png");
+      const imageBytes = Buffer.from("current-photo");
+      await fs.writeFile(imagePath, imageBytes);
+
+      const pdfPage = {
+        type: "image" as const,
+        data: Buffer.from("pdf-page").toString("base64"),
+        mimeType: "image/png",
+        attachmentIndex: 1,
+      };
+
+      const result = await resolveCurrentTurnImages({
+        ctx: {
+          Body: "caption",
+          MediaPaths: [imagePath, path.join(base, "scan.pdf")],
+          MediaTypes: ["image/png", "application/pdf"],
+          MediaWorkspaceDir: base,
+        } satisfies MsgContext,
+        cfg: {} as OpenClawConfig,
+        extractedFileImages: [pdfPage],
+      });
+
+      expect(result.images).toEqual([
+        {
+          type: "image",
+          data: imageBytes.toString("base64"),
+          mimeType: "image/png",
+        },
+        {
+          type: "image",
+          data: pdfPage.data,
+          mimeType: "image/png",
+        },
+      ]);
+      expect(result.imageOrder).toEqual(["inline", "inline"]);
+    });
+  });
+
+  it("orders extracted PDF page images before later current image attachments", async () => {
+    await withTempDir({ prefix: "openclaw-current-turn-pdf-order-" }, async (base) => {
+      const imagePath = path.join(base, "photo.png");
+      await fs.writeFile(imagePath, "current-photo");
+      const pdfPage = {
+        type: "image" as const,
+        data: Buffer.from("pdf-page").toString("base64"),
+        mimeType: "image/png",
+        attachmentIndex: 0,
+      };
+
+      const result = await resolveCurrentTurnImages({
+        ctx: {
+          Body: "caption",
+          MediaPaths: [path.join(base, "scan.pdf"), imagePath],
+          MediaTypes: ["application/pdf", "image/png"],
+          MediaWorkspaceDir: base,
+        } satisfies MsgContext,
+        cfg: {} as OpenClawConfig,
+        extractedFileImages: [pdfPage],
+      });
+
+      expect(result.images?.map((image) => Buffer.from(image.data, "base64").toString())).toEqual([
+        "pdf-page",
+        "current-photo",
+      ]);
+      expect(result.imageOrder).toEqual(["inline", "inline"]);
+    });
+  });
 });

@@ -211,6 +211,7 @@ const APPROVAL_RUNTIME_METHODS = new Set<string>([
 ]);
 
 const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
+  "wake",
   "cron.list",
   "cron.get",
   "cron.add",

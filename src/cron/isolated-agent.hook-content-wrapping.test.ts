@@ -1,6 +1,6 @@
 // Hook content wrapping tests cover isolated agent message wrapping for hooks.
 import "./isolated-agent.mocks.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { makeCfg } from "./isolated-agent.test-harness.js";
@@ -24,6 +24,19 @@ function lastEmbeddedPrompt(): string {
 }
 
 describe("runCronIsolatedAgentTurn hook content wrapping", () => {
+  beforeAll(async () => {
+    process.env.OPENCLAW_TEST_FAST = "1";
+    vi.spyOn(isolatedAgentRunRuntime, "resolveThinkingDefault").mockReturnValue("off");
+    vi.mocked(loadModelCatalog).mockResolvedValue([]);
+    await withTempHome(async (home) => {
+      await runCronTurn(home, {
+        jobPayload: { kind: "agentTurn", message: "warm runtime" },
+        message: "warm runtime",
+        sessionKey: "hook:gmail:warm-runtime",
+      });
+    });
+  });
+
   beforeEach(() => {
     process.env.OPENCLAW_TEST_FAST = "1";
     vi.spyOn(isolatedAgentRunRuntime, "resolveThinkingDefault").mockReturnValue("off");

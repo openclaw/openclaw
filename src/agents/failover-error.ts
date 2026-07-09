@@ -20,6 +20,8 @@ import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 const MAX_FAILOVER_CAUSE_DEPTH = 25;
+const MISSING_TOOL_RESULT_REASON = "missing_tool_result";
+const MISSING_TOOL_RESULT_TEXT_RE = /native Codex tool\.call without a matching tool\.result/i;
 
 /** Structured error used to carry model fallback/failover metadata across layers. */
 export class FailoverError extends Error {
@@ -105,6 +107,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 403;
     case "timeout":
       return 408;
+    case "context_overflow":
+      return 413;
     case "format":
       return 400;
     case "model_not_found":
@@ -325,6 +329,21 @@ function isEmbeddedAttemptSessionTakeover(err: unknown): boolean {
   );
 }
 
+function hasPreservedTakeoverPromptError(err: unknown): err is Record<"promptError", unknown> {
+  return Boolean(
+    isEmbeddedAttemptSessionTakeover(err) &&
+    err &&
+    typeof err === "object" &&
+    Object.hasOwn(err, "promptError"),
+  );
+}
+
+function resolveFailoverSourceError(err: unknown): unknown {
+  // Cleanup takeover is a secondary failure when the wrapper preserves the
+  // prompt error. Classify and report that provider-facing source instead.
+  return hasPreservedTakeoverPromptError(err) ? err.promptError : err;
+}
+
 function hasEmbeddedAttemptSessionTakeover(err: unknown, seen: Set<object> = new Set()): boolean {
   if (isEmbeddedAttemptSessionTakeover(err)) {
     return true;
@@ -344,24 +363,61 @@ function hasEmbeddedAttemptSessionTakeover(err: unknown, seen: Set<object> = new
   );
 }
 
-/**
- * True when the error is a local runtime coordination error (session write-lock
- * timeout or embedded attempt session takeover) rather than a provider/model
- * failure. The model fallback chain must abort on these instead of consuming
- * candidate slots — retrying any model would hit the same local condition.
- * See #83510.
- */
-export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
-  if (!hasSessionWriteLockContention(err) && !hasEmbeddedAttemptSessionTakeover(err)) {
-    return false;
+function readField(value: unknown, key: string): unknown {
+  if (!value || typeof value !== "object") {
+    return undefined;
   }
-  if (isFailoverError(err)) {
-    return false;
-  }
-  if (isEmbeddedAttemptSessionTakeover(err)) {
+  return (value as Record<string, unknown>)[key];
+}
+
+function readStringField(value: unknown, key: string): string | undefined {
+  const field = readField(value, key);
+  return typeof field === "string" ? field : undefined;
+}
+
+function isMissingToolResultMessage(value: string): boolean {
+  return MISSING_TOOL_RESULT_TEXT_RE.test(value);
+}
+
+function isMissingToolResultMarker(value: string): boolean {
+  return value.trim() === MISSING_TOOL_RESULT_REASON;
+}
+
+function readMissingToolResultMarker(err: unknown): true | undefined {
+  const message = readDirectErrorMessage(err);
+  if (message && isMissingToolResultMessage(message)) {
     return true;
   }
-  return resolveFailoverClassificationFromError(err) === null;
+  for (const key of ["code", "reason", "status"] as const) {
+    const value = readStringField(err, key);
+    if (value && isMissingToolResultMarker(value)) {
+      return true;
+    }
+  }
+  const output = readStringField(err, "output");
+  if (output && isMissingToolResultMessage(output)) {
+    return true;
+  }
+  const resultReason = readStringField(readField(err, "result"), "reason");
+  const detailReason = readStringField(readField(err, "detail"), "reason");
+  if (resultReason === MISSING_TOOL_RESULT_REASON || detailReason === MISSING_TOOL_RESULT_REASON) {
+    return true;
+  }
+  return undefined;
+}
+
+function hasMissingToolResultFailure(err: unknown): boolean {
+  return findErrorProperty(err, readMissingToolResultMarker) === true;
+}
+
+/**
+ * True when the error is a local runtime coordination/tool-execution error
+ * rather than a provider/model failure. The model fallback chain must abort on
+ * these instead of consuming candidate slots — retrying any model would hit the
+ * same local condition. See #83510 and #95474.
+ */
+export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
+  return resolveModelFallbackError(err).kind === "coordination";
 }
 
 function hasTimeoutHint(err: unknown): boolean {
@@ -409,7 +465,10 @@ export function isSignalTimeoutReason(reason: unknown): boolean {
 function failoverReasonFromClassification(
   classification: FailoverClassification | null,
 ): FailoverReason | null {
-  return classification?.kind === "reason" ? classification.reason : null;
+  if (!classification) {
+    return null;
+  }
+  return classification.kind === "reason" ? classification.reason : "context_overflow";
 }
 
 function normalizeErrorSignal(err: unknown, providerHint?: string): FailoverSignal {
@@ -674,46 +733,55 @@ export function describeFailoverError(err: unknown): {
   };
 }
 
+type FailoverErrorContext = {
+  provider?: string;
+  model?: string;
+  profileId?: string;
+  authMode?: string;
+  sessionId?: string;
+  lane?: string;
+};
+
+type ModelFallbackErrorResolution =
+  | { kind: "failover"; error: FailoverError }
+  | { kind: "coordination"; error: unknown }
+  | { kind: "unknown"; error: unknown };
+
 /** Convert a classified raw error into a FailoverError with optional request context. */
 export function coerceToFailoverError(
   err: unknown,
-  context?: {
-    provider?: string;
-    model?: string;
-    profileId?: string;
-    authMode?: string;
-    sessionId?: string;
-    lane?: string;
-  },
+  context?: FailoverErrorContext,
 ): FailoverError | null {
-  if (isFailoverError(err)) {
-    if (context?.authMode && !err.authMode) {
-      const message = typeof err.message === "string" ? err.message : String(err);
+  const sourceError = resolveFailoverSourceError(err);
+  if (isFailoverError(sourceError)) {
+    if (context?.authMode && !sourceError.authMode) {
+      const message =
+        typeof sourceError.message === "string" ? sourceError.message : String(sourceError);
       return new FailoverError(message, {
-        reason: err.reason,
-        provider: err.provider,
-        model: err.model,
-        profileId: err.profileId,
+        reason: sourceError.reason,
+        provider: sourceError.provider,
+        model: sourceError.model,
+        profileId: sourceError.profileId,
         authMode: context.authMode,
-        status: err.status,
-        code: err.code,
-        rawError: err.rawError,
-        authProfileFailure: err.authProfileFailure,
-        sessionId: err.sessionId,
-        lane: err.lane,
-        cause: err.cause,
-        suspend: err.suspend,
+        status: sourceError.status,
+        code: sourceError.code,
+        rawError: sourceError.rawError,
+        authProfileFailure: sourceError.authProfileFailure,
+        sessionId: sourceError.sessionId,
+        lane: sourceError.lane,
+        cause: sourceError.cause,
+        suspend: sourceError.suspend,
       });
     }
-    return err;
+    return sourceError;
   }
-  const reason = resolveFailoverReasonFromError(err, context?.provider);
+  const reason = resolveFailoverReasonFromError(sourceError, context?.provider);
   if (!reason) {
     return null;
   }
 
-  const signal = normalizeErrorSignal(err);
-  const message = signal.message ?? String(err);
+  const signal = normalizeErrorSignal(sourceError);
+  const message = signal.message ?? String(sourceError);
   const status = signal.status ?? resolveFailoverStatus(reason);
   const code = signal.code;
 
@@ -735,4 +803,29 @@ export function coerceToFailoverError(
     cause: err instanceof Error ? err : undefined,
     suspend: shouldSuspend,
   });
+}
+
+/** Classify one candidate failure once so fallback routing and diagnostics share it. */
+export function resolveModelFallbackError(
+  err: unknown,
+  context?: FailoverErrorContext,
+): ModelFallbackErrorResolution {
+  // A direct takeover remains a coordination failure unless the dedicated
+  // cleanup wrapper owns a preserved prompt error. Its message alone must not
+  // reclassify session-state loss as a provider failure.
+  if (isEmbeddedAttemptSessionTakeover(err) && !hasPreservedTakeoverPromptError(err)) {
+    return { kind: "coordination", error: err };
+  }
+  const failoverError = coerceToFailoverError(err, context);
+  if (failoverError) {
+    return { kind: "failover", error: failoverError };
+  }
+  if (
+    hasSessionWriteLockContention(err) ||
+    hasEmbeddedAttemptSessionTakeover(err) ||
+    hasMissingToolResultFailure(err)
+  ) {
+    return { kind: "coordination", error: err };
+  }
+  return { kind: "unknown", error: err };
 }

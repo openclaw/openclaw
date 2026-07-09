@@ -1,6 +1,9 @@
 /** Resolves plugin ids that should load during Gateway startup. */
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
-import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
+import {
+  buildModelCatalogMergeKey,
+  parseModelCatalogRef,
+} from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -27,6 +30,7 @@ import { normalizePluginsConfigWithResolver } from "./config-normalization-share
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { resolveConfiguredGenericEmbeddingProviderId } from "./embedding-provider-config.js";
+import { listRegisteredEmbeddingProviders } from "./embedding-providers.js";
 import {
   collectConfiguredSpeechProviderIds,
   normalizeConfiguredSpeechProviderIdForStartup,
@@ -50,6 +54,7 @@ import {
 } from "./plugin-registry-contributions.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
 import { normalizePluginIdScope } from "./plugin-scope.js";
+import type { PluginRegistry } from "./registry-types.js";
 
 export type GatewayStartupPluginPlan = {
   channelPluginIds: readonly string[];
@@ -404,19 +409,9 @@ function listModelProviderRefs(value: unknown): string[] {
 
 function listModelProviderRefParts(value: unknown): Array<{ providerId: string; modelId: string }> {
   return listModelProviderRefs(value)
-    .map((ref) => {
-      const slashIndex = ref.indexOf("/");
-      if (slashIndex <= 0 || slashIndex >= ref.length - 1) {
-        return undefined;
-      }
-      return {
-        providerId: normalizeProviderId(ref.slice(0, slashIndex)),
-        modelId: ref.slice(slashIndex + 1).trim(),
-      };
-    })
-    .filter((entry): entry is { providerId: string; modelId: string } =>
-      Boolean(entry?.providerId && entry.modelId),
-    );
+    .map(parseModelCatalogRef)
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .map(({ provider, modelId }) => ({ providerId: provider, modelId }));
 }
 
 function collectModelProviderIds(value: unknown): ReadonlySet<string> {
@@ -475,6 +470,7 @@ function collectConfiguredAgentModelProviderIds(
 
   const defaults = config.agents?.defaults;
   addModelProviderRefs(defaults?.model);
+  addModelProviderRefs(defaults?.utilityModel);
   addModelMapProviderIds(defaults?.models);
 
   const agents = Array.isArray(config.agents?.list) ? config.agents.list : [];
@@ -483,6 +479,7 @@ function collectConfiguredAgentModelProviderIds(
       continue;
     }
     addModelProviderRefs(agent.model);
+    addModelProviderRefs(agent.utilityModel);
     addModelMapProviderIds(agent.models);
   }
 
@@ -752,6 +749,24 @@ export function collectUnregisteredConfiguredMemoryEmbeddingProviders(params: {
         left.configuredId.localeCompare(right.configuredId) ||
         left.source.localeCompare(right.source),
     );
+}
+
+// Registered embedding provider ids the loaded runtime can actually serve: the live
+// registry's memory + general embedding providers plus the global/core embedding
+// registry. Shared by gateway boot (the startup "configured but unregistered" warning)
+// and the `/status plugins` drift line so both agree on what counts as "registered" and
+// never diverge. The `{ provider: entry.adapter }` wrap makes the core registry entries
+// match the registration shape so the id projection stays uniform across all three sources.
+export function collectRegisteredEmbeddingProviderIds(
+  registry: Partial<Pick<PluginRegistry, "embeddingProviders" | "memoryEmbeddingProviders">>,
+): Set<string> {
+  return new Set(
+    [
+      ...(registry.memoryEmbeddingProviders ?? []),
+      ...(registry.embeddingProviders ?? []),
+      ...listRegisteredEmbeddingProviders().map((entry) => ({ provider: entry.adapter })),
+    ].map((entry) => entry.provider.id),
+  );
 }
 
 function addPluginConfigEntryIds(

@@ -7,7 +7,10 @@ import type { EmbeddedAgentQueueMessageOutcome } from "../../agents/embedded-age
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+import {
+  createReplyOperation as createRegisteredReplyOperation,
+  type ReplyOperation,
+} from "./reply-run-registry.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedAgentMock = vi.fn();
@@ -225,7 +228,10 @@ vi.mock("./session-run-accounting.js", () => ({
 }));
 
 vi.mock("./agent-runner-memory.js", () => ({
-  runMemoryFlushIfNeeded: async ({ sessionEntry }: { sessionEntry?: unknown }) => sessionEntry,
+  runMemoryFlushIfNeeded: async ({ sessionEntry }: { sessionEntry?: unknown }) => ({
+    sessionEntry,
+    outcome: "skipped",
+  }),
   runPreflightCompactionIfNeeded: async ({ sessionEntry }: { sessionEntry?: unknown }) =>
     sessionEntry,
 }));
@@ -259,7 +265,11 @@ const { runReplyAgent } = await import("./agent-runner.js");
 function createReplyOperation(): ReplyOperation {
   return {
     result: undefined,
+    startedAtMs: Date.now(),
+    lastActivityAtMs: Date.now(),
+    recordActivity: vi.fn(),
     setPhase: vi.fn(),
+    freezeAbort: vi.fn(),
     fail: vi.fn(),
     complete: vi.fn(),
     completeThen: vi.fn(),
@@ -407,7 +417,46 @@ describe("runReplyAgent media path normalization", () => {
     expect(createReplyMediaContextRuntimeMock).not.toHaveBeenCalled();
   });
 
-  it("steers active prompts in steer queue mode", async () => {
+  it("steers active non-streaming prompts in steer queue mode", async () => {
+    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
+      queued: true,
+      sessionId,
+      target: "embedded_run",
+      gatewayHealth: "live",
+    }));
+    const followupRun = createMockFollowupRun({ prompt: "generate chart" });
+    followupRun.run.taskSuggestionDeliveryMode = "gateway";
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "steer" } as QueueSettings,
+        shouldSteer: true,
+        shouldFollowup: true,
+        isActive: true,
+        isStreaming: false,
+        followupRun,
+      }),
+    );
+
+    expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenLastCalledWith(
+      "session",
+      "generate chart",
+      {
+        steeringMode: "all",
+        taskSuggestionDeliveryMode: "gateway",
+      },
+    );
+    expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+  });
+
+  it("latches audio only after the active reply operation accepts the steer", async () => {
+    const operation = createRegisteredReplyOperation({
+      sessionKey: "agent:main:whatsapp:direct:chat-1",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+    expect(operation.acceptedSteeredInboundAudio).toBe(false);
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: true,
       sessionId,
@@ -417,19 +466,24 @@ describe("runReplyAgent media path normalization", () => {
 
     await runReplyAgent(
       makeRunReplyAgentParams({
+        replyOperation: operation,
+        sessionKey: "agent:main:whatsapp:direct:chat-1",
         resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
         shouldFollowup: true,
-        isStreaming: true,
+        isActive: true,
+        followupRun: {
+          ...createMockFollowupRun({ prompt: "summarize the audio" }),
+          currentInboundAudio: true,
+        } as unknown as FollowupRun,
       }),
     );
 
+    expect(operation.acceptedSteeredInboundAudio).toBe(true);
     expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenLastCalledWith(
       "session",
-      "generate chart",
-      {
-        steeringMode: "all",
-      },
+      "summarize the audio",
+      { steeringMode: "all", taskSuggestionDeliveryMode: undefined },
     );
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
   });

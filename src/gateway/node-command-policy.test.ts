@@ -8,12 +8,18 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
+  pinActivePluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import {
+  filterLegacyNodeProtocolFeatures,
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
   normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
+  resolveNodePairingCommandAllowlist,
 } from "./node-command-policy.js";
 
 describe("gateway/node-command-policy", () => {
@@ -23,7 +29,7 @@ describe("gateway/node-command-policy", () => {
 
   function installCanvasPluginDefaults() {
     const registry = createEmptyPluginRegistry();
-    (registry.nodeInvokePolicies ??= []).push({
+    registry.nodeInvokePolicies.push({
       pluginId: "canvas",
       pluginName: "Canvas",
       source: "/extensions/canvas/index.ts",
@@ -37,6 +43,7 @@ describe("gateway/node-command-policy", () => {
       },
     });
     setActivePluginRegistry(registry);
+    return registry;
   }
 
   it("normalizes declared node commands against the allowlist", () => {
@@ -109,6 +116,49 @@ describe("gateway/node-command-policy", () => {
     expect(allowlist.has("canvas.present")).toBe(true);
   });
 
+  it("suppresses plugin-owned features for legacy protocol nodes", () => {
+    installCanvasPluginDefaults();
+
+    expect(
+      filterLegacyNodeProtocolFeatures({
+        caps: ["canvas", "device"],
+        commands: ["canvas.snapshot", "device.info"],
+        pluginSurfaces: ["canvas"],
+      }),
+    ).toEqual({
+      caps: ["device"],
+      commands: ["device.info"],
+    });
+  });
+
+  it("keeps plugin node defaults from the pinned Gateway registry", () => {
+    const startupRegistry = installCanvasPluginDefaults();
+    pinActivePluginChannelRegistry(startupRegistry);
+    const transientRegistry = createEmptyPluginRegistry();
+    const startupPolicy = startupRegistry.nodeInvokePolicies[0];
+    if (!startupPolicy) {
+      throw new Error("expected canvas node policy");
+    }
+    transientRegistry.nodeInvokePolicies.push({
+      ...startupPolicy,
+      pluginId: "transient",
+      policy: {
+        ...startupPolicy.policy,
+        commands: ["transient.read"],
+      },
+    });
+    setActivePluginRegistry(transientRegistry);
+
+    const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
+      platform: "macos",
+      deviceFamily: "Mac",
+    });
+
+    expect(allowlist.has("canvas.snapshot")).toBe(true);
+    expect(allowlist.has("canvas.present")).toBe(true);
+    expect(allowlist.has("transient.read")).toBe(false);
+  });
+
   it("does not grant host command defaults for platform prefix aliases", () => {
     const cfg = {} as OpenClawConfig;
     const cases = [
@@ -142,10 +192,32 @@ describe("gateway/node-command-policy", () => {
       expect(allowlist.has("system.run")).toBe(false);
       expect(allowlist.has("system.run.prepare")).toBe(false);
       expect(allowlist.has("system.which")).toBe(false);
+      expect(allowlist.has("system.execApprovals.get")).toBe(false);
+      expect(allowlist.has("system.execApprovals.set")).toBe(false);
       expect(allowlist.has("browser.proxy")).toBe(false);
       expect(allowlist.has("screen.snapshot")).toBe(false);
       expect(allowlist.has("system.notify")).toBe(true);
     }
+  });
+
+  it("allows exec approval commands only through desktop node pairing approval", () => {
+    const cfg = {} as OpenClawConfig;
+    const desktopNode = { platform: "windows", deviceFamily: "Windows" };
+
+    const pairingAllowlist = resolveNodePairingCommandAllowlist(cfg, desktopNode);
+    expect(pairingAllowlist.has("system.execApprovals.get")).toBe(true);
+    expect(pairingAllowlist.has("system.execApprovals.set")).toBe(true);
+
+    const unapprovedRuntimeAllowlist = resolveNodeCommandAllowlist(cfg, desktopNode);
+    expect(unapprovedRuntimeAllowlist.has("system.execApprovals.get")).toBe(false);
+    expect(unapprovedRuntimeAllowlist.has("system.execApprovals.set")).toBe(false);
+
+    const approvedRuntimeAllowlist = resolveNodeCommandAllowlist(cfg, {
+      ...desktopNode,
+      approvedCommands: ["system.execApprovals.get", "system.execApprovals.set"],
+    });
+    expect(approvedRuntimeAllowlist.has("system.execApprovals.get")).toBe(true);
+    expect(approvedRuntimeAllowlist.has("system.execApprovals.set")).toBe(true);
   });
 
   it("keeps defaults for first-party native platform labels with matching families", () => {
@@ -174,6 +246,42 @@ describe("gateway/node-command-policy", () => {
     expect(macAllowlist.has("system.run")).toBe(false);
     expect(macAllowlist.has("system.which")).toBe(false);
     expect(macAllowlist.has("screen.snapshot")).toBe(false);
+
+    const watchAllowlist = resolveNodeCommandAllowlist(cfg, {
+      platform: "watchOS 11.5.0",
+      deviceFamily: "Apple Watch",
+    });
+    expect(watchAllowlist.has("device.info")).toBe(true);
+    expect(watchAllowlist.has("device.status")).toBe(true);
+    expect(watchAllowlist.has("system.notify")).toBe(true);
+    expect(watchAllowlist.has("camera.list")).toBe(false);
+    expect(watchAllowlist.has("system.run")).toBe(false);
+  });
+
+  it("requires matching watchOS platform and device-family metadata", () => {
+    const cfg = {} as OpenClawConfig;
+    const mismatch = resolveNodeCommandAllowlist(cfg, {
+      platform: "watchOS 11.5.0",
+      deviceFamily: "iPhone",
+    });
+    expect(mismatch.has("device.info")).toBe(false);
+
+    const familyOnly = resolveNodeCommandAllowlist(cfg, { deviceFamily: "Apple Watch" });
+    expect(familyOnly.has("device.info")).toBe(true);
+    expect(familyOnly.has("system.run")).toBe(false);
+  });
+
+  it("keeps plugin defaults out of the fixed watchOS command surface", () => {
+    installCanvasPluginDefaults();
+
+    const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
+      platform: "watchOS 11.5.0",
+      deviceFamily: "Apple Watch",
+    });
+
+    expect(allowlist.has("device.info")).toBe(true);
+    expect(allowlist.has("canvas.snapshot")).toBe(false);
+    expect(allowlist.has("canvas.present")).toBe(false);
   });
 
   it("keeps explicitly approved host commands for desktop platforms", () => {
@@ -241,6 +349,73 @@ describe("gateway/node-command-policy", () => {
       },
     );
     expect(currentConfigApproval.has("screen.record")).toBe(true);
+  });
+
+  it("keeps computer.act out of the runtime allowlist until explicitly allowed", () => {
+    const macNode = {
+      platform: "macos",
+      deviceFamily: "Mac",
+      commands: ["computer.act", "screen.snapshot"],
+    };
+    const unarmed = resolveNodeCommandAllowlist({} as OpenClawConfig, macNode);
+    expect(unarmed.has("computer.act")).toBe(false);
+    expect(
+      resolveNodeCommandAllowlist({} as OpenClawConfig, {
+        ...macNode,
+        approvedCommands: ["computer.act"],
+      }).has("computer.act"),
+    ).toBe(false);
+
+    const armed = resolveNodeCommandAllowlist(
+      { gateway: { nodes: { allowCommands: ["computer.act"] } } } as OpenClawConfig,
+      macNode,
+    );
+    expect(armed.has("computer.act")).toBe(true);
+
+    const denied = resolveNodeCommandAllowlist(
+      {
+        gateway: { nodes: { allowCommands: ["computer.act"], denyCommands: ["computer.act"] } },
+      } as OpenClawConfig,
+      macNode,
+    );
+    expect(denied.has("computer.act")).toBe(false);
+  });
+
+  it("keeps computer.act declarable through the macOS pairing allowlist only", () => {
+    const pairing = resolveNodePairingCommandAllowlist({} as OpenClawConfig, {
+      platform: "macos",
+      deviceFamily: "Mac",
+      commands: ["computer.act"],
+    });
+    expect(pairing.has("computer.act")).toBe(true);
+
+    const windowsPairing = resolveNodePairingCommandAllowlist({} as OpenClawConfig, {
+      platform: "windows",
+      deviceFamily: "Windows",
+      commands: ["computer.act"],
+    });
+    expect(windowsPairing.has("computer.act")).toBe(false);
+
+    // Dangerous commands outside PLATFORM_DEFAULTS stay out of pairing too.
+    expect(windowsPairing.has("screen.record")).toBe(false);
+  });
+
+  it("keeps computer.act declarable at pairing even when fresh-setup denyCommands blocks it", () => {
+    // Fresh gateway setup seeds denyCommands from DEFAULT_DANGEROUS_NODE_COMMANDS,
+    // which includes computer.act. The pairing surface must still retain it so
+    // the node can be armed later; invoke-time policy still blocks it at runtime.
+    const cfg = {
+      gateway: { nodes: { denyCommands: ["computer.act", "screen.record", "camera.snap"] } },
+    } as OpenClawConfig;
+    const macNode = { platform: "macos", deviceFamily: "Mac", commands: ["computer.act"] };
+    expect(resolveNodePairingCommandAllowlist(cfg, macNode).has("computer.act")).toBe(true);
+    // Runtime allowlist still gates it until armed via allowCommands.
+    expect(resolveNodeCommandAllowlist(cfg, macNode).has("computer.act")).toBe(false);
+    // Arming (allowCommands opt-in) makes it runtime-invocable.
+    const armedCfg = {
+      gateway: { nodes: { allowCommands: ["computer.act"] } },
+    } as OpenClawConfig;
+    expect(resolveNodeCommandAllowlist(armedCfg, macNode).has("computer.act")).toBe(true);
   });
 
   it("reads foreground restriction metadata from plugin node policies", () => {

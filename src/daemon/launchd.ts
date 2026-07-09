@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
@@ -22,6 +23,7 @@ import {
 import { execFileUtf8 } from "./exec-file.js";
 import { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
 import {
+  LAUNCH_AGENT_ENV_WRAPPER_SHELL,
   buildLaunchAgentPlist as buildLaunchAgentPlistImpl,
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
   readLaunchAgentProgramArgumentsFromFile,
@@ -244,8 +246,11 @@ function isLaunchAgentEnvironmentWrapperArgs(params: {
   wrapperPath: string;
 }): boolean {
   return (
-    params.programArguments[0] === params.wrapperPath &&
-    params.programArguments[1] === params.envFilePath
+    (params.programArguments[0] === params.wrapperPath &&
+      params.programArguments[1] === params.envFilePath) ||
+    (params.programArguments[0] === LAUNCH_AGENT_ENV_WRAPPER_SHELL &&
+      params.programArguments[1] === params.wrapperPath &&
+      params.programArguments[2] === params.envFilePath)
   );
 }
 
@@ -299,7 +304,12 @@ async function prepareLaunchAgentProgramArguments(params: {
   }
 
   return {
-    programArguments: [wrapperPath, envFilePath, ...params.programArguments],
+    programArguments: [
+      LAUNCH_AGENT_ENV_WRAPPER_SHELL,
+      wrapperPath,
+      envFilePath,
+      ...params.programArguments,
+    ],
   };
 }
 
@@ -861,10 +871,10 @@ function formatLaunchctlResultDetail(res: {
   stderr: string;
   code: number;
 }): string {
-  return sanitizeForLog((res.stderr || res.stdout).replace(/[\r\n\t]+/g, " "))
+  const sanitized = sanitizeForLog((res.stderr || res.stdout).replace(/[\r\n\t]+/g, " "))
     .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 1000);
+    .trim();
+  return truncateUtf16Safe(sanitized, 1000);
 }
 
 async function bootoutLaunchAgentOrThrow(params: {

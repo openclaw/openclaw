@@ -1,7 +1,10 @@
 /**
  * Truncates oversized tool-result content in messages and transcripts.
  */
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { TextContent } from "../../llm/types.js";
@@ -14,8 +17,10 @@ import {
   resolveSessionWriteLockOptions,
 } from "../session-write-lock.js";
 import { SessionManager } from "../sessions/index.js";
+import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
+import type { ToolResultPromptProjectionState } from "./session-prompt-state.js";
 import {
   persistTranscriptStateMutation,
   readTranscriptFileState,
@@ -45,6 +50,8 @@ const LARGE_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 32_000;
 const XL_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 64_000;
 const LARGE_CONTEXT_TOOL_RESULT_TOKENS = 100_000;
 const XL_CONTEXT_TOOL_RESULT_TOKENS = 200_000;
+const PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER = 4;
+const AGGREGATE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
 
 /**
  * Minimum characters to keep when truncating.
@@ -53,6 +60,7 @@ const XL_CONTEXT_TOOL_RESULT_TOKENS = 200_000;
  */
 const MIN_KEEP_CHARS = 2_000;
 const RECOVERY_MIN_KEEP_CHARS = 0;
+const aggregateToolResultRecoveryWarnings = new Set<string>();
 
 type ToolResultTruncationOptions = {
   suffix?: string | ((truncatedChars: number) => string);
@@ -63,6 +71,39 @@ const DEFAULT_SUFFIX = (truncatedChars: number) =>
   formatContextLimitTruncationNotice(truncatedChars);
 const COMPACT_RECOVERY_SUFFIX = (truncatedChars: number) =>
   `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; narrow args]`;
+const AGGREGATE_ELISION_MARKER =
+  "[tool result elided: aggregate tool-result budget exceeded; rerun the command if the output is needed]";
+
+function logToolResultSessionTruncation(params: {
+  rewrittenEntries: number;
+  contextWindowTokens: number;
+  maxChars: number;
+  aggregateBudgetChars: number;
+  oversizedReplacementCount: number;
+  aggregateReplacementCount: number;
+  sessionKey?: string;
+  sessionId?: string;
+}): void {
+  const sessionLogKey = params.sessionKey ?? params.sessionId ?? "unknown";
+  const message =
+    `[tool-result-truncation] Truncated ${params.rewrittenEntries} tool result(s) in session ` +
+    `(contextWindow=${params.contextWindowTokens} maxChars=${params.maxChars} ` +
+    `aggregateBudgetChars=${params.aggregateBudgetChars} ` +
+    `oversized=${params.oversizedReplacementCount} aggregate=${params.aggregateReplacementCount}) ` +
+    `sessionKey=${sessionLogKey}`;
+  if (params.aggregateReplacementCount <= 0) {
+    log.info(message);
+    return;
+  }
+  if (aggregateToolResultRecoveryWarnings.has(sessionLogKey)) {
+    log.info(message);
+    return;
+  }
+  aggregateToolResultRecoveryWarnings.add(sessionLogKey);
+  log.warn(
+    `${message}; aggregate tool-result pressure detected; consider /compact or /new if pressure persists`,
+  );
+}
 
 function resolveSuffixFactory(
   suffix: ToolResultTruncationOptions["suffix"],
@@ -101,11 +142,12 @@ function appendBoundedTruncationSuffix(params: {
       return finalText;
     }
     if (keptText.length === 0) {
-      return finalText.slice(0, params.maxChars);
+      return truncateUtf16Safe(finalText, params.maxChars);
     }
     const overflow = finalText.length - params.maxChars;
-    const nextKeptText = keptText.slice(0, Math.max(0, keptText.length - overflow));
-    keptText = nextKeptText.length < keptText.length ? nextKeptText : keptText.slice(0, -1);
+    const nextKeptText = sliceUtf16Safe(keptText, 0, Math.max(0, keptText.length - overflow));
+    keptText =
+      nextKeptText.length < keptText.length ? nextKeptText : sliceUtf16Safe(keptText, 0, -1);
   }
 }
 
@@ -120,8 +162,8 @@ const MIDDLE_OMISSION_MARKER =
  * which should be preserved during truncation.
  */
 function hasImportantTail(text: string): boolean {
-  // Check last ~2000 chars for error-like patterns
-  const tail = normalizeLowercaseStringOrEmpty(text.slice(-2000));
+  // Check last ~2000 chars for error-like patterns without splitting a surrogate pair.
+  const tail = normalizeLowercaseStringOrEmpty(sliceUtf16Safe(text, -2000));
   return (
     /\b(error|exception|failed|fatal|traceback|panic|stack trace|errno|exit code)\b/.test(tail) ||
     // JSON closing — if the output is JSON, the tail has closing structure
@@ -175,7 +217,8 @@ export function truncateToolResultText(
         tailStart = tailNewline + 1;
       }
 
-      const keptText = text.slice(0, headCut) + MIDDLE_OMISSION_MARKER + text.slice(tailStart);
+      const keptText =
+        sliceUtf16Safe(text, 0, headCut) + MIDDLE_OMISSION_MARKER + sliceUtf16Safe(text, tailStart);
       return appendBoundedTruncationSuffix({
         keptText,
         originalTextLength: text.length,
@@ -191,7 +234,7 @@ export function truncateToolResultText(
   if (lastNewline > budget * 0.8) {
     cutPoint = lastNewline;
   }
-  const keptText = text.slice(0, cutPoint);
+  const keptText = sliceUtf16Safe(text, 0, cutPoint);
   return appendBoundedTruncationSuffix({
     keptText,
     originalTextLength: text.length,
@@ -246,6 +289,38 @@ export function resolveLiveToolResultMaxChars(params: {
   const configuredCap = resolveAgentContextLimits(params.cfg, params.agentId)?.toolResultMaxChars;
   const cap = configuredCap ?? resolveAutoLiveToolResultMaxChars(params.contextWindowTokens);
   return calculateMaxToolResultCharsWithCap(params.contextWindowTokens, cap);
+}
+
+export function resolveLiveToolResultAggregateMaxChars(params: {
+  contextWindowTokens: number;
+  perResultMaxChars?: number;
+  cfg?: OpenClawConfig;
+  agentId?: string | null;
+}): number {
+  const perResultMaxChars = Math.max(
+    1,
+    Math.floor(
+      params.perResultMaxChars ??
+        resolveLiveToolResultMaxChars({
+          contextWindowTokens: params.contextWindowTokens,
+          cfg: params.cfg,
+          agentId: params.agentId,
+        }),
+    ),
+  );
+  const contextWindowTokens = Number.isFinite(params.contextWindowTokens)
+    ? Math.max(1, Math.floor(params.contextWindowTokens))
+    : 1;
+  // Aggregate truncation shares the 0.5 history-pressure invariant used by
+  // safeguard compaction and the mid-turn single-result guard. If this drifts,
+  // truncation can hide pressure that compaction routing should see.
+  const contextShareChars = Math.floor(
+    contextWindowTokens * 4 * AGGREGATE_TOOL_RESULT_CONTEXT_SHARE,
+  );
+  return Math.max(
+    perResultMaxChars * PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER,
+    contextShareChars,
+  );
 }
 
 /**
@@ -343,6 +418,109 @@ function isToolResultTextBlock(
   );
 }
 
+type ToolResultSpillDetails = {
+  fullOutputPath: string;
+  spillTruncated: boolean;
+  spilledChars?: number;
+};
+
+function getToolResultSpillDetails(message: AgentMessage): ToolResultSpillDetails | undefined {
+  const details = (message as { details?: unknown }).details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return undefined;
+  }
+  const fullOutputPath = (details as { fullOutputPath?: unknown }).fullOutputPath;
+  if (typeof fullOutputPath !== "string" || fullOutputPath.length === 0) {
+    return undefined;
+  }
+  const spillTruncated = (details as { spillTruncated?: unknown }).spillTruncated === true;
+  const spilledChars = (details as { spilledChars?: unknown }).spilledChars;
+  return {
+    fullOutputPath,
+    spillTruncated,
+    ...(typeof spilledChars === "number" && Number.isFinite(spilledChars)
+      ? { spilledChars: Math.max(0, Math.floor(spilledChars)) }
+      : {}),
+  };
+}
+
+function toolResultTextContainsFullOutputFooter(
+  message: AgentMessage,
+  fullOutputPath: string,
+): boolean {
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  const footer = formatFullOutputFooter(fullOutputPath);
+  const escapedFooter = JSON.stringify(footer).slice(1, -1);
+  return content.some((block: unknown) => {
+    if (!isToolResultTextBlock(block)) {
+      return false;
+    }
+    return block.text.includes(footer) || block.text.includes(escapedFooter);
+  });
+}
+
+type AggregateElisionMarkers = {
+  full: string;
+  compact: string;
+  truncationSuffix: (truncatedChars: number) => string;
+};
+
+function resolveAggregateElisionMarkers(
+  message: AgentMessage,
+): AggregateElisionMarkers | undefined {
+  const spill = getToolResultSpillDetails(message);
+  if (!spill) {
+    return undefined;
+  }
+  // Details alone are not model-visible. Only preserve paths that already
+  // appeared in the original footer, so elision discloses nothing new.
+  if (!toolResultTextContainsFullOutputFooter(message, spill.fullOutputPath)) {
+    return undefined;
+  }
+  // Aggregate elision is a rare recovery path, not a request hot path; one
+  // existence check avoids pointing the model at already-deleted spill files.
+  if (!existsSync(spill.fullOutputPath)) {
+    return undefined;
+  }
+  // The path was already disclosed in the original tool footer; preserving it
+  // here adds no new disclosure and only keeps recovery possible.
+  if (spill.spillTruncated) {
+    const count =
+      spill.spilledChars === undefined ? "capped content" : `first ${spill.spilledChars} chars`;
+    return {
+      full: `[tool result elided: partial output preserved at ${spill.fullOutputPath} (${count}); read it if the output is needed]`,
+      compact: `[partial: ${spill.fullOutputPath}]`,
+      truncationSuffix: (truncatedChars) =>
+        `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; partial output at ${spill.fullOutputPath}]`,
+    };
+  }
+  return {
+    full: `[tool result elided: full output preserved at ${spill.fullOutputPath}; read it if the output is needed]`,
+    compact: `[read ${spill.fullOutputPath}]`,
+    truncationSuffix: (truncatedChars) =>
+      `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; full output at ${spill.fullOutputPath}]`,
+  };
+}
+
+function formatAggregateElisionText(
+  remainingTextBudget: number,
+  spillMarkers: AggregateElisionMarkers | undefined,
+): string {
+  if (remainingTextBudget <= 0) {
+    return "";
+  }
+  if (spillMarkers?.full && spillMarkers.full.length <= remainingTextBudget) {
+    return spillMarkers.full;
+  }
+  if (spillMarkers?.compact && spillMarkers.compact.length <= remainingTextBudget) {
+    return spillMarkers.compact;
+  }
+  return AGGREGATE_ELISION_MARKER.slice(0, remainingTextBudget);
+}
+
 /**
  * Truncate oversized tool results in an array of messages (in-memory).
  * Returns a new array with truncated messages.
@@ -356,7 +534,13 @@ export function truncateOversizedToolResultsInMessages(
   maxCharsOverride?: number,
   aggregateMaxCharsOverride?: number,
   projectionState?: ToolResultPromptProjectionState,
-): { messages: AgentMessage[]; truncatedCount: number } {
+): {
+  messages: AgentMessage[];
+  truncatedCount: number;
+  aggregateTruncatedCount: number;
+  aggregatePressureEngaged: boolean;
+  aggregateBudgetChars: number;
+} {
   const maxChars = Math.max(
     1,
     maxCharsOverride ?? calculateMaxToolResultChars(contextWindowTokens),
@@ -399,6 +583,7 @@ export function truncateOversizedToolResultsInMessages(
     maxChars,
     aggregateBudgetChars,
     minKeepChars: RECOVERY_MIN_KEEP_CHARS,
+    protectTrailingToolResults: Boolean(projectionState),
   });
   if (projectionState) {
     for (const [index] of messages.entries()) {
@@ -416,6 +601,9 @@ export function truncateOversizedToolResultsInMessages(
     return {
       messages: hasProjectedChanges ? projectedMessages : messages,
       truncatedCount: 0,
+      aggregateTruncatedCount: 0,
+      aggregatePressureEngaged: plan.aggregatePressureExceeded,
+      aggregateBudgetChars,
     };
   }
 
@@ -436,6 +624,9 @@ export function truncateOversizedToolResultsInMessages(
   return {
     messages: replacedBranch.map((entry) => entry.message as AgentMessage),
     truncatedCount: replacementIds.size,
+    aggregateTruncatedCount: plan.aggregateReplacementCount,
+    aggregatePressureEngaged: plan.aggregatePressureExceeded,
+    aggregateBudgetChars,
   };
 }
 
@@ -447,8 +638,10 @@ function calculateRecoveryAggregateToolResultChars(
   return Math.max(
     1,
     aggregateMaxCharsOverride ??
-      maxCharsOverride ??
-      calculateMaxToolResultChars(contextWindowTokens),
+      resolveLiveToolResultAggregateMaxChars({
+        contextWindowTokens,
+        perResultMaxChars: maxCharsOverride ?? calculateMaxToolResultChars(contextWindowTokens),
+      }),
   );
 }
 
@@ -475,12 +668,7 @@ type ToolResultReplacement = {
   message: AgentMessage;
 };
 
-export type ToolResultPromptProjectionState = {
-  replacements: Map<string, AgentMessage>;
-  frozen: Set<string>;
-  ambiguousBaseKeys: Set<string>;
-  sourceTextByKey: Map<string, string[]>;
-};
+export type { ToolResultPromptProjectionState } from "./session-prompt-state.js";
 
 export function createToolResultPromptProjectionState(): ToolResultPromptProjectionState {
   return {
@@ -521,16 +709,27 @@ function getToolResultProjectionKeys(
     }
   }
   const occurrences = new Map<string, number>();
-  return baseKeys.map((baseKey) => {
-    if (!baseKey) {
+  return baseKeys.map((baseKey, index) => {
+    if (baseKey && !projectionState.ambiguousBaseKeys.has(baseKey)) {
+      return baseKey;
+    }
+    const message = messages[index];
+    if (!message || message.role !== "toolResult") {
       return undefined;
     }
-    if (projectionState.ambiguousBaseKeys.has(baseKey)) {
-      return undefined;
-    }
-    const occurrence = occurrences.get(baseKey) ?? 0;
-    occurrences.set(baseKey, occurrence + 1);
-    return `${baseKey}:${occurrence}`;
+    // Ambiguous/missing tool ids still need a stable frozen identity; otherwise
+    // each request rewrites their prompt-cache tail projection (#99495).
+    const messageId = (message as { id?: unknown }).id;
+    const sourceIdentity =
+      typeof messageId === "string" && messageId.length > 0
+        ? `id:${messageId}`
+        : `text:${createHash("sha256")
+            .update(JSON.stringify(getToolResultTextBlocks(message)))
+            .digest("base64url")}`;
+    const fallbackBase = `fallback:${baseKey ?? "tool"}:${sourceIdentity}`;
+    const occurrence = occurrences.get(fallbackBase) ?? 0;
+    occurrences.set(fallbackBase, occurrence + 1);
+    return `${fallbackBase}:${occurrence}`;
   });
 }
 
@@ -594,10 +793,15 @@ function getToolResultTextBlocks(message: AgentMessage): string[] {
 
 function buildAggregateToolResultReplacements(params: {
   branch: ToolResultBranchEntry[];
+  spillSourceBranch?: ToolResultBranchEntry[];
   aggregateBudgetChars: number;
   minKeepChars?: number;
-}): ToolResultReplacement[] {
+  protectTrailingToolResults?: boolean;
+}): { replacements: ToolResultReplacement[]; pressureExceeded: boolean } {
   const minKeepChars = params.minKeepChars ?? MIN_KEEP_CHARS;
+  const protectedEntryIds = params.protectTrailingToolResults
+    ? getTrailingToolResultEntryIds(params.branch)
+    : new Set<string>();
   const candidates = params.branch
     .map((entry, index) => ({ entry, index }))
     .filter(
@@ -615,13 +819,15 @@ function buildAggregateToolResultReplacements(params: {
       index: item.index,
       entryId: item.entry.id,
       message: item.entry.message,
+      spillSourceMessage: params.spillSourceBranch?.[item.index]?.message ?? item.entry.message,
       textLength: getToolResultTextLength(item.entry.message),
       aggregateEligible: item.entry.aggregateEligible !== false,
+      protectedFromAggregateRecovery: protectedEntryIds.has(item.entry.id),
     }))
     .filter((item) => item.textLength > 0);
 
   if (candidates.length < 2) {
-    return [];
+    return { replacements: [], pressureExceeded: false };
   }
 
   const suffixFactory =
@@ -633,21 +839,28 @@ function buildAggregateToolResultReplacements(params: {
 
   const totalChars = candidates.reduce((sum, item) => sum + item.textLength, 0);
   if (totalChars <= params.aggregateBudgetChars) {
-    return [];
+    return { replacements: [], pressureExceeded: false };
   }
 
   let remainingReduction = totalChars - params.aggregateBudgetChars;
   const replacements: Array<{ entryId: string; message: AgentMessage }> = [];
-
-  // Spend aggregate reduction on older entries first so fresh tool output stays intact.
-  for (const candidate of candidates
-    .filter((item) => item.aggregateEligible)
+  const aggregateRecoveryCandidates = candidates
+    .filter((item) => !item.protectedFromAggregateRecovery)
     .toSorted((a, b) => {
       if (a.index !== b.index) {
         return a.index - b.index;
       }
       return b.textLength - a.textLength;
-    })) {
+    });
+  const recoveryCandidates = [
+    ...aggregateRecoveryCandidates.filter((item) => item.aggregateEligible),
+    // Frozen bytes move only after fresh output is exhausted and the hard aggregate
+    // guard still overflows; starting from the frozen projection makes this shrink-only.
+    ...aggregateRecoveryCandidates.filter((item) => !item.aggregateEligible),
+  ];
+
+  // Spend aggregate reduction on older entries first so fresh tool output stays intact.
+  for (const candidate of recoveryCandidates) {
     if (remainingReduction <= 0) {
       break;
     }
@@ -658,9 +871,12 @@ function buildAggregateToolResultReplacements(params: {
 
     const requestedReduction = Math.min(reducibleChars, remainingReduction);
     const targetChars = Math.max(minTruncatedTextChars, candidate.textLength - requestedReduction);
-    const truncatedMessage = truncateToolResultMessage(candidate.message, targetChars, {
+    const spillMarkers = resolveAggregateElisionMarkers(candidate.spillSourceMessage);
+    const candidateSuffixFactory = spillMarkers?.truncationSuffix ?? suffixFactory;
+    const candidateTargetChars = Math.max(targetChars, candidateSuffixFactory(1).length);
+    const truncatedMessage = truncateToolResultMessage(candidate.message, candidateTargetChars, {
       minKeepChars,
-      suffix: suffixFactory,
+      suffix: candidateSuffixFactory,
     });
     const newLength = getToolResultTextLength(truncatedMessage);
     const actualReduction = Math.max(0, candidate.textLength - newLength);
@@ -673,19 +889,20 @@ function buildAggregateToolResultReplacements(params: {
   }
 
   if (remainingReduction > 0) {
-    for (const candidate of candidates.filter((item) => item.aggregateEligible)) {
+    for (const candidate of recoveryCandidates) {
       if (remainingReduction <= 0) {
         break;
       }
       const existingReplacement = replacements.find(
         (replacement) => replacement.entryId === candidate.entryId,
       );
-      const emptyMessage = clearToolResultText(existingReplacement?.message ?? candidate.message);
-      const actualReduction = Math.max(
-        0,
-        candidate.textLength - getToolResultTextLength(emptyMessage),
-      );
-      if (actualReduction <= 0) {
+      const baseMessage = existingReplacement?.message ?? candidate.message;
+      const baseTextLength = getToolResultTextLength(baseMessage);
+      const targetTextChars = Math.max(0, baseTextLength - remainingReduction);
+      const spillMarkers = resolveAggregateElisionMarkers(candidate.spillSourceMessage);
+      const emptyMessage = clearToolResultText(candidate.message, targetTextChars, spillMarkers);
+      const actualReduction = Math.max(0, baseTextLength - getToolResultTextLength(emptyMessage));
+      if (actualReduction <= 0 && !spillMarkers) {
         continue;
       }
       const replacement = { entryId: candidate.entryId, message: emptyMessage };
@@ -701,21 +918,58 @@ function buildAggregateToolResultReplacements(params: {
     }
   }
 
-  return replacements;
+  return { replacements, pressureExceeded: true };
 }
 
-function clearToolResultText(message: AgentMessage): AgentMessage {
+function getTrailingToolResultEntryIds(branch: ToolResultBranchEntry[]): Set<string> {
+  const ids = new Set<string>();
+  let sawMessage = false;
+  for (let index = branch.length - 1; index >= 0; index--) {
+    const entry = branch[index];
+    if (entry?.type !== "message" || !entry.message) {
+      if (!sawMessage) {
+        continue;
+      }
+      break;
+    }
+    sawMessage = true;
+    if ((entry.message as { role?: string }).role !== "toolResult") {
+      break;
+    }
+    ids.add(entry.id);
+  }
+  return ids;
+}
+
+function clearToolResultText(
+  message: AgentMessage,
+  maxTextChars = Number.POSITIVE_INFINITY,
+  resolvedSpillMarkers?: AggregateElisionMarkers,
+): AgentMessage {
   const content = (message as { content?: unknown }).content;
   if (!Array.isArray(content)) {
     return message;
   }
+  let remainingTextBudget = Math.max(0, Math.floor(maxTextChars));
+  const spillMarkers = resolvedSpillMarkers ?? resolveAggregateElisionMarkers(message);
+  if (spillMarkers) {
+    // The pointer is what makes elision recoverable. ~130 chars per entry is
+    // negligible against the 64k+ aggregate floor, and accounting uses actual lengths.
+    remainingTextBudget = Math.max(remainingTextBudget, spillMarkers.compact.length);
+  }
   return {
     ...message,
-    content: content.map((block) =>
-      block && typeof block === "object" && (block as { type?: unknown }).type === "text"
-        ? Object.assign({}, block, { text: "" })
-        : block,
-    ),
+    content: content.map((block) => {
+      if (!isToolResultTextBlock(block)) {
+        return block;
+      }
+      const replacementText = formatAggregateElisionText(remainingTextBudget, spillMarkers);
+      remainingTextBudget = Math.max(0, remainingTextBudget - replacementText.length);
+      return Object.assign({}, block, {
+        text: replacementText,
+        ...(typeof block.content === "string" ? { content: replacementText } : {}),
+      });
+    }),
   } as AgentMessage;
 }
 
@@ -723,6 +977,7 @@ function buildOversizedToolResultReplacements(params: {
   branch: ToolResultBranchEntry[];
   maxChars: number;
   minKeepChars?: number;
+  protectedEntryIds?: Set<string>;
 }): ToolResultReplacement[] {
   const minKeepChars = params.minKeepChars ?? MIN_KEEP_CHARS;
   const replacements: ToolResultReplacement[] = [];
@@ -738,10 +993,17 @@ function buildOversizedToolResultReplacements(params: {
     if (getToolResultTextLength(msg) <= params.maxChars) {
       continue;
     }
+    const replacementMinKeepChars = params.protectedEntryIds?.has(entry.id)
+      ? Math.max(minKeepChars, MIN_KEEP_CHARS)
+      : minKeepChars;
+    const spillMarkers = resolveAggregateElisionMarkers(msg);
+    const suffixFactory = spillMarkers?.truncationSuffix;
+    const maxChars = Math.max(params.maxChars, suffixFactory?.(1).length ?? 0);
     replacements.push({
       entryId: entry.id,
-      message: truncateToolResultMessage(msg, params.maxChars, {
-        minKeepChars,
+      message: truncateToolResultMessage(msg, maxChars, {
+        minKeepChars: replacementMinKeepChars,
+        ...(suffixFactory ? { suffix: suffixFactory } : {}),
       }),
     });
   }
@@ -800,18 +1062,24 @@ function buildToolResultReplacementPlan(params: {
   maxChars: number;
   aggregateBudgetChars: number;
   minKeepChars?: number;
+  protectTrailingToolResults?: boolean;
 }): {
   replacements: ToolResultReplacement[];
   oversizedReplacementCount: number;
   aggregateReplacementCount: number;
+  aggregatePressureExceeded: boolean;
   oversizedReducibleChars: number;
   aggregateReducibleChars: number;
 } {
   const minKeepChars = params.minKeepChars ?? MIN_KEEP_CHARS;
+  const protectedEntryIds = params.protectTrailingToolResults
+    ? getTrailingToolResultEntryIds(params.branch)
+    : undefined;
   const oversizedReplacements = buildOversizedToolResultReplacements({
     branch: params.branch,
     maxChars: params.maxChars,
     minKeepChars,
+    protectedEntryIds,
   });
   const oversizedReducibleChars = calculateReplacementReduction(
     params.branch,
@@ -821,11 +1089,14 @@ function buildToolResultReplacementPlan(params: {
     params.branch,
     oversizedReplacements,
   );
-  const aggregateReplacements = buildAggregateToolResultReplacements({
+  const aggregatePlan = buildAggregateToolResultReplacements({
     branch: oversizedTrimmedBranch,
+    spillSourceBranch: params.branch,
     aggregateBudgetChars: params.aggregateBudgetChars,
     minKeepChars,
+    protectTrailingToolResults: params.protectTrailingToolResults,
   });
+  const aggregateReplacements = aggregatePlan.replacements;
   const aggregateReducibleChars = calculateReplacementReduction(
     oversizedTrimmedBranch,
     aggregateReplacements,
@@ -835,6 +1106,7 @@ function buildToolResultReplacementPlan(params: {
     replacements: [...oversizedReplacements, ...aggregateReplacements],
     oversizedReplacementCount: oversizedReplacements.length,
     aggregateReplacementCount: aggregateReplacements.length,
+    aggregatePressureExceeded: aggregatePlan.pressureExceeded,
     oversizedReducibleChars,
     aggregateReducibleChars,
   };
@@ -899,6 +1171,7 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
   contextWindowTokens: number;
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
+  protectTrailingToolResults?: boolean;
   sessionFile?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -925,6 +1198,7 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
     maxChars,
     aggregateBudgetChars,
     minKeepChars: RECOVERY_MIN_KEEP_CHARS,
+    protectTrailingToolResults: params.protectTrailingToolResults,
   });
   if (plan.replacements.length === 0) {
     return {
@@ -954,12 +1228,16 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
     });
   }
 
-  log.info(
-    `[tool-result-truncation] Truncated ${rewriteResult.rewrittenEntries} tool result(s) in session ` +
-      `(contextWindow=${contextWindowTokens} maxChars=${maxChars} aggregateBudgetChars=${aggregateBudgetChars} ` +
-      `oversized=${plan.oversizedReplacementCount} aggregate=${plan.aggregateReplacementCount}) ` +
-      `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
-  );
+  logToolResultSessionTruncation({
+    rewrittenEntries: rewriteResult.rewrittenEntries,
+    contextWindowTokens,
+    maxChars,
+    aggregateBudgetChars,
+    oversizedReplacementCount: plan.oversizedReplacementCount,
+    aggregateReplacementCount: plan.aggregateReplacementCount,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+  });
 
   return {
     truncated: rewriteResult.changed,
@@ -974,6 +1252,7 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
   contextWindowTokens: number;
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
+  protectTrailingToolResults?: boolean;
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
@@ -1000,6 +1279,7 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
     maxChars,
     aggregateBudgetChars,
     minKeepChars: RECOVERY_MIN_KEEP_CHARS,
+    protectTrailingToolResults: params.protectTrailingToolResults,
   });
   if (plan.replacements.length === 0) {
     return {
@@ -1034,12 +1314,16 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
     });
   }
 
-  log.info(
-    `[tool-result-truncation] Truncated ${rewriteResult.rewrittenEntries} tool result(s) in session ` +
-      `(contextWindow=${contextWindowTokens} maxChars=${maxChars} aggregateBudgetChars=${aggregateBudgetChars} ` +
-      `oversized=${plan.oversizedReplacementCount} aggregate=${plan.aggregateReplacementCount}) ` +
-      `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
-  );
+  logToolResultSessionTruncation({
+    rewrittenEntries: rewriteResult.rewrittenEntries,
+    contextWindowTokens,
+    maxChars,
+    aggregateBudgetChars,
+    oversizedReplacementCount: plan.oversizedReplacementCount,
+    aggregateReplacementCount: plan.aggregateReplacementCount,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+  });
 
   return {
     truncated: rewriteResult.changed,
@@ -1053,6 +1337,7 @@ export function truncateOversizedToolResultsInSessionManager(params: {
   contextWindowTokens: number;
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
+  protectTrailingToolResults?: boolean;
   sessionFile?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -1075,6 +1360,7 @@ export async function truncateOversizedToolResultsInSession(params: {
   contextWindowTokens: number;
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
+  protectTrailingToolResults?: boolean;
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
@@ -1094,6 +1380,7 @@ export async function truncateOversizedToolResultsInSession(params: {
       contextWindowTokens,
       maxCharsOverride: params.maxCharsOverride,
       aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
+      protectTrailingToolResults: params.protectTrailingToolResults,
       sessionFile,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,

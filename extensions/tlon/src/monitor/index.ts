@@ -2,6 +2,7 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import { createLoggerBackedRuntime } from "../../runtime-api.js";
 import { getTlonRuntime } from "../runtime.js";
@@ -852,7 +853,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
                     type: "channel",
                     requestingShip: senderShip,
                     channelNest: nest,
-                    messagePreview: rawText.slice(0, 100),
+                    messagePreview: sliceUtf16Safe(rawText, 0, 100),
                     originalMessage: {
                       messageId: messageId ?? "",
                       messageText: rawText,
@@ -1056,7 +1057,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
               const approval = createPendingApproval({
                 type: "dm",
                 requestingShip: senderShip,
-                messagePreview: messageText.slice(0, 100),
+                messagePreview: sliceUtf16Safe(messageText, 0, 100),
                 originalMessage: {
                   messageId: messageId ?? "",
                   messageText,

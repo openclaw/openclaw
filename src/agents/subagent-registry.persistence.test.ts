@@ -271,6 +271,90 @@ describe("subagent registry persistence", () => {
     expect(persisted?.startedAt).toBeLessThanOrEqual(endedAt);
   });
 
+  it("rejects a stale timing write after session ownership changes", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+
+    const startedAt = Date.now();
+    const storePath = await writeChildSessionEntry({
+      sessionKey: "agent:main:subagent:stale-timing",
+      sessionId: "sess-stale-timing",
+      updatedAt: startedAt - 1,
+    });
+    await persistSubagentSessionTiming(
+      {
+        runId: "run-stale-timing",
+        childSessionKey: "agent:main:subagent:stale-timing",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "do not persist stale timing",
+        cleanup: "keep",
+        createdAt: startedAt,
+        startedAt,
+        endedAt: startedAt + 500,
+        outcome: { status: "ok" },
+      } as never,
+      { isCurrentGeneration: () => false },
+    );
+
+    const persisted = (await readSubagentSessionStore(storePath))[
+      "agent:main:subagent:stale-timing"
+    ];
+    expect(persisted).toMatchObject({
+      sessionId: "sess-stale-timing",
+      updatedAt: startedAt - 1,
+    });
+    expect(persisted?.startedAt).toBeUndefined();
+    expect(persisted?.endedAt).toBeUndefined();
+    expect(persisted?.status).toBeUndefined();
+  });
+
+  it("does not overwrite durable completion with a provisional killed status", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+
+    const startedAt = Date.now();
+    const completedAt = startedAt + 500;
+    const storePath = await writeChildSessionEntry({
+      sessionKey: "agent:main:subagent:kill-race",
+      sessionId: "sess-kill-race",
+      updatedAt: completedAt,
+    });
+    const store = await readSubagentSessionStore(storePath);
+    store["agent:main:subagent:kill-race"] = {
+      ...store["agent:main:subagent:kill-race"],
+      status: "done",
+      startedAt,
+      endedAt: completedAt,
+      runtimeMs: 500,
+      abortedLastRun: true,
+    };
+    await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, "utf8");
+
+    await persistSubagentSessionTiming({
+      runId: "run-kill-race",
+      childSessionKey: "agent:main:subagent:kill-race",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "preserve completion",
+      cleanup: "keep",
+      createdAt: startedAt,
+      startedAt,
+      endedAt: completedAt + 1,
+      endedReason: "subagent-killed",
+      outcome: { status: "error", error: "manual kill" },
+    } as never);
+
+    const persisted = (await readSubagentSessionStore(storePath))["agent:main:subagent:kill-race"];
+    expect(persisted).toMatchObject({
+      status: "done",
+      startedAt,
+      endedAt: completedAt,
+      runtimeMs: 500,
+    });
+    expect(persisted?.abortedLastRun).toBeUndefined();
+  });
+
   it("skips cleanup when cleanupHandled was persisted", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
@@ -689,6 +773,48 @@ describe("subagent registry persistence", () => {
     };
     expect(after.runs?.["run-orphan-restore"]).toBeUndefined();
     expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+  });
+
+  it("preserves restored killed tombstones until bounded reconciliation", async () => {
+    const now = Date.now();
+    const runId = "run-killed-restore-tombstone";
+    await writePersistedRegistry(
+      {
+        version: 2,
+        runs: {
+          [runId]: {
+            runId,
+            childSessionKey: "agent:main:subagent:killed-restore-tombstone",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "restore killed tombstone",
+            cleanup: "keep",
+            createdAt: now - 100,
+            startedAt: now - 50,
+            endedAt: now,
+            endedReason: "subagent-killed",
+            outcome: { status: "error", error: "manual kill" },
+            suppressAnnounceReason: "killed",
+            killReconciliation: { killedAt: now },
+            cleanupHandled: true,
+            cleanupCompletedAt: now,
+          },
+        },
+      },
+      { seedChildSessions: false },
+    );
+
+    restartRegistry();
+    await flushQueuedRegistryWork();
+
+    expect(announceSpy).not.toHaveBeenCalled();
+    expect(listSubagentRunsForRequester("agent:main:main")).toEqual([
+      expect.objectContaining({
+        runId,
+        endedReason: "subagent-killed",
+        suppressAnnounceReason: "killed",
+      }),
+    ]);
   });
 
   it("reconciles stale unended restored runs that are not restart-recoverable", async () => {

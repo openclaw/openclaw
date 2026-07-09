@@ -1,12 +1,18 @@
 /**
  * Node invoke plugin-policy regression tests.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
   type PluginApprovalRequestPayload,
 } from "../infra/plugin-approvals.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import {
+  pinActivePluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
@@ -16,14 +22,6 @@ import type { GatewayClient, GatewayRequestContext } from "./server-methods/type
 const DEMO_PLUGIN_ID = "demo";
 const DEMO_COMMAND = "demo.read";
 const DEMO_PARAMS = { path: "/tmp/x" };
-
-const registryState = vi.hoisted(() => ({
-  current: null as PluginRegistry | null,
-}));
-
-vi.mock("../plugins/active-runtime-registry.js", () => ({
-  getActiveRuntimePluginRegistry: () => registryState.current,
-}));
 
 function createNodeSession(): NodeSession {
   return {
@@ -101,7 +99,7 @@ function createOperatorClient(): GatewayClient {
   });
 }
 
-type NodeInvokePolicyRegistration = NonNullable<PluginRegistry["nodeInvokePolicies"]>[number];
+type NodeInvokePolicyRegistration = PluginRegistry["nodeInvokePolicies"][number];
 type NodeInvokePolicyHandler = NodeInvokePolicyRegistration["policy"]["handle"];
 type PluginApprovalRecord = ReturnType<
   ExecApprovalManager<PluginApprovalRequestPayload>["listPendingRecords"]
@@ -121,11 +119,13 @@ function createDemoPolicy(handle: NodeInvokePolicyHandler): NodeInvokePolicyRegi
 
 function createApprovalRequestPolicy(params?: {
   timeoutMs?: number;
+  title?: string;
+  description?: string;
 }): NodeInvokePolicyRegistration {
   return createDemoPolicy(async (ctx: OpenClawPluginNodeInvokePolicyContext) => {
     const approval = await ctx.approvals?.request({
-      title: "Sensitive action",
-      description: "Needs approval",
+      title: params?.title ?? "Sensitive action",
+      description: params?.description ?? "Needs approval",
       ...(params?.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
     });
     return { ok: true, payload: approval ?? null };
@@ -133,22 +133,25 @@ function createApprovalRequestPolicy(params?: {
 }
 
 function setDangerousDemoCommandRegistry(policies: NodeInvokePolicyRegistration[] = []) {
-  registryState.current = {
-    nodeHostCommands: [
-      {
-        pluginId: DEMO_PLUGIN_ID,
-        command: {
-          command: DEMO_COMMAND,
-          dangerous: true,
-          handle: async () => "{}",
-        },
-        source: "test",
-      },
-    ],
-    nodeInvokePolicies: policies,
-  } as unknown as PluginRegistry;
+  const registry = createEmptyPluginRegistry();
+  registry.nodeHostCommands.push({
+    pluginId: DEMO_PLUGIN_ID,
+    command: {
+      command: DEMO_COMMAND,
+      dangerous: true,
+      handle: async () => "{}",
+    },
+    source: "test",
+  });
+  registry.nodeInvokePolicies.push(...policies);
+  setActivePluginRegistry(registry);
 }
 
+function createPolicyRegistry(handle: NodeInvokePolicyHandler): PluginRegistry {
+  const registry = createEmptyPluginRegistry();
+  registry.nodeInvokePolicies.push(createDemoPolicy(handle));
+  return registry;
+}
 async function invokeDemoPolicy(
   context: GatewayRequestContext,
   client: GatewayClient | null = null,
@@ -189,7 +192,11 @@ async function expectApprovalResolution(
 
 describe("applyPluginNodeInvokePolicy", () => {
   beforeEach(() => {
-    registryState.current = null;
+    resetPluginRuntimeStateForTest();
+  });
+
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
   });
 
   it("fails closed for dangerous plugin node commands without a policy", async () => {
@@ -225,6 +232,25 @@ describe("applyPluginNodeInvokePolicy", () => {
       timeoutMs: undefined,
       idempotencyKey: undefined,
     });
+  });
+
+  it("uses a matching policy from the pinned Gateway registry after an active swap", async () => {
+    const gatewayRegistry = createPolicyRegistry((ctx) => ctx.invokeNode());
+    setActivePluginRegistry(gatewayRegistry);
+    pinActivePluginChannelRegistry(gatewayRegistry);
+    setActivePluginRegistry(
+      createPolicyRegistry(async () => ({
+        ok: false,
+        code: "TRANSIENT_POLICY",
+        message: "agent-scoped policy must not shadow Gateway policy",
+      })),
+    );
+    const { context, invoke } = createContext();
+
+    const result = await invokeDemoPolicy(context);
+
+    expect(result).toStrictEqual({ ok: true, payload: { ok: true, value: 1 }, payloadJSON: null });
+    expect(invoke).toHaveBeenCalledOnce();
   });
 
   it("binds plugin policy approval requests to the invoking client", async () => {
@@ -288,10 +314,7 @@ describe("applyPluginNodeInvokePolicy", () => {
   });
 
   it("leaves commands without a dangerous plugin registration to normal allowlist handling", async () => {
-    registryState.current = {
-      nodeHostCommands: [],
-      nodeInvokePolicies: [],
-    } as unknown as PluginRegistry;
+    setActivePluginRegistry(createEmptyPluginRegistry());
     const { context } = createContext();
 
     const result = await applyPluginNodeInvokePolicy({
@@ -303,5 +326,32 @@ describe("applyPluginNodeInvokePolicy", () => {
     });
 
     expect(result).toBeNull();
+  });
+
+  it("keeps approval payload fields on UTF-16 boundaries", async () => {
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+    setDangerousDemoCommandRegistry([
+      createApprovalRequestPolicy({
+        title: `${"a".repeat(79)}🚀tail`,
+        description: `${"b".repeat(255)}🚀tail`,
+      }),
+    ]);
+    const { context } = createContext({
+      pluginApprovalManager: manager,
+      getApprovalClientConnIds: createApprovalClientLookup([
+        createApprovalClient({
+          connId: "conn-owner-approval",
+          clientId: "client-owner",
+          deviceId: "device-owner",
+        }),
+      ]),
+    });
+    const resultPromise = invokeDemoPolicy(context, createOperatorClient());
+
+    const record = await expectSinglePendingApproval(manager);
+    expect(record.request.title).toBe("a".repeat(79));
+    expect(record.request.description).toBe("b".repeat(255));
+
+    await expectApprovalResolution(resultPromise, manager, record);
   });
 });

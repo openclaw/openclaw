@@ -13,14 +13,17 @@ registration edge limit.
 
 - The scarce resource is Blacksmith runner registrations, not Blacksmith vCPU
   capacity.
-- GitHub runner registrations for `openclaw` are currently capped at 3,000 per
-  5 minutes per repository, organization, or enterprise. The `openclaw`
+- GitHub runner registrations for `openclaw` currently report a 10,000 per
+  5-minute bucket in `actions_runner_registration`. Verify the live bucket
+  before each tuning pass because GitHub can change it. The `openclaw`
   organization shares one bucket.
 - Core REST quota does not draw down this bucket. Check
   `actions_runner_registration` separately; core quota can be healthy while
   runner registration is throttled.
-- Use 2,000 registrations per 5 minutes as the operating target. Leave the last
-  third for other repos, retries, and burst overlap.
+- Use about 60% of the live bucket as the operating target. With the current
+  10,000-registration bucket, keep planned Blacksmith burst load under 6,000
+  registrations per 5 minutes and leave the rest for other repos, retries, and
+  burst overlap.
 - Jobs that route, notify, summarize, choose shards, or run short CodeQL quality
   scans should stay on GitHub-hosted runners unless measured evidence says
   Blacksmith is required.
@@ -88,9 +91,10 @@ admission. The debounce only suppresses pushes that arrive while
 registrations are spent even if a later push cancels the run. If timing is
 uncertain, count every sequential push in the window.
 
-Reject a change unless the org-level worst case stays below 2,000 registrations
-per 5 minutes with headroom for ClawSweeper, ClawHub, Clownfish, OpenClaw RTT,
-and Clawbench.
+Reject a change unless the org-level worst case stays below about 60% of the
+live bucket. With the current 10,000-registration bucket, keep planned
+Blacksmith burst load under 6,000 registrations per 5 minutes with headroom for
+ClawSweeper, ClawHub, Clownfish, OpenClaw RTT, and Clawbench.
 
 ## Safe Levers
 
@@ -128,7 +132,7 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
 - `runner-admission` on `ubuntu-24.04` with
   `OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS=90`.
 - `preflight` and `security-fast` needing `runner-admission`.
-- CI matrix caps: fast/check lanes at 12, Node test shards at 24, Windows and
+- CI matrix caps: fast/check lanes at 12, Node test shards at 28, Windows and
   Android at 2.
 - `build-artifacts` on `blacksmith-16vcpu-ubuntu-2404`.
 - lower-weight Node/check shards on `blacksmith-4vcpu-ubuntu-2404`.

@@ -524,8 +524,8 @@ The branch already has a real shared SQLite base:
   shape into SQLite before normal runtime use.
 - QQBot credential recovery snapshots now live in SQLite plugin state under
   `qqbot/credential-backups`. Runtime no longer writes
-  `qqbot/data/credential-backup*.json`; doctor imports and removes those
-  legacy backup files with the other QQBot state inputs.
+  `qqbot/data/credential-backup*.json`; the QQBot doctor contract imports and
+  archives those legacy backup files from the active state directory.
 - Gateway reload planning compares SQLite installed-plugin index snapshots under
   an internal `installedPluginIndex.installRecords.*` diff namespace. Runtime
   reload decisions no longer wrap those rows in fake `plugins.installs` config
@@ -1576,10 +1576,9 @@ Move these into the global database:
   `voice-call` / `calls` namespace instead of `calls.jsonl`; the plugin CLI
   tails and summarizes SQLite-backed call history.
 - QQBot gateway sessions, known-user records, and ref-index quote cache now use
-  SQLite plugin state under `qqbot` namespaces (`sessions`, `known-users`,
-  `ref-index`) instead of `session-*.json`, `known-users.json`, and
-  `ref-index.jsonl`; the QQBot doctor/setup migration imports and removes the
-  legacy files.
+  SQLite plugin state under `qqbot` namespaces (`gateway-sessions`,
+  `known-users`, `ref-index`) instead of `session-*.json`, `known-users.json`,
+  and `ref-index.jsonl`. Those legacy files are caches and are not migrated.
 - Discord model-picker preferences, command-deploy hashes, and thread bindings
   now use SQLite plugin state under `discord` namespaces
   (`model-picker-preferences`, `command-deploy-hashes`, `thread-bindings`)
