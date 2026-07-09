@@ -8,13 +8,13 @@ import {
 } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
+import { resolveSessionAgentIds } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "../agents/auth-profiles/store.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
@@ -154,8 +154,8 @@ function resolveMcpLoopbackAuthProfileStore(
   sessionKey: string,
 ): ReturnType<typeof loadAuthProfileStoreForSecretsRuntime> | undefined {
   try {
-    const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    const agentDir = resolveAgentDir(cfg, agentId);
+    const { sessionAgentId } = resolveSessionAgentIds({ config: cfg, sessionKey });
+    const agentDir = resolveAgentDir(cfg, sessionAgentId);
     return loadAuthProfileStoreForSecretsRuntime(agentDir);
   } catch {
     // Auth-profile loading is best-effort for loopback tool availability.
