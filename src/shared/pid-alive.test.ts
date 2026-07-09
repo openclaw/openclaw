@@ -158,13 +158,14 @@ describe("process start times", () => {
       .mockReturnValue("Mon Jul  6 12:34:56 2026\n");
 
     return withMockedPlatform("darwin", async () => {
-      expect(getFileLockProcessStartTime(42)).toBe(
-        Math.floor(new Date("Mon Jul  6 12:34:56 2026").getTime() / 1000),
-      );
+      expect(getFileLockProcessStartTime(42)).toBe(Date.UTC(2026, 6, 6, 12, 34, 56) / 1000);
       expect(execSpy).toHaveBeenCalledWith(
         "/bin/ps",
         ["-o", "lstart=", "-p", "42"],
-        expect.objectContaining({ encoding: "utf8" }),
+        expect.objectContaining({
+          encoding: "utf8",
+          env: expect.objectContaining({ LC_ALL: "C", TZ: "UTC" }),
+        }),
       );
     });
   });

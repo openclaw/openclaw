@@ -14,6 +14,10 @@ struct ExecApprovalEvaluation {
     let allowlistSatisfied: Bool
     let allowlistMatch: ExecAllowlistEntry?
     let skillAllow: Bool
+
+    var canPersistAllowAlways: Bool {
+        self.security == .allowlist && self.boundCommand != nil && !self.allowAlwaysPatterns.isEmpty
+    }
 }
 
 struct ExecApprovalStoreMutations: Sendable {
@@ -43,6 +47,7 @@ enum ExecApprovalEvaluator {
     static func evaluate(
         command: [String],
         rawCommand: String?,
+        displayCommand: String? = nil,
         cwd: String?,
         envOverrides: [String: String]?,
         agentId: String?) async -> ExecApprovalEvaluation
@@ -54,7 +59,8 @@ enum ExecApprovalEvaluator {
         let ask = approvals.agent.ask
         let shellWrapper = ExecShellWrapperParser.extract(command: command, rawCommand: rawCommand).isWrapper
         let env = HostEnvSanitizer.sanitize(overrides: envOverrides, shellWrapper: shellWrapper)
-        let displayCommand = ExecCommandFormatter.displayString(for: command, rawCommand: rawCommand)
+        let effectiveDisplayCommand = displayCommand ??
+            ExecCommandFormatter.displayString(for: command, rawCommand: rawCommand)
         let allowlistRawCommand = ExecSystemRunCommandValidator.allowlistEvaluationRawCommand(
             command: command,
             rawCommand: rawCommand)
@@ -92,7 +98,7 @@ enum ExecApprovalEvaluator {
         }
 
         return ExecApprovalEvaluation(
-            displayCommand: displayCommand,
+            displayCommand: effectiveDisplayCommand,
             agentId: normalizedAgentId,
             security: security,
             ask: ask,

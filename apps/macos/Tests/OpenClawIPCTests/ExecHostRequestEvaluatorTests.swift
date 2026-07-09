@@ -65,6 +65,30 @@ struct ExecHostRequestEvaluatorTests {
         }
     }
 
+    @Test func `validate request separates canonical wrapper display from allowlist payload`() {
+        let command = ["/bin/sh", "-lc", "/usr/bin/printf ok"]
+        let request = ExecHostRequest(
+            command: command,
+            rawCommand: "/usr/bin/printf ok",
+            cwd: nil,
+            env: nil,
+            timeoutMs: nil,
+            needsScreenRecording: nil,
+            agentId: nil,
+            sessionKey: nil,
+            approvalDecision: nil)
+
+        switch ExecHostRequestEvaluator.validateRequest(request) {
+        case let .success(validated):
+            #expect(validated.command == command)
+            #expect(validated.displayCommand == ExecCommandFormatter.displayString(for: command))
+            #expect(validated.evaluationRawCommand == "/usr/bin/printf ok")
+            #expect(validated.displayCommand != validated.evaluationRawCommand)
+        case let .failure(error):
+            Issue.record("unexpected invalid request: \(error.message)")
+        }
+    }
+
     @Test func `validate request rejects a padded executable without normalizing it`() {
         let request = ExecHostRequest(
             command: [" /usr/bin/touch ", "/tmp/must-not-run"],

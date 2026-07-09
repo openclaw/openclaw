@@ -4,16 +4,49 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
+import type { ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { SkillBinsProvider } from "./invoke-types.js";
 import { handleInvoke } from "./invoke.js";
 
 const approvalResolutionFailure = vi.hoisted(() => ({ error: null as Error | null }));
+const execApprovalsStoreMock = vi.hoisted(() => ({
+  ensureError: undefined as unknown,
+  ensureResult: undefined as unknown,
+  hasEnsureResult: false,
+  updateError: undefined as unknown,
+  updateResult: undefined as unknown,
+  hasUpdateResult: false,
+  updateCalls: 0,
+}));
 
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../infra/exec-approvals.js")>();
   return {
     ...original,
+    ensureExecApprovalsSnapshot: async () => {
+      if (execApprovalsStoreMock.ensureError !== undefined) {
+        throw execApprovalsStoreMock.ensureError;
+      }
+      if (execApprovalsStoreMock.hasEnsureResult) {
+        return execApprovalsStoreMock.ensureResult as Awaited<
+          ReturnType<typeof original.ensureExecApprovalsSnapshot>
+        >;
+      }
+      return await original.ensureExecApprovalsSnapshot();
+    },
+    updateExecApprovals: async (...args: Parameters<typeof original.updateExecApprovals>) => {
+      execApprovalsStoreMock.updateCalls += 1;
+      if (execApprovalsStoreMock.updateError !== undefined) {
+        throw execApprovalsStoreMock.updateError;
+      }
+      if (execApprovalsStoreMock.hasUpdateResult) {
+        return execApprovalsStoreMock.updateResult as Awaited<
+          ReturnType<typeof original.updateExecApprovals>
+        >;
+      }
+      return await original.updateExecApprovals(...args);
+    },
     resolveExecApprovalsLocked: async (
       ...args: Parameters<typeof original.resolveExecApprovalsLocked>
     ) => {
@@ -32,9 +65,217 @@ vi.mock("../logger.js", async (importOriginal) => ({
   logWarn: vi.fn(),
 }));
 
+function createExecApprovalsSnapshot(
+  overrides: Partial<ExecApprovalsSnapshot> = {},
+): ExecApprovalsSnapshot {
+  return {
+    path: "/tmp/exec-approvals.json",
+    exists: true,
+    raw: "{}",
+    hash: "hash-before",
+    file: {
+      version: 1,
+      socket: {
+        path: "/tmp/exec-approvals.sock",
+        token: "secret-token",
+      },
+    },
+    ...overrides,
+  };
+}
+
+type InvokeResult = {
+  ok?: boolean;
+  payloadJSON?: string;
+  error?: { code?: string; message?: string };
+};
+
+async function invokeExecApprovals(
+  command: "system.execApprovals.get" | "system.execApprovals.set",
+  params?: unknown,
+): Promise<InvokeResult> {
+  const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+  await handleInvoke(
+    {
+      id: `invoke-${command}`,
+      nodeId: "node-1",
+      command,
+      paramsJSON: params === undefined ? undefined : JSON.stringify(params),
+    },
+    { request } as unknown as GatewayClient,
+    { current: async () => [] },
+  );
+  return (request.mock.calls[0]?.[1] ?? {}) as InvokeResult;
+}
+
 describe("node host invoke", () => {
   beforeEach(() => {
     approvalResolutionFailure.error = null;
+    execApprovalsStoreMock.ensureError = undefined;
+    execApprovalsStoreMock.ensureResult = undefined;
+    execApprovalsStoreMock.hasEnsureResult = false;
+    execApprovalsStoreMock.updateError = undefined;
+    execApprovalsStoreMock.updateResult = undefined;
+    execApprovalsStoreMock.hasUpdateResult = false;
+    execApprovalsStoreMock.updateCalls = 0;
+  });
+
+  it("returns a redacted exec approvals snapshot", async () => {
+    execApprovalsStoreMock.hasEnsureResult = true;
+    execApprovalsStoreMock.ensureResult = createExecApprovalsSnapshot();
+    const result = await invokeExecApprovals("system.execApprovals.get");
+    const payload = JSON.parse(result.payloadJSON ?? "{}") as ExecApprovalsSnapshot;
+    expect(payload).toEqual({
+      path: "/tmp/exec-approvals.json",
+      exists: true,
+      hash: "hash-before",
+      file: {
+        version: 1,
+        socket: { path: "/tmp/exec-approvals.sock" },
+      },
+    });
+  });
+
+  it("updates exec approvals and redacts the resulting snapshot", async () => {
+    execApprovalsStoreMock.hasEnsureResult = true;
+    execApprovalsStoreMock.ensureResult = createExecApprovalsSnapshot();
+    execApprovalsStoreMock.hasUpdateResult = true;
+    execApprovalsStoreMock.updateResult = createExecApprovalsSnapshot({
+      hash: "hash-after",
+      file: {
+        version: 1,
+        defaults: { security: "deny" },
+        socket: { path: "/tmp/updated.sock", token: "updated-secret" },
+      },
+    });
+    const result = await invokeExecApprovals("system.execApprovals.set", {
+      baseHash: "hash-before",
+      file: { version: 1, defaults: { security: "deny" } },
+    });
+
+    expect(execApprovalsStoreMock.updateCalls).toBe(1);
+    expect(JSON.parse(result.payloadJSON ?? "{}")).toEqual({
+      path: "/tmp/exec-approvals.json",
+      exists: true,
+      hash: "hash-after",
+      file: {
+        version: 1,
+        defaults: { security: "deny" },
+        socket: { path: "/tmp/updated.sock" },
+      },
+    });
+  });
+
+  it("rejects an exec approvals update with a stale base hash", async () => {
+    execApprovalsStoreMock.hasEnsureResult = true;
+    execApprovalsStoreMock.ensureResult = createExecApprovalsSnapshot();
+    const result = await invokeExecApprovals("system.execApprovals.set", {
+      baseHash: "stale-hash",
+      file: { version: 1 },
+    });
+
+    expect(execApprovalsStoreMock.updateCalls).toBe(0);
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("exec approvals changed"),
+      },
+    });
+  });
+
+  it("rejects an exec approvals update when the locked CAS loses its race", async () => {
+    execApprovalsStoreMock.hasEnsureResult = true;
+    execApprovalsStoreMock.ensureResult = createExecApprovalsSnapshot();
+    execApprovalsStoreMock.hasUpdateResult = true;
+    execApprovalsStoreMock.updateResult = null;
+    const result = await invokeExecApprovals("system.execApprovals.set", {
+      baseHash: "hash-before",
+      file: { version: 1 },
+    });
+
+    expect(execApprovalsStoreMock.updateCalls).toBe(1);
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "INVALID_REQUEST: exec approvals changed; reload and retry",
+      },
+    });
+  });
+
+  it("classifies typed exec approvals lock timeouts as TIMEOUT", async () => {
+    execApprovalsStoreMock.ensureError = Object.assign(new Error("approval lock unavailable"), {
+      code: "file_lock_timeout",
+    });
+    const result = await invokeExecApprovals("system.execApprovals.get");
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "TIMEOUT",
+        message: "Error: approval lock unavailable",
+      },
+    });
+  });
+
+  it("classifies stale exec approval locks as UNAVAILABLE", async () => {
+    execApprovalsStoreMock.ensureError = Object.assign(new Error("stale approval lock"), {
+      code: "file_lock_stale",
+    });
+    const result = await invokeExecApprovals("system.execApprovals.get");
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "Error: stale approval lock",
+      },
+    });
+  });
+
+  it("classifies exec approvals filesystem failures as UNAVAILABLE", async () => {
+    execApprovalsStoreMock.ensureError = Object.assign(new Error("permission denied"), {
+      code: "EACCES",
+    });
+    const result = await invokeExecApprovals("system.execApprovals.set", {
+      file: { version: 1 },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "Error: permission denied",
+      },
+    });
+  });
+
+  it("classifies exec approvals update failures as UNAVAILABLE", async () => {
+    execApprovalsStoreMock.hasEnsureResult = true;
+    execApprovalsStoreMock.ensureResult = createExecApprovalsSnapshot();
+    execApprovalsStoreMock.updateError = new Error("approval store write failed");
+    const result = await invokeExecApprovals("system.execApprovals.set", {
+      baseHash: "hash-before",
+      file: { version: 1 },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "Error: approval store write failed",
+      },
+    });
+  });
+
+  it("classifies malformed exec approvals set payloads as INVALID_REQUEST", async () => {
+    const result = await invokeExecApprovals("system.execApprovals.set", {});
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST" },
+    });
   });
 
   it.runIf(process.platform !== "win32")(

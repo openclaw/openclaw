@@ -513,6 +513,41 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
+    func `native approvals get reports held sidecar lock as unavailable`() async throws {
+        try await self.withTempStateDir { stateDir in
+            let lockURL = stateDir.appendingPathComponent("exec-approvals.json.lock")
+            try Data("held".utf8).write(to: lockURL)
+
+            let response = await MacNodeRuntime().handleInvoke(BridgeInvokeRequest(
+                id: "approvals-get-held-lock",
+                command: OpenClawSystemCommand.execApprovalsGet.rawValue))
+
+            #expect(!response.ok)
+            #expect(response.error?.code == .unavailable)
+            #expect(response.error?.message == "UNAVAILABLE: exec approvals store unavailable; retry")
+            #expect(FileManager().fileExists(atPath: lockURL.path))
+        }
+    }
+
+    @Test
+    func `native approvals get reports malformed store as unavailable`() async throws {
+        try await self.withTempStateDir { _ in
+            let url = ExecApprovalsStore.fileURL()
+            let malformed = Data("{".utf8)
+            try malformed.write(to: url, options: [.atomic])
+
+            let response = await MacNodeRuntime().handleInvoke(BridgeInvokeRequest(
+                id: "approvals-get-malformed",
+                command: OpenClawSystemCommand.execApprovalsGet.rawValue))
+
+            #expect(!response.ok)
+            #expect(response.error?.code == .unavailable)
+            #expect(response.error?.message == "UNAVAILABLE: exec approvals store unavailable; retry")
+            #expect(try Data(contentsOf: url) == malformed)
+        }
+    }
+
+    @Test
     func `allow always persistence failure denies before shell execution`() async throws {
         try await self.withTempStateDir { _ in
             _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
@@ -688,15 +723,14 @@ struct ExecApprovalsStoreRefactorTests {
                 source: "allow-always",
                 commandText: "python3 b.py",
                 argPattern: #"^b\.py$"#)
-            _ = try ExecApprovalsStore.updateAllowlist(
+            _ = try ExecApprovalsStore.addAllowlistEntries(
                 agentId: "main",
-                allowlist: [first, second]).get()
+                entries: [first, second]).get()
 
-            _ = try ExecApprovalsStore.recordAllowlistUse(
+            _ = try ExecApprovalsStore.recordAllowlistUses(
                 agentId: "main",
-                match: first,
-                command: "python3 a.py",
-                resolvedPath: "/usr/bin/python3").get()
+                uses: [ExecAllowlistUse(match: first, resolvedPath: "/usr/bin/python3")],
+                command: "python3 a.py").get()
 
             let entries = try #require(ExecApprovalsStore.loadFile().agents?["main"]?.allowlist)
             #expect(entries[0].lastUsedCommand == "python3 a.py")
@@ -754,15 +788,76 @@ extension ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `update allowlist accepts basename pattern`() async throws {
+    func `legacy writer revocation wins before migration publishes and archives`() async throws {
+        try await self.withTempHomeAndStateDir { home, _ in
+            let legacyDir = home.appendingPathComponent(".openclaw", isDirectory: true)
+            try FileManager().createDirectory(
+                at: legacyDir,
+                withIntermediateDirectories: true)
+            let legacyFile = legacyDir.appendingPathComponent("exec-approvals.json")
+            let legacyLock = legacyDir.appendingPathComponent("exec-approvals.json.lock")
+            let initial = Data(
+                #"{"version":1,"agents":{"main":{"allowlist":[{"id":"revoked-entry","pattern":"/usr/bin/echo"}]}}}"#
+                    .utf8)
+            let revoked = Data(
+                #"{"version":1,"agents":{"main":{"allowlist":[]}}}"#.utf8)
+            try initial.write(to: legacyFile)
+            try Data("legacy writer owns lock".utf8).write(to: legacyLock)
+
+            // An older writer revokes under its sidecar lock. Migration must
+            // wait, then read and archive only the post-revocation policy.
+            DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(100)) {
+                try? revoked.write(to: legacyFile, options: [.atomic])
+                try? FileManager().removeItem(at: legacyLock)
+            }
+
+            let migrated = ExecApprovalsStore.ensureFile()
+
+            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.isEmpty)
+            #expect(migrated.agents?["main"]?.allowlist?.isEmpty != false)
+            #expect(!FileManager().fileExists(atPath: legacyFile.path))
+            let archived = URL(fileURLWithPath: "\(legacyFile.path).migrated")
+            #expect(FileManager().fileExists(atPath: archived.path))
+            let archivedFile = try JSONDecoder().decode(
+                ExecApprovalsFile.self,
+                from: Data(contentsOf: archived))
+            #expect(archivedFile.agents?["main"]?.allowlist?.isEmpty == true)
+        }
+    }
+
+    @Test
+    func `legacy migration fails closed while legacy writer lock is held`() async throws {
+        try await self.withTempHomeAndStateDir { home, _ in
+            let legacyDir = home.appendingPathComponent(".openclaw", isDirectory: true)
+            try FileManager().createDirectory(
+                at: legacyDir,
+                withIntermediateDirectories: true)
+            let legacyFile = legacyDir.appendingPathComponent("exec-approvals.json")
+            let legacyLock = legacyDir.appendingPathComponent("exec-approvals.json.lock")
+            let permissive = Data(
+                #"{"version":1,"defaults":{"security":"full","ask":"off"}}"#.utf8)
+            try permissive.write(to: legacyFile)
+            try Data("legacy writer owns lock".utf8).write(to: legacyLock)
+
+            let ensured = ExecApprovalsStore.ensureFile()
+
+            #expect(ensured.defaults?.security == .deny)
+            #expect(ensured.defaults?.ask == .off)
+            #expect(!FileManager().fileExists(atPath: ExecApprovalsStore.fileURL().path))
+            #expect(try Data(contentsOf: legacyFile) == permissive)
+            #expect(FileManager().fileExists(atPath: legacyLock.path))
+        }
+    }
+
+    @Test
+    func `add allowlist entries accepts basename pattern`() async throws {
         try await self.withTempStateDir { _ in
-            let rejected = try ExecApprovalsStore.updateAllowlist(
+            _ = try ExecApprovalsStore.addAllowlistEntries(
                 agentId: "main",
-                allowlist: [
+                entries: [
                     ExecAllowlistEntry(pattern: "echo"),
                     ExecAllowlistEntry(pattern: "/bin/echo"),
                 ]).get()
-            #expect(rejected.isEmpty)
 
             let resolved = ExecApprovalsStore.resolve(agentId: "main")
             #expect(resolved.allowlist.map(\.pattern) == ["echo", "/bin/echo"])
@@ -770,21 +865,16 @@ extension ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `update allowlist migrates legacy pattern from resolved path`() async throws {
+    func `ensure file migrates legacy pattern from resolved path`() async throws {
         try await self.withTempStateDir { _ in
-            let rejected = try ExecApprovalsStore.updateAllowlist(
-                agentId: "main",
-                allowlist: [
-                    ExecAllowlistEntry(
-                        pattern: "echo",
-                        lastUsedAt: nil,
-                        lastUsedCommand: nil,
-                        lastResolvedPath: " /usr/bin/echo "),
-                ]).get()
-            #expect(rejected.isEmpty)
+            let raw = Data(
+                #"{"version":1,"agents":{"main":{"allowlist":[{"pattern":"echo","lastResolvedPath":" /usr/bin/echo "}]}}}"#
+                    .utf8)
+            try raw.write(to: ExecApprovalsStore.fileURL(), options: [.atomic])
 
-            let resolved = ExecApprovalsStore.resolve(agentId: "main")
-            #expect(resolved.allowlist.map(\.pattern) == ["/usr/bin/echo"])
+            let ensured = ExecApprovalsStore.ensureFile()
+            #expect(ensured.agents?["main"]?.allowlist?.map(\.pattern) == ["/usr/bin/echo"])
+            #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.map(\.pattern) == ["/usr/bin/echo"])
         }
     }
 
@@ -802,12 +892,11 @@ extension ExecApprovalsStoreRefactorTests {
             }
 
             let startedAt = Date()
-            let rejected = try ExecApprovalsStore.updateAllowlist(
+            _ = try ExecApprovalsStore.addAllowlistEntry(
                 agentId: "main",
-                allowlist: [ExecAllowlistEntry(pattern: "/bin/echo")]).get()
+                pattern: "/bin/echo").get()
 
             #expect(Date().timeIntervalSince(startedAt) >= 0.075)
-            #expect(rejected.isEmpty)
             #expect(ExecApprovalsStore.resolve(agentId: "main").allowlist.map(\.pattern) == ["/bin/echo"])
         }
     }
@@ -823,9 +912,9 @@ extension ExecApprovalsStoreRefactorTests {
             ])
             try payload.write(to: lockURL)
 
-            _ = ExecApprovalsStore.updateAllowlist(
+            _ = ExecApprovalsStore.addAllowlistEntry(
                 agentId: "main",
-                allowlist: [ExecAllowlistEntry(pattern: "/bin/echo")])
+                pattern: "/bin/echo")
 
             #expect(FileManager().fileExists(atPath: lockURL.path))
             #expect(try Data(contentsOf: lockURL) == payload)
@@ -843,9 +932,9 @@ extension ExecApprovalsStoreRefactorTests {
                 ofItemAtPath: lockURL.path)
 
             let startedAt = Date()
-            let result = ExecApprovalsStore.updateAllowlist(
+            let result = ExecApprovalsStore.addAllowlistEntry(
                 agentId: "main",
-                allowlist: [ExecAllowlistEntry(pattern: "/bin/echo")])
+                pattern: "/bin/echo")
             let elapsed = Date().timeIntervalSince(startedAt)
 
             guard case .failure(.unavailable) = result else {
@@ -907,19 +996,21 @@ extension ExecApprovalsStoreRefactorTests {
     @Test
     func `entry scoped update cannot restore a revoked allowlist snapshot`() async throws {
         try await self.withTempStateDir { _ in
-            let revokedID = UUID().uuidString
-            _ = ExecApprovalsStore.updateAllowlist(
+            _ = try ExecApprovalsStore.addAllowlistEntry(
                 agentId: "main",
-                allowlist: [ExecAllowlistEntry(id: revokedID, pattern: "/bin/echo")])
-            let stale = ExecAllowlistEntry(id: revokedID, pattern: "/bin/cat")
+                pattern: "/bin/echo").get()
+            let revokedID = try #require(ExecApprovalsStore.resolve(agentId: "main").allowlist.first?.id)
 
-            _ = ExecApprovalsStore.updateAllowlist(
+            _ = try ExecApprovalsStore.removeAllowlistEntry(
                 agentId: "main",
-                allowlist: [ExecAllowlistEntry(pattern: "/usr/bin/date")])
+                id: revokedID).get()
+            _ = try ExecApprovalsStore.addAllowlistEntry(
+                agentId: "main",
+                pattern: "/usr/bin/date").get()
             let result = ExecApprovalsStore.updateAllowlistEntry(
                 agentId: "main",
                 id: revokedID,
-                pattern: stale.pattern)
+                pattern: "/bin/cat")
 
             if case let .failure(error) = result {
                 Issue.record("unexpected update failure: \(error)")

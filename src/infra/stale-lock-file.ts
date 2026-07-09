@@ -58,3 +58,25 @@ export function isLockOwnerDefinitelyStale(params: {
   // age cannot distinguish a crashed writer from a suspended live writer.
   return false;
 }
+
+export function shouldRemoveDeadOwnerOrExpiredLock(params: {
+  payload: Record<string, unknown> | null;
+  staleMs: number;
+  nowMs?: number;
+  isPidDefinitelyDead?: (pid: number) => boolean;
+  getProcessStartTime?: (pid: number) => number | null;
+}): boolean {
+  const payload = readLockFileOwnerPayload(params.payload);
+  if (payload?.pid) {
+    return isLockOwnerDefinitelyStale({
+      payload: params.payload,
+      isPidDefinitelyDead: params.isPidDefinitelyDead,
+      getProcessStartTime: params.getProcessStartTime,
+    });
+  }
+  if (!payload?.createdAt) {
+    return false;
+  }
+  const createdAt = Date.parse(payload.createdAt);
+  return !Number.isFinite(createdAt) || (params.nowMs ?? Date.now()) - createdAt > params.staleMs;
+}

@@ -315,10 +315,21 @@ const EXEC_APPROVALS_LOCK_OPTIONS = {
     randomize: true,
   },
   stale: 30_000,
+  // Approval policy is an authorization boundary. A pathname recheck followed
+  // by stale-lock unlink cannot prove that a fresh owner was not substituted.
+  staleRecovery: "fail-closed",
 } as const;
 const EXEC_APPROVALS_LOCK_QUEUE = resolveGlobalMap<string, Promise<unknown>>(
   Symbol.for("openclaw.execApprovalsLockQueue"),
 );
+let execApprovalsProcessStartTime: number | null | undefined;
+
+function getExecApprovalsProcessStartTime(): number | null {
+  if (execApprovalsProcessStartTime === undefined) {
+    execApprovalsProcessStartTime = getFileLockProcessStartTime(process.pid);
+  }
+  return execApprovalsProcessStartTime;
+}
 const EXEC_APPROVALS_SYNC_LOCK_RETRIES = 10;
 const EXEC_APPROVALS_SYNC_LOCK_RETRY_MS = 20;
 
@@ -569,6 +580,11 @@ function ensureDir(filePath: string) {
     }
   }
   return dir;
+}
+
+function resolveCanonicalExecApprovalsTarget(filePath: string): string {
+  const dir = ensureDir(filePath);
+  return path.join(fs.realpathSync(dir), path.basename(filePath));
 }
 
 function assertNoExecApprovalsSymlinkParents(targetPath: string, trustedRoot: string): void {
@@ -1155,15 +1171,14 @@ function removeOwnedExecApprovalsLock(
 }
 
 function acquireExecApprovalsLockSync(filePath: string): ExecApprovalsSyncLock {
-  const dir = ensureDir(filePath);
-  const normalizedTarget = path.join(fs.realpathSync(dir), path.basename(filePath));
+  const normalizedTarget = resolveCanonicalExecApprovalsTarget(filePath);
   const lockPath = `${normalizedTarget}.lock`;
   const payload: Record<string, unknown> = {
     pid: process.pid,
     createdAt: new Date().toISOString(),
     nonce: crypto.randomUUID(),
   };
-  const starttime = getFileLockProcessStartTime(process.pid);
+  const starttime = getExecApprovalsProcessStartTime();
   if (starttime !== null) {
     payload.starttime = starttime;
   }
@@ -1304,7 +1319,10 @@ function enqueueExecApprovalsLock<T>(filePath: string, fn: () => Promise<T>): Pr
 }
 
 async function withExecApprovalsLock<T>(fn: () => Promise<T>): Promise<T> {
-  const filePath = resolveExecApprovalsPath();
+  // Harden and canonicalize before entering either lock layer. This prevents a
+  // symlinked state component from redirecting the sidecar and secures the
+  // directory even when the guarded update becomes a no-op or loses its CAS.
+  const filePath = resolveCanonicalExecApprovalsTarget(resolveExecApprovalsPath());
   return await enqueueExecApprovalsLock(filePath, async () =>
     withFileLock(filePath, EXEC_APPROVALS_LOCK_OPTIONS, fn),
   );

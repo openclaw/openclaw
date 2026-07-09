@@ -5,7 +5,10 @@ import {
   drainFileLockManagerForTest,
   resetFileLockManagerForTest,
 } from "@openclaw/fs-safe/file-lock";
-import { isLockOwnerDefinitelyStale } from "../infra/stale-lock-file.js";
+import {
+  isLockOwnerDefinitelyStale,
+  shouldRemoveDeadOwnerOrExpiredLock,
+} from "../infra/stale-lock-file.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 
 /** Retry and stale-recovery policy for acquiring a filesystem lock. */
@@ -20,6 +23,8 @@ export type FileLockOptions = {
   };
   /** Milliseconds used to classify contended sidecars as stale. */
   stale: number;
+  /** Fail closed for security-sensitive state; generic locks retain shipped stale recovery. */
+  staleRecovery?: "fail-closed" | "remove-if-unchanged";
 };
 
 /** Live file-lock handle returned after successful acquisition. */
@@ -52,16 +57,13 @@ export type FileLockStaleError = Error & {
 };
 
 const FILE_LOCK_MANAGER_KEY = "openclaw.plugin-sdk.file-lock";
+let currentProcessStartTime: number | null | undefined;
 
-function shouldReclaimPluginLock(params: {
-  lockPath: string;
-  payload: Record<string, unknown> | null;
-  staleMs: number;
-  nowMs: number;
-}): boolean {
-  return isLockOwnerDefinitelyStale({
-    payload: params.payload,
-  });
+function getCurrentProcessStartTime(): number | null {
+  if (currentProcessStartTime === undefined) {
+    currentProcessStartTime = getFileLockProcessStartTime(process.pid);
+  }
+  return currentProcessStartTime;
 }
 
 function normalizeLockError(err: unknown): never {
@@ -95,27 +97,42 @@ export async function acquireFileLock(
   filePath: string,
   options: FileLockOptions,
 ): Promise<FileLockHandle> {
+  const staleRecovery = options.staleRecovery ?? "remove-if-unchanged";
   try {
     const lock = await acquireFsSafeFileLock(filePath, {
       managerKey: FILE_LOCK_MANAGER_KEY,
       staleMs: options.stale,
       retry: options.retries,
-      // Path-based check-then-unlink cannot prove the pathname still names the
-      // observed inode. Dead-owner locks therefore fail closed for manual repair.
-      staleRecovery: "fail-closed",
+      staleRecovery,
       allowReentrant: true,
       payload: () => {
         const payload: Record<string, unknown> = {
           pid: process.pid,
           createdAt: new Date().toISOString(),
         };
-        const starttime = getFileLockProcessStartTime(process.pid);
+        const starttime = getCurrentProcessStartTime();
         if (starttime !== null) {
           payload.starttime = starttime;
         }
         return payload;
       },
-      shouldReclaim: shouldReclaimPluginLock,
+      shouldReclaim: (params) =>
+        staleRecovery === "fail-closed"
+          ? isLockOwnerDefinitelyStale({ payload: params.payload })
+          : shouldRemoveDeadOwnerOrExpiredLock({
+              payload: params.payload,
+              staleMs: params.staleMs,
+              nowMs: params.nowMs,
+            }),
+      ...(staleRecovery === "remove-if-unchanged"
+        ? {
+            shouldRemoveStaleLock: (snapshot: { payload: Record<string, unknown> | null }) =>
+              shouldRemoveDeadOwnerOrExpiredLock({
+                payload: snapshot.payload,
+                staleMs: options.stale,
+              }),
+          }
+        : {}),
     });
     return { lockPath: lock.lockPath, release: lock.release };
   } catch (err) {
