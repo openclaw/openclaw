@@ -1,9 +1,9 @@
 // Diagnostic stability bundle helpers collect stable diagnostic data for comparison.
 import fs from "node:fs";
 import path from "node:path";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import process from "node:process";
 import v8 from "node:v8";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import type {
   DiagnosticMemoryPressureEvent,
