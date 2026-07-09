@@ -66,6 +66,7 @@ import type {
   ChannelPlugin,
 } from "../channels/plugins/types.public.js";
 import { createReplyPrefixContext } from "../channels/reply-prefix.js";
+import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   listDueCommitmentsForSession,
   listDueCommitmentSessionKeys,
@@ -1426,6 +1427,20 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: "disabled" };
   }
   if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
+    const every = heartbeat?.every ?? cfg.agents?.defaults?.heartbeat?.every;
+    if (every) {
+      try {
+        const parsed = parseDurationMs(every, { defaultUnit: "m" });
+        if (parsed === 0) {
+          log.warn(
+            `heartbeat: interval "${every}" resolves to 0ms — heartbeat is disabled. ` +
+              `If this is unintentional, set a positive interval (e.g. "30m").`,
+          );
+        }
+      } catch {
+        // parse error already handled by config validation
+      }
+    }
     return { status: "skipped", reason: "disabled" };
   }
 

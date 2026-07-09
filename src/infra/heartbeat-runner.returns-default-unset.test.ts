@@ -737,6 +737,23 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it.each(["0s", "0m", "0h", "0d", "00ms"])(
+    "skips heartbeat when interval resolves to zero: %s",
+    async (every) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { heartbeat: { every } },
+        },
+      };
+
+      const res = await runHeartbeatOnce({ cfg });
+      expect(res.status).toBe("skipped");
+      if (res.status === "skipped") {
+        expect(res.reason).toBe("disabled");
+      }
+    },
+  );
+
   it.each([
     ["the heartbeat main session", (cfg: OpenClawConfig) => resolveMainSessionKey(cfg)],
     ["another session for the same agent", () => "agent:main:telegram:alerts"],

@@ -411,6 +411,14 @@ describe("agent defaults schema", () => {
     );
   });
 
+  it.each(["0s", "0m", "0h", "0d", "00ms"])(
+    "accepts zero heartbeat every interval as valid (intentional disable): %s",
+    (every) => {
+      expectSchemaSuccess(AgentDefaultsSchema.safeParse({ heartbeat: { every } }));
+      expectSchemaSuccess(AgentEntrySchema.safeParse({ id: "ops", heartbeat: { every } }));
+    },
+  );
+
   it("preserves per-agent contextTokens through config validation", () => {
     const result = validateConfigObject({
       agents: {
