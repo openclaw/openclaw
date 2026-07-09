@@ -9,6 +9,7 @@ import {
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
 import type { ChatScope } from "../types.js";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { debugLog } from "./log.js";
 
 interface CacheEntry {
@@ -55,7 +56,7 @@ export function getCachedFileInfo(
     return null;
   }
 
-  debugLog(`[upload-cache] Cache HIT: key=${key.slice(0, 40)}..., fileUuid=${entry.fileUuid}`);
+  debugLog(`[upload-cache] Cache HIT: key=${truncateUtf16Safe(key, 40)}..., fileUuid=${entry.fileUuid}`);
   return entry.fileInfo;
 }
 
@@ -100,6 +101,6 @@ export function setCachedFileInfo(
   });
 
   debugLog(
-    `[upload-cache] Cache SET: key=${key.slice(0, 40)}..., ttl=${effectiveTtl}s, uuid=${fileUuid}`,
+    `[upload-cache] Cache SET: key=${truncateUtf16Safe(key, 40)}..., ttl=${effectiveTtl}s, uuid=${fileUuid}`,
   );
 }
