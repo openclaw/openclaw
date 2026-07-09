@@ -207,7 +207,6 @@ function partialReport(): JsonObject {
         state: { id: STATE },
         status: "PASS",
         surface: SURFACE,
-        violations: [],
       },
     ],
     schemaVersion: "kova.report.v1",
@@ -805,6 +804,10 @@ describe("scripts/lib/kova-report-gate.mjs", () => {
     [
       "rejects PARTIAL records with violations",
       (report) => setAt(report, ["records", 0, "violations"], [{}]),
+    ],
+    [
+      "rejects PARTIAL records with null violations",
+      (report) => setAt(report, ["records", 0, "violations"], null),
     ],
     [
       "rejects PARTIAL reports without sampled RSS",

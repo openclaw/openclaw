@@ -83,14 +83,14 @@ jobs:
             repeat: input
             deep_profile: "false"
             live: "false"
-            include_filters: "scenario:fresh-install scenario:gateway-performance scenario:bundled-plugin-startup scenario:bundled-runtime-deps scenario:agent-cold-warm-message"
+            include_filters: "scenario:fresh-install,scenario:gateway-performance,scenario:bundled-plugin-startup,scenario:bundled-runtime-deps,scenario:agent-cold-warm-message"
           - lane: mock-deep-profile
             title: Kova mock provider deep profile
             auth: mock
             repeat: "1"
             deep_profile: "true"
             live: "false"
-            include_filters: "scenario:fresh-install scenario:gateway-performance scenario:agent-cold-warm-message"
+            include_filters: "scenario:fresh-install,scenario:gateway-performance,scenario:agent-cold-warm-message"
           - lane: live-openai-candidate
             title: Kova live OpenAI GPT 5.5 agent turn
             auth: live
@@ -344,9 +344,7 @@ jobs:
             --json
           )
 
-          for filter in $INCLUDE_FILTERS; do
-            args+=(--include "$filter")
-          done
+          args+=(--include "$INCLUDE_FILTERS")
 
           if [[ "$MATRIX_DEEP_PROFILE" == "true" ]]; then
             args+=(--deep-profile)
