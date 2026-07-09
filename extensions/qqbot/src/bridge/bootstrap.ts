@@ -76,6 +76,7 @@ function createBuiltinAdapter(): PlatformAdapter {
         filePathHint: options.filePathHint,
         maxBytes: options.maxBytes,
         maxRedirects: options.maxRedirects,
+        timeoutMs: options.timeoutMs,
         ssrfPolicy: options.ssrfPolicy,
         requestInit: options.requestInit,
       });
