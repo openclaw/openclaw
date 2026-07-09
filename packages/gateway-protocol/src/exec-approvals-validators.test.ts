@@ -45,6 +45,33 @@ describe("exec approvals protocol validators", () => {
     ).toBe(true);
   });
 
+  it("accepts fractional timestamps from Mac App node snapshots", () => {
+    const file = {
+      version: 1 as const,
+      agents: {
+        main: {
+          allowlist: [
+            {
+              id: "entry-1",
+              pattern: "/usr/bin/python3",
+              lastUsedAt: 1775154056736.789,
+              lastUsedCommand: "python3 -c 'print(123)'",
+            },
+          ],
+        },
+      },
+    };
+
+    expect(validateExecApprovalsSetParams({ file, baseHash: "abc123" })).toBe(true);
+    expect(
+      validateExecApprovalsNodeSetParams({
+        nodeId: "mac-node-1",
+        file,
+        baseHash: "abc123",
+      }),
+    ).toBe(true);
+  });
+
   it("accepts the shipped Windows node approval contract", () => {
     expect(
       validateExecApprovalsNodeSnapshot({
