@@ -585,6 +585,40 @@ describe("node surface approvals", () => {
     });
   });
 
+  test("keeps the approved node surface across a device pairing re-approval", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      const pendingSurface = await requestNodePairing(
+        {
+          nodeId: "node-1",
+          platform: "darwin",
+          commands: ["system.run", "canvas.snapshot"],
+        },
+        baseDir,
+      );
+
+      // A device repair (same id, fresh keypair) rebuilds the paired record;
+      // approved and pending node surfaces must survive that rebuild.
+      const repair = await requestDevicePairing(
+        {
+          deviceId: "node-1",
+          publicKey: "pk-node-1-rotated",
+          role: "node",
+          roles: ["node"],
+          scopes: [],
+        },
+        baseDir,
+      );
+      await approveDevicePairing(repair.request.requestId, { callerScopes: [] }, baseDir);
+
+      const paired = await findPairedNode("node-1", baseDir);
+      expect(paired?.commands).toEqual(["system.run"]);
+      const pending = (await listNodePairing(baseDir)).pending;
+      expect(pending).toHaveLength(1);
+      expect(pending[0]?.requestId).toBe(pendingSurface.request.requestId);
+    });
+  });
+
   test("renames the operator-facing node name without touching approval state", async () => {
     await withNodePairingDir(async (baseDir) => {
       await setupPairedNode(baseDir);

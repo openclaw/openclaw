@@ -675,6 +675,12 @@ function buildApprovedPairedDevice(params: {
     remoteIp: params.accessMetadata?.remoteIp ?? params.pending.remoteIp,
     tokens: params.tokens,
     approvedVia: mergeApprovalKind(params.existing, params.approvedVia),
+    // Node capability approvals ride on the device record; device repair or
+    // role re-approval must not silently revoke an approved node surface.
+    ...(params.existing?.nodeSurface ? { nodeSurface: params.existing.nodeSurface } : {}),
+    ...(params.existing?.pendingNodeSurface
+      ? { pendingNodeSurface: params.existing.pendingNodeSurface }
+      : {}),
     createdAtMs: params.existing?.createdAtMs ?? params.now,
     approvedAtMs: params.now,
     lastSeenAtMs: params.accessMetadata?.lastSeenAtMs ?? params.existing?.lastSeenAtMs,

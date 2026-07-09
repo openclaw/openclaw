@@ -541,7 +541,13 @@ export function registerNodesStatusCommands(nodes: Command) {
           if (opts.json) {
             defaultRuntime.writeJson({
               pending: pendingRows,
-              paired: filteredPaired,
+              // Current gateways emit no token, but the permissive parser keeps
+              // unknown fields; strip so an older gateway's legacy node token
+              // never reaches JSON output.
+              paired: filteredPaired.map((row) => {
+                const { token: _token, ...rest } = row as { token?: unknown };
+                return rest;
+              }),
             });
             return;
           }
