@@ -4,6 +4,7 @@
  * plugin hook decisions.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import {
   EmbeddedPluginApprovalBroker,
@@ -96,6 +97,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     setEmbeddedPluginApprovalBroker(null);
     setEmbeddedMode(false);
     setActivePluginRegistry(createEmptyPluginRegistry());
+    clearRuntimeConfigSnapshot();
     resetGlobalHookRunner();
   });
 
@@ -665,6 +667,33 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(result).toEqual({
       blocked: false,
       params: { action: "reject", proposal_id: "weather-20260530-a1b2c3d4e5" },
+    });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(runBeforeToolCallMock).not.toHaveBeenCalled();
+  });
+
+  it("uses runtime skill_workshop approval policy when hook context has no config", async () => {
+    (hookRunner.hasHooks as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    setRuntimeConfigSnapshot({
+      skills: {
+        workshop: {
+          approvalPolicy: "auto",
+        },
+      },
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "skill_workshop",
+      params: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+      },
+    });
+
+    expect(result).toEqual({
+      blocked: false,
+      params: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
     });
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
     expect(runBeforeToolCallMock).not.toHaveBeenCalled();

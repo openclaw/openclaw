@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -20,6 +21,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await testState.cleanup();
   await tempDirs.cleanup();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("resolveSkillWorkshopToolApproval", () => {
@@ -145,5 +147,36 @@ describe("resolveSkillWorkshopToolApproval", () => {
     expect(withoutWorkspace?.requireApproval?.description).toBe(
       "Apply a pending workspace skill proposal into live workspace skills.",
     );
+  });
+
+  it("falls back to runtime config when explicit hook config is unavailable", async () => {
+    setRuntimeConfigSnapshot({
+      skills: {
+        workshop: {
+          approvalPolicy: "auto",
+        },
+      },
+    });
+
+    const autoResult = await resolveSkillWorkshopToolApproval({
+      toolName: "skill_workshop",
+      toolParams: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
+    });
+
+    expect(autoResult).toBeUndefined();
+
+    const explicitPendingResult = await resolveSkillWorkshopToolApproval({
+      toolName: "skill_workshop",
+      toolParams: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
+      config: {
+        skills: {
+          workshop: {
+            approvalPolicy: "pending",
+          },
+        },
+      },
+    });
+
+    expect(explicitPendingResult?.requireApproval?.title).toBe("Apply workspace skill proposal");
   });
 });

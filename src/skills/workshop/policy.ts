@@ -1,5 +1,6 @@
 // Workshop policy helpers validate generated skill drafts against workspace policy.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH } from "../../infra/plugin-approvals.js";
 import type { PluginHookBeforeToolCallResult } from "../../plugins/hook-before-tool-call-result.js";
@@ -154,7 +155,11 @@ export async function resolveSkillWorkshopToolApproval(params: {
   if (!action) {
     return undefined;
   }
-  const config = resolveSkillWorkshopConfig(params.config);
+  let rawConfig = params.config;
+  try {
+    rawConfig ??= getRuntimeConfig();
+  } catch {}
+  const config = resolveSkillWorkshopConfig(rawConfig);
   if (config.approvalPolicy === "auto") {
     return undefined;
   }
