@@ -279,7 +279,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     sessionKey: props.sessionKey,
     sessionsResult: props.sessionsResult,
   });
-  const fastMode = resolveChatFastModeSelectState({
+  const fastModeSelect = resolveChatFastModeSelectState({
     activeRunId: props.activeRunId,
     catalog: props.modelCatalog,
     connected: props.connected,
@@ -291,6 +291,10 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     sessionsResult: props.sessionsResult,
     stream: props.stream,
   });
+  // Reasoning/speed state derives from the session row, which still describes
+  // the previous model while a switch is pending; keep both locked until the
+  // refreshed session list lands so stale levels cannot be committed.
+  const fastMode = props.modelSwitching ? { ...fastModeSelect, disabled: true } : fastModeSelect;
   const activeSession = props.sessionsResult?.sessions.find((row) => row.key === props.sessionKey);
   const currentProviderHint = activeSession?.modelProvider ?? "";
   const defaultProviderHint = props.sessionsResult?.defaults?.modelProvider ?? "";
@@ -352,6 +356,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const thinkingDisabled =
     !props.connected ||
     busy ||
+    props.modelSwitching ||
     !props.gatewayAvailable ||
     (thinking.options.length === 0 && thinking.currentOverride === "");
   return renderChatModelReasoningSelect({

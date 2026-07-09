@@ -3708,6 +3708,44 @@ describe("chat model controls", () => {
     expect(fastButton?.getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("locks reasoning and speed while a model switch is pending", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      models: [
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+      ],
+      thinkingDefault: "high",
+    });
+    state.sessionsResult = createSessionsListResult({
+      defaultsModel: "gpt-5.5",
+      defaultsProvider: "openai",
+      defaultsThinkingDefault: "high",
+      defaultsThinkingLevels: [
+        { id: "low", label: "low" },
+        { id: "high", label: "high" },
+      ],
+    });
+    const container = document.createElement("div");
+    render(
+      renderChatModelControls({
+        ...createChatModelControlsProps(state),
+        modelSwitching: true,
+      }),
+      container,
+    );
+
+    // The session row still describes the previous model while the switch is
+    // pending, so committing reasoning/speed then would target stale levels.
+    expect(getThinkingSlider(container)?.disabled).toBe(true);
+    const speedButtons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]"),
+    );
+    expect(speedButtons.length).toBeGreaterThan(0);
+    expect(speedButtons.every((button) => button.disabled)).toBe(true);
+  });
+
   it("renders the committed model selection when a model switch fails", async () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
