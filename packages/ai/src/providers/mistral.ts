@@ -1,5 +1,6 @@
 // Mistral provider adapts Mistral streams and tool calls to the runtime.
 import { HTTPClient, Mistral, type Fetcher } from "@mistralai/mistralai";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   ChatCompletionStreamRequest,
   ChatCompletionStreamRequestMessage,
@@ -295,7 +296,7 @@ function truncateErrorText(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
   }
-  return `${text.slice(0, maxChars)}... [truncated ${text.length - maxChars} chars]`;
+  return `${truncateUtf16Safe(text, maxChars)}... [truncated ${text.length - maxChars} chars]`;
 }
 
 function safeJsonStringify(value: unknown): string {
