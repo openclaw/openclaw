@@ -209,7 +209,6 @@ export const fr: TranslationMap = {
     globalTooltip: "Inclure les sessions globales.",
     unknownTooltip: "Inclure les sessions inconnues.",
     archivedOnlyTooltip: "Afficher uniquement les sessions archivées.",
-    liveCount: "{count} live",
     minutesPlaceholder: "min",
     searchPlaceholder: "Filtrer par clé, agent, libellé, type…",
     selected: "{count} sélectionné(s)",
@@ -251,6 +250,9 @@ export const fr: TranslationMap = {
     tokenRange: "{before} to {after} tokens",
     tokensBefore: "{count} tokens avant",
     tokenDeltaUnavailable: "delta de tokens indisponible",
+    contextUsage: "{percent} % du contexte utilisé ({used} / {context} jetons)",
+    contextUsageApprox:
+      "~{percent} % du contexte utilisé ({used} / {context} tokens, approximatif)",
     checkpoints: "{count} points de contrôle",
     checkpoint: "{count} point de contrôle",
     showSessionDetails: "Afficher les détails de la session pour {count}",

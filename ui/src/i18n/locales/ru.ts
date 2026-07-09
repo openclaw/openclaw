@@ -207,7 +207,6 @@ export const ru: TranslationMap = {
     globalTooltip: "Включить глобальные сеансы.",
     unknownTooltip: "Включить неизвестные сеансы.",
     archivedOnlyTooltip: "Показывать только архивные сеансы.",
-    liveCount: "{count} live",
     minutesPlaceholder: "мин",
     searchPlaceholder: "Фильтр по ключу, агенту, метке, типу…",
     selected: "Выбрано: {count}",
@@ -249,6 +248,9 @@ export const ru: TranslationMap = {
     tokenRange: "от {before} до {after} токенов",
     tokensBefore: "{count} токенов до",
     tokenDeltaUnavailable: "дельта токенов недоступна",
+    contextUsage: "Использовано {percent}% контекста ({used} / {context} токенов)",
+    contextUsageApprox:
+      "Использовано ~{percent}% контекста ({used} / {context} токенов, приблизительно)",
     checkpoints: "{count} контрольных точек",
     checkpoint: "{count} контрольная точка",
     showSessionDetails: "Показать сведения о сеансе для {count}",
