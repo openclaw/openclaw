@@ -190,7 +190,7 @@ export function buildMatrixReplyArtifact(
 ): MatrixQaReplyArtifact {
   const replyBody = event.body?.trim();
   return {
-    bodyPreview: replyBody ? truncateUtf16Safe(replyBody, 200) : undefined,
+    bodyPreview: replyBody === undefined ? undefined : truncateUtf16Safe(replyBody, 200),
     eventId: event.eventId,
     mentions: event.mentions,
     relatesTo: event.relatesTo,
