@@ -530,6 +530,24 @@ async function authorizeGatewayConnectCore(
     return { ok: false, reason: result.reason };
   }
 
+  // Reject browser requests with a disallowed Origin under any auth mode before
+  // the none-mode success return, matching the WebSocket ingress invariant that
+  // checks any present Origin header independent of auth mode. Only applies to
+  // the HTTP surface (WS has its own origin check in message-handler.ts:881).
+  // Origin-less requests (headless proxy clients, curl, scripts) are unaffected.
+  if (authSurface === "http" && params.browserOriginPolicy?.origin) {
+    const originCheck = checkBrowserOrigin({
+      requestHost: params.browserOriginPolicy.requestHost,
+      origin: params.browserOriginPolicy.origin,
+      allowedOrigins: params.browserOriginPolicy.allowedOrigins,
+      allowHostHeaderOriginFallback: params.browserOriginPolicy.allowHostHeaderOriginFallback,
+      isLocalClient: localDirect,
+    });
+    if (!originCheck.ok) {
+      return { ok: false, reason: "origin_not_allowed" };
+    }
+  }
+
   if (auth.mode === "none") {
     return { ok: true, method: "none" };
   }
