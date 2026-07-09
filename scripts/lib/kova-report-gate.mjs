@@ -142,10 +142,6 @@ function validateRecord(recordValue) {
   return record;
 }
 
-function recordViolations(record) {
-  return record.violations === undefined ? [] : array(record.violations, "record violations");
-}
-
 function validateTargetCleanup(report) {
   if (!text(report.target, "report target").startsWith("local-build:")) {
     check(report.targetCleanup === null, "non-local target had cleanup metadata");
