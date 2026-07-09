@@ -728,9 +728,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
         if (shouldDeliverText) {
           if (info?.kind === "block") {
-            const sendIndependentBlockText = async () => {
+            const sendIndependentBlockText = async (): Promise<boolean> => {
               if (!coreBlockStreamingEnabled) {
-                return;
+                return false;
               }
               const isFirstBlock = !sentIndependentBlockText;
               await sendChunkedTextReply({
@@ -756,6 +756,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               if (hasMedia) {
                 await sendMediaReplies(payload);
               }
+              return true;
             };
             // Drop internal block chunks unless we can safely consume them as
             // streaming-card fallback content or send them as independent
@@ -765,8 +766,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               return;
             }
             if (!(await startStreaming())) {
-              await sendIndependentBlockText();
-              return;
+              if (await sendIndependentBlockText()) {
+                return;
+              }
             }
           }
 
