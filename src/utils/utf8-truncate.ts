@@ -11,6 +11,13 @@ function isContinuationByte(byte: number | undefined): boolean {
  * never yields a trailing U+FFFD. Handles both a hard byte cap and an input Buffer
  * that was already byte-sliced mid-sequence upstream.
  */
+/**
+ * Returns the number of leading bytes of `bytes` that form a complete UTF-8
+ * prefix within a `maxBytes` byte budget. `maxBytes` is a byte (not character)
+ * limit; the result is the largest offset <= maxBytes that does not split a
+ * multibyte sequence, so `bytes.subarray(0, result).toString("utf8")` never
+ * ends in U+FFFD.
+ */
 function completeUtf8PrefixLength(bytes: Buffer, maxBytes: number): number {
   const end = Math.min(maxBytes, bytes.byteLength);
   if (end <= 0) {
