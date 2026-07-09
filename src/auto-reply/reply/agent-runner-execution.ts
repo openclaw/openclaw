@@ -2565,6 +2565,7 @@ async function runAgentTurnWithFallbackInternal(
                     skillsSnapshot: params.followupRun.run.skillsSnapshot,
                     messageChannel: params.followupRun.originatingChannel ?? undefined,
                     messageProvider: hookMessageProvider,
+                    clientCaps: params.followupRun.run.clientCaps,
                     currentChannelId:
                       params.followupRun.originatingTo ??
                       params.sessionCtx.OriginatingTo ??

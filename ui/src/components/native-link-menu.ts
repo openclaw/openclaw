@@ -1,15 +1,12 @@
-import { LitElement, html } from "lit";
+import { html } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
+import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 
 export type NativeLinkMenuAction = "inline" | "external" | "copy";
 
-export class NativeLinkMenu extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+export class NativeLinkMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) x = 0;
   @property({ attribute: false }) y = 0;
   @property({ attribute: false }) trigger: HTMLAnchorElement | null = null;
