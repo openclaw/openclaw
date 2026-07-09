@@ -42,6 +42,7 @@ import {
   isRateLimitErrorMessage,
   isTransientHttpError,
 } from "../../agents/embedded-agent-helpers.js";
+import { isPeriodicUsageLimitErrorMessage } from "../../agents/embedded-agent-helpers/failover-matches.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
 import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
@@ -685,7 +686,18 @@ function buildRateLimitCooldownMessage(err: unknown): string {
     return BILLING_ERROR_USER_MESSAGE;
   }
   if (!isFallbackSummaryError(err)) {
-    return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
+    // A raw (non-FallbackSummaryError) FailoverError has no numeric cooldown. For periodic
+    // (daily/weekly/monthly) usage limits specifically, the provider's own message already
+    // carries the actual reset wording (e.g. "resets 6pm (UTC)") — prefer that over the
+    // generic "try again in a few minutes" copy, which is misleading for ~10h+ limits
+    // (#102598). Plain transient rate-limit/overload errors keep the generic copy.
+    const periodicLimitCopy = isPeriodicUsageLimitErrorMessage(message)
+      ? formatRateLimitOrOverloadedErrorCopy(message)
+      : undefined;
+    return (
+      periodicLimitCopy ??
+      "⚠️ All models are temporarily rate-limited. Please try again in a few minutes."
+    );
   }
   const expiry = err.soonestCooldownExpiry;
   const now = Date.now();

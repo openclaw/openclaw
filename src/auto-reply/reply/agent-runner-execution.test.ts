@@ -173,6 +173,12 @@ vi.mock("../../agents/embedded-agent-helpers.js", async () => {
       if (/model\s+(?:is\s+)?at capacity/i.test(message)) {
         return "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
       }
+      // Periodic (daily/weekly/monthly) usage-limit copy carries the provider's own reset
+      // wording (e.g. "resets 6pm (UTC)") and should pass through, mirroring the real
+      // extractProviderRateLimitMessage behavior (#102598).
+      if (/\b(?:daily|weekly|monthly)\s+(?:usage\s+)?limit/i.test(message)) {
+        return `⚠️ ${message}`;
+      }
       if (/rate.limit|too many requests|429/i.test(message)) {
         return "⚠️ API rate limit reached. Please try again later.";
       }
@@ -7354,6 +7360,10 @@ describe("runAgentTurnWithFallback", () => {
       if (result.kind === "final") {
         expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
         expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+        // The provider's actual reset wording should pass through instead of the generic
+        // "try again in a few minutes" copy, which is misleading for a ~10h weekly limit.
+        expect(result.payload.text).toContain("resets 6pm (UTC)");
+        expect(result.payload.text).not.toContain("try again in a few minutes");
       }
     },
   );

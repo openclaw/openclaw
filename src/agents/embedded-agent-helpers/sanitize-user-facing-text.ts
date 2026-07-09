@@ -30,6 +30,7 @@ import { stableStringify } from "../stable-stringify.js";
 import {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
+  isPeriodicUsageLimitErrorMessage,
   isRateLimitErrorMessage,
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
@@ -95,7 +96,7 @@ const HTTP_ERROR_HINTS = [
   "permission",
 ];
 const RATE_LIMIT_SPECIFIC_HINT_RE =
-  /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again in\b|\breset\b|\bplan\b|\bquota\b/i;
+  /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again in\b|\bresets?\b|\bplan\b|\bquota\b/i;
 const MODEL_CAPACITY_ERROR_RE = /\b(?:selected\s+)?model\s+(?:is\s+)?at capacity\b/i;
 const NON_ERROR_PROVIDER_PAYLOAD_MAX_LENGTH = 16_384;
 const NON_ERROR_PROVIDER_PAYLOAD_PREFIX_RE = /^codex\s*error(?:\s+\d{3})?[:\s-]+/i;
@@ -130,7 +131,10 @@ export function formatRateLimitOrOverloadedErrorCopy(raw: string): string | unde
   if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
     return MODEL_CAPACITY_ERROR_USER_MESSAGE;
   }
-  const isRateLimit = isRateLimitErrorMessage(raw);
+  // Periodic (daily/weekly/monthly) usage-limit copy doesn't match the generic
+  // rate-limit text patterns, but it still carries actionable provider reset
+  // wording (e.g. "resets 6pm (UTC)") that's worth preserving (#102598).
+  const isRateLimit = isRateLimitErrorMessage(raw) || isPeriodicUsageLimitErrorMessage(raw);
   if (isRateLimit) {
     const providerMessage = extractProviderRateLimitMessage(raw);
     if (providerMessage) {
