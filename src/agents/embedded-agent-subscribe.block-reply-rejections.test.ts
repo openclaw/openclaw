@@ -61,4 +61,35 @@ describe("subscribeEmbeddedAgentSession block reply rejections", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(unhandledRejections).toHaveLength(0);
   });
+
+  it("contains rejected assistant progress callbacks", async () => {
+    process.on("unhandledRejection", onUnhandledRejection);
+    const rejectedCallback = vi.fn().mockRejectedValue(new Error("boom"));
+    const { emit } = createSubscribedSessionHarness({
+      runId: "run",
+      onAgentEvent: rejectedCallback,
+      onPartialReply: rejectedCallback,
+      onAssistantMessageStart: rejectedCallback,
+      onReasoningStream: rejectedCallback,
+      onReasoningEnd: rejectedCallback,
+      reasoningMode: "stream",
+    });
+
+    emitMessageStartAndEndForAssistantText({ emit, text: "Hello" });
+    emitAssistantTextDelta({ emit, delta: "Hello" });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "thinking_delta", delta: "Because" },
+    });
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "thinking_end" },
+    });
+    await waitForAsyncCallbacks();
+
+    expect(rejectedCallback).toHaveBeenCalled();
+    expect(unhandledRejections).toHaveLength(0);
+  });
 });

@@ -220,7 +220,29 @@ function emitReasoningEnd(ctx: EmbeddedAgentSubscribeContext) {
     return;
   }
   ctx.state.reasoningStreamOpen = false;
-  void ctx.params.onReasoningEnd?.();
+  try {
+    const result = ctx.params.onReasoningEnd?.();
+    if (isPromiseLike<void>(result)) {
+      void Promise.resolve(result).catch((error: unknown) => {
+        ctx.log.warn(`reasoning end callback failed: ${String(error)}`);
+      });
+    }
+  } catch (error) {
+    ctx.log.warn(`reasoning end callback failed: ${String(error)}`);
+  }
+}
+
+function emitAssistantMessageStart(ctx: EmbeddedAgentSubscribeContext) {
+  try {
+    const result = ctx.params.onAssistantMessageStart?.();
+    if (isPromiseLike<void>(result)) {
+      void Promise.resolve(result).catch((error: unknown) => {
+        ctx.log.warn(`assistant message start callback failed: ${String(error)}`);
+      });
+    }
+  } catch (error) {
+    ctx.log.warn(`assistant message start callback failed: ${String(error)}`);
+  }
 }
 
 function openReasoningStream(ctx: EmbeddedAgentSubscribeContext) {
@@ -652,7 +674,7 @@ export function handleMessageStart(
   // re-trigger block replies.
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
   // Use assistant message_start as the earliest "writing" signal for typing.
-  void ctx.params.onAssistantMessageStart?.();
+  emitAssistantMessageStart(ctx);
 }
 
 /** Handles assistant message deltas, reasoning, directives, and block replies. */
@@ -791,7 +813,7 @@ export function handleMessageUpdate(
       streamItemChanged = true;
       void ctx.flushBlockReplyBuffer({ assistantMessageIndex: ctx.state.assistantMessageIndex });
       ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
-      void ctx.params.onAssistantMessageStart?.();
+      emitAssistantMessageStart(ctx);
     }
     ctx.state.lastAssistantStreamItemId = streamItemId;
   }

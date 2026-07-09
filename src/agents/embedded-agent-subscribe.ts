@@ -268,6 +268,18 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const pendingBlockReplyTasks = new Set<Promise<void>>();
   const replyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
+  const runBestEffortCallback = (label: string, callback: () => void | Promise<void>) => {
+    try {
+      const result = callback();
+      if (isPromiseLike<void>(result)) {
+        void Promise.resolve(result).catch((error: unknown) => {
+          log.warn(`${label} callback failed: ${String(error)}`);
+        });
+      }
+    } catch (error) {
+      log.warn(`${label} callback failed: ${String(error)}`);
+    }
+  };
   const shouldAllowSilentTurnText = (text: string | undefined) =>
     Boolean(text && isSilentReplyText(text, SILENT_REPLY_TOKEN));
   const emitAssistantStreamDataSafely = (
@@ -279,12 +291,16 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       stream: "assistant",
       data,
     });
-    void params.onAgentEvent?.({
-      stream: "assistant",
-      data,
-    });
+    if (params.onAgentEvent) {
+      runBestEffortCallback("assistant agent event", () =>
+        params.onAgentEvent?.({
+          stream: "assistant",
+          data,
+        }),
+      );
+    }
     if (delivery.emitPartialReply && params.onPartialReply && state.shouldEmitPartialReplies) {
-      void params.onPartialReply(data);
+      runBestEffortCallback("assistant partial reply", () => params.onPartialReply?.(data));
     }
   };
   const emitAssistantStreamData = (
@@ -730,11 +746,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       return;
     }
     try {
-      void params.onToolResult({
-        text: parsed.text,
-        mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
-        ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
-      });
+      runBestEffortCallback("tool result", () =>
+        params.onToolResult?.({
+          text: parsed.text,
+          mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
+          ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
+        }),
+      );
     } catch {
       // ignore tool result delivery failures
     }
@@ -1210,10 +1228,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // render hook — uniformly, whether the thinking block rode in on a tool call
     // or arrived on its own. It still reaches the bus/archive above.
     if (state.streamReasoning && !hasMessageToolOnlySourceDelivery() && params.onReasoningStream) {
-      void params.onReasoningStream({
-        text: trimmed,
-        ...(state.reasoningMode === "stream" ? {} : { requiresReasoningProgressOptIn: true }),
-      });
+      runBestEffortCallback("reasoning stream", () =>
+        params.onReasoningStream?.({
+          text: trimmed,
+          ...(state.reasoningMode === "stream" ? {} : { requiresReasoningProgressOptIn: true }),
+        }),
+      );
     }
   };
 
