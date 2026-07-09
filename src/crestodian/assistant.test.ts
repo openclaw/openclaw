@@ -11,10 +11,6 @@ import {
 } from "./assistant.js";
 import type { CrestodianOverview } from "./overview.js";
 
-function hasDanglingSurrogate(value: string): boolean {
-  return /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
-}
-
 function overview(overrides: Partial<CrestodianOverview["tools"]> = {}): CrestodianOverview {
   return {
     config: {
@@ -136,40 +132,6 @@ describe("Crestodian assistant", () => {
     expect(prompt.slice(0, prompt.indexOf("User request:"))).toBe(
       `Conversation so far:\nUser: ${prefix}…\n\n`,
     );
-  });
-
-  it("raw slice would leave a lone high surrogate at the emoji boundary", () => {
-    const prefix = "a".repeat(499);
-    const text = `${prefix}🎉tail`;
-    // Prove the bug on main: raw slice(0, 500) splits the surrogate pair,
-    // leaving a lone high surrogate (0xD83C) at position 499.
-    const rawSlice = text.slice(0, 500);
-    expect(hasDanglingSurrogate(rawSlice)).toBe(true);
-    expect(rawSlice.charCodeAt(rawSlice.length - 1)).toBeGreaterThanOrEqual(0xd800);
-    expect(rawSlice.charCodeAt(rawSlice.length - 1)).toBeLessThanOrEqual(0xdbff);
-  });
-
-  it("truncateUtf16Safe produces no dangling surrogates in the prompt output", () => {
-    const prefix = "a".repeat(499);
-    const prompt = buildCrestodianAssistantUserPrompt({
-      input: "continue",
-      overview: overview(),
-      history: [{ role: "user", text: `${prefix}🎉tail` }],
-    });
-    expect(hasDanglingSurrogate(prompt)).toBe(false);
-  });
-
-  it("multi-emoji boundary: raw slice splits but truncateUtf16Safe does not", () => {
-    const prefix = "a".repeat(499);
-    const text = `${prefix}🎉🦀🐚tail`;
-    const rawSlice = text.slice(0, 500);
-    expect(hasDanglingSurrogate(rawSlice)).toBe(true);
-    const prompt = buildCrestodianAssistantUserPrompt({
-      input: "continue",
-      overview: overview(),
-      history: [{ role: "user", text }],
-    });
-    expect(hasDanglingSurrogate(prompt)).toBe(false);
   });
 
   it("uses Claude CLI first for configless planning", async () => {
