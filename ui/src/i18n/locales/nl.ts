@@ -287,6 +287,7 @@ export const nl: TranslationMap = {
     markUnread: "Mark as unread",
     markRead: "Mark as read",
     forkSession: "Fork",
+    openChat: "Chat openen",
     archiveSession: "Sessie archiveren",
     restoreSession: "Sessie herstellen",
     deleteSessionMenu: "Delete…",

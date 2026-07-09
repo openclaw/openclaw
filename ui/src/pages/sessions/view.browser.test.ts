@@ -127,7 +127,9 @@ function sessionsTableHtml() {
                       <span class="session-compaction-count">1</span>
                       <svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
                     </button>
-                    <button class="icon-btn" aria-label="Add to Workboard"></button>
+                    <button class="icon-btn" aria-label="Open session menu" aria-haspopup="menu">
+                      <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1" /></svg>
+                    </button>
                   </div>
                 </td>
               </tr>

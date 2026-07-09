@@ -285,6 +285,7 @@ export const fa: TranslationMap = {
     markUnread: "Mark as unread",
     markRead: "Mark as read",
     forkSession: "Fork",
+    openChat: "باز کردن چت",
     archiveSession: "بایگانی کردن نشست",
     restoreSession: "بازیابی نشست",
     deleteSessionMenu: "Delete…",
