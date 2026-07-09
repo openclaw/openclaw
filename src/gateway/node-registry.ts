@@ -174,7 +174,7 @@ function normalizeSystemRunInvokeParams(params: { command: string; params?: unkn
     return params.params;
   }
   const obj = params.params as Record<string, unknown>;
-  const normalized = {
+  const normalized: Record<string, unknown> = {
     ...obj,
     runId: normalizeString(obj.runId) || randomUUID(),
   };
