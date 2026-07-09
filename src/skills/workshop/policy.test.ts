@@ -74,14 +74,15 @@ describe("resolveSkillWorkshopToolApproval", () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-policy-long-name-");
     const description = "d".repeat(160);
     const content = "# Long name\n";
-    // Long proposal ids use a 60-character skill key, 8-character date, and 10-character suffix.
-    const fixedLength = [
-      `Proposal ID: ${"p".repeat(60)}-00000000-0000000000`,
-      "Target skill: ",
+    const proposalIdLength = 60 + 1 + 8 + 1 + 10;
+    const fixedLines = [
+      `Proposal ID: ${"p".repeat(proposalIdLength)}`,
       `Description: ${description}`,
       "Support files: 0",
       `Body size: ${(Buffer.byteLength(content, "utf8") / 1024).toFixed(1)} KB`,
-    ].join("\n").length;
+    ];
+    const skillPrefix = "Target skill: ";
+    const fixedLength = fixedLines.join("\n").length + skillPrefix.length + fixedLines.length;
     const availableSkillNameLength = Math.max(
       1,
       PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH - fixedLength,
