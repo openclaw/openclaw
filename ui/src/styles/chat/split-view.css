@@ -121,7 +121,8 @@ openclaw-chat-pane {
 
 /* Spans exactly the split view's box (nav edge -> viewport right, ignoring the
    topbar's 12px padding) and mirrors its flex geometry below, so toolbar
-   segment edges land on the pane edges they label. */
+   segment edges land on the pane edges they label. overflow: clip keeps the
+   scroll-synced track from painting over the nav or viewport edge. */
 .chat-split-toolbar {
   position: fixed;
   top: var(--safe-area-top);
@@ -131,10 +132,20 @@ openclaw-chat-pane {
   display: flex;
   align-items: center;
   height: var(--shell-topbar-height);
+  overflow: clip;
 }
 
-/* min-width mirrors .chat-split-view__column so both layers clamp at the same
-   point when many columns compete for space. */
+/* Same box constraints as .chat-split-view's content; chat-page translates it
+   by the split view's scrollLeft so segments track scrolled-away columns. */
+.chat-split-toolbar__track {
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  height: 100%;
+}
+
+/* min-width mirrors .chat-split-view__column so both layers overflow at the
+   same point when many columns compete for space. */
 .chat-split-toolbar__column {
   display: flex;
   flex: 1 1 0;
@@ -232,9 +243,18 @@ openclaw-chat-pane {
    the rail's render breakpoint: the collapsed class stays on the workbench
    while the rail is display:none below 1121px. */
 @media (min-width: 1121px) {
-  .chat-split-view__drop-container:has(.chat-workbench--workspace-collapsed)
-    .chat-open-split-view {
+  .chat-split-view__drop-container:has(.chat-workbench--workspace-collapsed) .chat-open-split-view {
     right: 8px;
+  }
+}
+
+/* 1101-1120px renders the full column toolbar, but the chat card keeps the
+   content gutter there (the zero-gutter workspace rule starts at 1121px);
+   match .content's 20px padding so segments stay on the pane edges. */
+@media (min-width: 1101px) and (max-width: 1120px) {
+  .chat-split-toolbar {
+    right: calc(20px + var(--safe-area-right));
+    left: calc(var(--shell-nav-width) + 20px + var(--safe-area-left));
   }
 }
 

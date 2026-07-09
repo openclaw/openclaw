@@ -50,6 +50,9 @@ export class ChatPage extends LitElement {
   @state() private layout: ChatSplitLayout | undefined;
   @state() private narrow = false;
   @state() private dropIndicator: DropIndicator | null = null;
+  // Horizontal scroll offset of .chat-split-view when its columns overflow;
+  // the fixed toolbar track mirrors it so segments stay over their panes.
+  @state() private splitScrollLeft = 0;
 
   private mediaQuery: MediaQueryList | null = null;
   private sessionsCleanup: (() => void) | null = null;
@@ -341,7 +344,15 @@ export class ChatPage extends LitElement {
   private readonly openSplitView = () => {
     const sessionKey = this.data?.sessionKey?.trim();
     if (sessionKey) {
+      this.splitScrollLeft = 0;
       this.persistLayout(createSplitLayout(sessionKey));
+    }
+  };
+
+  private readonly handleSplitViewScroll = (event: Event) => {
+    const left = (event.currentTarget as HTMLElement).scrollLeft;
+    if (left !== this.splitScrollLeft) {
+      this.splitScrollLeft = left;
     }
   };
 
@@ -486,20 +497,26 @@ export class ChatPage extends LitElement {
     }
     // Mirror the split view's flex geometry (same column weights, 4px gaps at
     // divider positions, same container bounds) so header segment edges land
-    // exactly on the pane edges below; see .chat-split-toolbar in split-view.css.
+    // exactly on the pane edges below; the track follows the split view's
+    // horizontal scroll when columns overflow. See split-view.css.
     return html`
       <div class="chat-split-toolbar">
-        ${layout.columns.map(
-          (column, columnIndex) => html`
-            ${columnIndex > 0 ? html`<div class="chat-split-toolbar__gap"></div>` : nothing}
-            <div
-              class="chat-split-toolbar__column"
-              style="flex: ${layout.columnWeights[columnIndex]} 1 0"
-            >
-              ${column.panes.map((pane) => this.renderSplitToolbarPane(layout, pane))}
-            </div>
-          `,
-        )}
+        <div
+          class="chat-split-toolbar__track"
+          style=${this.splitScrollLeft ? `transform: translateX(${-this.splitScrollLeft}px)` : ""}
+        >
+          ${layout.columns.map(
+            (column, columnIndex) => html`
+              ${columnIndex > 0 ? html`<div class="chat-split-toolbar__gap"></div>` : nothing}
+              <div
+                class="chat-split-toolbar__column"
+                style="flex: ${layout.columnWeights[columnIndex]} 1 0"
+              >
+                ${column.panes.map((pane) => this.renderSplitToolbarPane(layout, pane))}
+              </div>
+            `,
+          )}
+        </div>
       </div>
     `;
   }
@@ -514,7 +531,7 @@ export class ChatPage extends LitElement {
         : nothing;
     }
     return html`
-      <div class="chat-split-view">
+      <div class="chat-split-view" @scroll=${this.handleSplitViewScroll}>
         ${repeat(
           layout.columns,
           (column) => column.id,
