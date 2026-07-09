@@ -23,10 +23,37 @@ export function parseAzureDeploymentNameMap(value: string | undefined): Map<stri
   return map;
 }
 
+type CachedDeploymentNameMap = {
+  source: string;
+  deploymentsByLowerModelId: Map<string, string>;
+};
+
+let cachedDeploymentNameMap: CachedDeploymentNameMap | undefined;
+
+function getAzureDeploymentNameMap(value: string | undefined): Map<string, string> | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  if (cachedDeploymentNameMap?.source === value) {
+    return cachedDeploymentNameMap.deploymentsByLowerModelId;
+  }
+
+  const deploymentsByLowerModelId = new Map<string, string>();
+  for (const [modelId, deploymentName] of parseAzureDeploymentNameMap(value)) {
+    deploymentsByLowerModelId.set(modelId.toLowerCase(), deploymentName);
+  }
+  cachedDeploymentNameMap = { source: value, deploymentsByLowerModelId };
+  return deploymentsByLowerModelId;
+}
+
 /** Resolves the Azure deployment name for a model id, falling back to the model id. */
 export function resolveAzureDeploymentNameFromMap(params: {
   modelId: string;
   deploymentMap?: string;
 }): string {
-  return parseAzureDeploymentNameMap(params.deploymentMap).get(params.modelId) || params.modelId;
+  return (
+    getAzureDeploymentNameMap(params.deploymentMap)?.get(params.modelId.toLowerCase()) ||
+    params.modelId
+  );
 }
