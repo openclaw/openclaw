@@ -519,8 +519,9 @@ export const streamOpenAICompletions: StreamFunction<
 
         // Aggregated (non-streaming) response: surface choice.message.refusal
         // when content is absent, matching the streaming delta path above.
-        if (!choice.delta && choice.message) {
-          const messageRefusal = (choice.message as Record<string, unknown>).refusal;
+        const choiceMessage = (choice as unknown as { message?: Record<string, unknown> }).message;
+        if (!choice.delta && choiceMessage) {
+          const messageRefusal = choiceMessage.refusal;
           if (
             typeof messageRefusal === "string" &&
             messageRefusal.trim().length > 0 &&
