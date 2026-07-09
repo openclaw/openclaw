@@ -986,6 +986,8 @@ async function executePreparedToolCall(
   signal: AbortSignal | undefined,
   emit: AgentEventSink,
 ): Promise<ExecutedToolCallOutcome> {
+  // Parallel batches prepare every call first. A later preflight abort must not
+  // let an earlier prepared, side-effectful tool start afterward.
   if (signal?.aborted) {
     return {
       result: createErrorToolResult("Operation aborted"),
