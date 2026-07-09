@@ -1,8 +1,8 @@
 // Register agent tests cover agent command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerAgentsCommands } from "./register.agent.js";
 import { registerAgentTurnCommand } from "./register.agent-turn.js";
+import { registerAgentsCommands } from "./register.agent.js";
 
 const mocks = vi.hoisted(() => ({
   agentCliCommandMock: vi.fn(),
@@ -124,6 +124,17 @@ describe("agent command registration", () => {
     const [options, callRuntime, deps] = commandCall(agentCliCommandMock);
     expect((options as { message?: string }).message).toBeUndefined();
     expect((options as { messageFile?: string }).messageFile).toBe("task.md");
+    expect((options as { agent?: string }).agent).toBe("ops");
+    expect(callRuntime).toBe(runtime);
+    expect(deps).toBeUndefined();
+  });
+
+  it("forwards message stdin to the agent command", async () => {
+    await runCli(["agent", "--message-stdin", "--agent", "ops"]);
+
+    const [options, callRuntime, deps] = commandCall(agentCliCommandMock);
+    expect((options as { message?: string }).message).toBeUndefined();
+    expect((options as { messageStdin?: boolean }).messageStdin).toBe(true);
     expect((options as { agent?: string }).agent).toBe("ops");
     expect(callRuntime).toBe(runtime);
     expect(deps).toBeUndefined();

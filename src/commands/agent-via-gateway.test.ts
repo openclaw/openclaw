@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -347,14 +348,90 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("reads UTF-8 stdin for gateway dispatch", async () => {
+    await withTempStore(async () => {
+      const messageBody = 'first line\n```json\n{"ok":true}\n```\nsecond line\n';
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ messageStdin: true, sessionKey: "agent:main:incident-42" }, runtime, {
+        stdin: Readable.from([Buffer.from(`\uFEFF${messageBody}`, "utf8")]),
+      });
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      const params = requireRecord(request.params, "gateway request params");
+      expect(params.message).toBe(messageBody);
+    });
+  });
+
+  it("reads UTF-8 stdin for local embedded dispatch", async () => {
+    await withTempStore(async () => {
+      const messageBody = 'first line\n```json\n{"ok":true}\n```\nsecond line\n';
+      mockLocalAgentReply();
+
+      await agentCliCommand(
+        { messageStdin: true, sessionKey: "agent:main:incident-42", local: true },
+        runtime,
+        { stdin: Readable.from([Buffer.from(`\uFEFF${messageBody}`, "utf8")]) },
+      );
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      const opts = requireRecord(
+        requireFirstCallArg(agentCommand, "embedded agent"),
+        "embedded agent options",
+      );
+      expect(opts.message).toBe(messageBody);
+      expect(opts).not.toHaveProperty("messageStdin");
+    });
+  });
+
   it("rejects inline and file messages together", async () => {
     await expect(
       agentCliCommand(
         { message: "inline", messageFile: "task.md", sessionKey: "agent:main:incident-42" },
         runtime,
       ),
-    ).rejects.toThrow("Use either --message or --message-file, not both");
+    ).rejects.toThrow("Use only one of --message, --message-file, or --message-stdin");
     expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("rejects inline and stdin messages together", async () => {
+    await expect(
+      agentCliCommand(
+        { message: "inline", messageStdin: true, sessionKey: "agent:main:incident-42" },
+        runtime,
+        { stdin: Readable.from(["stdin"]) },
+      ),
+    ).rejects.toThrow("Use only one of --message, --message-file, or --message-stdin");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("rejects file and stdin messages together", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messageFile = path.join(dir, "message.md");
+      fs.writeFileSync(messageFile, "file message", "utf8");
+
+      await expect(
+        agentCliCommand(
+          { messageFile, messageStdin: true, sessionKey: "agent:main:incident-42" },
+          runtime,
+          { stdin: Readable.from(["stdin"]) },
+        ),
+      ).rejects.toThrow("Use only one of --message, --message-file, or --message-stdin");
+      expect(callGateway).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects empty stdin input", async () => {
+    await withTempStore(async () => {
+      await expect(
+        agentCliCommand({ messageStdin: true, sessionKey: "agent:main:incident-42" }, runtime, {
+          stdin: Readable.from([" \n\t"]),
+        }),
+      ).rejects.toThrow("--message-stdin input is empty");
+      expect(callGateway).not.toHaveBeenCalled();
+    });
   });
 
   it("reports missing message files before dispatch", async () => {
@@ -376,6 +453,17 @@ describe("agentCliCommand", () => {
       await expect(
         agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime),
       ).rejects.toThrow("Message file must be valid UTF-8");
+      expect(callGateway).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects stdin input that is not valid UTF-8", async () => {
+    await withTempStore(async () => {
+      await expect(
+        agentCliCommand({ messageStdin: true, sessionKey: "agent:main:incident-42" }, runtime, {
+          stdin: Readable.from([Buffer.from([0xff])]),
+        }),
+      ).rejects.toThrow("--message-stdin input must be valid UTF-8");
       expect(callGateway).not.toHaveBeenCalled();
     });
   });

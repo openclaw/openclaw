@@ -70,6 +70,7 @@ const GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 
 type AgentCliOpts = {
   message?: string;
   messageFile?: string;
+  messageStdin?: boolean;
   agent?: string;
   model?: string;
   to?: string;
@@ -90,7 +91,7 @@ type AgentCliOpts = {
   extraSystemPrompt?: string;
   local?: boolean;
 };
-type AgentDispatchOpts = Omit<AgentCliOpts, "messageFile"> & {
+type AgentDispatchOpts = Omit<AgentCliOpts, "messageFile" | "messageStdin"> & {
   message: string;
 };
 
@@ -101,6 +102,7 @@ type AgentCliProcessLike = {
 };
 type AgentCliDeps = CliDeps & {
   process?: AgentCliProcessLike;
+  stdin?: NodeJS.ReadableStream;
 };
 type AgentGatewayCallIdentity = Pick<
   Parameters<typeof callGateway>[0],
@@ -178,7 +180,7 @@ function protectJsonStdout(opts: Pick<AgentCliOpts, "json">): void {
 
 function missingAgentMessageError(): Error {
   return new Error(
-    `Missing message. Use ${formatCliCommand('openclaw agent --message "..." --agent <id>')} or ${formatCliCommand("openclaw agent --message-file <path> --agent <id>")}.`,
+    `Missing message. Use ${formatCliCommand('openclaw agent --message "..." --agent <id>')}, ${formatCliCommand("openclaw agent --message-file <path> --agent <id>")}, or ${formatCliCommand("openclaw agent --message-stdin --agent <id>")}.`,
   );
 }
 
@@ -209,15 +211,54 @@ async function readAgentMessageFile(messageFile: string): Promise<string> {
   }
 }
 
-async function resolveAgentMessageOpts(opts: AgentCliOpts): Promise<AgentDispatchOpts> {
-  const { messageFile: rawMessageFile, ...rest } = opts;
+async function readAgentMessageStdin(
+  stream: NodeJS.ReadableStream = process.stdin,
+): Promise<string> {
+  if ((stream as { isTTY?: unknown }).isTTY === true) {
+    throw new Error(
+      "--message-stdin refuses to read from an interactive terminal; pipe input instead.",
+    );
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    if (typeof chunk === "string") {
+      chunks.push(Buffer.from(chunk, "utf8"));
+    } else if (chunk instanceof Uint8Array) {
+      chunks.push(Buffer.from(chunk));
+    } else {
+      chunks.push(Buffer.from(String(chunk), "utf8"));
+    }
+  }
+  try {
+    return MESSAGE_FILE_DECODER.decode(Buffer.concat(chunks)).replace(/^\uFEFF/, "");
+  } catch {
+    throw new Error("--message-stdin input must be valid UTF-8.");
+  }
+}
+
+async function resolveAgentMessageOpts(
+  opts: AgentCliOpts,
+  deps?: Pick<AgentCliDeps, "stdin">,
+): Promise<AgentDispatchOpts> {
+  const { messageFile: rawMessageFile, messageStdin: rawMessageStdin, ...rest } = opts;
   const messageFile = rawMessageFile?.trim();
   const hasInlineMessage = opts.message !== undefined;
-  if (hasInlineMessage && messageFile) {
-    throw new Error("Use either --message or --message-file, not both.");
+  const hasStdinMessage = rawMessageStdin === true;
+  const selectedSources = [hasInlineMessage, Boolean(messageFile), hasStdinMessage].filter(
+    Boolean,
+  ).length;
+  if (selectedSources > 1) {
+    throw new Error("Use only one of --message, --message-file, or --message-stdin.");
   }
   if (rawMessageFile !== undefined && !messageFile) {
     throw new Error("--message-file must not be empty.");
+  }
+  if (hasStdinMessage) {
+    const message = await readAgentMessageStdin(deps?.stdin);
+    if (!message.trim()) {
+      throw new Error("--message-stdin input is empty.");
+    }
+    return { ...rest, message };
   }
   if (messageFile) {
     const message = await readAgentMessageFile(messageFile);
@@ -910,7 +951,7 @@ export async function agentCliCommand(
   deps?: AgentCliDeps,
 ) {
   protectJsonStdout(opts);
-  const messageOpts = await resolveAgentMessageOpts(opts);
+  const messageOpts = await resolveAgentMessageOpts(opts, deps);
   // `/compact` cannot run as a plain CLI agent turn: the slash-command handler
   // rejects CLI-originated senders, so the message would fall through to a
   // normal turn and exit 0 without compacting anything (issue #90640 Gap B).

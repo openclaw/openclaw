@@ -17,6 +17,7 @@ Related: [Agent send tool](/tools/agent-send)
 
 - `-m, --message <text>`: message body
 - `--message-file <path>`: read the message body from a UTF-8 file
+- `--message-stdin`: read the message body from stdin
 - `-t, --to <dest>`: recipient used to derive the session key
 - `--session-key <key>`: explicit session key to use for routing
 - `--session-id <id>`: explicit session id
@@ -39,6 +40,7 @@ Related: [Agent send tool](/tools/agent-send)
 openclaw agent --to +15555550123 --message "status update" --deliver
 openclaw agent --agent ops --message "Summarize logs"
 openclaw agent --agent ops --message-file ./task.md
+printf 'Summarize logs' | openclaw agent --agent ops --message-stdin
 openclaw agent --agent ops --model openai/gpt-5.4 --message "Summarize logs"
 openclaw agent --session-key agent:ops:incident-42 --message "Summarize status"
 openclaw agent --agent ops --session-key incident-42 --message "Summarize status"
@@ -50,7 +52,8 @@ openclaw agent --agent ops --message "Run locally" --local
 
 ## Notes
 
-- Pass exactly one of `--message` or `--message-file`. `--message-file` strips a leading UTF-8 BOM and preserves multiline content; it rejects files that are not valid UTF-8.
+- Pass exactly one of `--message`, `--message-file`, or `--message-stdin`.
+  File and stdin messages strip a leading UTF-8 BOM and preserve multiline content; they reject input that is not valid UTF-8.
 - Slash commands (for example `/compact`) cannot run through `--message`. The CLI rejects them and points you at the first-class command instead (`openclaw sessions compact <key>` for compaction).
 - `--local` and embedded fallback runs are one-shot: bundled MCP loopback resources and warm Claude stdio sessions opened for the run are retired after the reply, so scripted invocations do not leave local child processes running. Gateway-backed runs keep Gateway-owned MCP loopback resources under the running Gateway process instead.
 - With `--agent`, `--channel` and `--to` together, session routing follows the channel's canonical recipient and `session.dmScope`. Channels with a stable outbound-only recipient identity use a provider-owned session isolated from the agent's main session. `--reply-channel` and `--reply-account` affect delivery only.

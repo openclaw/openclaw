@@ -36,6 +36,7 @@ export function registerAgentTurnCommand(
     .description("Run an agent turn via the Gateway (use --local for embedded)")
     .option("-m, --message <text>", "Message body for the agent")
     .option("--message-file <path>", "Read the agent message body from a UTF-8 file")
+    .option("--message-stdin", "Read the agent message body from stdin", false)
     .option("-t, --to <number>", "Recipient number in E.164 used to derive the session key")
     .option("--session-key <key>", "Explicit session key (agent:<id>:<key>, or scoped to --agent)")
     .option("--session-id <id>", "Use an explicit session id")
@@ -73,6 +74,7 @@ ${formatHelpExamples([
   ['openclaw agent --to +15555550123 --message "status update"', "Start a new session."],
   ['openclaw agent --agent ops --message "Summarize logs"', "Use a specific agent."],
   ["openclaw agent --agent ops --message-file ./task.md", "Read a multiline message file."],
+  ["printf 'Summarize logs' | openclaw agent --agent ops --message-stdin", "Read from stdin."],
   [
     'openclaw agent --session-key agent:ops:incident-42 --message "Summarize status"',
     "Target an exact session key.",
