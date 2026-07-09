@@ -31,6 +31,11 @@ export type TuiChatSendResult = {
 
 export type TuiApprovalDecision = "allow-once" | "allow-always" | "deny";
 
+export type TuiTaskSuggestionActionCapabilities = {
+  canAccept: boolean;
+  canDismiss: boolean;
+};
+
 export type TuiPluginApproval = {
   id: string;
   request: {
@@ -197,6 +202,7 @@ export type TuiBackend = {
   listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;
   listPluginApprovals?: () => Promise<unknown>;
   resolvePluginApproval?: (id: string, decision: TuiApprovalDecision) => Promise<{ ok?: boolean }>;
+  getTaskSuggestionActionCapabilities?: () => TuiTaskSuggestionActionCapabilities;
   listTaskSuggestions?: () => Promise<TaskSuggestion[]>;
   acceptTaskSuggestion?: (taskId: string) => Promise<TaskSuggestionsAcceptResult>;
   dismissTaskSuggestion?: (taskId: string) => Promise<{ taskId: string; dismissed: boolean }>;

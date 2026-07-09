@@ -62,8 +62,14 @@ function createHarness() {
   const onAccepted = vi.fn().mockResolvedValue(undefined);
   let agentId = "main";
   let sessionKey = "agent:main:main";
+  let actionCapabilities = { canAccept: true, canDismiss: true };
   const controller = createTuiTaskSuggestionController({
-    client: { listTaskSuggestions, acceptTaskSuggestion, dismissTaskSuggestion },
+    client: {
+      getTaskSuggestionActionCapabilities: () => actionCapabilities,
+      listTaskSuggestions,
+      acceptTaskSuggestion,
+      dismissTaskSuggestion,
+    },
     chatLog: { addSystem },
     getAgentId: () => agentId,
     getSessionKey: () => sessionKey,
@@ -100,6 +106,9 @@ function createHarness() {
     },
     setSessionKey: (value: string) => {
       sessionKey = value;
+    },
+    setActionCapabilities: (value: { canAccept: boolean; canDismiss: boolean }) => {
+      actionCapabilities = value;
     },
   };
 }
@@ -202,6 +211,46 @@ describe("TUI task suggestions", () => {
     });
     expect(harness.acceptTaskSuggestion).not.toHaveBeenCalled();
     expect(harness.addSystem).toHaveBeenCalledWith("follow-up task dismissed");
+  });
+
+  it("offers only actions allowed by the connected operator scopes", () => {
+    const writeHarness = createHarness();
+    writeHarness.setActionCapabilities({ canAccept: false, canDismiss: true });
+    writeHarness.controller.handleEvent("task.suggestion", {
+      action: "created",
+      suggestion: suggestionPayload(),
+    });
+    expect(writeHarness.selectors[0]?.items.map((item) => item.value)).toEqual(["dismiss"]);
+    expect(writeHarness.selectors[0]?.setSelectedIndex).toHaveBeenCalledWith(0);
+
+    const readHarness = createHarness();
+    readHarness.setActionCapabilities({ canAccept: false, canDismiss: false });
+    readHarness.controller.handleEvent("task.suggestion", {
+      action: "created",
+      suggestion: suggestionPayload(),
+    });
+    expect(readHarness.openOverlay).not.toHaveBeenCalled();
+  });
+
+  it("rebuilds an active selector when reconnect changes action scopes", async () => {
+    const harness = createHarness();
+    const suggestion = suggestionPayload();
+    harness.controller.handleEvent("task.suggestion", {
+      action: "created",
+      suggestion,
+    });
+    const staleSelector = harness.selectors[0];
+
+    harness.setActionCapabilities({ canAccept: false, canDismiss: true });
+    harness.listTaskSuggestions.mockResolvedValueOnce([suggestion]);
+    await harness.controller.refresh();
+
+    expect(harness.closeOverlay).toHaveBeenCalledWith(harness.overlayHandles[0]);
+    expect(harness.openOverlay).toHaveBeenCalledTimes(2);
+    expect(harness.selectors[1]?.items.map((item) => item.value)).toEqual(["dismiss"]);
+    staleSelector?.onSelect?.({ value: "accept", label: "Start in worktree" });
+    staleSelector?.onSelect?.({ value: "accept", label: "Start in worktree" });
+    expect(harness.acceptTaskSuggestion).not.toHaveBeenCalled();
   });
 
   it("shows a still-pending suggestion again when its action fails", async () => {

@@ -829,6 +829,7 @@ describe("GatewayChatClient", () => {
       features: {
         methods: ["taskSuggestions.list", "taskSuggestions.accept", "taskSuggestions.dismiss"],
       },
+      auth: { role: "operator", scopes: ["operator.admin"] },
     } as never;
     (client as unknown as { client: { request: typeof request } }).client.request = request;
 
@@ -845,6 +846,25 @@ describe("GatewayChatClient", () => {
     expect(request).toHaveBeenNthCalledWith(1, "taskSuggestions.list", {});
     expect(request).toHaveBeenNthCalledWith(2, "taskSuggestions.accept", { taskId: "task_1" });
     expect(request).toHaveBeenNthCalledWith(3, "taskSuggestions.dismiss", { taskId: "task_2" });
+  });
+
+  it("derives task suggestion actions from negotiated methods and scopes", () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    client.hello = {
+      features: {
+        methods: ["taskSuggestions.accept", "taskSuggestions.dismiss"],
+      },
+      auth: { role: "operator", scopes: ["operator.write"] },
+    } as never;
+
+    expect(client.getTaskSuggestionActionCapabilities()).toEqual({
+      canAccept: false,
+      canDismiss: true,
+    });
   });
 
   it("skips task suggestion refreshes against older gateways", async () => {

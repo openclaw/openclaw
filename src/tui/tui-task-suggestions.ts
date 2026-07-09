@@ -22,7 +22,10 @@ type TaskSelector = Component & {
 type TaskSuggestionControllerDeps = {
   client: Pick<
     TuiBackend,
-    "listTaskSuggestions" | "acceptTaskSuggestion" | "dismissTaskSuggestion"
+    | "getTaskSuggestionActionCapabilities"
+    | "listTaskSuggestions"
+    | "acceptTaskSuggestion"
+    | "dismissTaskSuggestion"
   >;
   chatLog: { addSystem: (line: string) => void };
   getAgentId: () => string;
@@ -195,6 +198,8 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
   const hiddenIds = new Set<string>();
   let activeId: string | null = null;
   let activeOverlay: OverlayHandle | null = null;
+  let activeSelector: TaskSelector | null = null;
+  let activeActionKey: string | null = null;
   let revision = 0;
   let disposed = false;
   let refreshInFlight: Promise<void> | null = null;
@@ -206,6 +211,8 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
       activeOverlay = null;
     }
     activeId = null;
+    activeSelector = null;
+    activeActionKey = null;
   };
 
   const remove = (id: string) => {
@@ -221,9 +228,27 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
     suggestion.sessionKey === deps.getSessionKey() &&
     (suggestion.sessionKey !== "global" || suggestion.agentId === deps.getAgentId());
 
+  const availableActions = () => {
+    const capabilities = deps.client.getTaskSuggestionActionCapabilities?.() ?? {
+      canAccept: Boolean(deps.client.acceptTaskSuggestion),
+      canDismiss: Boolean(deps.client.dismissTaskSuggestion),
+    };
+    return TASK_ACTIONS.filter((action) =>
+      action.value === "accept" ? capabilities.canAccept : capabilities.canDismiss,
+    );
+  };
+
   const presentNext = () => {
-    if (disposed || activeId) {
+    if (disposed) {
       return;
+    }
+    const actions = availableActions();
+    const actionKey = actions.map((action) => action.value).join(",");
+    if (activeId) {
+      if (activeActionKey === actionKey) {
+        return;
+      }
+      closeActive();
     }
     const suggestion = [...suggestions.values()]
       .toSorted((left, right) => left.createdAt - right.createdAt)
@@ -232,14 +257,21 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
       return;
     }
 
+    if (actions.length === 0) {
+      return;
+    }
+
     activeId = suggestion.id;
-    const selector = createSelector(TASK_ACTIONS.slice());
-    selector.setSelectedIndex?.(1);
+    const selector = createSelector(actions);
+    activeSelector = selector;
+    activeActionKey = actionKey;
+    const dismissIndex = actions.findIndex((action) => action.value === "dismiss");
+    selector.setSelectedIndex?.(dismissIndex >= 0 ? dismissIndex : 0);
     let acceptArmed = false;
     let prompt: TaskPrompt | null = null;
 
     const resolve = async (action: "accept" | "dismiss") => {
-      if (activeId !== suggestion.id) {
+      if (activeId !== suggestion.id || activeSelector !== selector) {
         return;
       }
       closeActive();
@@ -287,6 +319,15 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
       prompt?.setConfirmation("");
     };
     selector.onSelect = (item) => {
+      if (activeSelector !== selector) {
+        return;
+      }
+      if (!availableActions().some((action) => action.value === item.value)) {
+        closeActive();
+        presentNext();
+        deps.requestRender();
+        return;
+      }
       if (item.value === "dismiss") {
         void resolve("dismiss");
         return;
@@ -303,6 +344,9 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
       deps.requestRender();
     };
     selector.onCancel = () => {
+      if (activeSelector !== selector) {
+        return;
+      }
       hiddenIds.add(suggestion.id);
       closeActive();
       deps.chatLog.addSystem("follow-up task hidden; suggestion remains pending");

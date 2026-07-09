@@ -31,6 +31,7 @@ import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readActiveGatewayLockPort } from "../infra/gateway-lock.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { sleep } from "../utils/sleep.js";
 import { VERSION } from "../version.js";
 import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
@@ -331,8 +332,32 @@ export class GatewayChatClient implements TuiBackend {
     });
   }
 
+  getTaskSuggestionActionCapabilities() {
+    const auth = this.hello?.auth;
+    const methods = this.hello?.features?.methods;
+    const allows = (method: string, scope: "operator.admin" | "operator.write") =>
+      Array.isArray(methods) &&
+      methods.includes(method) &&
+      Boolean(
+        auth &&
+        roleScopesAllow({
+          role: auth.role,
+          requestedScopes: [scope],
+          allowedScopes: auth.scopes,
+        }),
+      );
+    return {
+      canAccept: allows("taskSuggestions.accept", "operator.admin"),
+      canDismiss: allows("taskSuggestions.dismiss", "operator.write"),
+    };
+  }
+
   async listTaskSuggestions() {
     if (this.hello?.features?.methods?.includes("taskSuggestions.list") !== true) {
+      return [];
+    }
+    const actions = this.getTaskSuggestionActionCapabilities();
+    if (!actions.canAccept && !actions.canDismiss) {
       return [];
     }
     const result = await this.client.request<TaskSuggestionsListResult>("taskSuggestions.list", {});
