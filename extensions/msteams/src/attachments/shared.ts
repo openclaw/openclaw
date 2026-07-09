@@ -216,7 +216,11 @@ export function normalizeContentType(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const trimmed = value.trim();
+  // MIME types are case-insensitive (RFC 2045) and every downstream comparison in
+  // this module assumes a lowercased value (e.g. startsWith("image/"), === the
+  // Teams file-download-info type). Relay payloads (SharePoint, OneDrive, Bot
+  // Framework CDN) routinely emit mixed-case values like "Image/PNG".
+  const trimmed = value.trim().toLowerCase();
   return trimmed ? trimmed : undefined;
 }
 
