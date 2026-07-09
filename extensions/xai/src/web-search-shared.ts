@@ -80,8 +80,16 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
+function isTimeoutAbortError(error: unknown): boolean {
+  if (!isAbortError(error)) {
+    return false;
+  }
+  const cause = error instanceof Error && "cause" in error ? error.cause : undefined;
+  return cause instanceof Error && cause.name === "TimeoutError";
+}
+
 export function wrapXaiWebSearchError(error: unknown, timeoutSeconds: number): never {
-  if (isAbortError(error)) {
+  if (isTimeoutAbortError(error)) {
     throw new Error(
       `xAI web search timed out after ${timeoutSeconds}s. Increase tools.web.search.timeoutSeconds if queries are complex.`,
       { cause: error },

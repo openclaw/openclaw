@@ -938,6 +938,12 @@ describe("xai web search config resolution", () => {
 
   it("converts internal xAI timeout aborts into structured tool errors", () => {
     const abort = new DOMException("This operation was aborted", "AbortError");
+    (abort as DOMException & { cause?: unknown }).cause = Object.assign(
+      new Error("request timed out"),
+      {
+        name: "TimeoutError",
+      },
+    );
 
     expect(() => wrapXaiWebSearchError(abort, 60)).toThrow("xAI web search timed out after 60s");
 
@@ -947,6 +953,18 @@ describe("xai web search config resolution", () => {
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).name).toBe("Error");
       expect((error as Error).cause).toBe(abort);
+    }
+  });
+
+  it("preserves caller-driven xAI aborts instead of relabeling them as timeouts", () => {
+    const abort = new DOMException("This operation was aborted", "AbortError");
+
+    expect(() => wrapXaiWebSearchError(abort, 60)).toThrow("This operation was aborted");
+
+    try {
+      wrapXaiWebSearchError(abort, 60);
+    } catch (error) {
+      expect(error).toBe(abort);
     }
   });
 });
