@@ -204,4 +204,62 @@ describe("chunkDiscordText", () => {
     expect(second.startsWith("_")).toBe(true);
     expect(second).toContain("  11. indented line");
   });
+
+  it("does not prepend italics underscore to start of chunk when it opens with code fence", () => {
+    // With maxLines: 10 and Reasoning:\n_ prefix, chunk 1 holds
+    // lines 1-10 (Reasoning + 9 body lines). Chunk 2 starts at
+    // line 11 = the code fence. The rebalancing guard must not
+    // prepend _ to ```python.
+    const body = [
+      "1. line",
+      "2. line",
+      "3. line",
+      "4. line",
+      "5. line",
+      "6. line",
+      "7. line",
+      "8. line",
+      "9. line",
+      "```python",
+      "print('hello')",
+      "print('world')",
+      "```",
+    ].join("\n");
+    const text = `Reasoning:\n_${body}_`;
+
+    const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
+    expect(chunks.length).toBeGreaterThan(1);
+
+    // chunk 2 starts with "```python" — the closing _ from chunk 1
+    // must not be prepended to this line.
+    for (const chunk of chunks) {
+      expect(chunk).not.toMatch(/_```/);
+    }
+  });
+
+  it("does not prepend italics underscore to start of chunk when it opens with inline code", () => {
+    // Same reasoning as above: chunk 2 opens with `inline code`,
+    // not a normal text line.
+    const body = [
+      "1. line",
+      "2. line",
+      "3. line",
+      "4. line",
+      "5. line",
+      "6. line",
+      "7. line",
+      "8. line",
+      "9. line",
+      "`inline code` trailing text",
+      "11. line",
+    ].join("\n");
+    const text = `Reasoning:\n_${body}_`;
+
+    const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
+    expect(chunks.length).toBeGreaterThan(1);
+
+    for (const chunk of chunks) {
+      expect(chunk).not.toMatch(/_`/);
+    }
+  });
 });
