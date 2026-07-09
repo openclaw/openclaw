@@ -1,5 +1,6 @@
 // Defines allowed-value metadata for config validation and docs.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 const MAX_ALLOWED_VALUES_HINT = 12;
 const MAX_ALLOWED_VALUE_CHARS = 160;
@@ -14,7 +15,7 @@ function truncateHintText(text: string, limit: number): string {
   if (text.length <= limit) {
     return text;
   }
-  return `${text.slice(0, limit)}... (+${text.length - limit} chars)`;
+  return `${truncateUtf16Safe(text, limit)}... (+${text.length - limit} chars)`;
 }
 
 function safeStringify(value: unknown): string {
