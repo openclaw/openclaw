@@ -18,6 +18,7 @@ import {
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDedupeCache } from "../infra/dedupe.js";
 import type { UsageProviderId } from "../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
@@ -97,7 +98,13 @@ import type {
 } from "./types.js";
 
 const log = createSubsystemLogger("plugins/provider-runtime");
-const warnedExternalAuthFallbackPluginIds = new Set<string>();
+/** Bounded LRU cap on per-plugin external-auth-fallback warnings. The key space
+ *  is pluginId (a finite set per gateway run), so 4096 is comfortably above any
+ *  realistic plugin count and prevents unbounded growth on long-running hosts. */
+const warnedExternalAuthFallbackPluginIds = createDedupeCache({
+  ttlMs: 0,
+  maxSize: 4096,
+});
 
 function matchesProviderPluginRef(provider: ProviderPlugin, providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
@@ -1005,8 +1012,7 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
       continue;
     }
     const pluginId = plugin.pluginId ?? plugin.id;
-    if (!declaredPluginIds.has(pluginId) && !warnedExternalAuthFallbackPluginIds.has(pluginId)) {
-      warnedExternalAuthFallbackPluginIds.add(pluginId);
+    if (!declaredPluginIds.has(pluginId) && !warnedExternalAuthFallbackPluginIds.check(pluginId)) {
       log.warn(
         `Provider plugin "${sanitizeForLog(pluginId)}" uses external auth hooks without declaring contracts.externalAuthProviders. This compatibility fallback is deprecated and will be removed in a future release.`,
       );

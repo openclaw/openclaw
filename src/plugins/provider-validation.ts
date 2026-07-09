@@ -1,11 +1,18 @@
 /** Validates and normalizes provider plugin definitions before registry registration. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { createDedupeCache } from "../infra/dedupe.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
 import { pushPluginValidationDiagnostic } from "./validation-diagnostics.js";
 
-const warnedDeprecatedDiscoveryProviders = new Set<string>();
+/** Bounded LRU cap on per-plugin deprecated-discovery-provider warnings. The key
+ *  space is `pluginId:providerId`, so 4096 covers thousands of providers per
+ *  plugin without unbounded growth across gateway runs. */
+const warnedDeprecatedDiscoveryProviders = createDedupeCache({
+  ttlMs: 0,
+  maxSize: 4096,
+});
 
 type ProviderWizardSetup = NonNullable<NonNullable<ProviderPlugin["wizard"]>["setup"]>;
 type ProviderWizardModelPicker = NonNullable<NonNullable<ProviderPlugin["wizard"]>["modelPicker"]>;
@@ -365,8 +372,7 @@ export function normalizeRegisteredProvider(params: {
   }
   if (!catalog && discovery) {
     const warningKey = `${params.pluginId}:${id}:discovery`;
-    if (!warnedDeprecatedDiscoveryProviders.has(warningKey)) {
-      warnedDeprecatedDiscoveryProviders.add(warningKey);
+    if (!warnedDeprecatedDiscoveryProviders.check(warningKey)) {
       pushPluginValidationDiagnostic({
         level: "warn",
         pluginId: params.pluginId,
