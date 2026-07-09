@@ -141,14 +141,16 @@ vi.mock("../../plugins/synthetic-auth.runtime.js", () => ({
   resolveRuntimeExternalAuthProviderRefs: resolveRuntimeExternalAuthProviderRefsMock,
 }));
 
-vi.mock("./model.static-catalog.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./model.static-catalog.js")>();
-  return {
-    ...actual,
-    resolveBundledProviderStaticCatalogModel: resolveBundledProviderStaticCatalogModelMock,
-    resolveBundledStaticCatalogModel: resolveBundledStaticCatalogModelMock,
-  };
-});
+vi.mock("./model.static-catalog.js", () => ({
+  canonicalizeManifestModelCatalogProviderAlias: ({ provider }: { provider: string }) => {
+    // Static-catalog coverage exercises alias discovery. Model resolution only needs the canonical
+    // result here; rescanning every plugin manifest made each table-like case pay I/O.
+    const normalized = provider.trim().toLowerCase();
+    return normalized === "moonshotai" || normalized === "moonshot-ai" ? "moonshot" : provider;
+  },
+  resolveBundledProviderStaticCatalogModel: resolveBundledProviderStaticCatalogModelMock,
+  resolveBundledStaticCatalogModel: resolveBundledStaticCatalogModelMock,
+}));
 
 import type { OpenRouterModelCapabilities } from "./openrouter-model-capabilities.js";
 

@@ -1657,13 +1657,6 @@ class AppSidebar extends LitElement {
       this.activeRouteId !== undefined && isSettingsNavigationRoute(this.activeRouteId);
     return html`
       <aside class="sidebar ${this.collapsed ? "sidebar--collapsed" : ""}">
-        <!-- macOS app only (CSS-gated on html.openclaw-native-macos): use the
-             otherwise-empty native titlebar strip instead of a sidebar row. -->
-        <img
-          class="sidebar-native-brand"
-          src="${controlUiPublicAssetPath("favicon.svg", this.basePath)}"
-          alt="OpenClaw"
-        />
         <div class="sidebar-shell">
           ${this.renderBrand()}
           <div class="sidebar-shell__body">

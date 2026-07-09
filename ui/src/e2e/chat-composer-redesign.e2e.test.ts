@@ -120,13 +120,19 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       const camera = composerShell.locator(".agent-chat__camera-btn");
       const takePhoto = composerShell.getByRole("menuitem", { name: "Take photo" });
       const settings = composer.getByRole("button", { name: "Chat settings", exact: true });
-      const splitView = composer.getByRole("button", { name: "Open split view" });
+      const splitView = page.getByRole("button", { name: "Open split view" });
       const voice = page.getByRole("button", { name: "Start voice input" });
 
       await expect.poll(() => model.isVisible()).toBe(true);
       await expect.poll(() => contextUsage.isVisible()).toBe(true);
       await expect.poll(() => usage.isVisible()).toBe(false);
       await expect.poll(() => settings.isVisible()).toBe(true);
+      await expect.poll(() => splitView.isVisible()).toBe(true);
+      await expect
+        .poll(() =>
+          splitView.evaluate((node) => node.closest(".agent-chat__composer-shell") == null),
+        )
+        .toBe(true);
       await expect.poll(() => attach.isVisible()).toBe(true);
       await expect.poll(() => camera.isVisible()).toBe(false);
       await expect.poll(() => voice.isVisible()).toBe(true);
@@ -381,37 +387,56 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
           progress.evaluate((node) => node.closest(".agent-chat__composer-controls") != null),
         )
         .toBe(true);
-      const [activeSettingsBox, activeSplitViewBox, activeProgressBox, activeModelBox] =
-        await Promise.all([
-          settings.boundingBox(),
-          splitView.boundingBox(),
-          progress.boundingBox(),
-          model.boundingBox(),
-        ]);
+      const [
+        activeSettingsBox,
+        activeSplitViewBox,
+        activeProgressBox,
+        activeModelBox,
+        activeChatContentBox,
+      ] = await Promise.all([
+        settings.boundingBox(),
+        splitView.boundingBox(),
+        progress.boundingBox(),
+        model.boundingBox(),
+        chatContent.boundingBox(),
+      ]);
       expect(activeSettingsBox).not.toBeNull();
       expect(activeSplitViewBox).not.toBeNull();
       expect(activeProgressBox).not.toBeNull();
       expect(activeModelBox).not.toBeNull();
-      if (!activeSettingsBox || !activeSplitViewBox || !activeProgressBox || !activeModelBox) {
-        throw new Error(
-          "expected settings, split view, progress, and model controls to have layout boxes",
-        );
+      expect(activeChatContentBox).not.toBeNull();
+      if (
+        !activeSettingsBox ||
+        !activeSplitViewBox ||
+        !activeProgressBox ||
+        !activeModelBox ||
+        !activeChatContentBox
+      ) {
+        throw new Error("expected chat content and composer controls to have layout boxes");
       }
-      expect(activeSplitViewBox.x).toBeGreaterThanOrEqual(
+      expect(activeProgressBox.x).toBeGreaterThanOrEqual(
         activeSettingsBox.x + activeSettingsBox.width - 1,
       );
       expect(
-        activeSplitViewBox.x - (activeSettingsBox.x + activeSettingsBox.width),
-      ).toBeLessThanOrEqual(8);
-      expect(activeProgressBox.x).toBeGreaterThanOrEqual(
-        activeSplitViewBox.x + activeSplitViewBox.width - 1,
-      );
-      expect(
-        activeProgressBox.x - (activeSplitViewBox.x + activeSplitViewBox.width),
+        activeProgressBox.x - (activeSettingsBox.x + activeSettingsBox.width),
       ).toBeLessThanOrEqual(8);
       expect(activeModelBox.x).toBeGreaterThanOrEqual(
         activeProgressBox.x + activeProgressBox.width - 1,
       );
+      expect(
+        Math.abs(
+          activeChatContentBox.x +
+            activeChatContentBox.width -
+            (activeSplitViewBox.x + activeSplitViewBox.width),
+        ),
+      ).toBeLessThanOrEqual(24);
+      expect(
+        Math.abs(
+          activeChatContentBox.y +
+            activeChatContentBox.height -
+            (activeSplitViewBox.y + activeSplitViewBox.height),
+        ),
+      ).toBeLessThanOrEqual(24);
       expect(
         Math.abs(
           activeProgressBox.y +

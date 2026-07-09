@@ -223,6 +223,105 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     await closeOpenBrowserContexts();
   });
 
+  it("uses one global toolbar row for split view", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          content: [{ type: "text", text: "Split toolbar proof." }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText("Split toolbar proof.").waitFor({ timeout: 10_000 });
+
+      const splitEntry = page.getByRole("button", { name: "Open split view" });
+      await expect.poll(() => splitEntry.isVisible()).toBe(true);
+      await page.setViewportSize({ height: 900, width: 1100 });
+      await expect.poll(() => splitEntry.isVisible()).toBe(true);
+      await page.setViewportSize({ height: 900, width: 1440 });
+      await expect
+        .poll(() =>
+          splitEntry.evaluate((node) => node.closest(".agent-chat__composer-shell") == null),
+        )
+        .toBe(true);
+      await splitEntry.click();
+
+      const topbar = page.locator(".topbar");
+      const toolbar = page.locator(".chat-split-toolbar");
+      const toolbarPanes = page.locator(".chat-split-toolbar__pane");
+      await expect.poll(() => page.locator(".chat-split-view__pane").count()).toBe(2);
+      await expect.poll(() => toolbarPanes.count()).toBe(2);
+      await expect
+        .poll(async () => {
+          const visible = await Promise.all(
+            (await toolbarPanes.all()).map((pane) => pane.isVisible()),
+          );
+          return visible.every(Boolean);
+        })
+        .toBe(true);
+      await expect.poll(() => page.locator(".dashboard-header").isVisible()).toBe(false);
+      await expect.poll(() => splitEntry.count()).toBe(0);
+
+      const [topbarBox, toolbarBox] = await Promise.all([
+        topbar.boundingBox(),
+        toolbar.boundingBox(),
+      ]);
+      expect(topbarBox).not.toBeNull();
+      expect(toolbarBox).not.toBeNull();
+      if (!topbarBox || !toolbarBox) {
+        throw new Error("expected the split toolbar and global topbar to have layout boxes");
+      }
+      expect(Math.abs(topbarBox.y - toolbarBox.y)).toBeLessThanOrEqual(1);
+      expect(Math.abs(topbarBox.height - toolbarBox.height)).toBeLessThanOrEqual(1);
+
+      await toolbarPanes.first().getByRole("combobox").focus();
+      await expect.poll(() => toolbarPanes.first().getAttribute("class")).toContain("--active");
+
+      await page.evaluate(() => {
+        document.documentElement.style.setProperty("--safe-area-top", "20px");
+        document.documentElement.style.setProperty("--safe-area-left", "24px");
+        document.documentElement.style.setProperty("--safe-area-right", "24px");
+        document.body.style.paddingTop = "20px";
+        document.body.style.paddingRight = "24px";
+        document.body.style.paddingLeft = "24px";
+      });
+      const insetToolbarBox = await toolbar.boundingBox();
+      expect(insetToolbarBox?.y).toBe(20);
+      expect(insetToolbarBox?.x).toBeGreaterThan(topbarBox.x);
+
+      await page.setViewportSize({ height: 900, width: 1100 });
+      const navToggle = page.getByRole("button", { name: "Expand sidebar" });
+      await expect.poll(() => navToggle.isVisible()).toBe(true);
+      const [navToggleBox, narrowToolbarBox] = await Promise.all([
+        navToggle.boundingBox(),
+        toolbar.boundingBox(),
+      ]);
+      expect(navToggleBox).not.toBeNull();
+      expect(narrowToolbarBox).not.toBeNull();
+      if (!navToggleBox || !narrowToolbarBox) {
+        throw new Error("expected the drawer toggle and split toolbar to have layout boxes");
+      }
+      expect(narrowToolbarBox.x).toBeGreaterThanOrEqual(navToggleBox.x + navToggleBox.width);
+
+      const firstPane = page.locator(".chat-split-view__pane").first();
+      await firstPane.click({ position: { x: 20, y: 80 } });
+      await expect.poll(() => firstPane.getAttribute("class")).toContain("--active");
+      await expect.poll(() => toolbarPanes.first().getAttribute("class")).toContain("--active");
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("sends a chat turn through the GUI and renders the final Gateway event", async () => {
     const context = await newBrowserContext({
       locale: "en-US",

@@ -67,6 +67,219 @@ Relay mode separates Slack ingress from the OpenClaw gateway. A trusted router o
 
 The relay URL must use `wss://` unless it targets localhost. Treat the bearer token and router route table as part of the Slack authorization boundary: routed events enter the normal Slack message handler as authorized activations. A router-provided `slack_identity` in the websocket `hello` frame can set the default outbound username and icon; an explicit identity supplied by the caller still wins. The relay connection reconnects with the same bounded backoff timing as Socket Mode and clears the router-provided identity whenever it disconnects.
 
+### Enterprise Grid org-wide installs
+
+One Slack account can receive messages from every workspace covered by an
+Enterprise Grid org-wide installation. Choose direct Socket Mode or HTTP
+Request URLs; relay mode is not supported for enterprise accounts. Both
+least-privilege manifests below enable only the V1 `message` and `app_mention`
+event path, immediate replies, and listener-owned status reactions.
+
+#### Socket Mode
+
+```json
+{
+  "display_information": {
+    "name": "OpenClaw",
+    "description": "Slack connector for OpenClaw"
+  },
+  "features": {
+    "bot_user": { "display_name": "OpenClaw", "always_online": true }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "channels:history",
+        "channels:read",
+        "chat:write",
+        "files:read",
+        "files:write",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "mpim:history",
+        "mpim:read",
+        "reactions:write",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "org_deploy_enabled": true,
+    "socket_mode_enabled": true,
+    "event_subscriptions": {
+      "bot_events": [
+        "app_mention",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim"
+      ]
+    }
+  }
+}
+```
+
+Have an Enterprise Grid Org Admin or Org Owner approve the app, install it at
+the organization level, and choose the workspaces the installation covers.
+Confirm that the app is available in every intended workspace before starting
+OpenClaw. Generate an app-level token with `connections:write` for Socket Mode,
+then copy the bot token from the org installation. Configure the account that
+uses the org-installed bot token:
+
+```json5
+{
+  channels: {
+    slack: {
+      enabled: true,
+      mode: "socket",
+      enterpriseOrgInstall: true,
+      appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+      botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      groupPolicy: "allowlist",
+      channels: {
+        C0123456789: { requireMention: true },
+      },
+    },
+  },
+}
+```
+
+#### HTTP Request URLs
+
+Use HTTP mode when the Gateway has a public HTTPS endpoint and does not open a
+Socket Mode connection. Replace the example URL with the Gateway's public
+`webhookPath` URL (default `/slack/events`):
+
+```json
+{
+  "display_information": {
+    "name": "OpenClaw",
+    "description": "Slack connector for OpenClaw"
+  },
+  "features": {
+    "bot_user": { "display_name": "OpenClaw", "always_online": true }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "channels:history",
+        "channels:read",
+        "chat:write",
+        "files:read",
+        "files:write",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "mpim:history",
+        "mpim:read",
+        "reactions:write",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "org_deploy_enabled": true,
+    "event_subscriptions": {
+      "request_url": "https://gateway-host.example.com/slack/events",
+      "bot_events": [
+        "app_mention",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim"
+      ]
+    }
+  }
+}
+```
+
+Have an Enterprise Grid Org Admin or Org Owner approve the app, install it at
+the organization level, and choose the workspaces the installation covers.
+After Slack verifies the Request URL, copy the org installation's bot token and
+the app's **Basic Information -> App Credentials -> Signing Secret**. Configure
+the enterprise account with the same Request URL path:
+
+```json5
+{
+  channels: {
+    slack: {
+      enabled: true,
+      mode: "http",
+      enterpriseOrgInstall: true,
+      botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+      signingSecret: {
+        source: "env",
+        provider: "default",
+        id: "SLACK_SIGNING_SECRET",
+      },
+      webhookPath: "/slack/events",
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      groupPolicy: "allowlist",
+      channels: {
+        C0123456789: { requireMention: true },
+      },
+    },
+  },
+}
+```
+
+At startup, OpenClaw verifies `enterpriseOrgInstall` with Slack `auth.test`.
+An org-installed token without the flag, or a workspace token with the flag,
+fails startup. Slack remains the source of truth for which workspaces have
+granted the installation; OpenClaw then applies the configured channel, user,
+DM, and mention policies to each delivered event. Enterprise V1 rejects all
+bot-authored `message` and `app_mention` events before dispatch, regardless of
+`allowBots`, because org installs do not provide a stable workspace-qualified
+bot identity for loop prevention.
+
+Enterprise support is intentionally limited to direct Socket Mode or HTTP
+`message` and `app_mention` events and their immediate replies. Relay mode,
+slash commands, interactions, App Home, reaction event listeners, pins, Slack
+action tools, Slack-native approvals, bindings, queued or scheduled delivery,
+and proactive sends are unavailable for an enterprise account. Outbound
+acknowledgment, typing, and status reactions are supported through the
+listener-owned Slack client and require `reactions:write`; inbound reaction
+notifications and reaction action tools remain unavailable.
+
+Immediate replies reuse the standard Slack delivery behavior for chunks,
+media, metadata, identity fallback, unfurls, and receipts, but only while the
+validated listener-owned client remains in the active event turn. The
+in-memory send queue and thread-participation records are partitioned by that
+event's workspace; the client itself is never serialized or persisted.
+
+Channel policy keys and `dm.groupChannels` entries must use raw stable Slack channel IDs or the
+`channel:<id>` form. OpenClaw normalizes either form to the raw channel ID for
+runtime matching; `slack:`, `group:`, and `mpim:` prefixes fail startup.
+User policy entries must use stable Slack user IDs; names, slugs, display names,
+and email addresses fail startup. IDs must use Slack's canonical uppercase
+prefix and body (for example, `C0123456789` or `U0123456789`); lowercase and
+short lookalikes fail startup. Enterprise accounts cannot enable
+`dangerouslyAllowNameMatching`. Enterprise accounts may set the global
+`mentionPatterns.mode`, but `mentionPatterns.allowIn` and
+`mentionPatterns.denyIn` fail startup because bare Slack channel IDs are not
+workspace-qualified and can be reused across workspaces. Workspace installs
+retain the existing scoped mention-pattern behavior. Each accepted workspace
+gets separate routing, session, transcript, dedupe, history, and cache identity
+even when Slack IDs overlap. Within the `message` stream, ordinary user messages
+and user-authored `file_share` events are supported; other message subtypes are
+rejected before authorization or system-event handling.
+
+Enterprise DMs must either be disabled (`dm.enabled=false` or
+`dmPolicy="disabled"`) or explicitly open with `dmPolicy="open"` and
+an effective account `allowFrom` containing the literal `"*"`. An empty
+allowlist or user-specific IDs without `"*"` fails startup. Pairing and
+per-user DM allowlists are rejected because Slack user IDs are not
+workspace-qualified in those authorization stores. Channel and sender policy
+continues to apply to channel messages.
+
 ## Install
 
 ```bash
@@ -76,6 +289,10 @@ openclaw plugins install @openclaw/slack
 `plugins install` registers and enables the plugin. It does nothing until you configure the Slack app and channel settings below. See [Plugins](/tools/plugin) for general plugin install rules.
 
 ## Quick setup
+
+The manifests in this section create a workspace-scoped installation. For an
+Enterprise Grid organization installation, use the dedicated
+[org-wide manifest and workflow](#enterprise-grid-org-wide-installs) instead.
 
 <Tabs>
   <Tab title="Socket Mode (default)">
@@ -1242,6 +1459,7 @@ In a channel with `requireMention: true`, include a typed mention of the bot wit
     - text chunks use `channels.slack.textChunkLimit` (default `8000`, capped at Slack's own message-length limit)
     - `channels.slack.streaming.chunkMode="newline"` enables paragraph-first splitting
     - file sends use Slack upload APIs and can include thread replies (`thread_ts`)
+    - long file captions use the first Slack-safe text chunk as the upload comment and send remaining chunks as follow-up messages
     - outbound media cap follows `channels.slack.mediaMaxMb` when configured; otherwise channel sends use MIME-kind defaults from media pipeline
 
   </Accordion>
@@ -1466,7 +1684,7 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
 
 <Accordion title="High-signal Slack fields">
 
-- mode/auth: `mode`, `botToken`, `appToken`, `signingSecret`, `webhookPath`, `accounts.*`
+- mode/auth: `mode`, `enterpriseOrgInstall`, `botToken`, `appToken`, `signingSecret`, `webhookPath`, `accounts.*`
 - DM access: `dm.enabled`, `dmPolicy`, `allowFrom` (legacy: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
 - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
 - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
