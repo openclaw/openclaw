@@ -5,20 +5,18 @@ import {
   sessionRouteStateOwners,
 } from "./doctor-contract-api.js";
 
-describe("claude doctor contract", () => {
+describe("glm-bridge doctor contract (GLM review G6)", () => {
   it("starts with no legacy config rules (no retired keys yet)", () => {
     expect(legacyConfigRules).toEqual([]);
   });
 
-  it("normalizeCompatibilityConfig is a no-op until claude accumulates retired keys", () => {
+  it("normalizeCompatibilityConfig is a no-op until glm-bridge accumulates retired keys", () => {
     const original = {
       plugins: {
         entries: {
-          claude: {
+          "glm-bridge": {
             enabled: true,
-            config: {
-              appServer: { mode: "managed" },
-            },
+            config: { appServer: { modelProvider: "zai" } },
           },
         },
       },
@@ -28,23 +26,27 @@ describe("claude doctor contract", () => {
     expect(result.config).toBe(original);
   });
 
-  it("claims anthropic and claude provider/auth-profile prefixes", () => {
+  it("claims the zai provider and 'zai:' auth-profile prefix, distinct from Claude", () => {
     expect(sessionRouteStateOwners).toHaveLength(1);
     const owner = sessionRouteStateOwners[0];
     if (!owner) {
       throw new Error("expected sessionRouteStateOwners[0]");
     }
-    expect(owner.id).toBe("claude");
-    expect(owner.providerIds).toEqual(expect.arrayContaining(["anthropic", "claude"]));
-    expect(owner.runtimeIds).toEqual(expect.arrayContaining(["claude", "claude-bridge"]));
-    expect(owner.authProfilePrefixes).toEqual(expect.arrayContaining(["anthropic:", "claude:"]));
+    expect(owner.id).toBe("glm-bridge");
+    expect(owner.providerIds).toEqual(["zai"]);
+    expect(owner.authProfilePrefixes).toEqual(["zai:"]);
   });
 
-  // Regression guard for GLM review G6: the doctor-contract registry validator
-  // (isDoctorSessionRouteStateOwner) rejects any owner carrying an EMPTY-ARRAY
-  // field — `[]` is not `undefined` and normalizes to length 0, failing the
-  // "=== undefined || length > 0" guard — which silently drops the whole owner
-  // from the scan. A previous `cliSessionKeys: []` made this owner never load.
+  it("does NOT claim the shared claude-bridge runtimeId (would double-attribute)", () => {
+    const owner = sessionRouteStateOwners[0];
+    // runtimeIds is intentionally omitted so a claude-bridge-runtime session is
+    // attributed to exactly one owner. Attribution is via provider/auth only.
+    expect(owner?.runtimeIds ?? []).not.toContain("claude-bridge");
+  });
+
+  // The doctor-contract registry validator (isDoctorSessionRouteStateOwner)
+  // rejects any owner carrying an EMPTY-ARRAY field, silently dropping the whole
+  // owner. Empty fields must be omitted (left undefined), not set to [].
   it("declares no empty-array fields (they would be dropped by the registry validator)", () => {
     for (const owner of sessionRouteStateOwners) {
       for (const field of [

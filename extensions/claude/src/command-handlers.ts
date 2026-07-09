@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { peekSharedClaudeAppServerClient } from "./app-server/client.js";
+import { claudeAppServerPoolKey } from "./app-server/config.js";
 import { resolveManagedClaudeBridgeVersion } from "./app-server/managed-binary.js";
 import {
   readClaudeAppServerBinding,
@@ -18,6 +19,15 @@ import {
 import { compareClaudeBridgeVersions, MIN_CLAUDE_BRIDGE_VERSION } from "./app-server/version.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+// /claude status|version are Claude-extension-scoped commands, so they must
+// report THIS extension's own bridge process — the default-anthropic pool slot
+// — not whichever bridge (e.g. glm-bridge → Z.ai) ran a turn most recently.
+// Peeking the pool by our own key removes the lastAccessedKey ambiguity that
+// surfaces when both the Claude and GLM harness extensions are active
+// (GLM review G7). glm-bridge, when it grows its own /glm command, would peek
+// claudeAppServerPoolKey("zai") the same way.
+const CLAUDE_APP_SERVER_POOL_KEY = claudeAppServerPoolKey();
 
 export function handleHelp(): PluginCommandResult {
   return {
@@ -38,7 +48,7 @@ export function handleHelp(): PluginCommandResult {
 }
 
 export function handleStatus(_ctx: PluginCommandContext): PluginCommandResult {
-  const snapshot = peekSharedClaudeAppServerClient();
+  const snapshot = peekSharedClaudeAppServerClient(CLAUDE_APP_SERVER_POOL_KEY);
   const lines = ["**Claude app-server status**", ""];
   if (!snapshot) {
     lines.push("- Shared client: not yet created (no claude turn has run this process)");
@@ -85,7 +95,7 @@ export async function handleVersion(_ctx: PluginCommandContext): Promise<PluginC
       : "- Bundled bridge (managed): not found — reinstall OpenClaw or run `pnpm install`",
   );
 
-  const snapshot = peekSharedClaudeAppServerClient();
+  const snapshot = peekSharedClaudeAppServerClient(CLAUDE_APP_SERVER_POOL_KEY);
   const running = snapshot?.running ? snapshot.runningVersion : undefined;
   lines.push(`- Running bridge (spawned): ${running ?? "not running"}`);
 

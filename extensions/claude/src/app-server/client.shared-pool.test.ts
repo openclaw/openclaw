@@ -111,7 +111,10 @@ describe("shared claude app-server client pool (openclaw-7ss)", () => {
     const anthropicOpts = { command: "fake-bridge", env: { ANTHROPIC_API_KEY: "real-key" } };
     const zaiOpts = {
       command: "fake-bridge",
-      env: { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic", ANTHROPIC_AUTH_TOKEN: "zai-key" },
+      env: {
+        ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic",
+        ANTHROPIC_AUTH_TOKEN: "zai-key",
+      },
     };
 
     const anthropicClient = getSharedClaudeAppServerClient(ANTHROPIC_KEY, anthropicOpts);
@@ -174,6 +177,34 @@ describe("shared claude app-server client pool (openclaw-7ss)", () => {
     const zaiClient = getSharedClaudeAppServerClient(ZAI_KEY, zaiOpts);
     await startAndInitialize(zaiClient);
     expect(peekSharedClaudeAppServerClient()?.running).toBe(true);
+  });
+
+  it("keyed peek reports a specific entry, not whichever ran most recently (G7)", async () => {
+    const anthropicOpts = { command: "fake-bridge", env: { ANTHROPIC_API_KEY: "real-key" } };
+    const zaiOpts = { command: "fake-bridge", env: { ANTHROPIC_AUTH_TOKEN: "zai-key" } };
+
+    // A keyed peek before any turn is still null.
+    expect(peekSharedClaudeAppServerClient(ANTHROPIC_KEY)).toBeNull();
+
+    const anthropicClient = getSharedClaudeAppServerClient(ANTHROPIC_KEY, anthropicOpts);
+    await startAndInitialize(anthropicClient);
+    // GLM ran a turn MORE RECENTLY, so the keyless (lastAccessedKey) peek would
+    // report the zai entry — the ambiguity G7 is about.
+    const zaiClient = getSharedClaudeAppServerClient(ZAI_KEY, zaiOpts);
+    await startAndInitialize(zaiClient);
+
+    // The keyed peek still resolves the Claude extension's own slot.
+    expect(peekSharedClaudeAppServerClient(ANTHROPIC_KEY)?.running).toBe(true);
+    expect(peekSharedClaudeAppServerClient(ZAI_KEY)?.running).toBe(true);
+
+    // Stopping the anthropic slot is visible only through its own key; the
+    // keyless peek still points at the most-recently-accessed zai slot.
+    await clearSharedClaudeAppServerClient(ANTHROPIC_KEY);
+    expect(peekSharedClaudeAppServerClient(ANTHROPIC_KEY)).toBeNull();
+    expect(peekSharedClaudeAppServerClient(ZAI_KEY)?.running).toBe(true);
+
+    // An unknown key resolves to null rather than falling back to recency.
+    expect(peekSharedClaudeAppServerClient("claude-bridge:nonexistent")).toBeNull();
   });
 
   it("clearSharedClaudeAppServerClient() with no key stops every pool entry", async () => {
