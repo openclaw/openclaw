@@ -4,6 +4,8 @@ import { WebSocketServer } from "ws";
 import { createClickClackClient } from "./http-client.js";
 
 const LOOPBACK_RESPONSE_BYTES = 18 * 1024 * 1024;
+const CLICKCLACK_REQUEST_BODY_LIMIT_BYTES = 1024 * 1024;
+const CLICKCLACK_INBOUND_JSON_LIMIT_BYTES = 16 * 1024 * 1024;
 
 function requestBodyJson(init: RequestInit | undefined): unknown {
   const body = init?.body;
@@ -336,14 +338,17 @@ describe("createClickClackClient websocket", () => {
       baseUrl: `http://127.0.0.1:${address.port}`,
       token: "test-token",
     });
+    const socket = client.websocket("ws-1");
     try {
-      const socket = client.websocket("ws-1");
       return await new Promise<{ delivered: boolean; error?: string }>((resolve) => {
         socket.on("message", () => resolve({ delivered: true }));
         socket.on("error", (error) => resolve({ delivered: false, error: error.message }));
-      }).finally(() => socket.close());
+      });
     } finally {
-      wss.close();
+      socket.terminate();
+      await new Promise<void>((resolve, reject) => {
+        wss.close((error) => (error ? reject(error) : resolve()));
+      });
     }
   }
 
@@ -352,9 +357,25 @@ describe("createClickClackClient websocket", () => {
     expect(result.delivered).toBe(true);
   });
 
+  it("delivers a valid event frame above the server request-body limit", async () => {
+    // The server wraps and re-encodes accepted request payloads, so the event
+    // frame can legitimately be larger than its 1 MiB request-body limit.
+    const frame = JSON.stringify({
+      id: "evt-1",
+      cursor: "cursor-1",
+      type: "agent.progress",
+      workspace_id: "workspace-1",
+      created_at: "2026-07-09T00:00:00Z",
+      payload: { line: { text: "x".repeat(CLICKCLACK_REQUEST_BODY_LIMIT_BYTES) } },
+    });
+    expect(Buffer.byteLength(frame)).toBeGreaterThan(CLICKCLACK_REQUEST_BODY_LIMIT_BYTES);
+
+    const result = await runFrameCase(frame);
+    expect(result.delivered).toBe(true);
+  });
+
   it("rejects an oversized inbound frame before it reaches the event parser", async () => {
-    // 1 MiB + 1 byte: ws must error before the frame reaches the message handler.
-    const result = await runFrameCase("x".repeat(1024 * 1024 + 1));
+    const result = await runFrameCase("x".repeat(CLICKCLACK_INBOUND_JSON_LIMIT_BYTES + 1));
     expect(result.delivered).toBe(false);
     expect(result.error).toMatch(/max payload/i);
   });

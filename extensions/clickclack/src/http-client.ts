@@ -42,11 +42,10 @@ type ClientOptions = {
 };
 
 const CLICKCLACK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
-// Bound inbound realtime frames before ws buffers them for JSON parsing.
-// ClickClack events are small JSON; 1 MiB matches the sibling relay caps
-// (Slack/Signal) and replaces ws's 100 MiB default. ws rejects an over-limit
-// frame with an error + 1009 close before it reaches the event parser.
-const CLICKCLACK_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
+// Keep REST and websocket JSON under the same bounded response budget. ClickClack
+// accepts 1 MiB request bodies, then wraps and re-encodes them as events, so a
+// valid frame can exceed 1 MiB before ws hands it to the event parser.
+const CLICKCLACK_INBOUND_JSON_LIMIT_BYTES = 16 * 1024 * 1024;
 
 /**
  * Creates a typed client for the ClickClack API using bearer-token auth.
@@ -72,7 +71,9 @@ export function createClickClackClient(options: ClientOptions) {
       const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
       throw new Error(`ClickClack ${response.status}: ${detail}`);
     }
-    return await readProviderJsonResponse<T>(response, "ClickClack response");
+    return await readProviderJsonResponse<T>(response, "ClickClack response", {
+      maxBytes: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
+    });
   }
 
   return {
@@ -231,7 +232,7 @@ export function createClickClackClient(options: ClientOptions) {
         headers: {
           Authorization: `Bearer ${options.token}`,
         },
-        maxPayload: CLICKCLACK_WS_MAX_PAYLOAD_BYTES,
+        maxPayload: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
       });
     },
   };
