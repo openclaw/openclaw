@@ -143,5 +143,37 @@
         "silenceTimeoutMs": 1500.5
       }
     }
+  ],
+  "idleTimeoutCases": [
+    {
+      "id": "integer_idle_timeout_kept",
+      "fallback": null,
+      "expectedIdleTimeoutS": 30,
+      "talk": {
+        "idleTimeoutS": 30
+      }
+    },
+    {
+      "id": "missing_idle_timeout_stays_disabled",
+      "fallback": null,
+      "expectedIdleTimeoutS": null,
+      "talk": {}
+    },
+    {
+      "id": "zero_idle_timeout_stays_disabled",
+      "fallback": null,
+      "expectedIdleTimeoutS": null,
+      "talk": {
+        "idleTimeoutS": 0
+      }
+    },
+    {
+      "id": "string_idle_timeout_stays_disabled",
+      "fallback": null,
+      "expectedIdleTimeoutS": null,
+      "talk": {
+        "idleTimeoutS": "30"
+      }
+    }
   ]
 }

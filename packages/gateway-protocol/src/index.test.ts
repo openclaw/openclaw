@@ -312,6 +312,7 @@ describe("validateTalkConfigResult", () => {
       validateTalkConfigResult({
         config: {
           talk: {
+            idleTimeoutS: 30,
             realtime: {
               provider: "openai",
               providers: {

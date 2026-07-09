@@ -361,6 +361,7 @@ const TalkSchema = z
     speechLocale: z.string().optional(),
     interruptOnSpeech: z.boolean().optional(),
     silenceTimeoutMs: z.number().int().positive().optional(),
+    idleTimeoutS: z.number().int().positive().optional(),
   })
   .strict()
   .superRefine((talk, ctx) => {

@@ -26,6 +26,7 @@ struct TalkModeGatewayConfigTests {
                         ],
                     ],
                     "speechLocale": "ru-RU",
+                    "idleTimeoutS": 30,
                 ]),
             ],
             issues: nil)
@@ -44,5 +45,6 @@ struct TalkModeGatewayConfigTests {
         #expect(parsed.apiKey == nil)
         #expect(parsed.voiceId == "unused-voice")
         #expect(parsed.speechLocaleID == "ru-RU")
+        #expect(parsed.idleTimeoutS == 30)
     }
 }

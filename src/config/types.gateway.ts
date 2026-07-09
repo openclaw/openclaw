@@ -117,6 +117,8 @@ export type TalkConfig = {
   interruptOnSpeech?: boolean;
   /** Milliseconds of user silence before Talk mode sends the transcript after a pause. */
   silenceTimeoutMs?: number;
+  /** Seconds of no Talk interaction before the active Talk mode session deactivates. */
+  idleTimeoutS?: number;
 };
 
 export type TalkConfigResponse = TalkConfig & {

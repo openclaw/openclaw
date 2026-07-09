@@ -35,10 +35,19 @@ type TimeoutContractCase = {
   talk: Record<string, unknown>;
 };
 
+/** Fixture row that validates Talk idle-timeout normalization. */
+type IdleTimeoutContractCase = {
+  id: string;
+  fallback: null;
+  expectedIdleTimeoutS: number | null;
+  talk: Record<string, unknown>;
+};
+
 /** JSON fixture file shape used by this contract test. */
 type TalkConfigContractFixture = {
   selectionCases: SelectionContractCase[];
   timeoutCases: TimeoutContractCase[];
+  idleTimeoutCases: IdleTimeoutContractCase[];
 };
 
 /** External fixture keeps the matrix readable and reusable across config edits. */
@@ -82,6 +91,13 @@ describe("talk.config contract fixtures", () => {
     it(`timeout:${fixture.id}`, () => {
       const payload = buildTalkConfigResponse(fixture.talk);
       expect(payload?.silenceTimeoutMs ?? fixture.fallback).toBe(fixture.expectedTimeoutMs);
+    });
+  }
+
+  for (const fixture of fixtures.idleTimeoutCases) {
+    it(`idle-timeout:${fixture.id}`, () => {
+      const payload = buildTalkConfigResponse(fixture.talk);
+      expect(payload?.idleTimeoutS ?? fixture.fallback).toBe(fixture.expectedIdleTimeoutS);
     });
   }
 });
