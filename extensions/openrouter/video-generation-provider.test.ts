@@ -276,8 +276,8 @@ describe("openrouter video generation provider", () => {
       resolveProviderAuth: () => ({
         apiKey: "OPENROUTER_API_KEY",
         discoveryApiKey: "resolved-openrouter-key",
-        mode: "api_key",
-        source: "env",
+        mode: "api_key" as const,
+        source: "env" as const,
       }),
     });
 
@@ -375,8 +375,8 @@ describe("openrouter video generation provider", () => {
       resolveProviderAuth: () => ({
         apiKey: "OPENROUTER_API_KEY",
         discoveryApiKey: "resolved-openrouter-key",
-        mode: "api_key",
-        source: "env",
+        mode: "api_key" as const,
+        source: "env" as const,
       }),
     });
 
@@ -426,7 +426,7 @@ describe("openrouter video generation provider", () => {
           apiKey: "OPENROUTER_API_KEY",
           discoveryApiKey: "resolved-openrouter-key",
           mode: "api_key",
-          source: "env",
+          source: "env" as const,
         }),
       }),
     ).rejects.toThrow(
