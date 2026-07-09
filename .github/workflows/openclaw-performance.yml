@@ -976,36 +976,23 @@ jobs:
           echo "report_url=$report_url" >> "$GITHUB_OUTPUT"
           echo "ready=true" >> "$GITHUB_OUTPUT"
 
-      - name: Authenticate clawgrit reports publisher
-        id: auth
+      - name: Create clawgrit reports app token
+        id: clawgrit_app_token
+        if: ${{ steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}
+        continue-on-error: ${{ env.REPORT_PUBLISH_REQUIRED != 'true' }}
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          client-id: Iv23liOECG0slfuhz093
+          private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: clawgrit-reports
+          permission-contents: write
+
+      - name: Publish to clawgrit reports
         if: ${{ steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}
         continue-on-error: ${{ env.REPORT_PUBLISH_REQUIRED != 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.CLAWGRIT_REPORTS_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "ready=false" >> "$GITHUB_OUTPUT"
-          annotation="$([[ "$REPORT_PUBLISH_REQUIRED" == "true" ]] && printf error || printf warning)"
-          if [[ -z "${GH_TOKEN:-}" ]]; then
-            echo "::${annotation}::CLAWGRIT_REPORTS_TOKEN is unavailable; Kova artifacts were uploaded, but the report cannot be published."
-            exit 1
-          fi
-          if ! repo_can_push="$(gh api repos/openclaw/clawgrit-reports --jq '.permissions.push == true')"; then
-            echo "::${annotation}::CLAWGRIT_REPORTS_TOKEN was rejected by GitHub; Kova artifacts were uploaded, but the report cannot be published."
-            exit 1
-          fi
-          if [[ "$repo_can_push" != "true" ]]; then
-            echo "::${annotation}::CLAWGRIT_REPORTS_TOKEN lacks push access to openclaw/clawgrit-reports."
-            exit 1
-          fi
-          echo "ready=true" >> "$GITHUB_OUTPUT"
-
-      - name: Publish to clawgrit reports
-        if: ${{ steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' && steps.auth.outputs.ready == 'true' }}
-        continue-on-error: ${{ env.REPORT_PUBLISH_REQUIRED != 'true' }}
-        env:
-          CLAWGRIT_REPORTS_TOKEN: ${{ secrets.CLAWGRIT_REPORTS_TOKEN }}
+          CLAWGRIT_REPORTS_APP_TOKEN: ${{ steps.clawgrit_app_token.outputs.token }}
           REPORTS_ROOT: ${{ steps.prepare.outputs.reports_root }}
           REPORT_COMMIT: ${{ steps.prepare.outputs.report_commit }}
           DEST_REL: ${{ steps.prepare.outputs.dest_rel }}
@@ -1014,8 +1001,17 @@ jobs:
         run: |
           set -euo pipefail
           annotation="$([[ "$REPORT_PUBLISH_REQUIRED" == "true" ]] && printf error || printf warning)"
-          token="$CLAWGRIT_REPORTS_TOKEN"
-          unset CLAWGRIT_REPORTS_TOKEN
+          if [[ -z "${CLAWGRIT_REPORTS_APP_TOKEN:-}" ]]; then
+            {
+              echo "### Clawgrit report publish unavailable"
+              echo
+              echo "The repository-scoped ClawSweeper GitHub App token could not be created."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::${annotation}::ClawSweeper GitHub App token is unavailable; Kova artifacts were uploaded, but the report cannot be published."
+            exit 1
+          fi
+          token="$CLAWGRIT_REPORTS_APP_TOKEN"
+          unset CLAWGRIT_REPORTS_APP_TOKEN
           auth_header="$(printf 'x-access-token:%s' "$token" | base64 | tr -d '\n')"
           unset token
           echo "::add-mask::${auth_header}"
@@ -1058,7 +1054,7 @@ jobs:
                 echo "### Clawgrit report publish failed"
                 echo
                 echo "Kova artifacts were uploaded, but publishing the clawgrit report failed after ${attempt} attempts."
-                echo 'Check the `CLAWGRIT_REPORTS_TOKEN` secret or the reports repository permissions.'
+                echo "Check the ClawSweeper GitHub App installation and contents permission for openclaw/clawgrit-reports."
               } >> "$GITHUB_STEP_SUMMARY"
               echo "::${annotation}::Kova artifacts uploaded, but clawgrit report publish failed after ${attempt} attempts."
               exit 1

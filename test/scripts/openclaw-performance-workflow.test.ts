@@ -2,6 +2,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -131,15 +132,15 @@ describe("OpenClaw performance workflow", () => {
     const publisher = workflow.jobs?.publish;
     const kovaSteps = workflow.jobs?.kova?.steps ?? [];
     const publishSteps = publisher?.steps ?? [];
+    const appTokenIndex = publishSteps.findIndex(
+      (step) => step.name === "Create clawgrit reports app token",
+    );
+    const artifactIndex = publishSteps.findIndex((step) => step.name === "Resolve Kova artifact");
     const downloadIndex = publishSteps.findIndex((step) => step.name === "Download Kova artifacts");
     const prepareIndex = publishSteps.findIndex(
       (step) => step.name === "Prepare clawgrit report commit",
     );
-    const authIndex = publishSteps.findIndex(
-      (step) => step.name === "Authenticate clawgrit reports publisher",
-    );
     const pushIndex = publishSteps.findIndex((step) => step.name === "Publish to clawgrit reports");
-    const auth = publishSteps[authIndex] as WorkflowStep;
 
     expect(publisher?.needs).toEqual(["resolve_target", "kova"]);
     expect(publisher?.if).toBe(
@@ -151,29 +152,59 @@ describe("OpenClaw performance workflow", () => {
       "${{ github.event_name == 'schedule' || inputs.profile == 'release' }}",
     );
     expect(kovaSteps.some((step) => step.name === "Upload Kova artifacts")).toBe(true);
-    expect(kovaSteps.some((step) => step.name?.includes("clawgrit reports publisher"))).toBe(false);
-    expect(downloadIndex).toBeGreaterThanOrEqual(0);
+    expect(JSON.stringify(kovaSteps)).not.toContain("CLAWSWEEPER_APP_PRIVATE_KEY");
+    expect(artifactIndex).toBeGreaterThanOrEqual(0);
+    expect(downloadIndex).toBeGreaterThan(artifactIndex);
     expect(prepareIndex).toBeGreaterThan(downloadIndex);
-    expect(authIndex).toBeGreaterThan(prepareIndex);
-    expect(pushIndex).toBeGreaterThan(authIndex);
-    expect(auth.id).toBe("auth");
-    expect(auth.if).toBe(
+    expect(appTokenIndex).toBeGreaterThan(prepareIndex);
+    expect(pushIndex).toBeGreaterThan(appTokenIndex);
+  });
+
+  it("mints only a short-lived repo-scoped ClawSweeper app token", () => {
+    const workflowText = readFileSync(WORKFLOW, "utf8");
+    const publisher = readWorkflow().jobs?.publish;
+    const publishSteps = publisher?.steps ?? [];
+    const appToken = findStep("Create clawgrit reports app token", "publish");
+    const publish = findStep("Publish to clawgrit reports", "publish");
+    const appTokenOutput = "${{ steps.clawgrit_app_token.outputs.token }}";
+    const tokenConsumers = publishSteps.filter((step) =>
+      Object.values(step.env ?? {}).includes(appTokenOutput),
+    );
+
+    expect(appToken.id).toBe("clawgrit_app_token");
+    expect(appToken.if).toBe(
       "${{ steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}",
     );
-    expect(auth.env?.GH_TOKEN).toBe("${{ secrets.CLAWGRIT_REPORTS_TOKEN }}");
-    expect(auth.run).toContain(
-      "gh api repos/openclaw/clawgrit-reports --jq '.permissions.push == true'",
+    expect(appToken.uses).toBe(
+      "actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3",
     );
-    expect(auth.run).toContain('[[ "$repo_can_push" != "true" ]]');
+    expect(appToken.with).toEqual({
+      "client-id": "Iv23liOECG0slfuhz093",
+      "private-key": "${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}",
+      owner: "openclaw",
+      repositories: "clawgrit-reports",
+      "permission-contents": "write",
+    });
+    expect(appToken.with?.["skip-token-revoke"]).toBeUndefined();
+    expect(tokenConsumers.map((step) => step.name)).toEqual(["Publish to clawgrit reports"]);
+    expect(publish.env?.CLAWGRIT_REPORTS_APP_TOKEN).toBe(appTokenOutput);
+    expect(workflowText.split(appTokenOutput)).toHaveLength(2);
+    expect(workflowText.split("${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}")).toHaveLength(2);
+    expect(publish.if).toBe(
+      "${{ steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}",
+    );
+    expect(workflowText).not.toContain("CLAWGRIT_REPORTS_TOKEN");
+    expect(workflowText).not.toContain("secrets.GH_APP_PRIVATE_KEY");
+    expect(workflowText).not.toContain('app-id: "2729701"');
   });
 
   it("keeps manual non-release publication advisory", () => {
     const continuation = "${{ env.REPORT_PUBLISH_REQUIRED != 'true' }}";
     const steps = [
+      findStep("Create clawgrit reports app token", "publish"),
       findStep("Resolve Kova artifact", "publish"),
       findStep("Download Kova artifacts", "publish"),
       findStep("Prepare clawgrit report commit", "publish"),
-      findStep("Authenticate clawgrit reports publisher", "publish"),
       findStep("Publish to clawgrit reports", "publish"),
     ];
 
@@ -187,17 +218,16 @@ describe("OpenClaw performance workflow", () => {
     }
   });
 
-  it("validates artifacts before exposing publisher credentials", () => {
+  it("keeps app credentials out of artifact processing and scopes them to Git push", () => {
     const workflow = readWorkflow();
     const kovaJob = workflow.jobs?.kova;
     const artifact = findStep("Resolve Kova artifact", "publish");
     const paths = findStep("Create isolated publisher paths", "publish");
     const download = findStep("Download Kova artifacts", "publish");
     const prepare = findStep("Prepare clawgrit report commit", "publish");
-    const auth = findStep("Authenticate clawgrit reports publisher", "publish");
     const publish = findStep("Publish to clawgrit reports", "publish");
 
-    expect(JSON.stringify(kovaJob)).not.toContain("CLAWGRIT_REPORTS_TOKEN");
+    expect(JSON.stringify(kovaJob)).not.toContain("CLAWSWEEPER_APP_PRIVATE_KEY");
     expect(artifact.env?.GH_TOKEN).toBe("${{ github.token }}");
     expect(artifact.run).toContain("gh api --paginate");
     expect(artifact.run).toContain("candidate_attempt <= GITHUB_RUN_ATTEMPT");
@@ -210,7 +240,9 @@ describe("OpenClaw performance workflow", () => {
     expect(download.with?.["artifact-ids"]).toBe("${{ steps.artifact.outputs.id }}");
     expect(download.with?.name).toBeUndefined();
     expect(download.with?.path).toBe("${{ steps.paths.outputs.input_root }}");
-    expect(prepare.env?.CLAWGRIT_REPORTS_TOKEN).toBeUndefined();
+    expect(JSON.stringify(artifact.env ?? {})).not.toContain("clawgrit_app_token.outputs.token");
+    expect(JSON.stringify(download.env ?? {})).not.toContain("clawgrit_app_token.outputs.token");
+    expect(JSON.stringify(prepare.env ?? {})).not.toContain("clawgrit_app_token.outputs.token");
     expect(prepare.env?.TESTED_SHA).toBe("${{ needs.resolve_target.outputs.tested_sha }}");
     expect(prepare.env?.PRODUCER_ATTEMPT).toBe("${{ steps.artifact.outputs.producer_attempt }}");
     expect(prepare.run).toContain('run_slug="${GITHUB_RUN_ID}-${PRODUCER_ATTEMPT}"');
@@ -224,11 +256,12 @@ describe("OpenClaw performance workflow", () => {
     expect(prepare.run).toContain(
       'remote add origin "https://github.com/openclaw/clawgrit-reports.git"',
     );
-    expect(auth.env?.GH_TOKEN).toBe("${{ secrets.CLAWGRIT_REPORTS_TOKEN }}");
-    expect(publish.env?.CLAWGRIT_REPORTS_TOKEN).toBe("${{ secrets.CLAWGRIT_REPORTS_TOKEN }}");
+    expect(publish.env?.CLAWGRIT_REPORTS_APP_TOKEN).toBe(
+      "${{ steps.clawgrit_app_token.outputs.token }}",
+    );
     expect(publish.if).toContain("steps.prepare.outputs.already_published != 'true'");
     expect(publish.run).not.toContain("${{ steps.kova.outputs.");
-    expect(publish.run).toContain("unset CLAWGRIT_REPORTS_TOKEN");
+    expect(publish.run).toContain("unset CLAWGRIT_REPORTS_APP_TOKEN");
     expect(publish.run).toContain("GIT_CONFIG_KEY_0=core.hooksPath");
     expect(publish.run).toContain("GIT_CONFIG_VALUE_0=/dev/null");
     expect(publish.run).toContain("GIT_CONFIG_KEY_1=http.https://github.com/.extraheader");
@@ -302,7 +335,7 @@ printf '%s\\n' \
 case "$*" in
   *"config --local --get core.hooksPath"*) echo /dev/null ;;
   *"remote get-url origin"*) echo https://github.com/openclaw/clawgrit-reports.git ;;
-  *" push origin HEAD:main"*) exit "\${STUB_PUSH_STATUS:-0}" ;;
+  *" push origin HEAD:main"*) printf push > "$STUB_PUSH_MARKER"; exit "\${STUB_PUSH_STATUS:-0}" ;;
   *" fetch --depth=1 origin main"*) exit 1 ;;
   *) exit 0 ;;
 esac
@@ -314,14 +347,21 @@ esac
     chmodSync(join(bin, "sleep"), 0o755);
     chmodSync(join(bin, "timeout"), 0o755);
 
-    const execute = (pushStatus: string) => {
-      const summary = join(root, `summary-${pushStatus}.md`);
+    const execute = (pushStatus: string, appToken: string | null = "test-app-token") => {
+      const summary = join(
+        root,
+        `summary-${pushStatus}-${appToken === null ? "missing" : "token"}.md`,
+      );
+      const pushMarker = join(
+        root,
+        `push-${pushStatus}-${appToken === null ? "missing" : "token"}.marker`,
+      );
       const result = spawnSync("bash", ["-c", publish.run ?? ""], {
         encoding: "utf8",
         env: {
           ...process.env,
           PATH: `${bin}:${process.env.PATH ?? ""}`,
-          CLAWGRIT_REPORTS_TOKEN: "test-token",
+          ...(appToken === null ? {} : { CLAWGRIT_REPORTS_APP_TOKEN: appToken }),
           DEST_REL: "openclaw-performance/main/123-1/mock-provider",
           GITHUB_STEP_SUMMARY: summary,
           REPORT_COMMIT: "a".repeat(40),
@@ -329,11 +369,13 @@ esac
           REPORT_URL: reportUrl,
           REPORTS_ROOT: reportsRoot,
           RUNNER_TEMP: root,
+          STUB_PUSH_MARKER: pushMarker,
           STUB_PUSH_STATUS: pushStatus,
         },
       });
       return {
         result,
+        pushMarker,
         summary: readFileSync(summary, "utf8"),
       };
     };
@@ -346,8 +388,15 @@ esac
       const failure = execute("1");
       expect(failure.result.status).toBe(1);
       expect(failure.summary).toContain("Clawgrit report publish failed");
-      expect(failure.summary).toContain("`CLAWGRIT_REPORTS_TOKEN`");
+      expect(failure.summary).toContain("ClawSweeper GitHub App installation");
       expect(failure.summary).not.toContain("Published report:");
+
+      const missing = execute("0", null);
+      expect(missing.result.status).toBe(1);
+      expect(missing.result.stdout).toContain("ClawSweeper GitHub App token is unavailable");
+      expect(missing.summary).toContain("Clawgrit report publish unavailable");
+      expect(missing.summary).not.toContain("Published report:");
+      expect(existsSync(missing.pushMarker)).toBe(false);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
