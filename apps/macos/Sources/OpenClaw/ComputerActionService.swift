@@ -66,6 +66,13 @@ final class ComputerActionService {
     /// drag and release events so a modifier-held split drag keeps Cmd/Opt/Shift
     /// for the whole gesture even when later turns omit the modifier.
     private var heldButtonFlags: CGEventFlags = []
+    /// Bumped on every lifecycle release request. `perform` captures this before
+    /// it suspends and re-checks after dispatch: a disconnect/stop/disable release
+    /// can run during an await while `leftButtonDown` is still false, see nothing
+    /// held, and no-op, after which dispatch arms the button. The post-dispatch
+    /// re-check releases that just-armed button so a lifecycle release can never
+    /// be defeated by actor reentrancy at an await before the button is set.
+    private var releaseGeneration: UInt64 = 0
 
     // Drag pacing: fast enough to feel responsive, slow enough that dropped
     // targets (AppKit hit-testing mid-drag) do not misfire.
@@ -97,8 +104,18 @@ final class ComputerActionService {
         guard self.permissions.checkAccessibilityPermission() else {
             throw ComputerActionError.accessibilityNotTrusted
         }
+        // Capture the release generation before the first suspension. If a
+        // lifecycle release runs while this action is awaiting below (when
+        // leftButtonDown is still false), it no-ops; the check after dispatch
+        // then releases any button this action armed so the release wins.
+        let releaseGenerationAtStart = self.releaseGeneration
         let display = try await self.resolveDisplay(screenIndex: params.screenIndex)
         try await self.dispatch(params, display: display)
+        // No suspension between dispatch arming the button and this check, so the
+        // read of leftButtonDown/releaseGeneration is atomic on the actor.
+        if self.leftButtonDown, self.releaseGeneration != releaseGenerationAtStart {
+            self.releaseHeldInput()
+        }
         let cursor = self.automation.currentMouseLocation() ?? CGPoint.zero
         return OpenClawComputerActResult(ok: true, cursorX: cursor.x, cursorY: cursor.y)
     }
@@ -325,6 +342,11 @@ final class ComputerActionService {
     /// disabled) so a stranded left_mouse_down is not held until the idle
     /// watchdog fires. Idempotent when nothing is held.
     func releaseHeldInput() {
+        // Bump first so a computer.act action suspended at an await before it
+        // arms the button observes the changed generation after it resumes and
+        // releases itself (see perform); otherwise this no-ops for a not-yet-held
+        // button and the action would leave it stuck until the idle watchdog.
+        self.releaseGeneration &+= 1
         self.buttonReleaseTask?.cancel()
         self.buttonReleaseTask = nil
         guard self.leftButtonDown else { return }
