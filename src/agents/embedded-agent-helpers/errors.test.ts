@@ -6,8 +6,9 @@ import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../../shared/assista
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { formatAssistantErrorText, isLikelyContextOverflowError } from "./errors.js";
 
-const { toolPolicyAuditInfo } = vi.hoisted(() => ({
+const { toolPolicyAuditInfo, warnMock } = vi.hoisted(() => ({
   toolPolicyAuditInfo: vi.fn(),
+  warnMock: vi.fn(),
 }));
 
 vi.mock("../../logging/subsystem.js", () => ({
@@ -15,7 +16,7 @@ vi.mock("../../logging/subsystem.js", () => ({
     debug: vi.fn(),
     error: vi.fn(),
     info: toolPolicyAuditInfo,
-    warn: vi.fn(),
+    warn: warnMock,
   }),
 }));
 
@@ -105,5 +106,50 @@ describe("isLikelyContextOverflowError", () => {
         "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
       ),
     ).toBe(true);
+  });
+});
+
+function hasLoneSurrogate(s: string): boolean {
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      if (i + 1 >= s.length || s.charCodeAt(i + 1) < 0xdc00 || s.charCodeAt(i + 1) > 0xdfff) {
+        return true;
+      }
+    }
+    if (c >= 0xdc00 && c <= 0xdfff) {
+      if (i === 0 || s.charCodeAt(i - 1) < 0xd800 || s.charCodeAt(i - 1) > 0xdbff) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+describe("formatAssistantErrorText long-error truncation", () => {
+  beforeEach(() => {
+    warnMock.mockClear();
+  });
+
+  it("does not split UTF-16 surrogate pairs in the logged preview or returned text", () => {
+    // 199 ASCII chars put the high surrogate of the emoji exactly at the
+    // legacy 200-code-unit cut point; the trailing padding keeps total length
+    // above the 600-code-unit truncation threshold.
+    const raw = "a".repeat(199) + "😀" + "b".repeat(500);
+    const msg = makeAssistantMessageFixture({
+      errorMessage: raw,
+      content: [{ type: "text", text: raw }],
+    });
+
+    const friendly = formatAssistantErrorText(msg);
+
+    expect(friendly).toContain("…");
+    expect(hasLoneSurrogate(friendly ?? "")).toBe(false);
+    expect(warnMock).toHaveBeenCalled();
+    const warnCall = warnMock.mock.calls.find((call) =>
+      String(call[0]).includes("Long error truncated"),
+    );
+    expect(warnCall).toBeDefined();
+    expect(hasLoneSurrogate(String(warnCall![0]))).toBe(false);
   });
 });
