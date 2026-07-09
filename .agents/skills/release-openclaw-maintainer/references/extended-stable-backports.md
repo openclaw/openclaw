@@ -263,5 +263,8 @@ and Full Release Validation from the canonical branch; publish every
 npm-publishable official plugin from the exact release SHA; publish the
 prepared core tarball with the referenced successful run IDs; verify every
 exact package and `extended-stable` selector; and preserve the generated
-selector-repair command. Never republish an immutable version when only a
-selector needs repair.
+core `openclaw` selector-repair command. Repair missing or stale official-
+plugin selectors on already-published versions with the approved credential-
+isolated release tooling for manual tag repair; the OIDC source workflow cannot
+mutate those tags. Never republish an immutable version when only a selector
+needs repair.
