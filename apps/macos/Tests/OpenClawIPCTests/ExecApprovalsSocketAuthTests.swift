@@ -56,7 +56,7 @@ struct ExecApprovalsSocketAuthTests {
     }
 
     @Test
-    func `exec host limiter bounds real command output`() async throws {
+    func `exec host limiter bounds real command output`() async {
         let result = await ShellExecutor.runDetailed(
             command: [
                 "/usr/bin/perl",
@@ -69,6 +69,41 @@ struct ExecApprovalsSocketAuthTests {
 
         #expect(ExecHostOutputLimiter.truncate(result.stdout).utf8.count <= ExecHostOutputLimiter.maxOutputFieldBytes)
         #expect(ExecHostOutputLimiter.truncate(result.stderr).utf8.count <= ExecHostOutputLimiter.maxOutputFieldBytes)
+        #expect(result.exitCode == 0)
+    }
+
+    @Test
+    func `socket decoded argv reaches executor without token normalization`() async throws {
+        let command = ["/usr/bin/printf", "<%s>|<%s>", "  padded  ", "-n"]
+        let request = ExecHostRequest(
+            command: command,
+            rawCommand: nil,
+            cwd: nil,
+            env: nil,
+            timeoutMs: nil,
+            needsScreenRecording: nil,
+            agentId: nil,
+            sessionKey: nil,
+            approvalDecision: .allowOnce)
+        let requestJSON = try JSONEncoder().encode(request)
+        let socketDecodedRequest = try JSONDecoder().decode(ExecHostRequest.self, from: requestJSON)
+
+        let validated: ExecHostValidatedRequest
+        switch ExecHostRequestEvaluator.validateRequest(socketDecodedRequest) {
+        case let .success(request):
+            validated = request
+        case let .failure(error):
+            Issue.record("unexpected invalid request: \(error.message)")
+            return
+        }
+        let result = await ShellExecutor.runDetailed(
+            command: validated.command,
+            cwd: nil,
+            env: nil,
+            timeout: 2)
+
+        #expect(validated.command == command)
+        #expect(result.stdout == "<  padded  >|<-n>")
         #expect(result.exitCode == 0)
     }
 

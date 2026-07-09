@@ -2,13 +2,41 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { SkillBinsProvider } from "./invoke-types.js";
 import { handleInvoke } from "./invoke.js";
 
+const approvalResolutionFailure = vi.hoisted(() => ({ error: null as Error | null }));
+
+vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../infra/exec-approvals.js")>();
+  return {
+    ...original,
+    resolveExecApprovalsLocked: async (
+      ...args: Parameters<typeof original.resolveExecApprovalsLocked>
+    ) => {
+      const error = approvalResolutionFailure.error;
+      approvalResolutionFailure.error = null;
+      if (error) {
+        throw error;
+      }
+      return await original.resolveExecApprovalsLocked(...args);
+    },
+  };
+});
+
+vi.mock("../logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logger.js")>()),
+  logWarn: vi.fn(),
+}));
+
 describe("node host invoke", () => {
+  beforeEach(() => {
+    approvalResolutionFailure.error = null;
+  });
+
   it.runIf(process.platform !== "win32")(
     "reports current allow-always coverage for prepared shell-wrapped system.run commands",
     async () => {
@@ -152,6 +180,60 @@ describe("node host invoke", () => {
         }),
       }),
     );
+  });
+
+  it("returns a structured failure when system.run approval resolution rejects", async () => {
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+    const skillBins: SkillBinsProvider = { current: async () => [] };
+    approvalResolutionFailure.error = new Error("approval lock unavailable");
+
+    await expect(
+      handleInvoke(
+        {
+          id: "invoke-approval-read-failure",
+          nodeId: "node-1",
+          command: "system.run",
+          paramsJSON: JSON.stringify({ command: ["echo", "ok"] }),
+        },
+        { request } as unknown as GatewayClient,
+        skillBins,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(
+      "node.invoke.result",
+      expect.objectContaining({
+        id: "invoke-approval-read-failure",
+        nodeId: "node-1",
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "node invocation failed",
+        },
+      }),
+    );
+  });
+
+  it("consumes a failed terminal response after approval resolution rejects", async () => {
+    const request = vi.fn<GatewayClient["request"]>().mockRejectedValue(new Error("gateway down"));
+    const skillBins: SkillBinsProvider = { current: async () => [] };
+    approvalResolutionFailure.error = new Error("approval lock unavailable");
+
+    await expect(
+      handleInvoke(
+        {
+          id: "invoke-approval-read-and-send-failure",
+          nodeId: "node-1",
+          command: "system.run",
+          paramsJSON: JSON.stringify({ command: ["echo", "ok"] }),
+        },
+        { request } as unknown as GatewayClient,
+        skillBins,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("includes effective exec policy in system.run.prepare responses", async () => {
