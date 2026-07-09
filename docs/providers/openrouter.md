@@ -105,7 +105,7 @@ under `agents.defaults.imageGenerationModel`:
   agents: {
     defaults: {
       imageGenerationModel: {
-        primary: "openrouter/google/gemini-3.1-flash-image-preview",
+        primary: "openrouter/google/gemini-3.1-flash-image",
         timeoutMs: 180_000,
       },
     },

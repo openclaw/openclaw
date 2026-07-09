@@ -213,10 +213,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
-    expect(res.config.agents?.list).toEqual([
-      { id: "main", workspace: "/main" },
-      { id: "beta" },
-    ]);
+    expect(res.config.agents?.list).toEqual([{ id: "main", workspace: "/main" }, { id: "beta" }]);
     expect(res.changes.some((change) => change.includes("workspace"))).toBe(false);
   });
 
@@ -451,9 +448,9 @@ describe("normalizeCompatibilityConfigValues", () => {
           },
         },
       } as unknown as OpenClawConfig);
-      const channel = (res.config.channels as Record<string, { accounts?: Record<string, unknown> }>)?.[
-        channelId
-      ];
+      const channel = (
+        res.config.channels as Record<string, { accounts?: Record<string, unknown> }>
+      )?.[channelId];
 
       expect(channel?.accounts?.default).toEqual({
         dmPolicy: "allowlist",
@@ -611,7 +608,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
 
     expect(res.config.agents?.defaults?.imageGenerationModel).toEqual({
-      primary: "google/gemini-3-pro-image-preview",
+      primary: "google/gemini-3.1-flash-image",
     });
     expect(res.config.models?.providers?.google?.apiKey).toEqual({
       source: "env",
@@ -624,7 +621,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.models?.providers?.google?.models).toStrictEqual([]);
     expect(res.config.skills?.entries).toBeUndefined();
     expect(res.changes).toEqual([
-      "Moved skills.entries.nano-banana-pro → agents.defaults.imageGenerationModel.primary (google/gemini-3-pro-image-preview).",
+      "Moved skills.entries.nano-banana-pro → agents.defaults.imageGenerationModel.primary (google/gemini-3.1-flash-image).",
       "Moved skills.entries.nano-banana-pro.apiKey → models.providers.google.apiKey.",
       "Removed legacy skills.entries.nano-banana-pro.",
     ]);
