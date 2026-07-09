@@ -161,4 +161,52 @@ describe("resolveWebProviderDefinition", () => {
       },
     });
   });
+
+  it("falls back to auto-detect when runtime metadata names an unavailable provider", () => {
+    const resolved = resolveWebProviderDefinition({
+      config: {},
+      toolConfig: { enabled: true },
+      runtimeMetadata: { selectedProvider: "removed-provider" },
+      providers: [
+        {
+          id: "custom",
+        },
+      ],
+      resolveEnabled: () => true,
+      resolveAutoProviderId: () => "custom",
+      createTool: ({ provider }) => ({
+        name: provider.id,
+      }),
+    });
+
+    expect(resolved).toEqual({
+      provider: {
+        id: "custom",
+      },
+      definition: {
+        name: "custom",
+      },
+    });
+  });
+
+  it("does not replace an unavailable explicit provider id with auto-detect", () => {
+    const resolved = resolveWebProviderDefinition({
+      config: {},
+      toolConfig: { enabled: true },
+      runtimeMetadata: undefined,
+      providerId: "missing-provider",
+      providers: [
+        {
+          id: "custom",
+        },
+      ],
+      resolveEnabled: () => true,
+      resolveAutoProviderId: () => "custom",
+      createTool: ({ provider }) => ({
+        name: provider.id,
+      }),
+    });
+
+    expect(resolved).toBeNull();
+  });
 });

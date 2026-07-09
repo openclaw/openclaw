@@ -280,12 +280,7 @@ export function resolveWebProviderDefinition<
     toolConfig: params.toolConfig,
     providers,
   });
-  const providerId =
-    params.providerId ?? params.runtimeMetadata?.selectedProvider ?? autoProviderId;
-  if (!providerId) {
-    return null;
-  }
-  const provider =
+  const resolveProvider = (providerId: string) =>
     providers.find((entry) => entry.id === providerId) ??
     providers.find(
       (entry) =>
@@ -297,6 +292,16 @@ export function resolveWebProviderDefinition<
           providerId,
         }),
     );
+  let provider: TProvider | undefined;
+  if (params.providerId !== undefined) {
+    provider = params.providerId ? resolveProvider(params.providerId) : undefined;
+  } else {
+    const runtimeProviderId = params.runtimeMetadata?.selectedProvider;
+    provider = runtimeProviderId ? resolveProvider(runtimeProviderId) : undefined;
+    if (!provider && autoProviderId) {
+      provider = resolveProvider(autoProviderId);
+    }
+  }
   if (!provider) {
     return null;
   }
