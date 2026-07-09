@@ -62,6 +62,13 @@ describe("bracket-only marker rejection", () => {
     expect(blocks).toBeNull();
   });
 
+  test("rejects bracket marker with function close tag suffix", () => {
+    // [name] bracket openings set requiresClosing:true; a stray </function>
+    // close tag must not promote the bracket to an empty-argument tool call.
+    const blocks = parseStandalonePlainTextToolCallBlocks("[exec]\n</function>");
+    expect(blocks).toBeNull();
+  });
+
   test("preserves bracket markers when stripping visible text", () => {
     const result = stripPlainTextToolCallBlocks("[tool:exec]\n");
     expect(result).toBe("[tool:exec]\n");

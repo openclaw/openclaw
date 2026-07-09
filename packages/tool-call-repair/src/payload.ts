@@ -324,7 +324,7 @@ function parseXmlishPlainTextToolCallBlockEndAt(text: string, start: number): nu
     cursor = parameter.end;
   }
   // Reject zero-parameter bracket markers but accept explicit <function=...></function> calls
-  if (parameterCount === 0 && opening.allowsOptionalXmlishClose) {
+  if (parameterCount === 0 && (opening.allowsOptionalXmlishClose || opening.requiresClosing)) {
     return null;
   }
   return opening.allowsOptionalXmlishClose
@@ -371,7 +371,7 @@ function parseXmlishPlainTextToolCallBlockAt(
     cursor = parameter.end;
   }
   // Reject zero-parameter bracket markers but accept explicit <function=...></function> calls
-  if (parameterCount === 0 && opening.allowsOptionalXmlishClose) {
+  if (parameterCount === 0 && (opening.allowsOptionalXmlishClose || opening.requiresClosing)) {
     return null;
   }
 
