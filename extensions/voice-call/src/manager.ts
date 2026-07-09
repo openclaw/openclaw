@@ -413,7 +413,9 @@ export class CallManager {
     // is actually available; otherwise speak immediately on answered.
     const mode = (call.metadata?.mode as string | undefined) ?? "conversation";
     if (mode === "conversation") {
-      if (this.config.realtime.enabled) {
+      // Guard absent realtime config (e.g. direct test/runtime construction);
+      // normalized configs always include defaults, but this path is public.
+      if (this.config.realtime?.enabled) {
         return;
       }
       const shouldWaitForStreamConnect =

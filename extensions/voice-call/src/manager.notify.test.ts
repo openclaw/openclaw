@@ -1,6 +1,13 @@
 // Voice Call tests cover manager.notify plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { createManagerHarness, FakeProvider } from "./manager.test-harness.js";
+import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
+import { CallManager } from "./manager.js";
+import {
+  createManagerHarness,
+  createTestStorePath,
+  FakeProvider,
+  installVoiceCallStateRuntimeForTests,
+} from "./manager.test-harness.js";
 
 class FailFirstPlayTtsProvider extends FakeProvider {
   private failed = false;
@@ -190,6 +197,29 @@ describe("CallManager notify and mapping", () => {
     await answerCall(manager, callId, "evt-conversation-plivo");
 
     expectFirstPlayTtsText(provider, "Hello from conversation");
+  });
+
+  it("does not crash on answered conversation call when realtime config is absent", async () => {
+    installVoiceCallStateRuntimeForTests();
+    const parsed = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+    const config = { ...parsed, realtime: undefined } as unknown as VoiceCallConfig;
+    const manager = new CallManager(config, createTestStorePath());
+    const provider = new FakeProvider("plivo");
+    await manager.initialize(provider, "https://example.com/voice/webhook");
+
+    const callId = await initiateCallWithMessage(
+      manager,
+      "+15550000015",
+      "Hello without realtime",
+      "conversation",
+    );
+    await answerCall(manager, callId, "evt-conversation-no-realtime");
+
+    expectFirstPlayTtsText(provider, "Hello without realtime");
   });
 
   it("speaks initial message on answered for conversation mode when Twilio streaming is disabled", async () => {
