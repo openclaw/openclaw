@@ -141,6 +141,69 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     });
   });
 
+  it("announces channel-shaped failure destinations without mode under a global webhook default (#102235)", () => {
+    const logger = {
+      warn: vi.fn(),
+    };
+    // Job shape from CLI `--failure-channel slack --failure-to #alerts` with no `--failure-mode`.
+    const job = {
+      id: "cron-channel-fd-no-mode",
+      name: "channel fd no mode",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "hello" },
+      delivery: {
+        mode: "none",
+        failureDestination: {
+          channel: "slack",
+          to: "#alerts",
+        },
+      },
+      state: {},
+    } satisfies CronJob;
+
+    dispatchGatewayCronFinishedNotifications({
+      evt: {
+        jobId: job.id,
+        action: "finished",
+        status: "error",
+        error: "boom",
+      },
+      job,
+      deps: {} as CliDeps,
+      logger,
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+      // Global default like `cron.failureDestination = { mode: "webhook", to: "https://..." }`.
+      globalFailureDestination: {
+        mode: "webhook",
+        to: "https://hook.example/cron",
+      },
+    });
+
+    // After the fix: channel-shaped job FD without mode is announce, not inherited webhook.
+    expect(mocks.sendFailureNotificationAnnounce).toHaveBeenCalledTimes(1);
+    expect(mocks.sendFailureNotificationAnnounce.mock.calls[0]?.[4]).toEqual({
+      channel: "slack",
+      to: "#alerts",
+      accountId: undefined,
+      sessionKey: undefined,
+      inheritSessionThread: false,
+    });
+    expect(mocks.sendFailureNotificationAnnounce.mock.calls[0]?.[5]).toBe(
+      '⚠️ Cron job "channel fd no mode" failed: boom',
+    );
+    // Must not treat "#alerts" as a webhook URL and drop the alert.
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: job.id }),
+      "cron: failure destination webhook URL is invalid, skipping",
+    );
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+  });
+
   it("redacts command action-required summaries before webhook completion delivery", async () => {
     const logger = { warn: vi.fn() };
     const sensitiveSummary =
