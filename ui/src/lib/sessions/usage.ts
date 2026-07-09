@@ -28,6 +28,7 @@ export function buildSessionUsageDateParams(timeZone: "local" | "utc") {
     ? { mode: "utc" }
     : {
         mode: "specific",
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         utcOffset: formatUtcOffset(new Date().getTimezoneOffset()),
       };
 }

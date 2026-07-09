@@ -694,7 +694,7 @@ describe("session cost usage", () => {
         agentId: "main",
         startMs: Date.UTC(2026, 1, 11, 2),
         endMs: Date.UTC(2026, 1, 12, 1, 59, 59, 999),
-        dailyUtcOffsetMinutes: -120,
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: -120 },
       });
       const summary = requireValue(result.summaries[0], "offset session summary missing");
 
@@ -706,6 +706,86 @@ describe("session cost usage", () => {
       expect(new Set(summary.utcQuarterHourMessageCounts?.map((entry) => entry.date))).toEqual(
         new Set(["2026-02-12"]),
       );
+    });
+  });
+
+  it("rebuckets cost and session days with historical DST offsets", async () => {
+    const root = await makeSessionCostRoot("cost-cache-request-timezone");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-timezone.jsonl");
+    const usage = {
+      input: 10,
+      output: 5,
+      totalTokens: 15,
+      cost: { total: 0.00001 },
+    };
+    await fs.writeFile(
+      sessionFile,
+      [
+        {
+          type: "message",
+          timestamp: "2026-03-28T22:29:00.000Z",
+          message: { role: "user", content: "before DST" },
+        },
+        {
+          type: "message",
+          timestamp: "2026-03-28T22:30:00.000Z",
+          message: { role: "assistant", usage },
+        },
+        {
+          type: "message",
+          timestamp: "2026-03-29T22:29:00.000Z",
+          message: { role: "user", content: "after DST" },
+        },
+        {
+          type: "message",
+          timestamp: "2026-03-29T22:30:00.000Z",
+          message: { role: "assistant", usage },
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n"),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ agentId: "main", sessionFiles: [sessionFile] });
+      const dayBucket = { mode: "time-zone", timeZone: "Europe/Vienna" } as const;
+      const startMs = Date.parse("2026-03-27T23:00:00.000Z");
+      const endMs = Date.parse("2026-03-30T21:59:59.999Z");
+      const cost = await loadCostUsageSummaryFromCache({
+        agentId: "main",
+        startMs,
+        endMs,
+        dayBucket,
+        requestRefresh: false,
+      });
+      const sessions = await loadSessionCostSummariesFromCache({
+        sessions: [{ sessionId: "sess-timezone", sessionFile }],
+        agentId: "main",
+        startMs,
+        endMs,
+        dayBucket,
+        requestRefresh: false,
+      });
+      const session = requireValue(sessions.summaries[0], "timezone session summary missing");
+
+      expect(cost.days).toBe(3);
+      expect(cost.daily.map((entry) => [entry.date, entry.totalTokens])).toEqual([
+        ["2026-03-28", 15],
+        ["2026-03-29", 0],
+        ["2026-03-30", 15],
+      ]);
+      expect(session.activityDates).toEqual(["2026-03-28", "2026-03-30"]);
+      expect(session.dailyBreakdown?.map((entry) => [entry.date, entry.tokens])).toEqual([
+        ["2026-03-28", 15],
+        ["2026-03-30", 15],
+      ]);
+      expect(session.dailyMessageCounts?.map((entry) => entry.date)).toEqual([
+        "2026-03-28",
+        "2026-03-30",
+      ]);
     });
   });
 
@@ -803,7 +883,7 @@ describe("session cost usage", () => {
       const summary = await loadCostUsageSummary({
         startMs,
         endMs,
-        dailyUtcOffsetMinutes: -120,
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: -120 },
       });
 
       expect(summary.daily.map((entry) => entry.date)).toEqual(["2026-02-11"]);
@@ -1886,7 +1966,7 @@ describe("session cost usage", () => {
         sessionFile,
         startMs: Date.UTC(2026, 1, 4, 2),
         endMs: Date.UTC(2026, 1, 5, 1, 59, 59, 999),
-        dailyUtcOffsetMinutes: -120,
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: -120 },
         requestRefresh: false,
         refreshMode: "sync-when-empty",
       });
