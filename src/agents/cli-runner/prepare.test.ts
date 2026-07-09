@@ -2811,6 +2811,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         sourceReplyDeliveryMode: undefined,
         requireExplicitMessageTarget: false,
         senderIsOwner: undefined,
+        authProfileStore: undefined,
       });
       expect(context.systemPrompt).toContain("## Memory Recall");
       expect(context.systemPrompt).toContain("tools=memory_search");

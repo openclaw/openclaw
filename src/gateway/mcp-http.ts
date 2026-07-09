@@ -7,6 +7,9 @@ import {
   type ServerResponse,
 } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveAgentDir, resolveSessionAgentIds } from "../agents/agent-scope.js";
+import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -228,6 +231,21 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         const cfg = getRuntimeConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
         const yieldContext = resolveMcpLoopbackYieldContext(cliRequestCaptureHandle);
+        // Resolve auth profile store per-request from the session so that
+        // OAuth-only plugin tools (e.g. xAI x_search) see the caller's auth
+        // context rather than a process-wide snapshot captured at server start.
+        const { sessionAgentId } = resolveSessionAgentIds({
+          config: cfg,
+          sessionKey: requestContext.sessionKey,
+        });
+        const requestAgentDir = resolveAgentDir(cfg, sessionAgentId);
+        const requestAuthStore: AuthProfileStore | undefined = loadAuthProfileStoreForRuntime(
+          requestAgentDir,
+          { readOnly: true },
+        );
+        const requestAuthCacheKey = Object.keys(requestAuthStore?.profiles ?? {})
+          .toSorted()
+          .join(",");
         const scopedTools = toolCache.resolve({
           cfg,
           sessionKey: requestContext.sessionKey,
@@ -244,6 +262,8 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           sourceReplyDeliveryMode: requestContext.sourceReplyDeliveryMode,
           requireExplicitMessageTarget: requestContext.requireExplicitMessageTarget,
           senderIsOwner: requestContext.senderIsOwner,
+          authProfileStore: requestAuthStore,
+          authCacheKey: requestAuthCacheKey || undefined,
         });
 
         logMcpLoopbackTraffic("request", {
