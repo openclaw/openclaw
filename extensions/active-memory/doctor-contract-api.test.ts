@@ -106,11 +106,7 @@ describe("active-memory doctor state migration", () => {
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(
       sourcePath,
-      JSON.stringify({
-        sessions: {
-          "telegram:dm:bad": { disabled: true, updatedAt: Number.NaN },
-        },
-      }),
+      '{"sessions":{"telegram:dm:bad":{"disabled":true,"updatedAt":1e999}}}',
     );
 
     const migration = stateMigrations[0];
