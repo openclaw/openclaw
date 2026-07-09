@@ -1059,6 +1059,61 @@ describe("overflow compaction in run loop", () => {
     expect(result.payloads?.[0]?.isError).toBe(true);
   });
 
+  it("routes the Anthropic long-context 429 through compaction and terminates blocked without model fallback", async () => {
+    // Use the REAL classifiers: the harness default mockedIsLikelyContextOverflowError
+    // reimplements only request_too_large-style patterns and never matches this body,
+    // so this test would prove nothing about the reorder without the actual module.
+    const actualErrors = await vi.importActual<
+      typeof import("../embedded-agent-helpers/errors.js")
+    >("../embedded-agent-helpers/errors.js");
+    mockedIsLikelyContextOverflowError.mockImplementation(
+      actualErrors.isLikelyContextOverflowError,
+    );
+    mockedIsCompactionFailureError.mockImplementation(actualErrors.isCompactionFailureError);
+
+    const longContextBody =
+      '429 {"type":"error","error":{"type":"rate_limit_error","message":"Extra usage is required for long context requests."}}';
+    // The billing classifier still matches this body; only the early return inside
+    // isLikelyContextOverflowError reroutes it to overflow recovery instead.
+    expect(actualErrors.isBillingErrorMessage(longContextBody)).toBe(true);
+    expect(actualErrors.isLikelyContextOverflowError(longContextBody)).toBe(true);
+
+    // 4 overflow attempts: 3 compact+retry cycles, then exhausted recovery.
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({ promptError: makeOverflowError(longContextBody) }),
+    );
+    mockedCompactDirect
+      .mockResolvedValueOnce(
+        makeCompactionSuccess({ summary: "Compacted 1", tokensBefore: 180000 }),
+      )
+      .mockResolvedValueOnce(
+        makeCompactionSuccess({ summary: "Compacted 2", tokensBefore: 160000 }),
+      )
+      .mockResolvedValueOnce(
+        makeCompactionSuccess({ summary: "Compacted 3", tokensBefore: 140000 }),
+      );
+
+    const result = await runEmbeddedAgent(baseParams);
+
+    // Classified as context overflow, not billing/rate-limit: compaction ran.
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(3);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
+    // Every retry stayed on the original model; overflow never selects a fallback
+    // model (model-fallback.ts rethrows context-overflow so the runner owns it).
+    for (let attemptIndex = 0; attemptIndex < 4; attemptIndex++) {
+      const attemptParams = requireMockCallArg(mockedRunEmbeddedAttempt, attemptIndex);
+      expect(attemptParams.provider).toBe("anthropic");
+      expect(attemptParams.modelId).toBe("test-model");
+      expect(attemptParams.fallbackActive).toBe(false);
+    }
+    // Canonical blocked terminal result after exhausted overflow recovery.
+    expect(result.meta.error?.kind).toBe("context_overflow");
+    expect(result.meta.error?.message).toContain("Extra usage is required for long context");
+    expect(result.meta.livenessState).toBe("blocked");
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("Context overflow");
+  });
+
   it("succeeds after second compaction attempt", async () => {
     const overflowError = makeOverflowError();
 
