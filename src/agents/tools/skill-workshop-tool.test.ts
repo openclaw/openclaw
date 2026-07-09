@@ -29,6 +29,20 @@ afterEach(async () => {
 });
 
 describe("skill_workshop tool", () => {
+  it("describes action selection and pending-proposal discovery in its schema", () => {
+    const tool = createSkillWorkshopTool({ workspaceDir: "/tmp/openclaw" });
+    const schema = JSON.stringify(tool.parameters);
+
+    expect(schema).toContain("create = new skill");
+    expect(schema).toContain("update = existing live skill");
+    expect(schema).toContain("revise = existing pending proposal");
+    expect(schema).toContain("not filesystem search");
+    expect(schema).toContain("when proposal_id is unknown");
+    expect(schema).toContain("returns candidates");
+    expect(schema).toContain("max 160 bytes");
+    expect(schema).toContain("shortens the proposal listing entry");
+  });
+
   it("is exposed in the OpenClaw tool set", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
     const tools = createOpenClawTools({

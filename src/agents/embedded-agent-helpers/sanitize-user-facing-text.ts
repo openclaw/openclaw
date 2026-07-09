@@ -127,14 +127,23 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
 }
 
 export function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
-  if (isRateLimitErrorMessage(raw)) {
-    return extractProviderRateLimitMessage(raw) ?? RATE_LIMIT_ERROR_USER_MESSAGE;
-  }
   if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
     return MODEL_CAPACITY_ERROR_USER_MESSAGE;
   }
+  const isRateLimit = isRateLimitErrorMessage(raw);
+  if (isRateLimit) {
+    const providerMessage = extractProviderRateLimitMessage(raw);
+    if (providerMessage) {
+      return providerMessage;
+    }
+  }
+  // Retry classification still owns 429 backoff; user copy can preserve the provider's
+  // overload wording when there is no more actionable retry/reset detail.
   if (isOverloadedErrorMessage(raw)) {
     return OVERLOADED_ERROR_USER_MESSAGE;
+  }
+  if (isRateLimit) {
+    return RATE_LIMIT_ERROR_USER_MESSAGE;
   }
   return undefined;
 }

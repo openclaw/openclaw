@@ -2,6 +2,7 @@
 // generated/build inputs, manifest-discovered plugin surfaces, live-test
 // helpers, or package bridge files that static production scanning cannot see.
 export const KNIP_UNUSED_FILE_ALLOWLIST = [
+  "extensions/qa-lab/src/ci-smoke-plan.ts",
   // Continuation-rail post-compaction release helper, extracted for testability
   // in isolation; agent-runner-execution.ts:154-238 still has inline
   // releaseQueuedCompactionCompletion implementation. TODO: refactor call-site

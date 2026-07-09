@@ -164,7 +164,7 @@ function normalizeIMessageDbPath(value: string | undefined | null): string {
 // Stable signature for the local Messages backend an iMessage account targets.
 // Two enabled accounts that share a signature watch the same source, which
 // caused duplicate inbound handling in openclaw/openclaw#65141.
-export function resolveIMessageAccountSourceSignature(account: ResolvedIMessageAccount): string {
+function resolveIMessageAccountSourceSignature(account: ResolvedIMessageAccount): string {
   return JSON.stringify([
     normalizeIMessageCliPath(account.config.cliPath),
     normalizeIMessageDbPath(account.config.dbPath),

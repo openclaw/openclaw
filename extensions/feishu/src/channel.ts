@@ -28,11 +28,17 @@ import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
-import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  interactiveReplyToPresentation,
+  normalizeInteractiveReply,
+  normalizeMessagePresentation,
+  resolveInteractiveTextFallback,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import type { PluginRuntime } from "../runtime-api.js";
 import {
   inspectFeishuCredentials,
@@ -71,6 +77,7 @@ import {
 import { listFeishuDirectoryGroups, listFeishuDirectoryPeers } from "./directory.static.js";
 import { feishuDoctor } from "./doctor.js";
 import { messageActionTargetAliases } from "./message-action-contract.js";
+import { readNativeFeishuCardJson } from "./native-card.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import { buildFeishuPresentationCard } from "./presentation-card.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
@@ -583,6 +590,26 @@ function readFirstString(
   return undefined;
 }
 
+const UNRESOLVED_RESPONSE_PREFIX_VAR_PATTERN = /\{[a-zA-Z][a-zA-Z0-9.]*\}/;
+
+function resolveFeishuMessageActionResponsePrefix(ctx: ChannelMessageActionContext) {
+  const configured = ctx.cfg.messages?.responsePrefix;
+  if (!configured) {
+    return undefined;
+  }
+  const agentId = (ctx.agentId?.trim() || "main").toLowerCase();
+  const identityName = ctx.cfg.agents?.list
+    ?.find((agent) => agent.id.trim().toLowerCase() === agentId)
+    ?.identity?.name?.trim();
+  const resolved =
+    configured === "auto"
+      ? identityName
+        ? `[${identityName}]`
+        : undefined
+      : configured.replace(/\{(?:identity\.name|identityname)\}/gi, identityName ?? "$&");
+  return resolved && !UNRESOLVED_RESPONSE_PREFIX_VAR_PATTERN.test(resolved) ? resolved : undefined;
+}
+
 function readOptionalPositiveInteger(
   params: Record<string, unknown>,
   keys: string[],
@@ -800,13 +827,24 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             if (ctx.action === "thread-reply" && !replyToMessageId) {
               throw new Error("Feishu thread-reply requires messageId.");
             }
-            const presentation = normalizeMessagePresentation(ctx.params.presentation);
             const text = readFirstString(ctx.params, ["text", "message"]);
+            const textCard = readNativeFeishuCardJson(text, {
+              responsePrefix: resolveFeishuMessageActionResponsePrefix(ctx),
+            });
+            const interactive = normalizeInteractiveReply(ctx.params.interactive);
+            const presentation =
+              normalizeMessagePresentation(ctx.params.presentation) ??
+              (interactive ? interactiveReplyToPresentation(interactive) : undefined);
             const mediaUrl = readFeishuMediaParam(ctx.params);
             const audioAsVoice = readBooleanParam(ctx.params, ["asVoice", "audioAsVoice"]);
             const card = presentation
-              ? buildFeishuPresentationCard({ presentation, fallbackText: text })
-              : undefined;
+              ? buildFeishuPresentationCard({
+                  presentation,
+                  fallbackText: textCard
+                    ? undefined
+                    : resolveInteractiveTextFallback({ text, interactive }),
+                })
+              : textCard;
             if (card && mediaUrl) {
               throw new Error(`Feishu ${ctx.action} does not support card with media.`);
             }
@@ -1389,6 +1427,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
+      sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
       presentationCapabilities: {
         supported: true,
         buttons: true,

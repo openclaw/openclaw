@@ -6,7 +6,6 @@
  */
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
-import path from "node:path";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
@@ -116,7 +115,7 @@ import {
   resolveMainSessionAlias,
   resolveSandboxRuntimeStatus,
   updateSessionStore,
-  isAdminOnlyMethod,
+  resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./subagent-spawn.runtime.js";
 import type {
   SpawnSubagentContextMode,
@@ -297,10 +296,16 @@ async function callSubagentGateway(
   // scope-upgrade handshake that headless gateway-client connections cannot
   // complete interactively, causing close(1008) "pairing required" (#59428).
   //
-  // Only admin-only methods are pinned to ADMIN_SCOPE; other methods (e.g.
-  // "agent" → write) keep their least-privilege scope so that the gateway does
-  // not treat the caller as owner (senderIsOwner) and expose owner-only tools.
-  const scopes = params.scopes ?? (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
+  // Only admin-requiring calls are pinned to ADMIN_SCOPE; other methods (e.g.
+  // "agent" → write) keep their least-privilege scope so the gateway does not
+  // treat the caller as owner. The params-aware resolver keeps spawn-metadata
+  // sessions.patch calls on the admin tier.
+  const leastPrivilegeScopes = resolveLeastPrivilegeOperatorScopesForMethod(
+    params.method,
+    params.params,
+  );
+  const scopes =
+    params.scopes ?? (leastPrivilegeScopes.includes(ADMIN_SCOPE) ? [ADMIN_SCOPE] : undefined);
   const request = {
     ...params,
     ...(scopes != null ? { scopes } : {}),
@@ -398,6 +403,23 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   if (continuationTraceparent) {
     entry.continuationTraceparent = continuationTraceparent;
   }
+  const continuationChainCount = normalizeNonNegativeInteger(patch.continuationChainCount);
+  if (continuationChainCount !== undefined) {
+    entry.continuationChainCount = continuationChainCount;
+  }
+  const continuationChainStartedAt = normalizeNonNegativeInteger(patch.continuationChainStartedAt);
+  if (continuationChainStartedAt !== undefined) {
+    entry.continuationChainStartedAt = continuationChainStartedAt;
+  }
+  const continuationChainTokens = normalizeNonNegativeInteger(patch.continuationChainTokens);
+  if (continuationChainTokens !== undefined) {
+    entry.continuationChainTokens = continuationChainTokens;
+  }
+  const continuationChainId =
+    typeof patch.continuationChainId === "string" ? patch.continuationChainId.trim() : "";
+  if (continuationChainId) {
+    entry.continuationChainId = continuationChainId;
+  }
   if (typeof patch.thinkingLevel === "string" && patch.thinkingLevel.trim()) {
     entry.thinkingLevel = patch.thinkingLevel.trim();
   }
@@ -422,6 +444,13 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
     }
   }
   return entry;
+}
+
+function normalizeNonNegativeInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return Math.floor(value);
 }
 
 function loadSubagentConfig() {
@@ -569,7 +598,6 @@ async function prepareSubagentSessionContext(params: {
   let parentEntry: SessionEntry | undefined;
   let childEntry: SessionEntry | undefined;
   let forkFallbackNote: string | undefined;
-  const sessionsDir = path.dirname(parentTarget.storePath);
 
   try {
     if (params.targetAgentId !== params.requesterAgentId) {
@@ -586,7 +614,6 @@ async function prepareSubagentSessionContext(params: {
       sessionStoreKeys: childTarget.storeKeys,
       fallbackEntry: { sessionId: "", updatedAt: Date.now() },
       agentId: params.requesterAgentId,
-      sessionsDir,
     });
     if (forkedResult.status === "missing-parent") {
       throw new Error(

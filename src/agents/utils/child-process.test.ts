@@ -75,4 +75,20 @@ describe.skipIf(process.platform === "win32")("waitForChildProcess", () => {
       vi.useRealTimers();
     }
   });
+
+  it("swallows stdout and stderr stream errors without rejecting", async () => {
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const fakeChild = Object.assign(new EventEmitter(), {
+      stdout,
+      stderr,
+    }) as unknown as ChildProcess;
+
+    const completion = waitForChildProcess(fakeChild);
+    stdout.emit("error", new Error("stdout read failed"));
+    stderr.emit("error", new Error("stderr read failed"));
+    fakeChild.emit("exit", 0);
+
+    await expect(completion).resolves.toBe(0);
+  });
 });

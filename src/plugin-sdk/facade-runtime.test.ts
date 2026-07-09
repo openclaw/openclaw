@@ -547,10 +547,10 @@ describe("plugin-sdk facade runtime", () => {
     });
   });
 
-  it("keeps shared runtime-core facades available without plugin activation", () => {
+  it("keeps bundled extension runtime-core facades available without plugin activation", () => {
     setRuntimeConfigSnapshot({});
 
-    for (const dirName of ["speech-core", "image-generation-core", "media-understanding-core"]) {
+    for (const dirName of ["image-generation-core", "media-understanding-core"]) {
       expect(
         resolveActivationCheckBundledPluginPublicSurfaceAccess({
           dirName,
@@ -564,6 +564,23 @@ describe("plugin-sdk facade runtime", () => {
         pluginId: dirName,
       });
     }
+  });
+
+  it("does not treat package-backed speech-core as a bundled extension facade", () => {
+    setRuntimeConfigSnapshot({});
+
+    expect(
+      resolveActivationCheckBundledPluginPublicSurfaceAccess({
+        dirName: "speech-core",
+        artifactBasename: "runtime-api.js",
+        location: null,
+        sourceExtensionsRoot: "",
+        resolutionKey: "runtime-core:speech-core",
+      }),
+    ).toEqual({
+      allowed: false,
+      reason: "no bundled plugin manifest found for speech-core",
+    });
   });
 
   it("prefers the source runtime snapshot for facade activation checks", () => {

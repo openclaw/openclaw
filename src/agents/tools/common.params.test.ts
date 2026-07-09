@@ -166,6 +166,8 @@ describe("readNumberParam", () => {
   it("throws for invalid present bounded finite number params", () => {
     expect(readFiniteNumberParam({ quality: "0.75" }, "quality")).toBe(0.75);
     expect(readFiniteNumberParam({ quality: null }, "quality")).toBeUndefined();
+    expect(readFiniteNumberParam({ quality: "" }, "quality")).toBeUndefined();
+    expect(readFiniteNumberParam({ quality: " \t\n" }, "quality")).toBeUndefined();
     expect(() => readFiniteNumberParam({ quality: "0.8jpg" }, "quality")).toThrow(
       "quality must be a finite number",
     );

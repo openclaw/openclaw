@@ -11,7 +11,7 @@ import { NonEmptyString } from "./primitives.js";
  */
 const MAX_PLUGIN_APPROVAL_TIMEOUT_MS = 600_000;
 const PLUGIN_APPROVAL_TITLE_MAX_LENGTH = 80;
-const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 256;
+const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 512;
 
 /** Approval request raised by a plugin before a sensitive tool action proceeds. */
 export const PluginApprovalRequestParamsSchema = Type.Object(

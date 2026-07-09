@@ -165,6 +165,80 @@ describe("resolveTelegramInboundBody", () => {
     expect(htmlResult?.rawBody).toBe("Forwarded html");
   });
 
+  it("extracts visible text from canonical rich-message block fields", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: {
+          blocks: [
+            {
+              type: "details",
+              summary: "Run summary",
+              blocks: [
+                {
+                  type: "list",
+                  items: [
+                    {
+                      label: "1.",
+                      blocks: [
+                        {
+                          type: "paragraph",
+                          text: "CI clean",
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+            {
+              type: "mathematical_expression",
+              expression: "a^2+b^2=c^2",
+            },
+            {
+              type: "photo",
+              caption: {
+                text: "Chart",
+                credit: "OpenClaw",
+              },
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(result?.rawBody).toBe("Run summary\n1.\nCI clean\na^2+b^2=c^2\nChart\nOpenClaw");
+    expect(result?.bodyText).toBe("Run summary\n1.\nCI clean\na^2+b^2=c^2\nChart\nOpenClaw");
+  });
+
+  it("keeps rich-message table caption spans inline", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: {
+          blocks: [
+            {
+              type: "table",
+              caption: [
+                { type: "plain", text: "Total " },
+                { type: "bold", text: "Q1" },
+              ],
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(result?.rawBody).toBe("Total Q1");
+    expect(result?.bodyText).toBe("Total Q1");
+  });
+
   it("keeps rich-message placeholders quiet in requireMention groups", async () => {
     const logger = { info: vi.fn() };
     const result = await resolveTelegramBody({

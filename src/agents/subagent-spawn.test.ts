@@ -329,6 +329,42 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(agentParams.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
+  it("persists inherited continuation chain state into draining child sessions", async () => {
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "drain continuation delegates",
+        drainsContinuationDelegateQueue: true,
+        continuationChainState: {
+          count: 7,
+          startedAt: 1_783_520_000_000,
+          tokens: 12_345,
+          chainId: "chain-from-parent",
+        },
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const childSessionKey = result.childSessionKey as string;
+    expect(persistedStore?.[childSessionKey]).toMatchObject({
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      continuationChainCount: 7,
+      continuationChainStartedAt: 1_783_520_000_000,
+      continuationChainTokens: 12_345,
+      continuationChainId: "chain-from-parent",
+    });
+  });
+
   it("dispatches spawned agent runs in process when a gateway context is available", async () => {
     hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
     hoisted.callGatewayMock.mockRejectedValue(new Error("unexpected websocket gateway call"));

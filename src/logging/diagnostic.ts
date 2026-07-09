@@ -1,5 +1,6 @@
 // Diagnostic logger records structured runtime events, timings, and health snapshots.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
+import { resolveCompactionTimeoutMs } from "../agents/embedded-agent-runner/compaction-safety-timeout.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -648,7 +649,6 @@ function isStalledModelCallRecoveryEligible(params: {
     params.classification?.eventType === "session.stalled" &&
     params.classification.classification === "stalled_agent_run" &&
     params.classification.activeWorkKind === "model_call" &&
-    params.activity?.hasActiveEmbeddedRun === true &&
     typeof lastProgressAgeMs === "number" &&
     lastProgressAgeMs >= params.stuckSessionAbortMs
   );
@@ -1326,6 +1326,7 @@ export function startDiagnosticHeartbeat(
     }
     const stuckSessionWarnMs = resolveStuckSessionWarnMs(heartbeatConfig);
     const stuckSessionAbortMs = resolveStuckSessionAbortMs(heartbeatConfig, stuckSessionWarnMs);
+    const compactionSafetyTimeoutMs = resolveCompactionTimeoutMs(heartbeatConfig);
     const now = Date.now();
     pruneDiagnosticSessionStates(now, true);
     const work = getDiagnosticWorkSnapshot(now);
@@ -1430,6 +1431,7 @@ export function startDiagnosticHeartbeat(
               expectedState: state.state,
               stateGeneration: state.generation,
               staleActiveProgressAbortMs: stuckSessionAbortMs,
+              compactionSafetyTimeoutMs,
             },
           });
         } else if (
@@ -1451,6 +1453,7 @@ export function startDiagnosticHeartbeat(
               allowActiveAbort: true,
               expectedState: state.state,
               stateGeneration: state.generation,
+              compactionSafetyTimeoutMs,
             },
           });
         }

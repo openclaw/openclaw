@@ -168,6 +168,13 @@ openclaw doctor --lint --all --skip core/doctor/session-locks
 
 `openclaw doctor --post-upgrade` runs plugin compatibility probes for chaining after a build or upgrade. Findings go to stdout; exit code is 1 if any finding has `level: "error"`. Add `--json` for a machine-readable envelope (`{ probesRun, findings }`), suitable for CI, the community `fork-upgrade` skill, and other post-upgrade smoke tooling. If the installed plugin index is missing or malformed, JSON mode still emits the envelope with a `plugin.index_unavailable` error finding.
 
+Container image startup is the exception to the usual "run doctor after
+updating" flow. When `openclaw gateway run` starts on a new OpenClaw version, it
+runs safe state and plugin repairs before reporting ready. If repair cannot
+finish safely, startup exits and tells you to run the same image once with
+`openclaw doctor --fix` against the same mounted state/config before restarting
+the container normally.
+
 ## Notes
 
 - In Nix mode (`OPENCLAW_NIX_MODE=1`), read-only doctor checks still work, but `doctor --fix`, `doctor --repair`, `doctor --yes`, and `doctor --generate-gateway-token` are disabled because `openclaw.json` is immutable. Edit the Nix source for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start).

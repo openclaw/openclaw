@@ -33,6 +33,34 @@ class TestProxyAgent {
   constructor(readonly options: unknown) {}
 }
 
+function useBodylessForeignResponse(params: { text: string; contentLength?: string }) {
+  const text = vi.fn(async () => params.text);
+  const headers = new Headers({ "content-type": "application/json" });
+  if (params.contentLength !== undefined) {
+    headers.set("content-length", params.contentLength);
+  }
+  testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+    Agent: TestAgent,
+    EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+    ProxyAgent: TestProxyAgent,
+    fetch: async () =>
+      ({
+        status: 400,
+        statusText: "Bad Request",
+        headers,
+        body: null,
+        ok: false,
+        text,
+      }) as unknown as Response,
+  };
+  return text;
+}
+
+async function fetchOAuthRegistrationError(): Promise<Response> {
+  const fetch = buildMcpHttpFetch({ resourceUrl: "https://mcp.example.com/mcp" });
+  return await fetch("https://auth.example.com/oauth/register", { method: "POST" });
+}
+
 function redirectResponse(location: string, status = 302): Response {
   return new Response(null, {
     status,
@@ -212,37 +240,36 @@ describe("MCP HTTP fetch helpers", () => {
     expect(calls[1]?.[1]?.headers).toBeUndefined();
   });
 
-  it("returns fetch responses compatible with MCP SDK OAuth error parsing", async () => {
-    class ForeignResponse {
-      status = 400;
-      statusText = "Bad Request";
-      headers = new Headers({ "content-type": "application/json" });
-      body = null;
-      get ok() {
-        return false;
-      }
-      async text() {
-        return '{"error":"invalid_client_metadata","error_description":"bad redirect"}';
-      }
-    }
+  it.each([undefined, "64", "1048577"])(
+    "drops body-less foreign OAuth text without trusting Content-Length %s",
+    async (contentLength) => {
+      const text = useBodylessForeignResponse({
+        text: '{"error_description":"unbounded"}',
+        contentLength,
+      });
 
-    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-      Agent: TestAgent,
-      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
-      ProxyAgent: TestProxyAgent,
-      fetch: async (url: string | URL | Request, init?: unknown) => {
-        fetchCalls.push({ url, init });
-        return new ForeignResponse() as unknown as Response;
-      },
-    };
-    const fetch = buildMcpHttpFetch({
-      resourceUrl: "https://mcp.example.com/mcp",
+      const response = await fetchOAuthRegistrationError();
+
+      expect(response).toBeInstanceOf(Response);
+      expect(response.status).toBe(400);
+      expect(response.body).toBeNull();
+      expect(text).not.toHaveBeenCalled();
+      const error = await parseErrorResponse(response);
+      expect(error.message).toContain("HTTP 400");
+    },
+  );
+
+  it("never materializes a body-less foreign response with a lying safe length", async () => {
+    const text = useBodylessForeignResponse({
+      text: "x".repeat(1024 * 1024 + 1),
+      contentLength: "64",
     });
 
-    const response = await fetch("https://auth.example.com/oauth/register", { method: "POST" });
+    const response = await fetchOAuthRegistrationError();
+
     expect(response).toBeInstanceOf(Response);
-    const error = await parseErrorResponse(response);
-    expect(error.message).toContain("bad redirect");
-    expect(error.message).not.toContain("[object Response]");
+    expect(response.status).toBe(400);
+    expect(response.body).toBeNull();
+    expect(text).not.toHaveBeenCalled();
   });
 });

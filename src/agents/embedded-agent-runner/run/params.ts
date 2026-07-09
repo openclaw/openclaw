@@ -3,6 +3,7 @@
  */
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
+  BlockReplyContext,
   PartialReplyPayload,
   SourceReplyDeliveryMode,
 } from "../../../auto-reply/get-reply-options.types.js";
@@ -37,6 +38,7 @@ import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
 import type { RequestCompactionToolOpts } from "../../tools/request-compaction-tool.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
+import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 
@@ -53,6 +55,8 @@ export type CurrentInboundPromptContext = {
   text: string;
   resumableText?: string;
   promptJoiner?: "\n\n" | "\n" | " ";
+  /** Generated goal blocks owned by inbound-context assembly, never user text. */
+  injectedGoalContexts?: string[];
 };
 
 export type RunEmbeddedAgentParams = {
@@ -153,6 +157,12 @@ export type RunEmbeddedAgentParams = {
   /** Task working directory for tool/runtime execution. Defaults to workspaceDir. */
   cwd?: string;
   agentDir?: string;
+  /**
+   * Run config consumed by core paths (model selection, tools, plugin
+   * activation). Plugin harnesses resolve `plugins.entries.<id>.config` from
+   * the live global config, NOT from this object — per-run plugin-config
+   * overrides are unsupported; use an explicit run param instead.
+   */
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
@@ -247,8 +257,8 @@ export type RunEmbeddedAgentParams = {
   shouldEmitToolOutput?: () => boolean;
   onPartialReply?: (payload: PartialReplyPayload) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
-  onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;
-  onBlockReplyFlush?: () => void | Promise<void>;
+  onBlockReply?: (payload: BlockReplyPayload, context?: BlockReplyContext) => void | Promise<void>;
+  onBlockReplyFlush?: (context: BlockReplyFlushContext) => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
   onReasoningStream?: (payload: ReasoningStreamPayload) => void | Promise<void>;

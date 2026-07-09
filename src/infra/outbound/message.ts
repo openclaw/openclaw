@@ -47,7 +47,7 @@ const loadMessageGatewayRuntime = createLazyRuntimeModule(
   () => import("./message.gateway.runtime.js"),
 );
 
-export type MessageGatewayOptions = OutboundMessageGatewayOptionsInput;
+type MessageGatewayOptions = OutboundMessageGatewayOptionsInput;
 
 type MessageSendParams = {
   to: string;
@@ -136,7 +136,7 @@ export type MessagePollResult = {
   maxSelections: number;
   durationSeconds: number | null;
   durationHours: number | null;
-  via: "gateway";
+  via: "direct" | "gateway";
   result?: {
     messageId: string;
     toJid?: string;
@@ -157,6 +157,7 @@ function buildMessagePollResult(params: {
     durationSeconds?: number | null;
     durationHours?: number | null;
   };
+  via: MessagePollResult["via"];
   result?: MessagePollResult["result"];
   dryRun?: boolean;
 }): MessagePollResult {
@@ -168,9 +169,26 @@ function buildMessagePollResult(params: {
     maxSelections: params.normalized.maxSelections,
     durationSeconds: params.normalized.durationSeconds ?? null,
     durationHours: params.normalized.durationHours ?? null,
-    via: "gateway",
+    via: params.via,
     ...(params.dryRun ? { dryRun: true } : { result: params.result }),
   };
+}
+
+function assertPollOptionSupport(params: {
+  channel: string;
+  outbound: NonNullable<ReturnType<typeof resolveRequiredPlugin>["outbound"]>;
+  durationSeconds?: number;
+  isAnonymous?: boolean;
+}): void {
+  if (
+    typeof params.durationSeconds === "number" &&
+    params.outbound.supportsPollDurationSeconds !== true
+  ) {
+    throw new Error(`durationSeconds is not supported for ${params.channel} polls`);
+  }
+  if (typeof params.isAnonymous === "boolean" && params.outbound.supportsAnonymousPolls !== true) {
+    throw new Error(`isAnonymous is not supported for ${params.channel} polls`);
+  }
 }
 
 async function resolveRequiredChannel(params: {
@@ -486,6 +504,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
   if (!outbound?.sendPoll) {
     throw new Error(`Unsupported poll channel: ${channel}`);
   }
+  const deliveryMode = outbound.deliveryMode ?? "direct";
   const normalized = outbound.pollMaxOptions
     ? normalizePollInput(pollInput, { maxOptions: outbound.pollMaxOptions })
     : normalizePollInput(pollInput);
@@ -495,7 +514,46 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
       channel,
       to: params.to,
       normalized,
+      via: deliveryMode === "gateway" ? "gateway" : "direct",
       dryRun: true,
+    });
+  }
+
+  assertPollOptionSupport({
+    channel,
+    outbound,
+    durationSeconds: params.durationSeconds,
+    isAnonymous: params.isAnonymous,
+  });
+
+  if (deliveryMode !== "gateway") {
+    const resolvedTarget = resolveOutboundTarget({
+      channel,
+      to: params.to,
+      cfg,
+      accountId: params.accountId,
+      mode: "explicit",
+    });
+    if (!resolvedTarget.ok) {
+      throw resolvedTarget.error;
+    }
+
+    const result = await outbound.sendPoll({
+      cfg,
+      to: resolvedTarget.to,
+      poll: normalized,
+      accountId: params.accountId,
+      threadId: params.threadId,
+      silent: params.silent,
+      isAnonymous: params.isAnonymous,
+    });
+
+    return buildMessagePollResult({
+      channel,
+      to: params.to,
+      normalized,
+      via: "direct",
+      result,
     });
   }
 
@@ -528,6 +586,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     channel,
     to: params.to,
     normalized,
+    via: "gateway",
     result,
   });
 }

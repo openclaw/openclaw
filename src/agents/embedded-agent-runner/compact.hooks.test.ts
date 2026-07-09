@@ -105,10 +105,18 @@ function findMockCall(mock: ReturnType<typeof vi.fn>, predicate: (arg: unknown[]
   return call;
 }
 
-function mockResolvedModel() {
+function mockResolvedModel(params?: { supportsTools?: boolean }) {
   resolveModelMock.mockReset();
   resolveModelMock.mockReturnValue({
-    model: { provider: "openai", api: "responses", id: "fake", input: [] },
+    model: {
+      provider: "openai",
+      api: "responses",
+      id: "fake",
+      input: [],
+      ...(params?.supportsTools === undefined
+        ? {}
+        : { compat: { supportsTools: params.supportsTools } }),
+    },
     error: null,
     authStorage: { setRuntimeApiKey: vi.fn() },
     modelRegistry: {},
@@ -473,6 +481,18 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expectRecordFields(mockCallArg(applyAgentCompactionSettingsFromConfigMock), {
       contextTokenBudget: 64_000,
     });
+  });
+
+  it("skips runtime tool construction when the compaction model does not support tools", async () => {
+    mockResolvedModel({ supportsTools: false });
+
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(createOpenClawCodingToolsMock).not.toHaveBeenCalled();
   });
 
   it("quarantines unsupported tool schemas before creating the compaction model session", async () => {
@@ -1199,6 +1219,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   });
 
   it("emits post-compaction side effects once for a rotated successor transcript", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
     const listener = vi.fn();
     const cleanup = onSessionTranscriptUpdate(listener);
     const sync = vi.fn(async () => {});
@@ -1239,6 +1260,13 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       expect(sync).toHaveBeenCalledWith({
         reason: "post-compaction",
         sessionFiles: ["/tmp/rotated-session.jsonl"],
+      });
+      expectRecordFields(mockCallArg(hookRunner.runAfterCompaction), {
+        previousSessionId: "session-1",
+        sessionFile: "/tmp/rotated-session.jsonl",
+      });
+      expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
+        sessionId: "rotated-session",
       });
     } finally {
       cleanup();
@@ -1682,6 +1710,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.ok).toBe(true);
     expectRecordFields(mockCallArg(hookRunner.runAfterCompaction), {
       sessionFile: rotatedSessionFile,
+      previousSessionId: TEST_SESSION_ID,
     });
     expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
       sessionId: rotatedSessionId,

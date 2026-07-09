@@ -113,11 +113,21 @@ export function resolveRealtimeVoiceAgentConsultTools(
   // Keep the built-in consult tool first and prevent custom tools from
   // replacing its provider-facing contract by name.
   for (const tool of customTools) {
-    if (!tools.has(tool.name)) {
-      tools.set(tool.name, tool);
+    const name = readRealtimeVoiceCustomToolName(tool);
+    if (name !== undefined && !tools.has(name)) {
+      tools.set(name, tool);
     }
   }
   return [...tools.values()];
+}
+
+function readRealtimeVoiceCustomToolName(tool: RealtimeVoiceTool): string | undefined {
+  try {
+    const name = tool.name;
+    return typeof name === "string" ? name : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Resolve the OpenClaw tool allowlist paired with the consult exposure policy. */

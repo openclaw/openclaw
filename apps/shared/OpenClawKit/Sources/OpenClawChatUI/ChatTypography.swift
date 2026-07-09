@@ -5,6 +5,8 @@ import AppKit
 #endif
 
 enum OpenClawChatTypography {
+    static let bodySize: CGFloat = 17
+
     static var title3: Font {
         display(size: 22, weight: .bold, relativeTo: .title2)
     }
@@ -22,7 +24,7 @@ enum OpenClawChatTypography {
     }
 
     static var body: Font {
-        body(size: 17, weight: .regular, relativeTo: .body)
+        body(size: self.bodySize, weight: .regular, relativeTo: .body)
     }
 
     static var footnote: Font {

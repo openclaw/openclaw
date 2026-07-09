@@ -19,6 +19,7 @@ import {
   normalizeCdpHttpBaseForJsonEndpoints,
   openCdpWebSocket,
   redactCdpUrl,
+  scopeCdpPolicyToConfiguredEndpoint,
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
@@ -272,13 +273,25 @@ export function formatChromeCdpDiagnostic(diagnostic: ChromeCdpDiagnostic): stri
   const websocket = redactedWsUrl ? `; websocket=${redactedWsUrl}` : "";
   const wslPortproxyHint =
     diagnostic.code === "http_unreachable" && isLikelyEmptyHttpReply(diagnostic.message)
-      ? " In WSL2-to-Windows Chrome setups, this can be a stale netsh portproxy self-loop where svchost/iphlpsvc owns the CDP port instead of chrome.exe; verify with tasklist /svc and curl /json/version, then remove any 127.0.0.1:9222 -> 127.0.0.1:9222 portproxy rule."
+      ? WSL_EMPTY_REPLY_PORTPROXY_HINT
       : "";
   return `CDP diagnostic: ${diagnostic.code} after ${diagnostic.elapsedMs}ms; cdp=${redactedCdpUrl}${websocket}; ${diagnostic.message}.${wslPortproxyHint}`;
 }
 
+// The WSL-side error cannot identify which Windows loopback Chrome owns.
+// Send operators to the host listeners before they change the proxy family.
+const WSL_EMPTY_REPLY_PORTPROXY_HINT =
+  " In WSL2-to-Windows Chrome setups, an empty CDP reply can mean netsh is forwarding to the" +
+  " wrong loopback address. On Windows, inspect `netstat -ano | findstr :9222` and" +
+  " `netsh interface portproxy show all`, then curl both 127.0.0.1 and [::1]. Chromium prefers" +
+  " 127.0.0.1 and falls back to [::1] only when the IPv4 bind fails. If svchost/iphlpsvc owns" +
+  " 127.0.0.1:9222, remove the 127.0.0.1:9222 -> 127.0.0.1:9222 self-loop; if chrome.exe" +
+  " listens only on [::1], use v4tov6 with connectaddress=::1 for the WSL2-reachable listener.";
+
 function isLikelyEmptyHttpReply(message: string): boolean {
-  return /empty reply|other side closed|socket closed|terminated before response/i.test(message);
+  return /empty reply|other side closed|socket closed|connection reset|econnreset|terminated before response/i.test(
+    message,
+  );
 }
 
 async function diagnoseCdpWebSocketEndpoint(params: {
@@ -334,6 +347,7 @@ export async function diagnoseChromeCdp(
       startedAt,
     });
   }
+  const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(cdpUrl, ssrfPolicy);
 
   if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
     return await diagnoseCdpWebSocketEndpoint({
@@ -349,7 +363,7 @@ export async function diagnoseChromeCdp(
     : cdpUrl;
   let version: ChromeVersion;
   try {
-    version = await readChromeVersion(discoveryUrl, timeoutMs, ssrfPolicy);
+    version = await readChromeVersion(discoveryUrl, timeoutMs, cdpControlPolicy);
   } catch (err) {
     if (isWebSocketUrl(cdpUrl)) {
       return await diagnoseCdpWebSocketEndpoint({
@@ -388,7 +402,10 @@ export async function diagnoseChromeCdp(
   }
   const wsUrl = normalizeCdpWsUrl(wsUrlRaw, discoveryUrl);
   try {
-    await assertCdpEndpointAllowed(wsUrl, ssrfPolicy);
+    await assertCdpEndpointAllowed(wsUrl, cdpControlPolicy, {
+      source: "discovered",
+      configuredUrl: cdpUrl,
+    });
   } catch (err) {
     return failureDiagnostic({
       cdpUrl,

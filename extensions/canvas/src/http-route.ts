@@ -11,7 +11,7 @@ import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH, handleA2uiHttpRequest } fr
 import { createCanvasHostHandler, type CanvasHostHandler } from "./host/server.js";
 
 /** Canvas route handler shape registered with the plugin HTTP router. */
-export type CanvasHttpRouteHandler = {
+type CanvasHttpRouteHandler = {
   handleHttpRequest: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   handleUpgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => Promise<boolean>;
   close: () => Promise<void>;

@@ -24,13 +24,13 @@ private enum OnboardingStep: Int, CaseIterable {
         return "Step \(idx + 1) of \(manualSteps.count)"
     }
 
-    var title: String {
+    var title: LocalizedStringKey {
         switch self {
         case .intro: "Welcome"
         case .welcome: "Connect Gateway"
-        case .mode: "Connection Mode"
-        case .connect: "Connect"
-        case .auth: "Authentication"
+        case .mode: "Gateway Setup"
+        case .connect: "Gateway Details"
+        case .auth: "Gateway Status"
         case .success: "Connected"
         }
     }
@@ -58,6 +58,15 @@ struct GatewaySetupLinkStaging {
         self.link = nil
         return true
     }
+}
+
+private enum OnboardingFocusedField: Hashable {
+    case setupCode
+    case manualHost
+    case manualPort
+    case discoveryDomain
+    case gatewayToken
+    case gatewayPassword
 }
 
 struct OnboardingWizardView: View {
@@ -96,6 +105,7 @@ struct OnboardingWizardView: View {
     @State private var setupCode: String = ""
     @State private var setupCodeStatus: String?
     @State private var setupAttemptID: UUID?
+    @FocusState private var focusedField: OnboardingFocusedField?
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
     let allowSkip: Bool
@@ -160,11 +170,15 @@ struct OnboardingWizardView: View {
                             EmptyView()
                         }
                     }
+                    .formStyle(.grouped)
+                    .scrollContentBackground(.hidden)
+                    .background(Color(uiColor: .systemGroupedBackground))
                     .scrollDismissesKeyboard(.interactively)
                 }
             }
             .navigationTitle(self.isFullScreenStep ? "" : self.step.title)
             .navigationBarTitleDisplayMode(.inline)
+            .tint(OpenClawBrand.activationPrimaryAction)
             .toolbar {
                 if !self.isFullScreenStep {
                     ToolbarItem(placement: .principal) {
@@ -177,41 +191,15 @@ struct OnboardingWizardView: View {
                         }
                     }
                 }
-                ToolbarItem(placement: .topBarLeading) {
-                    if self.step.canGoBack {
-                        Button {
-                            self.navigateBack()
-                        } label: {
-                            Label("Back", systemImage: "chevron.left")
-                                .font(OpenClawType.subheadSemiBold)
-                        }
-                        .font(OpenClawType.subheadSemiBold)
-                    } else if self.allowSkip {
-                        Button {
-                            self.invalidateSetupAttempt()
-                            self.onClose()
-                        } label: {
-                            Text("Close")
-                                .font(OpenClawType.subheadSemiBold)
-                        }
-                        .font(OpenClawType.subheadSemiBold)
-                    }
-                }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button {
-                        UIApplication.shared.sendAction(
-                            #selector(UIResponder.resignFirstResponder),
-                            to: nil,
-                            from: nil,
-                            for: nil)
-                    } label: {
-                        Text("Done")
-                            .font(OpenClawType.subheadSemiBold)
-                    }
-                    .font(OpenClawType.subheadSemiBold)
-                }
             }
+        }
+        .safeAreaInset(edge: .bottom, alignment: .trailing, spacing: 0) {
+            self.keyboardDismissControl
+        }
+        .overlay(alignment: .topLeading) {
+            self.leadingChromeButton
+                .padding(.leading, 16)
+                .padding(.top, 10)
         }
         .gatewayTrustPromptAlert()
         .alert("QR Scanner Unavailable", isPresented: Binding(
@@ -298,7 +286,7 @@ struct OnboardingWizardView: View {
                     OnboardingStateStore.markCompleted(mode: selectedMode)
                     self.didMarkCompleted = true
                 }
-                self.step = .success
+                self.navigate(to: .success)
             }
     }
 
@@ -320,11 +308,11 @@ struct OnboardingWizardView: View {
                     self.showQRScanner = false
                 })
                 .ignoresSafeArea()
-                .navigationTitle("Scan QR Code")
+                .navigationTitle("Scan Setup Code")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .principal) {
-                        Text("Scan QR Code")
+                        Text("Scan Setup Code")
                             .font(OpenClawType.headline)
                     }
                     ToolbarItem(placement: .topBarLeading) {
@@ -372,75 +360,135 @@ struct OnboardingWizardView: View {
         }
     }
 
+    @ViewBuilder
+    private var leadingChromeButton: some View {
+        if self.step.canGoBack {
+            Button {
+                self.navigateBack()
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(OpenClawType.subheadSemiBold)
+                    .accessibilityLabel("Back")
+            }
+            .buttonStyle(OpenClawCloseButtonStyle())
+        } else if self.allowSkip {
+            Button {
+                self.invalidateSetupAttempt()
+                self.onClose()
+            } label: {
+                Text("Close")
+                    .font(OpenClawType.subheadSemiBold)
+            }
+            .buttonStyle(OpenClawCloseButtonStyle())
+        }
+    }
+
+    @ViewBuilder
+    private var keyboardDismissControl: some View {
+        if self.focusedField != nil {
+            Button {
+                self.dismissKeyboard()
+            } label: {
+                Image(systemName: "keyboard.chevron.compact.down")
+                    .font(OpenClawType.headline)
+                    .frame(width: 50, height: 44)
+                    .contentShape(Capsule(style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(OpenClawBrand.activationPrimaryAction)
+            .background(.ultraThinMaterial, in: Capsule(style: .continuous))
+            .overlay {
+                Capsule(style: .continuous)
+                    .stroke(OpenClawBrand.activationNeutralStroke, lineWidth: 0.6)
+            }
+            .shadow(color: Color.black.opacity(0.08), radius: 14, x: 0, y: 4)
+            .accessibilityLabel("Dismiss Keyboard")
+            .padding(.trailing, 20)
+            .padding(.bottom, 10)
+            .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            .animation(.smooth(duration: 0.16), value: self.focusedField)
+        }
+    }
+
     private var introStep: some View {
-        OnboardingIntroStep(onContinue: advanceFromIntro)
+        OnboardingIntroStep(onContinue: self.advanceFromIntro)
     }
 
     private var welcomeStep: some View {
         OnboardingWelcomeStep(
             statusLine: self.statusLine,
+            isConnecting: self.connectingGatewayID != nil,
             onScanQRCode: {
                 self.openQRScannerFromOnboarding()
             },
             onManualSetup: {
                 self.invalidateSetupAttempt()
-                self.step = .mode
+                self.statusLine = ""
+                self.navigate(to: .mode)
             })
     }
 
     @ViewBuilder
     private var modeStep: some View {
-        setupCodeSection
+        self.setupCodeSection
 
         Section {
             OnboardingModeRow(
-                title: OnboardingConnectionMode.homeNetwork.title,
+                title: "Home Network",
                 subtitle: "LAN or Tailscale host",
+                symbol: "house.and.flag",
                 selected: self.selectedMode == .homeNetwork)
             {
                 self.selectMode(.homeNetwork)
             }
 
             OnboardingModeRow(
-                title: OnboardingConnectionMode.remoteDomain.title,
+                title: "Remote Domain",
                 subtitle: "VPS with domain",
+                symbol: "globe",
                 selected: self.selectedMode == .remoteDomain)
             {
                 self.selectMode(.remoteDomain)
             }
 
-            self.developerModeToggleRow
-
             if self.developerModeEnabled {
+                self.developerModeToggleRow
+
                 OnboardingModeRow(
-                    title: OnboardingConnectionMode.developerLocal.title,
+                    title: "Same Machine (Dev)",
                     subtitle: "For local iOS app development",
+                    symbol: "wrench.and.screwdriver",
                     selected: self.selectedMode == .developerLocal)
                 {
                     self.selectMode(.developerLocal)
                 }
             }
         } header: {
-            Text("Connection Mode")
-                .font(OpenClawType.captionSemiBold)
+            Text("Manual Connection")
+                .font(OpenClawType.footnoteSemiBold)
+                .padding(.top, 12)
         }
         .disabled(self.connectingGatewayID != nil)
 
         Section {
             Button {
-                self.step = .connect
+                self.navigate(to: .connect)
             } label: {
                 Text("Continue")
                     .font(OpenClawType.subheadSemiBold)
             }
-            .font(OpenClawType.subheadSemiBold)
             .disabled(self.selectedMode == nil || self.connectingGatewayID != nil)
+            .buttonStyle(OpenClawPrimaryActionButtonStyle(height: 48, cornerRadius: 16))
+            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
         }
     }
 
     private var developerModeToggleRow: some View {
         self.onboardingButtonToggle(
             "Developer mode",
+            symbol: "wrench.and.screwdriver",
             isOn: Binding(
                 get: { self.developerModeEnabled },
                 set: { enabled in
@@ -451,23 +499,36 @@ struct OnboardingWizardView: View {
                 }))
     }
 
-    private func onboardingButtonToggle(_ title: String, isOn: Binding<Bool>) -> some View {
-        // Onboarding Form switch rows need full-width taps; native Toggle only hits the switch edge on iOS 26.
-        Button {
-            isOn.wrappedValue.toggle()
-        } label: {
-            HStack {
+    private func onboardingButtonToggle(
+        _ title: LocalizedStringKey,
+        symbol: String? = nil,
+        isOn: Binding<Bool>) -> some View
+    {
+        Toggle(isOn: isOn) {
+            HStack(spacing: 12) {
+                if let symbol {
+                    OnboardingModeIcon(symbol: symbol, selected: false)
+                }
+
                 Text(title)
-                    .font(OpenClawType.subhead)
-                Spacer(minLength: 8)
-                OpenClawToggleIndicator(isOn: isOn.wrappedValue)
+                    .font(OpenClawType.subheadSemiBold)
+                    .foregroundStyle(.primary)
             }
-            .contentShape(Rectangle())
+            .frame(minHeight: 52)
         }
-        .font(OpenClawType.subhead)
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
-        .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
+        .tint(OpenClawBrand.activationPrimaryAction)
+        .contentShape(Rectangle())
+        .overlay {
+            Button {
+                isOn.wrappedValue.toggle()
+            } label: {
+                Rectangle()
+                    .fill(.clear)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHidden(true)
+        }
     }
 
     @ViewBuilder
@@ -477,14 +538,14 @@ struct OnboardingWizardView: View {
                 self.onboardingLabeledContent("Mode", value: selectedMode.title)
                 self.onboardingLabeledContent("Discovery", value: self.gatewayController.discoveryStatusText)
                 self.onboardingLabeledContent("Status", value: self.appModel.gatewayDisplayStatusText)
-                self.onboardingLabeledContent("Progress", value: self.statusLine)
+                self.onboardingLabeledContent("Progress", value: self.statusLine.isEmpty ? "Ready" : self.statusLine)
             } header: {
                 Text("Status")
-                    .font(OpenClawType.captionSemiBold)
+                    .font(OpenClawType.footnoteSemiBold)
             } footer: {
                 if let connectMessage {
                     Text(connectMessage)
-                        .font(OpenClawType.caption)
+                        .font(OpenClawType.footnote)
                 }
             }
 
@@ -503,14 +564,13 @@ struct OnboardingWizardView: View {
         } else {
             Section {
                 Text("Choose a mode first.")
-                    .font(OpenClawType.subhead)
+                    .font(OpenClawType.body)
                 Button {
-                    self.step = .mode
+                    self.navigate(to: .mode)
                 } label: {
                     Text("Back to Mode Selection")
                         .font(OpenClawType.subheadSemiBold)
                 }
-                .font(OpenClawType.subheadSemiBold)
             }
         }
     }
@@ -549,13 +609,13 @@ struct OnboardingWizardView: View {
             .disabled(self.connectingGatewayID != nil)
         } header: {
             Text("Setup Link")
-                .font(OpenClawType.captionSemiBold)
+                .font(OpenClawType.footnoteSemiBold)
         } footer: {
             Text(link.tls
                 ? "Review this endpoint. Credentials are applied only after you tap Connect."
                 :
                 "Plaintext may expose credentials. Continue only if you trust this local network and host.")
-                .font(OpenClawType.caption)
+                .font(OpenClawType.footnote)
         }
     }
 
@@ -564,7 +624,7 @@ struct OnboardingWizardView: View {
             Section {
                 if self.gatewayController.gateways.isEmpty {
                     Text("No gateways found yet.")
-                        .font(OpenClawType.subhead)
+                        .font(OpenClawType.body)
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(self.gatewayController.gateways) { gateway in
@@ -573,7 +633,7 @@ struct OnboardingWizardView: View {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(gateway.name)
-                                    .font(OpenClawType.subheadSemiBold)
+                                    .font(OpenClawType.body)
                                 if let host = gateway.lanHost ?? gateway.tailnetDns {
                                     Text(host)
                                         .font(OpenClawType.footnote)
@@ -611,7 +671,7 @@ struct OnboardingWizardView: View {
                 .disabled(self.connectingGatewayID != nil)
             } header: {
                 Text("Discovered Gateways")
-                    .font(OpenClawType.captionSemiBold)
+                    .font(OpenClawType.footnoteSemiBold)
             }
 
             self.manualConnectionFieldsSection(title: "Manual Fallback")
@@ -619,36 +679,36 @@ struct OnboardingWizardView: View {
     }
 
     private var remoteDomainConnectSection: some View {
-        manualConnectionFieldsSection(title: "Domain Settings")
+        self.manualConnectionFieldsSection(title: "Domain Settings")
     }
 
     private var developerConnectSection: some View {
         Section {
-            TextField("Host", text: self.manualHostBinding)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(OpenClawType.subhead)
-            TextField("Port", text: self.manualPortTextBinding)
+            self.onboardingTextField("Host", text: self.manualHostBinding, focusedField: .manualHost)
+            self.onboardingTextField("Port", text: self.manualPortTextBinding, focusedField: .manualPort)
                 .keyboardType(.numberPad)
-                .font(OpenClawType.subhead)
-            self.onboardingButtonToggle("Use TLS", isOn: self.$manualTLS)
+            self.manualConnectionSecurityRows
             self.manualConnectButton
         } header: {
             Text("Developer Local")
-                .font(OpenClawType.captionSemiBold)
+                .font(OpenClawType.footnoteSemiBold)
         } footer: {
             Text("Default host is localhost. Use your Mac LAN IP if simulator networking requires it.")
-                .font(OpenClawType.caption)
+                .font(OpenClawType.footnote)
         }
     }
 
     private var authStep: some View {
         Group {
             Section {
-                self.onboardingSecureField("Gateway Auth Token", text: self.gatewayTokenBinding)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                self.onboardingSecureField("Gateway Password", text: self.gatewayPasswordBinding)
+                self.onboardingSecureField(
+                    "Gateway Auth Token",
+                    text: self.gatewayTokenBinding,
+                    focusedField: .gatewayToken)
+                self.onboardingSecureField(
+                    "Gateway Password",
+                    text: self.gatewayPasswordBinding,
+                    focusedField: .gatewayPassword)
 
                 if let problem = self.currentProblem {
                     GatewayProblemBanner(
@@ -661,17 +721,17 @@ struct OnboardingWizardView: View {
                             self.showGatewayProblemDetails = true
                         })
                 } else if self.issue.needsAuthToken {
-                    Text("Gateway rejected credentials. Scan a fresh QR code or update token/password.")
+                    Text("Gateway rejected credentials. Scan a fresh setup code or update token/password.")
                         .font(OpenClawType.footnote)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Auth token looks valid.")
+                    Text("OpenClaw is checking gateway and node access.")
                         .font(OpenClawType.footnote)
                         .foregroundStyle(.secondary)
                 }
             } header: {
-                Text("Authentication")
-                    .font(OpenClawType.captionSemiBold)
+                Text(self.gatewayStatusSectionTitle)
+                    .font(OpenClawType.footnoteSemiBold)
             }
 
             if self.issue.needsPairing {
@@ -686,7 +746,7 @@ struct OnboardingWizardView: View {
                     .disabled(self.connectingGatewayID != nil)
                 } header: {
                     Text("Pairing Approval")
-                        .font(OpenClawType.captionSemiBold)
+                        .font(OpenClawType.footnoteSemiBold)
                 } footer: {
                     let requestLine: String = {
                         if let id = self.currentProblem?.requestId ?? self.issue.requestId, !id.isEmpty {
@@ -709,7 +769,7 @@ struct OnboardingWizardView: View {
                 Button {
                     self.openQRScannerFromOnboarding()
                 } label: {
-                    Label("Scan QR Code Again", systemImage: "qrcode.viewfinder")
+                    Label("Scan Setup Code Again", systemImage: "qrcode.viewfinder")
                         .font(OpenClawType.subheadSemiBold)
                 }
                 .font(OpenClawType.subheadSemiBold)
@@ -733,70 +793,54 @@ struct OnboardingWizardView: View {
     }
 
     private var successStep: some View {
-        VStack(spacing: 0) {
-            Spacer()
-
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 64))
-                .foregroundStyle(OpenClawBrand.ok)
-                .padding(.bottom, 20)
-
-            Text("Connected")
-                .font(OpenClawType.title1)
-                .foregroundStyle(OpenClawBrand.textPrimary)
-                .padding(.bottom, 8)
-
-            Text(self.successEndpoint)
-                .font(OpenClawType.subhead)
-                .foregroundStyle(.secondary)
-
-            Spacer()
-
-            Button {
-                self.onComplete()
-            } label: {
-                Label("Go to Chat", systemImage: "bubble.left.and.bubble.right.fill")
-                    .font(OpenClawType.headline)
-            }
-            .font(OpenClawType.headline)
-            .openClawPrimaryButton()
-            .padding(.horizontal, OpenClawSpacing.space6)
-            .padding(.bottom, 48)
-        }
+        OnboardingSuccessStep(
+            gatewayName: self.appModel.gatewayServerName ?? "gateway",
+            gatewayAddress: self.appModel.gatewayRemoteAddress,
+            onGetStarted: self.onComplete)
     }
 }
 
 extension OnboardingWizardView {
+    private var gatewayStatusSectionTitle: String {
+        if self.issue.needsPairing || self.currentProblem?.needsPairingApproval == true {
+            return "Gateway Approval"
+        }
+        if self.issue.needsAuthToken || self.currentProblem != nil {
+            return "Authentication"
+        }
+        return "Gateway Status"
+    }
+
     private var setupCodeSection: some View {
         Section {
-            TextField("Paste setup code", text: self.$setupCode)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(OpenClawType.subhead)
-                .disabled(self.connectingGatewayID != nil)
-                .onSubmit {
-                    Task { await self.applySetupCodeAndConnect() }
-                }
+            HStack(spacing: 12) {
+                self.onboardingTextField("Enter setup code", text: self.$setupCode, focusedField: .setupCode)
+                    .lineLimit(1)
+                    .submitLabel(.go)
+                    .onSubmit {
+                        guard self.canApplySetupCode else { return }
+                        Task { await self.applySetupCodeAndConnect() }
+                    }
 
-            Button {
-                Task { await self.applySetupCodeAndConnect() }
-            } label: {
-                if self.connectingGatewayID == "setup-code" {
-                    HStack(spacing: 8) {
+                Button {
+                    Task { await self.applySetupCodeAndConnect() }
+                } label: {
+                    if self.connectingGatewayID == "setup-code" {
                         ProgressView()
                             .progressViewStyle(.circular)
-                        Text("Applying...")
+                            .controlSize(.small)
+                    } else {
+                        Text("Apply")
                             .font(OpenClawType.subheadSemiBold)
                     }
-                } else {
-                    Text("Apply Setup Code")
-                        .font(OpenClawType.subheadSemiBold)
                 }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .controlSize(.regular)
+                .tint(OpenClawBrand.activationPrimaryAction)
+                .disabled(!self.canApplySetupCode)
             }
-            .font(OpenClawType.subheadSemiBold)
-            .disabled(
-                self.setupCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || self.connectingGatewayID != nil)
+            .frame(minHeight: 50)
 
             if let setupCodeStatus, !setupCodeStatus.isEmpty {
                 Text(setupCodeStatus)
@@ -805,65 +849,127 @@ extension OnboardingWizardView {
             }
         } header: {
             Text("Setup Code")
-                .font(OpenClawType.captionSemiBold)
+                .font(OpenClawType.footnoteSemiBold)
         } footer: {
-            Text("Use this if you received a setup code instead of a QR code.")
-                .font(OpenClawType.caption)
+            Text("Use this if you have a setup code instead of scanning.")
+                .font(OpenClawType.footnote)
         }
     }
 
-    private func manualConnectionFieldsSection(title: String) -> some View {
+    private var canApplySetupCode: Bool {
+        !self.setupCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && self.connectingGatewayID == nil
+    }
+
+    private func manualConnectionFieldsSection(title: LocalizedStringKey) -> some View {
         Section {
-            TextField("Host", text: self.manualHostBinding)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(OpenClawType.subhead)
-            TextField("Port", text: self.manualPortTextBinding)
+            self.onboardingTextField("Host", text: self.manualHostBinding, focusedField: .manualHost)
+            self.onboardingTextField("Port", text: self.manualPortTextBinding, focusedField: .manualPort)
                 .keyboardType(.numberPad)
-                .font(OpenClawType.subhead)
-            self.onboardingButtonToggle("Use TLS", isOn: self.$manualTLS)
-            TextField("Discovery Domain (optional)", text: self.$discoveryDomain)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(OpenClawType.subhead)
+            self.manualConnectionSecurityRows
+            self.onboardingTextField(
+                "Discovery Domain (optional)",
+                text: self.$discoveryDomain,
+                focusedField: .discoveryDomain)
             if self.selectedMode == .remoteDomain {
-                self.onboardingSecureField("Gateway Auth Token", text: self.gatewayTokenBinding)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                self.onboardingSecureField("Gateway Password", text: self.gatewayPasswordBinding)
+                self.onboardingSecureField(
+                    "Gateway Auth Token",
+                    text: self.gatewayTokenBinding,
+                    focusedField: .gatewayToken)
+                self.onboardingSecureField(
+                    "Gateway Password",
+                    text: self.gatewayPasswordBinding,
+                    focusedField: .gatewayPassword)
             }
             self.manualConnectButton
         } header: {
             Text(title)
-                .font(OpenClawType.captionSemiBold)
+                .font(OpenClawType.footnoteSemiBold)
         }
     }
 
-    private func onboardingLabeledContent(_ title: String, value: String) -> some View {
-        LabeledContent {
-            Text(value)
-                .font(OpenClawType.subhead)
+    private var manualTransport: GatewayManualTransportPresentation {
+        GatewayConnectionController.manualTransportPresentation(
+            host: self.manualHost,
+            requestedTLS: self.manualTLS)
+    }
+
+    private var manualTLSBinding: Binding<Bool> {
+        Binding(
+            get: { self.manualTransport.effectiveTLS },
+            set: { enabled in
+                guard !self.manualTransport.requiresTLS else { return }
+                self.manualTLS = enabled
+            })
+    }
+
+    @ViewBuilder
+    private var manualConnectionSecurityRows: some View {
+        Picker("Connection security", selection: self.manualTLSBinding) {
+            Text("Unencrypted")
+                .font(OpenClawType.captionSemiBold)
+                .tag(false)
+            Text("Secure (TLS)")
+                .font(OpenClawType.captionSemiBold)
+                .tag(true)
+        }
+        .pickerStyle(.segmented)
+        .disabled(self.manualTransport.requiresTLS)
+
+        if let helperText = self.manualTransport.helperText {
+            Text(helperText)
+                .font(OpenClawType.footnote)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private func onboardingLabeledContent(_ title: LocalizedStringKey, value: String) -> some View {
+        LabeledContent {
+            Text(verbatim: value)
+                .font(OpenClawType.body)
         } label: {
             Text(title)
-                .font(OpenClawType.subheadSemiBold)
+                .font(OpenClawType.body)
         }
     }
 
-    private func onboardingSecureField(_ placeholder: String, text: Binding<String>) -> some View {
-        ZStack(alignment: .leading) {
-            SecureField("", text: text)
+    private func onboardingTextField(
+        _ placeholder: LocalizedStringKey,
+        text: Binding<String>,
+        focusedField: OnboardingFocusedField) -> some View
+    {
+        TextField(
+            "",
+            text: text,
+            prompt: Text(placeholder)
                 .font(OpenClawType.subhead)
-                .accessibilityLabel(placeholder)
+                .foregroundStyle(.tertiary))
+            .font(OpenClawType.subhead)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .focused(self.$focusedField, equals: focusedField)
+            .accessibilityLabel(placeholder)
+    }
+
+    private func onboardingSecureField(
+        _ placeholder: LocalizedStringKey,
+        text: Binding<String>,
+        focusedField: OnboardingFocusedField) -> some View
+    {
+        ZStack(alignment: .leading) {
             if text.wrappedValue.isEmpty {
                 Text(placeholder)
-                    .font(OpenClawType.subheadSemiBold)
+                    .font(OpenClawType.subhead)
                     .foregroundStyle(.tertiary)
-                    .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
+            SecureField("", text: text)
+                .font(OpenClawType.subhead)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .focused(self.$focusedField, equals: focusedField)
         }
-        .font(OpenClawType.subhead)
+        .accessibilityLabel(placeholder)
     }
 
     private var manualConnectButton: some View {
@@ -912,12 +1018,13 @@ extension OnboardingWizardView {
         let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
         guard self.setupAttemptID == attemptID else { return }
 
-        self.applyGatewayLink(link)
+        await self.applyGatewayLink(link)
         self.setupCode = ""
-        self.setupCodeStatus = "Setup code applied. Connecting..."
-        self.connectMessage = "Connecting via setup code..."
-        self.statusLine = "Setup code loaded. Connecting to \(link.host):\(link.port)..."
-        self.step = .connect
+        self.setupCodeStatus = "Setup code applied. Connecting…"
+        self.connectMessage = "Connecting via setup code…"
+        self.statusLine = "Setup code loaded. Connecting to \(link.host):\(link.port)…"
+        await self.prepareFocusedFieldForStepTransition()
+        self.navigate(to: .connect)
         await self.connectManual(setupAttemptID: attemptID)
     }
 
@@ -955,10 +1062,10 @@ extension OnboardingWizardView {
         }
         let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
         guard self.setupAttemptID == attemptID else { return }
-        self.applyGatewayLink(link)
-        self.connectMessage = "Connecting via QR code..."
-        self.statusLine = "QR loaded. Connecting to \(link.host):\(link.port)..."
-        self.step = .connect
+        await self.applyGatewayLink(link)
+        self.connectMessage = "Connecting via setup code…"
+        self.statusLine = "Setup code loaded. Connecting to \(link.host):\(link.port)…"
+        self.navigate(to: .connect)
         await self.connectManual(setupAttemptID: attemptID)
     }
 
@@ -976,7 +1083,7 @@ extension OnboardingWizardView {
         self.setupCodeStatus = "Setup link loaded for \(link.host):\(link.port). Tap Connect to apply."
         self.connectMessage = nil
         self.statusLine = self.setupCodeStatus ?? ""
-        self.step = .connect
+        self.navigate(to: .connect)
     }
 
     private func connectStagedGatewaySetupLink() async {
@@ -996,8 +1103,8 @@ extension OnboardingWizardView {
         await self.appModel.resetGatewaySessionsForTargetSwitch()
         guard self.setupLinkStaging.link == link else { return }
         _ = self.setupLinkStaging.take()
-        self.applyGatewayLink(link, disconnectExistingGatewayForBootstrap: false)
-        self.setupCodeStatus = "Setup link applied. Connecting..."
+        await self.applyGatewayLink(link, disconnectExistingGatewayForBootstrap: false)
+        self.setupCodeStatus = "Setup link applied. Connecting…"
         self.issue = .none
         self.connectMessage = "Connecting to \(link.host)…"
         self.statusLine = "Connecting to \(link.host):\(link.port)…"
@@ -1014,7 +1121,7 @@ extension OnboardingWizardView {
 
     private func applyGatewayLink(
         _ link: GatewayConnectDeepLink,
-        disconnectExistingGatewayForBootstrap: Bool = true)
+        disconnectExistingGatewayForBootstrap: Bool = true) async
     {
         self.manualHost = link.host
         self.manualPort = link.port
@@ -1023,7 +1130,7 @@ extension OnboardingWizardView {
         let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
         self.gatewayCredentialFieldStableID = setupAuth.targetStableID
         if setupAuth.hasBootstrapToken {
-            GatewayOnboardingReset.prepareForBootstrapPairing(
+            await GatewayOnboardingReset.prepareForBootstrapPairing(
                 appModel: self.appModel,
                 instanceId: GatewaySettingsStore.currentInstanceID(),
                 gatewayStableID: setupAuth.targetStableID,
@@ -1167,7 +1274,7 @@ extension OnboardingWizardView {
         OnboardingStateStore.markFirstRunIntroSeen()
         self.requestLocalNetworkAccess(reason: "onboarding_continue")
         self.statusLine = ""
-        self.step = .welcome
+        self.navigate(to: .welcome)
     }
 
     private func requestLocalNetworkAccessIfPastIntro(reason: String) {
@@ -1183,6 +1290,27 @@ extension OnboardingWizardView {
         guard let target = step.previous else { return }
         self.invalidateSetupAttempt()
         self.connectMessage = nil
+        self.navigate(to: target)
+    }
+
+    private func prepareFocusedFieldForStepTransition() async {
+        guard self.focusedField != nil else { return }
+        self.dismissKeyboard()
+        await Task.yield()
+        try? await Task.sleep(nanoseconds: 120_000_000)
+    }
+
+    private func dismissKeyboard() {
+        self.focusedField = nil
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil)
+    }
+
+    private func navigate(to target: OnboardingStep) {
+        self.focusedField = nil
         self.step = target
     }
 
@@ -1209,28 +1337,16 @@ extension OnboardingWizardView {
         return !host.isEmpty && self.resolvedManualPort(host: host) != nil
     }
 
-    private var successEndpoint: String {
-        let serverName = self.appModel.gatewayServerName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !serverName.isEmpty {
-            return serverName
-        }
-        let remoteAddress = self.appModel.gatewayRemoteAddress?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return remoteAddress.isEmpty ? "gateway" : remoteAddress
-    }
-
     private func initializeState() {
         if self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            if let last = GatewaySettingsStore.loadLastGatewayConnection() {
-                switch last {
-                case let .manual(host, port, useTLS, _):
-                    self.manualHost = host
-                    self.manualPort = port
-                    self.manualTLS = useTLS
-                case .discovered:
-                    self.manualHost = "openclaw.local"
-                    self.manualPort = 18789
-                    self.manualTLS = true
-                }
+            if let active = GatewaySettingsStore.activeGatewayEntry(),
+               active.kind == .manual,
+               let host = active.host,
+               let port = active.port
+            {
+                self.manualHost = host
+                self.manualPort = port
+                self.manualTLS = active.useTLS
             } else {
                 self.manualHost = "openclaw.local"
                 self.manualPort = 18789
@@ -1239,7 +1355,13 @@ extension OnboardingWizardView {
         }
         self.manualPortText = self.manualPort > 0 ? String(self.manualPort) : ""
         if self.selectedMode == nil {
-            self.selectedMode = OnboardingStateStore.lastMode()
+            let lastMode = OnboardingStateStore.lastMode()
+            if lastMode == .developerLocal {
+                self.developerModeEnabled = true
+            }
+            if self.developerModeEnabled || lastMode != .developerLocal {
+                self.selectedMode = lastMode
+            }
         }
         if self.selectedMode == .developerLocal, self.manualHost == "openclaw.local" {
             self.manualHost = "localhost"
@@ -1262,7 +1384,7 @@ extension OnboardingWizardView {
                 targetStableID: stableID)
         }
 
-        let hasSavedGateway = GatewaySettingsStore.loadLastGatewayConnection() != nil
+        let hasSavedGateway = GatewaySettingsStore.activeGatewayEntry() != nil
         let hasToken = !self.gatewayToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasPassword = !self.gatewayPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if !hasSavedGateway, !hasToken, !hasPassword {
@@ -1513,11 +1635,11 @@ extension OnboardingWizardView {
         }
         defer { self.connectingGatewayID = nil }
 
-        switch GatewaySettingsStore.loadLastGatewayConnection() {
-        case .some(.discovered):
-            await self.gatewayController.connectLastKnown()
-        case .some(.manual), .none:
-            // connectLastKnown() replays the persisted endpoint and credentials,
+        switch GatewaySettingsStore.activeGatewayEntry()?.kind {
+        case .discovered:
+            await self.gatewayController.connectActiveGateway()
+        case .manual, .none:
+            // connectActiveGateway() replays the persisted endpoint and credentials,
             // so token/host/port edits made on this screen would be ignored and
             // a missing stored connection would silently do nothing. Manual
             // retries must dial the current form input instead.
@@ -1542,7 +1664,7 @@ extension OnboardingWizardView {
 
     private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
         if problem.suggestsOnboardingReset {
-            GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
+            await GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
             self.gatewayToken = ""
             self.gatewayPassword = ""
             self.gatewayCredentialFieldStableID = nil
@@ -1551,7 +1673,7 @@ extension OnboardingWizardView {
             self.connectMessage = nil
             self.issue = .none
             self.pairingRequestId = nil
-            self.step = .connect
+            self.navigate(to: .connect)
             self.openQRScannerFromOnboarding(status: "Scan a fresh setup QR code from this gateway.")
             return
         }
@@ -1563,7 +1685,7 @@ extension OnboardingWizardView {
             _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
             return
         }
-        if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
+        if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem) {
             return
         }
         guard problem.retryable else { return }

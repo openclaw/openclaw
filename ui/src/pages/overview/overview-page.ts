@@ -56,7 +56,7 @@ function addNamedAttention(
   }
 }
 
-export class OverviewPage extends LitElement {
+class OverviewPage extends LitElement {
   readonly i18nController = new I18nController(this);
 
   override createRenderRoot() {
@@ -246,8 +246,8 @@ export class OverviewPage extends LitElement {
       ...this.settings,
       themeMode: this.context.theme.mode,
       navCollapsed: navigation.navCollapsed,
-      navGroupsCollapsed: navigation.navGroupsCollapsed,
-      recentSessionsCollapsed: navigation.recentSessionsCollapsed,
+      sidebarPinnedRoutes: [...navigation.sidebarPinnedRoutes],
+      sidebarMoreExpanded: navigation.sidebarMoreExpanded,
       locale,
     };
     this.settings = nextDraft;

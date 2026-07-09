@@ -12,6 +12,7 @@ import type {
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   pinActivePluginChannelRegistry,
+  pinActivePluginHttpRouteRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
@@ -172,7 +173,7 @@ describe("buildGatewayReloadPlan", () => {
     {
       pluginId: "browser",
       pluginName: "Browser",
-      registration: { restartPrefixes: ["browser"] },
+      registration: { restartPrefixes: ["browser"], hotPrefixes: ["browser.profiles"] },
       source: "test",
     },
     {
@@ -212,6 +213,28 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartGateway).toBe(true);
     expect(plan.restartReasons).toContain("browser.enabled");
     expect(plan.hotReasons).toStrictEqual([]);
+  });
+
+  it("hot-reloads browser profile config under the broad browser restart rule", () => {
+    const path = "browser.profiles.sandbox.cdpUrl";
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartReasons).toStrictEqual([]);
+    expect(plan.hotReasons).toEqual([path]);
+    expect(plan.noopPaths).toStrictEqual([]);
+    expect(resolveConfigReloadMetadata(path).kind).toBe("hot");
+  });
+
+  it("keeps Gateway reload policy when an agent activates a scoped registry", () => {
+    pinActivePluginHttpRouteRegistry(registry);
+    setActivePluginRegistry(emptyRegistry);
+
+    const path = "browser.profiles.sandbox.cdpUrl";
+    expect(buildGatewayReloadPlan([path])).toMatchObject({
+      restartGateway: false,
+      hotReasons: [path],
+    });
   });
 
   it("restarts the Gmail watcher for hooks.gmail changes", () => {
@@ -526,6 +549,16 @@ describe("buildGatewayReloadPlan", () => {
       expectRestartReason: "browser.enabled",
     },
     {
+      path: "browser.defaultProfile",
+      expectRestartGateway: true,
+      expectRestartReason: "browser.defaultProfile",
+    },
+    {
+      path: "browser.profiles.sandbox.cdpUrl",
+      expectRestartGateway: false,
+      expectHotPath: "browser.profiles.sandbox.cdpUrl",
+    },
+    {
       path: "gateway.channelHealthCheckMinutes",
       expectRestartGateway: false,
       expectHotPath: "gateway.channelHealthCheckMinutes",
@@ -710,6 +743,9 @@ function createReloaderHarness(
   const onConfigApplied = vi.fn(
     async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {},
   );
+  const onNoopConfigCommit = vi.fn(
+    async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {},
+  );
   const onHotReload = vi.fn(async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {});
   const onRestart = vi.fn((_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {});
   let writeListener: ((event: ConfigWriteNotification) => void) | null = null;
@@ -738,6 +774,7 @@ function createReloaderHarness(
     subscribeToWrites,
     onConfigChange,
     onConfigApplied,
+    onNoopConfigCommit,
     onHotReload,
     onRestart,
     log,
@@ -747,6 +784,7 @@ function createReloaderHarness(
     watcher,
     onConfigChange,
     onConfigApplied,
+    onNoopConfigCommit,
     onHotReload,
     onRestart,
     log,
@@ -821,6 +859,39 @@ describe("startGatewayConfigReloader", () => {
     expect(harness.onConfigApplied).toHaveBeenCalledTimes(1);
     expect(harness.onHotReload).not.toHaveBeenCalled();
     expect(harness.onRestart).not.toHaveBeenCalled();
+    await harness.reloader.stop();
+  });
+
+  it("commits runtime snapshot changes for no-op visible reply reloads", async () => {
+    const initialConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      messages: { visibleReplies: "automatic" },
+    };
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      messages: { visibleReplies: "message_tool" },
+    };
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({ config: nextConfig, hash: "visible-replies" }),
+    );
+    const harness = createReloaderHarness(readSnapshot, { initialConfig });
+
+    harness.watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(harness.onNoopConfigCommit).toHaveBeenCalledTimes(1);
+    expect(harness.onNoopConfigCommit.mock.calls[0]?.[0].noopPaths).toContain(
+      "messages.visibleReplies",
+    );
+    expect(harness.onNoopConfigCommit.mock.calls[0]?.[1]).toBe(nextConfig);
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    expect(harness.onConfigChange.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.onNoopConfigCommit.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(harness.onNoopConfigCommit.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.onConfigApplied.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
     await harness.reloader.stop();
   });
 
@@ -1786,6 +1857,7 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       readSnapshot: vi.fn(async () => makeSnapshot()),
       initialPluginInstallRecords: {},
       readPluginInstallRecords: async () => ({}),
+      onNoopConfigCommit: vi.fn(async () => {}),
       onHotReload: vi.fn(async () => {}),
       onRestart: vi.fn(),
       log,

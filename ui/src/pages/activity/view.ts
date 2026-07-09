@@ -8,7 +8,7 @@ import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
 
 const STATUS_ORDER: ActivityStatus[] = ["running", "done", "error"];
 
-export type ActivityProps = {
+type ActivityProps = {
   entries: ActivityEntry[];
   filterText: string;
   statusFilters: Record<ActivityStatus, boolean>;

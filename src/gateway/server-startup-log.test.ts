@@ -1,11 +1,14 @@
 // Startup log tests cover security warnings, model detail formatting, plugin
 // summaries, bind URLs, ANSI output, and dangerous config reporting.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { formatAgentModelStartupDetails, logGatewayStartup } from "./server-startup-log.js";
 
 const pluginRegistryMocks = vi.hoisted(() => ({
   loadPluginManifestRegistryForPluginRegistry: vi.fn(),
+}));
+const modelMocks = vi.hoisted(() => ({
+  resolveThinkingDefault: vi.fn(() => "medium" as const),
 }));
 
 vi.mock("../plugins/plugin-registry.js", async (importOriginal) => ({
@@ -14,26 +17,16 @@ vi.mock("../plugins/plugin-registry.js", async (importOriginal) => ({
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
 }));
 
-describe("gateway startup log", () => {
-  beforeAll(() => {
-    formatAgentModelStartupDetails({
-      cfg: {
-        models: {
-          providers: {
-            google: {
-              api: "google-generative-ai",
-              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-              models: [],
-            },
-          },
-        },
-      },
-      provider: "google",
-      model: "gemma-4-26b-a4b-it",
-    });
-  });
+// Provider thinking owns a dedicated suite. Startup logging only needs its
+// fixture-level default while proving precedence and banner composition.
+vi.mock("../agents/model-thinking-default.js", () => ({
+  resolveThinkingDefault: modelMocks.resolveThinkingDefault,
+}));
 
+describe("gateway startup log", () => {
   beforeEach(() => {
+    modelMocks.resolveThinkingDefault.mockClear();
+    modelMocks.resolveThinkingDefault.mockReturnValue("medium");
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
       plugins: [],
@@ -281,6 +274,7 @@ describe("gateway startup log", () => {
         model: "gpt-5.5",
       }),
     ).toBe("thinking=medium, fast=on");
+    expect(modelMocks.resolveThinkingDefault).toHaveBeenCalledTimes(1);
   });
 
   it("preserves explicit startup thinking off", () => {
@@ -299,6 +293,7 @@ describe("gateway startup log", () => {
         model: "gpt-5.5",
       }),
     ).toBe("thinking=off, fast=on");
+    expect(modelMocks.resolveThinkingDefault).not.toHaveBeenCalled();
   });
 
   it("shows thinking off for configured provider models with reasoning disabled", () => {
@@ -329,6 +324,7 @@ describe("gateway startup log", () => {
         model: "gemma-4-26b-a4b-it",
       }),
     ).toBe("thinking=off, fast=off");
+    expect(modelMocks.resolveThinkingDefault).not.toHaveBeenCalled();
   });
 
   it("uses default agent mode overrides in the startup model details", () => {

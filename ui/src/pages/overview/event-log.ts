@@ -6,7 +6,7 @@ import { t } from "../../i18n/index.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 import { formatEventPayload } from "../../lib/presenter.ts";
 
-export type OverviewEventLogProps = {
+type OverviewEventLogProps = {
   events: readonly EventLogEntry[];
 };
 

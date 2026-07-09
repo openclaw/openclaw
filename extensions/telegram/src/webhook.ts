@@ -1050,23 +1050,11 @@ export async function startTelegramWebhook(opts: {
           runtime.error?.(
             `telegram setWebhook retry stopped after non-recoverable error: ${formatErrorMessage(err)}`,
           );
+          await shutdown();
           return;
         }
       }
       attempt += 1;
-    }
-  };
-  const closeAfterStartupFailure = async () => {
-    shutDown = true;
-    if (drainTimer) {
-      clearInterval(drainTimer);
-    }
-    server.close();
-    await bot.stop();
-    await closeTransportOnce();
-    status.noteWebhookStop();
-    if (diagnosticsEnabled) {
-      stopDiagnosticHeartbeat();
     }
   };
 
@@ -1077,7 +1065,7 @@ export async function startTelegramWebhook(opts: {
       await advertiseWebhook();
     } catch (err) {
       if (!shouldRetryWebhookRegistration(err)) {
-        await closeAfterStartupFailure();
+        await shutdown();
         throw err;
       }
       void retryWebhookRegistration(1);

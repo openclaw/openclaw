@@ -8,7 +8,7 @@ import type { DevicePairSetup } from "../../lib/device-pair-setup.ts";
 const PAIRING_DOCS_URL =
   "https://docs.openclaw.ai/channels/pairing#pair-from-the-control-ui-recommended";
 
-export type DevicePairSetupProps = {
+type DevicePairSetupProps = {
   open: boolean;
   loading: boolean;
   error: string | null;

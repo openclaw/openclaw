@@ -28,7 +28,7 @@ export function floatToPcm16(samples: Float32Array): Uint8Array {
   return bytes;
 }
 
-export function pcm16ToFloat(bytes: Uint8Array): Float32Array {
+function pcm16ToFloat(bytes: Uint8Array): Float32Array {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const samples = new Float32Array(Math.floor(bytes.byteLength / 2));
   for (let i = 0; i < samples.length; i += 1) {

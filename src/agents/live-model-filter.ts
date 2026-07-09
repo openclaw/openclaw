@@ -17,6 +17,7 @@ type ModelRef = {
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "anthropic/claude-opus-4-8",
+  "anthropic/claude-sonnet-5",
   "anthropic/claude-sonnet-4-6",
   "anthropic/claude-opus-4-7",
   "google/gemini-3.1-pro-preview",
@@ -31,7 +32,7 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "openrouter/minimax/minimax-m2.7",
   "opencode-go/glm-5",
   "openrouter/ai21/jamba-large-1.7",
-  "xai/grok-4.3",
+  "xai/grok-4.5",
   "zai/glm-5.1",
   "fireworks/accounts/fireworks/models/glm-5p1",
   "minimax-portal/minimax-m3",

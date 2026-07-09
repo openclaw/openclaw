@@ -7,6 +7,7 @@ import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { SESSION_TOOL_STDERR_TAIL_BYTES } from "./sessions/tools/limits.js";
 import {
   testing,
   addClientToolsToToolSearchCatalog,
@@ -66,6 +67,18 @@ function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0): unknown[] 
 }
 
 describe("Tool Search", () => {
+  it("keeps bounded directory descriptions UTF-16 well-formed", () => {
+    const sessionId = "session-utf16-directory";
+    const config = { tools: { toolSearch: { enabled: true, mode: "directory" } } } as never;
+    const searchTool = fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search");
+    const target = pluginTool("fake_utf16", `${"x".repeat(176)}🚀tail`);
+    applyToolSchemaDirectoryCatalog({ tools: [searchTool, target], config, sessionId });
+
+    const directory = buildToolSchemaDirectoryPrompt({ sessionId, config });
+
+    expect(directory).toContain(`${"x".repeat(176)}...`);
+    expect(directory).not.toContain("\uD83D");
+  });
   afterEach(() => {
     testing.setToolSearchCodeModeSupportedForTest(undefined);
     testing.setToolSearchMinCodeTimeoutMsForTest(undefined);
@@ -1725,5 +1738,19 @@ describe("Tool Search", () => {
       sessionId,
     });
     expect(second.catalogReused).toBe(false);
+  });
+
+  it("bounds tool_search_code stderr accumulation to the session tool tail limit", () => {
+    let stderrTail = "";
+    stderrTail = testing.appendToolSearchCodeStderrTail(
+      stderrTail,
+      `HEAD_OVERFLOW_${"x".repeat(SESSION_TOOL_STDERR_TAIL_BYTES + 10_000)}TAIL`,
+    );
+
+    expect(stderrTail).not.toContain("HEAD_OVERFLOW_");
+    expect(stderrTail.endsWith("TAIL")).toBe(true);
+    expect(Buffer.byteLength(stderrTail, "utf8")).toBeLessThanOrEqual(
+      SESSION_TOOL_STDERR_TAIL_BYTES,
+    );
   });
 });

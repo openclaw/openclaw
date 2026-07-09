@@ -29,7 +29,7 @@ openclaw nodes status
 openclaw nodes describe --node <idOrNameOrIp>
 ```
 
-Pending pairing requests expire after 5 minutes; see [Gateway-owned pairing](/gateway/pairing) for the full request/approve/token lifecycle. If a node retries with changed auth details (role/scopes/public key), the prior pending request is superseded and a new `requestId` is created — re-run `openclaw devices list` before approving.
+Pending pairing requests expire 5 minutes after the device's last retry — a device that keeps reconnecting keeps its one pending request (and `requestId`) alive instead of minting a new prompt every few minutes; see [Gateway-owned pairing](/gateway/pairing) for the full request/approve/token lifecycle. If a node retries with changed auth details (role/scopes/public key), the prior pending request is superseded and a new `requestId` is created — clients get a `device.pair.resolved` event for the superseded request, and you should re-run `openclaw devices list` before approving.
 
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
 - The device pairing record is the durable approved-role contract. Token rotation stays inside that contract; it cannot upgrade a paired node into a role that pairing approval never granted.
@@ -39,6 +39,21 @@ Pending pairing requests expire after 5 minutes; see [Gateway-owned pairing](/ga
   - commandless request: `operator.pairing`
   - non-exec node commands: `operator.pairing` + `operator.write`
   - `system.run` / `system.run.prepare` / `system.which`: `operator.pairing` + `operator.admin`
+
+## Version skew and upgrade order
+
+The Gateway accepts authenticated node clients across an N-1 protocol window.
+The current v4 Gateway therefore accepts v3 nodes when the connection declares
+both `role: "node"` and `client.mode: "node"`. Operator and UI sessions must
+still use the current protocol.
+
+For staged fleet upgrades, upgrade the Gateway first, then upgrade each node.
+An N-1 node remains visible and manageable while it is upgraded; the Gateway
+logs `legacy node protocol accepted` with an upgrade recommendation. Pairing,
+device authentication, command allowlists, and exec approvals still apply.
+Plugin-owned capabilities and commands stay hidden until the node upgrades to
+the current protocol. Nodes older than N-1 require an out-of-band upgrade before
+reconnecting.
 
 ## Remote node host (system.run)
 
@@ -349,6 +364,20 @@ Notes:
 
 Android nodes can expose `sms.send` and `sms.search` when the user grants **SMS** permission and the device supports telephony. Both commands are dangerous-by-default: the gateway operator must also add them to `gateway.nodes.allowCommands` before they can be invoked (see [Command policy](#command-policy)).
 
+For read-only SMS search, opt in explicitly in `openclaw.json`:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      allowCommands: ["sms.search"],
+    },
+  },
+}
+```
+
+Add `sms.send` separately only when the node should also be able to send messages. Android permission and Gateway command authorization are independent; granting the phone permission does not edit Gateway policy.
+
 Low-level invoke:
 
 ```bash
@@ -357,8 +386,9 @@ openclaw nodes invoke --node <idOrNameOrIp> --command sms.send --params '{"to":"
 
 Notes:
 
-- The permission prompt must be accepted on the Android device before the capability is advertised.
+- `sms.search` may be declared before `READ_SMS` is granted so an invocation can return a permission diagnostic; reading messages still requires that Android permission.
 - Wi-Fi-only devices without telephony will not advertise `sms.send`.
+- A `requires explicit gateway.nodes.allowCommands opt-in` error means the phone declared the command but the Gateway operator has not authorized it.
 
 ## Device and personal data commands
 

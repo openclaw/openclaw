@@ -22,6 +22,8 @@ export interface AiTransportHost {
     timeoutMs?: number,
     options?: { sanitizeSse?: boolean },
   ): typeof fetch | undefined;
+  /** Resolves host-owned process-local secret sentinel substrings immediately before egress. */
+  resolveSecretSentinel(value: string): string;
   /** Redacts secrets inside structured tool-result payloads. */
   redactSecrets<T>(value: T): T;
   /** Redacts secret-bearing text in tool payload strings. */
@@ -46,6 +48,7 @@ export interface AiTransportHost {
 
 const inertAiTransportHost: AiTransportHost = {
   buildModelFetch: () => undefined,
+  resolveSecretSentinel: (value) => value,
   redactSecrets: (value) => value,
   redactToolPayloadText: (text) => text,
   resolveOpenAIStrictToolSetting: (_model, options) =>
@@ -63,4 +66,23 @@ export function configureAiTransportHost(host: Partial<AiTransportHost>): void {
 /** Returns the active transport host (inert defaults unless configured). */
 export function getAiTransportHost(): AiTransportHost {
   return activeAiTransportHost;
+}
+
+/** Resolves sentinel substrings in custom headers at a no-fetch adapter boundary. */
+export function resolveAiTransportHeaderSentinels(
+  headers: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!headers) {
+    return undefined;
+  }
+  const host = getAiTransportHost();
+  let resolvedHeaders: Record<string, string> | undefined;
+  for (const [name, value] of Object.entries(headers)) {
+    const resolved = host.resolveSecretSentinel(value);
+    if (resolved !== value) {
+      resolvedHeaders ??= { ...headers };
+      resolvedHeaders[name] = resolved;
+    }
+  }
+  return resolvedHeaders ?? headers;
 }

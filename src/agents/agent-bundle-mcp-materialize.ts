@@ -6,6 +6,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { setPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
+import { matchesMcpToolFilterPattern } from "./agent-bundle-mcp-filter.js";
 import {
   buildSafeToolName,
   normalizeReservedToolNames,
@@ -154,31 +155,19 @@ function optionalStringRecordArg(input: unknown, key: string): Record<string, st
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
-function escapeRegex(value: string): string {
-  return value.replace(/[\\^$+?.()|[\]{}]/g, "\\$&");
-}
-
-function globMatches(pattern: string, value: string): boolean {
-  const trimmed = pattern.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (!trimmed.includes("*")) {
-    return trimmed === value;
-  }
-  return new RegExp(`^${trimmed.split("*").map(escapeRegex).join(".*")}$`).test(value);
-}
-
 function serverAllowsUtilityTool(
   server: McpToolCatalog["servers"][string],
   operation: string,
 ): boolean {
   const include = server.toolFilter?.include ?? [];
   const exclude = server.toolFilter?.exclude ?? [];
-  if (include.length > 0 && !include.some((pattern) => globMatches(pattern, operation))) {
+  if (
+    include.length > 0 &&
+    !include.some((pattern) => matchesMcpToolFilterPattern(pattern, operation))
+  ) {
     return false;
   }
-  return !exclude.some((pattern) => globMatches(pattern, operation));
+  return !exclude.some((pattern) => matchesMcpToolFilterPattern(pattern, operation));
 }
 
 function addMcpUtilityTool(params: {

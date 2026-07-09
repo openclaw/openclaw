@@ -85,6 +85,13 @@ export async function resetReplyRunSession(params: {
     continuationChainStartedAt: undefined,
     continuationChainTokens: undefined,
     continuationChainId: undefined,
+    compactionCount: 0,
+    memoryFlushAt: undefined,
+    memoryFlushCompactionCount: undefined,
+    memoryFlushContextHash: undefined,
+    memoryFlushFailureCount: undefined,
+    memoryFlushLastFailedAt: undefined,
+    memoryFlushLastFailureError: undefined,
   };
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const nextSessionFile = resolveSessionTranscriptPath(

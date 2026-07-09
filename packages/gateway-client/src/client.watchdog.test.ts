@@ -98,6 +98,23 @@ describe("GatewayClient", () => {
     }
   });
 
+  test("sends the configured websocket origin", async () => {
+    const port = await getFreePort();
+    wss = new WebSocketServer({ port, host: "127.0.0.1" });
+    const receivedOrigin = new Promise<string | undefined>((resolve) => {
+      wss?.once("connection", (_socket, request) => resolve(request.headers.origin));
+    });
+    const client = new GatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      origin: `http://127.0.0.1:${port}`,
+      connectChallengeTimeoutMs: 0,
+    });
+    client.start();
+
+    await expect(receivedOrigin).resolves.toBe(`http://127.0.0.1:${port}`);
+    client.stop();
+  });
+
   test("prefers connectChallengeTimeoutMs and still honors the legacy alias", () => {
     expect(resolveGatewayClientConnectChallengeTimeoutMs({})).toBe(
       DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
@@ -130,6 +147,26 @@ describe("GatewayClient", () => {
         env: { OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "6000" },
       }),
     ).toBe(6_000);
+  });
+
+  test("returns non-sensitive connection metadata", () => {
+    const client = new GatewayClient({
+      clientName: "cli",
+      mode: "backend",
+      preauthHandshakeTimeoutMs: 30_000,
+      deviceIdentity: {
+        deviceId: "device-1",
+        privateKeyPem: "private-key",
+        publicKeyPem: "public-key",
+      },
+    });
+
+    expect(client.getConnectionMetadata()).toEqual({
+      clientName: "cli",
+      hasDeviceIdentity: true,
+      mode: "backend",
+      preauthHandshakeTimeoutMs: 30_000,
+    });
   });
 
   test("closes on missing ticks", async () => {

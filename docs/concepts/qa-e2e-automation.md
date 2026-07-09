@@ -288,6 +288,14 @@ empty. Cold CI leases may still show Slack sign-in in
 `slack-desktop-smoke.png`; the approval checkpoint images are the visual
 proof for this lane.
 
+The default checkpoint run keeps the two standard Slack approval scenarios.
+To capture either opt-in Codex approval route, select it explicitly with
+`--scenario slack-codex-approval-exec-native` or
+`--scenario slack-codex-approval-plugin-native`; Mantis accepts both and emits
+the same pending/resolved screenshot pair. The runner expands its checkpoint
+and remote-command deadlines for each selected Codex route so the full
+approval, agent completion, and resolved-update sequence can finish.
+
 The operator checklist, GitHub workflow dispatch command, evidence-comment
 contract, hydrate-mode decision table, timing interpretation, and failure
 handling steps live in
@@ -594,15 +602,21 @@ Optional:
 - `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS` overrides the checkpoint
   acknowledgement timeout. The default is `120000`.
 
-Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts`):
+Canonical YAML scenarios exposed through the Slack live adapter:
+
+- `thread-follow-up`
+- `thread-isolation`
+
+Imperative Slack scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts`):
 
 - `slack-canary`
 - `slack-mention-gating`
 - `slack-allowlist-block`
 - `slack-top-level-reply-shape`
 - `slack-restart-resume`
-- `slack-thread-follow-up`
-- `slack-thread-isolation`
+- `slack-reaction-glyph-native` - opt-in live message-tool reaction scenario.
+  Instructs the agent to pass the exact `✅` glyph and confirms Slack stored
+  `white_check_mark` for the SUT bot on the target message.
 - `slack-approval-exec-native` - opt-in native Slack exec approval scenario.
   Requests an exec approval through the gateway, verifies the Slack message
   has native approval buttons, resolves it, and verifies the resolved Slack
@@ -611,6 +625,23 @@ Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts`):
   scenario. Enables exec and plugin approval forwarding together so plugin
   events are not suppressed by exec approval routing, then verifies the same
   pending/resolved native Slack UI path.
+- `slack-codex-approval-exec-native` - opt-in Codex Guardian command approval
+  scenario. Enables the Codex plugin in Guardian mode, routes a
+  Slack-originated Gateway agent turn through the Codex app-server harness,
+  waits for the native Slack plugin approval prompt for
+  `openclaw-codex-app-server`, resolves it, and verifies the Codex turn
+  finishes with the expected command-output and assistant markers.
+- `slack-codex-approval-plugin-native` - opt-in Codex Guardian file approval
+  scenario. Uses an outside-workspace `apply_patch` instruction so Codex emits
+  the app-server file-change approval route, then verifies the same native
+  Slack pending/resolved approval path, final assistant marker, and exact file
+  contents before cleanup.
+
+The Codex approval scenarios require an `openai/*` or `codex/*` `--model`, the
+normal live model credentials, and Codex auth or API-key auth accepted by the Codex plugin.
+The Slack report includes the Codex app-server method, selected Codex model key,
+final Codex turn status, and operation-marker verification alongside the
+redacted Slack approval metadata.
 
 Output artifacts:
 
@@ -1105,7 +1136,9 @@ The minimum adoption bar for a new channel:
    competing root command. Runner plugins should declare `qaRunners` in
    `openclaw.plugin.json` and export a matching `qaRunnerCliRegistrations`
    array from `runtime-api.ts`. Keep `runtime-api.ts` light; lazy CLI and
-   runner execution should stay behind separate entrypoints.
+   runner execution should stay behind separate entrypoints. An optional
+   `adapterFactory` exposes the transport to shared scenarios without changing
+   the command's existing scenario catalog.
 5. Author or adapt YAML scenarios under the themed `qa/scenarios/`
    directories.
 6. Use the generic scenario helpers for new scenarios.
