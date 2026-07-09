@@ -145,12 +145,16 @@ function isFullWidthCodePoint(codePoint: number): boolean {
 const emojiPresentationPattern = /\p{Emoji_Presentation}/u;
 const extendedPictographicPattern = /\p{Extended_Pictographic}/u;
 const regionalIndicatorPattern = /\p{Regional_Indicator}/u;
+const flagSequencePattern = /^\p{Regional_Indicator}{2}$/u;
 const keycapSequencePattern = /^(?:[#*0-9]\uFE0F?\u20E3)$/u;
 
 function isWideEmojiGrapheme(grapheme: string): boolean {
+  // Regional indicators are wide only as the exact pair that forms a flag.
+  if (regionalIndicatorPattern.test(grapheme)) {
+    return flagSequencePattern.test(grapheme);
+  }
   if (
     keycapSequencePattern.test(grapheme) ||
-    regionalIndicatorPattern.test(grapheme) ||
     emojiPresentationPattern.test(grapheme)
   ) {
     return true;
