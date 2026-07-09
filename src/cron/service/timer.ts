@@ -1191,21 +1191,22 @@ function finishRetiredCronTaskRuns(
 async function persistClaimedCronRunStart(
   state: CronServiceState,
   params: { jobId: string; reservedAtMs: number; startedAt: number },
-): Promise<void> {
-  if (params.reservedAtMs === params.startedAt) {
-    return;
-  }
-  await locked(state, async () => {
+): Promise<boolean> {
+  return await locked(state, async () => {
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
     const job = state.store?.jobs.find((entry) => entry.id === params.jobId);
     if (job?.state.runningAtMs !== params.reservedAtMs) {
-      return;
+      return false;
+    }
+    if (params.reservedAtMs === params.startedAt) {
+      return true;
     }
     // Task maintenance recovers interrupted cron task rows by matching the run
     // id timestamp to this durable marker; persist the claimed start before
     // creating the task row so a later restart has one stable key.
     job.state.runningAtMs = params.startedAt;
     await persist(state);
+    return true;
   });
 }
 
@@ -1415,15 +1416,22 @@ export async function onTimer(state: CronServiceState) {
       let taskRunId: string | undefined;
 
       try {
-        await persistClaimedCronRunStart(state, { jobId: id, reservedAtMs, startedAt });
+        const claimed = await persistClaimedCronRunStart(state, {
+          jobId: id,
+          reservedAtMs,
+          startedAt,
+        });
         if (
+          !claimed ||
           stopAdmittingDueJobs ||
           state.stopped ||
           state.restartRecoveryPending ||
           !isCronActiveJobMarkerCurrent(activeJobMarker)
         ) {
           clearCronJobActive(job.id, activeJobMarker);
-          await releaseClaimedCronRunStart(state, { jobId: id, startedAt });
+          if (claimed) {
+            await releaseClaimedCronRunStart(state, { jobId: id, startedAt });
+          }
           return undefined;
         }
         job.state.runningAtMs = startedAt;
@@ -1939,18 +1947,21 @@ async function runStartupCatchupCandidate(
   });
   let taskRunId: string | undefined;
   try {
-    await persistClaimedCronRunStart(state, {
+    const claimed = await persistClaimedCronRunStart(state, {
       jobId: candidate.jobId,
       reservedAtMs: candidate.reservedAtMs,
       startedAt,
     });
     if (
+      !claimed ||
       state.stopped ||
       state.restartRecoveryPending ||
       !isCronActiveJobMarkerCurrent(activeJobMarker)
     ) {
       clearCronJobActive(candidate.job.id, activeJobMarker);
-      await releaseClaimedCronRunStart(state, { jobId: candidate.jobId, startedAt });
+      if (claimed) {
+        await releaseClaimedCronRunStart(state, { jobId: candidate.jobId, startedAt });
+      }
       return undefined;
     }
     candidate.job.state.runningAtMs = startedAt;
