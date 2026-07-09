@@ -1133,7 +1133,6 @@ describe("google transport stream", () => {
 
     expect(googleAuthMock).toHaveBeenCalledWith({
       scopes: ["https://www.googleapis.com/auth/cloud-platform"],
-      clientOptions: { transporterOptions: { timeout: 30_000 } },
     });
     expect(googleAuthGetAccessTokenMock).toHaveBeenCalledTimes(1);
     expect(tokenFetchMock).not.toHaveBeenCalled();

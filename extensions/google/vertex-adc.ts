@@ -361,9 +361,6 @@ async function resolveGoogleVertexAccessTokenViaGoogleAuth(): Promise<string> {
         // It also caches tokens internally and refreshes before expiry.
         return new GoogleAuth({
           scopes: [GOOGLE_VERTEX_OAUTH_SCOPE],
-          clientOptions: {
-            transporterOptions: { timeout: GOOGLE_VERTEX_ADC_TOKEN_REFRESH_TIMEOUT_MS },
-          },
         });
       }),
     };
