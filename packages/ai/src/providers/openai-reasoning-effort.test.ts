@@ -1,6 +1,7 @@
 // Verifies model-specific OpenAI reasoning-effort normalization and disablement.
 import { describe, expect, it } from "vitest";
 import {
+  normalizeOpenAIReasoningEffort,
   resolveOpenAIReasoningEffortForModel,
   resolveOpenAISupportedReasoningEfforts,
 } from "./openai-reasoning-effort.js";
@@ -110,5 +111,17 @@ describe("OpenAI reasoning effort support", () => {
 
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "none" })).toBeUndefined();
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "high" })).toBe("high");
+  });
+
+  it("lowercases mixed-case and uppercase effort names", () => {
+    expect(normalizeOpenAIReasoningEffort("HIGH")).toBe("high");
+    expect(normalizeOpenAIReasoningEffort("Medium")).toBe("medium");
+    expect(normalizeOpenAIReasoningEffort("mInImAl")).toBe("minimal");
+  });
+
+  it("matches mixed-case effort input against the supported list", () => {
+    const model = { provider: "openai", id: "gpt-5" };
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "HIGH" })).toBe("high");
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "Medium" })).toBe("medium");
   });
 });
