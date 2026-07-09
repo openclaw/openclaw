@@ -1,73 +1,68 @@
----
-name: openclaw-extended-stable-backport
-description: "Discover, assess, and prepare the complete security and reliability backport set for OpenClaw's npm extended-stable line. Use when preparing the initial .33 or a later maintenance patch for the trailing completed month's core openclaw package, including direct commits and fixes without public PRs."
----
+# Extended-Stable Backport Preparation
 
-# OpenClaw Extended-Stable Backport
-
-Prepare the next core npm maintenance patch for the active `extended-stable`
-line. Discover the full candidate set, obtain maintainer approval, and prepare
-the approved commits as one coordinated backport PR.
-
-Treat commits as canonical. Use PRs, issues, ClawSweeper reports, and advisories
-as supporting context only.
+Prepare the next npm maintenance patch for the active `extended-stable` line.
+Discover the complete candidate set, obtain maintainer approval, and prepare
+the approved commits as one coordinated PR. Treat commits as canonical; use
+PRs, issues, ClawSweeper reports, and advisories as supporting context.
 
 ## Boundaries
 
-- Treat `docs/reference/RELEASING.md` and
-  `scripts/openclaw-npm-extended-stable-release.mjs` on pinned `origin/main` as
-  the current release contract.
-- Target the npm `extended-stable` selector and its exact canonical
-  `extended-stable/YYYY.M.33` branch. Do not confuse it with the user-facing
-  `stable` channel, which still resolves through npm `latest`.
-- Prepare only the core `openclaw` npm package. Do not plan plugin package,
-  GitHub Release, native app, Docker, mobile, or website publication.
-- Review the complete mainline delta. Do not stop after finding the first few
-  obvious fixes.
-- Present the proposed release set before changing release refs.
-- Never push directly to the canonical extended-stable branch, create a tag,
-  publish a package, or mutate an npm dist-tag.
-- Never use `bypass_extended_stable_guard=true` for a production release.
-- Never backport features, broad refactors, speculative hardening, or changes
-  that require new config, migrations, APIs, protocols, dependencies, runtime
+- Read `docs/reference/RELEASING.md`,
+  `scripts/openclaw-npm-extended-stable-release.mjs`, and the relevant release
+  workflows from a pinned current `origin/main` before resolving the line.
+- Target npm `extended-stable` and the canonical
+  `extended-stable/YYYY.M.33` branch. The user-facing `extended-stable` update
+  channel resolves that selector; user-facing `stable` continues to resolve
+  npm `latest`.
+- Cover the core `openclaw` package and every npm-publishable official plugin
+  included by the canonical `all-publishable` release inventory at the same
+  exact version.
+- Exclude ClawHub publication, GitHub Releases, native apps, Docker images,
+  mobile artifacts, website downloads, and private-repository dist-tags.
+- Review the complete mainline delta. Do not stop after the first obvious
+  fixes or consider public PRs the complete source set.
+- Present the full proposed release set before changing release refs.
+- Never push directly to the canonical branch, create a release tag, publish a
+  package, or mutate an npm dist-tag during discovery or staging.
+- Never use `bypass_extended_stable_guard=true` for production.
+- Reject features, broad refactors, speculative hardening, and changes that
+  require new config, migrations, APIs, protocols, dependencies, runtime
   requirements, or operator action.
 - Read `SECURITY.md` and use `$security-triage` for security candidates. Route
   unpublished advisory work through `$openclaw-ghsa-maintainer`; never expose
   private details before the security owner authorizes disclosure.
-- Use `$release-openclaw-maintainer` for version/tag/publish policy,
-  `$openclaw-testing` for proof selection, `$autoreview` before handoff, and
-  `$openclaw-pr-maintainer` for GitHub operations.
+- Use `$openclaw-testing` for proof selection, `$autoreview` before handoff,
+  and `$openclaw-pr-maintainer` for GitHub operations.
 
 ## Resolve the Active Line
 
 1. Run `git status -sb`. Do not overwrite unrelated work.
 2. Fetch current `origin/main`, tags, and `extended-stable/*` branches.
-3. Pin the fetched `origin/main` SHA. Read the release docs and helper from that
-   exact commit before resolving versions or branches.
-4. Query npm dist-tags, then choose exactly one mode:
+3. Pin the fetched `origin/main` SHA. Read the release contract from that exact
+   commit before resolving versions, package scope, or branches.
+4. Query npm dist-tags and choose exactly one mode:
    - **Existing line:** `extended-stable` exists. Treat its exact final
      `YYYY.M.PATCH` value as the published baseline; require `PATCH >= 33` and
      no prerelease or correction suffix.
    - **Bootstrap:** the selector is absent. Obtain explicit maintainer approval
      for the completed `YYYY.M` month and exact final base tag. Do not infer the
-     base solely from `latest`, because `latest` may already have advanced.
+     base solely from `latest`, which may already have advanced.
 5. Derive the only valid branch as `extended-stable/YYYY.M.33`.
-   - In existing-line mode, require the branch to exist, its `package.json`
-     version to equal the selector, and tag `vYYYY.M.PATCH` to resolve to the
-     branch tip.
-   - In bootstrap mode, use the approved base tag as the discovery target. If
-     the canonical branch already exists, require its tip to equal the approved
-     base commit and reject unexplained unpublished changes. Do not create the
-     remote branch during discovery.
-6. Confirm the exact published baseline or approved bootstrap base resolves
-   from npm and its Git tag resolves to the expected commit.
+   - Existing line: require the branch to exist, its `package.json` version to
+     equal the selector, and `vYYYY.M.PATCH` to resolve to the branch tip.
+   - Bootstrap: use the approved base tag for discovery. If the canonical
+     branch exists, require its tip to equal the approved base commit and reject
+     unexplained unpublished changes. Do not create the remote branch during
+     discovery.
+6. Confirm the published baseline or approved bootstrap base resolves from npm
+   and its Git tag resolves to the expected commit.
 7. Confirm `origin/main` has an exact final version in a strictly later
    calendar month with a patch below `33`, matching the production guard.
-8. Set the intended version:
+8. Choose the intended version:
    - bootstrap: exact final `YYYY.M.33`;
    - existing line: the next unused final patch on the same `YYYY.M` line,
      normally `PATCH + 1` and always `>= 34`.
-     Verify the intended exact version is absent from npm.
+9. Verify the intended core and official-plugin versions are absent from npm.
 
 Use an isolated npm config for unauthenticated registry reads:
 
@@ -83,10 +78,10 @@ fi
 ```
 
 Do not use GitHub's latest nonprerelease Release as the source of truth. The
-extended-stable workflow publishes only npm core and intentionally creates no
-GitHub Release. In bootstrap mode, record the approving maintainer and approved
-base commit. If npm, the canonical branch, tag, package version, approved base,
-or protected `main` disagree, stop before discovery or mutation.
+extended-stable lane intentionally creates no GitHub Release. In bootstrap
+mode, record the approving maintainer and approved base commit. Stop before
+discovery or mutation if npm, the canonical branch, tags, package versions,
+approved base, or protected `main` disagree.
 
 ## Build the Complete Commit Inventory
 
@@ -141,20 +136,20 @@ contracts.
 
 ## Filter by Publication Surface
 
-Include only fixes that affect files shipped in the core `openclaw` npm
-package or behavior exercised by that package. Prove package inclusion rather
-than inferring it from the path alone.
+Include only fixes that affect the core package or an npm-publishable official
+plugin in the exact release inventory. Prove package inclusion rather than
+inferring it from the source path alone.
 
-- Treat separately published plugin package-only changes as out of scope.
-- Do not exclude `extensions/**` solely by path; determine whether the changed
-  runtime is embedded in the core tarball or requires a separate plugin
-  publication.
-- Treat fixes requiring coordinated plugin publication as `blocked`; the
-  extended-stable workflow has no plugin publication or activation phase.
+- Do not exclude `extensions/**` by path. Determine whether the package appears
+  in the canonical `all-publishable` inventory.
+- Include plugin fixes only when the canonical workflow publishes that package
+  at the same intended version and can verify its exact package and selector.
+- Treat ClawHub-only, external, private, or otherwise unlisted plugin changes as
+  out of scope.
 - Treat native-only, Docker-only, mobile-only, website-only, and GitHub
   Release-only fixes as `skip` for this npm-only line.
 - Treat cross-repository or package-topology uncertainty as `blocked` until the
-  shipped core surface is proven.
+  shipped npm surface and release owner are proven.
 
 Prioritize crashes, hangs, restart loops, data/session/message loss,
 auth/provider failures, serious mature-behavior regressions,
@@ -167,19 +162,20 @@ Before calling the release set complete, use `$security-triage` and
 `$openclaw-ghsa-maintainer` to:
 
 1. enumerate authorized open/draft advisories and private-fork fix state;
-2. determine privately whether each item affects the published npm baseline;
+2. determine privately whether each item affects a published npm package in the
+   extended-stable release inventory;
 3. route applicable unpublished fixes through the approved private workflow;
 4. expose only an opaque pending/cleared status publicly.
 
-If advisory access is unavailable, require explicit security-owner confirmation.
-Never copy advisory titles, exploit details, private SHAs, or private refs into
-the public ledger, branch, PR, or chat output.
+If advisory access is unavailable, require explicit security-owner
+confirmation. Never copy advisory titles, exploit details, private SHAs, or
+private refs into the public ledger, branch, PR, or chat output.
 
 ## Assess Every Plausible Fix
 
 For each candidate, prove:
 
-1. The faulty behavior exists in the published extended-stable package or its
+1. The faulty behavior exists in the published extended-stable package set or
    canonical branch.
 2. The public source commit is on `main` and is not already present or
    behaviorally equivalent on the branch.
@@ -187,13 +183,13 @@ For each candidate, prove:
 4. The fix includes all required companion commits.
 5. Any branch-specific adaptation is narrow and preserves the invariant.
 6. Focused validation can prove the fix on the maintenance branch.
-7. The fix ships entirely through the core npm publication surface.
+7. The complete fix ships through the canonical npm publication inventory.
 
 Classify each plausible fix as:
 
-- `backport`: applicable, material, isolated, core-shipped, and testable;
+- `backport`: applicable, material, isolated, npm-shipped, and testable;
 - `already-covered`: commit or equivalent behavior is present;
-- `not-affected`: the published package does not contain the defect;
+- `not-affected`: the published package set does not contain the defect;
 - `blocked`: useful, but adaptation, package scope, or proof is incomplete;
 - `skip`: feature, low-impact change, refactor, or out-of-scope surface.
 
@@ -211,7 +207,8 @@ Before mutation, report:
 Include the published npm selector/version, canonical branch, intended patch,
 protected `main` version, scan bounds, total commits, batch count, dependency
 order, complete proposed set, blocked/high-risk decisions, carry-forward items,
-out-of-scope publication surfaces, and confidential security status.
+affected core/plugin packages, out-of-scope publication surfaces, and
+confidential security status.
 
 Use PR links when they exist, but retain source commit identities in internal
 evidence. Obtain explicit maintainer approval for the complete release set
@@ -220,10 +217,10 @@ before changing branches.
 ## Prepare the Approved Patch Set
 
 1. Resolve the exact target commit. In existing-line mode, use the canonical
-   remote head. In bootstrap mode, use the approved base commit; after the
-   release set is approved, have `$release-openclaw-maintainer` create the
-   canonical branch from that exact commit if it is still absent. Re-fetch and
-   verify it before creating a separate staging branch.
+   remote head. In bootstrap mode, use the approved base commit; after release
+   set approval, create the canonical branch from that exact commit if it is
+   still absent. Re-fetch and verify it before creating a separate staging
+   branch.
 2. Apply each approved public source commit in dependency order with
    `git cherry-pick -x`. Keep commits separate and avoid unrelated cleanup.
 3. Compare every result with the source diff and maintenance branch. Return a
@@ -231,19 +228,20 @@ before changing branches.
 4. Backport or add focused regression tests where practical. Run focused proof
    per fix, then combined changed-surface and release-relevant checks. Use
    Crabbox/Testbox for broad, package, cross-OS, release, or E2E proof.
-5. Use `$release-openclaw-maintainer` to add the canonical version closeout for
-   the intended patch on the same staging branch. Do not create the release tag
-   or dispatch publication workflows before the PR lands.
+5. Set the intended root version and run `pnpm release:prep` on the same staging
+   branch. Verify every publishable official extension package has that exact
+   version. Do not create the tag or dispatch publication before the PR lands.
 6. Run `$autoreview` until no accepted/actionable findings remain.
 7. Open one coordinated PR targeting the canonical extended-stable branch.
    Never target `main` and never push the target branch directly.
 8. Keep unpublished security work in the approved private advisory fork until
    disclosure is authorized.
 
-The PR body must list the intended maintenance tag, npm publication scope,
-every source commit and optional PR, impact, adaptations, focused and combined
-proof, security status, rollback considerations, and exact scan bounds. Record
-unresolved blocked candidates so the next run carries them forward.
+The PR body must list the intended maintenance tag, exact npm publication
+inventory, every source commit and optional PR, impact, adaptations, focused
+and combined proof, security status, rollback considerations, and exact scan
+bounds. Record unresolved blocked candidates so the next run carries them
+forward.
 
 ## Handoff
 
@@ -253,15 +251,17 @@ Report:
   base, and canonical branch;
 - intended maintenance tag and final staging head;
 - included, skipped, blocked, not-affected, and already-covered candidates;
-- branch-specific adaptations and commit order;
+- affected core/plugin packages, adaptations, and commit order;
 - proof commands, run IDs, and autoreview result;
 - remaining security, release, or maintainer approvals;
 - the coordinated PR URL or why no PR was opened;
-- explicit confirmation that no plugin or non-npm publication is planned.
+- explicit confirmation that no non-npm publication is planned.
 
-After the PR lands, hand off to `$release-openclaw-maintainer` to require exact
-branch-tip/tag/package identity, run npm preflight and Full Release Validation
-from the canonical branch, promote the prepared tarball through the manual npm
-workflow with `npm_dist_tag=extended-stable`, verify exact-version and selector
-readback, and preserve the prior-selector repair command. Never republish an
-immutable version when only selector readback needs repair.
+After the PR lands, continue with this skill's canonical extended-stable
+release flow. Require exact branch-tip/tag/package identity; run npm preflight
+and Full Release Validation from the canonical branch; publish every
+npm-publishable official plugin from the exact release SHA; publish the
+prepared core tarball with the referenced successful run IDs; verify every
+exact package and `extended-stable` selector; and preserve the generated
+selector-repair command. Never republish an immutable version when only a
+selector needs repair.

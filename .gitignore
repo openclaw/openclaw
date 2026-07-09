@@ -168,8 +168,6 @@ mantis/
 !.agents/skills/openclaw-release-maintainer/**
 !.agents/skills/openclaw-secret-scanning-maintainer/
 !.agents/skills/openclaw-secret-scanning-maintainer/**
-!.agents/skills/openclaw-extended-stable-backport/
-!.agents/skills/openclaw-extended-stable-backport/**
 !.agents/skills/openclaw-test-heap-leaks/
 !.agents/skills/openclaw-test-heap-leaks/**
 !.agents/skills/openclaw-test-performance/

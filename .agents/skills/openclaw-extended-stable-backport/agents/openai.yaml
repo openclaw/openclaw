@@ -1,4 +1,0 @@
-interface:
-  display_name: "OpenClaw Extended-Stable Backport"
-  short_description: "Prepare extended-stable maintenance patches"
-  default_prompt: "Use $openclaw-extended-stable-backport to discover and prepare the complete core npm backport set for the active extended-stable line."
