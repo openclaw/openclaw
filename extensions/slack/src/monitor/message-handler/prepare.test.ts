@@ -13,6 +13,7 @@ import {
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { upsertSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import {
@@ -2304,6 +2305,229 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     assertPrepared(existing, "existing message");
     expect(history).not.toHaveBeenCalled();
     expect(existing.ctxPayload.InboundHistory).toBeUndefined();
+  });
+
+  async function writeSlackSessionTranscriptContext(params: {
+    storePath: string;
+    sessionKey: string;
+    sessionId: string;
+    turns: Array<{ id: string; role: "user" | "assistant"; text: string; timestamp: number }>;
+  }) {
+    await seedSessionEntries(params.storePath, {
+      [params.sessionKey]: {
+        sessionId: params.sessionId,
+        updatedAt: Date.now(),
+      },
+    });
+    for (const turn of params.turns) {
+      await appendSessionTranscriptMessageByIdentity({
+        agentId: "main",
+        storePath: params.storePath,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        message: { role: turn.role, content: turn.text, timestamp: turn.timestamp },
+        eventId: turn.id,
+      });
+    }
+  }
+
+  function createTranscriptRoomCtx(storePath: string) {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+    slackCtx.historyLimit = 5;
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    return slackCtx;
+  }
+
+  function createTranscriptRoomMessage(overrides: Partial<SlackMessageEvent>): SlackMessageEvent {
+    return createSlackMessage({
+      channel: "C123",
+      channel_type: "channel",
+      ...overrides,
+    });
+  }
+
+  it("merges canonical session transcript turns into channel wake context", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const slackCtx = createTranscriptRoomCtx(storePath);
+    const account = createSlackAccount();
+
+    const first = await prepareMessageWith(
+      slackCtx,
+      account,
+      createTranscriptRoomMessage({ text: "hello from the channel", ts: "100.000" }),
+    );
+    assertPrepared(first, "first channel message");
+
+    await writeSlackSessionTranscriptContext({
+      storePath,
+      sessionKey: first.ctxPayload.SessionKey!,
+      sessionId: "slack-channel-transcript-session",
+      turns: [
+        {
+          id: "transcript-user-1",
+          role: "user",
+          text: "hello from the channel",
+          timestamp: 100_000,
+        },
+        {
+          id: "transcript-assistant-1",
+          role: "assistant",
+          text: "Launch checklist noted; ping me at T-10.",
+          timestamp: 150_000,
+        },
+      ],
+    });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      account,
+      createTranscriptRoomMessage({ text: "what did you say earlier?", ts: "200.000" }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.SessionKey).toBe(first.ctxPayload.SessionKey);
+    // The transcript copy of the cached channel message dedupes away; the
+    // assistant turn only exists in the transcript and must be merged in.
+    expect(prepared.ctxPayload.InboundHistory).toEqual([
+      {
+        sender: "Alice",
+        body: "hello from the channel",
+        timestamp: 100_000,
+        messageId: "100.000",
+      },
+      {
+        messageId: "session:transcript-assistant-1",
+        sender: "Assistant (assistant)",
+        body: "Launch checklist noted; ping me at T-10.",
+        timestamp: 150_000,
+      },
+    ]);
+  });
+
+  it("skips session transcript context for control-command messages", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const slackCtx = createTranscriptRoomCtx(storePath);
+    const account = createSlackAccount();
+
+    const first = await prepareMessageWith(
+      slackCtx,
+      account,
+      createTranscriptRoomMessage({ text: "hello from the channel", ts: "100.000" }),
+    );
+    assertPrepared(first, "first channel message");
+
+    await writeSlackSessionTranscriptContext({
+      storePath,
+      sessionKey: first.ctxPayload.SessionKey!,
+      sessionId: "slack-channel-reset-session",
+      turns: [
+        {
+          id: "transcript-user-1",
+          role: "user",
+          text: "old channel transcript text",
+          timestamp: 150_000,
+        },
+      ],
+    });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      account,
+      createTranscriptRoomMessage({ text: "/new summarize my workspace", ts: "200.000" }),
+    );
+
+    assertPrepared(prepared);
+    expect(JSON.stringify(prepared.ctxPayload.InboundHistory ?? [])).not.toContain(
+      "old channel transcript text",
+    );
+  });
+
+  it("merges session transcript turns into Enterprise Grid org-install channel wakes", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const slackCtx = createTranscriptRoomCtx(storePath);
+    const account = createSlackAccount();
+    const eventScope = {
+      apiAppId: "A1",
+      enterpriseId: "E1",
+      isEnterpriseInstall: true,
+      teamId: "T_ENTERPRISE",
+      client: {} as SlackEventScope["client"],
+    } satisfies SlackEventScope;
+    const prepareGridMessage = (message: SlackMessageEvent) =>
+      prepareSlackMessage({
+        ctx: slackCtx,
+        account,
+        message,
+        opts: { source: "message", eventScope },
+      });
+
+    const classic = await prepareMessageWith(
+      slackCtx,
+      account,
+      createTranscriptRoomMessage({ text: "classic workspace wake", ts: "50.000" }),
+    );
+    assertPrepared(classic, "classic channel message");
+
+    const first = await prepareGridMessage(
+      createTranscriptRoomMessage({ text: "hello from the grid channel", ts: "100.000" }),
+    );
+    assertPrepared(first, "first Grid channel message");
+    // Org installs qualify the room session key with the event workspace, so
+    // the transcript read must target the Grid-scoped key, not the classic
+    // per-channel key.
+    expect(first.ctxPayload.SessionKey).toContain("team:t_enterprise");
+    expect(first.ctxPayload.SessionKey).not.toBe(classic.ctxPayload.SessionKey);
+
+    await writeSlackSessionTranscriptContext({
+      storePath,
+      sessionKey: first.ctxPayload.SessionKey!,
+      sessionId: "slack-grid-transcript-session",
+      turns: [
+        {
+          id: "grid-user-1",
+          role: "user",
+          text: "hello from the grid channel",
+          timestamp: 100_000,
+        },
+        {
+          id: "grid-assistant-1",
+          role: "assistant",
+          text: "Grid rollout is at 60 percent.",
+          timestamp: 150_000,
+        },
+      ],
+    });
+
+    const prepared = await prepareGridMessage(
+      createTranscriptRoomMessage({ text: "what did you say earlier?", ts: "200.000" }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.SessionKey).toBe(first.ctxPayload.SessionKey);
+    // The classic wake stays out of the Grid history window (team-scoped
+    // historyKey), the transcript copy of the cached Grid message dedupes
+    // away, and the assistant turn merges in from the transcript.
+    expect(prepared.ctxPayload.InboundHistory).toEqual([
+      {
+        sender: "Alice",
+        body: "hello from the grid channel",
+        timestamp: 100_000,
+        messageId: "100.000",
+      },
+      {
+        messageId: "session:grid-assistant-1",
+        sender: "Assistant (assistant)",
+        body: "Grid rollout is at 60 percent.",
+        timestamp: 150_000,
+      },
+    ]);
   });
 
   it("uses room users allowlist for thread context filtering", async () => {

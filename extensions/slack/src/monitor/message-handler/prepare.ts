@@ -45,6 +45,10 @@ import { formatSlackError } from "../../errors.js";
 import { formatSlackFileReference } from "../../file-reference.js";
 import type { SlackSendIdentity } from "../../send.js";
 import { hasSlackThreadParticipationWithPersistence } from "../../sent-thread-cache.js";
+import {
+  buildSlackSessionTranscriptHistoryEntries,
+  mergeSlackSessionTranscriptInboundHistory,
+} from "../../session-transcript-context.js";
 import type { SlackAttachment, SlackFile, SlackMessageEvent } from "../../types.js";
 import { normalizeAllowListLower, normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import {
@@ -1477,13 +1481,35 @@ export async function prepareSlackMessage(params: {
     transcribed: (entry) =>
       effectiveMedia === effectiveDirectMedia && entry === preflightAudioMedia,
   });
-  const inboundHistory =
-    isRoomish && ctx.historyLimit > 0
-      ? channelHistory.buildInboundHistory({
-          historyKey,
-          limit: ctx.historyLimit,
+  // Channel and thread sessions rebuild prompt context from the in-memory
+  // channel-history window, which never contains this bot's own replies and is
+  // empty after a gateway restart. Merge a bounded window of the session's
+  // canonical transcript so the agent keeps seeing its own recent turns.
+  // Control commands (e.g. /new, /reset) are skipped so a session reset does
+  // not resurrect the transcript the user just cleared.
+  const sessionTranscriptBeforeTimestampMs = resolveSlackTimestampMs(message.ts);
+  const sessionTranscriptEntries =
+    isRoomish && ctx.historyLimit > 0 && !hasControlCommandInMessage
+      ? await buildSlackSessionTranscriptHistoryEntries({
+          agentId: route.agentId,
+          sessionKey,
+          storePath,
+          limit: 10,
+          ...(sessionTranscriptBeforeTimestampMs !== undefined
+            ? { beforeTimestampMs: sessionTranscriptBeforeTimestampMs }
+            : {}),
         })
-      : dmHistoryContext.inboundHistory;
+      : [];
+  const inboundHistory = mergeSlackSessionTranscriptInboundHistory({
+    sessionEntries: sessionTranscriptEntries,
+    inboundHistory:
+      isRoomish && ctx.historyLimit > 0
+        ? channelHistory.buildInboundHistory({
+            historyKey,
+            limit: ctx.historyLimit,
+          })
+        : dmHistoryContext.inboundHistory,
+  });
   const commandBody = textForCommandDetection.trim();
   const supplementalThreadHistoryBody =
     directThreadRoutedToDmSession && !threadHistoryBody ? threadStarterBody : threadHistoryBody;
