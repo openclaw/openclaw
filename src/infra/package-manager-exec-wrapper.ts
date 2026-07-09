@@ -353,7 +353,7 @@ function unwrapNpmExecInvocation(argv: string[]): string[] | null {
   return unwrapDirectPackageExecInvocation(["npx", ...tail]);
 }
 
-function unwrapBunExecInvocation(argv: string[]): string[] | null {
+function resolveBunExecInvocation(argv: string[]): PackageManagerExecInvocation {
   let idx = 1;
   while (idx < argv.length) {
     const token = argv[idx]?.trim() ?? "";
@@ -363,32 +363,43 @@ function unwrapBunExecInvocation(argv: string[]): string[] | null {
     }
     if (!token.startsWith("-")) {
       if (!BUN_EXEC_SUBCOMMANDS.has(token)) {
-        return null;
+        return { kind: "not-exec" };
       }
-      idx += 1;
-      break;
+      const tail = argv.slice(idx + 1);
+      if (tail[0] === "--") {
+        return tail.length > 1
+          ? { kind: "unwrapped", argv: tail.slice(1) }
+          : { kind: "unsafe-exec" };
+      }
+      // Tail parsing delegates to the shared bunx path so "bun x" and "bunx"
+      // accept and reject identical forms (unknown tail options fail closed).
+      const unwrapped = unwrapDirectPackageExecInvocation(["bunx", ...tail]);
+      return unwrapped ? { kind: "unwrapped", argv: unwrapped } : { kind: "unsafe-exec" };
     }
     const flag = normalizeOptionFlag(token);
     if (BUN_OPTIONS_WITH_VALUE.has(flag)) {
-      idx += token.includes("=") ? 1 : 2;
+      if (token.includes("=")) {
+        idx += 1;
+        continue;
+      }
+      // Bun's root dispatch does not consume space-separated option values when
+      // locating the subcommand, so a value token of "x" may actually dispatch
+      // bunx. Fail closed instead of guessing either parse.
+      if (BUN_EXEC_SUBCOMMANDS.has(argv[idx + 1]?.trim() ?? "")) {
+        return { kind: "unsafe-exec" };
+      }
+      idx += 2;
       continue;
     }
     if (BUN_FLAG_OPTIONS.has(flag)) {
       idx += 1;
       continue;
     }
-    return null;
+    return containsSubcommandToken(argv.slice(idx + 1), BUN_EXEC_SUBCOMMANDS)
+      ? { kind: "unsafe-exec" }
+      : { kind: "not-exec" };
   }
-  if (idx >= argv.length) {
-    return null;
-  }
-  const tail = argv.slice(idx);
-  if (tail[0] === "--") {
-    return tail.length > 1 ? tail.slice(1) : null;
-  }
-  // Tail parsing delegates to the shared bunx path so "bun x" and "bunx"
-  // accept and reject identical forms (unknown tail options fail closed).
-  return unwrapDirectPackageExecInvocation(["bunx", ...tail]);
+  return { kind: "not-exec" };
 }
 
 function unwrapYarnDlxInvocation(argv: string[]): string[] | null {
@@ -489,19 +500,7 @@ export function resolveKnownPackageManagerExecInvocation(
       return unwrapped ? { kind: "unwrapped", argv: unwrapped } : { kind: "unsafe-exec" };
     }
     case "bun": {
-      const unwrapped = unwrapBunExecInvocation(argv);
-      if (unwrapped) {
-        return { kind: "unwrapped", argv: unwrapped };
-      }
-      const firstSubcommand = firstSubcommandAfterOptions(argv, {
-        optionsWithValue: BUN_OPTIONS_WITH_VALUE,
-        flagOptions: BUN_FLAG_OPTIONS,
-      });
-      return BUN_EXEC_SUBCOMMANDS.has(firstSubcommand ?? "")
-        ? { kind: "unsafe-exec" }
-        : firstSubcommand === null && containsSubcommandToken(argv.slice(1), BUN_EXEC_SUBCOMMANDS)
-          ? { kind: "unsafe-exec" }
-          : { kind: "not-exec" };
+      return resolveBunExecInvocation(argv);
     }
     case "pnpm": {
       const unwrapped = unwrapPnpmExecInvocation(argv);

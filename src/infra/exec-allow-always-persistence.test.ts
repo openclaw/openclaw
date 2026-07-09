@@ -369,6 +369,30 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
   });
 
+  it("keeps bun option-value hidden-x carriers one-shot", async () => {
+    const dir = makeTempDir();
+    for (const executable of ["bun", "sh", "echo"]) {
+      makeExecutable(dir, executable);
+    }
+    const env = makePathEnv(dir);
+    const command = "bun -c x sh -c 'echo warmup-ok'";
+    const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+    const decision = resolveAllowAlwaysPersistenceDecision({
+      segments: plannedSegments(plan),
+      commandText: command,
+      cwd: dir,
+      env,
+      platform: process.platform,
+      authorizationPlan: plan,
+    });
+
+    expect(decision).toEqual({
+      kind: "one-shot",
+      reasons: expect.arrayContaining(["no-reusable-pattern"]),
+    });
+  });
+
   it("keeps chained package-manager shell carriers one-shot", async () => {
     const dir = makeTempDir();
     for (const executable of ["pnpm", "npm", "sh", "echo"]) {

@@ -52,5 +52,20 @@ describe("resolveKnownPackageManagerExecInvocation", () => {
         resolveKnownPackageManagerExecInvocation(["bun", "x", "--call", "sh -c 'id'"]),
       ).toEqual({ kind: "unsafe-exec" });
     });
+
+    it.each(["-c", "--config", "--cwd", "--env-file"])(
+      "fails closed when the %s option value hides x",
+      (flag) => {
+        expect(
+          resolveKnownPackageManagerExecInvocation(["bun", flag, "x", "sh", "-c", "id > marker"]),
+        ).toEqual({ kind: "unsafe-exec" });
+      },
+    );
+
+    it("still unwraps when valued options use inline values", () => {
+      expect(
+        resolveKnownPackageManagerExecInvocation(["bun", "--cwd=./pkg", "x", "tsx", "./run.ts"]),
+      ).toEqual({ kind: "unwrapped", argv: ["tsx", "./run.ts"] });
+    });
   });
 });

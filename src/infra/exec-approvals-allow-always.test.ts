@@ -1055,6 +1055,38 @@ $0 \\"$1\\"" touch {marker}`,
     ).toBe(true);
   });
 
+  it("rejects stale bun allow-always entries when option values hide x", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const bunPath = makeExecutable(dir, "bun");
+    makeExecutable(dir, "sh");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "bun -c x sh -c 'id > marker'",
+      allowlist: [{ pattern: bunPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentAllowlistEntries).toEqual([null]);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
   it("rejects stale bun allow-always entries when unknown options hide x", async () => {
     if (process.platform === "win32") {
       return;
