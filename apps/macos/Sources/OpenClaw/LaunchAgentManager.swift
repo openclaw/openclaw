@@ -26,11 +26,10 @@ enum LaunchAgentManager {
         if enabled {
             let persist = writePlist ?? { self.writePlist(bundlePath: $0) }
             persist(bundlePath)
-            let alreadyLoaded: Bool
-            if let loaded {
-                alreadyLoaded = loaded
+            let alreadyLoaded = if let loaded {
+                loaded
             } else {
-                alreadyLoaded = await self.isLoaded()
+                await self.isLoaded()
             }
             // Startup hydrates the toggle from launchd. Reinstalling the active job here
             // would boot out the app that is still responsible for bootstrapping it again.
