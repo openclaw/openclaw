@@ -711,6 +711,126 @@ openclaw-logs-page {
   color: var(--muted);
 }
 
+/* ── Gateway Host card ── */
+
+.qs-system {
+  display: grid;
+  grid-template-columns: minmax(200px, 280px) minmax(0, 1fr);
+  gap: 14px 24px;
+  align-items: start;
+  padding: 14px 16px 16px;
+}
+
+.qs-system__identity {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  min-width: 0;
+}
+
+.qs-system__name {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.qs-system__meta {
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.qs-system__address {
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 7px;
+  padding: 3px 9px;
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  overflow-wrap: anywhere;
+}
+
+.qs-system__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
+  gap: 10px;
+}
+
+.qs-stat {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 42%, var(--card) 58%);
+}
+
+.qs-stat__label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.qs-stat__value {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 1.25rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.qs-stat__unit {
+  font-size: 0.7rem;
+  font-weight: 550;
+  letter-spacing: 0;
+  color: var(--muted);
+}
+
+.qs-stat__detail {
+  font-size: 0.7rem;
+  line-height: 1.35;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.qs-meter {
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--border) 55%, transparent);
+  overflow: hidden;
+}
+
+.qs-meter__fill {
+  width: var(--qs-meter-fill, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ok);
+  transition: width var(--duration-normal) var(--ease-out);
+}
+
+.qs-meter__fill--warn {
+  background: var(--warn);
+}
+
+.qs-meter__fill--critical {
+  background: var(--danger, #ff6b78);
+}
+
 /* ── Footer ── */
 
 .qs-footer {
@@ -1028,6 +1148,10 @@ openclaw-logs-page {
   }
 
   .qs-card--personal .qs-identity-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .qs-system {
     grid-template-columns: 1fr;
   }
 
