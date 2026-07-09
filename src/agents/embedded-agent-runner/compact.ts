@@ -23,7 +23,6 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
-import { generateSecureToken } from "../../infra/secure-random.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -78,6 +77,7 @@ import {
   resolveChannelMessageToolHints,
   resolveChannelReactionGuidance,
 } from "../channel-tools.js";
+import { createCompactionDiagId } from "../compaction-attribution.js";
 import {
   hasMeaningfulConversationContent,
   isRealConversationMessage,
@@ -200,7 +200,10 @@ import { readTranscriptFileState } from "./transcript-file-state.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 import { mapThinkingLevel, normalizeContextTokenBudget } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
-export type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
+export type {
+  CompactEmbeddedAgentSessionParams,
+  CompactionMessageMetrics,
+} from "./compact.types.js";
 
 const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
 type CompactEmbeddedAgentSessionParamsWithSessionFile = CompactEmbeddedAgentSessionRuntimeParams & {
@@ -213,10 +216,6 @@ function hasRealConversationContent(
   index: number,
 ): boolean {
   return isRealConversationMessage(msg, messages, index);
-}
-
-function createCompactionDiagId(): string {
-  return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
 
 function prepareCompactionSessionAgent(params: {
@@ -501,9 +500,9 @@ export async function compactEmbeddedAgentSessionDirect(
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
+  const requestedPrimaryProvider = params.provider?.trim() || undefined;
   const primaryProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
   const primaryModel = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
-  const requestedPrimaryProvider = params.provider?.trim() || DEFAULT_PROVIDER;
   const fallbacksOverride = resolveCompactionFallbacksOverride(params);
   const fallbackAgentId = resolveSessionAgentIds({
     sessionKey: params.sandboxSessionKey ?? params.sessionKey,
@@ -953,6 +952,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           senderName: params.senderName,
           senderUsername: params.senderUsername,
           senderE164: params.senderE164,
+          senderIsOwner: params.senderIsOwner,
           allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
           agentDir,
           cwd: effectiveCwd,
@@ -1085,6 +1085,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
             sessionId: params.sessionId,
             agentId: sessionAgentId,
             senderId: params.senderId,
+            senderIsOwner: params.senderIsOwner,
           }),
         )
       : undefined;

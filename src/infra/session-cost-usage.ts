@@ -9,9 +9,11 @@ import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import {
+  isCheckpointSessionTranscriptFileName,
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
+  parseParentSessionIdFromCheckpointFileName,
   parseSessionArchiveTimestamp,
   parseUsageCountedSessionIdFromFileName,
 } from "../config/sessions/artifacts.js";
@@ -375,12 +377,18 @@ async function cleanupStaleUsageCostCacheTempFiles(cachePath: string): Promise<v
 
 async function listUsageCountedTranscriptFileStats(
   agentId?: string,
-  params?: { minMtimeMs?: number; sessionsDir?: string },
+  params?: { minMtimeMs?: number; sessionsDir?: string; includeCheckpoints?: boolean },
 ): Promise<UsageCostTranscriptFile[]> {
   const sessionsDir = params?.sessionsDir ?? resolveSessionTranscriptsDirForAgent(agentId);
   const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
+  const includeCheckpoints = params?.includeCheckpoints ?? false;
   const tasks = entries
-    .filter((entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name))
+    .filter(
+      (entry) =>
+        entry.isFile() &&
+        (isUsageCountedSessionTranscriptFileName(entry.name) ||
+          (includeCheckpoints && isCheckpointSessionTranscriptFileName(entry.name))),
+    )
     .map((entry) => async (): Promise<UsageCostTranscriptFile | undefined> => {
       const filePath = path.join(sessionsDir, entry.name);
       const stats = await fs.promises.stat(filePath).catch(() => null);
@@ -1447,6 +1455,13 @@ export async function loadCostUsageSummary(params?: {
   });
 
   for (const file of files) {
+    // Checkpoint transcript twins (`<parentId>.checkpoint.<uuid>.jsonl`) carry
+    // copies of pre-compaction entries from the parent primary; counting them
+    // in daily totals would double-count tokens/cost. Skip — discovery uses
+    // them to advance parent mtime and label, but cost tallies must not.
+    if (isCheckpointSessionTranscriptFileName(path.basename(file.filePath))) {
+      continue;
+    }
     await scanUsageFile({
       filePath: file.filePath,
       config: params?.config,
@@ -2135,6 +2150,7 @@ export async function discoverAllSessions(params?: {
 }): Promise<DiscoveredSession[]> {
   const files = await listUsageCountedTranscriptFileStats(params?.agentId, {
     minMtimeMs: params?.startMs,
+    includeCheckpoints: true,
   });
 
   const discovered = new Map<string, DiscoveredSession>();
@@ -2143,6 +2159,48 @@ export async function discoverAllSessions(params?: {
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
     const filePath = file.filePath;
     const fileName = path.basename(filePath);
+
+    // Checkpoint-twin dedup: `<parentId>.checkpoint.<uuid>.jsonl`
+    // files are pre-compaction snapshot siblings of the parent primary
+    // session. They must NOT surface as distinct discovered sessions — that
+    // lopsides the discover map (one lopsided session can present as
+    // 6 separate sessions) and, worse, opens each file for first-user-message
+    // extraction, which is the dominant read cost on a heavy session with deep
+    // checkpoint history. Group them under the parent session id, do not
+    // re-read for label (the parent primary already carries it), and advance
+    // the parent's mtime if this checkpoint is newer.
+    if (isCheckpointSessionTranscriptFileName(fileName)) {
+      const parentId = parseParentSessionIdFromCheckpointFileName(fileName);
+      if (!parentId) {
+        continue;
+      }
+      const existing = discovered.get(parentId);
+      if (!existing) {
+        // Parent primary may not have been scanned yet (or may be absent
+        // entirely, which is the parent-missing recovery case). Record the
+        // checkpoint's mtime under the parent id without a sessionFile
+        // commitment; the parent primary will replace this entry when we
+        // encounter it via the primary branch below.
+        discovered.set(parentId, {
+          sessionId: parentId,
+          sessionFile: filePath,
+          mtime: file.mtimeMs,
+          firstUserMessage: undefined,
+        });
+      } else if (file.mtimeMs > existing.mtime) {
+        // Advance the parent's mtime if this checkpoint is newer; do NOT
+        // overwrite sessionFile when existing points at a primary transcript.
+        const existingIsPrimary = isPrimarySessionTranscriptFileName(
+          path.basename(existing.sessionFile),
+        );
+        discovered.set(parentId, {
+          ...existing,
+          sessionFile: existingIsPrimary ? existing.sessionFile : filePath,
+          mtime: file.mtimeMs,
+        });
+      }
+      continue;
+    }
 
     const sessionId = parseUsageCountedSessionIdFromFileName(fileName);
     if (!sessionId) {
@@ -2197,19 +2255,32 @@ export async function discoverAllSessions(params?: {
       (isPrimaryTranscript === existingIsPrimary && file.mtimeMs >= existing.mtime);
 
     if (shouldReplace) {
+      // Preserve the newest activity timestamp when the primary transcript
+      // replaces a checkpoint-twin placeholder scanned earlier: a
+      // just-written checkpoint can carry a newer mtime than its parent
+      // primary, and dropping to the primary's older mtime would report the
+      // parent session as stale depending on directory iteration order. Keep
+      // the primary sessionFile but the max mtime of the two.
       discovered.set(sessionId, {
         sessionId,
         sessionFile: filePath,
-        mtime: file.mtimeMs,
+        mtime: existing ? Math.max(existing.mtime, file.mtimeMs) : file.mtimeMs,
         firstUserMessage: firstUserMessage ?? existing?.firstUserMessage,
       });
       continue;
     }
 
+    // Non-replacement path: the existing entry wins its sessionFile, but still
+    // keep the newest activity timestamp so a newer twin scanned after the
+    // primary (any directory iteration order) never regresses the session's
+    // mtime (#1144).
+    if (file.mtimeMs > existing.mtime) {
+      existing.mtime = file.mtimeMs;
+    }
     if (!existing.firstUserMessage && firstUserMessage) {
       existing.firstUserMessage = firstUserMessage;
-      discovered.set(sessionId, existing);
     }
+    discovered.set(sessionId, existing);
   }
 
   // Sort by mtime descending (most recent first)

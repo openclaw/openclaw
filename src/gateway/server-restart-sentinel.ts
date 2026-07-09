@@ -3,6 +3,7 @@
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-reply-run-queue.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
+import { deliverQueuedPostCompactionDelegate } from "../auto-reply/reply/post-compaction-delegate-dispatch.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
@@ -87,10 +88,12 @@ function enqueueRestartSentinelWake(
     accountId?: string;
     threadId?: string | number;
   },
+  traceparent?: string,
 ) {
   enqueueSystemEvent(message, {
     sessionKey,
     ...(deliveryContext ? { deliveryContext } : {}),
+    ...(traceparent ? { traceparent } : {}),
   });
   requestHeartbeat({ source: "restart-sentinel", intent: "immediate", reason: "wake", sessionKey });
 }
@@ -244,8 +247,23 @@ async function deliverQueuedSessionDelivery(params: {
   const { cfg, entry, storePath, canonicalKey } = loadSessionEntry(params.entry.sessionKey);
   const queuedDeliveryContext = resolveQueuedSessionDeliveryContext(params.entry);
 
+  if (params.entry.kind === "postCompactionDelegate") {
+    await deliverQueuedPostCompactionDelegate({
+      entry: {
+        ...params.entry,
+        sessionKey: canonicalKey,
+      },
+    });
+    return;
+  }
+
   if (params.entry.kind === "systemEvent") {
-    enqueueRestartSentinelWake(params.entry.text, canonicalKey, queuedDeliveryContext);
+    enqueueRestartSentinelWake(
+      params.entry.text,
+      canonicalKey,
+      queuedDeliveryContext,
+      params.entry.traceparent,
+    );
     return;
   }
 
@@ -259,12 +277,22 @@ async function deliverQueuedSessionDelivery(params: {
       expectedSessionId: params.entry.expectedSessionId,
       actualSessionId: entry?.sessionId ?? null,
     });
-    enqueueRestartSentinelWake(params.entry.message, canonicalKey, queuedDeliveryContext);
+    enqueueRestartSentinelWake(
+      params.entry.message,
+      canonicalKey,
+      queuedDeliveryContext,
+      params.entry.traceparent,
+    );
     return;
   }
 
   if (!params.entry.route) {
-    enqueueRestartSentinelWake(params.entry.message, canonicalKey, queuedDeliveryContext);
+    enqueueRestartSentinelWake(
+      params.entry.message,
+      canonicalKey,
+      queuedDeliveryContext,
+      params.entry.traceparent,
+    );
     return;
   }
 
@@ -380,6 +408,7 @@ function buildQueuedRestartContinuation(params: {
       sessionKey: params.sessionKey,
       text: params.continuation.text,
       ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
+      ...(params.continuation.traceparent ? { traceparent: params.continuation.traceparent } : {}),
       idempotencyKey,
       maxRetries: RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS,
     };
@@ -393,6 +422,7 @@ function buildQueuedRestartContinuation(params: {
     maxRetries: RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS,
     ...(params.route ? { route: params.route } : {}),
     ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
+    ...(params.continuation.traceparent ? { traceparent: params.continuation.traceparent } : {}),
     idempotencyKey,
   };
 }

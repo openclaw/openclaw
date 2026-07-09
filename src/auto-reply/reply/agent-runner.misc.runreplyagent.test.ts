@@ -621,6 +621,26 @@ describe("runReplyAgent auto-compaction token update", () => {
     ).toBeUndefined();
   });
 
+  it("keeps continuation-only direct replies silent", async () => {
+    const result = await runEmptyDirectReply(
+      {
+        payloads: [{ text: "CONTINUE_WORK:5" }],
+        meta: { agentMeta: {} },
+      },
+      {
+        config: {
+          agents: {
+            defaults: {
+              continuation: { enabled: true },
+            },
+          },
+        },
+      },
+    );
+
+    expect(result).toBeUndefined();
+  });
+
   it("surfaces terminal direct failures after runtime compaction progress", async () => {
     const onBlockReply = vi.fn();
     const result = await runEmptyDirectReply(

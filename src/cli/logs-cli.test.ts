@@ -556,7 +556,7 @@ describe("logs cli", () => {
       expect(output).toContain("journal while probing");
       expect(output).toContain("Log file: /tmp/openclaw.log");
       expect(output).toContain("rpc recovered line");
-      expect(output).toContain("2026-05-29T20:00:00.000");
+      expect(output).toMatch(/2026-05-29T\d{2}:00:00\.000(?:[+-]\d{2}:\d{2}|Z)?/u);
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 

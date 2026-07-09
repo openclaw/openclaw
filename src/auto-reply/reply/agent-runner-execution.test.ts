@@ -43,6 +43,10 @@ import type { FollowupRun } from "./queue.js";
 import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
+// request_compaction regression anchor: execution tests below exercise the
+// embedded run callback surface that carries volitional compaction requests
+// through fallback-selected provider/model/auth-profile state.
+
 const state = vi.hoisted(() => ({
   runEmbeddedAgentMock: vi.fn(),
   runCliAgentMock: vi.fn(),
@@ -336,6 +340,7 @@ type FallbackRunnerParams = {
 type EmbeddedAgentParams = {
   lifecycleGeneration?: string;
   onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
+  onAssistantMessageStart?: () => Promise<void> | void;
   onExecutionPhase?: (info: {
     phase:
       | "runner_entered"

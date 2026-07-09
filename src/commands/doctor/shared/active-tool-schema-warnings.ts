@@ -15,6 +15,7 @@ import {
 // Doctor warnings for active tools whose schemas cannot be projected to the selected runtime.
 import { buildReadableToolsByName } from "../../../agents/tools-effective-inventory-build.js";
 import type { AnyAgentTool } from "../../../agents/tools/common.js";
+import { buildInventoryContinuationToolOpts } from "../../../agents/tools/continuation-inventory-opts.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
@@ -123,6 +124,9 @@ export function collectActiveToolSchemaProjectionWarnings(params: {
         modelContextWindowTokens: runtimeModelContext.modelContextWindowTokens,
         allowGatewaySubagentBinding: true,
         toolPolicyAuditLogLevel: "debug",
+        ...buildInventoryContinuationToolOpts(
+          params.cfg.agents?.defaults?.continuation?.enabled === true,
+        ),
       });
     } catch (error) {
       warnings.push(

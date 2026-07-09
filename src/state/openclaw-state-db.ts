@@ -921,6 +921,7 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
       repairLegacyTaskAgentAttribution(db);
     }
   });
+  ensureColumn(db, "flow_runs", "chain_id TEXT");
   ensureColumn(db, "subagent_runs", "task_name TEXT");
 }
 

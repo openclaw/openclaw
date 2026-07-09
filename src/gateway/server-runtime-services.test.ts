@@ -19,6 +19,23 @@ const hoisted = vi.hoisted(() => {
     isVitestRuntimeEnv: vi.fn(() => false),
     recoverPendingDeliveries: vi.fn(async () => undefined),
     recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
+    recoverPendingContinuationDelegates: vi.fn(async () => ({
+      sessions: 0,
+      dispatched: 0,
+      rejected: 0,
+    })),
+    requeueAwaitingNextCompactionDelegates: vi.fn(async () => ({ requeued: 0 })),
+    recoverAndReleaseStagedPostCompactionDelegates: vi.fn(async () => ({
+      sessions: 0,
+      dispatched: 0,
+      failed: 0,
+    })),
+    recoverPendingContinuationWork: vi.fn(async () => ({
+      sessions: 0,
+      dispatched: 0,
+      failed: 0,
+      reaped: 0,
+    })),
     deliverOutboundPayloads: vi.fn(),
   };
 });
@@ -42,6 +59,17 @@ vi.mock("../infra/outbound/delivery-queue.js", () => ({
 
 vi.mock("./server-restart-sentinel.js", () => ({
   recoverPendingRestartContinuationDeliveries: hoisted.recoverPendingRestartContinuationDeliveries,
+}));
+
+vi.mock("../auto-reply/continuation/delegate-dispatch.js", () => ({
+  recoverPendingContinuationDelegates: hoisted.recoverPendingContinuationDelegates,
+  requeueAwaitingNextCompactionDelegates: hoisted.requeueAwaitingNextCompactionDelegates,
+  recoverAndReleaseStagedPostCompactionDelegates:
+    hoisted.recoverAndReleaseStagedPostCompactionDelegates,
+}));
+
+vi.mock("../auto-reply/continuation/work-dispatch.js", () => ({
+  recoverPendingContinuationWork: hoisted.recoverPendingContinuationWork,
 }));
 
 vi.mock("./channel-health-monitor.js", () => ({
@@ -77,6 +105,10 @@ describe("server-runtime-services", () => {
     hoisted.isVitestRuntimeEnv.mockReset().mockReturnValue(false);
     hoisted.recoverPendingDeliveries.mockClear();
     hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
+    hoisted.recoverPendingContinuationDelegates.mockClear();
+    hoisted.requeueAwaitingNextCompactionDelegates.mockClear();
+    hoisted.recoverAndReleaseStagedPostCompactionDelegates.mockClear();
+    hoisted.recoverPendingContinuationWork.mockClear();
     hoisted.deliverOutboundPayloads.mockClear();
   });
 
@@ -221,6 +253,28 @@ describe("server-runtime-services", () => {
     await vi.advanceTimersByTimeAsync(1_250);
     await vi.dynamicImportSettled();
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledTimes(1);
+  });
+
+  it("requeues next-seam post-compaction claims using the boot-time cutoff", async () => {
+    vi.useFakeTimers();
+    const recoveryArmedAt = new Date("2026-07-03T20:00:00.000Z");
+    const recoveryArmedAtMs = recoveryArmedAt.getTime();
+    vi.setSystemTime(recoveryArmedAt);
+
+    activateScheduledServicesForTest();
+    await vi.advanceTimersByTimeAsync(1_400);
+    await vi.dynamicImportSettled();
+
+    expect(hoisted.recoverPendingContinuationDelegates).toHaveBeenCalledWith({
+      queuedCreatedAtOrBefore: recoveryArmedAtMs,
+      includeRunningUpdatedAtOrBefore: recoveryArmedAtMs,
+    });
+    expect(hoisted.requeueAwaitingNextCompactionDelegates).toHaveBeenCalledWith({
+      runningUpdatedAtOrBefore: recoveryArmedAtMs,
+    });
+    expect(hoisted.recoverAndReleaseStagedPostCompactionDelegates).toHaveBeenCalledWith({
+      runningUpdatedAtOrBefore: recoveryArmedAtMs,
+    });
   });
 
   it("starts cron and records memory when post-ready maintenance fails", async () => {

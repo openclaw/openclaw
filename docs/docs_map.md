@@ -2982,6 +2982,108 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: References
   - H2: Related
 
+## design/continuation-tools-infographics.md
+
+- Route: /design/continuation-tools-infographics
+- Headings:
+  - H1: Continuation tools infographics
+  - H2: continuework() — same-session successor turn
+  - H2: continuedelegate() — child worker shard and return routing
+  - H2: requestcompaction() — elective compaction seam
+  - H2: One-screen comparison
+
+## design/continue-work-signal-v2.md
+
+- Route: /design/continue-work-signal-v2
+- Headings:
+  - H1: RFC: Agent Self-Elected Turn Continuation (CONTINUEWORK)
+  - H2: Table of Contents
+  - H2: 1. Problem
+  - H3: 1.1 Inter-turn inertia
+  - H3: 1.2 The dwindle pattern
+  - H3: 1.3 Requirements for a continuation primitive
+  - H2: 2. Solution
+  - H3: 2.1 Terminology and scope
+  - H3: 2.2 Unified interface: tools first, response-token fallback
+  - H3: 2.3 continuework() semantics
+  - H3: 2.4 continuedelegate() semantics and return modes
+  - H3: 2.5 requestcompaction() semantics
+  - H3: 2.6 Response-token fallback and token interaction
+  - H3: 2.7 Capability-tier hierarchy
+  - H3: 2.8 Design rationale
+  - H2: 3. Implementation
+  - H3: 3.1 Architecture
+  - H3: 3.2 Delegate dispatch walkthrough
+  - H4: Turn 0: emit and strip
+  - H4: Gap window
+  - H4: Spawn and wake
+  - H3: 3.3 Announce payloads and chain tracking
+  - H3: 3.4 Tool implementation and prompt gating
+  - H3: 3.5 Temporal sharding with context attachments
+  - H3: 3.6 Persistence and restart-survival
+  - H2: 4. Platform Integration
+  - H3: 4.1 Two-layer compaction model and trigger taxonomy
+  - H3: 4.2 Context-pressure awareness
+  - H3: 4.3 requestcompaction() in the compaction lifecycle
+  - H3: 4.4 Continuation relay and post-compaction context rehydration
+  - H3: 4.5 Lifecycle hooks and platform settings
+  - H3: 4.6 Gateway as lifecycle broker
+  - H2: 5. Configuration
+  - H3: 5.1 Core configuration surface
+  - H4: Chain budget lifecycle
+  - H3: 5.2 Human-user profiles
+  - H4: Shipped defaults: single-agent, safety-first
+  - H4: Fleet multi-agent profile
+  - H3: 5.3 Wide fan-out patterns
+  - H4: Cross-session targeting policy
+  - H3: 5.4 TaskFlow backing for same-session work and delegates
+  - H2: 6. Observability
+  - H3: 6.1 Diagnostic log anchors
+  - H3: 6.2 Lifecycle traces
+  - H3: 6.3 /status continuation telemetry
+  - H3: 6.4 Context-pressure telemetry and fleet evidence
+  - H3: 6.5 Human-user observability and hot reload
+  - H3: 6.6 Chain-correlation via diagnostics-otel
+  - H3: 6.7 OTEL trace wiring across the substrate queue boundary
+  - H3: 6.8 Trace-context propagation across the continuation lifecycle
+  - H2: 7. Safety and Security
+  - H3: 7.1 Guardrails and human-user consent
+  - H3: 7.2 Temporal gap and payload integrity
+  - H2: 8. Applicability Statement and Production Use Cases
+  - H3: 8.1 Persistent development workflows
+  - H3: 8.2 Background research and scheduled follow-up
+  - H3: 8.3 Ambient self-knowledge and quiet enrichment
+  - H3: 8.4 Long-running creative and synthesis loops
+  - H2: 9. Testing
+  - H3: 9.1 Test strategy and terminology
+  - H3: 9.2 Functional coverage
+  - H3: 9.3 Blind enrichment methodology
+  - H3: 9.4 Integration test session results
+  - H4: Volitional-compaction canary cycle
+  - H4: Tool-parity canary cycle
+  - H3: 9.5 Major findings from live validation
+  - H2: 10. Discussion and Future Work
+  - H3: 10.1 Summary
+  - H3: 10.2 Future directions
+  - H2: Appendix A. Proposed and unimplemented extensions
+  - H3: A.1 Bounded pre-compaction evacuation window
+  - H3: A.2 Compaction-triggered evacuation delegate
+  - H3: A.3 Proposed contextpressure lifecycle hook
+  - H3: A.4 Proposed configuration values not shipped in the current codebase
+  - H2: Appendix B. Alternatives, prior art, and tool comparisons
+  - H3: B.1 Alternatives considered
+  - H3: B.2 Prior art
+  - H3: B.3 continuedelegate() compared with sessionsspawn
+  - H3: B.4 Async-only volitional compaction: design decision
+  - H2: Appendix C. Failure modes and behavioral limitations
+  - H3: C.1 Operational failure modes
+  - H3: C.2 Inherited behavioral limitations
+  - H2: Appendix D. Detailed implementation evidence
+  - H3: D.1 Context-pressure inclusion sketch
+  - H3: D.2 Evidence locations
+  - H3: D.3 Historical integration test session results
+  - H3: D.4 Current validation cycle: v5.2 substrate verification
+
 ## diagnostics/flags.md
 
 - Route: /diagnostics/flags

@@ -847,6 +847,7 @@ function normalizeLegacyFlowRow(row: Record<string, unknown>): SqliteBindRow {
     shape: legacyBindValue(row.shape),
     sync_mode: syncMode,
     owner_key: ownerKey,
+    chain_id: legacyBindValue(row.chain_id),
     requester_origin_json: legacyBindValue(row.requester_origin_json),
     controller_id: controllerId,
     revision: normalizeLegacySqliteInteger(row.revision as number | bigint | null) ?? 0,
@@ -959,6 +960,7 @@ function readLegacyFlowRows(sourcePath: string): SqliteBindRow[] {
       pickLegacyColumn(columns, "sync_mode"),
       pickLegacyColumn(columns, "owner_key"),
       pickLegacyColumn(columns, "owner_session_key"),
+      pickLegacyColumn(columns, "chain_id"),
       pickLegacyColumn(columns, "requester_origin_json"),
       pickLegacyColumn(columns, "controller_id"),
       pickLegacyColumn(columns, "revision", "0"),
@@ -1021,11 +1023,11 @@ function insertFlowRunRowSql(db: DatabaseSync, row: SqliteBindRow): void {
   db.prepare(
     `
       INSERT INTO flow_runs (
-        flow_id, shape, sync_mode, owner_key, requester_origin_json, controller_id, revision,
-        status, notify_policy, goal, current_step, blocked_task_id, blocked_summary, state_json,
-        wait_json, cancel_requested_at, created_at, updated_at, ended_at
+        flow_id, shape, sync_mode, owner_key, chain_id, requester_origin_json, controller_id,
+        revision, status, notify_policy, goal, current_step, blocked_task_id, blocked_summary,
+        state_json, wait_json, cancel_requested_at, created_at, updated_at, ended_at
       ) VALUES (
-        @flow_id, @shape, @sync_mode, @owner_key, @requester_origin_json, @controller_id,
+        @flow_id, @shape, @sync_mode, @owner_key, @chain_id, @requester_origin_json, @controller_id,
         @revision, @status, @notify_policy, @goal, @current_step, @blocked_task_id,
         @blocked_summary, @state_json, @wait_json, @cancel_requested_at, @created_at,
         @updated_at, @ended_at

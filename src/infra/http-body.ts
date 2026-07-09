@@ -198,6 +198,9 @@ async function readResponsePrefix(
   validateMaxBytes(maxBytes);
   const body = response.body;
   if (!body || typeof body.getReader !== "function") {
+    if (typeof response.arrayBuffer !== "function") {
+      throw new Error("Response body is not readable under the byte limit");
+    }
     const fallback = Buffer.from(await response.arrayBuffer());
     if (fallback.length > maxBytes) {
       return {

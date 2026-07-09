@@ -2645,6 +2645,10 @@ export class AgentSession {
       return false;
     }
 
+    if (message.errorCode === "repeated_tool_error" || message.errorType === "tool_error_loop") {
+      return false;
+    }
+
     // Context overflow is handled by compaction, not retry
     const contextWindow = this.model?.contextWindow ?? 0;
     if (isContextOverflow(message, contextWindow)) {

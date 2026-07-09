@@ -1025,6 +1025,40 @@ describe("handleMessageUpdate commentary phase", () => {
       expect(debug).toHaveBeenCalledWith("text_end block reply flush failed: Error: boom");
     });
   });
+
+  it("suppresses repeated validation-loop assistant stream text once a safe summary exists", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createMessageUpdateContext({
+      onAgentEvent,
+      state: {
+        lastToolError: {
+          toolName: "edit",
+          validationErrorSummary: "edit tool validation failed: invalid arguments",
+        },
+      },
+    });
+
+    handleMessageUpdate(
+      ctx,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: "Stopped after 2 identical failed edit tool calls.",
+        delta: "Stopped after 2 identical failed edit tool calls.",
+      }),
+    );
+    handleMessageUpdate(
+      ctx,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: 'Validation failed for tool "edit": Received arguments: {}',
+        delta: 'Validation failed for tool "edit": Received arguments: {}',
+      }),
+    );
+
+    expect(ctx.emitAssistantStreamData).not.toHaveBeenCalled();
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    expect(JSON.stringify(ctx.state)).not.toContain("Received arguments");
+  });
 });
 
 describe("handleMessageEnd", () => {
@@ -1097,6 +1131,46 @@ describe("handleMessageEnd", () => {
 
     expect(firstMockArg(ctx.noteLastAssistant as never, "last assistant")).toBe(message);
     expect(ctx.recordAssistantUsage).toHaveBeenCalledWith(message.usage);
+  });
+
+  it("suppresses repeated validation-loop assistant message-end text", () => {
+    const onAgentEvent = vi.fn();
+    const emitBlockReply = vi.fn();
+    const finalizeAssistantTexts = vi.fn();
+    const ctx = createMessageEndContext({
+      onAgentEvent,
+      emitBlockReply,
+      finalizeAssistantTexts,
+      state: {
+        lastToolError: {
+          toolName: "edit",
+          validationErrorSummary: "edit tool validation failed: invalid arguments",
+        },
+      },
+    });
+    const text =
+      'Stopped after 2 identical failed edit tool calls. Validation failed for tool "edit": Received arguments: {}';
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text }],
+        stopReason: "error",
+        usage: {},
+      },
+    } as never);
+
+    expect(ctx.noteLastAssistant).toHaveBeenCalled();
+    expect(ctx.recordAssistantUsage).toHaveBeenCalled();
+    expect(ctx.commitAssistantUsage).toHaveBeenCalled();
+    expect(ctx.emitAssistantStreamData).not.toHaveBeenCalled();
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(finalizeAssistantTexts).not.toHaveBeenCalled();
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    expect(JSON.stringify(ctx.state)).not.toContain("Received arguments");
   });
 
   it("warns when assistant text only pretends to call a registered tool", () => {

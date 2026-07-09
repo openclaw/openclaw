@@ -1,6 +1,7 @@
 // Anthropic OAuth tests cover token exchange and refresh behavior.
 import { get } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useHermeticOpenclawEnv } from "../../../../test/vitest/hermetic-openclaw-env.js";
 import { anthropicOAuthProvider, refreshAnthropicToken, testing } from "./anthropic.js";
 
 afterEach(() => {
@@ -19,6 +20,7 @@ async function getLocalCallback(url: string): Promise<void> {
 }
 
 describe("Anthropic OAuth token responses", () => {
+  useHermeticOpenclawEnv();
   it("cancels provider login before opening the OAuth flow", async () => {
     const controller = new AbortController();
     controller.abort();

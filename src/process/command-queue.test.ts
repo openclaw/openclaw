@@ -37,6 +37,7 @@ let resetCommandLane: CommandQueueModule["resetCommandLane"];
 let resetCommandQueueStateForTest: CommandQueueModule["resetCommandQueueStateForTest"];
 let setCommandLaneConcurrency: CommandQueueModule["setCommandLaneConcurrency"];
 let waitForActiveTasks: CommandQueueModule["waitForActiveTasks"];
+let waitForCommandLaneIdle: CommandQueueModule["waitForCommandLaneIdle"];
 
 function createDeferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve: (() => void) | undefined;
@@ -109,6 +110,7 @@ describe("command queue", () => {
       resetCommandQueueStateForTest,
       setCommandLaneConcurrency,
       waitForActiveTasks,
+      waitForCommandLaneIdle,
     } = await import("./command-queue.js"));
   });
 
@@ -775,6 +777,39 @@ describe("command queue", () => {
 
     blocker2.resolve();
     await Promise.all([first, second]);
+  });
+
+  it("waitForCommandLaneIdle waits until queued and active lane work both drain", async () => {
+    const { task: blocker, release } = enqueueBlockedMainTask(async () => "blocker");
+    let followupRan = false;
+    const followup = enqueueCommandInLane(CommandLane.Main, async () => {
+      followupRan = true;
+      return "followup";
+    });
+
+    const idlePromise = waitForCommandLaneIdle(CommandLane.Main, 1_000);
+
+    release();
+    await expect(blocker).resolves.toBe("blocker");
+    await expect(followup).resolves.toBe("followup");
+    await expect(idlePromise).resolves.toEqual({ idle: true });
+    expect(followupRan).toBe(true);
+  });
+
+  it("waitForCommandLaneIdle returns idle=false when the lane remains busy past timeout", async () => {
+    const { task, release } = enqueueBlockedMainTask();
+
+    vi.useFakeTimers();
+    try {
+      const idlePromise = waitForCommandLaneIdle(CommandLane.Main, 50);
+      await vi.advanceTimersByTimeAsync(50);
+      await expect(idlePromise).resolves.toEqual({ idle: false });
+
+      release();
+      await task;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("clearCommandLane rejects pending promises", async () => {

@@ -25,6 +25,7 @@ import {
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { buildInventoryContinuationToolOpts } from "../agents/tools/continuation-inventory-opts.js";
 import {
   replaceWithEffectiveCronCreatorToolAllowlist,
   type CronCreatorToolAllowlistEntry,
@@ -209,6 +210,14 @@ export function resolveGatewayScopedTools(params: {
       : undefined,
     inheritedToolAllowlist,
     inheritedToolDenylist,
+    // Gateway tool-resolution builds the tool catalog for dispatch lookup, not
+    // for live execution. Register continue_work + request_compaction via inert
+    // stub callbacks so the catalog reflects the full continuation surface and
+    // the openclaw-tools.ts partial-registration warning is satisfied honestly
+    // (not suppressed).
+    ...buildInventoryContinuationToolOpts(
+      params.cfg?.agents?.defaults?.continuation?.enabled === true,
+    ),
   });
 
   const policyFiltered = applyToolPolicyPipeline({

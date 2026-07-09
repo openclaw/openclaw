@@ -1,7 +1,7 @@
 /** Non-blocking worker-thread writer for Gateway audit metadata. */
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { Worker } from "node:worker_threads";
+import { Worker, type WorkerOptions } from "node:worker_threads";
 import { resolveStateDir } from "../config/paths.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import type { AuditEventInput } from "./audit-event-types.js";
@@ -47,14 +47,21 @@ export function createAuditEventWriter(
   } = {},
 ): AuditEventWriter {
   const workerUrl = options.workerUrl ?? resolveAuditEventWriterUrl();
-  const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   const maxPending = Math.max(1, Math.floor(options.maxPending ?? MAX_PENDING_AUDIT_EVENTS));
   let worker: Worker;
   try {
-    worker = new Worker(workerUrl, {
+    const workerOptions: WorkerOptions = {
       workerData: { stateDir: options.stateDir ?? resolveStateDir(process.env) },
-      execArgv: sourceWorkerExecArgv,
-    });
+    };
+    if (workerUrl.pathname.endsWith(".ts")) {
+      const sourceWorkerUrl = workerUrl.href;
+      worker = new Worker(
+        `import { tsImport } from "tsx/esm/api"; await tsImport(${JSON.stringify(sourceWorkerUrl)}, import.meta.url);`,
+        { ...workerOptions, eval: true },
+      );
+    } else {
+      worker = new Worker(workerUrl, workerOptions);
+    }
   } catch (error) {
     options.onError?.(error instanceof Error ? error.message : String(error));
     return {

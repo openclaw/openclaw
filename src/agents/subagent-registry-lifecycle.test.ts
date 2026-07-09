@@ -784,6 +784,7 @@ describe("subagent registry lifecycle hardening", () => {
       triggerCleanup: true,
     });
     await vi.waitFor(() => expect(entry.deleteCleanupDispatchedAt).toBeTypeOf("number"));
+    await vi.waitFor(() => expect(releaseDelete).toBeTypeOf("function"));
 
     expect(markSubagentRunPausedAfterYield({ entry, endedAt: 4_001 })).toBe(false);
     expect(entry.pauseReason).toBeUndefined();

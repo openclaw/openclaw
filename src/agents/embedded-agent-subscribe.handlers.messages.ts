@@ -42,6 +42,7 @@ import {
   sanitizeAssistantVisibleStreamText,
 } from "./embedded-agent-utils.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
+import { summarizeToolValidationError } from "./tool-error-summary.js";
 import {
   hasNonzeroUsage,
   makeZeroUsageSnapshot,
@@ -153,6 +154,64 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+const REPEATED_TOOL_VALIDATION_LOOP_RE = /Stopped after \d+ identical failed .* tool calls/;
+
+function shouldSuppressValidationLoopAssistantOutput(params: {
+  message: AssistantMessage;
+  assistantRecord?: Record<string, unknown>;
+  validationErrorSummary?: string;
+  text?: string;
+}): boolean {
+  if (!params.validationErrorSummary) {
+    return false;
+  }
+
+  if (params.message.stopReason === "error") {
+    return true;
+  }
+
+  const candidateText = [
+    typeof params.assistantRecord?.delta === "string" ? params.assistantRecord.delta : "",
+    typeof params.assistantRecord?.content === "string" ? params.assistantRecord.content : "",
+    params.text ?? coerceChatContentText(extractAssistantText(params.message)),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return (
+    candidateText.includes("Received arguments") ||
+    candidateText.includes("Validation failed for tool") ||
+    REPEATED_TOOL_VALIDATION_LOOP_RE.test(candidateText)
+  );
+}
+
+function resetMessageEndStreamingState(ctx: EmbeddedAgentSubscribeContext): void {
+  ctx.state.deltaBuffer = "";
+  ctx.state.blockBuffer = "";
+  ctx.blockChunker?.reset();
+  ctx.state.blockState.thinking = false;
+  ctx.state.blockState.final = false;
+  ctx.state.blockState.inlineCode = createInlineCodeState();
+  ctx.state.blockState.fence = undefined;
+  ctx.state.blockState.reasoningInlineCode = undefined;
+  ctx.state.blockState.reasoningFence = undefined;
+  ctx.state.blockState.reasoningPendingFenceFragment = undefined;
+  ctx.state.blockState.finalInlineCode = undefined;
+  ctx.state.blockState.finalFence = undefined;
+  ctx.state.blockState.pendingFenceFragment = undefined;
+  ctx.state.blockState.pendingTagFragment = undefined;
+  ctx.state.partialBlockState.fence = undefined;
+  ctx.state.partialBlockState.reasoningInlineCode = undefined;
+  ctx.state.partialBlockState.reasoningFence = undefined;
+  ctx.state.partialBlockState.reasoningPendingFenceFragment = undefined;
+  ctx.state.partialBlockState.finalInlineCode = undefined;
+  ctx.state.partialBlockState.finalFence = undefined;
+  ctx.state.partialBlockState.pendingFenceFragment = undefined;
+  ctx.state.partialBlockState.pendingTagFragment = undefined;
+  ctx.state.lastStreamedAssistant = undefined;
+  ctx.state.lastStreamedAssistantCleaned = undefined;
+  ctx.state.reasoningStreamOpen = false;
 }
 
 function extractStandaloneMessageToolText(
@@ -694,12 +753,25 @@ export function handleMessageUpdate(
       ? (assistantEvent as Record<string, unknown>)
       : undefined;
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
+  const validationErrorSummary = ctx.state.lastToolError
+    ? summarizeToolValidationError(ctx.state.lastToolError)
+    : undefined;
 
   if (evtType === "text_end" || evtType === "done" || evtType === "error") {
     capturePendingAssistantUsage(ctx, evt);
     if (evtType === "done" || evtType === "error") {
       ctx.commitAssistantUsage();
     }
+  }
+
+  if (
+    shouldSuppressValidationLoopAssistantOutput({
+      message: msg,
+      assistantRecord,
+      validationErrorSummary,
+    })
+  ) {
+    return;
   }
 
   if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
@@ -1078,6 +1150,19 @@ export function handleMessageEnd(
 
   const rawText = coerceChatContentText(extractAssistantText(assistantMessage));
   const rawVisibleText = coerceChatContentText(extractAssistantVisibleText(assistantMessage));
+  const validationErrorSummary = ctx.state.lastToolError
+    ? summarizeToolValidationError(ctx.state.lastToolError)
+    : undefined;
+  if (
+    shouldSuppressValidationLoopAssistantOutput({
+      message: assistantMessage,
+      validationErrorSummary,
+      text: rawText,
+    })
+  ) {
+    resetMessageEndStreamingState(ctx);
+    return;
+  }
   appendRawStream({
     ts: Date.now(),
     event: "assistant_message_end",
@@ -1115,31 +1200,7 @@ export function handleMessageEnd(
   const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
 
   const finalizeMessageEnd = () => {
-    ctx.state.deltaBuffer = "";
-    ctx.state.blockBuffer = "";
-    ctx.blockChunker?.reset();
-    ctx.state.blockState.thinking = false;
-    ctx.state.blockState.final = false;
-    ctx.state.blockState.inlineCode = createInlineCodeState();
-    ctx.state.blockState.fence = undefined;
-    ctx.state.blockState.reasoningInlineCode = undefined;
-    ctx.state.blockState.reasoningFence = undefined;
-    ctx.state.blockState.reasoningPendingFenceFragment = undefined;
-    ctx.state.blockState.finalInlineCode = undefined;
-    ctx.state.blockState.finalFence = undefined;
-    ctx.state.blockState.pendingFenceFragment = undefined;
-    ctx.state.blockState.pendingTagFragment = undefined;
-    ctx.state.partialBlockState.fence = undefined;
-    ctx.state.partialBlockState.reasoningInlineCode = undefined;
-    ctx.state.partialBlockState.reasoningFence = undefined;
-    ctx.state.partialBlockState.reasoningPendingFenceFragment = undefined;
-    ctx.state.partialBlockState.finalInlineCode = undefined;
-    ctx.state.partialBlockState.finalFence = undefined;
-    ctx.state.partialBlockState.pendingFenceFragment = undefined;
-    ctx.state.partialBlockState.pendingTagFragment = undefined;
-    ctx.state.lastStreamedAssistant = undefined;
-    ctx.state.lastStreamedAssistantCleaned = undefined;
-    ctx.state.reasoningStreamOpen = false;
+    resetMessageEndStreamingState(ctx);
   };
 
   const previousStreamedText = ctx.state.lastStreamedAssistantCleaned ?? "";

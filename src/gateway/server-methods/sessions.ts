@@ -44,6 +44,8 @@ import {
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { stagedPostCompactionDelegateCount } from "../../auto-reply/continuation-delegate-store.js";
+import type { FollowupRun } from "../../auto-reply/reply/queue.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
@@ -62,6 +64,7 @@ import {
   applySessionPatchProjection,
   preflightSessionTranscriptForManualCompact,
   trimSessionTranscriptForManualCompact,
+  loadSessionStoreEntrySnapshot,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -81,6 +84,7 @@ import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
@@ -146,6 +150,110 @@ import { assertValidParams } from "./validation.js";
 const log = createSubsystemLogger("gateway/sessions");
 
 const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
+
+function buildManualCompactionReleaseFollowupRun(params: {
+  cfg: OpenClawConfig;
+  entry: SessionEntry;
+  model: { provider: string; model: string };
+  sessionFile: string;
+  sessionId: string;
+  sessionKey: string;
+  targetAgentId: string;
+  workspaceDir: string;
+}): FollowupRun {
+  const deliveryContext = deliveryContextFromSession(params.entry);
+  const messageProvider = deliveryContext?.channel;
+  const cwd = normalizeOptionalString(params.entry.spawnedCwd);
+  return {
+    prompt: "",
+    enqueuedAt: Date.now(),
+    ...(deliveryContext?.channel ? { originatingChannel: deliveryContext.channel } : {}),
+    ...(deliveryContext?.to ? { originatingTo: deliveryContext.to } : {}),
+    ...(deliveryContext?.accountId ? { originatingAccountId: deliveryContext.accountId } : {}),
+    ...(deliveryContext?.threadId !== undefined
+      ? { originatingThreadId: deliveryContext.threadId }
+      : {}),
+    run: {
+      agentId: params.targetAgentId,
+      agentDir: params.workspaceDir,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionFile: params.sessionFile,
+      workspaceDir: params.workspaceDir,
+      ...(cwd ? { cwd } : {}),
+      config: params.cfg,
+      provider: params.model.provider,
+      model: params.model.model,
+      ...(messageProvider ? { messageProvider } : {}),
+      ...(deliveryContext?.accountId ? { agentAccountId: deliveryContext.accountId } : {}),
+      timeoutMs: 0,
+      blockReplyBreak: "message_end",
+    },
+  };
+}
+
+function sessionHasPostCompactionDelegates(params: {
+  entry?: SessionEntry;
+  sessionKey: string;
+}): boolean {
+  return (
+    stagedPostCompactionDelegateCount(params.sessionKey) > 0 ||
+    (params.entry?.pendingPostCompactionDelegates?.length ?? 0) > 0
+  );
+}
+
+async function releaseManualPostCompactionDelegatesIfNeeded(params: {
+  cfg: OpenClawConfig;
+  compactionCount: number | undefined;
+  entry: SessionEntry;
+  model: { provider: string; model: string };
+  sessionFile: string;
+  sessionId: string;
+  sessionKey: string;
+  store: Record<string, SessionEntry>;
+  storePath: string;
+  targetAgentId: string;
+  workspaceDir: string;
+}): Promise<void> {
+  if (
+    !sessionHasPostCompactionDelegates({
+      entry: params.entry,
+      sessionKey: params.sessionKey,
+    })
+  ) {
+    return;
+  }
+  const releaseFollowupRun = buildManualCompactionReleaseFollowupRun({
+    cfg: params.cfg,
+    entry: params.entry,
+    model: params.model,
+    sessionFile: params.sessionFile,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    targetAgentId: params.targetAgentId,
+    workspaceDir: params.workspaceDir,
+  });
+  try {
+    const { releasePostCompactionDelegatesAfterCompaction } =
+      await import("../../auto-reply/reply/agent-runner-execution.js");
+    await releasePostCompactionDelegatesAfterCompaction({
+      activeSessionStore: params.store,
+      compactionCount: params.compactionCount,
+      followupRun: releaseFollowupRun,
+      sessionEntry: params.entry,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
+  } catch (err) {
+    // Manual compaction already succeeded and the session store/transcript now
+    // reflects the compacted state. Match request_compaction's tolerant release
+    // semantics so post-compaction maintenance cannot turn a successful compact
+    // into a failed RPC.
+    log.warn(
+      `[sessions.compact:post-compaction-release-failed] session=${params.sessionKey} reason=${formatErrorMessage(err)}`,
+    );
+  }
+}
 
 function filterSessionStoreToConfiguredAgents(
   cfg: OpenClawConfig,
@@ -2814,6 +2922,30 @@ export const sessionsHandlers: GatewayRequestHandlers = {
               undefined,
             );
             if (trimResult.compacted) {
+              const snapshotAfterTrim = loadSessionStoreEntrySnapshot({
+                sessionKey: target.canonicalKey,
+                storePath,
+              });
+              const storeAfterTrim = snapshotAfterTrim.store;
+              const entryAfterTrim = snapshotAfterTrim.entry ?? latestEntry;
+              await releaseManualPostCompactionDelegatesIfNeeded({
+                cfg,
+                compactionCount: entryAfterTrim.compactionCount ?? 0,
+                entry: entryAfterTrim,
+                model: resolveSessionModelRef(cfg, entryAfterTrim, target.agentId),
+                sessionFile:
+                  entryAfterTrim.sessionFile ??
+                  latestEntry.sessionFile ??
+                  path.join(storePath, `.jsonl`),
+                sessionId: entryAfterTrim.sessionId,
+                sessionKey: target.canonicalKey,
+                store: storeAfterTrim,
+                storePath,
+                targetAgentId: target.agentId,
+                workspaceDir:
+                  normalizeOptionalString(entryAfterTrim.spawnedWorkspaceDir) ||
+                  resolveAgentWorkspaceDir(cfg, target.agentId),
+              });
               emitSessionsChanged(context, {
                 sessionKey: target.canonicalKey,
                 ...(target.canonicalKey === "global" && target.agentId
@@ -2906,6 +3038,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           }
           if (result.ok && result.compacted) {
             let persisted: boolean;
+            let releaseSessionEntry: SessionEntry | undefined;
+            let releaseSessionStore: Record<string, SessionEntry> | undefined;
             try {
               // Guarded terminal persist: skip when session ownership rotated
               // while compaction ran (sessionId/lifecycleRevision/work-start).
@@ -2951,6 +3085,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
                 },
               });
               persisted = persistProjection.ok;
+              if (persistProjection.ok) {
+                releaseSessionEntry = persistProjection.entry;
+                releaseSessionStore = { [target.canonicalKey]: persistProjection.entry };
+              }
             } catch (err) {
               emitCompactionEnd(false, formatErrorMessage(err));
               throw err;
@@ -2966,6 +3104,21 @@ export const sessionsHandlers: GatewayRequestHandlers = {
                 }),
               );
               return;
+            }
+            if (releaseSessionEntry && releaseSessionStore) {
+              await releaseManualPostCompactionDelegatesIfNeeded({
+                cfg,
+                compactionCount: releaseSessionEntry.compactionCount ?? 0,
+                entry: releaseSessionEntry,
+                model: resolvedModel,
+                sessionFile: releaseSessionEntry.sessionFile ?? filePath,
+                sessionId: releaseSessionEntry.sessionId,
+                sessionKey: target.canonicalKey,
+                store: releaseSessionStore,
+                storePath,
+                targetAgentId: target.agentId,
+                workspaceDir,
+              });
             }
           }
 

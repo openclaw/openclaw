@@ -25,6 +25,8 @@ const hoisted = vi.hoisted(() => ({
 
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
+let consumeSubagentTraceparentHandoff: typeof import("./subagent-traceparent-handoff.js").consumeSubagentTraceparentHandoff;
+let resetSubagentTraceparentHandoffsForTests: typeof import("./subagent-traceparent-handoff.js").resetSubagentTraceparentHandoffsForTests;
 
 function createConfigOverride(overrides?: Record<string, unknown>) {
   return createSubagentSpawnTestConfig(os.tmpdir(), {
@@ -67,7 +69,12 @@ function firstRegisteredSubagentRun(): Record<string, unknown> {
 
 describe("spawnSubagentDirect seam flow", () => {
   beforeAll(async () => {
-    ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
+    ({
+      resetSubagentRegistryForTests,
+      spawnSubagentDirect,
+      consumeSubagentTraceparentHandoff,
+      resetSubagentTraceparentHandoffsForTests,
+    } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
       dispatchGatewayMethodInProcessMock: hoisted.dispatchGatewayMethodInProcessMock,
       hasInProcessGatewayContextMock: hoisted.hasInProcessGatewayContextMock,
@@ -102,6 +109,7 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.configOverride = createConfigOverride();
     installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
     hoisted.loadSessionStoreMock.mockReturnValue({});
+    resetSubagentTraceparentHandoffsForTests();
 
     hoisted.updateSessionStoreMock.mockImplementation(
       async (
@@ -257,6 +265,7 @@ describe("spawnSubagentDirect seam flow", () => {
       {
         task: "inspect the spawn seam",
         model: "openai/gpt-5.4",
+        traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -293,6 +302,9 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(registerInput.workspaceDir).toBe("/tmp/requester-workspace");
     expect(registerInput.expectsCompletionMessage).toBe(true);
     expect(registerInput.spawnMode).toBe("run");
+    expect(registerInput.traceparent).toBe(
+      "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+    );
     expect(hoisted.emitSessionLifecycleEventMock).toHaveBeenCalledWith({
       sessionKey: childSessionKey,
       reason: "create",
@@ -315,6 +327,42 @@ describe("spawnSubagentDirect seam flow", () => {
     const agentParams = requireRecord(agentRequest.params);
     expect(agentParams.sessionKey).toBe(childSessionKey);
     expect(agentParams.cleanupBundleMcpOnRunEnd).toBe(true);
+  });
+
+  it("persists inherited continuation chain state into draining child sessions", async () => {
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "drain continuation delegates",
+        drainsContinuationDelegateQueue: true,
+        continuationChainState: {
+          count: 7,
+          startedAt: 1_783_520_000_000,
+          tokens: 12_345,
+          chainId: "chain-from-parent",
+        },
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const childSessionKey = result.childSessionKey as string;
+    expect(persistedStore?.[childSessionKey]).toMatchObject({
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      continuationChainCount: 7,
+      continuationChainStartedAt: 1_783_520_000_000,
+      continuationChainTokens: 12_345,
+      continuationChainId: "chain-from-parent",
+    });
   });
 
   it("dispatches spawned agent runs in process when a gateway context is available", async () => {
@@ -1035,6 +1083,56 @@ describe("spawnSubagentDirect seam flow", () => {
     const agentCall = calls.find((call) => call.method === "agent");
     const params = requireRecord(agentCall?.params);
     expect(params.thinking).toBeUndefined();
+  });
+
+  it("forwards inherited traceparent to the child agent run", async () => {
+    const traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        calls.push(request);
+        if (request.method === "agent") {
+          return { runId: "run-traceparent", status: "accepted", acceptedAt: 1000 };
+        }
+        if (request.method?.startsWith("sessions.")) {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
+    let persistedTraceparent: unknown;
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedTraceparent ??= Object.values(store).find(
+          (entry) => entry.continuationTraceparent,
+        )?.continuationTraceparent;
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "verify traceparent forwarding",
+        traceparent,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const agentCall = calls.find((call) => call.method === "agent");
+    const params = requireRecord(agentCall?.params);
+    expect(params.traceparent).toBe(traceparent);
+    expect(
+      consumeSubagentTraceparentHandoff({
+        idempotencyKey: params.idempotencyKey as string,
+        sessionKey: params.sessionKey as string,
+      })?.traceparent,
+    ).toBe(traceparent);
+    expect(persistedTraceparent).toBe(traceparent);
+    const registerInput = requireRecord(hoisted.registerSubagentRunMock.mock.calls[0]?.[0]);
+    expect(registerInput.traceparent).toBe(traceparent);
   });
 
   it("does not duplicate long subagent task text in the initial user message (#72019)", async () => {

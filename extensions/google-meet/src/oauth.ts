@@ -249,6 +249,7 @@ export async function waitForGoogleMeetAuthCode(params: {
   manual: boolean;
   timeoutMs: number;
   authUrl: string;
+  callbackPort?: number;
   promptInput: (message: string) => Promise<string>;
   writeLine: (message: string) => void;
 }): Promise<string> {
@@ -263,7 +264,7 @@ export async function waitForGoogleMeetAuthCode(params: {
     const callback = await waitForLocalOAuthCallback({
       expectedState: params.state,
       timeoutMs: params.timeoutMs,
-      port: 8085,
+      port: params.callbackPort ?? 8085,
       callbackPath: "/oauth2callback",
       redirectUri: GOOGLE_MEET_REDIRECT_URI,
       successTitle: "Google Meet OAuth complete",

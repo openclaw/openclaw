@@ -18,6 +18,10 @@ import {
   testing as subagentRegistryTesting,
 } from "../../agents/subagent-registry.js";
 import {
+  registerSubagentTraceparentHandoff,
+  resetSubagentTraceparentHandoffsForTests,
+} from "../../agents/subagent-traceparent-handoff.js";
+import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
@@ -651,6 +655,94 @@ describe("gateway agent handler", () => {
     dateOnlyFakeClockActive = false;
     vi.useRealTimers();
     resetExecApprovalFollowupRuntimeHandoffsForTests();
+    resetSubagentTraceparentHandoffsForTests();
+  });
+
+  it("uses the same-process subagent traceparent handoff when the request field is missing", async () => {
+    const traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    const sessionKey = "agent:main:subagent:child-trace";
+    const idempotencyKey = "child-trace-run";
+    registerSubagentTraceparentHandoff({
+      idempotencyKey,
+      sessionKey,
+      traceparent,
+    });
+    const existingEntry = buildExistingMainStoreEntry({
+      spawnedBy: "agent:main:main",
+    });
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: existingEntry,
+      canonicalKey: sessionKey,
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, Record<string, unknown>> = {
+        [sessionKey]: { ...existingEntry },
+      };
+      const result = await updater(store);
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "child task",
+        agentId: "main",
+        sessionKey,
+        idempotencyKey,
+      },
+      { client: backendGatewayClient() },
+    );
+
+    const call = await waitForAgentCommandCall();
+    expect(call.traceparent).toBe(traceparent);
+  });
+
+  it("uses the provisional child session traceparent when the request field is missing across process", async () => {
+    const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    const sessionKey = "agent:main:subagent:child-session-trace";
+    const idempotencyKey = "child-session-trace-run";
+    const existingEntry = buildExistingMainStoreEntry({
+      spawnedBy: "agent:main:main",
+      continuationTraceparent: traceparent,
+    });
+    let persistedEntry: Record<string, unknown> | undefined;
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: existingEntry,
+      canonicalKey: sessionKey,
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, Record<string, unknown>> = {
+        [sessionKey]: { ...existingEntry },
+      };
+      const result = await updater(store);
+      persistedEntry = result as Record<string, unknown>;
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "child task",
+        agentId: "main",
+        sessionKey,
+        idempotencyKey,
+      },
+      { client: backendGatewayClient() },
+    );
+
+    const call = await waitForAgentCommandCall();
+    expect(call.traceparent).toBe(traceparent);
+    expect(persistedEntry?.continuationTraceparent).toBeUndefined();
   });
 
   it("passes resolved maintenance config to the gateway admission store write", async () => {
@@ -3321,6 +3413,163 @@ describe("gateway agent handler", () => {
     resetTimeConfig();
   });
 
+  it("forwards continuation metadata to the ingress agent command for backend callers", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "delegate finished",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        continuationTrigger: "delegate-return",
+        drainsContinuationDelegateQueue: true,
+        idempotencyKey: "test-continuation-trigger-forward",
+      },
+      { reqId: "continuation-trigger-1", client: backendGatewayClient() },
+    );
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as
+      | { continuationTrigger?: string; drainsContinuationDelegateQueue?: boolean }
+      | undefined;
+    expect(call?.continuationTrigger).toBe("delegate-return");
+    expect(call?.drainsContinuationDelegateQueue).toBe(true);
+  });
+
+  it("ignores internal continuation controls from non-backend callers", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "delegate finished",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        continuationTrigger: "delegate-return",
+        drainsContinuationDelegateQueue: true,
+        traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        idempotencyKey: "test-continuation-trigger-non-backend",
+      },
+      { reqId: "continuation-trigger-non-backend", client: operatorWriteGatewayClient() },
+    );
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as
+      | {
+          continuationTrigger?: string;
+          drainsContinuationDelegateQueue?: boolean;
+          traceparent?: string;
+        }
+      | undefined;
+    // Raw RPC clients cannot force continuation queue-drain / heartbeat-like
+    // semantics or inject trace context (these fields are backend-only).
+    expect(call?.continuationTrigger).toBeUndefined();
+    expect(call?.drainsContinuationDelegateQueue).toBeUndefined();
+    expect(call?.traceparent).toBeUndefined();
+  });
+
+  it("preserves core-spawned continuation controls with same-process traceparent handoff", async () => {
+    primeMainAgentRun();
+    const sessionKey = "agent:main:subagent:trusted-continuation";
+    const idempotencyKey = "trusted-continuation-handoff";
+    const traceparent = "00-2af7651916cd43dd8448eb211c80319c-d7ad6b7169203331-01";
+    registerSubagentTraceparentHandoff({ idempotencyKey, sessionKey, traceparent });
+    const existingEntry = buildExistingMainStoreEntry({
+      spawnedBy: "agent:main:main",
+    });
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: existingEntry,
+      canonicalKey: sessionKey,
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, Record<string, unknown>> = {
+        [sessionKey]: { ...existingEntry },
+      };
+      return await updater(store);
+    });
+
+    await invokeAgent(
+      {
+        message: "trusted continuation child",
+        agentId: "main",
+        sessionKey,
+        continuationTrigger: "delegate-return",
+        drainsContinuationDelegateQueue: true,
+        idempotencyKey,
+      },
+      { reqId: "trusted-continuation-handoff", client: operatorWriteGatewayClient() },
+    );
+
+    const call = (await waitForAgentCommandCall()) as
+      | {
+          continuationTrigger?: string;
+          drainsContinuationDelegateQueue?: boolean;
+          traceparent?: string;
+        }
+      | undefined;
+    expect(call?.continuationTrigger).toBe("delegate-return");
+    expect(call?.drainsContinuationDelegateQueue).toBe(true);
+    expect(call?.traceparent).toBe(traceparent);
+  });
+
+  it("honors a request traceparent from backend callers", async () => {
+    primeMainAgentRun();
+    const traceparent = "00-1af7651916cd43dd8448eb211c80319c-c7ad6b7169203331-01";
+
+    await invokeAgent(
+      {
+        message: "delegate finished",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        traceparent,
+        idempotencyKey: "test-continuation-traceparent-backend",
+      },
+      { reqId: "continuation-traceparent-backend", client: backendGatewayClient() },
+    );
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as { traceparent?: string } | undefined;
+    expect(call?.traceparent).toBe(traceparent);
+  });
+
+  it.each([
+    {
+      name: "passes senderIsOwner=false for write-scoped gateway callers",
+      scopes: ["operator.write"],
+      idempotencyKey: "test-sender-owner-write",
+      senderIsOwner: false,
+    },
+    {
+      name: "passes senderIsOwner=true for admin-scoped gateway callers",
+      scopes: ["operator.admin"],
+      idempotencyKey: "test-sender-owner-admin",
+      senderIsOwner: true,
+    },
+  ])("$name", async ({ scopes, idempotencyKey, senderIsOwner }) => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "owner-tools check",
+        sessionKey: "agent:main:main",
+        idempotencyKey,
+      },
+      {
+        client: {
+          connect: {
+            role: "operator",
+            scopes,
+            client: { id: "test-client", mode: "gateway" },
+          },
+        } as unknown as AgentHandlerArgs["client"],
+      },
+    );
+
+    const callArgs = await waitForAgentCommandCall<{ senderIsOwner?: boolean }>();
+    expect(callArgs.senderIsOwner).toBe(senderIsOwner);
+  });
+
   it("respects explicit bestEffortDeliver=false for main session runs", async () => {
     mocks.agentCommand.mockClear();
     primeMainAgentRun();
@@ -4497,6 +4746,10 @@ describe("gateway agent handler", () => {
       abortError.name = "AbortError";
       const context = makeContext();
       const runId = "task-registry-agent-run-abort-error";
+      // Abort the run's chat controller before the rejection bubbles so
+      // isGatewayAgentAbortRejection sees signal.aborted=true. Without this
+      // setup the test cannot distinguish operator-aborted runs from raw
+      // AbortError rejections that originate inside the agent itself.
       mocks.agentCommand.mockImplementationOnce(() => {
         context.chatAbortControllers.get(runId)?.controller.abort();
         return Promise.reject(abortError);

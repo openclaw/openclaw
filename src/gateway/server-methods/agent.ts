@@ -62,7 +62,9 @@ import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSessionRun,
 } from "../../agents/spawned-context.js";
+import { consumeSubagentTraceparentHandoff } from "../../agents/subagent-traceparent-handoff.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import type { ContinuationTrigger } from "../../auto-reply/types.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import {
   evaluateSessionFreshness,
@@ -1048,6 +1050,10 @@ function dispatchAgentRunFromGateway(params: {
       params.respond(true, payload, undefined, { runId: params.runId });
     })
     .catch((err: unknown) => {
+      // Restored from upstream b4f69286fd (closes openclaw/openclaw#83962): match
+      // TimeoutError and signal.reason TimeoutError shapes so timed-out runs
+      // classify as timeout (not error) and keep dedupe.ok true. isAbortError
+      // alone matches only name="AbortError" and misses both shapes.
       const aborted = isGatewayAgentAbortRejection(err, params.abortController.signal);
       const renderedErr = formatForLog(err);
       if (taskTracked) {
@@ -1175,6 +1181,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       inputProvenance?: InputProvenance;
       workspaceDir?: string;
       voiceWakeTrigger?: string;
+      drainsContinuationDelegateQueue?: boolean;
+      continuationTrigger?: ContinuationTrigger;
+      traceparent?: string;
     };
     if (request.cwd && !path.isAbsolute(request.cwd)) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "cwd must be absolute"));
@@ -1834,6 +1843,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
       let resolvedSessionId = requestedSessionId;
       let sessionEntry: SessionEntry | undefined;
+      let sessionContinuationTraceparent: string | undefined;
       let sessionPersistedBeforeGatewayAdmission = false;
       let bestEffortDeliver = requestedBestEffortDeliver ?? false;
       let cfgForAgent: OpenClawConfig | undefined;
@@ -2204,6 +2214,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         ) {
           return;
         }
+        sessionContinuationTraceparent = entry?.continuationTraceparent;
         const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry);
         if (archivedSessionError) {
           respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
@@ -2658,8 +2669,12 @@ export const agentHandlers: GatewayRequestHandlers = {
                   recoveredSessionStartedAt !== undefined &&
                   freshEntry?.sessionStartedAt === undefined &&
                   freshEntry?.sessionId === entry?.sessionId
-                    ? { ...patchBuild.patch, sessionStartedAt: recoveredSessionStartedAt }
-                    : patchBuild.patch;
+                    ? {
+                        ...patchBuild.patch,
+                        sessionStartedAt: recoveredSessionStartedAt,
+                        continuationTraceparent: undefined,
+                      }
+                    : { ...patchBuild.patch, continuationTraceparent: undefined };
                 const merged = mergeSessionEntry(freshEntry, effectivePatch);
                 const sendPolicy =
                   request.deliver === true
@@ -3292,6 +3307,16 @@ export const agentHandlers: GatewayRequestHandlers = {
           }
           const execApprovalFollowupElevatedDefaults =
             execApprovalFollowupRuntimeHandoff?.bashElevated;
+          const subagentTraceparentHandoff = consumeSubagentTraceparentHandoff({
+            idempotencyKey: idem,
+            sessionKey: resolvedSessionKey,
+          })?.traceparent;
+          const trustedContinuationRuntimeHandoff =
+            canUseInternalRuntimeHandoff || Boolean(subagentTraceparentHandoff);
+          const inheritedTraceparent =
+            (canUseInternalRuntimeHandoff ? request.traceparent : undefined) ??
+            subagentTraceparentHandoff ??
+            sessionContinuationTraceparent;
 
           dispatchAgentRunFromGateway({
             ingressOpts: {
@@ -3351,6 +3376,18 @@ export const agentHandlers: GatewayRequestHandlers = {
                   internalEvents: request.internalEvents,
                 }),
               cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd,
+              // Internal continuation controls: reserved for backend callers.
+              // These fields are stripped from the public generated schema, but
+              // raw RPC clients can still set them. Ignore them for non-backend
+              // clients so an ordinary caller cannot force continuation
+              // queue-drain semantics or mark runs continuation/heartbeat-like.
+              drainsContinuationDelegateQueue: trustedContinuationRuntimeHandoff
+                ? request.drainsContinuationDelegateQueue
+                : undefined,
+              continuationTrigger: trustedContinuationRuntimeHandoff
+                ? request.continuationTrigger
+                : undefined,
+              traceparent: inheritedTraceparent,
               abortSignal: activeRunAbort.controller.signal,
               lifecycleGeneration,
               onActiveModelSelected: ({ provider }) => {

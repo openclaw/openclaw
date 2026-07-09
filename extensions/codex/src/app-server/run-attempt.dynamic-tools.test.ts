@@ -599,6 +599,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         durationMs: 1,
         response: {
           success: false,
+          diagnosticTerminalReason: "timed_out",
           contentItems: [
             {
               type: "inputText",
@@ -631,17 +632,20 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
           type: event.type,
           toolName: event.toolName,
           toolCallId: event.toolCallId,
+          terminalReason: event.type === "tool.execution.error" ? event.terminalReason : undefined,
         })),
       ).toEqual([
         {
           type: "tool.execution.started",
           toolName: "echo",
           toolCallId: "call-echo-timeout",
+          terminalReason: undefined,
         },
         {
           type: "tool.execution.error",
           toolName: "echo",
           toolCallId: "call-echo-timeout",
+          terminalReason: "timed_out",
         },
       ]);
     } finally {

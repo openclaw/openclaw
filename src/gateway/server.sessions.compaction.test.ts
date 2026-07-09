@@ -5,11 +5,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import {
+  stagePostCompactionDelegate,
+  stagedPostCompactionDelegateCount,
+} from "../auto-reply/continuation-delegate-store.js";
 import type { SessionCompactionCheckpoint } from "../config/sessions.js";
+import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
+import { peekSystemEvents } from "../infra/system-events.js";
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
+import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-registry.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -632,6 +639,172 @@ test("sessions.compact records terminal Codex native compaction", async () => {
   expect(store["agent:main:main"]?.totalTokens).toBeUndefined();
   expect(store["agent:main:main"]?.totalTokensFresh).toBeUndefined();
 
+  ws.close();
+});
+
+test("sessions.compact releases queued post-compaction delegates after manual compaction", async () => {
+  resetTaskFlowRegistryForTests({ persist: false });
+  const { dir, storePath } = await createSessionStoreDir();
+  await fs.writeFile(
+    path.join(dir, "sess-post-compaction.jsonl"),
+    `${JSON.stringify({ role: "user", content: "hello delegates" })}\n`,
+    "utf-8",
+  );
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-post-compaction", {
+        deliveryContext: {
+          channel: "webchat",
+          to: "webchat:user-123",
+        },
+      }),
+    },
+  });
+  stagePostCompactionDelegate("agent:main:main", {
+    task: "rehydrate after dashboard compact",
+    createdAt: Date.now(),
+  });
+  expect(stagedPostCompactionDelegateCount("agent:main:main")).toBe(1);
+
+  const { ws } = await openClient();
+  const compacted = await rpcReq<{ ok: true; key: string; compacted: boolean }>(
+    ws,
+    "sessions.compact",
+    { key: "main" },
+  );
+
+  expectMainCompactionResult(compacted, true);
+  expect(stagedPostCompactionDelegateCount("agent:main:main")).toBe(0);
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { compactionCount?: number }
+  >;
+  expect(store["agent:main:main"]?.compactionCount).toBe(1);
+  ws.close();
+  resetTaskFlowRegistryForTests({ persist: false });
+});
+
+test("sessions.compact preserves legacy route fields when releasing post-compaction delegates", async () => {
+  resetTaskFlowRegistryForTests({ persist: false });
+  const { dir } = await createSessionStoreDir();
+  await fs.writeFile(
+    path.join(dir, "sess-post-compaction-legacy.jsonl"),
+    `${JSON.stringify({ role: "user", content: "hello legacy route" })}\n`,
+    "utf-8",
+  );
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-post-compaction-legacy", {
+        lastChannel: "telegram",
+        lastTo: "chat-123",
+        lastAccountId: "acct-1",
+        lastThreadId: "topic-9",
+      }),
+    },
+  });
+  stagePostCompactionDelegate("agent:main:main", {
+    task: "rehydrate after compact with legacy route",
+    createdAt: Date.now(),
+  });
+
+  const { ws } = await openClient();
+  const compacted = await rpcReq<{ ok: true; key: string; compacted: boolean }>(
+    ws,
+    "sessions.compact",
+    { key: "main" },
+  );
+
+  expectMainCompactionResult(compacted, true);
+  expect(stagedPostCompactionDelegateCount("agent:main:main")).toBe(0);
+  const queued = await loadPendingSessionDeliveries(process.env.OPENCLAW_STATE_DIR);
+  const postCompaction = queued.find(
+    (entry) =>
+      entry.kind === "postCompactionDelegate" &&
+      entry.task === "rehydrate after compact with legacy route",
+  );
+  expect(postCompaction?.deliveryContext).toMatchObject({
+    channel: "telegram",
+    to: "chat-123",
+    accountId: "acct-1",
+    threadId: "topic-9",
+  });
+  ws.close();
+  resetTaskFlowRegistryForTests({ persist: false });
+});
+
+test("sessions.compact maxLines releases queued post-compaction delegates after trim", async () => {
+  resetTaskFlowRegistryForTests({ persist: false });
+  const { dir } = await createSessionStoreDir();
+  const sessionId = "sess-post-compaction-trim";
+  const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+  const originalLines = buildSessionTranscriptLines(sessionId, 120);
+  await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
+  await writeSessionStore({
+    entries: { main: sessionStoreEntry(sessionId, { sessionFile: transcriptPath }) },
+  });
+  stagePostCompactionDelegate("agent:main:main", {
+    task: "rehydrate after maxLines compact",
+    createdAt: Date.now(),
+  });
+
+  const beforeEvents = peekSystemEvents("agent:main:main").length;
+
+  const { ws } = await openClient();
+  const compacted = await rpcReq<{ ok: true; key: string; compacted: boolean; kept?: number }>(
+    ws,
+    "sessions.compact",
+    { key: "main", maxLines: 50 },
+  );
+
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.compacted).toBe(true);
+  expect(compacted.payload?.kept).toBe(50);
+  await vi.waitFor(() => {
+    expect(peekSystemEvents("agent:main:main").slice(beforeEvents)).toContainEqual(
+      expect.stringContaining("Queued 1 post-compaction delegate(s)"),
+    );
+    expect(stagedPostCompactionDelegateCount("agent:main:main")).toBe(0);
+  });
+  ws.close();
+  resetTaskFlowRegistryForTests({ persist: false });
+});
+
+test("sessions.compact skips post-compaction lifecycle when no delegates exist", async () => {
+  const { dir } = await createSessionStoreDir();
+  const sessionId = "sess-post-compaction-empty";
+  const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+  const originalLines = buildSessionTranscriptLines(sessionId, 120);
+  await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
+  await writeSessionStore({
+    entries: { main: sessionStoreEntry(sessionId, { sessionFile: transcriptPath }) },
+  });
+
+  const beforeEvents = peekSystemEvents("agent:main:main").length;
+
+  const { ws } = await openClient();
+  const compacted = await rpcReq<{ ok: true; key: string; compacted: boolean; kept?: number }>(
+    ws,
+    "sessions.compact",
+    { key: "main", maxLines: 50 },
+  );
+
+  expectMainCompactionResult(compacted, true);
+  expect(compacted.payload?.kept).toBe(50);
+  const trimmed = (await fs.readFile(transcriptPath, "utf-8")).trim().split("\n");
+  expect(trimmed).toHaveLength(50);
+  expect(JSON.parse(trimmed[0] ?? "{}")).toMatchObject({
+    type: "session",
+    id: "sess-post-compaction-empty",
+  });
+  expect(JSON.parse(trimmed[1] ?? "{}")).toMatchObject({ id: "entry-70", parentId: null });
+  expect(JSON.parse(trimmed.at(-1) ?? "{}")).toMatchObject({
+    id: "entry-118",
+    message: { content: "line-118" },
+  });
+  expect(stagedPostCompactionDelegateCount("agent:main:main")).toBe(0);
+  expect(peekSystemEvents("agent:main:main").slice(beforeEvents)).not.toContainEqual(
+    expect.stringContaining("[system:post-compaction]"),
+  );
   ws.close();
 });
 

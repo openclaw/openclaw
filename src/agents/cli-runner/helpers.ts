@@ -205,6 +205,8 @@ export function buildCliAgentSystemPrompt(params: {
     userTime,
     userTimeFormat,
     contextFiles: params.contextFiles,
+    memoryCitationsMode: params.config?.memory?.citations,
+    continuationEnabled: params.config?.agents?.defaults?.continuation?.enabled === true,
     bootstrapMode: params.bootstrapMode,
   });
 }

@@ -85,7 +85,7 @@ import {
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
-import { updateSessionStore } from "../config/sessions/store.js";
+import { resolveSessionStoreEntry, updateSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -563,6 +563,7 @@ function resolveHeartbeatSession(
   agentId?: string,
   heartbeat?: HeartbeatConfig,
   forcedSessionKey?: string,
+  opts?: { reason?: string },
 ) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
@@ -586,9 +587,23 @@ function resolveHeartbeatSession(
     };
   }
 
-  // Guard: never route heartbeats to subagent sessions, regardless of entry path.
+  // Guard: never route heartbeats to subagent sessions, regardless of entry path —
+  // UNLESS the wake is a continuation-triggered wake (reason="continuation"). Subagent
+  // sessions that call continue_work() need their own wake to fire back into the same
+  // session, not redirect to main. Without this exemption, continue_work in subagents
+  // is a dead tool (the timer fires but the wake gets eaten). Tracking: #746.
   const forced = forcedSessionKey?.trim();
   if (forced && isSubagentSessionKey(forced)) {
+    if (isContinuationHeartbeatWakeReason(opts?.reason ?? "")) {
+      // Continuation wake: route TO the subagent session so it takes another turn.
+      return {
+        sessionKey: forced,
+        storePath,
+        store,
+        entry: store[forced],
+        suppressOriginatingContext: true,
+      };
+    }
     return {
       sessionKey: mainSessionKey,
       storePath,
@@ -802,7 +817,8 @@ async function restoreHeartbeatUpdatedAt(params: {
     return;
   }
   const store = loadSessionStore(storePath);
-  const entry = store[sessionKey];
+  const resolvedRead = resolveSessionStoreEntry({ store, sessionKey });
+  const entry = resolvedRead.existing;
   if (!entry) {
     return;
   }
@@ -811,7 +827,8 @@ async function restoreHeartbeatUpdatedAt(params: {
     return;
   }
   await updateSessionStore(storePath, (nextStore) => {
-    const nextEntry = nextStore[sessionKey] ?? entry;
+    const resolved = resolveSessionStoreEntry({ store: nextStore, sessionKey });
+    const nextEntry = resolved.existing ?? entry;
     if (!nextEntry) {
       return;
     }
@@ -819,7 +836,10 @@ async function restoreHeartbeatUpdatedAt(params: {
     if (nextEntry.updatedAt === resolvedUpdatedAt) {
       return;
     }
-    nextStore[sessionKey] = { ...nextEntry, updatedAt: resolvedUpdatedAt };
+    nextStore[resolved.normalizedKey] = { ...nextEntry, updatedAt: resolvedUpdatedAt };
+    for (const legacyKey of resolved.legacyKeys) {
+      delete nextStore[legacyKey];
+    }
   });
 }
 
@@ -1017,10 +1037,19 @@ function inferHeartbeatWakeSourceFromReason(reason?: string): HeartbeatWakeSourc
   if (trimmed === "wake" || trimmed.startsWith("hook:")) {
     return "hook";
   }
+  if (isContinuationHeartbeatWakeReason(trimmed)) {
+    return "hook";
+  }
   if (trimmed.startsWith("acp:spawn:")) {
     return "acp-spawn";
   }
   return undefined;
+}
+
+function isContinuationHeartbeatWakeReason(reason: string): boolean {
+  return (
+    reason === "continuation" || reason === "silent-wake-enrichment" || reason === "delegate-return"
+  );
 }
 
 function resolveHeartbeatWakePayloadFlags(params: {
@@ -1032,7 +1061,11 @@ function resolveHeartbeatWakePayloadFlags(params: {
   return {
     isExecEventWake: source === "exec-event",
     isCronWake: source === "cron",
-    isWakePayload: source === "hook" || source === "acp-spawn" || reason === "wake",
+    isWakePayload:
+      source === "hook" ||
+      source === "acp-spawn" ||
+      reason === "wake" ||
+      isContinuationHeartbeatWakeReason(reason),
   };
 }
 
@@ -1055,6 +1088,7 @@ async function resolveHeartbeatPreflight(params: {
     params.agentId,
     params.heartbeat,
     params.forcedSessionKey,
+    { reason: params.reason },
   );
   const pendingEventEntries =
     params.runScope === "commitment-only" ? [] : peekSystemEventEntries(session.sessionKey);
@@ -1426,6 +1460,7 @@ export async function runHeartbeatOnce(opts: {
   source?: HeartbeatWakeSource;
   intent?: HeartbeatWakeIntent;
   reason?: string;
+  parentRunId?: string;
   runScope?: HeartbeatRunScope;
   deps?: HeartbeatDeps;
 }): Promise<HeartbeatRunResult> {
@@ -1512,6 +1547,7 @@ export async function runHeartbeatOnce(opts: {
     agentId,
     heartbeat,
     opts.sessionKey,
+    { reason: opts.reason },
   );
   const HEARTBEAT_DEFER_WINDOW_MS = 30_000;
   const pendingFinalDeliveryText = recentSessionEntry?.pendingFinalDeliveryText;
@@ -1783,7 +1819,8 @@ export async function runHeartbeatOnce(opts: {
     const dueTaskNames = new Set(dueHeartbeatTasks.map((task) => task.name));
 
     await updateSessionStore(storePath, (store) => {
-      const current = store[sessionKey];
+      const resolved = resolveSessionStoreEntry({ store, sessionKey });
+      const current = resolved.existing;
       // Initialize stub entry on first run when current doesn't exist.
       const base = current ?? {
         // Generate valid sessionId - derive from sessionKey without colons.
@@ -1802,7 +1839,10 @@ export async function runHeartbeatOnce(opts: {
         }
       }
 
-      store[sessionKey] = { ...base, heartbeatTaskState: taskState };
+      store[resolved.normalizedKey] = { ...base, heartbeatTaskState: taskState };
+      for (const legacyKey of resolved.legacyKeys) {
+        delete store[legacyKey];
+      }
     });
   };
 
@@ -1818,14 +1858,18 @@ export async function runHeartbeatOnce(opts: {
     await updateSessionStore(
       storePath,
       (store) => {
-        const current = store[sessionKey];
+        const resolved = resolveSessionStoreEntry({ store, sessionKey });
+        const current = resolved.existing;
         if (current?.pendingFinalDelivery !== true && !current?.pendingFinalDeliveryText) {
           return false;
         }
         if (!heartbeatRunOwnsPendingFinalDelivery(current, startedAt)) {
           return false;
         }
-        store[sessionKey] = { ...current, ...CLEARED_PENDING_FINAL_DELIVERY_FIELDS };
+        store[resolved.normalizedKey] = { ...current, ...CLEARED_PENDING_FINAL_DELIVERY_FIELDS };
+        for (const legacyKey of resolved.legacyKeys) {
+          delete store[legacyKey];
+        }
         return true;
       },
       // No pending to clear is the common case; avoid rewriting the store then.
@@ -1959,6 +2003,14 @@ export async function runHeartbeatOnce(opts: {
     const timeoutOverrideSeconds = resolveHeartbeatTimeoutOverrideSeconds(cfg, heartbeat);
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
+    // Map heartbeat wake reason to structured continuation trigger.
+    // "continuation" = CONTINUE_WORK timer fired; delegate-return reasons = delegate completed.
+    const continuationTrigger =
+      opts.reason === "continuation"
+        ? ("work-wake" as const)
+        : opts.reason === "silent-wake-enrichment" || opts.reason === "delegate-return"
+          ? ("delegate-return" as const)
+          : undefined;
     const replyOperationRunState: ReplyOperationRunState = {};
     const replyOpts = {
       isHeartbeat: true,
@@ -1975,6 +2027,8 @@ export async function runHeartbeatOnce(opts: {
       timeoutOverrideSeconds,
       bootstrapContextMode,
       onModelSelected: replyPrefix.onModelSelected,
+      continuationTrigger,
+      parentRunId: opts.parentRunId,
     };
     const getReplyFromConfig =
       opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
@@ -2292,7 +2346,8 @@ export async function runHeartbeatOnce(opts: {
     // Record last delivered heartbeat payload for dedupe.
     if (visibleSendSucceeded && !shouldSkipMain && normalized.text.trim()) {
       await updateSessionStore(storePath, (store) => {
-        const current = store[sessionKey];
+        const resolved = resolveSessionStoreEntry({ store, sessionKey });
+        const current = resolved.existing;
         if (!current) {
           return;
         }
@@ -2303,12 +2358,15 @@ export async function runHeartbeatOnce(opts: {
         const clearedRecoveryFields = heartbeatRunOwnsPendingFinalDelivery(current, startedAt)
           ? CLEARED_PENDING_FINAL_DELIVERY_FIELDS
           : {};
-        store[sessionKey] = {
+        store[resolved.normalizedKey] = {
           ...current,
           lastHeartbeatText: normalized.text,
           lastHeartbeatSentAt: startedAt,
           ...clearedRecoveryFields,
         };
+        for (const legacyKey of resolved.legacyKeys) {
+          delete store[legacyKey];
+        }
       });
     }
 
@@ -2645,6 +2703,7 @@ export function startHeartbeatRunner(opts: {
             reason,
             runScope: "global",
             sessionKey: requestedSessionKey,
+            parentRunId: params.parentRunId,
             deps: { runtime: state.runtime },
           });
           if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
@@ -2701,6 +2760,7 @@ export function startHeartbeatRunner(opts: {
             source: params.source,
             intent,
             reason,
+            parentRunId: params.parentRunId,
             runScope: "global",
             deps: { runtime: state.runtime },
           });
@@ -2814,6 +2874,7 @@ export function startHeartbeatRunner(opts: {
       reason: params.reason,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
+      parentRunId: params.parentRunId,
       heartbeat: params.heartbeat,
       source: params.source,
       intent: params.intent,

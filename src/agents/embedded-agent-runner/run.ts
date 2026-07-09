@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import { resetContinueDelegateTurnBudget } from "../../auto-reply/continuation/delegate-turn-admission.js";
 import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
@@ -36,6 +37,8 @@ import {
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { requireSessionKeyOrSkip } from "../../infra/session-keys.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { redactIdentifier } from "../../logging/redact-identifier.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -772,6 +775,13 @@ async function runEmbeddedAgentInternal(
     if (params.enqueue) {
       return params.enqueue(taskWithCurrentLifecycle, withLaneTimeout(withRunLaneWait(globalOpts)));
     }
+    // #1057: a subagent continuation is routed onto its own session lane, so the
+    // global lane resolves to that same session lane. Re-enqueuing it through the
+    // global path here (already inside the enqueueSession wrapper for that lane)
+    // would self-deadlock; run it directly instead.
+    if (globalLane === sessionLane) {
+      return taskWithCurrentLifecycle();
+    }
     noteLaneWaitIfBusy(globalLane);
     return enqueueCommandInLane(
       globalLane,
@@ -805,6 +815,9 @@ async function runEmbeddedAgentInternal(
 
   return enqueueSession(async () => {
     throwIfAborted();
+    if (params.sessionKey) {
+      resetContinueDelegateTurnBudget(params.sessionKey);
+    }
     // Same-session reads below must see any prior deferred transcript rewrite.
     // Checkpoint before the global lane so unrelated sessions can still start
     // while this session waits on its own maintenance lane.
@@ -2122,6 +2135,19 @@ async function runEmbeddedAgentInternal(
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
+            // Forward continuation-tool callbacks so the main-session LLM
+            // tool-schema includes continue_work + request_compaction. Without this,
+            // createOpenClawTools fires the continuation-misconfig-warn guard at
+            // openclaw-tools.ts:624 and only continue_delegate registers, leaving
+            // continue_work + request_compaction absent from the LLM-callable
+            // function-tool-list. Empirically confirmed by schema-inventory
+            // introspection at two deployed agent-host seats; see #868. The opts
+            // are constructed upstream at
+            // auto-reply/reply/agent-runner-execution.ts:2472 + :2504 and arrive
+            // here on the RunEmbeddedAgent params, but were not threaded through
+            // to the attempt layer.
+            continueWorkOpts: params.continueWorkOpts,
+            requestCompactionOpts: params.requestCompactionOpts,
             promptCacheKey: params.promptCacheKey,
             sandboxSessionKey: params.sandboxSessionKey,
             trigger: params.trigger,
@@ -2549,6 +2575,25 @@ async function runEmbeddedAgentInternal(
                 `[timeout-compaction] LLM timed out with high prompt token usage (${Math.round(tokenUsedRatio * 100)}%); ` +
                   `attempting compaction before retry (attempt ${timeoutCompactionAttempts}/${MAX_TIMEOUT_COMPACTION_ATTEMPTS}) diagId=${timeoutDiagId}`,
               );
+              log.warn(
+                `[context-pressure:fire] mid-turn trigger=timeout ratio=${Math.round(tokenUsedRatio * 100)}% ` +
+                  `tokens=${Math.round((lastTurnPromptTokens ?? 0) / 1000)}k/${Math.round(ctxInfo.tokens / 1000)}k ` +
+                  `sessionKey=${params.sessionKey ?? params.sessionId}`,
+              );
+              const timeoutSessionKey = requireSessionKeyOrSkip(
+                params,
+                log,
+                "pi-runner.timeout-compaction",
+              );
+              if (timeoutSessionKey) {
+                enqueueSystemEvent(
+                  `[system:context-pressure] Mid-turn compaction triggered at ${Math.round(tokenUsedRatio * 100)}% ` +
+                    `context (${Math.round((lastTurnPromptTokens ?? 0) / 1000)}k/${Math.round(ctxInfo.tokens / 1000)}k tokens). ` +
+                    `Your last reply hit the provider timeout ceiling. Consider evacuating working state earlier via ` +
+                    `continue_delegate(post-compaction) or memory files so the next turn starts with room to grow.`,
+                  { sessionKey: timeoutSessionKey },
+                );
+              }
               let timeoutCompactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
               await runOwnsCompactionBeforeHook("timeout recovery");
               try {
@@ -2757,6 +2802,25 @@ async function runEmbeddedAgentInternal(
               log.warn(
                 `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
               );
+              log.warn(
+                `[context-pressure:fire] mid-turn trigger=overflow attempt=${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS} ` +
+                  `tokens=${observedOverflowTokens !== undefined ? Math.round(observedOverflowTokens / 1000) : "?"}k/${Math.round(ctxInfo.tokens / 1000)}k ` +
+                  `sessionKey=${params.sessionKey ?? params.sessionId}`,
+              );
+              const overflowSessionKey = requireSessionKeyOrSkip(
+                params,
+                log,
+                "pi-runner.overflow-compaction",
+              );
+              if (overflowSessionKey) {
+                enqueueSystemEvent(
+                  `[system:context-pressure] Context-overflow compaction triggered mid-turn ` +
+                    `(attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}). ` +
+                    `Your last reply grew the context past the model's window. Consider evacuating ` +
+                    `large tool results or delegated work with continue_delegate(post-compaction).`,
+                  { sessionKey: overflowSessionKey },
+                );
+              }
               let compactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
               let previousSessionId: string | undefined;
               await runOwnsCompactionBeforeHook("overflow recovery");

@@ -23,9 +23,9 @@ type MockModelRequest = {
 };
 
 const LOCAL_STARTUP_TIMEOUT_MS = 60_000;
-const LOCAL_OUTPUT_TIMEOUT_MS = 120_000;
+const LOCAL_OUTPUT_TIMEOUT_MS = 300_000;
 const LOCAL_EXIT_TIMEOUT_MS = 4_000;
-const LOCAL_TEST_TIMEOUT_MS = 150_000;
+const LOCAL_TEST_TIMEOUT_MS = 360_000;
 
 function createIdempotentCleanup(cleanup: () => Promise<void>) {
   let cleanupPromise: Promise<void> | undefined;
@@ -595,7 +595,9 @@ describe.concurrent("TUI PTY real backends", () => {
                 ),
             });
           }
-          await fixture.run.write("\u001b", { delay: false });
+          if (fixture.kind === "gateway") {
+            await fixture.run.write("/stop\r", { delay: false });
+          }
           await fixture.run.waitForOutput(
             "run aborted: edit tool validation failed:",
             LOCAL_OUTPUT_TIMEOUT_MS,

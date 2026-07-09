@@ -138,6 +138,25 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
     );
   });
 
+  it("reports continuation work wakes to hooks as heartbeat triggers", async () => {
+    mocks.runBeforeAgentReply.mockResolvedValue({
+      handled: true,
+      reply: { text: "plugin reply" },
+    });
+
+    await getReplyFromConfig(buildGetReplyGroupCtx(), { continuationTrigger: "work-wake" }, {});
+
+    const [[, hookCtx]] = mocks.runBeforeAgentReply.mock.calls as unknown as Array<
+      [
+        { cleanedBody?: string },
+        {
+          trigger?: string;
+        },
+      ]
+    >;
+    expect(hookCtx.trigger).toBe("heartbeat");
+  });
+
   it("falls back to NO_REPLY when the hook claims without a reply payload", async () => {
     mocks.runBeforeAgentReply.mockResolvedValue({ handled: true });
 

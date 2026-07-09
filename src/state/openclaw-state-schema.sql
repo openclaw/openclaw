@@ -1275,6 +1275,7 @@ CREATE TABLE IF NOT EXISTS flow_runs (
   shape TEXT,
   sync_mode TEXT NOT NULL DEFAULT 'managed',
   owner_key TEXT NOT NULL,
+  chain_id TEXT,
   requester_origin_json TEXT,
   controller_id TEXT,
   revision INTEGER NOT NULL DEFAULT 0,

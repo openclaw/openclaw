@@ -13,7 +13,19 @@ import {
   type SsrFPolicy,
 } from "./ssrf-runtime.js";
 
+type LiveModelCatalogFetchGuardResult = Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+type LiveModelCatalogCompatibleFetchGuardResult = Omit<
+  LiveModelCatalogFetchGuardResult,
+  "finalUrl" | "requestHeaders"
+> & {
+  finalUrl?: string;
+  requestHeaders?: HeadersInit;
+};
+
 export type LiveModelCatalogFetchGuard = typeof fetchWithSsrFGuard;
+type LiveModelCatalogCompatibleFetchGuard = (
+  params: Parameters<typeof fetchWithSsrFGuard>[0],
+) => Promise<LiveModelCatalogCompatibleFetchGuardResult>;
 
 export type LiveModelCatalogHeaderContext = {
   apiKey?: string;
@@ -126,7 +138,7 @@ function buildDefaultLiveModelCatalogHeaders(ctx: LiveModelCatalogHeaderContext)
 }
 
 function buildHeaders(
-  params: FetchLiveProviderModelIdsParams,
+  params: Omit<FetchLiveProviderModelIdsParams, "fetchGuard">,
   safeReplayHeaders?: Headers,
 ): Headers {
   const headers = safeReplayHeaders
@@ -235,15 +247,20 @@ function resolveLiveModelCatalogNextPage(
 }
 
 async function fetchLiveProviderModelCatalogPage(
-  params: FetchLiveProviderModelRowsParams & {
-    fetchGuard: LiveModelCatalogFetchGuard;
+  params: Omit<FetchLiveProviderModelRowsParams, "fetchGuard"> & {
+    fetchGuard: LiveModelCatalogCompatibleFetchGuard;
     url: string;
     timeoutMs: number;
     safeReplayHeaders?: Headers;
   },
 ): Promise<{ body: unknown; finalUrl: string; requestHeaders: Headers; rows: readonly unknown[] }> {
   const requestHeaders = buildHeaders(params, params.safeReplayHeaders);
-  const { response, finalUrl, release } = await params.fetchGuard({
+  const {
+    response,
+    release,
+    finalUrl: guardFinalUrl,
+    requestHeaders: guardRequestHeaders,
+  } = await params.fetchGuard({
     url: params.url,
     init: {
       headers: requestHeaders,
@@ -255,6 +272,8 @@ async function fetchLiveProviderModelCatalogPage(
     ...(params.requireHttps !== undefined ? { requireHttps: params.requireHttps } : {}),
     auditContext: params.auditContext ?? `${params.providerId}-model-discovery`,
   });
+  const finalUrl = guardFinalUrl ?? (response.url || params.url);
+  const resolvedRequestHeaders = new Headers(guardRequestHeaders ?? requestHeaders);
   try {
     if (!response.ok) {
       await cancelUnreadResponseBody(response);
@@ -264,7 +283,7 @@ async function fetchLiveProviderModelCatalogPage(
     return {
       body,
       finalUrl,
-      requestHeaders,
+      requestHeaders: resolvedRequestHeaders,
       rows: (params.readRows ?? readDefaultLiveModelCatalogRows)(body),
     };
   } finally {
@@ -275,7 +294,7 @@ async function fetchLiveProviderModelCatalogPage(
 export async function fetchLiveProviderModelRows(
   params: FetchLiveProviderModelRowsParams,
 ): Promise<readonly unknown[]> {
-  const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
+  const fetchGuard: LiveModelCatalogCompatibleFetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
   const timeoutMs = params.timeoutMs ?? 5_000;
   const startedAt = Date.now();
   const rows: unknown[] = [];

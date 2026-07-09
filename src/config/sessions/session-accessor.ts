@@ -1984,6 +1984,22 @@ export async function restoreSessionFromCompactionCheckpoint(
 }
 
 /**
+ * Removes a session's canonical entry plus any folded legacy-alias rows from
+ * the resolved store. Reset and corruption-recovery paths use this to drop a
+ * session so the next turn starts fresh; alias cleanup mirrors the store
+ * writer's normalized-key rules so stale aliases cannot resurrect the entry.
+ */
+export async function removeSessionEntry(scope: SessionAccessScope): Promise<void> {
+  await updateSessionStore(resolveSessionStorePathForScope(scope), (store) => {
+    const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
+    delete store[resolved.normalizedKey];
+    for (const legacyKey of resolved.legacyKeys) {
+      delete store[legacyKey];
+    }
+  });
+}
+
+/**
  * Applies a session patch projection through the accessor boundary.
  * The resolver sees a read-only snapshot and names the persisted key set; the
  * projector returns one replacement entry without receiving the mutable store.
@@ -3200,6 +3216,24 @@ export function resolveSessionTranscriptReadTarget(
   };
 }
 
+export type SessionStoreEntrySnapshot = {
+  entry?: SessionEntry;
+  normalizedKey: string;
+  store: Record<string, SessionEntry>;
+};
+
+export function loadSessionStoreEntrySnapshot(params: {
+  sessionKey: string;
+  storePath: string;
+}): SessionStoreEntrySnapshot {
+  const store = loadSessionStore(params.storePath, { skipCache: true });
+  const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
+  return {
+    ...(resolved.existing ? { entry: resolved.existing } : {}),
+    normalizedKey: resolved.normalizedKey,
+    store,
+  };
+}
 function resolveConcreteReadStorePath(storePath: string | undefined): string | undefined {
   const trimmed = storePath?.trim();
   if (!trimmed || trimmed === "(multiple)" || trimmed.includes("{agentId}")) {

@@ -237,6 +237,7 @@ function collectQueuedImages(items: FollowupRun[]): Pick<FollowupRun, "images" |
 type FollowupRuntimeMetadata = Pick<
   FollowupRun,
   | "currentInboundEventKind"
+  | "currentInboundEventTimestampMs"
   | "currentInboundAudio"
   | "currentInboundContext"
   | "abortSignal"
@@ -490,6 +491,7 @@ function collectRuntimeMetadata(
   );
   return {
     currentInboundEventKind: currentTurnSource?.currentInboundEventKind,
+    currentInboundEventTimestampMs: currentTurnSource?.currentInboundEventTimestampMs,
     currentInboundAudio: currentTurnSource?.currentInboundAudio,
     currentInboundContext: collectCurrentInboundContext(items),
     abortSignal,

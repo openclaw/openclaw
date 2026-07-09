@@ -175,6 +175,7 @@ import {
 } from "../../embedded-agent-helpers.js";
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import { isCoreToolResultMediaTrustedName } from "../../embedded-agent-subscribe.tools.js";
 import { isSignalTimeoutReason } from "../../failover-error.js";
 import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
@@ -560,6 +561,34 @@ export {
   resolveEmbeddedAgentStreamFn,
 };
 
+function collectTrustedPluginLocalMediaToolNames(params: {
+  tools: Array<{ name?: string }>;
+}): Set<string> {
+  const trusted = new Set<string>();
+  for (const tool of params.tools) {
+    const toolName = tool.name?.trim();
+    if (!toolName) {
+      continue;
+    }
+    const meta = getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0]);
+    if (meta?.trustedLocalMedia === true) {
+      trusted.add(toolName);
+    }
+  }
+  return trusted;
+}
+
+function collectTrustedLocalMediaToolNames(params: {
+  coreBuiltinToolNames: ReadonlySet<string>;
+  trustedPluginToolNames: ReadonlySet<string>;
+}): Set<string> {
+  return new Set([
+    ...[...params.coreBuiltinToolNames].filter((toolName) =>
+      isCoreToolResultMediaTrustedName(toolName),
+    ),
+    ...params.trustedPluginToolNames,
+  ]);
+}
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 const aggregateToolResultPressureWarnings = new Set<string>();
 
@@ -1183,6 +1212,8 @@ export async function runEmbeddedAttempt(
       ...((params.messageChannel ?? params.messageProvider)
         ? { channel: params.messageChannel ?? params.messageProvider }
         : {}),
+      ...(params.fireReason ? { fireReason: params.fireReason } : {}),
+      ...(params.parentRunId ? { parentRunId: params.parentRunId } : {}),
       trace: runTrace,
     };
     emitTrustedDiagnosticEvent({
@@ -1429,6 +1460,9 @@ export async function runEmbeddedAttempt(
             onToolOutcome: params.onToolOutcome,
             allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
             skillsSnapshot: skillsSnapshotForRun,
+            continueWorkOpts: params.continueWorkOpts,
+            requestCompactionOpts: params.requestCompactionOpts,
+            drainsContinuationDelegateQueue: params.drainsContinuationDelegateQueue,
             skillUsagePaths,
             conversationCapabilityProfile: runtimeCapabilityProfile,
             onYield: (message) => {
@@ -1678,6 +1712,9 @@ export async function runEmbeddedAttempt(
       conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
     });
+    const trustedPluginLocalMediaToolNames = collectTrustedPluginLocalMediaToolNames({
+      tools: toolsEnabled ? [...tools, ...filteredBundledTools] : [],
+    });
     const normalizedBundledTools =
       filteredBundledTools.length > 0
         ? normalizeAgentRuntimeTools({
@@ -1824,6 +1861,7 @@ export async function runEmbeddedAttempt(
                 ? shouldCatalogToolForLocalModelLean
                 : undefined,
           });
+    toolSearchCatalogApplied = true;
     const projectedToolSearchTools = filterLocalModelLeanTools({
       tools: toolSearch.tools,
       config: params.config,
@@ -2107,6 +2145,7 @@ export async function runEmbeddedAttempt(
         bootstrapTruncationNotice,
         includeMemorySection: !activeContextEngine || activeContextEngine.info.id === "legacy",
         promptContribution,
+        continuationEnabled: params.config?.agents?.defaults?.continuation?.enabled === true,
       },
       providerTransform: {
         provider: params.provider,
@@ -2433,6 +2472,10 @@ export async function runEmbeddedAttempt(
       const coreBuiltinToolNames = collectCoreBuiltinToolNames(uncompactedEffectiveTools, {
         isPluginTool: (tool) =>
           Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
+      });
+      const trustedLocalMediaToolNames = collectTrustedLocalMediaToolNames({
+        coreBuiltinToolNames,
+        trustedPluginToolNames: trustedPluginLocalMediaToolNames,
       });
       const replaySafetyOptions = {
         declaredReplaySafe: (candidate: { name?: string }) => {
@@ -3768,6 +3811,7 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           agentId: sessionAgentId,
           builtinToolNames,
+          trustedLocalMediaToolNames,
           replaySafeToolNames,
           internalEvents: params.internalEvents,
         }),

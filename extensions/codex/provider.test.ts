@@ -29,6 +29,7 @@ function createFakeCodexClient(): CodexAppServerClient {
     addNotificationHandler: vi.fn(() => () => undefined),
     addRequestHandler: vi.fn(() => () => undefined),
     addCloseHandler: vi.fn(() => () => undefined),
+    getActiveSharedLeaseCountForUnscopedNotifications: vi.fn(() => undefined),
     close: vi.fn(),
   } as unknown as CodexAppServerClient;
 }

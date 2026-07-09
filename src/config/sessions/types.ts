@@ -218,6 +218,29 @@ export type SessionGoal = {
   budgetLimitedAt?: number;
 };
 
+export type SessionPostCompactionDelegate = {
+  task: string;
+  createdAt: number;
+  /** Stable original arm time, preserved across re-stage/restart cycles. */
+  firstArmedAt?: number;
+  /** Post-compaction delegates are silent by contract; persist the intent across store round trips. */
+  silent?: boolean;
+  silentWake?: boolean;
+  targetSessionKey?: string;
+  targetSessionKeys?: string[];
+  fanoutMode?: "tree" | "all";
+  traceparent?: string;
+  /** Optional provider/model override forwarded to the released delegate; omitted => inherit parent. */
+  model?: string;
+  /**
+   * Runtime-only TaskFlow claim handle for a delegate just released by
+   * consumeStagedPostCompactionDelegates. Used to finalize or fail exactly the
+   * claimed row after a durable handoff; never persisted in session entries.
+   */
+  flowId?: string;
+  expectedRevision?: number;
+};
+
 export type PendingSkillSuggestion = {
   skillName: string;
   detectedAt: number;
@@ -250,6 +273,8 @@ export type SessionEntry = {
   pluginExtensionSlotKeys?: Record<string, Record<string, string>>;
   /** Durable one-shot prompt additions drained before the next agent turn. */
   pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
+  /** Internal one-shot traceparent for a freshly spawned child agent run. */
+  continuationTraceparent?: string;
   sessionId: string;
   updatedAt: number;
   /** Opaque owner revision used to reject stale lifecycle mutations. */
@@ -423,6 +448,11 @@ export type SessionEntry = {
   fallbackNoticeReason?: string;
   contextTokens?: number;
   contextBudgetStatus?: SessionContextBudgetStatus;
+  /**
+   * Last context-pressure band that fired (e.g. 80, 90, 95). Used to deduplicate
+   * pressure events until the session crosses into a higher band.
+   */
+  lastContextPressureBand?: number;
   compactionCount?: number;
   compactionCheckpoints?: SessionCompactionCheckpoint[];
   memoryFlushAt?: number;
@@ -457,6 +487,16 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+  /** Number of continuation turns completed in the current chain. Reset on external message. */
+  continuationChainCount?: number;
+  /** Timestamp (ms) when the current continuation chain started. */
+  continuationChainStartedAt?: number;
+  /** Accumulated token usage across the current continuation chain. Reset on external message. */
+  continuationChainTokens?: number;
+  /** Stable identifier for the current continuation chain, persisted across compaction. */
+  continuationChainId?: string;
+  /** Post-compaction delegates staged for execution after context compaction. */
+  pendingPostCompactionDelegates?: SessionPostCompactionDelegate[];
   /**
    * Generic plugin-owned runtime debug entries shown in verbose status surfaces.
    * Each plugin owns and may overwrite only its own entry between turns.
@@ -562,7 +602,7 @@ export function setSessionRuntimeModel(
 
 export type SessionEntryMergePolicy = "touch-activity" | "preserve-activity";
 
-type MergeSessionEntryOptions = {
+export type MergeSessionEntryOptions = {
   policy?: SessionEntryMergePolicy;
   now?: number;
 };
@@ -642,8 +682,9 @@ export function mergeSessionEntryWithPolicy(
 export function mergeSessionEntry(
   existing: SessionEntry | undefined,
   patch: Partial<SessionEntry>,
+  options?: MergeSessionEntryOptions,
 ): SessionEntry {
-  return mergeSessionEntryWithPolicy(existing, patch);
+  return mergeSessionEntryWithPolicy(existing, patch, options);
 }
 
 export function mergeSessionEntryPreserveActivity(

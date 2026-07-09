@@ -1,3 +1,4 @@
+// "RFC §" references herein cite docs/design/continue-work-signal-v2.md (Agent Self-Elected Turn Continuation / CONTINUE_WORK).
 /**
  * Subagent spawn executor.
  *
@@ -30,6 +31,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
+import { normalizeDiagnosticTraceparent } from "../infra/diagnostic-trace-context-pure.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
@@ -60,14 +62,22 @@ import {
   type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
+import {
+  deriveContinuationDelegateChildRunId,
+  deriveContinuationDelegateChildSessionKey,
+} from "./subagent-continuation-ids.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
-import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
+import {
+  countActiveRunsForSession,
+  registerSubagentRun,
+} from "./subagent-registry-spawn-runtime.js";
 import { resolveSubagentRunTimerDelayMs } from "./subagent-run-timeout.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
 import { normalizeSubagentTaskName } from "./subagent-task-name.js";
+import { registerSubagentTraceparentHandoff } from "./subagent-traceparent-handoff.js";
 export {
   SUBAGENT_SPAWN_ACCEPTED_NOTE,
   SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE,
@@ -157,7 +167,14 @@ const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
 const DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 60_000;
 const MAX_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 300_000;
 
-type SpawnSubagentParams = {
+type ContinuationChainSpawnState = {
+  count: number;
+  startedAt: number;
+  tokens: number;
+  chainId?: string;
+};
+
+type SpawnSubagentBaseParams = {
   task: string;
   label?: string;
   agentId?: string;
@@ -180,9 +197,39 @@ type SpawnSubagentParams = {
     mimeType?: string;
   }>;
   attachMountPath?: string;
+  /** When true, sub-agent completion is delivered as a silent system event
+   *  instead of a visible channel message. Used for ambient enrichment shards. */
+  silentAnnounce?: boolean;
+  /** When true (with silentAnnounce), the parent session is woken after the
+   *  enrichment is enqueued. Enables autonomous cognition loops where the agent
+   *  acts on shard returns without external nudge. */
+  wakeOnReturn?: boolean;
+  /** Continuation return targeting for cross-session delegate enrichment. */
+  continuationTargetSessionKey?: string;
+  continuationTargetSessionKeys?: string[];
+  continuationFanoutMode?: "tree" | "all";
+  traceparent?: string;
+  /** Durable continuation delegate flow id; used to derive idempotent child session/run keys. */
+  continuationDelegateFlowId?: string;
 };
 
-type SpawnSubagentContext = {
+type SpawnSubagentContinuationDrainParams = {
+  /** When true, the spawned sub-agent's run drains the continuation delegate queue,
+   *  enabling the continue_delegate tool for chain-hop delegates. */
+  drainsContinuationDelegateQueue: true;
+  /** Initial continuation chain basis for a child that can drain continuation delegates. */
+  continuationChainState: ContinuationChainSpawnState;
+};
+
+type SpawnSubagentNonContinuationDrainParams = {
+  drainsContinuationDelegateQueue?: false;
+  continuationChainState?: never;
+};
+
+export type SpawnSubagentParams = SpawnSubagentBaseParams &
+  (SpawnSubagentContinuationDrainParams | SpawnSubagentNonContinuationDrainParams);
+
+export type SpawnSubagentContext = {
   agentSessionKey?: string;
   /** Separate key used only for completion routing, not sandbox policy. */
   completionOwnerKey?: string;
@@ -231,6 +278,14 @@ async function updateSubagentSessionStore(
   return await subagentSpawnDeps.updateSessionStore(storePath, mutator);
 }
 
+function hasRequestModelOverride(params: unknown): boolean {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return false;
+  }
+  const record = params as Record<string, unknown>;
+  return typeof record.provider === "string" || typeof record.model === "string";
+}
+
 async function callSubagentGateway(
   params: Parameters<typeof callGateway>[0],
 ): Promise<Awaited<ReturnType<typeof callGateway>>> {
@@ -242,8 +297,9 @@ async function callSubagentGateway(
   // complete interactively, causing close(1008) "pairing required" (#59428).
   //
   // Only admin-requiring calls are pinned to ADMIN_SCOPE; other methods (e.g.
-  // "agent" -> write) keep their least-privilege scope. The params-aware
-  // resolver keeps spawn-metadata sessions.patch calls on the admin tier.
+  // "agent" → write) keep their least-privilege scope so the gateway does not
+  // treat the caller as owner. The params-aware resolver keeps spawn-metadata
+  // sessions.patch calls on the admin tier.
   const leastPrivilegeScopes = resolveLeastPrivilegeOperatorScopesForMethod(
     params.method,
     params.params,
@@ -260,6 +316,8 @@ async function callSubagentGateway(
     typeof request.params === "object" &&
     !Array.isArray(request.params)
   ) {
+    const agentModelOverride =
+      request.method === "agent" && hasRequestModelOverride(request.params);
     // Spawn is already running in the gateway process for channel/tool calls.
     // Direct dispatch avoids self-connecting over WS while the same event loop is busy.
     return await subagentSpawnDeps.dispatchGatewayMethodInProcess(
@@ -267,7 +325,8 @@ async function callSubagentGateway(
       request.params as Record<string, unknown>,
       {
         expectFinal: request.expectFinal,
-        ...(scopes != null ? { forceSyntheticClient: true } : {}),
+        ...(scopes != null || agentModelOverride ? { forceSyntheticClient: true } : {}),
+        ...(agentModelOverride ? { allowSyntheticModelOverride: true } : {}),
         ...(typeof request.timeoutMs === "number" ? { timeoutMs: request.timeoutMs } : {}),
         ...(scopes != null ? { syntheticScopes: scopes } : {}),
       },
@@ -280,7 +339,7 @@ function readGatewayRunId(response: Awaited<ReturnType<typeof callGateway>>): st
   if (!response || typeof response !== "object") {
     return undefined;
   }
-  const { runId } = response as { runId?: unknown };
+  const { runId } = response as Record<string, unknown>;
   return typeof runId === "string" && runId ? runId : undefined;
 }
 
@@ -338,6 +397,29 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   if (inheritedToolAllow.length > 0) {
     entry.inheritedToolAllow = inheritedToolAllow;
   }
+  const continuationTraceparent = normalizeDiagnosticTraceparent(
+    typeof patch.continuationTraceparent === "string" ? patch.continuationTraceparent : undefined,
+  );
+  if (continuationTraceparent) {
+    entry.continuationTraceparent = continuationTraceparent;
+  }
+  const continuationChainCount = normalizeNonNegativeInteger(patch.continuationChainCount);
+  if (continuationChainCount !== undefined) {
+    entry.continuationChainCount = continuationChainCount;
+  }
+  const continuationChainStartedAt = normalizeNonNegativeInteger(patch.continuationChainStartedAt);
+  if (continuationChainStartedAt !== undefined) {
+    entry.continuationChainStartedAt = continuationChainStartedAt;
+  }
+  const continuationChainTokens = normalizeNonNegativeInteger(patch.continuationChainTokens);
+  if (continuationChainTokens !== undefined) {
+    entry.continuationChainTokens = continuationChainTokens;
+  }
+  const continuationChainId =
+    typeof patch.continuationChainId === "string" ? patch.continuationChainId.trim() : "";
+  if (continuationChainId) {
+    entry.continuationChainId = continuationChainId;
+  }
   if (typeof patch.thinkingLevel === "string" && patch.thinkingLevel.trim()) {
     entry.thinkingLevel = patch.thinkingLevel.trim();
   }
@@ -362,6 +444,13 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
     }
   }
   return entry;
+}
+
+function normalizeNonNegativeInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return Math.floor(value);
 }
 
 function loadSubagentConfig() {
@@ -1240,7 +1329,15 @@ export async function spawnSubagentDirect(
       error: targetPolicy.error,
     };
   }
-  const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
+  if (params.drainsContinuationDelegateQueue && !params.continuationChainState) {
+    return {
+      status: "error",
+      error: "continuationChainState is required when drainsContinuationDelegateQueue is true",
+    };
+  }
+  const childSessionKey = params.continuationDelegateFlowId
+    ? deriveContinuationDelegateChildSessionKey(targetAgentId, params.continuationDelegateFlowId)
+    : `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
   const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg,
     sessionKey: requesterInternalKey,
@@ -1328,13 +1425,33 @@ export async function spawnSubagentDirect(
     }
   };
 
+  // Continuation chain-hop delegates get orchestrator role regardless of depth,
+  // so they can continue_delegate further within the chain. (RFC §3.4)
+  const effectiveRole = params.drainsContinuationDelegateQueue
+    ? "orchestrator"
+    : childCapabilities.role;
+  const effectiveControlScope = params.drainsContinuationDelegateQueue
+    ? "children"
+    : childCapabilities.controlScope;
+
   const initialChildSessionPatch: Record<string, unknown> = {
     spawnDepth: childDepth,
-    subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
-    subagentControlScope: childCapabilities.controlScope,
+    subagentRole: effectiveRole === "main" ? null : effectiveRole,
+    subagentControlScope: effectiveControlScope,
     ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
     ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
     ...plan.initialSessionPatch,
+    ...(params.traceparent ? { continuationTraceparent: params.traceparent } : {}),
+    ...(params.continuationChainState
+      ? {
+          continuationChainCount: params.continuationChainState.count,
+          continuationChainStartedAt: params.continuationChainState.startedAt,
+          continuationChainTokens: params.continuationChainState.tokens,
+          ...(params.continuationChainState.chainId
+            ? { continuationChainId: params.continuationChainState.chainId }
+            : {}),
+        }
+      : {}),
   };
 
   const initialPatchError = await patchChildSession(initialChildSessionPatch);
@@ -1441,6 +1558,27 @@ export async function spawnSubagentDirect(
     }),
     childDepth,
     maxSpawnDepth,
+    // Hint tool availability so the subagent prompt teaches tool-primary vs bracket-only.
+    // continue_work is always available when continuation is enabled (not in any deny list).
+    // continue_delegate requires drainsContinuationDelegateQueue + non-leaf depth + no explicit deny.
+    toolNames: (() => {
+      const names: string[] = [];
+      if (cfg.agents?.defaults?.continuation?.enabled === true) {
+        names.push("continue_work");
+      }
+      if (
+        params.drainsContinuationDelegateQueue === true &&
+        childDepth < maxSpawnDepth &&
+        !cfg.tools?.subagents?.tools?.deny?.includes("continue_delegate")
+      ) {
+        names.push("continue_delegate");
+      }
+      return names.length > 0 ? names : undefined;
+    })(),
+    // Without this, `buildSubagentSystemPrompt` falls through the continuation
+    // chaining gate (#715) and subagents never see the guidance even when
+    // `agents.defaults.continuation.enabled === true`.
+    continuationEnabled: cfg.agents?.defaults?.continuation?.enabled === true,
   });
 
   let retainOnSessionKeep = false;
@@ -1539,7 +1677,9 @@ export async function spawnSubagentDirect(
   }
   const contextEnginePreparation = contextEnginePrepareResult.preparation;
 
-  const childIdem = crypto.randomUUID();
+  const childIdem = params.continuationDelegateFlowId
+    ? deriveContinuationDelegateChildRunId(params.continuationDelegateFlowId)
+    : crypto.randomUUID();
   let childRunId: string = childIdem;
   const deliverInitialChildRunDirectly =
     requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin;
@@ -1552,6 +1692,14 @@ export async function spawnSubagentDirect(
       workspaceDir: _workspaceDir,
       ...publicSpawnedMetadata
     } = spawnedMetadata;
+    registerSubagentTraceparentHandoff({
+      idempotencyKey: childIdem,
+      sessionKey: childSessionKey,
+      traceparent: params.traceparent,
+    });
+    const childRunModelRef = subagentSpawnDeps.hasInProcessGatewayContext()
+      ? splitModelRef(resolvedModel)
+      : undefined;
     const response = await callSubagentGateway({
       method: "agent",
       params: {
@@ -1570,9 +1718,15 @@ export async function spawnSubagentDirect(
         disableMessageTool: true,
         cleanupBundleMcpOnRunEnd: spawnMode !== "session",
         extraSystemPrompt: childSystemPrompt,
+        ...(childRunModelRef?.provider ? { provider: childRunModelRef.provider } : {}),
+        ...(childRunModelRef?.model ? { model: childRunModelRef.model } : {}),
         thinking: thinkingOverride,
         timeout: runTimeoutSeconds,
         label: label || undefined,
+        ...(params.drainsContinuationDelegateQueue
+          ? { drainsContinuationDelegateQueue: true }
+          : {}),
+        ...(params.traceparent ? { traceparent: params.traceparent } : {}),
         ...(bootstrapContextMode
           ? {
               bootstrapContextMode,
@@ -1673,6 +1827,19 @@ export async function spawnSubagentDirect(
       attachmentsDir: attachmentAbsDir,
       attachmentsRootDir: attachmentRootDir,
       retainAttachmentsOnKeep: retainOnSessionKeep,
+      ...(params.silentAnnounce ? { silentAnnounce: true } : {}),
+      ...(params.wakeOnReturn ? { wakeOnReturn: true } : {}),
+      ...(params.drainsContinuationDelegateQueue ? { drainsContinuationDelegateQueue: true } : {}),
+      ...(params.continuationTargetSessionKey
+        ? { continuationTargetSessionKey: params.continuationTargetSessionKey }
+        : {}),
+      ...(params.continuationTargetSessionKeys && params.continuationTargetSessionKeys.length > 0
+        ? { continuationTargetSessionKeys: params.continuationTargetSessionKeys }
+        : {}),
+      ...(params.continuationFanoutMode
+        ? { continuationFanoutMode: params.continuationFanoutMode }
+        : {}),
+      ...(params.traceparent ? { traceparent: params.traceparent } : {}),
     });
   } catch (err) {
     await rollbackPreparedContextEngine(contextEnginePreparation);

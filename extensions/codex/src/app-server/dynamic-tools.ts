@@ -38,6 +38,7 @@ import {
   type HeartbeatToolResponse,
   type MessagingToolSend,
   type MessagingToolSourceReplyPayload,
+  type ToolResultFailureKind,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -53,7 +54,6 @@ import type {
   CodexDynamicToolCallOutputContentItem,
   CodexDynamicToolCallParams,
   CodexDynamicToolCallResponse,
-  CodexDynamicToolDiagnosticTerminalReason,
   CodexDynamicToolDiagnosticTerminalType,
   CodexDynamicToolFunctionSpec,
   CodexDynamicToolSpec,
@@ -502,8 +502,8 @@ export function createCodexDynamicToolBridge(params: {
         // Prepare before marking side-effect evidence; argument preparation can
         // fail without the target tool actually starting.
         const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
-        const telemetryArgs = isRecord(preparedArgs) ? preparedArgs : args;
-        executedArgs = structuredClone(telemetryArgs);
+        const preparedToolArgs = isRecord(preparedArgs) ? preparedArgs : args;
+        executedArgs = structuredClone(preparedToolArgs);
         const messagingContext = {
           config: params.hookContext?.config,
           currentChannelId: params.hookContext?.currentChannelId,
@@ -530,6 +530,14 @@ export function createCodexDynamicToolBridge(params: {
         const telemetryRawResult = sanitizeToolResult(rawResult);
         const rawIsError = isCodexToolResultError(rawResult);
         const rawResultFailureKind = resolveToolResultFailureKind(rawResult);
+        // The native agentToolResultMiddleware runner observes OpenClaw's
+        // executed args (preparedToolArgs merged with before_tool_call
+        // adjustments), matching the after_tool_call hook view. The legacy
+        // codex app-server extension runner keeps its historical contract of
+        // observing the tool's prepared call args, before before_tool_call
+        // rewrites them. Feeding the merged view to the legacy runner makes a
+        // contract extension's args diverge from the invoked call, so its
+        // assertion throws and its transformed result is silently discarded.
         const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
           threadId: call.threadId,
           turnId: call.turnId,
@@ -544,7 +552,7 @@ export function createCodexDynamicToolBridge(params: {
           turnId: call.turnId,
           toolCallId: call.callId,
           toolName,
-          args: structuredClone(executedArgs),
+          args: structuredClone(preparedToolArgs),
           result: middlewareResult,
         });
         const resultIsError = rawIsError || isCodexToolResultError(result);
@@ -603,14 +611,12 @@ export function createCodexDynamicToolBridge(params: {
           isError: resultIsError,
           messagingTarget: confirmedMessagingTarget,
         });
-        const terminalType =
-          resultFailureKind === "blocked" ? "blocked" : resultIsError ? "error" : "completed";
         const response = withDiagnosticTerminalType(
           {
             contentItems: convertToolContents(result.content, toolResultMaxChars),
             success: !resultIsError,
           },
-          terminalType,
+          resolveDiagnosticTerminalType(resultFailureKind, resultIsError),
         );
         withDiagnosticFailureDisposition(response, resultFailureKind);
         const blocksSourceReplyTermination = hasExplicitNonSourceMessageRoute(
@@ -767,7 +773,7 @@ function notifyAgentToolResult(
 
 function failedToolResult(
   message: string,
-  status: "blocked" | CodexDynamicToolDiagnosticTerminalReason = "failed",
+  status: ToolResultFailureKind = "failed",
 ): AgentToolResult<unknown> {
   return {
     content: [{ type: "text", text: message }],
@@ -1249,6 +1255,19 @@ function isAsyncStartedToolResult(result: AgentToolResult<unknown>): boolean {
   return isRecord(details) && details.async === true && details.status === "started";
 }
 
+function resolveDiagnosticTerminalType(
+  failureKind: ToolResultFailureKind | undefined,
+  isError: boolean,
+): CodexDynamicToolDiagnosticTerminalType {
+  if (failureKind === "blocked") {
+    return "blocked";
+  }
+  if (isError) {
+    return "error";
+  }
+  return "completed";
+}
+
 function withDiagnosticTerminalType<T extends CodexDynamicToolCallResponse>(
   response: T,
   terminalType: CodexDynamicToolDiagnosticTerminalType,
@@ -1263,7 +1282,7 @@ function withDiagnosticTerminalType<T extends CodexDynamicToolCallResponse>(
 
 function withDiagnosticFailureDisposition<T extends CodexDynamicToolCallResponse>(
   response: T,
-  disposition: "blocked" | CodexDynamicToolDiagnosticTerminalReason | undefined,
+  disposition: ToolResultFailureKind | undefined,
 ): T {
   if (!disposition) {
     return response;

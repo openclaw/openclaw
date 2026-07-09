@@ -31,6 +31,7 @@ let resolveQueuedReplyExecutionConfigActual:
   | (typeof import("./agent-runner-utils.js"))["resolveQueuedReplyExecutionConfig"]
   | undefined;
 let createFollowupRunner: typeof import("./followup-runner.js").createFollowupRunner;
+let noOpRearmGuardForTest: typeof import("./no-op-rearm-guard.js");
 let clearRuntimeConfigSnapshot: typeof import("../../config/config.js").clearRuntimeConfigSnapshot;
 let loadSessionStore: typeof import("../../config/sessions/store.js").loadSessionStore;
 let saveSessionStore: typeof import("../../config/sessions/store.js").saveSessionStore;
@@ -473,6 +474,7 @@ async function loadFreshFollowupRunnerModuleForTest() {
   ({ testing: cliBackendsTestingForTest } = await import("../../agents/cli-backends.js"));
   setFastFollowupCliBackendDeps();
   ({ createFollowupRunner } = await import("./followup-runner.js"));
+  noOpRearmGuardForTest = await import("./no-op-rearm-guard.js");
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
     await import("../../config/config.js"));
   ({ clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } =
@@ -621,10 +623,44 @@ afterEach(() => {
 const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
   createMockFollowupRun({ run: { messageProvider } });
 
+// Continuation regression anchors: follow-up turns must keep continue_work,
+// continue_delegate, and drainsContinuationDelegateQueue wired through the
+// queued runner even after embedded-runner rename churn.
 function createQueuedRun(
   overrides: Partial<Omit<FollowupRun, "run">> & { run?: Partial<FollowupRun["run"]> } = {},
 ): FollowupRun {
   return createMockFollowupRun(overrides);
+}
+
+type TestContinueWorkRequest = { reason: string; delaySeconds: number };
+
+function requestContinueWorkFromCall(callArgs: unknown, request: TestContinueWorkRequest): void {
+  (
+    callArgs as {
+      continueWorkOpts?: {
+        requestContinuation: (req: TestContinueWorkRequest) => void;
+      };
+    }
+  ).continueWorkOpts?.requestContinuation(request);
+}
+
+function makeFollowupContinuationConfig(storePath: string): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        continuation: {
+          enabled: true,
+          maxChainLength: 200,
+          defaultDelayMs: 15000,
+          minDelayMs: 5000,
+          maxDelayMs: 86400000,
+          costCapTokens: 50000000,
+          maxDelegatesPerTurn: 500,
+        },
+      },
+    },
+    session: { store: storePath },
+  } as OpenClawConfig;
 }
 
 describe("createFollowupRunner reply-lane admission", () => {
@@ -749,6 +785,192 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(call.cwd).toBe("/tmp/task-repo");
     const recorder = requireRecord(call.userTurnTranscriptRecorder, "embedded user turn recorder");
     expect(recorder.message).toBe(preparedUserTurnMessage);
+  });
+
+  it("runs timestamp-less room-event followups even when a continuation no-op streak is tripped (#1148)", async () => {
+    const sessionKey = "main";
+    // Seed the per-session no-op streak with continuation-owned no-op outcomes.
+    for (let i = 0; i < noOpRearmGuardForTest.DEFAULT_NO_OP_REARM_THRESHOLD; i += 1) {
+      noOpRearmGuardForTest.recordNoOpRearmOutcome({
+        sessionKey,
+        wakeClass: { kind: "self_rearm", source: "continuation" },
+        runId: `seed-room-${i}`,
+        outcome: { kind: "no_op", reason: "seed" },
+      });
+    }
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: { toolSummary: { calls: 1, tools: ["message_react"] } },
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey,
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        currentInboundEventTimestampMs: 0,
+        run: { sessionKey, provider: "anthropic", model: "claude" },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
+  it("admits fresh room-event followups without treating normal room activity as backlog (#1148)", async () => {
+    const sessionKey = "main";
+    for (let i = 0; i < noOpRearmGuardForTest.DEFAULT_NO_OP_REARM_THRESHOLD; i += 1) {
+      noOpRearmGuardForTest.recordNoOpRearmOutcome({
+        sessionKey,
+        wakeClass: { kind: "self_rearm", source: "continuation" },
+        runId: `seed-fresh-room-${i}`,
+        outcome: { kind: "no_op", reason: "seed" },
+      });
+    }
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: { toolSummary: { calls: 1, tools: ["message_react"] } },
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey,
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        currentInboundEventTimestampMs: Date.now(),
+        messageId: "fresh-room-reaction",
+        run: { sessionKey, provider: "anthropic", model: "claude" },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not let message-tool-only room acknowledgements build suppression when no delivery happened (#1148)", async () => {
+    const sessionKey = "main";
+    for (let i = 0; i < noOpRearmGuardForTest.DEFAULT_NO_OP_REARM_THRESHOLD; i += 1) {
+      noOpRearmGuardForTest.recordNoOpRearmOutcome({
+        sessionKey,
+        wakeClass: { kind: "self_rearm", source: "continuation" },
+        runId: `seed-message-tool-only-${i}`,
+        outcome: { kind: "no_op", reason: "seed" },
+      });
+    }
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I will only speak if the message tool sends this." }],
+      meta: {},
+      didSendViaMessagingTool: false,
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey,
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        currentInboundEventTimestampMs: 0,
+        run: {
+          sessionKey,
+          provider: "anthropic",
+          model: "claude",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        currentInboundEventTimestampMs: 0,
+        run: {
+          sessionKey,
+          provider: "anthropic",
+          model: "claude",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("runs restart-recovery followups because generic system recovery is not continuation-owned (#1151)", async () => {
+    const sessionKey = "main";
+    for (let i = 0; i < noOpRearmGuardForTest.DEFAULT_NO_OP_REARM_THRESHOLD; i += 1) {
+      noOpRearmGuardForTest.recordNoOpRearmOutcome({
+        sessionKey,
+        wakeClass: { kind: "self_rearm", source: "continuation" },
+        runId: `seed-restart-${i}`,
+        outcome: { kind: "no_op", reason: "seed" },
+      });
+    }
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey,
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionKey,
+          provider: "anthropic",
+          model: "claude",
+          inputProvenance: { kind: "internal_system", sourceTool: "restart-sentinel" },
+        },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
+  it("admits and runs a queued room-event followup when a fresh human edge reset the streak (#1138/#1142)", async () => {
+    const sessionKey = "main";
+    for (let i = 0; i < noOpRearmGuardForTest.DEFAULT_NO_OP_REARM_THRESHOLD; i += 1) {
+      noOpRearmGuardForTest.recordNoOpRearmOutcome({
+        sessionKey,
+        wakeClass: { kind: "self_rearm", source: "continuation" },
+        runId: `seed-reset-${i}`,
+        outcome: { kind: "no_op", reason: "seed" },
+      });
+    }
+    // A fresh human message resets the streak, so the next turn is admitted again.
+    const admission = noOpRearmGuardForTest.evaluateNoOpRearmAdmission({
+      sessionKey,
+      inboundEventKind: "user_request",
+      provenance: { kind: "external_user" },
+      messageId: "fresh-human-1",
+    });
+    expect(admission.admit).toBe(true);
+
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey,
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        currentInboundEventTimestampMs: 0,
+        run: { sessionKey, provider: "anthropic", model: "claude" },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
   it("runs queued followups with the session id returned by admission", async () => {
@@ -6240,5 +6462,584 @@ describe("createFollowupRunner queued user message idempotency across fallback",
     expect(firstAttempt.suppressNextUserMessagePersistence).toBe(false);
     expect(secondAttempt.suppressNextUserMessagePersistence).toBe(false);
     expect(secondAttempt.suppressAssistantErrorPersistence).toBe(false);
+  });
+});
+
+describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
+  it("passes continueWorkOpts to runEmbeddedAgent when continuation.enabled=true", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done" }],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude",
+      sessionKey: "agent:main:subagent:test-organ",
+    });
+    const queued = createQueuedRun({
+      run: {
+        sessionKey: "agent:main:subagent:test-organ",
+        config: {
+          agents: {
+            defaults: {
+              continuation: {
+                enabled: true,
+                maxChainLength: 200,
+                defaultDelayMs: 15000,
+                minDelayMs: 5000,
+                maxDelayMs: 86400000,
+                costCapTokens: 50000000,
+                maxDelegatesPerTurn: 500,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        drainsContinuationDelegateQueue: true,
+      },
+    });
+
+    await runner(queued);
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalled();
+    const callArgs = requireLastMockCallArg(runEmbeddedAgentMock, "runEmbeddedAgent");
+    expect(callArgs.continueWorkOpts).toBeDefined();
+    expect(typeof (callArgs.continueWorkOpts as any).requestContinuation).toBe("function");
+  });
+
+  it("passes resolved continuation config into followup continue_delegate dispatch", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-delegate-config-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionKey = "agent:main:subagent:delegate-config-followup";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-followup-delegate-config",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const runtimeConfig = makeFollowupContinuationConfig(storePath);
+    runtimeConfig.agents!.defaults!.continuation = {
+      ...runtimeConfig.agents!.defaults!.continuation!,
+      maxChainLength: 17,
+      costCapTokens: 1234,
+      maxDelegatesPerTurn: 3,
+      crossSessionTargeting: "enabled",
+    };
+    setRuntimeConfigSnapshot(runtimeConfig);
+    await saveSessionStore(storePath, sessionStore);
+    const delegateDispatch = await import("../continuation/delegate-dispatch.js");
+    const dispatchSpy = vi
+      .spyOn(delegateDispatch, "dispatchToolDelegates")
+      .mockImplementationOnce(async (params) => ({
+        dispatched: 0,
+        rejected: 0,
+        chainState: params.chainState,
+      }));
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude",
+    });
+
+    try {
+      await runner(
+        createQueuedRun({
+          run: {
+            sessionKey,
+            sessionId: sessionEntry.sessionId,
+            sessionFile: sessionEntry.sessionFile,
+            provider: "anthropic",
+            model: "claude",
+            drainsContinuationDelegateQueue: true,
+            config: runtimeConfig,
+          },
+        }),
+      );
+
+      expect(dispatchSpy).toHaveBeenCalledTimes(1);
+      const dispatchCall = dispatchSpy.mock.calls[0]?.[0];
+      expect(dispatchCall?.maxChainLength).toBe(17);
+      expect(dispatchCall?.config).toMatchObject({
+        maxChainLength: 17,
+        costCapTokens: 1234,
+        maxDelegatesPerTurn: 3,
+        crossSessionTargeting: "enabled",
+      });
+    } finally {
+      dispatchSpy.mockRestore();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists followup continue_work chain state to the session store", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-continue-work-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionKey = "agent:main:subagent:continue-work-followup";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-followup-cw",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const runtimeConfig = {
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+            maxChainLength: 200,
+            defaultDelayMs: 15000,
+            minDelayMs: 5000,
+            maxDelayMs: 86400000,
+            costCapTokens: 50000000,
+            maxDelegatesPerTurn: 500,
+          },
+        },
+      },
+      session: { store: storePath },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeConfig);
+    await saveSessionStore(storePath, sessionStore);
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      if (!opts) {
+        throw new Error("continueWorkOpts missing");
+      }
+      opts.requestContinuation({ reason: "persist proof", delaySeconds: 30 });
+      return {
+        payloads: [{ text: "done" }],
+        meta: {
+          agentMeta: {
+            provider: "anthropic",
+            model: "claude",
+            usage: { input: 7, output: 5, cacheRead: 0, cacheWrite: 0 },
+          },
+        },
+      };
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude",
+    });
+
+    try {
+      await runner(
+        createQueuedRun({
+          run: {
+            sessionKey,
+            sessionId: sessionEntry.sessionId,
+            sessionFile: sessionEntry.sessionFile,
+            provider: "anthropic",
+            model: "claude",
+            drainsContinuationDelegateQueue: true,
+            config: runtimeConfig,
+          },
+        }),
+      );
+
+      const stored = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(stored).toMatchObject({
+        continuationChainCount: 1,
+        continuationChainTokens: 12,
+      });
+      expect(stored?.continuationChainStartedAt).toBeGreaterThan(0);
+    } finally {
+      const { resetContinuationWorkDispatchForTests } =
+        await import("../continuation/work-dispatch.js");
+      const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
+      resetContinuationWorkDispatchForTests();
+      resetTaskFlowRegistryForTests({ persist: false });
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the queued reply session key for followup continuation work", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-reply-key-cw-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const outerSessionKey = "agent:main:subagent:outer-followup";
+    const replySessionKey = "agent:main:subagent:queued-followup";
+    const outerEntry: SessionEntry = {
+      sessionId: "session-outer-followup",
+      sessionFile: path.join(tmpDir, "outer.jsonl"),
+      updatedAt: Date.now(),
+    };
+    const replyEntry: SessionEntry = {
+      sessionId: "session-queued-followup",
+      sessionFile: path.join(tmpDir, "queued.jsonl"),
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      [outerSessionKey]: outerEntry,
+      [replySessionKey]: replyEntry,
+    };
+    const runtimeConfig = makeFollowupContinuationConfig(storePath);
+    setRuntimeConfigSnapshot(runtimeConfig);
+    await saveSessionStore(storePath, sessionStore);
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      requestContinueWorkFromCall(callArgs, {
+        reason: "queued key continuation",
+        delaySeconds: 30,
+      });
+      return {
+        payloads: [{ text: "done" }],
+        meta: {
+          agentMeta: {
+            provider: "anthropic",
+            model: "claude",
+            usage: { input: 3, output: 4, cacheRead: 0, cacheWrite: 0 },
+          },
+        },
+      };
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: outerEntry,
+      sessionStore,
+      sessionKey: outerSessionKey,
+      storePath,
+      defaultModel: "anthropic/claude",
+    });
+
+    try {
+      await runner(
+        createQueuedRun({
+          run: {
+            sessionKey: replySessionKey,
+            sessionId: replyEntry.sessionId,
+            sessionFile: replyEntry.sessionFile,
+            provider: "anthropic",
+            model: "claude",
+            drainsContinuationDelegateQueue: true,
+            config: runtimeConfig,
+          },
+        }),
+      );
+
+      const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+      expect(listTaskFlowsForOwnerKey(outerSessionKey)).toHaveLength(0);
+      expect(listTaskFlowsForOwnerKey(replySessionKey)).toHaveLength(1);
+      const stored = loadSessionStore(storePath, { skipCache: true });
+      expect(stored[outerSessionKey]?.continuationChainCount).toBeUndefined();
+      expect(stored[replySessionKey]).toMatchObject({
+        continuationChainCount: 1,
+        continuationChainTokens: 7,
+      });
+    } finally {
+      const { resetContinuationWorkDispatchForTests } =
+        await import("../continuation/work-dispatch.js");
+      const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
+      resetContinuationWorkDispatchForTests();
+      resetTaskFlowRegistryForTests({ persist: false });
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("schedules only the winning fallback attempt's continue_work requests", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-fallback-cw-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionKey = "agent:main:subagent:continue-work-fallback-followup";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-followup-fallback-cw",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const runtimeConfig = makeFollowupContinuationConfig(storePath);
+    setRuntimeConfigSnapshot(runtimeConfig);
+    await saveSessionStore(storePath, sessionStore);
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        await params.run("anthropic", "discarded");
+        const result = await params.run("openai", "winner");
+        return {
+          outcome: "completed",
+          result,
+          provider: "openai",
+          model: "winner",
+          attempts: [],
+        };
+      },
+    );
+    runEmbeddedAgentMock
+      .mockImplementationOnce(async (callArgs: unknown) => {
+        requestContinueWorkFromCall(callArgs, {
+          reason: "discarded request",
+          delaySeconds: 30,
+        });
+        return { payloads: [{ text: "discarded" }], meta: {} };
+      })
+      .mockImplementationOnce(async (callArgs: unknown) => {
+        requestContinueWorkFromCall(callArgs, {
+          reason: "winning request",
+          delaySeconds: 60,
+        });
+        return {
+          payloads: [{ text: "winner" }],
+          meta: {
+            agentMeta: {
+              provider: "openai",
+              model: "winner",
+              usage: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0 },
+            },
+          },
+        };
+      });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude",
+    });
+
+    try {
+      await runner(
+        createQueuedRun({
+          run: {
+            sessionKey,
+            sessionId: sessionEntry.sessionId,
+            sessionFile: sessionEntry.sessionFile,
+            provider: "anthropic",
+            model: "claude",
+            drainsContinuationDelegateQueue: true,
+            config: runtimeConfig,
+          },
+        }),
+      );
+
+      const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+      const states = listTaskFlowsForOwnerKey(sessionKey).map(
+        (flow) => flow.stateJson as { delayMs?: number; reason?: string },
+      );
+      expect(states).toHaveLength(1);
+      expect(states[0]).toMatchObject({
+        reason: "winning request",
+        delayMs: 60_000,
+      });
+    } finally {
+      const { resetContinuationWorkDispatchForTests } =
+        await import("../continuation/work-dispatch.js");
+      const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
+      resetContinuationWorkDispatchForTests();
+      resetTaskFlowRegistryForTests({ persist: false });
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("suppresses followup continuations after replay-unsafe incomplete turns", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-unsafe-cw-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionKey = "agent:main:subagent:continue-work-unsafe-followup";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-followup-unsafe-cw",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const runtimeConfig = makeFollowupContinuationConfig(storePath);
+    setRuntimeConfigSnapshot(runtimeConfig);
+    await saveSessionStore(storePath, sessionStore);
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      requestContinueWorkFromCall(callArgs, {
+        reason: "unsafe request",
+        delaySeconds: 30,
+      });
+      return {
+        payloads: [{ text: "Agent could not complete the turn.", isError: true }],
+        meta: {
+          replayInvalid: true,
+          error: {
+            kind: "incomplete_turn",
+            message: "Agent could not complete the turn.",
+            fallbackSafe: false,
+          },
+          agentMeta: {
+            provider: "anthropic",
+            model: "claude",
+            usage: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0 },
+          },
+        },
+      };
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude",
+    });
+
+    try {
+      await runner(
+        createQueuedRun({
+          run: {
+            sessionKey,
+            sessionId: sessionEntry.sessionId,
+            sessionFile: sessionEntry.sessionFile,
+            provider: "anthropic",
+            model: "claude",
+            drainsContinuationDelegateQueue: true,
+            config: runtimeConfig,
+          },
+        }),
+      );
+
+      const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+      expect(listTaskFlowsForOwnerKey(sessionKey)).toHaveLength(0);
+      const stored = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(stored?.continuationChainCount).toBeUndefined();
+    } finally {
+      const { resetContinuationWorkDispatchForTests } =
+        await import("../continuation/work-dispatch.js");
+      const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
+      resetContinuationWorkDispatchForTests();
+      resetTaskFlowRegistryForTests({ persist: false });
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("honors followup bracket continue_work fallback and strips the emitted token", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-token-cw-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionKey = "agent:main:subagent:continue-work-token-followup";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-followup-token-cw",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const runtimeConfig = {
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+            maxChainLength: 200,
+            defaultDelayMs: 15000,
+            minDelayMs: 5000,
+            maxDelayMs: 86400000,
+            costCapTokens: 50000000,
+            maxDelegatesPerTurn: 500,
+          },
+        },
+      },
+      session: { store: storePath },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeConfig);
+    await saveSessionStore(storePath, sessionStore);
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done\nCONTINUE_WORK" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { input: 7, output: 5, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude",
+    });
+
+    try {
+      await runner(
+        createQueuedRun({
+          originatingChannel: "discord",
+          originatingTo: "channel:C1",
+          run: {
+            sessionKey,
+            sessionId: sessionEntry.sessionId,
+            sessionFile: sessionEntry.sessionFile,
+            provider: "anthropic",
+            model: "claude",
+            drainsContinuationDelegateQueue: true,
+            config: runtimeConfig,
+          },
+        }),
+      );
+
+      const deliveredPayload = requireMockCallArg(routeReplyMock, 0).payload as { text?: string };
+      expect(deliveredPayload.text).toBe("done");
+      const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+      const [flow] = listTaskFlowsForOwnerKey(sessionKey);
+      expect(flow?.stateJson).toMatchObject({
+        kind: "continuation_work",
+        delayMs: 15000,
+      });
+    } finally {
+      const { resetContinuationWorkDispatchForTests } =
+        await import("../continuation/work-dispatch.js");
+      const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
+      resetContinuationWorkDispatchForTests();
+      resetTaskFlowRegistryForTests({ persist: false });
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does NOT pass continueWorkOpts when continuation is disabled", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done" }],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude",
+      sessionKey: "agent:main:subagent:test-leaf",
+    });
+    const queued = createQueuedRun({
+      run: {
+        sessionKey: "agent:main:subagent:test-leaf",
+        config: {
+          agents: { defaults: {} },
+        } as OpenClawConfig,
+      },
+    });
+
+    await runner(queued);
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalled();
+    const callArgs = requireLastMockCallArg(runEmbeddedAgentMock, "runEmbeddedAgent");
+    expect(callArgs.continueWorkOpts).toBeUndefined();
   });
 });
