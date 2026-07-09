@@ -11,7 +11,7 @@ openclaw plugins install ./path/to/local/zalo-plugin --acknowledge-non-clawhub-i
 ## Install (npm)
 
 ```bash
-openclaw plugins install @openclaw/zalo
+openclaw plugins install npm:@openclaw/zalo --acknowledge-non-clawhub-install
 ```
 
 Onboarding: select Zalo and confirm the install prompt to fetch the plugin automatically.

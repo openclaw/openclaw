@@ -11,7 +11,7 @@ openclaw plugins install ./path/to/local/twitch-plugin --acknowledge-non-clawhub
 ## Install (npm)
 
 ```bash
-openclaw plugins install @openclaw/twitch
+openclaw plugins install npm:@openclaw/twitch --acknowledge-non-clawhub-install
 ```
 
 Onboarding: select Twitch and confirm the install prompt to fetch the plugin automatically.
