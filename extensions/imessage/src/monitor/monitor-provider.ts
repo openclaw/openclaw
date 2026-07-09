@@ -976,6 +976,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       const earlyDirectTypingStarted = sendIMessageTyping(earlyDirectTypingTarget, true, {
         cfg,
         accountId: accountInfo.accountId,
+        ...(message.guid ? { messageGuid: message.guid } : {}),
       }).then(
         () => true,
         (err: unknown) => {
@@ -1003,6 +1004,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             await sendIMessageTyping(earlyDirectTypingTarget, false, {
               cfg,
               accountId: accountInfo.accountId,
+              ...(message.guid ? { messageGuid: message.guid } : {}),
             });
           })
           .catch((err: unknown) => {
@@ -1118,6 +1120,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
                   cfg,
                   accountId: accountInfo.accountId,
                   client: getActiveClient(),
+                  ...(ctxPayload.messageIdFull ? { messageGuid: ctxPayload.messageIdFull } : {}),
                 });
               },
               stop: async () => {
@@ -1125,6 +1128,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
                   cfg,
                   accountId: accountInfo.accountId,
                   client: getActiveClient(),
+                  ...(ctxPayload.messageIdFull ? { messageGuid: ctxPayload.messageIdFull } : {}),
                 });
               },
               // Keep the native typing bubble alive through long tool chains.
