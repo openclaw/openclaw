@@ -1,6 +1,6 @@
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../../../src/plugin-sdk/plugin-test-api.js";
 
 const resolveTelegramMiniAppUrls = vi.hoisted(() => vi.fn());
 
