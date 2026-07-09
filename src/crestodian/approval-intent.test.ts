@@ -86,4 +86,15 @@ describe("classifyCrestodianApprovalIntent", () => {
       "other",
     );
   });
+
+  it("routes ambiguous-message classification through the utility model tier", async () => {
+    const deps = completionDeps("approve");
+    await classifyCrestodianApprovalIntent(
+      { message: "alright, ship that change", proposal: "set config gateway.port to 19001" },
+      deps,
+    );
+    expect(deps.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ useUtilityModel: true }),
+    );
+  });
 });

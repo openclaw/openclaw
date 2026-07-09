@@ -101,6 +101,7 @@ export async function classifyCrestodianApprovalIntent(
     )({
       cfg,
       agentId: resolveDefaultAgentId(cfg),
+      useUtilityModel: true,
       allowMissingApiKeyModes: ["aws-sdk"],
     });
     if ("error" in prepared) {
