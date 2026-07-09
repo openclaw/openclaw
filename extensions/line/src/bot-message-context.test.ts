@@ -134,10 +134,10 @@ describe("buildLineMessageContext", () => {
       agents: { defaults: { envelopeTimestamp: "off" } },
     };
     await buildLineMessageContext({
-      event: createMessageEvent(
-        { type: "user", userId: "user-1" },
-        { timestamp, message: { id: "baseline", type: "text", text: "BODY_MARKER" } },
-      ),
+      event: createMessageEvent({ type: "user", userId: "user-1" }, {
+        timestamp,
+        message: { id: "baseline", type: "text", text: "BODY_MARKER" },
+      } as Partial<MessageEvent>),
       allMedia: [],
       cfg: logCfg,
       account,
@@ -151,10 +151,10 @@ describe("buildLineMessageContext", () => {
     logVerboseMock.mockClear();
 
     await buildLineMessageContext({
-      event: createMessageEvent(
-        { type: "user", userId: "user-1" },
-        { timestamp, message: { id: "1", type: "text", text: rawBody } },
-      ),
+      event: createMessageEvent({ type: "user", userId: "user-1" }, {
+        timestamp,
+        message: { id: "1", type: "text", text: rawBody },
+      } as Partial<MessageEvent>),
       allMedia: [],
       cfg: logCfg,
       account,
