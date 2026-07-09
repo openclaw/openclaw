@@ -166,15 +166,6 @@ function createWebhookProofRuntime(params: {
   const recordInboundSession = vi.fn(async ({ ctx }: { ctx: ObservedInboundContext }) => {
     params.observedContexts.push(ctx);
   });
-  const dispatcher = {
-    sendToolResult: vi.fn(),
-    sendBlockReply: vi.fn(),
-    sendFinalReply: vi.fn(),
-    waitForIdle: vi.fn(),
-    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    markComplete: vi.fn(),
-  };
   return {
     config: { current: vi.fn(() => params.cfg) },
     channel: {
@@ -601,7 +592,7 @@ describe("Feishu webhook signed-request e2e", () => {
       abortSignal: abortController.signal,
       accountId,
     });
-    const url = `http://127.0.0.1:${feishuAccount.webhookPort}${feishuAccount.webhookPath}`;
+    const url = `http://127.0.0.1:${String(feishuAccount.webhookPort)}${String(feishuAccount.webhookPath)}`;
 
     try {
       await waitUntilServerReady(url);
