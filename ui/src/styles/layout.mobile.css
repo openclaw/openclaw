@@ -920,6 +920,12 @@
     max-width: 106px;
   }
 
+  /* The 106px key column has no room for the kind avatar; run state stays
+     visible through the status column, which this breakpoint keeps. */
+  .sessions-table .session-avatar {
+    display: none;
+  }
+
   .sessions-table .session-status-col {
     width: 76px;
     min-width: 76px;
