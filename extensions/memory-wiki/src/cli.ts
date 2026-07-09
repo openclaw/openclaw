@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   isRecord,
   normalizeStringEntries,
@@ -180,7 +181,7 @@ function isResolvedMemoryWikiConfig(
 function sanitizeGatewayStringForTerminal(value: string): string {
   const truncated =
     value.length > GATEWAY_TERMINAL_STRING_MAX_CHARS
-      ? value.slice(0, GATEWAY_TERMINAL_STRING_MAX_CHARS)
+      ? truncateUtf16Safe(value, GATEWAY_TERMINAL_STRING_MAX_CHARS)
       : value;
   const sanitized = truncated
     .replace(ANSI_ESCAPE_SEQUENCE_PATTERN, "")
