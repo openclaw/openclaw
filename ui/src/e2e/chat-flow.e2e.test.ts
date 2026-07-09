@@ -85,19 +85,28 @@ async function waitForChatScrollIdle(page: Page): Promise<void> {
   await expect
     .poll(
       () =>
-        page.evaluate(() => {
-          const app = document.querySelector("openclaw-app") as
-            | (Element & {
-                chatIsProgrammaticScroll?: boolean;
-                chatScrollFrame?: number | null;
-                chatScrollTimeout?: number | null;
-              })
-            | null;
-          return Boolean(
-            app &&
-            app.chatScrollFrame == null &&
-            app.chatScrollTimeout == null &&
-            !app.chatIsProgrammaticScroll,
+        page.locator(".chat-thread").evaluate(async (element) => {
+          const thread = element as HTMLElement;
+          const readGeometry = () => ({
+            clientHeight: thread.clientHeight,
+            scrollHeight: thread.scrollHeight,
+            scrollTop: Math.round(thread.scrollTop),
+          });
+          const before = readGeometry();
+          // The chat scroll owner may do one bounded 120/150ms late-size retry.
+          await new Promise<void>((resolve) => {
+            globalThis.setTimeout(resolve, 180);
+          });
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => resolve());
+            });
+          });
+          const after = readGeometry();
+          return (
+            before.clientHeight === after.clientHeight &&
+            before.scrollHeight === after.scrollHeight &&
+            before.scrollTop === after.scrollTop
           );
         }),
       { timeout: 10_000 },
@@ -221,6 +230,105 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
   afterEach(async () => {
     await closeOpenBrowserContexts();
+  });
+
+  it("uses one global toolbar row for split view", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          content: [{ type: "text", text: "Split toolbar proof." }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText("Split toolbar proof.").waitFor({ timeout: 10_000 });
+
+      const splitEntry = page.getByRole("button", { name: "Open split view" });
+      await expect.poll(() => splitEntry.isVisible()).toBe(true);
+      await page.setViewportSize({ height: 900, width: 1100 });
+      await expect.poll(() => splitEntry.isVisible()).toBe(true);
+      await page.setViewportSize({ height: 900, width: 1440 });
+      await expect
+        .poll(() =>
+          splitEntry.evaluate((node) => node.closest(".agent-chat__composer-shell") == null),
+        )
+        .toBe(true);
+      await splitEntry.click();
+
+      const topbar = page.locator(".topbar");
+      const toolbar = page.locator(".chat-split-toolbar");
+      const toolbarPanes = page.locator(".chat-split-toolbar__pane");
+      await expect.poll(() => page.locator(".chat-split-view__pane").count()).toBe(2);
+      await expect.poll(() => toolbarPanes.count()).toBe(2);
+      await expect
+        .poll(async () => {
+          const visible = await Promise.all(
+            (await toolbarPanes.all()).map((pane) => pane.isVisible()),
+          );
+          return visible.every(Boolean);
+        })
+        .toBe(true);
+      await expect.poll(() => page.locator(".dashboard-header").isVisible()).toBe(false);
+      await expect.poll(() => splitEntry.count()).toBe(0);
+
+      const [topbarBox, toolbarBox] = await Promise.all([
+        topbar.boundingBox(),
+        toolbar.boundingBox(),
+      ]);
+      expect(topbarBox).not.toBeNull();
+      expect(toolbarBox).not.toBeNull();
+      if (!topbarBox || !toolbarBox) {
+        throw new Error("expected the split toolbar and global topbar to have layout boxes");
+      }
+      expect(Math.abs(topbarBox.y - toolbarBox.y)).toBeLessThanOrEqual(1);
+      expect(Math.abs(topbarBox.height - toolbarBox.height)).toBeLessThanOrEqual(1);
+
+      await toolbarPanes.first().getByRole("combobox").focus();
+      await expect.poll(() => toolbarPanes.first().getAttribute("class")).toContain("--active");
+
+      await page.evaluate(() => {
+        document.documentElement.style.setProperty("--safe-area-top", "20px");
+        document.documentElement.style.setProperty("--safe-area-left", "24px");
+        document.documentElement.style.setProperty("--safe-area-right", "24px");
+        document.body.style.paddingTop = "20px";
+        document.body.style.paddingRight = "24px";
+        document.body.style.paddingLeft = "24px";
+      });
+      const insetToolbarBox = await toolbar.boundingBox();
+      expect(insetToolbarBox?.y).toBe(20);
+      expect(insetToolbarBox?.x).toBeGreaterThan(topbarBox.x);
+
+      await page.setViewportSize({ height: 900, width: 1100 });
+      const navToggle = page.getByRole("button", { name: "Expand sidebar" });
+      await expect.poll(() => navToggle.isVisible()).toBe(true);
+      const [navToggleBox, narrowToolbarBox] = await Promise.all([
+        navToggle.boundingBox(),
+        toolbar.boundingBox(),
+      ]);
+      expect(navToggleBox).not.toBeNull();
+      expect(narrowToolbarBox).not.toBeNull();
+      if (!navToggleBox || !narrowToolbarBox) {
+        throw new Error("expected the drawer toggle and split toolbar to have layout boxes");
+      }
+      expect(narrowToolbarBox.x).toBeGreaterThanOrEqual(navToggleBox.x + navToggleBox.width);
+
+      const firstPane = page.locator(".chat-split-view__pane").first();
+      await firstPane.click({ position: { x: 20, y: 80 } });
+      await expect.poll(() => firstPane.getAttribute("class")).toContain("--active");
+      await expect.poll(() => toolbarPanes.first().getAttribute("class")).toContain("--active");
+    } finally {
+      await closeBrowserContext(context);
+    }
   });
 
   it("sends a chat turn through the GUI and renders the final Gateway event", async () => {
@@ -1975,7 +2083,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
-  it("keeps sidebar session order stable while selecting sessions and supports sort modes", async () => {
+  it("keeps every sidebar session stable while selecting sessions and supports sort modes", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -1986,6 +2094,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       { length: 11 },
       (_, index) => `agent:main:session-${String.fromCharCode(97 + index)}`,
     );
+    const pinnedSessionKey = "agent:main:session-pinned";
+    const createdOrder = [pinnedSessionKey, ...createdSessionKeys];
+    const updatedOrder = [pinnedSessionKey, ...createdSessionKeys.toReversed()];
     const sessions = {
       count: createdSessionKeys.length + 1,
       defaults: {
@@ -1996,7 +2107,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       path: "",
       sessions: [
         {
-          key: "agent:main:session-pinned",
+          key: pinnedSessionKey,
           kind: "direct",
           label: "Pinned Session",
           pinned: true,
@@ -2024,9 +2135,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .waitFor({
           timeout: 10_000,
         });
-      await expect
-        .poll(() => sidebarSessionOrder(page))
-        .toEqual(["agent:main:session-pinned", ...createdSessionKeys.slice(0, 9)]);
+      await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
       await page
         .locator(
@@ -2036,9 +2145,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator(".sidebar-recent-session--active").getByText("Session B").waitFor({
         timeout: 10_000,
       });
-      await expect
-        .poll(() => sidebarSessionOrder(page))
-        .toEqual(["agent:main:session-pinned", ...createdSessionKeys.slice(0, 9)]);
+      await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
       const activeWeight = await page
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-b"]')
@@ -2052,19 +2159,11 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await page.getByRole("button", { name: "Sort sessions" }).click();
       await page.getByRole("menuitemradio", { name: "Last updated" }).click();
-      await expect
-        .poll(() => sidebarSessionOrder(page))
-        .toEqual([
-          "agent:main:session-pinned",
-          "agent:main:session-b",
-          ...createdSessionKeys.slice(2).toReversed(),
-        ]);
+      await expect.poll(() => sidebarSessionOrder(page)).toEqual(updatedOrder);
 
       await page.getByRole("button", { name: "Sort sessions" }).click();
       await page.getByRole("menuitemradio", { name: "Created" }).click();
-      await expect
-        .poll(() => sidebarSessionOrder(page))
-        .toEqual(["agent:main:session-pinned", ...createdSessionKeys.slice(0, 9)]);
+      await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
       await page.getByRole("button", { name: "Sort sessions" }).click();
       await page.getByRole("main").click();

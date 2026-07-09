@@ -76,9 +76,9 @@ gh api -X POST "repos/openclaw/openclaw/issues/<number>/assignees" -f 'assignees
 - If `name` is empty, use the login only. If profile lookup is rate-limited or unavailable, say `account age unknown` rather than omitting the opener.
 - Use identity and activity as triage signal, not proof by itself: new, low-activity, or bot-like accounts can raise review caution, but code, repro, and CI evidence still decide.
 
-## Suppress top-maintainer items in issue triage
+## Suppress recent wide-access maintainer PRs in triage
 
-When asked for issue triage, hot issues, pressing bugs, Discord-correlated issues, or "what is still open", do not surface issues or PRs authored by top maintainers by default. Prefer external/user-reported hot issues and external PRs, not maintainer-owned work queues.
+In generic issue/PR triage, hot queues, landable shortlists, or "what is still open", exclude PRs authored by maintainers with broad repository access until 14 days after `created_at`. Prefer external contributors' PRs. An ordinary request for landing candidates does not override the age gate. Continue suppressing maintainer-authored issues by default.
 
 Suppress by default when the opener/author is one of:
 
@@ -107,8 +107,9 @@ Also suppress lower-priority maintainer-owned noise from the broader keep/top-ma
 
 Exceptions:
 
-- Show maintainer-authored items when the requester explicitly asks for maintainer PRs/issues, PR landing candidates, release-blocking maintainer work, or a specific PR/issue number.
-- Show a maintainer-authored item when it is the canonical fix for an external hot issue, but frame it as the fix path rather than as a user-facing issue candidate.
+- Once a maintainer-authored PR is at least 14 days old, triage it normally.
+- A specific PR/issue number or an explicit request for maintainer-owned work overrides suppression.
+- When a recent maintainer PR is the canonical fix for an external hot issue, mention it only as the fix path; do not count it as a triage or landing candidate.
 - Do not close, label, or deprioritize solely because an item is maintainer-authored; this section only controls what appears in triage shortlists.
 
 ## Apply close and triage labels correctly

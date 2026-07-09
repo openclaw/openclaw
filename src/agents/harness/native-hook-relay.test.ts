@@ -1370,6 +1370,32 @@ describe("native hook relay registry", () => {
     expect(String(rawPayload.tool_response)).toContain("[truncated]");
   });
 
+  it("retains payload snapshots without splitting surrogate pairs", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["post_tool_use"],
+    });
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "post_tool_use",
+      rawPayload: {
+        tool_response: `${"a".repeat(3_999)}😀tail`,
+      },
+    });
+
+    const [recorded] = testing.getNativeHookRelayInvocationsForTests();
+    const rawPayload = readRecordField(
+      requireRecord(recorded, "native hook relay invocation"),
+      "rawPayload",
+      "invocation raw payload",
+    );
+    expect(rawPayload.tool_response).toBe(`${"a".repeat(3_999)}...[truncated]`);
+  });
+
   it("removes retained invocations when a relay is unregistered", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
@@ -3406,6 +3432,20 @@ describe("native hook relay registry", () => {
         ),
       }),
     ).toContain("(1 omitted)");
+  });
+
+  it("truncates PermissionRequest approval previews without splitting surrogate pairs", () => {
+    expect(
+      testing.formatPermissionApprovalDescriptionForTests({
+        provider: "codex",
+        sessionId: "session-1",
+        runId: "run-1",
+        toolName: "exec",
+        toolInput: {
+          command: `${"a".repeat(236)}😀tail`,
+        },
+      }),
+    ).toBe(`Tool: exec\nCommand: ${"a".repeat(236)}...`);
   });
 });
 

@@ -35,6 +35,12 @@ describe("readResponseTextSnippet", () => {
     expect(canceled).toBe(true);
   });
 
+  it("does not split surrogate pairs when truncating text snippets", async () => {
+    await expect(readResponseTextSnippet(new Response("abc🤖tail"), { maxChars: 4 })).resolves.toBe(
+      "abc... [truncated]",
+    );
+  });
+
   it("cancels snippet body reads when the caller signal aborts", async () => {
     let canceled = false;
     const response = stallingResponse(() => {

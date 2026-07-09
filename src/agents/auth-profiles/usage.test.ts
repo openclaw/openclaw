@@ -3,7 +3,7 @@
  * Covers unusable-window helpers, provider bypasses, WHAM probes, and store
  * persistence hooks without contacting real providers.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
@@ -39,6 +39,12 @@ beforeEach(() => {
   authProfileUsageTesting.setDepsForTest({
     updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,
   });
+});
+
+afterEach(() => {
+  authProfileUsageTesting.setDepsForTest(null);
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 function makeStore(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore {
@@ -1190,6 +1196,24 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     await markCodexFailureAt({ store, now });
 
     expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 43_200_000);
+  });
+
+  it("skips WHAM probe for locally expired OAuth access tokens", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({});
+    const profile = store.profiles["openai:default"];
+    if (profile?.type !== "oauth") {
+      throw new Error("expected OpenAI OAuth fixture");
+    }
+    profile.expires = now - 1;
+    mockWhamResponse(401);
+
+    await markCodexFailureAt({ store, now });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    const stats = store.usageStats?.["openai:default"];
+    expect(stats?.cooldownUntil).toBe(now + 30_000);
+    expect(stats?.cooldownReason).toBe("rate_limit");
   });
 
   it("maps HTTP 403 to a 24h cooldown", async () => {
