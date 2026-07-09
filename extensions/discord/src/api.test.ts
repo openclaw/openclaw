@@ -321,6 +321,24 @@ describe("fetchDiscord", () => {
     expect(request?.signal).toBe(timeoutController.signal);
   });
 
+  it("throws DiscordApiError on malformed JSON success response body", async () => {
+    const fetcher = withFetchPreconnect(
+      async () => new Response("NOT JSON {{{", { status: 200 }),
+    );
+
+    let error: unknown;
+    try {
+      await fetchDiscord("/users/@me/guilds", "test", fetcher, {
+        retry: { attempts: 1 },
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeInstanceOf(DiscordApiError);
+    expect(String(error)).toContain("Discord API /users/@me/guilds returned malformed JSON");
+  });
+
   it("returns under-cap requestDiscord responses from a real loopback HTTP server", async () => {
     const payload = { id: "channel-42", name: "loopback", type: 0 };
     let contentLength: string | null | undefined;

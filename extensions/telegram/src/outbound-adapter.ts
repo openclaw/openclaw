@@ -26,12 +26,13 @@ import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { splitTelegramHtmlChunks } from "./format.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
+import { resolveTelegramPromptContextTimestampMs } from "./outbound-message-context.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import { loadTelegramSendModule, type TelegramSendModule } from "./send-runtime.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 
 export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
-export const TELEGRAM_POLL_OPTION_LIMIT = 10;
+const TELEGRAM_POLL_OPTION_LIMIT = 10;
 
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
 type TelegramSendOpts = Parameters<TelegramSendFn>[2];
@@ -67,6 +68,9 @@ async function resolveTelegramSendContext(params: {
   formatting?: OutboundDeliveryFormattingOptions;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
+  onDeliveryResult?: Parameters<
+    NonNullable<ChannelOutboundAdapter["sendText"]>
+  >[0]["onDeliveryResult"];
   resolveSend: ResolveTelegramSendFn;
 }): Promise<{
   send: TelegramSendFn;
@@ -82,6 +86,7 @@ async function resolveTelegramSendContext(params: {
     accountId?: string;
     silent?: boolean;
     gatewayClientScopes?: readonly string[];
+    onDeliveryResult?: TelegramSendOpts["onDeliveryResult"];
   };
 }> {
   const send = await params.resolveSend(params.deps);
@@ -97,6 +102,11 @@ async function resolveTelegramSendContext(params: {
       accountId: params.accountId ?? undefined,
       silent: params.silent,
       gatewayClientScopes: params.gatewayClientScopes,
+      onDeliveryResult: params.onDeliveryResult
+        ? async (result) => {
+            await params.onDeliveryResult?.(attachChannelToResult("telegram", result));
+          }
+        : undefined,
       ...(params.formatting?.parseMode === "HTML" ? { textMode: "html" as const } : {}),
       tableMode: params.formatting?.tableMode,
     },
@@ -111,7 +121,7 @@ async function resolveTelegramOutboundSendContext(
   return { outboundTo, send, baseOpts };
 }
 
-export type CreateTelegramOutboundAdapterOptions = {
+type CreateTelegramOutboundAdapterOptions = {
   resolveSend?: ResolveTelegramSendFn;
   loadSendModule?: LoadTelegramSendModuleFn;
   beforeDeliverPayload?: ChannelOutboundAdapter["beforeDeliverPayload"];
@@ -156,6 +166,7 @@ export async function sendTelegramPayloadMessages(params: {
   const payloadOpts = {
     ...params.baseOpts,
     quoteText,
+    promptContextTimestampMs: resolveTelegramPromptContextTimestampMs(params.payload),
     ...(params.payload.audioAsVoice === true ? { asVoice: true } : {}),
   };
   const shouldConsumeImplicitReplyTarget =

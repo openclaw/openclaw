@@ -9,6 +9,7 @@ import {
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
@@ -16,6 +17,7 @@ let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 describe("runEmbeddedAgent prompt timeout fallback handoff", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
   });
 
   beforeEach(() => {

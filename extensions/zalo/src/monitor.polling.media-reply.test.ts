@@ -10,7 +10,7 @@ import {
   createRuntimeEnv,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { setZaloRuntime } from "./runtime.js";
 import {
@@ -116,6 +116,10 @@ describe("Zalo polling media replies", () => {
     matchedBy: "default",
   }));
   const dispatchReplyWithBufferedBlockDispatcherMock = vi.fn();
+
+  beforeAll(async () => {
+    await loadCachedLifecycleMonitorModule("zalo-polling-media-reply");
+  });
 
   beforeEach(async () => {
     await resetLifecycleTestState();

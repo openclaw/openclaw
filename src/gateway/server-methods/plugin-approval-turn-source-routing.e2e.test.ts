@@ -63,7 +63,7 @@ describe("plugin.approval.request turn-source routing (real gateway)", () => {
       bind: "loopback",
       auth: { mode: "token", token },
       controlUiEnabled: false,
-      deferStartupSidecars: true,
+      sidecarStartup: "defer",
     });
 
     // No operator approval client; only a requester with APPROVALS_SCOPE.

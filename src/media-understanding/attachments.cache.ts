@@ -12,7 +12,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { FsSafeError, openLocalFileSafely } from "../infra/fs-safe.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { isAbortError } from "../infra/unhandled-rejections.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import {
   readRemoteMediaBuffer,
   type MediaFetchRetryOptions,

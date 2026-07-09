@@ -1487,6 +1487,97 @@ describe("config plugin validation", () => {
     }
   });
 
+  it("accepts ask destructive policy without dropping adjacent Codex plugin config", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                codexDynamicToolsLoading: "direct",
+                codexPlugins: {
+                  enabled: true,
+                  allow_destructive_actions: "ask",
+                  plugins: {
+                    github: {
+                      enabled: false,
+                      marketplaceName: "openai-curated",
+                      pluginName: "github",
+                      allow_destructive_actions: "auto",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      {
+        env: {
+          ...suiteEnv(),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "global policy",
+      expectedPath: "plugins.entries.codex.config.codexPlugins.allow_destructive_actions",
+      codexPlugins: {
+        enabled: true,
+        allow_destructive_actions: "always",
+        plugins: {},
+      },
+    },
+    {
+      name: "per-plugin policy",
+      expectedPath:
+        "plugins.entries.codex.config.codexPlugins.plugins.github.allow_destructive_actions",
+      codexPlugins: {
+        enabled: true,
+        allow_destructive_actions: "ask",
+        plugins: {
+          github: {
+            marketplaceName: "openai-curated",
+            pluginName: "github",
+            allow_destructive_actions: "always",
+          },
+        },
+      },
+    },
+  ])("rejects old always destructive policy in the $name", ({ codexPlugins, expectedPath }) => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: { codexPlugins },
+            },
+          },
+        },
+      },
+      {
+        env: {
+          ...suiteEnv(),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expectPathMessageIncludes(res.issues, expectedPath, "invalid config");
+    }
+  });
+
   it("does not require native config schemas for enabled bundle plugins", () => {
     const res = validateInSuite({
       agents: { list: [{ id: "openclaw" }] },

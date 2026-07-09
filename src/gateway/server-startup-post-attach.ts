@@ -16,12 +16,14 @@ import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
+import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
@@ -50,42 +52,21 @@ type GatewayMemoryStartupPolicy =
   | { mode: "immediate" }
   | { mode: "idle"; delayMs: number };
 
-let mainSessionRestartRecoveryModulePromise: Promise<
-  typeof import("../agents/main-session-restart-recovery.js")
-> | null = null;
-let agentDefaultsModulePromise: Promise<typeof import("../agents/defaults.js")> | null = null;
-let agentModelSelectionModulePromise: Promise<
-  typeof import("../agents/model-selection.js")
-> | null = null;
-let internalHooksModulePromise: Promise<typeof import("../hooks/internal-hooks.js")> | null = null;
-let gatewayRestartSentinelModulePromise: Promise<
-  typeof import("./server-restart-sentinel.js")
-> | null = null;
+const loadMainSessionRestartRecoveryModule = createLazyRuntimeModule(
+  () => import("../agents/main-session-restart-recovery.js"),
+);
 
-const loadMainSessionRestartRecoveryModule = async () => {
-  mainSessionRestartRecoveryModulePromise ??= import("../agents/main-session-restart-recovery.js");
-  return await mainSessionRestartRecoveryModulePromise;
-};
+const loadAgentDefaultsModule = createLazyRuntimeModule(() => import("../agents/defaults.js"));
 
-const loadAgentDefaultsModule = async () => {
-  agentDefaultsModulePromise ??= import("../agents/defaults.js");
-  return await agentDefaultsModulePromise;
-};
+const loadAgentModelSelectionModule = createLazyRuntimeModule(
+  () => import("../agents/model-selection.js"),
+);
 
-const loadAgentModelSelectionModule = async () => {
-  agentModelSelectionModulePromise ??= import("../agents/model-selection.js");
-  return await agentModelSelectionModulePromise;
-};
+const loadInternalHooksModule = createLazyRuntimeModule(() => import("../hooks/internal-hooks.js"));
 
-const loadInternalHooksModule = async () => {
-  internalHooksModulePromise ??= import("../hooks/internal-hooks.js");
-  return await internalHooksModulePromise;
-};
-
-const loadGatewayRestartSentinelModule = async () => {
-  gatewayRestartSentinelModulePromise ??= import("./server-restart-sentinel.js");
-  return await gatewayRestartSentinelModulePromise;
-};
+const loadGatewayRestartSentinelModule = createLazyRuntimeModule(
+  () => import("./server-restart-sentinel.js"),
+);
 
 export type GatewayPostReadySidecarHandle = {
   stop: () => Awaitable<void>;
@@ -220,6 +201,7 @@ function scheduleProviderAuthStatePrewarm(params: {
     warn: (msg: string) => void;
   };
   delayMs?: number;
+  startupWarmEnabled: boolean;
 }): GatewayPostReadySidecarHandle {
   let stopped = false;
   let startupTimer: ReturnType<typeof setTimeout> | undefined;
@@ -290,6 +272,11 @@ function scheduleProviderAuthStatePrewarm(params: {
       clearCurrentProviderAuthState();
       scheduleAuthMapRewarm("auth-profile-failure");
     });
+    // Keep the broad provider sweep explicit; default startup only retains
+    // failure-triggered repair so discovery cannot starve gateway work.
+    if (!params.startupWarmEnabled) {
+      return;
+    }
     startupTimer = setTimeout(
       () => {
         void (async () => {
@@ -1125,8 +1112,7 @@ export async function startGatewayPostAttachRuntime(
     onSidecarsReady?: () => void;
     isClosing?: () => boolean;
     startupTrace?: GatewayStartupTrace;
-    deferSidecars?: boolean;
-    logReadyOnSidecars?: boolean;
+    sidecarStartup?: GatewaySidecarStartupMode;
     providerAuthPrewarm?: {
       enabled?: boolean;
       delayMs?: number;
@@ -1227,7 +1213,7 @@ export async function startGatewayPostAttachRuntime(
   };
   const waitForSidecarStartTurn = () =>
     new Promise<void>((resolve) => {
-      if (params.deferSidecars === true) {
+      if (params.sidecarStartup === "defer") {
         // Give startup logging and bind observers a deterministic head start
         // when tests or callers request deferred sidecar startup.
         const timer = setTimeout(resolve, DEFERRED_SIDECAR_START_DELAY_MS);
@@ -1302,12 +1288,13 @@ export async function startGatewayPostAttachRuntime(
             }),
           );
         }
-        if (params.providerAuthPrewarm?.enabled !== false) {
+        if (params.providerAuthPrewarm && params.providerAuthPrewarm.enabled !== false) {
           gatewayLifetimeSidecars.push(
             scheduleProviderAuthStatePrewarm({
-              getConfig: params.providerAuthPrewarm?.getConfig ?? (() => params.cfgAtStart),
+              getConfig: params.providerAuthPrewarm.getConfig ?? (() => params.cfgAtStart),
               log: params.log,
-              delayMs: params.providerAuthPrewarm?.delayMs,
+              delayMs: params.providerAuthPrewarm.delayMs,
+              startupWarmEnabled: params.providerAuthPrewarm.enabled === true,
             }),
           );
         }
@@ -1331,7 +1318,7 @@ export async function startGatewayPostAttachRuntime(
           ["postReadySidecarCount", postReadySidecars.length + gatewayLifetimeSidecars.length],
         ]);
         params.startupTrace?.mark("sidecars.ready");
-        if (params.logReadyOnSidecars !== false) {
+        if (params.sidecarStartup !== "defer") {
           params.log.info("gateway ready");
         }
         return { ...result, postReadySidecars, gatewayLifetimeSidecars, pluginRegistry };
@@ -1377,7 +1364,7 @@ export async function startGatewayPostAttachRuntime(
       params.log.warn(`gateway sidecars failed to start: ${String(err)}`);
     });
 
-  if (params.deferSidecars !== true) {
+  if (params.sidecarStartup !== "defer") {
     const [, tailscaleCleanup, sidecarsResult] = await Promise.all([
       startupLogPromise,
       tailscaleCleanupPromise,

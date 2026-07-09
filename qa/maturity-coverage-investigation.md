@@ -106,7 +106,6 @@ Add small native scenario YAML wrappers for these rather than duplicating the te
 | `automation.heartbeat-scheduling` | automation-cron-hooks-tasks-polling | Heartbeat | `src/infra/heartbeat-runner.active-hours-schedule.e2e.test.ts` |
 | `ui.assistant-media-tickets` | browser-control-ui-and-webchat | WebChat Conversations | `src/gateway/control-ui-assistant-media.e2e.test.ts` |
 | `ui.browser-talk-start-stop` | browser-control-ui-and-webchat | Browser Realtime Talk | `ui/src/ui/realtime-talk-google-live.test.ts` |
-| `channels.native-command-session-target` | channel-framework | Channel Actions Commands and Approvals | `src/auto-reply/reply.triggers.trigger-handling.targets-active-session-native-stop.e2e.test.ts` |
 | `clawhub.marketplace-list` | clawhub-and-external-plugin-distribution | Plugin Lifecycle and Health | `scripts/e2e/lib/plugins/marketplace.sh`<br>`scripts/e2e/lib/release-plugin-marketplace/scenario.sh` |
 | `clawhub.npm-pack-local-release-candidate-installs` | clawhub-and-external-plugin-distribution | Plugin Lifecycle and Health | `scripts/release-candidate-checklist.mjs`<br>`test/scripts/release-candidate-checklist.test.ts` |
 | `clawhub.skill-installs` | clawhub-and-external-plugin-distribution | Plugin Lifecycle and Health | `src/cli/skills-cli.clawhub-install.e2e.test.ts` |

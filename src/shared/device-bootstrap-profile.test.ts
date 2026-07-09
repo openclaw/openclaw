@@ -36,6 +36,7 @@ describe("device bootstrap profile", () => {
           "node.exec",
           "operator.admin",
           "operator.approvals",
+          "operator.pairing",
           "operator.read",
           "operator.talk.secrets",
           "operator.write",

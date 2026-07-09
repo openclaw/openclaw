@@ -190,7 +190,9 @@ const createExecApprovalDecisionStateMock = vi.hoisted(() =>
   ),
 );
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
-const sendExecApprovalFollowupResultMock = vi.hoisted(() => vi.fn(async () => undefined));
+const sendExecApprovalFollowupResultMock = vi.hoisted(() =>
+  vi.fn(async (_target: unknown, _resultText: string) => undefined),
+);
 const enforceStrictInlineEvalApprovalBoundaryMock = vi.hoisted(() =>
   vi.fn<StrictInlineEvalBoundary>((value) => ({
     approvedByAsk: value.approvedByAsk,
@@ -628,6 +630,69 @@ describe("executeNodeHostCommand", () => {
     expect(runParams.turnSourceTo).toBe("telegram:12345");
     expect(runParams.turnSourceAccountId).toBe("work");
     expect(runParams.turnSourceThreadId).toBe("42");
+  });
+
+  it("keeps async node approval follow-up output on a UTF-16 boundary", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+    const prefix = "a".repeat(50);
+    const tailHead = "b".repeat(999);
+    const stdout = `${prefix}🎉${tailHead}`;
+    callGatewayToolMock.mockImplementation(
+      async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
+        if (method === "exec.approvals.node.get") {
+          return { file: { version: 1, agents: {} } };
+        }
+        if (method !== "node.invoke") {
+          throw new Error(`unexpected gateway method: ${method}`);
+        }
+        if (params?.command === "system.run.prepare") {
+          return { payload: { plan: preparedPlan } };
+        }
+        if (params?.command === "system.run") {
+          return {
+            payload: {
+              success: true,
+              stdout,
+              stderr: "",
+              exitCode: 0,
+              timedOut: false,
+            },
+          };
+        }
+        throw new Error(`unexpected node invoke command: ${String(params?.command)}`);
+      },
+    );
+
+    const result = await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(result.details?.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalled();
+    });
+    const message = sendExecApprovalFollowupResultMock.mock.calls[0]?.[1];
+    if (typeof message !== "string") {
+      throw new Error("expected follow-up message");
+    }
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+    expect(message).not.toMatch(loneSurrogate);
+    expect(message).not.toContain("�");
+    expect(message).toContain(`Exec finished (node=node-1 id=approval-1, code 0)\n${tailHead}`);
   });
 
   it("does not build a human approval prompt for node auto-review allows", async () => {

@@ -28,6 +28,7 @@ function mockFeaturedCatalogResponse(payload: unknown, status = 200) {
   const release = vi.fn();
   ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
     response: Response.json(payload, { status }),
+    finalUrl: NVIDIA_FEATURED_MODELS_URL,
     release,
   });
   return release;
@@ -61,6 +62,10 @@ describe("nvidia provider catalog", () => {
           force_nonempty_content: true,
         },
       },
+    });
+    expect(provider.models[1]).toMatchObject({
+      id: "nvidia/nemotron-3-super-120b-a12b",
+      contextWindow: 1_048_576,
     });
   });
 

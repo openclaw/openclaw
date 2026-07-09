@@ -5,8 +5,8 @@
  * request ids, and binary payload guardrails into stable OpenClaw error shapes.
  */
 export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
-import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
+import { readResponseWithLimit } from "../infra/http-body.js";
 import { redactSensitiveText } from "../logging/redact.js";
 export { asBoolean } from "../utils/boolean.js";
 export { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";

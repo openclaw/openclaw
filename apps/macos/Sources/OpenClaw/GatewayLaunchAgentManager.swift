@@ -19,6 +19,10 @@ enum GatewayLaunchAgentManager {
             .appendingPathComponent("Library/LaunchAgents/\(gatewayLaunchdLabel).plist")
     }
 
+    private static var generatedEnvironmentDirectoryURL: URL {
+        OpenClawPaths.stateDirURL.appendingPathComponent("service-env", isDirectory: true)
+    }
+
     static func isLaunchAgentWriteDisabled() -> Bool {
         if FileManager().fileExists(atPath: self.disableLaunchAgentMarkerURL.path) { return true }
         return false
@@ -91,7 +95,12 @@ enum GatewayLaunchAgentManager {
     }
 
     static func launchdConfigSnapshot() -> LaunchAgentPlistSnapshot? {
-        LaunchAgentPlist.snapshot(url: self.plistURL)
+        let directory = self.generatedEnvironmentDirectoryURL
+        return LaunchAgentPlist.snapshot(
+            url: self.plistURL,
+            generatedEnvironmentFileURL: directory.appendingPathComponent("\(gatewayLaunchdLabel).env"),
+            generatedEnvironmentWrapperURL: directory.appendingPathComponent(
+                "\(gatewayLaunchdLabel)-env-wrapper.sh"))
     }
 
     static func launchdGatewayLogPath() -> String {

@@ -9,6 +9,7 @@ import { listSystemPresence } from "../../infra/system-presence.js";
 import { getUpdateAvailable } from "../../infra/update-startup.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveGatewayAuth } from "../auth.js";
+import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
@@ -79,6 +80,7 @@ export async function refreshGatewayHealthSnapshot(opts?: {
   includeSensitive?: boolean;
   getRuntimeSnapshot?: () => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
+  getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
 }) {
   const includeSensitive = opts?.includeSensitive === true;
   let refresh = includeSensitive ? sensitiveHealthRefresh : healthRefresh;
@@ -91,11 +93,13 @@ export async function refreshGatewayHealthSnapshot(opts?: {
         runtimeSnapshot = undefined;
       }
       const eventLoop = opts?.getEventLoopHealth?.();
+      const configReloadHotReloadStatus = opts?.getConfigReloaderHotReloadStatus?.();
       const snap = await getHealthSnapshot({
         probe: opts?.probe,
         includeSensitive,
         runtimeSnapshot,
         ...(eventLoop ? { eventLoop } : {}),
+        ...(configReloadHotReloadStatus ? { configReloadHotReloadStatus } : {}),
       });
       if (!includeSensitive) {
         healthCache = snap;

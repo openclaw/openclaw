@@ -39,7 +39,14 @@ describe("configureGatewayForSetup", () => {
 
     return buildWizardPrompter({
       select,
-      text: vi.fn(async () => textQueue.shift() as string),
+      text: vi.fn(async (paramsLocal) => {
+        const value = textQueue.shift() as string;
+        const error = typeof value === "string" ? paramsLocal.validate?.(value) : undefined;
+        if (error) {
+          throw new Error(error);
+        }
+        return value;
+      }),
     });
   }
 
@@ -98,6 +105,14 @@ describe("configureGatewayForSetup", () => {
     expect(result.nextConfig.gateway?.nodes?.denyCommands).toEqual(DEFAULT_DANGEROUS_NODE_COMMANDS);
     expect(result.nextConfig.gateway?.nodes?.denyCommands).not.toContain("screen.snapshot");
     expect(result.nextConfig.gateway?.nodes?.denyCommands).toContain("screen.record");
+  });
+
+  it.each(["1e3", "0x1000"])("rejects loose gateway port input: %s", async (port) => {
+    mocks.randomToken.mockReturnValue("generated-token");
+
+    await expect(runGatewayConfig({ textQueue: [port] })).rejects.toThrow(
+      "Use a port number from 1 to 65535",
+    );
   });
 
   it("prefers OPENCLAW_GATEWAY_TOKEN during quickstart token setup", async () => {

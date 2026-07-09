@@ -81,22 +81,21 @@ flow:
         - set: beforeCursor
           value:
             expr: state.getSnapshot().messages.length
-        - call: state.addInboundMessage
-          args:
-            - conversation:
-                id:
-                  expr: config.channelId
-                kind: channel
-                title:
-                  expr: config.channelTitle
-              senderId: alice
-              senderName: Alice
-              text:
-                expr: config.prompt
-              threadId:
-                ref: threadId
-              threadTitle:
-                expr: config.threadTitle
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.channelId
+              kind: channel
+              title:
+                expr: config.channelTitle
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: config.prompt
+            threadId:
+              ref: threadId
+            threadTitle:
+              expr: config.threadTitle
         - call: waitForOutboundMessage
           saveAs: outbound
           args:

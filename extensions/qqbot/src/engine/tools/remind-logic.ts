@@ -1,6 +1,7 @@
 // Qqbot plugin module implements remind logic behavior.
 import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 
 /**
  * QQBot reminder tool core logic.
@@ -257,13 +258,6 @@ export function formatDelay(ms: number): string {
     return `${hours}h`;
   }
   return `${hours}h${minutes}m`;
-}
-
-function json(data: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-    details: data,
-  };
 }
 
 function formatSchedulerError(error: unknown): string {

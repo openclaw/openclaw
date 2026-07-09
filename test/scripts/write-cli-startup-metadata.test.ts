@@ -8,6 +8,9 @@ import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.m
 import { __testing, writeCliStartupMetadata } from "../../scripts/write-cli-startup-metadata.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
+// These subprocess tests use explicit ready/close signals; timeout only catches broken fixtures.
+const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
+
 function writeFixtureFile(rootDir: string, relativePath: string, contents: string): void {
   const filePath = path.join(rootDir, relativePath);
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -67,7 +70,10 @@ function expectedTaskkillPath(): string {
   return resolveWindowsTaskkillPath();
 }
 
-async function waitForProcessExit(pid: number, timeoutMs = 1_000): Promise<void> {
+async function waitForProcessExit(
+  pid: number,
+  timeoutMs = LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (!processIsAlive(pid)) {
@@ -82,7 +88,7 @@ async function waitForProcessExit(pid: number, timeoutMs = 1_000): Promise<void>
 
 async function waitForChildClose(
   child: ReturnType<typeof spawn>,
-  timeoutMs = 2_000,
+  timeoutMs = LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
   return await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -292,7 +298,7 @@ describe("write-cli-startup-metadata", () => {
       let grandchildPid = 0;
 
       try {
-        const deadline = Date.now() + 1_000;
+        const deadline = Date.now() + LOAD_SENSITIVE_PROCESS_TIMEOUT_MS;
         while (Date.now() < deadline) {
           try {
             grandchildPid = Number(readFileSync(grandchildPidPath, "utf8"));
@@ -318,7 +324,7 @@ describe("write-cli-startup-metadata", () => {
           code: null,
           signal: "SIGTERM",
         });
-        await waitForProcessExit(grandchildPid, 2_000);
+        await waitForProcessExit(grandchildPid);
       } finally {
         if (runner.pid && processIsAlive(runner.pid)) {
           runner.kill("SIGKILL");

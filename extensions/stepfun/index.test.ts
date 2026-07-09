@@ -7,6 +7,12 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import stepfunPlugin from "./index.js";
+import {
+  STEPFUN_DEFAULT_MODEL_REF,
+  STEPFUN_PLAN_DEFAULT_MODEL_REF,
+  buildStepFunPlanProvider,
+  buildStepFunProvider,
+} from "./provider-catalog.js";
 
 type StepFunManifest = {
   setup?: {
@@ -28,6 +34,30 @@ function readManifest(): StepFunManifest {
 }
 
 describe("stepfun provider registration", () => {
+  it("adds Step 3.7 Flash without changing existing defaults", () => {
+    const standard = buildStepFunProvider();
+    const plan = buildStepFunPlanProvider();
+    const standardModel = standard.models?.find((model) => model.id === "step-3.7-flash");
+    const planModel = plan.models?.find((model) => model.id === "step-3.7-flash");
+
+    expect(STEPFUN_DEFAULT_MODEL_REF).toBe("stepfun/step-3.5-flash");
+    expect(STEPFUN_PLAN_DEFAULT_MODEL_REF).toBe("stepfun-plan/step-3.5-flash");
+    expect(standardModel).toMatchObject({
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 262144,
+      maxTokens: 262144,
+      cost: { input: 0.2, output: 1.15, cacheRead: 0.04, cacheWrite: 0 },
+    });
+    expect(planModel).toMatchObject({
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 262144,
+      maxTokens: 262144,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
+  });
+
   it("keeps manifest auth choices aligned with runtime provider methods", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: stepfunPlugin,

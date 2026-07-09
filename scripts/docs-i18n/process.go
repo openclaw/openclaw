@@ -114,9 +114,7 @@ func splitFrontMatter(content string) (string, string) {
 	}
 	front := strings.Join(lines[1:endIndex], "\n")
 	body := strings.Join(lines[endIndex+1:], "\n")
-	if strings.HasPrefix(body, "\n") {
-		body = body[1:]
-	}
+	body = strings.TrimPrefix(body, "\n")
 	return front, body
 }
 
