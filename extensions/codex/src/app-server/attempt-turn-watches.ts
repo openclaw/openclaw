@@ -166,7 +166,12 @@ export function createCodexAttemptTurnWatchController(params: {
 
   function scheduleTerminalIdleWatch() {
     clearTerminalIdleTimer();
-    if (params.isCompleted() || params.signal.aborted || !terminalIdleWatchArmed) {
+    if (
+      params.isCompleted() ||
+      params.signal.aborted ||
+      !terminalIdleWatchArmed ||
+      params.getActiveAppServerTurnRequests() > 0
+    ) {
       return;
     }
     const elapsedMs = Math.max(0, Date.now() - completionLastActivityAt);
@@ -366,14 +371,18 @@ export function createCodexAttemptTurnWatchController(params: {
   }
 
   function fireTerminalIdleTimeout() {
-    // This is the physical-client liveness backstop. An in-flight request can
-    // be silent forever if the client is wedged, so only real notifications
-    // reset the terminal clock.
+    // Physical-client liveness backstop. A terminal timeout retires the shared
+    // client, so it must only measure silence the client owns: while a
+    // server->client request is pending (approval/elicitation/tool call) the
+    // app-server legitimately says nothing until we respond. The response path
+    // touches activity when the request settles, so a wedged client is still
+    // caught within one terminal window after our response.
     if (
       params.isCompleted() ||
       params.isTerminalTurnNotificationQueued() ||
       params.signal.aborted ||
-      !terminalIdleWatchArmed
+      !terminalIdleWatchArmed ||
+      params.getActiveAppServerTurnRequests() > 0
     ) {
       return;
     }

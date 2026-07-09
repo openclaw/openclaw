@@ -171,35 +171,29 @@ describe("Codex app-server attempt turn watches", () => {
     expect(harness.abortController.signal.aborted).toBe(false);
   });
 
-  it("fires terminal idle timeout while an app-server request is in flight", () => {
+  it("keeps terminal idle gated while an app-server request is in flight", () => {
     const harness = createController();
     harness.activeRequests = 1;
 
     harness.controller.armTerminalIdleWatch();
     vi.advanceTimersByTime(10);
 
-    expect(harness.timeouts).toMatchObject([
-      {
-        kind: "terminal",
-        idleMs: 10,
-        timeoutMs: 10,
-        lastActivityReason: "startup",
-      },
-    ]);
-    expect(harness.abortController.signal.reason).toBe("turn_terminal_idle_timeout");
+    expect(harness.timeouts).toEqual([]);
+    expect(harness.abortController.signal.aborted).toBe(false);
   });
 
-  it("keeps terminal idle alive when notifications arrive during an in-flight request", () => {
+  it("fires terminal idle after the in-flight request settles and silence resumes", () => {
     const harness = createController();
     harness.activeRequests = 1;
 
     harness.controller.armTerminalIdleWatch();
-    vi.advanceTimersByTime(9);
-    harness.controller.noteNotificationReceived("item/commandExecution/outputDelta");
-    vi.advanceTimersByTime(9);
-
+    vi.advanceTimersByTime(10);
     expect(harness.timeouts).toEqual([]);
-    expect(harness.abortController.signal.aborted).toBe(false);
+
+    harness.activeRequests = 0;
+    harness.controller.touchActivity("request:item/tool/call:response");
+    vi.advanceTimersByTime(9);
+    expect(harness.timeouts).toEqual([]);
 
     vi.advanceTimersByTime(1);
     expect(harness.timeouts).toMatchObject([
@@ -207,9 +201,10 @@ describe("Codex app-server attempt turn watches", () => {
         kind: "terminal",
         idleMs: 10,
         timeoutMs: 10,
-        lastActivityReason: "notification:item/commandExecution/outputDelta",
+        lastActivityReason: "request:item/tool/call:response",
       },
     ]);
+    expect(harness.abortController.signal.reason).toBe("turn_terminal_idle_timeout");
   });
 
   it("keeps completion idle gated while a request is in flight", () => {
