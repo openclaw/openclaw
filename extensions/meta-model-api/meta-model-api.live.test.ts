@@ -1,5 +1,5 @@
 // Meta Model API live tests prove muse-spark auth and Responses API completion.
-import { completeSimple, streamSimple, type Model } from "openclaw/plugin-sdk/llm";
+import { streamSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { buildMetaModelApiProvider } from "./provider-catalog.js";
@@ -53,7 +53,7 @@ describeLive("meta-model-api plugin live", () => {
   it("completes a muse-spark Responses API turn with high reasoning effort", async () => {
     const model = resolveLiveModel();
     let capturedPayload: Record<string, unknown> | undefined;
-    const result = await completeSimple(
+    const stream = await resolveLiveStreamFn()(
       model,
       {
         messages: [
@@ -67,13 +67,13 @@ describeLive("meta-model-api plugin live", () => {
       {
         apiKey: MODEL_API_KEY,
         maxTokens: 4000, // fix: high reasoning needs ~300 tokens
-        streamFn: resolveLiveStreamFn(),
         reasoning: "high",
         onPayload: (payload) => {
           capturedPayload = payload as Record<string, unknown>;
         },
       },
     );
+    const result = await stream.result();
 
     if (result.stopReason === "error") {
       throw new Error(result.errorMessage || "Meta Model API returned an error");
