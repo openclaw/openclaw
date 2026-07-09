@@ -43,11 +43,11 @@ import {
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   asOptionalRecord as readRecord,
   isRecord,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import type {
@@ -1367,9 +1367,11 @@ function convertToolContents(
     const sliceLength = Math.min(item.text.length, remainingTextBudget);
     remainingTextBudget -= sliceLength;
     const shouldAppendNotice = remainingTextBudget <= 0;
-    const text = item.text.slice(0, sliceLength);
+    const text = truncateUtf16Safe(item.text, sliceLength);
     if (shouldAppendNotice) {
-      output.push({ type: "inputText", text: truncateUtf16Safe(`${text.trimEnd()}${notice}`, maxChars) });
+      // The notice budget is reserved before slicing text, so the combined
+      // result is already bounded without another boundary-sensitive cut.
+      output.push({ type: "inputText", text: `${text.trimEnd()}${notice}` });
       appendedNotice = true;
     } else if (text.length > 0) {
       output.push({ type: "inputText", text });
