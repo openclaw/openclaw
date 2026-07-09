@@ -90,9 +90,10 @@ describe("dreaming ingestion surrogate-proof boundary", () => {
     const pad = "x".repeat(279);
     const emoji = "🌍";
 
-    // normalizeSessionCorpusSnippet collapses whitespace then truncates.
-    // Session message text with emoji at boundary.
-    const sessionPad = "y".repeat(279);
+    // normalizeSessionCorpusSnippet collapses whitespace then truncateUtf16Safe to 280.
+    // Message text needs to be 281 chars with emoji at [279-280].
+    // "User: I found a bug in the " (27) + pad (252) + 🌍 (2) = 281
+    const sessionPad = "y".repeat(252);
 
     // Daily note: line where normalized text hits the 280-char emoji boundary
     const dailyContent = [
