@@ -1,0 +1,4 @@
+interface:
+  display_name: "J-Lens Observability"
+  short_description: "Audit model reasoning traces safely"
+  default_prompt: "Use $j-lens-observability to audit a prompt/response trace and separate observable rationale from true activation-level J-Lens analysis."
