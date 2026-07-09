@@ -110,12 +110,16 @@ async function fetchNodeApprovalsFileDenylist(params: {
       { timeoutMs: 10_000 },
       { nodeId: params.nodeId },
     );
-    const approvalsFile =
-      approvalsSnapshot && typeof approvalsSnapshot === "object"
-        ? approvalsSnapshot.file
-        : undefined;
-    if (!approvalsFile || typeof approvalsFile !== "object") {
+    if (!approvalsSnapshot || typeof approvalsSnapshot !== "object") {
       return null;
+    }
+    const approvalsFile = approvalsSnapshot.file;
+    if (!approvalsFile || typeof approvalsFile !== "object") {
+      // A well-formed snapshot without a file (ExecApprovalsNodeSnapshotSchema
+      // keeps `file` optional) means the node has no approvals file, so the
+      // file-layer denylist is known empty. Only transport failures stay
+      // unknown and fail closed into the prepare path.
+      return [];
     }
     const resolved = resolveExecApprovalsFromFile({
       file: approvalsFile as ExecApprovalsFile,
