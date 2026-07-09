@@ -69,4 +69,23 @@ struct VoiceWakeManagerSuppressionTests {
         #expect(manager.statusText == "Voice Wake isn’t supported on Simulator")
         #expect(manager.isListening == false)
     }
+
+    @Test
+    @MainActor func `clearing Talk suppression does not clobber voice note suppression`() async {
+        let manager = VoiceWakeManager._test_withoutRestartDelays()
+        manager.isEnabled = true
+        manager.statusText = "Listening"
+
+        manager.setSuppressedByVoiceNote(true)
+        manager.setSuppressedByTalk(true)
+        manager.setSuppressedByTalk(false)
+
+        await manager._test_waitForScheduledStart()
+        #expect(manager.statusText == "Paused")
+        #expect(manager.isListening == false)
+
+        manager.setSuppressedByVoiceNote(false)
+        await manager._test_waitForScheduledStart()
+        #expect(manager.statusText == "Voice Wake isn’t supported on Simulator")
+    }
 }

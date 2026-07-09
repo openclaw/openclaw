@@ -101,6 +101,10 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "tasks.list", scope: "operator.read" },
   { name: "tasks.get", scope: "operator.read" },
   { name: "tasks.cancel", scope: "operator.write" },
+  { name: "taskSuggestions.list", scope: "operator.read" },
+  { name: "taskSuggestions.create", scope: "operator.write" },
+  { name: "taskSuggestions.accept", scope: "operator.admin" },
+  { name: "taskSuggestions.dismiss", scope: "operator.write" },
   { name: "environments.list", scope: "operator.read" },
   { name: "environments.status", scope: "operator.read" },
   { name: "worktrees.list", scope: "operator.read" },
@@ -131,6 +135,10 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "skills.upload.commit", scope: "operator.admin" },
   { name: "skills.install", scope: "operator.admin" },
   { name: "skills.update", scope: "operator.admin" },
+  { name: "skills.curator.status", scope: "operator.read" },
+  { name: "skills.curator.pin", scope: "operator.admin" },
+  { name: "skills.curator.unpin", scope: "operator.admin" },
+  { name: "skills.curator.restore", scope: "operator.admin" },
   { name: "skills.proposals.list", scope: "operator.read" },
   { name: "skills.proposals.inspect", scope: "operator.read" },
   { name: "skills.proposals.create", scope: "operator.admin" },
@@ -159,14 +167,21 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "sessions.compaction.get", scope: "operator.read" },
   { name: "sessions.compaction.branch", scope: "operator.write" },
   { name: "sessions.compaction.restore", scope: "operator.admin" },
-  { name: "sessions.create", scope: "operator.write", startup: true },
+  // Params-aware: explicit cwd can point at any host checkout and requires admin.
+  { name: "sessions.create", scope: "dynamic", startup: true },
   { name: "sessions.send", scope: "operator.write", startup: true },
   { name: "sessions.abort", scope: "operator.write", startup: true },
-  { name: "sessions.patch", scope: "operator.admin" },
+  // Params-aware: write scope may mutate chat-organization fields
+  // (label/category/pinned/archived/unread); every other patch field stays
+  // admin-only. Policy lives in method-scopes.ts.
+  { name: "sessions.patch", scope: "dynamic" },
   { name: "sessions.pluginPatch", scope: "operator.admin" },
   { name: "sessions.cleanup", scope: "operator.admin" },
   { name: "sessions.reset", scope: "operator.admin" },
-  { name: "sessions.delete", scope: "operator.admin" },
+  // State-aware: write scope may delete already-archived sessions
+  // (archive-then-delete); the handler enforces the archived requirement and
+  // admin keeps unrestricted delete. Policy in method-scopes.ts + handler.
+  { name: "sessions.delete", scope: "dynamic" },
   { name: "sessions.compact", scope: "operator.admin" },
   { name: "last-heartbeat", scope: "operator.read" },
   { name: "set-heartbeats", scope: "operator.admin" },
@@ -258,6 +273,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // reads. Strong user/tenant isolation requires separate Gateways; see operator-scopes.md.
   { name: "agents.workspace.list", scope: "operator.read" },
   { name: "agents.workspace.get", scope: "operator.read" },
+  { name: "tts.speak", scope: "operator.write" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(
@@ -282,7 +298,7 @@ export function listCoreGatewayMethodNames(): string[] {
 }
 
 /** Looks up the raw core method scope, including node and dynamic sentinel scopes. */
-export function resolveCoreGatewayMethodScope(method: string): GatewayMethodScope | undefined {
+function resolveCoreGatewayMethodScope(method: string): GatewayMethodScope | undefined {
   return CORE_GATEWAY_METHOD_SPEC_BY_NAME.get(method)?.scope;
 }
 

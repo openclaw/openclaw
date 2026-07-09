@@ -38,7 +38,7 @@ import { formatCronSchedule, formatNextRun } from "../../lib/presenter.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { normalizeStringEntries, uniqueStrings } from "../../lib/string-coerce.ts";
 
-export type CronProps = {
+type CronProps = {
   basePath: string;
   loading: boolean;
   jobsLoadingMore: boolean;

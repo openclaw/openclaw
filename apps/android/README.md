@@ -61,6 +61,7 @@ MATCH_PASSWORD=<signing repo password> pnpm android:release:signing:check
 ```
 
 The signing sync pulls encrypted Android upload-key assets from the shared `apps-signing` repo and materializes decrypted files under `apps/android/build/release-signing/`.
+Standalone release APK verification also requires that key's public certificate SHA-256 fingerprint to match `Config/ReleaseSigning.json`.
 
 Generate raw Google Play screenshots:
 
@@ -85,6 +86,10 @@ the screenshots, then shuts down the emulator it started.
 - Third-party build: `openclaw-<version>-third-party-release.apk`
 
 `pnpm android:bundle:release` is an alias for the same Fastlane archive lane.
+
+Regular final and correction OpenClaw releases publish the signed third-party APK as `OpenClaw-Android.apk` with a checksum manifest and GitHub Actions provenance. `.github/workflows/android-release.yml` is the only automated GitHub Release upload path; `OpenClaw Release Publish` dispatches it while the canonical release is still a draft and blocks publication until the uploaded asset contract verifies.
+
+The protected `android-release` environment supplies `MATCH_PASSWORD`; the repository's read-only GitHub App token checks out encrypted material from `openclaw/apps-signing`. The workflow builds the exact release tag, refuses to replace different existing bytes, and re-downloads the APK for checksum, certificate, and provenance verification.
 
 `pnpm android:release:archive` is for local archive validation only. It is not a
 fallback upload path after `pnpm android:release:upload` fails.

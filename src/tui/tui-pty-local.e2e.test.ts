@@ -451,7 +451,7 @@ async function startGatewayModeTui(params: {
 }
 
 describe("TUI PTY real backends", () => {
-  afterEach(async () => {
+  afterEach(() => {
     for (const run of activeRuns.splice(0)) {
       run.dispose();
     }

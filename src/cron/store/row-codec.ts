@@ -19,6 +19,7 @@ import {
 import type { CronJobInsert, CronJobRow } from "./schema.js";
 import { getCronStoreKysely } from "./schema.js";
 import { bindStateColumns, stateFromRow } from "./state-codec.js";
+import { bindTriggerColumns, triggerFromRow } from "./trigger-codec.js";
 import type { LoadedCronStore } from "./types.js";
 
 export function bindScheduleColumns(
@@ -154,6 +155,7 @@ function bindCronJobRow(storeKey: string, job: CronJob, sortOrder: number): Cron
     session_key: job.sessionKey ?? null,
     session_target: job.sessionTarget,
     wake_mode: job.wakeMode,
+    ...bindTriggerColumns(job.trigger),
     ...bindScheduleColumns(job.schedule),
     ...bindPayloadColumns(job.payload),
     ...bindDeliveryColumns(job.delivery),
@@ -242,6 +244,7 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
   const payload = payloadFromRow(row);
   const delivery = deliveryFromRow(row);
   const failureAlert = failureAlertFromRow(row);
+  const trigger = triggerFromRow(row);
   if (!schedule || !payload) {
     return null;
   }
@@ -272,6 +275,7 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
     schedule,
     sessionTarget: row.session_target as CronJob["sessionTarget"],
     wakeMode: row.wake_mode as CronJob["wakeMode"],
+    ...(trigger ? { trigger } : {}),
     payload,
     ...(delivery ? { delivery } : {}),
     ...(failureAlert !== undefined ? { failureAlert } : {}),

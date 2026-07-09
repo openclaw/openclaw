@@ -687,7 +687,7 @@ struct OnboardingWizardView: View {
             self.onboardingTextField("Host", text: self.manualHostBinding, focusedField: .manualHost)
             self.onboardingTextField("Port", text: self.manualPortTextBinding, focusedField: .manualPort)
                 .keyboardType(.numberPad)
-            self.onboardingButtonToggle("Use TLS", isOn: self.$manualTLS)
+            self.manualConnectionSecurityRows
             self.manualConnectButton
         } header: {
             Text("Developer Local")
@@ -866,7 +866,7 @@ extension OnboardingWizardView {
             self.onboardingTextField("Host", text: self.manualHostBinding, focusedField: .manualHost)
             self.onboardingTextField("Port", text: self.manualPortTextBinding, focusedField: .manualPort)
                 .keyboardType(.numberPad)
-            self.onboardingButtonToggle("Use TLS", isOn: self.$manualTLS)
+            self.manualConnectionSecurityRows
             self.onboardingTextField(
                 "Discovery Domain (optional)",
                 text: self.$discoveryDomain,
@@ -885,6 +885,41 @@ extension OnboardingWizardView {
         } header: {
             Text(title)
                 .font(OpenClawType.footnoteSemiBold)
+        }
+    }
+
+    private var manualTransport: GatewayManualTransportPresentation {
+        GatewayConnectionController.manualTransportPresentation(
+            host: self.manualHost,
+            requestedTLS: self.manualTLS)
+    }
+
+    private var manualTLSBinding: Binding<Bool> {
+        Binding(
+            get: { self.manualTransport.effectiveTLS },
+            set: { enabled in
+                guard !self.manualTransport.requiresTLS else { return }
+                self.manualTLS = enabled
+            })
+    }
+
+    @ViewBuilder
+    private var manualConnectionSecurityRows: some View {
+        Picker("Connection security", selection: self.manualTLSBinding) {
+            Text("Unencrypted")
+                .font(OpenClawType.captionSemiBold)
+                .tag(false)
+            Text("Secure (TLS)")
+                .font(OpenClawType.captionSemiBold)
+                .tag(true)
+        }
+        .pickerStyle(.segmented)
+        .disabled(self.manualTransport.requiresTLS)
+
+        if let helperText = self.manualTransport.helperText {
+            Text(helperText)
+                .font(OpenClawType.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -1304,17 +1339,14 @@ extension OnboardingWizardView {
 
     private func initializeState() {
         if self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            if let last = GatewaySettingsStore.loadLastGatewayConnection() {
-                switch last {
-                case let .manual(host, port, useTLS, _):
-                    self.manualHost = host
-                    self.manualPort = port
-                    self.manualTLS = useTLS
-                case .discovered:
-                    self.manualHost = "openclaw.local"
-                    self.manualPort = 18789
-                    self.manualTLS = true
-                }
+            if let active = GatewaySettingsStore.activeGatewayEntry(),
+               active.kind == .manual,
+               let host = active.host,
+               let port = active.port
+            {
+                self.manualHost = host
+                self.manualPort = port
+                self.manualTLS = active.useTLS
             } else {
                 self.manualHost = "openclaw.local"
                 self.manualPort = 18789
@@ -1352,7 +1384,7 @@ extension OnboardingWizardView {
                 targetStableID: stableID)
         }
 
-        let hasSavedGateway = GatewaySettingsStore.loadLastGatewayConnection() != nil
+        let hasSavedGateway = GatewaySettingsStore.activeGatewayEntry() != nil
         let hasToken = !self.gatewayToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasPassword = !self.gatewayPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if !hasSavedGateway, !hasToken, !hasPassword {
@@ -1603,11 +1635,11 @@ extension OnboardingWizardView {
         }
         defer { self.connectingGatewayID = nil }
 
-        switch GatewaySettingsStore.loadLastGatewayConnection() {
-        case .some(.discovered):
-            await self.gatewayController.connectLastKnown()
-        case .some(.manual), .none:
-            // connectLastKnown() replays the persisted endpoint and credentials,
+        switch GatewaySettingsStore.activeGatewayEntry()?.kind {
+        case .discovered:
+            await self.gatewayController.connectActiveGateway()
+        case .manual, .none:
+            // connectActiveGateway() replays the persisted endpoint and credentials,
             // so token/host/port edits made on this screen would be ignored and
             // a missing stored connection would silently do nothing. Manual
             // retries must dial the current form input instead.
@@ -1653,7 +1685,7 @@ extension OnboardingWizardView {
             _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
             return
         }
-        if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
+        if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem) {
             return
         }
         guard problem.retryable else { return }

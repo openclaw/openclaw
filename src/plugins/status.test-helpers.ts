@@ -1,5 +1,6 @@
 /** Shared helpers for plugin status tests and installed-index fixture setup. */
 import type { PluginLoadResult } from "./loader.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRecord } from "./registry.js";
 import type { PluginCompatibilityNotice } from "./status.js";
 import type { PluginHookName } from "./types.js";
@@ -143,56 +144,12 @@ export function createCustomHook(params: {
 export function createPluginLoadResult(
   overrides: Partial<PluginLoadResult> & Pick<PluginLoadResult, "plugins"> = { plugins: [] },
 ): PluginLoadResult {
-  const {
-    plugins,
-    embeddingProviders,
-    modelCatalogProviders,
-    realtimeTranscriptionProviders,
-    realtimeVoiceProviders,
-    ...rest
-  } = overrides;
-  return {
-    plugins,
-    diagnostics: [],
-    channels: [],
-    channelSetups: [],
-    providers: [],
-    embeddingProviders: embeddingProviders ?? [],
-    speechProviders: [],
-    mediaUnderstandingProviders: [],
-    transcriptSourceProviders: [],
-    imageGenerationProviders: [],
-    videoGenerationProviders: [],
-    musicGenerationProviders: [],
-    webFetchProviders: [],
-    webSearchProviders: [],
-    migrationProviders: [],
-    codexAppServerExtensionFactories: [],
-    agentToolResultMiddlewares: [],
-    memoryEmbeddingProviders: [],
-    textTransforms: [],
-    agentHarnesses: [],
-    tools: [],
-    hooks: [],
-    typedHooks: [],
-    httpRoutes: [],
-    gatewayHandlers: {},
-    gatewayMethodDescriptors: [],
-    cliRegistrars: [],
-    services: [],
-    commands: [],
-    sessionExtensions: [],
-    trustedToolPolicies: [],
-    toolMetadata: [],
-    controlUiDescriptors: [],
-    runtimeLifecycles: [],
-    agentEventSubscriptions: [],
-    sessionSchedulerJobs: [],
-    conversationBindingResolvedHandlers: [],
-    ...rest,
-    modelCatalogProviders: modelCatalogProviders ?? [],
-    gatewayDiscoveryServices: rest.gatewayDiscoveryServices ?? [],
-    realtimeTranscriptionProviders: realtimeTranscriptionProviders ?? [],
-    realtimeVoiceProviders: realtimeVoiceProviders ?? [],
-  };
+  const registry = createEmptyPluginRegistry();
+  for (const key of Object.keys(overrides) as Array<keyof PluginLoadResult>) {
+    const value = overrides[key];
+    if (value !== undefined) {
+      Object.assign(registry, { [key]: value });
+    }
+  }
+  return registry;
 }

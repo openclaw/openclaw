@@ -106,6 +106,10 @@ import { ensureOpenClawModelsJson } from "../models-config.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
 import { applyPreparedRuntimeAuthToModel } from "../provider-request-config.js";
+import {
+  protectPreparedProviderRuntimeAuth,
+  unwrapSecretSentinelsForProviderEgress,
+} from "../provider-secret-egress.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import {
   applyAgentRunSessionTargetIdentity,
@@ -177,6 +181,7 @@ import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt.thread-helpers.js
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "./sandbox-info.js";
 import {
   mapSandboxSkillEntriesForPrompt,
+  mapSandboxSkillUsagePaths,
   resolveSandboxSkillRuntimeInputs,
 } from "./sandbox-skills.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
@@ -686,6 +691,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       profileId: authProfileId,
       agentDir,
       workspaceDir: resolvedWorkspace,
+      secretSentinels: true,
     });
 
     if (!apiKeyInfo.apiKey) {
@@ -693,23 +699,30 @@ async function compactEmbeddedAgentSessionDirectOnce(
         throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
       }
     } else {
-      const preparedAuth = await prepareProviderRuntimeAuth({
+      const preparedAuth = protectPreparedProviderRuntimeAuth({
+        sourceApiKey: apiKeyInfo.apiKey,
         provider: runtimeModel.provider,
-        config: params.config,
-        workspaceDir: resolvedWorkspace,
-        env: process.env,
-        context: {
+        preparedAuth: await prepareProviderRuntimeAuth({
+          provider: runtimeModel.provider,
           config: params.config,
-          agentDir,
           workspaceDir: resolvedWorkspace,
           env: process.env,
-          provider: runtimeModel.provider,
-          modelId,
-          model: runtimeModel,
-          apiKey: apiKeyInfo.apiKey,
-          authMode: apiKeyInfo.mode,
-          profileId: apiKeyInfo.profileId,
-        },
+          context: {
+            config: params.config,
+            agentDir,
+            workspaceDir: resolvedWorkspace,
+            env: process.env,
+            provider: runtimeModel.provider,
+            modelId,
+            model: runtimeModel,
+            apiKey: unwrapSecretSentinelsForProviderEgress(
+              apiKeyInfo.apiKey,
+              "provider runtime auth exchange",
+            ),
+            authMode: apiKeyInfo.mode,
+            profileId: apiKeyInfo.profileId,
+          },
+        }),
       });
       runtimeModel = applyPreparedRuntimeAuthToModel(runtimeModel, preparedAuth);
       const runtimeApiKey = preparedAuth?.apiKey ?? apiKeyInfo.apiKey;
@@ -787,6 +800,11 @@ async function compactEmbeddedAgentSessionDirectOnce(
         });
     const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
+      skillsWorkspaceDir: effectiveSkillsWorkspace,
+      skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
+    });
+    const skillUsagePaths = mapSandboxSkillUsagePaths({
+      paths: sandbox?.skillUsagePaths,
       skillsWorkspaceDir: effectiveSkillsWorkspace,
       skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
     });
@@ -949,6 +967,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           modelApi: model.api,
           modelContextWindowTokens: contextTokenBudget,
           skillsSnapshot: skillsSnapshotForRun,
+          skillUsagePaths,
           conversationCapabilityProfile: runtimeCapabilityProfile,
           modelAuthMode: resolveModelAuthMode(model.provider, params.config, undefined, {
             workspaceDir: effectiveWorkspace,
@@ -1643,6 +1662,9 @@ async function compactEmbeddedAgentSessionDirectOnce(
             tokensAfter,
             compactedCount,
             sessionFile: activeSessionFile,
+            ...(activeSessionId !== params.sessionId
+              ? { previousSessionId: params.sessionId }
+              : {}),
             summaryLength: typeof result.summary === "string" ? result.summary.length : undefined,
             tokensBefore: result.tokensBefore,
             firstKeptEntryId: effectiveFirstKeptEntryId,

@@ -270,7 +270,7 @@ function resolveSubcommandHelpSourceSignature(sourceRootDir: string = rootDir): 
   return hash.digest("hex");
 }
 
-export function readBundledChannelCatalog(
+function readBundledChannelCatalog(
   extensionsDirOverride: string = extensionsDir,
 ): BundledChannelCatalog {
   const entries: ExtensionChannelEntry[] = [];

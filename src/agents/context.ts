@@ -30,6 +30,8 @@ import { normalizeProviderId } from "./model-selection.js";
 export {
   ANTHROPIC_CONTEXT_1M_TOKENS,
   ANTHROPIC_FABLE_CONTEXT_TOKENS,
+  ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS,
+  ANTHROPIC_SONNET_5_CONTEXT_TOKENS,
   ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS,
 } from "./context-resolution.js";
 export { resetContextWindowCacheForTest } from "./context-runtime-state.js";

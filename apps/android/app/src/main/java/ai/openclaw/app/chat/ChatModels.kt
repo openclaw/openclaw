@@ -31,6 +31,7 @@ data class ChatMessageContent(
   val mimeType: String? = null,
   val fileName: String? = null,
   val base64: String? = null,
+  val durationMs: Long? = null,
 )
 
 /**
@@ -60,9 +61,24 @@ data class ChatSessionEntry(
   val lastActivityAt: Long? = null,
   val totalTokens: Long? = null,
   val totalTokensFresh: Boolean? = null,
+  val modelProvider: String? = null,
+  val model: String? = null,
   val contextTokens: Long? = null,
   val hasContextUsageMetadata: Boolean = totalTokens != null || totalTokensFresh != null || contextTokens != null,
 )
+
+/** Local fallback for server-side `sessions.list` search over cached entries. */
+fun filterSessionEntries(
+  sessions: List<ChatSessionEntry>,
+  search: String,
+): List<ChatSessionEntry> {
+  val query = search.trim().lowercase()
+  if (query.isEmpty()) return sessions
+  return sessions.filter { session ->
+    listOfNotNull(session.displayName, session.label, session.key)
+      .any { it.lowercase().contains(query) }
+  }
+}
 
 /**
  * Slash command metadata exposed by the gateway for text-surface chat clients.
@@ -104,4 +120,5 @@ data class OutgoingAttachment(
   val mimeType: String,
   val fileName: String,
   val base64: String,
+  val durationMs: Long? = null,
 )

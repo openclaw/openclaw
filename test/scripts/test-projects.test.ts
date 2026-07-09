@@ -264,6 +264,19 @@ describe("scripts/test-projects changed-target routing", () => {
       mode: "targets",
       targets: ["test/scripts/android-release-wrapper-args.test.ts"],
     });
+    expect(
+      resolveChangedTestTargetPlan(["apps/android/scripts/build-release-artifacts.ts"]),
+    ).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/android-release-artifacts.test.ts"],
+    });
+    expect(resolveChangedTestTargetPlan([".github/workflows/android-release.yml"])).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+      ],
+    });
     expect(resolveChangedTestTargetPlan(["scripts/release-fast-pretag-check.sh"])).toEqual({
       mode: "targets",
       targets: ["test/scripts/package-acceptance-workflow.test.ts"],
@@ -1189,10 +1202,15 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("keeps Crabbox runner script edits on their regression tests", () => {
-    expect(resolveChangedTestTargetPlan(["scripts/crabbox-wrapper.mjs"])).toEqual({
-      mode: "targets",
-      targets: ["test/scripts/crabbox-wrapper.test.ts"],
-    });
+    for (const scriptPath of [
+      "scripts/crabbox-wrapper.mjs",
+      "scripts/crabbox-wrapper-providers.mjs",
+    ]) {
+      expect(resolveChangedTestTargetPlan([scriptPath]), scriptPath).toEqual({
+        mode: "targets",
+        targets: ["test/scripts/crabbox-wrapper.test.ts"],
+      });
+    }
   });
 
   it("keeps build stamp script edits on the build stamp regression test", () => {
@@ -1282,6 +1300,14 @@ describe("scripts/test-projects changed-target routing", () => {
         ".github/workflows/mantis-telegram-desktop-proof.yml",
         [
           "test/scripts/mantis-telegram-desktop-proof-workflow.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/ci-workflow-guards.test.ts",
+        ],
+      ],
+      [
+        ".github/workflows/mantis-web-ui-chat-proof.yml",
+        [
+          "test/scripts/mantis-web-ui-chat-proof-workflow.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/ci-workflow-guards.test.ts",
         ],
@@ -2611,13 +2637,22 @@ describe("scripts/test-projects changed-target routing", () => {
       ["ui/src", "test/vitest/vitest.ui.config.ts"],
     ] as const;
 
+    const plansByConfig = new Map(
+      buildVitestRunPlans(
+        cases.map(([target]) => target),
+        process.cwd(),
+      ).map((plan) => [plan.config, plan]),
+    );
     for (const [target, config] of cases) {
-      expect(buildVitestRunPlans([target], process.cwd()).at(-1)).toEqual({
+      const plan = plansByConfig.get(config);
+      expect(plan).toMatchObject({
         config,
         forwardedArgs: [],
-        includePatterns: [`${target}/**/*.test.ts`],
         watchMode: false,
       });
+      expect(plan?.includePatterns?.filter((pattern) => pattern.endsWith("/**/*.test.ts"))).toEqual(
+        [`${target}/**/*.test.ts`],
+      );
     }
 
     expect(buildVitestRunPlans(["src/plugin-sdk"], process.cwd())).toEqual([

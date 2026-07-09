@@ -41,6 +41,8 @@ struct SettingsProTab: View {
     @State var isRefreshingGateway = false
     @State var isChangingLocationMode = false
     @State var connectingGatewayID: String?
+    @State var gatewayRegistry = GatewaySettingsStore.GatewayRegistry.empty
+    @State var pendingForgetGateway: GatewaySettingsStore.GatewayRegistryEntry?
     @State var selectedAgentPickerId = ""
     @State var gatewayToken = ""
     @State var gatewayPassword = ""
@@ -291,6 +293,29 @@ struct SettingsProTab: View {
                 Text(self.scannerError ?? "")
                     .font(OpenClawType.subhead)
             }
+            .confirmationDialog(
+                    "Forget \(self.pendingForgetGateway?.name ?? "gateway")?",
+                    isPresented: Binding(
+                        get: { self.pendingForgetGateway != nil },
+                        set: { if !$0 { self.pendingForgetGateway = nil } }),
+                    titleVisibility: .visible)
+            {
+                Button(role: .destructive) {
+                    self.forgetPendingGateway()
+                } label: {
+                    Text("Forget Gateway")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                Button(role: .cancel) {
+                    self.pendingForgetGateway = nil
+                } label: {
+                    Text("Cancel")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                } message: {
+                    Text("This removes saved credentials, device access, TLS trust, and cached chats for this gateway.")
+                        .font(OpenClawType.subhead)
+                }
     }
 
     private func applyGatewaySetupRequestIfNeeded() {

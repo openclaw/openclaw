@@ -15,6 +15,8 @@ import {
   normalizeProviderId,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
+  resolveClaudeMythos5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
@@ -56,7 +58,8 @@ function normalizeBedrockResolvedModel({ modelId, model }: ProviderNormalizeReso
   }
   const reasoning =
     model.reasoning ||
-    resolveClaudeFable5ModelIdentity({ id: modelId, params: model.params }) !== undefined;
+    resolveClaudeFable5ModelIdentity({ id: modelId, params: model.params }) !== undefined ||
+    resolveClaudeMythos5ModelIdentity({ id: modelId, params: model.params }) !== undefined;
   const current = model.thinkingLevelMap;
   const currentEfforts = current as Record<string, string | null | undefined> | undefined;
   if (
@@ -544,6 +547,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       const currentGuardrail = currentPluginConfig?.guardrail;
       const modelRef = { id: modelId, params: model?.params };
       const fable5 = resolveClaudeFable5ModelIdentity(modelRef) !== undefined;
+      const sonnet5 = resolveClaudeSonnet5ModelIdentity(modelRef) !== undefined;
       const canonicalModelId = resolveClaudeModelIdentity(modelRef);
       const opus47OrNewer =
         isOpus47OrNewerBedrockModelRef(modelId) || isOpus47OrNewerBedrockModelRef(canonicalModelId);
@@ -564,8 +568,11 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         api.logger.warn(message),
       );
       if (serviceTier && wrapped) {
-        if (fable5 && serviceTier !== "default") {
-          api.logger.warn(`ignoring unsupported Fable 5 Bedrock service tier: ${serviceTier}`);
+        if ((fable5 || sonnet5) && serviceTier !== "default") {
+          const modelLabel = fable5 ? "Fable 5" : "Sonnet 5";
+          api.logger.warn(
+            `ignoring unsupported ${modelLabel} Bedrock service tier: ${serviceTier}`,
+          );
         } else {
           wrapped = createBedrockServiceTierWrapper(wrapped, serviceTier);
         }

@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveBundledInstallPlanForCatalogEntry } from "../cli/plugin-install-plan.js";
 import { invalidatePluginRuntimeDiscoveryAfterConfigMutation } from "../cli/plugins-registry-refresh.js";
@@ -537,8 +538,10 @@ function summarizeInstallError(message: string): string {
   if (!cleaned) {
     return "Unknown install failure";
   }
-  return cleaned.length > 180 ? `${cleaned.slice(0, 179)}…` : cleaned;
+  return cleaned.length > 180 ? `${truncateUtf16Safe(cleaned, 179)}…` : cleaned;
 }
+
+export const testing = { summarizeInstallError };
 
 function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && error.message === "timeout";

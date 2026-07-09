@@ -29,7 +29,7 @@ class ConnectionManager(
   private val photosAvailable: () -> Boolean,
   private val hasRecordAudioPermission: () -> Boolean,
   private val installedAppsSharingEnabled: () -> Boolean,
-  private val manualTls: () -> Boolean,
+  private val manualTls: (GatewayEndpoint) -> Boolean,
 ) {
   companion object {
     internal val legacyOperatorScopes: List<String> =
@@ -230,6 +230,6 @@ class ConnectionManager(
   /** Resolves persisted TLS pin policy for a concrete gateway endpoint. */
   fun resolveTlsParams(endpoint: GatewayEndpoint): GatewayTlsParams? {
     val stored = prefs.loadGatewayTlsFingerprint(endpoint.stableId)
-    return resolveTlsParamsForEndpoint(endpoint, storedFingerprint = stored, manualTlsEnabled = manualTls())
+    return resolveTlsParamsForEndpoint(endpoint, storedFingerprint = stored, manualTlsEnabled = manualTls(endpoint))
   }
 }

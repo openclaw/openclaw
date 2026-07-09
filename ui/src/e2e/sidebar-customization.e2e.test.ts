@@ -70,11 +70,14 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       const sidebar = page.locator("openclaw-app-sidebar");
       const pinnedItems = sidebar.locator(".sidebar-nav > .nav-section__items > .nav-item");
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Overview"]);
-      await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(0);
+      await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(1);
+      await expect.poll(() => page.locator(".topbar").isVisible()).toBe(true);
+      await expect.poll(() => page.locator(".dashboard-header").isVisible()).toBe(true);
+      await expect.poll(() => page.locator(".topbar-brand").isVisible()).toBe(false);
       const settingsLink = sidebar.getByRole("link", { name: "Settings" });
       await expect.poll(() => settingsLink.isVisible()).toBe(true);
       await settingsLink.click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/config");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/general");
       await expect.poll(() => settingsLink.getAttribute("aria-current")).toBe("page");
       await sidebar.getByRole("link", { name: "Overview" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/overview");
@@ -92,25 +95,36 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         )
         .toContain("Logbook");
       await expect.poll(() => trimmedTextContents(pinnedItems)).not.toContain("Logbook");
+      // Workboard ships disabled, so it stays hidden from navigation entirely.
+      await expect
+        .poll(() =>
+          trimmedTextContents(
+            sidebar.locator(".nav-section--more .nav-section__items > .nav-item"),
+          ),
+        )
+        .not.toContain("Workboard");
 
-      const customizeButton = sidebar.getByRole("button", { name: "Customize sidebar" });
+      const customizeButton = sidebar.getByRole("button", { name: "Edit pinned items" });
       await customizeButton.click();
-      const menu = sidebar.getByRole("menu", { name: "Customize sidebar" });
+      const menu = sidebar.getByRole("menu", { name: "Edit pinned items" });
+      await expect
+        .poll(() => trimmedTextContents(menu.getByRole("menuitemcheckbox")))
+        .not.toContain("Workboard");
       const overviewItem = menu.getByRole("menuitemcheckbox", { name: "Overview" });
       await expect.poll(() => overviewItem.getAttribute("aria-checked")).toBe("true");
-      const worktreesItem = menu.getByRole("menuitemcheckbox", { name: "Worktrees" });
-      await expect.poll(() => worktreesItem.getAttribute("aria-checked")).toBe("false");
+      const usageItem = menu.getByRole("menuitemcheckbox", { name: "Usage" });
+      await expect.poll(() => usageItem.getAttribute("aria-checked")).toBe("false");
       await expect
         .poll(() => overviewItem.evaluate((element) => element === document.activeElement))
         .toBe(true);
       await captureUiProof(page, "02-customize-menu.png");
 
-      await worktreesItem.click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Overview", "Worktrees"]);
+      await usageItem.click();
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Overview", "Usage"]);
       await overviewItem.click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Worktrees"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
       await page.reload();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Worktrees"]);
+      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       await expect
         .poll(() =>
@@ -122,17 +136,33 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await captureUiProof(page, "03-persisted-customization.png");
 
       await customizeButton.click();
-      await menu.getByRole("menuitem", { name: "Reset to defaults" }).click();
+      await menu.getByRole("menuitem", { name: "Reset pinned items" }).click();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Overview"]);
 
+      // The sidebar search field is the command palette entry point.
+      const searchButton = sidebar.locator(".sidebar-search");
+      await searchButton.click();
+      const paletteInput = page.locator("#cmd-palette-input");
+      await expect.poll(() => paletteInput.isVisible()).toBe(true);
+      await page.keyboard.press("Escape");
+      await expect.poll(() => paletteInput.isVisible()).toBe(false);
+
+      // The sidebar toggle lives in the sidebar brand row on desktop.
       const collapseButton = page.getByRole("button", { name: "Collapse sidebar" });
+      await expect
+        .poll(() =>
+          collapseButton.evaluate((element) => Boolean(element.closest(".sidebar-brand"))),
+        )
+        .toBe(true);
       await collapseButton.click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .toContain("shell--nav-collapsed");
+      // Rail mode keeps the palette entry reachable as an icon-only control.
+      await expect.poll(() => searchButton.isVisible()).toBe(true);
       await page.reload();
       await expect
-        .poll(() => page.getByRole("button", { name: "Expand sidebar" }).isVisible())
+        .poll(() => sidebar.getByRole("button", { name: "Expand sidebar" }).isVisible())
         .toBe(true);
       await captureUiProof(page, "04-persisted-collapsed.png");
 
@@ -156,7 +186,54 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
           page.locator(".shell-nav").evaluate((element) => element.getBoundingClientRect().left),
         )
         .toBe(0);
+      await expect.poll(() => page.locator(".dashboard-header").isVisible()).toBe(true);
+      await expect.poll(() => page.locator(".topbar-brand").isVisible()).toBe(false);
       await captureUiProof(page, "05-expanded-tablet-drawer.png");
+
+      await page.keyboard.press("Escape");
+      await expect
+        .poll(() => page.locator(".shell").getAttribute("class"))
+        .not.toContain("shell--nav-drawer-open");
+      await page.setViewportSize({ height: 852, width: 393 });
+      await expect.poll(() => page.locator(".topbar-brand").isVisible()).toBe(true);
+      await expect.poll(() => page.locator(".dashboard-header").isVisible()).toBe(false);
+      await expect
+        .poll(() =>
+          page.locator(".shell-nav").evaluate((element) => element.getBoundingClientRect().right),
+        )
+        .toBeLessThanOrEqual(0);
+      await captureUiProof(page, "06-mobile-brand.png");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shows the Workboard route when the plugin is enabled in config", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "config.get": {
+          config: { plugins: { entries: { workboard: { enabled: true } } } },
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}overview`);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.getByRole("button", { name: "More" }).click();
+      await expect
+        .poll(() =>
+          trimmedTextContents(
+            sidebar.locator(".nav-section--more .nav-section__items > .nav-item"),
+          ),
+        )
+        .toContain("Workboard");
     } finally {
       await context.close();
     }

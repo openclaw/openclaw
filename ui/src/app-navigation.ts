@@ -16,7 +16,6 @@ export const SIDEBAR_NAV_ROUTES = [
   "overview",
   "activity",
   "workboard",
-  "worktrees",
   "instances",
   "sessions",
   "usage",
@@ -71,16 +70,17 @@ export const SETTINGS_NAVIGATION_ROUTES = [
   "automation",
   "mcp",
   "infrastructure",
+  "worktrees",
   "ai-agents",
   "debug",
   "logs",
 ] as const satisfies readonly NavigationRouteId[];
 
 const NAVIGATION_ICONS: NavigationItem = {
-  agents: "folder",
+  agents: "bot",
   activity: "activity",
   overview: "barChart",
-  workboard: "folder",
+  workboard: "kanban",
   worktrees: "folder",
   channels: "link",
   instances: "radio",

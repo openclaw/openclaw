@@ -283,7 +283,7 @@ export async function runManagerTurn(params: {
               });
             },
           });
-          if (!turnOutcome.sawTerminalEvent) {
+          if (!turnOutcome.terminalStatus) {
             throw new AcpRuntimeError(
               "ACP_TURN_FAILED",
               "ACP turn ended without a terminal done event.",
@@ -296,7 +296,7 @@ export async function runManagerTurn(params: {
             const terminalResult = resolveBackgroundTaskTerminalResult(taskProgressSummary);
             markBackgroundTaskTerminal(taskContext.runId, {
               sessionKey,
-              status: "succeeded",
+              status: turnOutcome.terminalStatus === "cancelled" ? "cancelled" : "succeeded",
               endedAt: Date.now(),
               lastEventAt: Date.now(),
               error: undefined,

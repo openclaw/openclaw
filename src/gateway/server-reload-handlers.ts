@@ -33,10 +33,8 @@ import {
   getActiveSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
-import {
-  getInspectableActiveTaskRestartBlockers,
-  type ActiveTaskRestartBlocker,
-} from "../tasks/task-registry.maintenance.js";
+import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
+import { formatActiveTaskRestartBlocker } from "../tasks/task-restart-blocker.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-reload.js";
@@ -260,23 +258,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
     return details;
   };
-  const formatTaskBlocker = (task: ActiveTaskRestartBlocker) => {
-    const details = [
-      `taskId=${task.taskId}`,
-      task.runId ? `runId=${task.runId}` : null,
-      `status=${task.status}`,
-      `runtime=${task.runtime}`,
-      task.label ? `label=${task.label}` : null,
-      task.title ? `title=${task.title.slice(0, 80)}` : null,
-    ].filter((value): value is string => Boolean(value));
-    return details.join(" ");
-  };
   const formatTaskBlockers = () => {
     const blockers = getInspectableActiveTaskRestartBlockers();
     if (blockers.length === 0) {
       return null;
     }
-    const shown = blockers.slice(0, 8).map(formatTaskBlocker);
+    const shown = blockers.slice(0, 8).map(formatActiveTaskRestartBlocker);
     const omitted = blockers.length - shown.length;
     return omitted > 0 ? `${shown.join("; ")}; +${omitted} more` : shown.join("; ");
   };

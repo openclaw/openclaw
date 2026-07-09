@@ -128,6 +128,7 @@ const TELEGRAM_GET_UPDATES_CONFLICT_HINT =
 
 const DEFAULT_POLL_STALL_THRESHOLD_MS = 120_000;
 const MIN_POLL_STALL_THRESHOLD_MS = 30_000;
+const TELEGRAM_DELIVERY_DRAIN_INTERVAL_MS = 5_000;
 const MAX_POLL_STALL_THRESHOLD_MS = 600_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
@@ -333,6 +334,7 @@ export class TelegramPollingSession {
   #spooledUpdateHandlerTimeoutMs: number;
   #spooledUpdateHandlerAbortGraceMs: number;
   #deliveryDrainInFlight = false;
+  #nextDeliveryDrainAt = 0;
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {
     this.#transportState = new TelegramPollingTransportState({
@@ -471,6 +473,20 @@ export class TelegramPollingSession {
       .finally(() => {
         this.#deliveryDrainInFlight = false;
       });
+  }
+
+  #maybeDrainPendingDeliveries(finishedAt: number) {
+    if (finishedAt < this.#nextDeliveryDrainAt) {
+      return;
+    }
+    // Match the queue's first retry window. This keeps healthy polling useful
+    // as a recovery driver without reopening the drain on every long poll.
+    this.#nextDeliveryDrainAt = finishedAt + TELEGRAM_DELIVERY_DRAIN_INTERVAL_MS;
+    this.#drainPendingDeliveriesAfterReconnect();
+  }
+
+  #rearmPendingDeliveryDrain() {
+    this.#nextDeliveryDrainAt = 0;
   }
 
   async #createPollingBot(): Promise<TelegramBot | undefined> {
@@ -1203,11 +1219,12 @@ export class TelegramPollingSession {
         if (!restartRequested && stalledBacklogKeys.size === 0) {
           this.#status.notePollSuccess(message.finishedAt);
         }
-        this.#drainPendingDeliveriesAfterReconnect();
+        this.#maybeDrainPendingDeliveries(message.finishedAt);
         pollState.outcome = `ok:${message.count}`;
         return;
       }
       if (message.type === "poll-error") {
+        this.#rearmPendingDeliveryDrain();
         liveness.noteGetUpdatesError(new Error(message.message), message.finishedAt);
         liveness.noteGetUpdatesFinished();
         pollState.outcome = "error";
@@ -1455,7 +1472,7 @@ export class TelegramPollingSession {
       onPollSuccess: (finishedAt) => {
         this.#noteHealthyPollingCycle();
         this.#status.notePollSuccess(finishedAt);
-        this.#drainPendingDeliveriesAfterReconnect();
+        this.#maybeDrainPendingDeliveries(finishedAt);
       },
     });
     bot.api.config.use(async (prev, method, payload, signal) => {
@@ -1469,6 +1486,7 @@ export class TelegramPollingSession {
         liveness.noteGetUpdatesSuccess(result);
         return result;
       } catch (err) {
+        this.#rearmPendingDeliveryDrain();
         liveness.noteGetUpdatesError(err);
         throw err;
       } finally {

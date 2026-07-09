@@ -478,9 +478,17 @@ export function createCodexAttemptTurnWatchController(params: {
         details?: Record<string, unknown>;
         attemptProgress?: boolean;
         attemptTimeoutMs?: number;
+        receivedAtMs?: number;
       },
     ) => {
-      completionLastActivityAt = Date.now();
+      // Buffered pre-bind notifications flush later than they arrived; honor
+      // the wire timestamp but never move recorded activity backwards, or the
+      // completion/terminal idle watches could fire early after a flush.
+      const now = Date.now();
+      completionLastActivityAt = Math.max(
+        completionLastActivityAt,
+        Math.min(now, options?.receivedAtMs ?? now),
+      );
       completionLastActivityReason = `notification:${method}`;
       if (options?.details !== undefined) {
         completionLastActivityDetails = options.details;

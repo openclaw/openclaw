@@ -552,6 +552,36 @@ describe("official external plugin catalog", () => {
     expect(result.entries.map((entry) => entry.name)).toEqual(["@acme/private-proof"]);
   });
 
+  it("fails closed for signed feed profiles until envelope enforcement is wired", async () => {
+    const fetchImpl = vi.fn();
+
+    await expect(
+      loadHostedOfficialExternalPluginCatalogEntries({
+        feedProfile: "acme",
+        catalogConfig: {
+          feeds: {
+            acme: {
+              url: "https://packages.acme.example/openclaw/feed",
+              verification: {
+                mode: "signed",
+                keys: [
+                  {
+                    keyId: "acme-root",
+                    publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                  },
+                ],
+              },
+            },
+          },
+        },
+        fetchImpl,
+        snapshotStore: null,
+      }),
+    ).rejects.toThrow("signed feed verification is not wired yet");
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("keeps direct hosted feed URL overrides constrained to the public allowlist", async () => {
     const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
 
@@ -1632,6 +1662,7 @@ describe("official external plugin catalog", () => {
       ["deepinfra", "@openclaw/deepinfra-provider"],
       ["deepseek", "@openclaw/deepseek-provider"],
       ["groq", "@openclaw/groq-provider"],
+      ["longcat", "@openclaw/longcat-provider"],
       ["kilocode", "@openclaw/kilocode-provider"],
       ["kimi", "@openclaw/kimi-provider"],
       ["qianfan", "@openclaw/qianfan-provider"],
@@ -1660,6 +1691,7 @@ describe("official external plugin catalog", () => {
       ["vercel-ai-gateway", "@openclaw/vercel-ai-gateway-provider"],
       ["zai", "@openclaw/zai-provider"],
     ] as const;
+    const currentExternalized = [["featherless", "@openclaw/featherless-provider"]] as const;
 
     for (const [id, npmSpec] of [...providers, ...plugins]) {
       expect(resolveOfficialExternalPluginInstall(expectCatalogEntry(id))).toEqual({
@@ -1675,6 +1707,14 @@ describe("official external plugin catalog", () => {
         npmSpec,
         defaultChoice: "npm",
         minHostVersion: ">=2026.6.9",
+      });
+    }
+    for (const [id, npmSpec] of currentExternalized) {
+      expect(resolveOfficialExternalPluginInstall(expectCatalogEntry(id))).toEqual({
+        clawhubSpec: `clawhub:${npmSpec}`,
+        npmSpec,
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.6.11",
       });
     }
   });
@@ -1752,6 +1792,19 @@ describe("official external plugin catalog", () => {
     });
   });
 
+  it("lists LongCat as an official external provider", () => {
+    const longcat = expectCatalogEntry("longcat");
+
+    expect(resolveOfficialExternalPluginId(longcat)).toBe("longcat");
+    expect(getOfficialExternalPluginCatalogEntry("meituan-longcat")).toBe(longcat);
+    expect(resolveOfficialExternalPluginInstall(longcat)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/longcat-provider",
+      npmSpec: "@openclaw/longcat-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.6.8",
+    });
+  });
+
   it("resolves external provider aliases beyond the primary provider id", () => {
     const qwen = expectCatalogEntry("qwen");
 
@@ -1813,7 +1866,9 @@ describe("official external plugin catalog", () => {
         CLOUDFLARE_AI_GATEWAY_API_KEY: "cloudflare-key",
         DEEPINFRA_API_KEY: "deepinfra-key",
         DEEPSEEK_API_KEY: "deepseek-key",
+        FEATHERLESS_API_KEY: "featherless-key",
         GROQ_API_KEY: "groq-key",
+        LONGCAT_API_KEY: "longcat-key",
         KILOCODE_API_KEY: "kilocode-key",
         KIMICODE_API_KEY: "kimi-key",
         KIMI_API_KEY: "moonshot-kimi-key",
@@ -1835,10 +1890,12 @@ describe("official external plugin catalog", () => {
       "cloudflare-ai-gateway",
       "deepinfra",
       "deepseek",
+      "featherless",
       "fireworks",
       "groq",
       "kilocode",
       "kimi",
+      "longcat",
       "moonshot",
       "qianfan",
       "qwen",
@@ -1849,6 +1906,7 @@ describe("official external plugin catalog", () => {
       "zai",
     ]);
     expect(resolveOfficialExternalProviderPluginIdsForEnv({ GROQ_API_KEY: " " })).toEqual([]);
+    expect(resolveOfficialExternalProviderPluginIdsForEnv({ LONGCAT_API_KEY: " " })).toEqual([]);
   });
 
   it("keeps Tencent auth choices available through the cold-install auth catalog", () => {
