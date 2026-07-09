@@ -260,7 +260,12 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             topDragRegion.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 78),
             topDragRegion.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -380),
             topDragRegion.topAnchor.constraint(equalTo: container.topAnchor),
-            topDragRegion.heightAnchor.constraint(equalToConstant: 28),
+            // Thin edge strip only: the web UI has no desktop topbar row, so a
+            // taller region would swallow clicks meant for the top of the
+            // content column (chat thread, page headers). The sidebar region
+            // below stays the primary drag surface — it floats over the 50px
+            // strip the native chrome CSS reserves in the web sidebar.
+            topDragRegion.heightAnchor.constraint(equalToConstant: 12),
             topRightDragRegion.leadingAnchor.constraint(equalTo: topDragRegion.trailingAnchor),
             topRightDragRegion.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
             topRightDragRegion.topAnchor.constraint(equalTo: container.topAnchor),
