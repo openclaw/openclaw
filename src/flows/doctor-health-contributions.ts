@@ -544,6 +544,10 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   if (migrated.changes.length > 0) {
     note(migrated.changes.join("\n"), "Doctor changes");
   }
+  const notices = migrated.notices ?? [];
+  if (notices.length > 0) {
+    note(notices.join("\n"), "Doctor notices");
+  }
   if (migrated.warnings.length > 0) {
     note(migrated.warnings.join("\n"), "Doctor warnings");
   }
@@ -1769,6 +1773,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       healthChecks: {
         id: "core/doctor/session-transcripts",
         description: "Legacy or branchy session transcript files are represented as findings.",
+        defaultEnabled: false,
         async detect() {
           const { detectSessionTranscriptHealthIssues, sessionTranscriptIssueToHealthFinding } =
             await import("../commands/doctor-session-transcripts.js");
@@ -1801,6 +1806,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       healthChecks: {
         id: "core/doctor/session-snapshots",
         description: "Stale cached session snapshot paths are represented as findings.",
+        defaultEnabled: false,
         async detect(ctx) {
           const { detectSessionSnapshotHealthIssues, sessionSnapshotIssueToHealthFinding } =
             await import("../commands/doctor-session-snapshots.js");

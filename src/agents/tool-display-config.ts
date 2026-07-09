@@ -49,6 +49,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Bash",
       detailKeys: ["command"],
     },
+    computer: {
+      emoji: "🖱️",
+      title: "Computer",
+      detailKeys: ["action", "coordinate", "text", "node", "nodeId", "screenIndex"],
+    },
     process: {
       emoji: "🧰",
       title: "Process",
@@ -299,6 +304,16 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "❓",
       title: "Ask Question",
       detailKeys: ["questions.0.question"],
+    },
+    spawn_task: {
+      emoji: "✨",
+      title: "Suggest Task",
+      detailKeys: ["title", "tldr", "cwd"],
+    },
+    dismiss_task: {
+      emoji: "🗑️",
+      title: "Dismiss Task",
+      detailKeys: ["task_id", "reason"],
     },
     skill_workshop: {
       emoji: "🧰",

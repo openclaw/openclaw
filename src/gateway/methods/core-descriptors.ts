@@ -106,6 +106,10 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "tasks.list", scope: "operator.read" },
   { name: "tasks.get", scope: "operator.read" },
   { name: "tasks.cancel", scope: "operator.write" },
+  { name: "taskSuggestions.list", scope: "operator.read" },
+  { name: "taskSuggestions.create", scope: "operator.write" },
+  { name: "taskSuggestions.accept", scope: "operator.admin" },
+  { name: "taskSuggestions.dismiss", scope: "operator.write" },
   { name: "environments.list", scope: "operator.read" },
   { name: "environments.status", scope: "operator.read" },
   { name: "worktrees.list", scope: "operator.read" },
@@ -168,7 +172,8 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "sessions.compaction.get", scope: "operator.read" },
   { name: "sessions.compaction.branch", scope: "operator.write" },
   { name: "sessions.compaction.restore", scope: "operator.admin" },
-  { name: "sessions.create", scope: "operator.write", startup: true },
+  // Params-aware: explicit cwd can point at any host checkout and requires admin.
+  { name: "sessions.create", scope: "dynamic", startup: true },
   { name: "sessions.send", scope: "operator.write", startup: true },
   { name: "sessions.abort", scope: "operator.write", startup: true },
   // Params-aware: write scope may mutate chat-organization fields

@@ -327,6 +327,19 @@ import {
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 import { SystemInfoParamsSchema, SystemInfoResultSchema } from "./system-info.js";
 import {
+  TaskSuggestionEventSchema,
+  TaskSuggestionResolutionSchema,
+  TaskSuggestionSchema,
+  TaskSuggestionsAcceptParamsSchema,
+  TaskSuggestionsAcceptResultSchema,
+  TaskSuggestionsCreateParamsSchema,
+  TaskSuggestionsCreateResultSchema,
+  TaskSuggestionsDismissParamsSchema,
+  TaskSuggestionsDismissResultSchema,
+  TaskSuggestionsListParamsSchema,
+  TaskSuggestionsListResultSchema,
+} from "./task-suggestions.js";
+import {
   TasksCancelParamsSchema,
   TasksCancelResultSchema,
   TasksGetParamsSchema,
@@ -491,6 +504,17 @@ export const ProtocolSchemas = {
   AuditEvent: AuditEventSchema,
   AuditListParams: AuditListParamsSchema,
   AuditListResult: AuditListResultSchema,
+  TaskSuggestion: TaskSuggestionSchema,
+  TaskSuggestionEvent: TaskSuggestionEventSchema,
+  TaskSuggestionResolution: TaskSuggestionResolutionSchema,
+  TaskSuggestionsAcceptParams: TaskSuggestionsAcceptParamsSchema,
+  TaskSuggestionsAcceptResult: TaskSuggestionsAcceptResultSchema,
+  TaskSuggestionsCreateParams: TaskSuggestionsCreateParamsSchema,
+  TaskSuggestionsCreateResult: TaskSuggestionsCreateResultSchema,
+  TaskSuggestionsDismissParams: TaskSuggestionsDismissParamsSchema,
+  TaskSuggestionsDismissResult: TaskSuggestionsDismissResultSchema,
+  TaskSuggestionsListParams: TaskSuggestionsListParamsSchema,
+  TaskSuggestionsListResult: TaskSuggestionsListResultSchema,
   TaskSummary: TaskSummarySchema,
   TasksListParams: TasksListParamsSchema,
   TasksListResult: TasksListResultSchema,

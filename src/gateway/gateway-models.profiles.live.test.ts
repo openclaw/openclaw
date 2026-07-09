@@ -947,6 +947,23 @@ describe("formatGatewayLiveAgentWaitFailure", () => {
   });
 });
 
+describe("isGatewayAgentWaitCompletedWithoutReply", () => {
+  it("accepts the malformed completion envelope used by tool-only turns", () => {
+    expect(isGatewayAgentWaitCompletedWithoutReply({ status: "error", error: " completed " })).toBe(
+      true,
+    );
+  });
+
+  it("rejects genuine agent errors and non-error completion envelopes", () => {
+    expect(isGatewayAgentWaitCompletedWithoutReply({ status: "error", error: "aborted" })).toBe(
+      false,
+    );
+    expect(isGatewayAgentWaitCompletedWithoutReply({ status: "ok", error: "completed" })).toBe(
+      false,
+    );
+  });
+});
+
 describe("assertGatewayLiveDidNotSkipAllDueToTimeout", () => {
   it("allows all-skip runs when no timeout skip was involved", () => {
     expect(() =>
@@ -2208,10 +2225,14 @@ function isToolNonceProbeMiss(error: string): boolean {
 
 function isTransientToolReadProbeErrorForLiveModel(error: string): boolean {
   const msg = error.toLowerCase();
+  const isTransientProviderFailure =
+    msg.includes("unknown error occurred") ||
+    (msg.includes("ai service returned an internal error") &&
+      msg.includes("try again in a moment"));
   return (
     msg.includes("tool-read: agent-wait") &&
     msg.includes("failovererror") &&
-    msg.includes("unknown error occurred")
+    isTransientProviderFailure
   );
 }
 
@@ -2279,7 +2300,17 @@ describe("isTransientToolReadProbeErrorForLiveModel", () => {
     ).toBe(true);
     expect(
       isTransientToolReadProbeErrorForLiveModel(
+        "[all-models] 1/1 openai/gpt-5.5: tool-read: agent-wait: agent.wait error for runId=run-1 (error=FailoverError: The AI service returned an internal error. Please try again in a moment.)",
+      ),
+    ).toBe(true);
+    expect(
+      isTransientToolReadProbeErrorForLiveModel(
         "[all-models] 1/1 google/gemini-3.1-pro-preview: prompt: agent-wait: agent.wait error for runId=run-1 (error=FailoverError: An unknown error occurred)",
+      ),
+    ).toBe(false);
+    expect(
+      isTransientToolReadProbeErrorForLiveModel(
+        "[all-models] 1/1 openai/gpt-5.5: prompt: agent-wait: agent.wait error for runId=run-1 (error=FailoverError: The AI service returned an internal error. Please try again in a moment.)",
       ),
     ).toBe(false);
   });
@@ -2289,10 +2320,10 @@ describe("getHighSignalLiveModelPriorityIndex", () => {
   it("prefers curated Google replacements over big-pickle", () => {
     expect(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.1-pro-preview" }),
-    ).toBe(3);
-    expect(
-      getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3-flash-preview" }),
     ).toBe(4);
+    expect(
+      getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.5-flash" }),
+    ).toBe(5);
     expect(getHighSignalLiveModelPriorityIndex({ provider: "opencode", id: "big-pickle" })).toBe(
       null,
     );
@@ -2878,11 +2909,21 @@ function formatGatewayLiveAgentWaitFailure(params: {
   );
 }
 
+function isGatewayAgentWaitCompletedWithoutReply(result: unknown): boolean {
+  const value = result as { status?: unknown; error?: unknown } | null | undefined;
+  return (
+    value?.status === "error" &&
+    typeof value.error === "string" &&
+    value.error.trim().toLowerCase() === "completed"
+  );
+}
+
 async function waitForGatewayAgentRun(params: {
   client: GatewayClient;
   runId: string;
   context: string;
   timeoutMs?: number;
+  allowCompletedWithoutReply?: boolean;
 }): Promise<void> {
   const timeoutMs = params.timeoutMs ?? GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS;
   const result = await params.client.request(
@@ -2895,7 +2936,10 @@ async function waitForGatewayAgentRun(params: {
       timeoutMs: timeoutMs + 5_000,
     },
   );
-  if ((result as { status?: unknown } | undefined)?.status === "ok") {
+  if (
+    (result as { status?: unknown } | undefined)?.status === "ok" ||
+    (params.allowCompletedWithoutReply && isGatewayAgentWaitCompletedWithoutReply(result))
+  ) {
     return;
   }
   throw formatGatewayLiveAgentWaitFailure({
@@ -2947,6 +2991,7 @@ async function requestGatewayAgentText(params: {
       runId,
       context: `${params.context}: agent-wait`,
       timeoutMs: GATEWAY_LIVE_AGENT_WAIT_TIMEOUT_MS,
+      allowCompletedWithoutReply: true,
     });
     const assistantTexts = await readSessionAssistantTexts(params.sessionKey, params.modelKey);
     return assistantTexts.length > baselineAssistantCount ? (assistantTexts.at(-1) ?? "") : "";
@@ -3833,6 +3878,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               logProgress(`${progressLabel}: tool-read`);
               const runIdTool = randomUUID();
               const maxToolReadAttempts = 3;
+              // Known-variable models already skip after exhausted nonce misses.
+              // Use the stricter follow-up prompts before conceding that coverage.
+              const retryKnownToolNonceMiss = shouldSkipToolNonceProbeMissForLiveModel(modelKey);
               let toolText = "";
               for (
                 let toolReadAttempt = 0;
@@ -3849,7 +3897,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                     message: strictReply
                       ? "OpenClaw live tool probe (local, safe): " +
                         `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
-                        `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`
+                        "Then reply with exactly the two nonce values from that file, separated by one space. No extra text."
                       : "OpenClaw live tool probe (local, safe): " +
                         `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
                         "Then reply with the two nonce values you read (include both).",
@@ -3903,10 +3951,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                     provider: model.provider,
                     attempt: toolReadAttempt,
                     maxAttempts: maxToolReadAttempts,
+                    retryKnownNonceMismatch: retryKnownToolNonceMiss,
                   })
                 ) {
                   logProgress(
-                    `${progressLabel}: tool-read retry (${toolReadAttempt + 2}/${maxToolReadAttempts}) malformed tool output`,
+                    `${progressLabel}: tool-read retry (${toolReadAttempt + 2}/${maxToolReadAttempts}) tool output mismatch`,
                   );
                   continue;
                 }
@@ -3919,8 +3968,15 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               if (params.extraToolProbes) {
                 logProgress(`${progressLabel}: tool-exec`);
                 const nonceC = randomUUID();
-                const toolWritePath = path.join(tempDir, `write-${runIdTool}.txt`);
+                // Timeout wrappers do not cancel late tool runs, so keep provider-key attempts
+                // isolated without putting a nonce-shaped UUID in the model-visible path.
+                const toolWritePath = path.join(
+                  tempDir,
+                  `write-model-${index + 1}-attempt-${attempt + 1}.txt`,
+                );
                 const maxExecReadAttempts = 3;
+                const retryKnownExecReadNonceMiss =
+                  shouldSkipExecReadNonceMissForLiveModel(modelKey) || retryKnownToolNonceMiss;
                 let execReadText = "";
                 for (
                   let execReadAttempt = 0;
@@ -3938,7 +3994,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                         "use the tool named `exec` (or `Exec`) to run this command: " +
                         `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
                         `Then use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolWritePath}"}. ` +
-                        `Then reply with exactly: ${nonceC}. No extra text.`
+                        "Then reply with exactly the nonce text from that file. No extra text."
                       : "OpenClaw live tool probe (local, safe): " +
                         "use the tool named `exec` (or `Exec`) to run this command: " +
                         `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
@@ -3973,10 +4029,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                       provider: model.provider,
                       attempt: execReadAttempt,
                       maxAttempts: maxExecReadAttempts,
+                      retryKnownNonceMismatch: retryKnownExecReadNonceMiss,
                     })
                   ) {
                     logProgress(
-                      `${progressLabel}: tool-exec retry (${execReadAttempt + 2}/${maxExecReadAttempts}) malformed tool output`,
+                      `${progressLabel}: tool-exec retry (${execReadAttempt + 2}/${maxExecReadAttempts}) tool output mismatch`,
                     );
                     continue;
                   }
@@ -4275,7 +4332,8 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           }
           if (shouldSkipToolNonceProbeMissForLiveModel(modelKey) && isToolNonceProbeMiss(message)) {
             skippedCount += 1;
-            logProgress(`${progressLabel}: skip (${modelKey} tool probe nonce miss)`);
+            const probe = isExecReadNonceProbeMiss(message) ? "exec/read" : "tool-read";
+            logProgress(`${progressLabel}: skip (${modelKey} ${probe} nonce miss)`);
             break;
           }
           if (isMissingProfileError(message)) {

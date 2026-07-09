@@ -62,8 +62,17 @@
     "suppressions": [
       {
         "provider": "qwen",
-        "model": "qwen3.6-plus",
-        "reason": "qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.",
+        "model": "qwen3.6-flash",
+        "reason": "qwen3.6-flash is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
+        "when": {
+          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
+          "providerConfigApiIn": ["qwen", "modelstudio"]
+        }
+      },
+      {
+        "provider": "qwen",
+        "model": "qwen3.7-max",
+        "reason": "qwen3.7-max is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
         "when": {
           "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
           "providerConfigApiIn": ["qwen", "modelstudio"]
@@ -71,8 +80,17 @@
       },
       {
         "provider": "modelstudio",
-        "model": "qwen3.6-plus",
-        "reason": "qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.",
+        "model": "qwen3.6-flash",
+        "reason": "qwen3.6-flash is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
+        "when": {
+          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
+          "providerConfigApiIn": ["qwen", "modelstudio"]
+        }
+      },
+      {
+        "provider": "modelstudio",
+        "model": "qwen3.7-max",
+        "reason": "qwen3.7-max is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
         "when": {
           "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
           "providerConfigApiIn": ["qwen", "modelstudio"]
@@ -101,7 +119,7 @@
           {
             "id": "qwen3.6-plus",
             "name": "qwen3.6-plus",
-            "reasoning": false,
+            "reasoning": true,
             "input": ["text", "image"],
             "cost": {
               "input": 0,

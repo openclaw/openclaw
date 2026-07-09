@@ -29,7 +29,6 @@ function createSettings(): UiSettings {
     navWidth: 280,
     sidebarPinnedRoutes: ["overview", "workboard", "agents"],
     sidebarMoreExpanded: false,
-    borderRadius: 50,
   };
 }
 
@@ -44,7 +43,6 @@ function createProps(overrides: Record<string, unknown> = {}): ChatControlsProps
     model: {
       activeRunId: null,
       connected: true,
-      draftScope: {},
       gatewayAvailable: true,
       loading: false,
       modelCatalog: [],

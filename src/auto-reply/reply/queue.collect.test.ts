@@ -212,6 +212,94 @@ describe("followup queue collect routing", () => {
     expect(calls.map((call) => call.messageId)).toEqual(["101.001", "101.002"]);
   });
 
+  it.each([
+    ["first", " Slack "],
+    ["batched", "SLACK"],
+  ] as const)(
+    "splits standalone Slack collect batches by message id in %s reply mode",
+    async (replyToMode, originatingChannel) => {
+      const key = `test-collect-slack-standalone-${replyToMode}-${Date.now()}`;
+      const calls: FollowupRun[] = [];
+      const done = createDeferred<void>();
+      const settings: QueueSettings = {
+        mode: "collect",
+        debounceMs: 0,
+        cap: 50,
+        dropPolicy: "summarize",
+      };
+
+      for (const [prompt, messageId] of [
+        ["one", "101.001"],
+        ["two", "101.002"],
+      ] as const) {
+        enqueueFollowupRun(
+          key,
+          createRun({
+            prompt,
+            messageId,
+            originatingChannel,
+            originatingTo: "channel:A",
+            originatingReplyToMode: replyToMode,
+            originatingChatType: "channel",
+          }),
+          settings,
+        );
+      }
+
+      scheduleFollowupDrain(key, async (run) => {
+        calls.push(run);
+        if (calls.length === 2) {
+          done.resolve();
+        }
+      });
+      await done.promise;
+
+      expect(calls.map((call) => call.prompt)).toEqual(["one", "two"]);
+      expect(calls.map((call) => call.messageId)).toEqual(["101.001", "101.002"]);
+    },
+  );
+
+  it("collects distinct messages inside the same routed thread", async () => {
+    const key = `test-collect-shared-thread-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    for (const [prompt, messageId] of [
+      ["one", "message-1"],
+      ["two", "message-2"],
+    ] as const) {
+      enqueueFollowupRun(
+        key,
+        createRun({
+          prompt,
+          messageId,
+          originatingChannel: "telegram",
+          originatingTo: "chat:1",
+          originatingThreadId: "topic-1",
+          originatingReplyToMode: "all",
+          originatingChatType: "group",
+        }),
+        settings,
+      );
+    }
+
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      done.resolve();
+    });
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toContain("Queued #1\none");
+    expect(calls[0]?.prompt).toContain("Queued #2\ntwo");
+  });
+
   it("does not collect when captured reply modes differ on the same anchor", async () => {
     const key = `test-collect-slack-reply-mode-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -345,6 +433,48 @@ describe("followup queue collect routing", () => {
     expect(calls.map((call) => call.run.sourceReplyDeliveryMode)).toEqual([
       "automatic",
       "message_tool_only",
+    ]);
+  });
+
+  it("does not collect when task suggestion delivery differs", async () => {
+    const key = `test-collect-diff-task-suggestion-delivery-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+    const createTaskRun = (prompt: string, taskSuggestionDeliveryMode?: "gateway") => {
+      const base = createRun({
+        prompt,
+        originatingChannel: "webchat",
+        originatingTo: "same-target",
+        originatingChatType: "direct",
+      });
+      return {
+        ...base,
+        run: {
+          ...base.run,
+          taskSuggestionDeliveryMode,
+        },
+      };
+    };
+
+    enqueueFollowupRun(key, createTaskRun("legacy client"), settings);
+    enqueueFollowupRun(key, createTaskRun("actionable client", "gateway"), settings);
+    scheduleFollowupDrain(key, async (run) => {
+      calls.push(run);
+      if (calls.length >= 2) {
+        done.resolve();
+      }
+    });
+    await done.promise;
+
+    expect(calls.map((call) => call.run.taskSuggestionDeliveryMode)).toEqual([
+      undefined,
+      "gateway",
     ]);
   });
 
@@ -2335,14 +2465,32 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).toContain("two");
   });
 
-  it("collects matching local webchat routes without an external destination", async () => {
+  it("collects matching local webchat routes with distinct message ids", async () => {
     const key = `test-collect-local-webchat-${Date.now()}`;
     const calls: FollowupRun[] = [];
     const done = createDeferred<void>();
     const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
 
-    enqueueFollowupRun(key, createRun({ prompt: "one", originatingChannel: "webchat" }), settings);
-    enqueueFollowupRun(key, createRun({ prompt: "two", originatingChannel: "webchat" }), settings);
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "one",
+        messageId: "webchat-message-1",
+        originatingChannel: "webchat",
+        originatingReplyToMode: "all",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "two",
+        messageId: "webchat-message-2",
+        originatingChannel: "webchat",
+        originatingReplyToMode: "all",
+      }),
+      settings,
+    );
     scheduleFollowupDrain(key, async (run) => {
       calls.push(run);
       done.resolve();

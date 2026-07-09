@@ -10,10 +10,23 @@ import {
   createTestRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { lineBindingsAdapter } from "./bindings.js";
 import { buildLineMessageContext, buildLinePostbackContext } from "./bot-message-context.js";
 import type { ResolvedLineAccount } from "./types.js";
+
+const logVerboseMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    logVerbose: logVerboseMock,
+    shouldLogVerbose: () => true,
+  };
+});
 
 type MessageEvent = webhook.MessageEvent;
 type PostbackEvent = webhook.PostbackEvent;
@@ -73,6 +86,7 @@ describe("buildLineMessageContext", () => {
     }) as PostbackEvent;
 
   beforeEach(async () => {
+    logVerboseMock.mockClear();
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -111,6 +125,47 @@ describe("buildLineMessageContext", () => {
 
     expect(context?.ctxPayload.OriginatingTo).toBe("line:group:group-1");
     expect(context?.ctxPayload.To).toBe("line:group:group-1");
+  });
+
+  it("keeps inbound log previews UTF-16 well-formed at the limit", async () => {
+    const timestamp = 1_700_000_000_000;
+    const logCfg: OpenClawConfig = {
+      ...cfg,
+      agents: { defaults: { envelopeTimestamp: "off" } },
+    };
+    await buildLineMessageContext({
+      event: createMessageEvent({ type: "user", userId: "user-1" }, {
+        timestamp,
+        message: { id: "baseline", type: "text", text: "BODY_MARKER" },
+      } as Partial<MessageEvent>),
+      allMedia: [],
+      cfg: logCfg,
+      account,
+      commandAuthorized: true,
+    });
+    const baselineLog = String(logVerboseMock.mock.calls[0]?.[0]);
+    const baselinePreview = baselineLog.match(/preview="(.*)"$/)?.[1] ?? "";
+    const markerIndex = baselinePreview.indexOf("BODY_MARKER");
+    expect(markerIndex).toBeGreaterThanOrEqual(0);
+    const rawBody = `${"x".repeat(199 - markerIndex)}🚀tail`;
+    logVerboseMock.mockClear();
+
+    await buildLineMessageContext({
+      event: createMessageEvent({ type: "user", userId: "user-1" }, {
+        timestamp,
+        message: { id: "1", type: "text", text: rawBody },
+      } as Partial<MessageEvent>),
+      allMedia: [],
+      cfg: logCfg,
+      account,
+      commandAuthorized: true,
+    });
+    const expectedPreview = `${baselinePreview.slice(0, markerIndex)}${"x".repeat(199 - markerIndex)}`;
+    const formattedBodyLength = markerIndex + rawBody.length;
+
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      `line inbound: from=line:user-1 len=${formattedBodyLength} preview="${expectedPreview}"`,
+    );
   });
 
   it("replaces a failed media placeholder with an unavailable notice", async () => {
