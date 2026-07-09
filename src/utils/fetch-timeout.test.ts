@@ -239,7 +239,11 @@ describe("buildTimeoutAbortSignal", () => {
             reject(new Error("missing signal"));
             return;
           }
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          signal.addEventListener(
+            "abort",
+            () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+            { once: true },
+          );
         }),
     );
 
