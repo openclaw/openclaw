@@ -8,6 +8,9 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 const DEFAULT_INWORLD_BASE_URL = "https://api.inworld.ai";
 export const DEFAULT_INWORLD_VOICE_ID = "Sarah";
 export const DEFAULT_INWORLD_MODEL_ID = "inworld-tts-1.5-max";
+// Voice discovery should fail boundedly instead of waiting forever when the
+// Inworld voices endpoint accepts the connection but never responds.
+const DEFAULT_INWORLD_VOICE_LIST_TIMEOUT_MS = 30_000;
 
 // The streaming TTS endpoint returns newline-delimited JSON whose audio is
 // base64-encoded, so the wire body is ~4/3 larger than the decoded audio plus a
@@ -226,7 +229,7 @@ export async function listInworldVoices(params: {
         Authorization: `Basic ${params.apiKey}`,
       },
     },
-    timeoutMs: params.timeoutMs,
+    timeoutMs: params.timeoutMs ?? DEFAULT_INWORLD_VOICE_LIST_TIMEOUT_MS,
     policy: ssrfPolicyFromInworldBaseUrl(baseUrl),
     auditContext: "inworld-voices",
   });
