@@ -1,4 +1,7 @@
 // Tests provider usage loading from plugin-provided sources.
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js";
 
@@ -183,6 +186,51 @@ describe("provider-usage.load plugin boundary", () => {
     expect(pluginCall.context?.provider).toBe("openai");
     expect(pluginCall.context?.token).toBe("codex-app-server");
     expect(pluginCall.context?.authProfileId).toBe("openai:work");
+  });
+
+  it("auto-discovers Kimi usage from its bundled manifest contract", async () => {
+    resolveProviderUsageSnapshotWithPluginMock.mockResolvedValueOnce({
+      provider: "kimi",
+      displayName: "Kimi",
+      windows: [
+        { label: "5h", usedPercent: 12 },
+        { label: "7d", usedPercent: 34 },
+      ],
+    });
+    const mockFetch = createProviderUsageFetch(async () => {
+      throw new Error("usage plugin mock should receive the fetch function without calling it");
+    });
+
+    await expect(
+      loadProviderUsageSummary({
+        now: usageNow,
+        agentDir: mkdtempSync(join(tmpdir(), "openclaw-kimi-usage-")),
+        env: { KIMI_API_KEY: "kimi-token" },
+        fetch: mockFetch as unknown as typeof fetch,
+        skipPluginAuthWithoutCredentialSource: true,
+      }),
+    ).resolves.toEqual({
+      updatedAt: usageNow,
+      providers: [
+        {
+          provider: "kimi",
+          displayName: "Kimi",
+          windows: [
+            { label: "5h", usedPercent: 12 },
+            { label: "7d", usedPercent: 34 },
+          ],
+        },
+      ],
+    });
+
+    expect(resolveProviderUsageSnapshotWithPluginMock).toHaveBeenCalledOnce();
+    const pluginCall = requireFirstPluginUsageCall();
+    expect(pluginCall.provider).toBe("kimi");
+    expect(pluginCall.context?.provider).toBe("kimi");
+    expect(pluginCall.context?.token).toBe("kimi-token");
+    expect(pluginCall.context?.timeoutMs).toBe(5_000);
+    expect(pluginCall.context?.fetchFn).toEqual(expect.any(Function));
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("passes an env proxy fetch into plugin usage context when no explicit fetch is supplied", async () => {
