@@ -20,6 +20,7 @@ afterEach(async () => {
 
 async function createRealtimeServer(params?: {
   closeOnConnection?: boolean;
+  closeConnectionsAfterIndex?: number;
   initialEvent?: unknown;
   initialText?: string;
   onUpgrade?: (headers: Record<string, string | string[] | undefined>) => void;
@@ -29,13 +30,24 @@ async function createRealtimeServer(params?: {
   const server = createServer();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const clients = new Set<WebSocket>();
+  const clientsInOrder: WebSocket[] = [];
+  let connectionIndex = 0;
 
   server.on("upgrade", (request, socket, head) => {
     params?.onUpgrade?.(request.headers);
     wss.handleUpgrade(request, socket, head, (ws) => {
+      const index = connectionIndex++;
       clients.add(ws);
-      ws.on("close", () => clients.delete(ws));
-      if (params?.closeOnConnection) {
+      clientsInOrder[index] = ws;
+      ws.on("close", () => {
+        clients.delete(ws);
+        clientsInOrder[index] = null as unknown as WebSocket;
+      });
+      if (
+        params?.closeOnConnection ||
+        (params?.closeConnectionsAfterIndex !== undefined &&
+          index > params.closeConnectionsAfterIndex)
+      ) {
         ws.close(1011, "setup failed");
         return;
       }
@@ -75,7 +87,15 @@ async function createRealtimeServer(params?: {
     });
   };
   const port = (server.address() as AddressInfo).port;
-  return { url: `ws://127.0.0.1:${port}` };
+  return {
+    url: `ws://127.0.0.1:${port}`,
+    closeConnection: (index: number) => {
+      const ws = clientsInOrder[index];
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close(1000, "test closed");
+      }
+    },
+  };
 }
 
 function createSignal() {
@@ -402,5 +422,45 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     const closeError = requireFirstMockArg(onError, "pre-ready close error");
     expect(closeError).toBeInstanceOf(Error);
     expect(closeError.message).toBe("test realtime transcription connection closed before ready");
+  });
+
+  it("gives up after maxReconnectAttempts on a flapping ready upstream", async () => {
+    let upgradeCount = 0;
+    const server = await createRealtimeServer({
+      closeConnectionsAfterIndex: 0,
+      onUpgrade: () => {
+        upgradeCount += 1;
+      },
+    });
+    const onError = vi.fn();
+    const session = createRealtimeTranscriptionWebSocketSession({
+      providerId: "test",
+      callbacks: { onError },
+      url: server.url,
+      readyOnOpen: true,
+      reconnectDelayMs: 10,
+      maxReconnectAttempts: 3,
+      reconnectLimitMessage: "test reconnect limit reached",
+      sendAudio: (audio, transport) => {
+        transport.sendBinary(audio);
+      },
+    });
+
+    await session.connect();
+    expect(session.isConnected()).toBe(true);
+    expect(upgradeCount).toBe(1);
+
+    server.closeConnection(0);
+
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledTimes(1);
+    });
+    const limitError = requireFirstMockArg(onError, "reconnect limit error");
+    expect(limitError).toBeInstanceOf(Error);
+    expect(limitError.message).toBe("test reconnect limit reached");
+    // Initial connection + 3 reconnect attempts; without the fix the counter
+    // resets on every socket open and the loop never terminates.
+    expect(upgradeCount).toBe(1 + 3);
+    session.close();
   });
 });
