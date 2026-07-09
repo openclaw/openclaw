@@ -90,7 +90,7 @@ function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
   return Object.freeze({ ...fallback, ...overrides });
 }
 
-export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
+const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 2,
   health: 1,
   lmstudio: 1,
@@ -195,12 +195,12 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10463,
+      10465,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5220,
+      5222,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

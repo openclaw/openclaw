@@ -130,7 +130,7 @@ export type ShortTermRecallEntry = {
   promotedAt?: string;
 };
 
-export type ShortTermRecallStore = {
+type ShortTermRecallStore = {
   version: 1;
   updatedAt: string;
   entries: Record<string, ShortTermRecallEntry>;
@@ -145,7 +145,7 @@ type ShortTermPhaseSignalEntry = {
   lastRemConsideredAt?: string;
 };
 
-export type ShortTermPhaseSignalStore = {
+type ShortTermPhaseSignalStore = {
   version: 1;
   updatedAt: string;
   entries: Record<string, ShortTermPhaseSignalEntry>;

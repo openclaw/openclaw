@@ -2712,7 +2712,7 @@ class NodeRuntime private constructor(
   private fun gatewayTlsProbeFailureMessage(failure: GatewayTlsProbeFailure?): String =
     when (failure) {
       GatewayTlsProbeFailure.TLS_UNAVAILABLE ->
-        "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected."
+        "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected."
       GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT ->
         "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry."
       GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE, null ->

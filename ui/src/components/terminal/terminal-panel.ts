@@ -20,6 +20,10 @@ const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fi
 const DOCK_RIGHT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M10 2.5v11" /></svg>`;
 
 type TerminalDock = "bottom" | "right";
+type TerminalToggleDetail = {
+  dock?: TerminalDock;
+  open?: boolean;
+};
 
 type PanelLayout = {
   open: boolean;
@@ -148,7 +152,7 @@ export class OpenClawTerminalPanel extends LitElement {
   private connection: TerminalConnection | null = null;
   private tabSeq = 0;
   private readonly onGlobalKeyDown = (event: KeyboardEvent) => this.handleGlobalKey(event);
-  private readonly onToggleRequest = () => this.toggle();
+  private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
   // Re-clamp a dock sized on a larger window so the header/resizer never end
   // up off-screen after the viewport shrinks (e.g. rotate, window resize).
   private readonly onViewportResize = () => {
@@ -275,13 +279,37 @@ export class OpenClawTerminalPanel extends LitElement {
       this.closePanel();
     } else {
       this.open = true;
+      this.syncLayoutReservation();
       this.persistLayout();
       void this.restoreSessions();
     }
   }
 
+  private handleToggleRequest(event: Event): void {
+    const detail =
+      event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
+        ? (event.detail as TerminalToggleDetail)
+        : null;
+    const dock = detail?.dock === "right" || detail?.dock === "bottom" ? detail.dock : null;
+    if (dock) {
+      this.dock = dock;
+    }
+    if (detail?.open === true) {
+      if (!this.available) {
+        return;
+      }
+      this.open = true;
+      this.syncLayoutReservation();
+      this.persistLayout();
+      void this.restoreSessions();
+      return;
+    }
+    this.toggle();
+  }
+
   private closePanel(): void {
     this.open = false;
+    this.syncLayoutReservation();
     this.persistLayout();
   }
 
@@ -599,6 +627,7 @@ export class OpenClawTerminalPanel extends LitElement {
 
   private setDock(dock: TerminalDock): void {
     this.dock = dock;
+    this.syncLayoutReservation();
     this.persistLayout();
     void this.updateComplete.then(() => {
       for (const tab of this.tabs) {

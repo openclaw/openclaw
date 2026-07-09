@@ -834,6 +834,137 @@ openclaw-chat-page {
   margin: 8px auto 14px;
 }
 
+.task-suggestions {
+  display: grid;
+  gap: 8px;
+  max-height: min(40vh, 24rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 14px 10px;
+}
+
+.task-suggestion {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+}
+
+.task-suggestion__icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.task-suggestion__icon svg,
+.task-suggestion__start svg {
+  width: 16px;
+  height: 16px;
+}
+
+.task-suggestion__body {
+  min-width: 0;
+  flex: 1;
+}
+
+.task-suggestion__eyebrow {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.task-suggestion__title {
+  margin-top: 2px;
+  color: var(--text);
+  font-weight: 650;
+}
+
+.task-suggestion__summary {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.task-suggestion__details {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.task-suggestion__detail {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.task-suggestion__detail > span {
+  padding-top: 3px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.task-suggestion__detail code,
+.task-suggestion__detail pre {
+  min-width: 0;
+  max-height: 9rem;
+  margin: 0;
+  padding: 5px 7px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  color: var(--text);
+  font: 11px/1.4 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.task-suggestion__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-suggestion__start {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .task-suggestion {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .task-suggestion__actions {
+    width: 100%;
+    justify-content: flex-end;
+    padding-left: 44px;
+  }
+
+  .task-suggestion__detail {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+  }
+}
+
 .agent-chat__input {
   --chat-box-inset: 8px;
 

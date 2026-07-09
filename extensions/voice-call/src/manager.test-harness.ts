@@ -82,7 +82,7 @@ export function createTestStorePath(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-test-"));
 }
 
-export function createVoiceCallStateRuntimeForTests(): VoiceCallStateRuntime["state"] {
+function createVoiceCallStateRuntimeForTests(): VoiceCallStateRuntime["state"] {
   return {
     resolveStateDir: () => "",
     openKeyedStore: (() => {

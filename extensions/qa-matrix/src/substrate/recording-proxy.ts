@@ -18,7 +18,7 @@ type MatrixQaBodyShape =
   | { kind: "json"; fields: string[] }
   | { kind: "text" };
 
-export type MatrixQaRecordedExchange = {
+type MatrixQaRecordedExchange = {
   categories: MatrixQaStateFamily[];
   request: {
     body: MatrixQaBodyShape;
@@ -86,7 +86,7 @@ type MatrixQaScenarioRouteStateExpectation = {
   };
 };
 
-export type MatrixQaRouteStateManifest = {
+type MatrixQaRouteStateManifest = {
   generatedAt: string;
   phases: Record<string, MatrixQaScenarioRouteStateExpectation>;
   profile: {

@@ -1135,7 +1135,12 @@ function moveCardToStatus(
   });
 }
 
-function renderCardMoveControl(props: WorkboardProps, card: WorkboardCard, busy: boolean) {
+function renderCardMoveControl(
+  props: WorkboardProps,
+  card: WorkboardCard,
+  busy: boolean,
+  options: { wide?: boolean } = {},
+) {
   const state = getWorkboardState(props.host);
   const statuses = state.statuses.includes(card.status)
     ? state.statuses
@@ -1144,7 +1149,10 @@ function renderCardMoveControl(props: WorkboardProps, card: WorkboardCard, busy:
     return nothing;
   }
   return html`
-    <label class="workboard-card__move" title=${t("workboard.fieldStatus")}>
+    <label
+      class="workboard-card__move ${options.wide ? "workboard-card__move--wide" : ""}"
+      title=${t("workboard.fieldStatus")}
+    >
       <span class="workboard-card__move-icon" aria-hidden="true">${icons.cornerDownRight}</span>
       <select
         class="workboard-card__move-select"
@@ -1198,6 +1206,166 @@ function renderCardActionSlot(content: TemplateResult | typeof nothing) {
         : content}
     </span>
   `;
+}
+
+function getCardActionState(props: WorkboardProps, card: WorkboardCard) {
+  const state = getWorkboardState(props.host);
+  const task = state.tasksByCardId.get(card.id);
+  const session = findWorkboardSession(card, props.sessions);
+  const busy = state.busyCardIds.has(card.id) || state.dispatching;
+  const activeTask = cardHasActiveOrRunningUnresolvedTask(card, task, state.missingTaskIds);
+  const writable = canMutate(props);
+  const live =
+    activeTask ||
+    cardHasUnresolvedStartedRun(card) ||
+    session?.hasActiveRun === true ||
+    (session?.hasActiveRun !== false && session?.status === "running");
+  return {
+    state,
+    task,
+    session,
+    busy,
+    activeTask,
+    live,
+    linkedSessionKey: card.sessionKey ?? card.execution?.sessionKey,
+    writable,
+    showStartControls: writable && cardCanStart(state, props.sessions, card),
+    archived: Boolean(card.metadata?.archivedAt),
+  };
+}
+
+function renderCardActionButton(params: {
+  label: string;
+  icon: TemplateResult;
+  iconOnly?: boolean;
+  className?: string;
+  disabled?: boolean;
+  ariaHaspopup?: "dialog";
+  onClick: (event: MouseEvent) => void;
+}) {
+  const button = html`
+    <button
+      class=${params.iconOnly
+        ? `btn btn--icon workboard-card__icon ${params.className ?? ""}`
+        : `btn ${params.className ?? ""}`}
+      type="button"
+      aria-label=${params.label}
+      aria-haspopup=${params.ariaHaspopup ?? nothing}
+      ?disabled=${params.disabled}
+      @click=${params.onClick}
+    >
+      ${params.icon}${params.iconOnly ? nothing : html`<span>${params.label}</span>`}
+    </button>
+  `;
+  return params.iconOnly
+    ? html`<openclaw-tooltip .content=${params.label}>${button}</openclaw-tooltip>`
+    : button;
+}
+
+function renderEditCardAction(
+  props: WorkboardProps,
+  card: WorkboardCard,
+  options: { iconOnly?: boolean } = {},
+) {
+  const state = getWorkboardState(props.host);
+  return renderCardActionButton({
+    label: t("workboard.editCard"),
+    icon: icons.edit,
+    iconOnly: options.iconOnly,
+    ariaHaspopup: "dialog",
+    disabled: state.dispatching,
+    onClick: (event) => {
+      rememberWorkboardReturnFocus(event.currentTarget);
+      openEditModal(state, card);
+      props.onRequestUpdate?.();
+    },
+  });
+}
+
+function renderArchiveCardAction(
+  props: WorkboardProps,
+  card: WorkboardCard,
+  busy: boolean,
+  archived: boolean,
+  options: { iconOnly?: boolean } = {},
+) {
+  const label = archived ? t("workboard.unarchiveCard") : t("workboard.archiveCard");
+  return renderCardActionButton({
+    label,
+    icon: archived ? icons.archiveRestore : icons.archive,
+    iconOnly: options.iconOnly,
+    disabled: busy,
+    onClick: () => {
+      void archiveWorkboardCard({
+        host: props.host,
+        client: props.client,
+        cardId: card.id,
+        archived: !archived,
+        requestUpdate: props.onRequestUpdate,
+      });
+    },
+  });
+}
+
+function renderOpenSessionCardAction(
+  props: WorkboardProps,
+  linkedSessionKey: string | undefined,
+  options: { iconOnly?: boolean } = {},
+) {
+  if (!linkedSessionKey) {
+    return nothing;
+  }
+  return renderCardActionButton({
+    label: t("workboard.openSession"),
+    icon: icons.messageSquare,
+    iconOnly: options.iconOnly,
+    onClick: () => props.onOpenSession(linkedSessionKey),
+  });
+}
+
+function renderStopCardAction(
+  props: WorkboardProps,
+  card: WorkboardCard,
+  busy: boolean,
+  options: { iconOnly?: boolean } = {},
+) {
+  return renderCardActionButton({
+    label: t("workboard.stopSession"),
+    icon: icons.stop,
+    iconOnly: options.iconOnly,
+    disabled: busy || !props.connected,
+    onClick: () => {
+      void stopWorkboardCard({
+        host: props.host,
+        client: props.client,
+        card,
+        requestUpdate: props.onRequestUpdate,
+      });
+    },
+  });
+}
+
+function renderDeleteCardAction(
+  props: WorkboardProps,
+  card: WorkboardCard,
+  busy: boolean,
+  options: { iconOnly?: boolean } = {},
+) {
+  return renderCardActionButton({
+    label: t("workboard.deleteCard"),
+    icon: icons.trash,
+    iconOnly: options.iconOnly,
+    className: "workboard-card__delete",
+    disabled: busy,
+    onClick: () => {
+      void deleteWorkboardCard({
+        host: props.host,
+        client: props.client,
+        cardId: card.id,
+        requestUpdate: props.onRequestUpdate,
+      });
+    },
+  });
 }
 
 function openCardDetails(state: WorkboardUiState, card: WorkboardCard) {
@@ -1863,12 +2031,12 @@ function renderCardDetailsPanel(props: WorkboardProps) {
   if (!card) {
     return nothing;
   }
-  const task = state.tasksByCardId.get(card.id);
+  const cardActions = getCardActionState(props, card);
+  const { task, busy, activeTask, live, linkedSessionKey, writable, showStartControls, archived } =
+    cardActions;
   const lifecycle = getWorkboardLifecycle(card, props.sessions, task);
   const formatted = formatLifecycle(lifecycle);
   const taskIsAuthoritative = task ? taskMatchesLifecycle(task, lifecycle) : false;
-  const linkedSessionKey = card.sessionKey ?? card.execution?.sessionKey;
-  const writable = canMutate(props);
   const comments = card.metadata?.comments ?? [];
   const attempts = card.metadata?.attempts ?? [];
   const links = card.metadata?.links ?? [];
@@ -1880,8 +2048,6 @@ function renderCardDetailsPanel(props: WorkboardProps) {
   const workerProtocol = card.metadata?.workerProtocol;
   const automation = card.metadata?.automation;
   const events = (card.events ?? []).slice(-6).toReversed();
-  const busy = state.busyCardIds.has(card.id) || state.dispatching;
-  const showStartControls = writable && cardCanStart(state, props.sessions, card);
   const dependencies = getWorkboardDependencyState(card, state.cards);
   return html`
     <aside
@@ -2085,17 +2251,14 @@ function renderCardDetailsPanel(props: WorkboardProps) {
         </section>
 
         <div class="workboard-detail__actions">
-          ${linkedSessionKey
-            ? html`
-                <button
-                  class="btn"
-                  type="button"
-                  @click=${() => props.onOpenSession(linkedSessionKey)}
-                >
-                  ${icons.messageSquare} ${t("workboard.openSession")}
-                </button>
-              `
+          ${writable && !archived ? renderEditCardAction(props, card) : nothing}
+          ${writable ? renderArchiveCardAction(props, card, busy, archived) : nothing}
+          ${writable ? renderCardMoveControl(props, card, busy, { wide: true }) : nothing}
+          ${writable && (linkedSessionKey ? live : activeTask)
+            ? renderStopCardAction(props, card, busy)
             : nothing}
+          ${renderOpenSessionCardAction(props, linkedSessionKey)}
+          ${writable ? renderDeleteCardAction(props, card, busy) : nothing}
           ${showStartControls ? renderStartExecutionControls(props, card) : nothing}
         </div>
       </div>
@@ -2217,21 +2380,19 @@ const viewPresetOptions: Array<{ value: WorkboardUiState["viewPreset"]; labelKey
 ];
 
 function renderCard(props: WorkboardProps, card: WorkboardCard) {
-  const state = getWorkboardState(props.host);
-  const task = state.tasksByCardId.get(card.id);
-  const session = findWorkboardSession(card, props.sessions);
-  const busy = state.busyCardIds.has(card.id) || state.dispatching;
+  const cardActions = getCardActionState(props, card);
+  const {
+    state,
+    task,
+    busy,
+    activeTask,
+    live,
+    linkedSessionKey,
+    writable,
+    showStartControls,
+    archived,
+  } = cardActions;
   const syncing = state.syncingCardIds.has(card.id);
-  const activeTask = cardHasActiveOrRunningUnresolvedTask(card, task, state.missingTaskIds);
-  const live =
-    activeTask ||
-    cardHasUnresolvedStartedRun(card) ||
-    session?.hasActiveRun === true ||
-    (session?.hasActiveRun !== false && session?.status === "running");
-  const linkedSessionKey = card.sessionKey ?? card.execution?.sessionKey;
-  const writable = canMutate(props);
-  const showStartControls = writable && cardCanStart(state, props.sessions, card);
-  const archived = Boolean(card.metadata?.archivedAt);
   const healthHighlighted = state.activeHealthHighlight
     ? workboardCardMatchesHealthKey(card, state.activeHealthHighlight, props.sessions, task)
     : false;
@@ -2240,49 +2401,9 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
     ? renderStartExecutionButton(props, card, null, "autonomous", { iconOnly: true })
     : nothing;
   const topEditAction =
-    writable && !archived
-      ? html`
-          <openclaw-tooltip .content=${t("workboard.editCard")}>
-            <button
-              class="btn btn--icon workboard-card__icon"
-              type="button"
-              aria-label=${t("workboard.editCard")}
-              aria-haspopup="dialog"
-              ?disabled=${state.dispatching}
-              @click=${(event: MouseEvent) => {
-                rememberWorkboardReturnFocus(event.currentTarget);
-                openEditModal(state, card);
-                props.onRequestUpdate?.();
-              }}
-            >
-              ${icons.edit}
-            </button>
-          </openclaw-tooltip>
-        `
-      : nothing;
+    writable && !archived ? renderEditCardAction(props, card, { iconOnly: true }) : nothing;
   const topArchiveAction = writable
-    ? html`
-        <openclaw-tooltip
-          .content=${archived ? t("workboard.unarchiveCard") : t("workboard.archiveCard")}
-        >
-          <button
-            class="btn btn--icon workboard-card__icon"
-            type="button"
-            aria-label=${archived ? t("workboard.unarchiveCard") : t("workboard.archiveCard")}
-            ?disabled=${busy}
-            @click=${() =>
-              archiveWorkboardCard({
-                host: props.host,
-                client: props.client,
-                cardId: card.id,
-                archived: !archived,
-                requestUpdate: props.onRequestUpdate,
-              })}
-          >
-            ${archived ? icons.archiveRestore : icons.archive}
-          </button>
-        </openclaw-tooltip>
-      `
+    ? renderArchiveCardAction(props, card, busy, archived, { iconOnly: true })
     : nothing;
   const detailAction = html`
     <openclaw-tooltip .content=${t("workboard.viewDetails")}>
@@ -2302,61 +2423,14 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
       </button>
     </openclaw-tooltip>
   `;
-  const sessionAction = linkedSessionKey
-    ? html`
-        <openclaw-tooltip .content=${t("workboard.openSession")}>
-          <button
-            class="btn btn--icon workboard-card__icon"
-            aria-label=${t("workboard.openSession")}
-            @click=${() => props.onOpenSession(linkedSessionKey)}
-          >
-            ${icons.messageSquare}
-          </button>
-        </openclaw-tooltip>
-      `
-    : nothing;
+  const sessionAction = renderOpenSessionCardAction(props, linkedSessionKey, { iconOnly: true });
   const stopAction =
     writable && (linkedSessionKey ? live : activeTask)
-      ? html`
-          <openclaw-tooltip .content=${t("workboard.stopSession")}>
-            <button
-              class="btn btn--icon workboard-card__icon"
-              aria-label=${t("workboard.stopSession")}
-              ?disabled=${busy || !props.connected}
-              @click=${() =>
-                stopWorkboardCard({
-                  host: props.host,
-                  client: props.client,
-                  card,
-                  requestUpdate: props.onRequestUpdate,
-                })}
-            >
-              ${icons.stop}
-            </button>
-          </openclaw-tooltip>
-        `
+      ? renderStopCardAction(props, card, busy, { iconOnly: true })
       : nothing;
   const moveAction = writable ? renderCardMoveControl(props, card, busy) : nothing;
   const deleteAction = writable
-    ? html`
-        <openclaw-tooltip .content=${t("workboard.deleteCard")}>
-          <button
-            class="btn btn--icon workboard-card__icon workboard-card__delete"
-            type="button"
-            aria-label=${t("workboard.deleteCard")}
-            ?disabled=${busy}
-            @click=${() =>
-              deleteWorkboardCard({
-                host: props.host,
-                client: props.client,
-                cardId: card.id,
-                requestUpdate: props.onRequestUpdate,
-              })}
-          >
-            ${icons.trash}
-          </button>
-        </openclaw-tooltip>
-      `
+    ? renderDeleteCardAction(props, card, busy, { iconOnly: true })
     : nothing;
   return html`
     <article

@@ -233,6 +233,13 @@ describe("Crestodian rescue message", () => {
     );
   });
 
+  it("refuses model provider setup from remote rescue with a local pointer", async () => {
+    const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+    await expect(runRescue("/crestodian configure model provider", cfg)).resolves.toContain(
+      "cannot host model-provider credential setup",
+    );
+  });
+
   it("drops a pending rescue change on decline", async () => {
     await withRescueStateDir("decline-", async () => {
       const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };

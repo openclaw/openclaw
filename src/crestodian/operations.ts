@@ -54,6 +54,7 @@ export type CrestodianOperation =
       provider?: string;
     }
   | { kind: "setup"; workspace?: string; model?: string }
+  | { kind: "model-setup"; workspace?: string }
   | { kind: "channel-list" }
   | { kind: "channel-setup"; channel: string }
   | { kind: "gateway-status" }
@@ -77,6 +78,7 @@ export type CrestodianOperationResult = {
   exitsInteractive?: boolean;
   message?: string;
   nextInput?: string;
+  followUp?: Extract<CrestodianOperation, { kind: "model-setup" }>;
 };
 
 /** Injectable command dependencies used by tests and alternate runners. */
@@ -143,6 +145,10 @@ const SETUP_RE = new RegExp(
   String.raw`^(?:setup|set\s+me\s+up|set\s+up\s+openclaw|onboard(?:\s+me)?|bootstrap|first\s+run)(?:\s+workspace\s+(?<workspace>${TOKEN}))?(?:\s+model\s+(?<model>\S+))?$`,
   "i",
 );
+const MODEL_SETUP_RE = new RegExp(
+  String.raw`^(?:configure\s+(?:a\s+)?model\s+provider|set\s*up\s+(?:a\s+)?model\s+provider|model\s+setup)(?:\s+workspace\s+(?<workspace>${TOKEN}))?$`,
+  "i",
+);
 const CREATE_AGENT_RE = new RegExp(
   String.raw`^(?:create|add|set\s*up|new)\s+(?:(?:an?|new|my)\s+)?agent\s+(?<agent>[a-z0-9_-]+)(?:\s+workspace\s+(?<workspace>${TOKEN}))?(?:\s+model\s+(?<model>\S+))?$`,
   "i",
@@ -168,7 +174,7 @@ const CHANNEL_CONNECT_RE =
   /^(?:connect|link)\s+(?:channel\s+)?(?:to\s+)?(?<channel>[a-z0-9_-]+)(?:\s+channel)?$/i;
 
 const NO_MATCH_MESSAGE =
-  "I can run doctor/status/health, check or restart Gateway, list agents/models, set default model, connect channels (`connect telegram`), show audit, or switch to your agent TUI.";
+  "I can run doctor/status/health, check or restart Gateway, list agents/models, configure a model provider, set default model, connect channels (`connect telegram`), show audit, or switch to your agent TUI.";
 
 /** Audit/source labels for detected inference backends (docs-visible contract). */
 const INFERENCE_SOURCE_LABELS: Record<InferenceBackendKind, string> = {
@@ -287,6 +293,14 @@ export function parseCrestodianOperation(input: string): CrestodianOperation {
   if (channelConnectMatch?.groups?.channel) {
     return { kind: "channel-setup", channel: channelConnectMatch.groups.channel.toLowerCase() };
   }
+  const modelSetupMatch = trimmed.match(MODEL_SETUP_RE);
+  if (modelSetupMatch) {
+    const workspace = trimShellishToken(modelSetupMatch.groups?.workspace);
+    return {
+      kind: "model-setup",
+      ...(workspace ? { workspace } : {}),
+    };
+  }
   const setupMatch = trimmed.match(SETUP_RE);
   if (setupMatch) {
     const workspace = trimShellishToken(setupMatch.groups?.workspace);
@@ -381,8 +395,8 @@ function validateCrestodianPluginInstallSpec(spec: string): string | null {
 
 /**
  * Return whether an operation can change local state or process lifecycle.
- * channel-setup is intentionally absent: starting the guided wizard is not a
- * write — the wizard itself collects explicit answers and commits at the end.
+ * Guided setup operations are intentionally absent: starting a wizard is not
+ * itself a write; the wizard owns approval and persistence for its answers.
  */
 export function isPersistentCrestodianOperation(operation: CrestodianOperation): boolean {
   return (
@@ -411,6 +425,8 @@ export function describeCrestodianPersistentOperation(operation: CrestodianOpera
       return `set config ${operation.path} to ${operation.source} SecretRef ${operation.source === "env" ? operation.id : "<redacted>"}`;
     case "setup":
       return formatSetupPlanDescription(operation);
+    case "model-setup":
+      return "configure a model provider and default model";
     case "doctor-fix":
       return "run doctor repairs";
     case "plugin-install":
@@ -717,13 +733,13 @@ async function executeSetup(
         ? `Model choice: ${setupModel.model} (${setupModel.source}).`
         : setupModel.source === "existing default model"
           ? `Model choice: keep existing default ${overview.defaultModel}.`
-          : "Model choice: none found yet. I will only set the workspace; install/login Codex or Claude Code, or set OPENAI_API_KEY/ANTHROPIC_API_KEY, then run setup again.",
+          : "Model choice: none found yet. I will set the workspace first, then offer guided model-provider setup.",
     ].join("\n");
     runtime.log(message);
     return { applied: false, message };
   }
   const workspace = resolveUserPath(operation.workspace ?? process.cwd());
-  return await applyPersistentOperation({
+  const result = await applyPersistentOperation({
     auditOperation: "crestodian.setup",
     operation,
     runtime,
@@ -760,6 +776,13 @@ async function executeSetup(
       };
     },
   });
+  if (result.applied && !setupModel.model && !overview.defaultModel) {
+    return {
+      ...result,
+      followUp: { kind: "model-setup", workspace },
+    };
+  }
+  return result;
 }
 
 async function executeSetDefaultModel(
@@ -1032,6 +1055,15 @@ export async function executeCrestodianOperation(
           `Connecting ${operation.channel} needs an interactive session.`,
           "Run `openclaw crestodian` and say `connect " + operation.channel + "`,",
           "or run `openclaw channels add` for the terminal wizard.",
+        ].join("\n"),
+      );
+      return { applied: false };
+    case "model-setup":
+      runtime.log(
+        [
+          "Model provider setup needs an interactive session with masked credential prompts.",
+          "Run `openclaw crestodian` and say `configure model provider`,",
+          "or run `openclaw configure --section model` directly.",
         ].join("\n"),
       );
       return { applied: false };

@@ -5,7 +5,7 @@ import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
 
-export type ConnectionBannerProps = {
+type ConnectionBannerProps = {
   lastError: string | null;
   onRetry: () => void;
 };
