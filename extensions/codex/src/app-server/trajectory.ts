@@ -5,6 +5,7 @@
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   EmbeddedRunAttemptParams,
@@ -377,7 +378,7 @@ function sanitizeValue(value: unknown, depth = 0, key = ""): unknown {
       return "<redacted payload>";
     }
     const redacted = redactSensitiveString(value);
-    return redacted.length > 20_000 ? `${redacted.slice(0, 20_000)}…` : redacted;
+    return redacted.length > 20_000 ? `${truncateUtf16Safe(redacted, 20_000)}…` : redacted;
   }
   if (depth >= 6) {
     return "<truncated>";
