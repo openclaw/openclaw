@@ -2614,6 +2614,29 @@ describe("sanitizeChatSendMessageInput", () => {
   ])("$name", ({ input, expected }) => {
     expect(sanitizeChatSendMessageInput(input)).toEqual(expected);
   });
+
+  it("preserves C1 control characters (>= U+0080) unchanged", () => {
+    const nel = String.fromCharCode(0x85); // C1 NEL: kept by the >= U+0080 policy
+    expect(sanitizeChatSendMessageInput(`a${nel}b`)).toEqual({
+      ok: true,
+      message: `a${nel}b`,
+    });
+  });
+
+  it("strips control characters from a large message without truncating other text", () => {
+    // Regression guard for issue #102915: the sanitizer must handle multi-hundred-KB
+    // payloads via a single native pass, not a per-character rebuild.
+    const del = String.fromCharCode(0x7f);
+    const tab = String.fromCharCode(0x09);
+    const unit = `line${del}text${tab}`;
+    const input = unit.repeat(50_000); // ~650KB with an embedded control char per unit
+    const result = sanitizeChatSendMessageInput(input);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.message).toBe(`linetext${tab}`.repeat(50_000));
+      expect(result.message).not.toContain(del);
+    }
+  });
 });
 
 describe("gateway chat transcript writes (guardrail)", () => {
