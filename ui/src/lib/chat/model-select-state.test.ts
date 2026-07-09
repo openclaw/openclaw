@@ -91,13 +91,14 @@ describe("chat-model-select-state", () => {
       nextValue: "on",
       supported: true,
     });
+    // Turning fast off always writes an explicit off override: the inherited
+    // baseline is unknowable while an override exists, and clearing could
+    // land on a fast default, turning the click into a visible no-op.
     expect(resolveFastModeState({ provider: "anthropic", fastMode: true })).toMatchObject({
       active: true,
       label: "Fast",
-      nextValue: "",
+      nextValue: "off",
     });
-    // Fast inherited from the agent default: the toggle must write an
-    // explicit off override instead of clearing to the (fast) default.
     expect(resolveFastModeState({ provider: "anthropic", effectiveFastMode: true })).toMatchObject({
       active: true,
       currentOverride: "",
@@ -113,7 +114,7 @@ describe("chat-model-select-state", () => {
       active: true,
       currentOverride: "auto",
       label: "Auto",
-      nextValue: "",
+      nextValue: "off",
     });
   });
 

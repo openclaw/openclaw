@@ -378,13 +378,11 @@ export function resolveChatFastModeSelectState(
             : "Default";
   // A legacy override on a provider without a wire mapping stays visible so it
   // can be cleared, but the toggle must not write a new no-op fast override.
-  const nextValue: ChatFastModeSelectValue = !providerSupported
-    ? ""
-    : active
-      ? isOpenAI || currentOverride === ""
-        ? "off"
-        : ""
-      : "on";
+  // For mapped providers an active toggle always writes an explicit off: the
+  // inherited baseline is unknowable while an override exists, and clearing
+  // could land on a fast default, turning the click into a visible no-op.
+  // /fast default remains the way back to the inherited setting.
+  const nextValue: ChatFastModeSelectValue = !providerSupported ? "" : active ? "off" : "on";
   return {
     active,
     currentOverride,
