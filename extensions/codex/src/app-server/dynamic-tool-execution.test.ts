@@ -634,7 +634,8 @@ describe("dynamic tool execution helpers", () => {
     await vi.advanceTimersByTimeAsync(1);
 
     const result = await response;
-    const resultText = result.contentItems[0]?.text ?? "";
+    const firstResultItem = result.contentItems[0];
+    const resultText = firstResultItem?.type === "inputText" ? firstResultItem.text : "";
     const [, details] = warn.mock.calls[0] ?? [];
     const highSurrogate = String.fromCharCode(0xd83d);
 
