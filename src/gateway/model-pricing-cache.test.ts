@@ -1376,32 +1376,11 @@ describe("model-pricing-cache", () => {
     });
   });
 
-  it("caps cache entries at MAX_PRICING_CACHE_ENTRIES and preserves recently-accessed entries", () => {
+  it("caps cache entries at MAX_PRICING_CACHE_ENTRIES and orders by access recency", () => {
     resetGatewayModelPricingCacheForTest();
 
-    // Seed the cache with an entry whose key sorts AFTER every provider-N entry
-    // so that first-N truncation would drop it.
-    const activeKey = "zzz-active/zzz-model";
-    const seed = new Map<string, CachedModelPricing>();
-    seed.set(activeKey, {
-      input: 1,
-      output: 2,
-      cacheRead: 0,
-      cacheWrite: 0,
-    });
-    replaceGatewayModelPricingCache(seed, 1);
-
-    // Simulate runtime lookup to record a recent-access timestamp.
-    const lookedUp = getCachedGatewayModelPricing({
-      provider: "zzz-active",
-      model: "zzz-model",
-    });
-    expect(lookedUp).toBeDefined();
-
-    // Feed an over-limit refresh payload whose keys all sort before the active
-    // entry alphabetically.  With first-N truncation the active entry would be
-    // dropped because it sits at the tail; with access-aware eviction it is
-    // retained because its access timestamp moves it to the front.
+    // Build an over-limit payload where one entry sorts alphabetically last
+    // (zzz-...) and would be dropped by first-N or key-order truncation.
     const overLimit = new Map<string, CachedModelPricing>();
     for (let i = 0; i < MAX_PRICING_CACHE_ENTRIES + 100; i++) {
       overLimit.set(`provider-${i}/model-${i}`, {
@@ -1411,22 +1390,38 @@ describe("model-pricing-cache", () => {
         cacheWrite: 0,
       });
     }
+    const activeKey = "zzz-active/zzz-model";
+    overLimit.set(activeKey, {
+      input: 999,
+      output: 888,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+
+    // Simulate a runtime lookup on the alphabetically-last entry to record
+    // a recent-access timestamp. Without this, key-order would drop it.
+    const lookedUp = getCachedGatewayModelPricing({
+      provider: "zzz-active",
+      model: "zzz-model",
+    });
+    expect(lookedUp).toBeDefined();
+
     replaceGatewayModelPricingCache(overLimit, 2);
 
     // 1) Cache is capped.
     expect(getGatewayModelPricingCacheMeta().size).toBe(MAX_PRICING_CACHE_ENTRIES);
 
-    // 2) Recently-accessed entry is preserved even though it sorts after all
-    //    provider-N keys and was not present in the refresh payload.
+    // 2) Recently-accessed entry is preserved even though it sorts
+    //    alphabetically last — access recency moves it forward.
     const retained = getCachedGatewayModelPricing({
       provider: "zzz-active",
       model: "zzz-model",
     });
     expect(retained).toBeDefined();
-    expect(retained!.input).toBe(1);
+    expect(retained!.input).toBe(999);
 
-    // 3) Tail entries (no access, late alphabetical order) are evicted.
-    //    provider-80 through provider-99 sort near the end and are dropped.
+    // 3) Non-accessed tail entries are evicted. provider-99 sorts near the
+    //    end alphabetically and was never accessed.
     const evicted = getCachedGatewayModelPricing({
       provider: "provider-99",
       model: "model-99",

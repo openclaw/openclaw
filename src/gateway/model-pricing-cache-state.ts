@@ -66,15 +66,11 @@ export function replaceGatewayModelPricingCache(
   nextCachedAt = Date.now(),
 ): void {
   if (nextPricing.size > MAX_PRICING_CACHE_ENTRIES) {
-    // Merge existing cache entries (which carry access history) with new pricing
-    // data so we can prefer recently-accessed entries when trimming.
-    const merged = new Map(cachedPricing);
-    for (const [key, value] of nextPricing) {
-      merged.set(key, value);
-    }
-    // Sort by last-access timestamp descending (newest first), then by key for
-    // deterministic ordering when timestamps are equal.
-    const sorted = Array.from(merged.entries()).sort(([keyA], [keyB]) => {
+    // Only retain entries present in the refresh payload so stale rows that a
+    // successful refresh no longer returns are dropped. Within the refresh set,
+    // sort by last-access timestamp (newest first) so recently-queried models
+    // survive the cap, then by key for deterministic ordering.
+    const sorted = Array.from(nextPricing.entries()).sort(([keyA], [keyB]) => {
       const timeA = pricingAccessTimestamps.get(keyA) ?? 0;
       const timeB = pricingAccessTimestamps.get(keyB) ?? 0;
       if (timeA !== timeB) return timeB - timeA;
