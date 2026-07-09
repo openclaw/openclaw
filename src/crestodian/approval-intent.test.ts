@@ -86,4 +86,12 @@ describe("classifyCrestodianApprovalIntent", () => {
       "other",
     );
   });
+
+  it("classifies on the utility model tier, not the flagship", async () => {
+    const deps = completionDeps("approve");
+    await classifyCrestodianApprovalIntent({ message: "alright, ship that change" }, deps);
+    expect(deps.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ useUtilityModel: true }),
+    );
+  });
 });
