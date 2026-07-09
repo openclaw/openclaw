@@ -1371,6 +1371,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
     reconcileTerminalRun("done", "done");
   } else if (payload.state === "aborted") {
+    // Preserve pre-abort messages to guard against race conditions that could
+    // clear chat history during the abort event (e.g. concurrent sessions.list
+    // poll or WebSocket reconnect). If materialization unexpectedly empties a
+    // non-empty transcript, keep the snapshot to avoid history loss (#102815).
+    const preAbortMessages = state.chatMessages;
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !shouldHideAssistantChatMessage(normalizedMessage)) {
       state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
@@ -1380,6 +1385,9 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, normalizedMessage);
     } else {
       state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
+    }
+    if (state.chatMessages.length === 0 && preAbortMessages.length > 0) {
+      state.chatMessages = preAbortMessages;
     }
     reconcileTerminalRun("interrupted", "killed");
   } else if (payload.state === "error") {
