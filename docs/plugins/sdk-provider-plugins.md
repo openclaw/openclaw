@@ -834,6 +834,18 @@ catalog, API-key auth, and dynamic model resolution.
         clients. Implement `handleBargeIn` when a transport can detect that a
         human is interrupting assistant playback and the provider supports
         truncating or clearing the active audio response.
+        `submitToolResult` may return `void` for synchronous submission, or a
+        `Promise<void>` for an asynchronous completion boundary the provider
+        bridge can expose. Gateway relay sessions wait for that promise before
+        confirming a final result or clearing the linked run; reject it when
+        submission fails.
+        Set `supportsToolResultSuppression: false` when the provider cannot
+        honor `options.suppressResponse`. OpenClaw then avoids suppression for
+        internal forced-consult and cancellation results, and rejects direct
+        suppressed-result requests instead of silently starting a response.
+        Consumers of `createRealtimeVoiceBridgeSession` may likewise return a
+        promise from `onToolCall`; synchronous throws and rejections are routed
+        to the session's `onError` callback.
         Set `handlesInputAudioBargeIn` only when provider VAD confirms an
         interruption by calling `onClearAudio("barge-in")`. Providers that omit
         the flag use OpenClaw's local input-audio fallback detection.
