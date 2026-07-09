@@ -23,14 +23,26 @@ function responseFromReader(params: {
   chunks: string[];
   cancel: () => Promise<void>;
   releaseLock: () => void;
+  readError?: Error;
 }): Response {
   const chunks: Array<ReadableStreamReadResult<Uint8Array>> = params.chunks.map((chunk) => ({
     done: false,
     value: new TextEncoder().encode(chunk),
   }));
-  chunks.push({ done: true, value: undefined });
+  if (!params.readError) {
+    chunks.push({ done: true, value: undefined });
+  }
   const reader = {
-    read: async () => chunks.shift() ?? { done: true, value: undefined },
+    read: async () => {
+      const next = chunks.shift();
+      if (next) {
+        return next;
+      }
+      if (params.readError) {
+        throw params.readError;
+      }
+      return { done: true, value: undefined };
+    },
     cancel: params.cancel,
     releaseLock: params.releaseLock,
   } as ReadableStreamDefaultReader<Uint8Array>;
@@ -216,6 +228,25 @@ describe("readResponseText", () => {
       bytesRead: 5,
     });
     expect(cancel).not.toHaveBeenCalled();
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps exact-limit responses truncated when the confirming read fails", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["hello"],
+      cancel,
+      releaseLock,
+      readError: new Error("stream failed before EOF"),
+    });
+
+    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
+      text: "hello",
+      truncated: true,
+      bytesRead: 5,
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 

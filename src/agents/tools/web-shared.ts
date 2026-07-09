@@ -277,12 +277,13 @@ export async function readResponseText(
         }
         if (bytesRead >= maxBytes) {
           // Reached the byte cap. A body that is exactly maxBytes bytes is
-          // complete, not truncated; only mark truncation when a non-empty
-          // chunk confirms the body continues past the limit. Zero-byte
-          // chunks are skipped to match the read loop above.
+          // complete only once EOF confirms it. Keep the conservative result
+          // if that confirming read fails or the body continues.
+          truncated = true;
           while (true) {
             const { done: atEnd, value: extra } = await reader.read();
             if (atEnd) {
+              truncated = false;
               break;
             }
             if (extra && extra.byteLength > 0) {
