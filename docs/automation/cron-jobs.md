@@ -440,7 +440,27 @@ Query-string tokens are rejected.
       -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.5"}'
     ```
 
-    Fields: `message` (required), `name`, `agentId`, `sessionKey` (requires `hooks.allowRequestSessionKey=true`), `idempotencyKey`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.
+    Fields: `message` (required), `name`, `agentId`, `sessionKey` (requires `hooks.allowRequestSessionKey=true`), `idempotencyKey`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`, `waitForResult`, `announceToMain`.
+
+    By default the agent runs asynchronously and the response is
+    `{ ok: true, status: "accepted", runId, sessionKey }`.
+
+    Set `waitForResult: true` to hold the connection open until the turn
+    completes; the response becomes
+    `{ ok: true, status: "completed", runId, sessionKey, result }` where
+    `result` is the agent's final output text. A failed run returns HTTP 500
+    with `{ ok: false, status: "error", runId, sessionKey, error }`. Set
+    `timeoutSeconds` to bound the wait.
+
+    `waitForResult` requests bypass idempotency replay: a retry with the same
+    `Idempotency-Key` starts a fresh agent run (a replayed response could not
+    carry the original `result`). Waiting callers own retry deduplication.
+    Async requests keep the normal replay behavior; replays return the same
+    `runId` and `sessionKey` as the original accepted response.
+
+    Set `announceToMain: false` to suppress the post-run summary event posted
+    to the main session for successful runs — useful for machine-driven flows
+    with no human observer. Failed runs are always announced.
 
   </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">

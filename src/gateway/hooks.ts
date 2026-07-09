@@ -226,6 +226,20 @@ type HookAgentPayload = {
   wakeMode: "now" | "next-heartbeat";
   sessionKey?: string;
   deliver: boolean;
+  /**
+   * When true, holds the HTTP connection open until the agent completes.
+   * The response carries `status: "completed"` and a `result` field with the
+   * agent's output text; a failed run returns HTTP 500 with `status: "error"`
+   * and an `error` field. Bypasses the idempotency cache — the caller owns
+   * retry deduplication, and a retry starts a fresh agent run.
+   * Use `timeoutSeconds` to bound the wait.
+   */
+  waitForResult?: boolean;
+  /** When false, suppresses the post-run summary event posted to the main
+   *  session for successful runs. Failed runs are always announced so errors
+   *  stay visible to a human operator. Useful for machine-callback flows that
+   *  have no human observer. Default: true. */
+  announceToMain?: boolean;
   channel: HookMessageChannel;
   to?: string;
   model?: string;
@@ -239,6 +253,10 @@ export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
   sourcePath: string;
   allowUnsafeExternalContent?: boolean;
   externalContentSource?: HookExternalContentSource;
+  /** Pre-allocated run ID from the caller. When provided, dispatchAgentHook uses this
+   *  instead of generating a new UUID, allowing the caller to cache the ID before the
+   *  async dispatch begins to close the idempotency async gap. */
+  runId?: string;
 };
 
 const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin) => plugin.id)];
@@ -459,6 +477,8 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
     typeof timeoutRaw === "number" && Number.isFinite(timeoutRaw) && timeoutRaw > 0
       ? Math.floor(timeoutRaw)
       : undefined;
+  const waitForResult = payload.waitForResult === true;
+  const announceToMain = payload.announceToMain !== false;
   return {
     ok: true,
     value: {
@@ -469,6 +489,8 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
       wakeMode,
       sessionKey,
       deliver,
+      waitForResult,
+      announceToMain,
       channel,
       to,
       model,

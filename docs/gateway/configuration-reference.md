@@ -771,8 +771,11 @@ Validation and safety notes:
 **Endpoints:**
 
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
-- `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
+- `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds?, waitForResult?, announceToMain? }`
   - `sessionKey` from request payload is accepted only when `hooks.allowRequestSessionKey=true` (default: `false`).
+  - Async response (default): `{ ok: true, status: "accepted", runId, sessionKey }`.
+  - `waitForResult: true` holds the connection open until the agent turn completes and responds `{ ok: true, status: "completed", runId, sessionKey, result }`; a failed run returns HTTP 500 `{ ok: false, status: "error", runId, sessionKey, error }`. Bound the wait with `timeoutSeconds`. These requests bypass idempotency replay — a retry re-runs the agent.
+  - `announceToMain: false` suppresses the main-session summary event for successful runs; failures are always announced.
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
   - Template-rendered mapping `sessionKey` values are treated as externally supplied and also require `hooks.allowRequestSessionKey=true`.
 
