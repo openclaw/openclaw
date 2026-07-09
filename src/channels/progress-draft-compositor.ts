@@ -1,5 +1,6 @@
 // Stateful progress-draft compositor for channel streaming previews.
 // It merges tool, reasoning, and commentary updates until the final reply replaces them.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
 import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import { stripInlineDirectiveTagsForDelivery } from "../utils/directive-tags.js";
@@ -487,7 +488,7 @@ function compactReasoningProgressDisplayLine(text: string, maxChars: number): st
     .trimEnd();
   const boundary = head.search(/\s+\S*$/u);
   if (boundary > Math.floor(maxChars * 0.6)) {
-    return `${head.slice(0, boundary).trimEnd()}…`;
+    return `${truncateUtf16Safe(head, boundary).trimEnd()}…`;
   }
   return `${head}…`;
 }
