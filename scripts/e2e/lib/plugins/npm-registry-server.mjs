@@ -6,7 +6,25 @@ import http from "node:http";
 import path from "node:path";
 
 const [portFile, ...packageArgs] = process.argv.slice(2);
-const upstreamRegistry = process.env.OPENCLAW_NPM_REGISTRY_UPSTREAM?.replace(/\/+$/u, "");
+function normalizeUpstreamRegistry(raw) {
+  if (!raw) {
+    return undefined;
+  }
+  const url = new URL(raw);
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("OPENCLAW_NPM_REGISTRY_UPSTREAM must be an HTTP(S) origin");
+  }
+  return url.origin;
+}
+
+const upstreamRegistry = normalizeUpstreamRegistry(process.env.OPENCLAW_NPM_REGISTRY_UPSTREAM);
 
 if (!portFile || packageArgs.length === 0 || packageArgs.length % 3 !== 0) {
   console.error(
@@ -106,12 +124,21 @@ function findTarballForPath(pathname) {
   return undefined;
 }
 
-async function proxyUpstream(url, response) {
+function resolveUpstreamRequestUrl(rawRequestUrl) {
+  const raw = rawRequestUrl || "/";
+  if (!raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) {
+    throw new Error(`refusing non-origin registry request URL: ${JSON.stringify(raw)}`);
+  }
+  const requestUrl = new URL(raw, "http://127.0.0.1");
+  return `${upstreamRegistry}${requestUrl.pathname}${requestUrl.search}`;
+}
+
+async function proxyUpstream(rawRequestUrl, response) {
   if (!upstreamRegistry) {
     return false;
   }
   try {
-    const upstreamUrl = new URL(`${url.pathname}${url.search}`, `${upstreamRegistry}/`);
+    const upstreamUrl = resolveUpstreamRequestUrl(rawRequestUrl);
     const upstreamResponse = await fetch(upstreamUrl, { redirect: "manual" });
     const body = Buffer.from(await upstreamResponse.arrayBuffer());
     // Fetch decodes compressed bodies but preserves upstream length metadata.
@@ -160,7 +187,7 @@ async function handleRequest(request, response) {
     return;
   }
 
-  if (await proxyUpstream(url, response)) {
+  if (await proxyUpstream(request.url, response)) {
     return;
   }
 

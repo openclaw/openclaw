@@ -740,6 +740,103 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
     }
   });
 
+  it("does not let absolute-form request targets escape the configured upstream", async () => {
+    const tempDirs: string[] = [];
+    const root = makeTempDir(tempDirs, "openclaw-plugin-npm-fixture-proxy-origin-");
+    const portFile = path.join(root, "port");
+    const tarballPath = path.join(root, "demo-plugin.tgz");
+    let configuredUpstreamHits = 0;
+    let escapeServerHits = 0;
+    let configuredUpstreamTarget: string | undefined;
+    writeFileSync(tarballPath, "fixture package archive", "utf8");
+
+    const configuredUpstream = createServer((request, response) => {
+      configuredUpstreamHits += 1;
+      configuredUpstreamTarget = request.url;
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.end("configured upstream");
+    });
+    const escapeServer = createServer((_request, response) => {
+      escapeServerHits += 1;
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.end("escaped upstream");
+    });
+    await Promise.all([
+      new Promise<void>((resolve) => {
+        configuredUpstream.listen(0, "127.0.0.1", resolve);
+      }),
+      new Promise<void>((resolve) => {
+        escapeServer.listen(0, "127.0.0.1", resolve);
+      }),
+    ]);
+    const configuredAddress = configuredUpstream.address();
+    const escapeAddress = escapeServer.address();
+    if (
+      !configuredAddress ||
+      typeof configuredAddress === "string" ||
+      !escapeAddress ||
+      typeof escapeAddress === "string"
+    ) {
+      throw new Error("expected upstream registry addresses");
+    }
+
+    const child = spawn(
+      process.execPath,
+      [
+        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+        portFile,
+        "@openclaw/demo-plugin-npm",
+        "1.0.0",
+        tarballPath,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${configuredAddress.port}`,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    try {
+      const port = await waitForPortFile(portFile);
+      const escaped = await requestFixtureRegistry(
+        port,
+        `http://registry.invalid//127.0.0.1:${escapeAddress.port}/probe`,
+      );
+
+      expect(escaped.statusCode).toBe(502);
+      expect(escaped.body).toContain("refusing non-origin registry request URL");
+      expect(configuredUpstreamHits).toBe(0);
+      expect(escapeServerHits).toBe(0);
+
+      const valid = await requestFixtureRegistry(port, "/pkg?x=1");
+
+      expect(valid.statusCode).toBe(200);
+      expect(valid.body).toBe("configured upstream");
+      expect(configuredUpstreamHits).toBe(1);
+      expect(configuredUpstreamTarget).toBe("/pkg?x=1");
+      expect(escapeServerHits).toBe(0);
+    } finally {
+      if (child.exitCode === null) {
+        child.kill();
+        await new Promise((resolve) => {
+          child.once("close", resolve);
+        });
+      }
+      await Promise.all([
+        new Promise<void>((resolve) => {
+          configuredUpstream.close(() => resolve());
+        }),
+        new Promise<void>((resolve) => {
+          escapeServer.close(() => resolve());
+        }),
+      ]);
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
   it("rejects invalid plugin fixture log byte limits before npm fixture setup", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-npm-fixture-log-invalid-"));
     try {
