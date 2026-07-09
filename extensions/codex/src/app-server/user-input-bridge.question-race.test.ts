@@ -1,8 +1,8 @@
+import { type EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   getGlobalQuestionManager,
   resetGlobalQuestionManagerForTest,
-  type EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 // Tests the codex user-input bridge convergence + race: a Codex requestUserInput
 // is ALSO registered with the global QuestionManager (so it renders on the card /
 // channel buttons), and whichever resolves first wins — a structured

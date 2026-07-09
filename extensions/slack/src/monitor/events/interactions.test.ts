@@ -3,7 +3,7 @@ import type { SlackShortcutMiddlewareArgs } from "@slack/bolt";
 import {
   getGlobalQuestionManager,
   resetGlobalQuestionManagerForTest,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
