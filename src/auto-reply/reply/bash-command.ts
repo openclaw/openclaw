@@ -1,4 +1,5 @@
 /** Handles /bash and ! shell command chat shortcuts. */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -54,7 +55,7 @@ function formatSessionSnippet(sessionId: string) {
   if (trimmed.length <= 12) {
     return trimmed;
   }
-  return `${trimmed.slice(0, 8)}…`;
+  return `${truncateUtf16Safe(trimmed, 8)}…`;
 }
 
 function formatOutputBlock(text: string) {
