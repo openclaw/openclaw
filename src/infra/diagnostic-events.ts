@@ -220,6 +220,15 @@ export type DiagnosticLivenessWarningEvent = DiagnosticBaseEvent & {
   active: number;
   waiting: number;
   queued: number;
+  /**
+   * True when this stall was observed for multiple consecutive heartbeat
+   * ticks while no agent/session work was open. A single idle-liveness blip
+   * (e.g. a brief GC pause) stays low-severity, but a stall that persists
+   * across ticks with nothing "active" is exactly the signature of a
+   * background/internal event-loop block and is escalated to warning
+   * severity even though no diagnostic session was in flight. See #34.
+   */
+  sustainedIdleStall: boolean;
 };
 
 export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {

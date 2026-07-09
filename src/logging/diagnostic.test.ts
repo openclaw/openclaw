@@ -582,6 +582,53 @@ describe("stuck session diagnostics threshold", () => {
     expect(events.filter((event) => event === "diagnostic.liveness.warning")).toHaveLength(2);
   });
 
+  it("escalates a sustained idle-liveness stall to a warning after repeated ticks (#34)", () => {
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+        },
+      },
+      {
+        emitMemorySample: createEmitMemorySampleMock(),
+        sampleLiveness: () => ({
+          reasons: ["event_loop_delay", "cpu"],
+          intervalMs: 30_000,
+          eventLoopDelayP99Ms: 1_500,
+          eventLoopDelayMaxMs: 2_000,
+          cpuCoreRatio: 0.95,
+        }),
+      },
+    );
+
+    // First tick: a single idle-liveness blip stays quiet (debug), matching
+    // "records idle liveness samples without warning in the gateway log".
+    vi.advanceTimersByTime(30_000);
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    // The stall keeps breaching thresholds tick after tick with zero open
+    // diagnostic work — no cron/skill/task, nothing "active" — exactly the
+    // background/internal event-loop-block signature reported in #34. Once
+    // it has persisted for enough consecutive ticks, the next emitted
+    // liveness report (still subject to the 120s cooldown) must escalate to
+    // a warning so it is visible in production logs, not just debug.
+    vi.advanceTimersByTime(120_000);
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("liveness warning:"));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("sustainedIdleStallTicks=5"));
+    expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toContainEqual(
+      expect.objectContaining({
+        type: "diagnostic.liveness.warning",
+        level: "warning",
+        active: 0,
+        waiting: 0,
+        queued: 0,
+      }),
+    );
+  });
+
   it("does not start the heartbeat when diagnostics are disabled by config", () => {
     const emitMemorySample = createEmitMemorySampleMock();
 

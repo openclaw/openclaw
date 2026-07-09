@@ -59,6 +59,16 @@ const DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 const DEFAULT_LIVENESS_EVENT_LOOP_UTILIZATION_WARN = 0.95;
 const DEFAULT_LIVENESS_CPU_CORE_RATIO_WARN = 0.9;
 const DEFAULT_LIVENESS_WARN_COOLDOWN_MS = 120_000;
+/**
+ * Number of consecutive heartbeat ticks (30s each) an idle-liveness stall
+ * (event-loop delay/CPU breach with zero open diagnostic work) must persist
+ * before we escalate the log line from debug to warn. A one-off blip during
+ * an idle process (e.g. a brief GC pause) stays quiet; a stall that keeps
+ * breaching thresholds tick after tick while nothing is "active" is exactly
+ * the signature of a background/internal event-loop block (see #34) and
+ * needs to be visible in production logs, not just in the debug stream.
+ */
+const DEFAULT_LIVENESS_IDLE_STALL_ESCALATE_TICKS = 3;
 let commandPollBackoffRuntimePromise: Promise<
   typeof import("../agents/command-poll-backoff.runtime.js")
 > | null = null;
@@ -114,6 +124,7 @@ let lastDiagnosticLivenessCpuUsage: CpuUsage | null = null;
 let lastDiagnosticLivenessEventLoopUtilization: EventLoopUtilization | null = null;
 let lastDiagnosticLivenessEventAt = 0;
 let lastDiagnosticLivenessWarnAt = 0;
+let consecutiveIdleLivenessStallTicks = 0;
 
 function loadCommandPollBackoffRuntime() {
   commandPollBackoffRuntimePromise ??= import("../agents/command-poll-backoff.runtime.js");
@@ -182,6 +193,7 @@ function startDiagnosticLivenessSampler(): void {
   lastDiagnosticLivenessEventLoopUtilization = performance.eventLoopUtilization();
   lastDiagnosticLivenessEventAt = 0;
   lastDiagnosticLivenessWarnAt = 0;
+  consecutiveIdleLivenessStallTicks = 0;
 
   if (diagnosticLivenessMonitor) {
     diagnosticLivenessMonitor.reset();
@@ -206,6 +218,7 @@ function stopDiagnosticLivenessSampler(): void {
   lastDiagnosticLivenessEventLoopUtilization = null;
   lastDiagnosticLivenessEventAt = 0;
   lastDiagnosticLivenessWarnAt = 0;
+  consecutiveIdleLivenessStallTicks = 0;
 }
 
 function sampleDiagnosticLiveness(now: number): DiagnosticLivenessSample | null {
@@ -297,7 +310,11 @@ function shouldEmitDiagnosticLivenessWarning(now: number, work: DiagnosticWorkSn
 function emitDiagnosticLivenessWarning(
   sample: DiagnosticLivenessSample,
   work: DiagnosticWorkSnapshot,
+  consecutiveIdleStallTicks: number,
 ): void {
+  const sustainedIdleStall =
+    !hasOpenDiagnosticWork(work) &&
+    consecutiveIdleStallTicks >= DEFAULT_LIVENESS_IDLE_STALL_ESCALATE_TICKS;
   const message = `liveness warning: reasons=${sample.reasons.join(",")} interval=${Math.round(
     sample.intervalMs / 1000,
   )}s eventLoopDelayP99Ms=${formatOptionalDiagnosticMetric(
@@ -308,8 +325,10 @@ function emitDiagnosticLivenessWarning(
     sample.eventLoopUtilization,
   )} cpuCoreRatio=${formatOptionalDiagnosticMetric(sample.cpuCoreRatio)} active=${
     work.activeCount
-  } waiting=${work.waitingCount} queued=${work.queuedCount}`;
-  if (hasOpenDiagnosticWork(work)) {
+  } waiting=${work.waitingCount} queued=${
+    work.queuedCount
+  } sustainedIdleStallTicks=${consecutiveIdleStallTicks}`;
+  if (hasOpenDiagnosticWork(work) || sustainedIdleStall) {
     diag.warn(message);
   } else {
     diag.debug(message);
@@ -328,6 +347,7 @@ function emitDiagnosticLivenessWarning(
     active: work.activeCount,
     waiting: work.waitingCount,
     queued: work.queuedCount,
+    sustainedIdleStall,
   });
   markActivity();
 }
@@ -755,6 +775,15 @@ export function startDiagnosticHeartbeat(
     pruneDiagnosticSessionStates(now, true);
     const work = getDiagnosticWorkSnapshot();
     const livenessSample = (opts?.sampleLiveness ?? sampleDiagnosticLiveness)(now, work);
+    // Track how many consecutive ticks have seen a liveness-threshold breach
+    // with no open diagnostic work. This runs every tick regardless of the
+    // cooldown gates below so a sustained background stall is still counted
+    // even while its log line is being throttled.
+    if (livenessSample !== null && !hasOpenDiagnosticWork(work)) {
+      consecutiveIdleLivenessStallTicks += 1;
+    } else {
+      consecutiveIdleLivenessStallTicks = 0;
+    }
     const shouldEmitLivenessEvent =
       livenessSample !== null && shouldEmitDiagnosticLivenessEvent(now);
     const shouldEmitLivenessWarning =
@@ -771,7 +800,7 @@ export function startDiagnosticHeartbeat(
     }
 
     if (shouldEmitLivenessReport && livenessSample) {
-      emitDiagnosticLivenessWarning(livenessSample, work);
+      emitDiagnosticLivenessWarning(livenessSample, work, consecutiveIdleLivenessStallTicks);
     }
 
     diag.debug(
