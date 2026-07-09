@@ -44,6 +44,22 @@ function hasConfiguredSearchCredentialCandidate(
   });
 }
 
+function hasConfiguredPluginSearchCredentialCandidate(
+  searchConfig: unknown,
+  env?: NodeJS.ProcessEnv,
+): boolean {
+  if (!isRecord(searchConfig)) {
+    return false;
+  }
+  if (hasConfiguredSearchCredentialCandidate(searchConfig, env)) {
+    return true;
+  }
+  return (
+    Object.hasOwn(searchConfig, "baseUrl") &&
+    hasConfiguredCredentialValue(searchConfig.baseUrl, env)
+  );
+}
+
 function hasConfiguredPluginWebSearchCandidate(
   config: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
@@ -55,7 +71,8 @@ function hasConfiguredPluginWebSearchCandidate(
   return Object.values(entries).some((entry) => {
     const pluginConfig = isRecord(entry) ? entry.config : undefined;
     return (
-      isRecord(pluginConfig) && hasConfiguredSearchCredentialCandidate(pluginConfig.webSearch, env)
+      isRecord(pluginConfig) &&
+      hasConfiguredPluginSearchCredentialCandidate(pluginConfig.webSearch, env)
     );
   });
 }

@@ -188,6 +188,29 @@ describe("hasConfiguredWebSearchCredential", () => {
     ).toBe(true);
   });
 
+  it("checks plugin webSearch baseUrl credentials without treating top-level search baseUrl as a key", () => {
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          tools: { web: { search: { baseUrl: "https://search.example.test" } } },
+          plugins: {
+            entries: {
+              searxng: {
+                config: {
+                  webSearch: {
+                    baseUrl: "https://searxng.example.test",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(true);
+  });
+
   it("treats manifest env var values as resolved literal credentials", () => {
     manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
       plugins: [
