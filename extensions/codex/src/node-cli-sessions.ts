@@ -295,6 +295,8 @@ async function runCodexExecResume(params: {
     child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
     child.stdin.end(params.prompt);
     let streamError: Error | undefined;
+    let streamKillTimer: NodeJS.Timeout | undefined;
+    let streamKillArmed = false;
     const exitCode = await new Promise<number | null>((resolve, reject) => {
       child.on("error", reject);
       child.on("exit", (code) => resolve(code));
@@ -305,12 +307,24 @@ async function runCodexExecResume(params: {
       // Unlike the earlier pattern of rejecting immediately, we record the
       // error and wait for the child to exit via the existing exit-listener so
       // the caller's active-session guard is not released while the child
-      // process is still running.
+      // process is still running. We dedup the kill path so a burst of
+      // stdout+stderr errors on the same broken pipe arms the SIGTERM +
+      // SIGKILL fallback only once.
       const routeStreamError = (error: unknown) => {
         streamError = error instanceof Error ? error : new Error(String(error));
-        child.kill("SIGTERM");
-        const sigkill = setTimeout(() => child.kill("SIGKILL"), 2_000);
-        sigkill.unref();
+        if (streamKillArmed) {
+          return;
+        }
+        if (child.exitCode === null) {
+          streamKillArmed = true;
+          child.kill("SIGTERM");
+          streamKillTimer = setTimeout(() => {
+            if (child.exitCode === null) {
+              child.kill("SIGKILL");
+            }
+          }, 2_000);
+          streamKillTimer.unref();
+        }
       };
       child.stdout?.on?.("error", routeStreamError);
       child.stderr?.on?.("error", routeStreamError);
@@ -318,6 +332,9 @@ async function runCodexExecResume(params: {
       clearTimeout(timeout);
       if (forceKillTimeout) {
         clearTimeout(forceKillTimeout);
+      }
+      if (streamKillTimer) {
+        clearTimeout(streamKillTimer);
       }
     });
     if (streamError) {

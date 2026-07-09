@@ -362,4 +362,49 @@ describe("runCodexExecResume stream error handling", () => {
       vi.resetModules();
     }
   });
+
+  it("dedupes the SIGKILL grace timer when stdout and stderr both error in burst", async () => {
+    // Mirror the same broken-pipe scenario from startQaGatewayChild's
+    // attachGatewayChildStreamErrorHandlers (PR #102104): one pipe failure
+    // can fire on every attached stream. The handler must arm the
+    // SIGTERM + SIGKILL fallback once, not once per stream.
+    const captured = await installSpawnWrapper();
+    try {
+      const { createCodexCliSessionNodeHostCommands: loadCommands } =
+        await import("./node-cli-sessions.js");
+      const command = loadCommands().find((entry) => entry.command === "codex.cli.session.resume");
+      const killCalls: string[] = [];
+      const handlePromise = command?.handle(
+        JSON.stringify({
+          sessionId: "stream-error-burst",
+          prompt: "ping",
+          timeoutMs: 10_000,
+        }),
+      );
+
+      // Wait for the real child to attach so we can wrap its kill.
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), 100));
+      const child = captured[0];
+      expect(child).toBeDefined();
+      const realKill = child!.kill.bind(child!);
+      (child as unknown as { kill: typeof realKill }).kill = ((
+        signal?: NodeJS.Signals | number,
+      ) => {
+        killCalls.push(signal === undefined ? "SIGTERM" : String(signal));
+        return realKill(signal);
+      }) as typeof realKill;
+
+      child?.stdout?.emit("error", new Error("stdout pipe broke"));
+      child?.stderr?.emit("error", new Error("stderr pipe broke"));
+
+      // The handler records whichever error arrives last into streamError
+      // and surfaces it after the child exits. We just need to confirm a
+      // single SIGTERM was issued.
+      await expect(handlePromise).rejects.toThrow(/pipe broke/);
+      expect(killCalls.filter((s) => s === "SIGTERM")).toEqual(["SIGTERM"]);
+    } finally {
+      vi.doUnmock("node:child_process");
+      vi.resetModules();
+    }
+  }, 10_000);
 });
