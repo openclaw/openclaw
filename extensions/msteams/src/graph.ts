@@ -129,6 +129,8 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
   token: string;
   url: string;
   headers?: Record<string, string>;
+  /** Optional shared operation deadline; actively aborts the guarded fetch when spent. */
+  deadline?: MSTeamsRequestDeadline;
 }): Promise<T> {
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
@@ -140,7 +142,7 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
       },
     },
     auditContext: "msteams.graph.absolute",
-    timeoutMs: MSTEAMS_REQUEST_TIMEOUT_MS,
+    timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
   });
   try {
     if (!response.ok) {
@@ -177,6 +179,8 @@ export async function fetchAllGraphPages<T>(params: {
   maxPages?: number;
   /** Stop pagination early when this predicate returns true. */
   findOne?: (item: T) => boolean;
+  /** Optional shared operation deadline; actively aborts the guarded fetch when spent. */
+  deadline?: MSTeamsRequestDeadline;
 }): Promise<PaginatedResult<T>> {
   const maxPages = params.maxPages ?? 50;
   const items: T[] = [];
@@ -187,6 +191,7 @@ export async function fetchAllGraphPages<T>(params: {
       token: params.token,
       path: nextPath,
       headers: params.headers,
+      deadline: params.deadline,
     });
 
     const pageItems = res.value ?? [];
@@ -265,6 +270,8 @@ export async function postGraphJson<T>(params: {
   token: string;
   path: string;
   body?: unknown;
+  /** Optional shared operation deadline; actively aborts the guarded fetch when spent. */
+  deadline?: MSTeamsRequestDeadline;
 }): Promise<T> {
   const res = await requestGraph({
     token: params.token,
@@ -272,6 +279,7 @@ export async function postGraphJson<T>(params: {
     method: "POST",
     body: params.body,
     errorPrefix: "Graph POST",
+    deadline: params.deadline,
   });
   return readOptionalGraphJson<T>(res, `Graph POST ${params.path} failed`);
 }
@@ -280,6 +288,8 @@ export async function postGraphBetaJson<T>(params: {
   token: string;
   path: string;
   body?: unknown;
+  /** Optional shared operation deadline; actively aborts the guarded fetch when spent. */
+  deadline?: MSTeamsRequestDeadline;
 }): Promise<T> {
   const res = await requestGraph({
     token: params.token,
@@ -288,16 +298,23 @@ export async function postGraphBetaJson<T>(params: {
     root: GRAPH_BETA,
     body: params.body,
     errorPrefix: "Graph beta POST",
+    deadline: params.deadline,
   });
   return readOptionalGraphJson<T>(res, `Graph beta POST ${params.path} failed`);
 }
 
-export async function deleteGraphRequest(params: { token: string; path: string }): Promise<void> {
+export async function deleteGraphRequest(params: {
+  token: string;
+  path: string;
+  /** Optional shared operation deadline; actively aborts the guarded fetch when spent. */
+  deadline?: MSTeamsRequestDeadline;
+}): Promise<void> {
   await requestGraph({
     token: params.token,
     path: params.path,
     method: "DELETE",
     errorPrefix: "Graph DELETE",
+    deadline: params.deadline,
   });
 }
 
@@ -305,6 +322,8 @@ export async function patchGraphJson<T>(params: {
   token: string;
   path: string;
   body?: unknown;
+  /** Optional shared operation deadline; actively aborts the guarded fetch when spent. */
+  deadline?: MSTeamsRequestDeadline;
 }): Promise<T> {
   const res = await requestGraph({
     token: params.token,
@@ -312,6 +331,7 @@ export async function patchGraphJson<T>(params: {
     method: "PATCH",
     body: params.body,
     errorPrefix: "Graph PATCH",
+    deadline: params.deadline,
   });
   return readOptionalGraphJson<T>(res, `Graph PATCH ${params.path} failed`);
 }
