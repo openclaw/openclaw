@@ -43,9 +43,14 @@ type ChatModelSelectState = {
 export type ChatFastModeSelectValue = "" | "on" | "off" | "auto";
 
 export type ChatFastModeSelectState = {
+  /** Fast output is effectively enabled (explicitly or via auto/inherited default). */
+  active: boolean;
   currentOverride: ChatFastModeSelectValue;
   disabled: boolean;
-  options: ChatModelSelectOption[];
+  /** Short state word shown inside the speed toggle. */
+  label: string;
+  /** Value the toggle commits when clicked. */
+  nextValue: ChatFastModeSelectValue;
   supported: boolean;
 };
 
@@ -62,14 +67,11 @@ type ChatFastModeSelectStateInput = {
   stream: string | null;
 };
 
-const FAST_MODE_PROVIDER_IDS = new Set([
-  "anthropic",
-  "minimax",
-  "minimax-portal",
-  "openai",
-  "openrouter",
-  "xai",
-]);
+// Providers with a real runtime fast-mode mapping: anthropic sets
+// service_tier auto/standard_only (extensions/anthropic/stream-wrappers.ts),
+// openai sets service_tier priority, minimax/xai swap to fast model variants.
+// Providers without a wire mapping must not offer the toggle.
+const FAST_MODE_PROVIDER_IDS = new Set(["anthropic", "minimax", "minimax-portal", "openai", "xai"]);
 
 function resolveActiveSessionRow(state: ChatModelSelectStateInput) {
   return state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
@@ -345,20 +347,41 @@ export function resolveChatFastModeSelectState(
           ? "off"
           : "";
   const isOpenAI = effectiveProvider === "openai";
-  const effectiveOpenAIMode = activeRow?.effectiveFastMode ?? activeRow?.fastMode;
+  const effectiveMode = activeRow?.effectiveFastMode ?? activeRow?.fastMode;
   // OpenAI exposes one optional priority tier. Keep legacy auto unselected so
   // either binary choice replaces it instead of implying the wrong tier.
   const currentOverride = isOpenAI
-    ? effectiveOpenAIMode === true
+    ? effectiveMode === true
       ? "on"
-      : effectiveOpenAIMode === "auto"
+      : effectiveMode === "auto"
         ? "auto"
         : "off"
     : configuredOverride;
   const supported = Boolean(
     (effectiveProvider && FAST_MODE_PROVIDER_IDS.has(effectiveProvider)) || configuredOverride,
   );
+  // The picker exposes speed as a two-state toggle: fast on, or back to the
+  // provider baseline (explicit off for OpenAI's priority tier, inherited
+  // default elsewhere). Auto and explicit standard overrides remain reachable
+  // through /fast and still render truthfully here.
+  const active = effectiveMode === true || effectiveMode === "auto";
+  const label =
+    effectiveMode === "auto"
+      ? "Auto"
+      : active
+        ? "Fast"
+        : isOpenAI
+          ? "Standard"
+          : currentOverride === "off"
+            ? "Standard"
+            : "Default";
+  const nextValue: ChatFastModeSelectValue = active
+    ? isOpenAI || currentOverride === ""
+      ? "off"
+      : ""
+    : "on";
   return {
+    active,
     currentOverride,
     disabled:
       !supported ||
@@ -368,17 +391,8 @@ export function resolveChatFastModeSelectState(
       Boolean(input.activeRunId) ||
       input.stream !== null ||
       !input.gatewayAvailable,
-    options: isOpenAI
-      ? [
-          { value: "off", label: "Standard" },
-          { value: "on", label: "Fast" },
-        ]
-      : [
-          { value: "", label: "Default" },
-          { value: "on", label: "Fast" },
-          { value: "off", label: "Standard" },
-          { value: "auto", label: "Auto" },
-        ],
+    label,
+    nextValue,
     supported,
   };
 }
