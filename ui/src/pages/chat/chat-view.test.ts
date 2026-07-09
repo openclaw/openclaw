@@ -3746,6 +3746,42 @@ describe("chat model controls", () => {
     expect(speedButtons.every((button) => button.disabled)).toBe(true);
   });
 
+  it("keeps the newest speed selection when an older patch fails late", async () => {
+    const pendingPatches: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
+    // Minimal host: the factory's mock gateway rebuilds session rows on every
+    // refresh, which would mask the optimistic fastMode value under test.
+    const host = {
+      client: {},
+      connected: true,
+      sessionKey: "main",
+      chatModelCatalog: [],
+      chatThinkingLevel: null,
+      sessionsResult: createSessionsResultFromRows([{ key: "main", kind: "direct", updatedAt: 1 }]),
+      sessions: {
+        patch: () =>
+          new Promise((resolve, reject) => {
+            pendingPatches.push({ resolve: () => resolve(null), reject });
+          }),
+        refresh: async () => {},
+      },
+    } as unknown as Parameters<typeof switchChatFastMode>[0];
+
+    const first = switchChatFastMode(host, "on");
+    await vi.waitFor(() => expect(pendingPatches).toHaveLength(1));
+    const second = switchChatFastMode(host, "off");
+    await vi.waitFor(() => expect(pendingPatches).toHaveLength(2));
+
+    pendingPatches[1]?.resolve();
+    await expect(second).resolves.toBe(true);
+    pendingPatches[0]?.reject(new Error("boom"));
+    await expect(first).resolves.toBe(false);
+
+    // Without the per-session patch token, the older failure would roll the
+    // row back to its pre-"on" value and clobber the newer selection.
+    const row = host.sessionsResult?.sessions.find((entry) => entry.key === "main");
+    expect(row?.fastMode).toBe(false);
+  });
+
   it("renders the committed model selection when a model switch fails", async () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
