@@ -243,7 +243,7 @@ export function createXaiToolPayloadCompatibilityWrapper(
           }
           normalizeXaiResponsesToolResultPayload(payloadObj, model);
           if (!supportsReasoningControls(model)) {
-            // Only grok-4.3* advertises configurable effort; drop effort fields elsewhere.
+            // Only current flagship Grok models advertise configurable effort.
             delete payloadObj.reasoning;
             delete payloadObj.reasoningEffort;
             delete payloadObj.reasoning_effort;

@@ -261,7 +261,7 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("rejects unknown sentinel-shaped values before guarded fetch", async () => {
-    const unknown = "oc-sent-v1-fedcba987654321001234567";
+    const unknown = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
     await expect(
       buildGuardedModelFetch(sentinelModel())("https://api.openai.com/v1/responses", {
         headers: { Authorization: `Bearer ${unknown}` },

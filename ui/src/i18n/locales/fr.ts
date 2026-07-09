@@ -1576,6 +1576,16 @@ export const fr: TranslationMap = {
   chat: {
     disconnected: "Déconnecté du Gateway.",
     archivedSessionDisabled: "Restaurez cette session pour envoyer des messages.",
+    taskSuggestions: {
+      eyebrow: "Suivi suggéré",
+      start: "Démarrer dans un worktree",
+      starting: "Démarrage…",
+      dismiss: "Ignorer {title}",
+      project: "Projet",
+      instructions: "Instructions",
+      adminRequired:
+        "Un accès administrateur est requis pour créer un worktree à partir de ce projet.",
+    },
     refreshTitle: "Actualiser les données du chat",
     settings: "Paramètres de chat",
     usageRemaining: "Utilisation restante",

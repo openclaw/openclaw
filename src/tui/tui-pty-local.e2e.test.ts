@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayChatClient } from "./gateway-chat.js";
@@ -450,8 +450,8 @@ async function startGatewayModeTui(params: {
   }
 }
 
-describe.concurrent("TUI PTY real backends", () => {
-  afterAll(() => {
+describe("TUI PTY real backends", () => {
+  afterEach(() => {
     for (const run of activeRuns.splice(0)) {
       run.dispose();
     }

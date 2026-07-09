@@ -617,6 +617,53 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("routes page typing to the active composer without stealing text input focus", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          content: [{ text: "Type whenever you are ready.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText("Type whenever you are ready.").click();
+
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await expect
+        .poll(() => composer.evaluate((element) => element === document.activeElement))
+        .toBe(false);
+
+      await page.keyboard.type("first character preserved");
+      expect(await composer.inputValue()).toBe("first character preserved");
+      await expect
+        .poll(() => composer.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+
+      await page.getByRole("button", { name: "Open command palette" }).click();
+      const paletteInput = page.locator(".cmd-palette__input");
+      await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
+      await expect
+        .poll(() => paletteInput.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.type("session search");
+
+      expect(await paletteInput.inputValue()).toBe("session search");
+      expect(await composer.inputValue()).toBe("first character preserved");
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("keeps stale context visible as approximate without warning or compaction", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
@@ -1165,6 +1212,159 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       const request = await gateway.waitForRequest("sessions.create");
       expect(requireRecord(request.params)).toMatchObject({ agentId: "main", worktree: true });
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("starts a model-suggested follow-up in a fresh worktree session", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const suggestion = {
+      id: "task_123",
+      title: "Remove stale adapter",
+      prompt: "Delete the stale adapter in src/example.ts and update tests.",
+      tldr: "The adapter is unreachable and adds maintenance cost.",
+      cwd: "/projects/example",
+      sessionKey: "main",
+      agentId: "main",
+      createdAt: Date.now(),
+    };
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["taskSuggestions.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "taskSuggestions.list",
+        "taskSuggestions.accept",
+      ],
+      methodResponses: {
+        "taskSuggestions.list": { suggestions: [suggestion] },
+        "taskSuggestions.accept": {
+          taskId: "task_123",
+          key: "agent:main:dashboard:suggested",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await gateway.waitForRequest("taskSuggestions.list");
+      await gateway.emitGatewayEvent("task.suggestion", {
+        action: "created",
+        suggestion,
+      });
+      await gateway.resolveDeferred("taskSuggestions.list", { suggestions: [] });
+
+      const startButton = page.getByRole("button", { name: "Start in worktree" });
+      await startButton.waitFor({ state: "visible", timeout: 10_000 });
+      await page
+        .getByText("/projects/example", { exact: true })
+        .waitFor({ state: "visible", timeout: 10_000 });
+      await page
+        .getByText("Delete the stale adapter in src/example.ts and update tests.", {
+          exact: true,
+        })
+        .waitFor({ state: "visible", timeout: 10_000 });
+      await startButton.click();
+
+      const acceptRequest = await gateway.waitForRequest("taskSuggestions.accept");
+      expect(acceptRequest.params).toEqual({ taskId: "task_123" });
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("clears model-suggested follow-ups while switching sessions", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "taskSuggestions.list"],
+      methodResponses: {
+        "sessions.list": chatSessionListResponse(),
+        "taskSuggestions.list": {
+          suggestions: [
+            {
+              id: "task_session_a",
+              title: "Follow up from session A",
+              prompt: "Complete the follow-up discovered in session A.",
+              tldr: "This suggestion belongs only to session A.",
+              cwd: "/projects/example",
+              sessionKey: "agent:main:session-a",
+              agentId: "main",
+              createdAt: Date.now(),
+            },
+          ],
+        },
+      },
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const startButton = page.getByRole("button", { name: "Start in worktree" });
+      await startButton.waitFor({ state: "visible", timeout: 10_000 });
+      await gateway.deferNext("taskSuggestions.list");
+      await page
+        .locator(
+          '.sidebar-recent-session[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link',
+        )
+        .click();
+      await waitForRequests(gateway, "taskSuggestions.list", 2);
+
+      await expect.poll(() => startButton.count()).toBe(0);
+      await gateway.resolveDeferred("taskSuggestions.list", { suggestions: [] });
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("keeps the composer visible when follow-up suggestions overflow", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 720, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "taskSuggestions.list"],
+      methodResponses: {
+        "taskSuggestions.list": {
+          suggestions: Array.from({ length: 12 }, (_, index) => ({
+            id: `task_overflow_${index}`,
+            title: `Follow-up ${index}`,
+            prompt: "Inspect the related implementation and tests. ".repeat(12),
+            tldr: "This follow-up remains useful but must not hide the composer.",
+            cwd: "/projects/example",
+            sessionKey: "main",
+            agentId: "main",
+            createdAt: Date.now() + index,
+          })),
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const tray = page.locator(".task-suggestions");
+      await tray.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await tray.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(
+        true,
+      );
+
+      const composer = page.locator(".agent-chat__composer-shell");
+      await composer.waitFor({ state: "visible", timeout: 10_000 });
+      const box = await composer.boundingBox();
+      expect(box).not.toBeNull();
+      expect((box?.y ?? 720) + (box?.height ?? 0)).toBeLessThanOrEqual(720);
     } finally {
       await closeBrowserContext(context);
     }
