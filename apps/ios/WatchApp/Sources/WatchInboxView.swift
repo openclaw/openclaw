@@ -1090,7 +1090,15 @@ private struct WatchChatTimelineView: View {
                     }
 
                     if let voiceStatusText = self.voiceStatusText {
-                        WatchTinyStatus(text: voiceStatusText)
+                        VStack(alignment: .leading, spacing: 3) {
+                            // Watch TTS runs through AVSpeechSynthesizer, which has no
+                            // metering API, so speaking uses the wave's synthetic pulse.
+                            TalkWaveformView(
+                                phase: self.speechPlayback.isSpeaking ? .speaking(level: nil) : .thinking)
+                                .frame(height: 24)
+                                .accessibilityHidden(true)
+                            WatchTinyStatus(text: voiceStatusText)
+                        }
                     }
 
                     WatchSecondaryButton(title: "Refresh") {
