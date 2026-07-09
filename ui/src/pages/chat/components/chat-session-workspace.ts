@@ -569,11 +569,12 @@ export function renderSessionWorkspaceRail(
         class="chat-workspace-rail chat-workspace-rail--collapsed"
         aria-label=${t("chat.workspaceFiles.label")}
       >
-        <openclaw-tooltip .content=${t("chat.workspaceFiles.expand")}>
+        <openclaw-tooltip .content=${`${t("chat.workspaceFiles.expand")} (⇧⌘B)`}>
           <button
             type="button"
             class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
             aria-label=${t("chat.workspaceFiles.expand")}
+            aria-keyshortcuts="Meta+Shift+B"
             aria-expanded="false"
             @click=${sessionWorkspace.onToggleCollapsed}
           >
@@ -882,11 +883,12 @@ export function renderSessionWorkspaceRail(
               ${icons.refresh}
             </button>
           </openclaw-tooltip>
-          <openclaw-tooltip .content=${t("chat.workspaceFiles.collapse")}>
+          <openclaw-tooltip .content=${`${t("chat.workspaceFiles.collapse")} (⇧⌘B)`}>
             <button
               type="button"
               class="nav-collapse-toggle chat-workspace-rail__collapse-toggle"
               aria-label=${t("chat.workspaceFiles.collapse")}
+              aria-keyshortcuts="Meta+Shift+B"
               aria-expanded="true"
               @click=${sessionWorkspace.onToggleCollapsed}
             >
