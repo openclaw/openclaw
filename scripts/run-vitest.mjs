@@ -423,7 +423,7 @@ export function resolveVitestSpawnParams(env = process.env, platform = process.p
 /**
  * Applies local Vitest scheduling and native worker budget env.
  */
-export function resolveVitestSpawnEnv(env = process.env) {
+function resolveVitestSpawnEnv(env = process.env) {
   const baseEnv = resolveLocalVitestEnv(env);
   if (!shouldApplyNativeWorkerBudget(baseEnv)) {
     return baseEnv;
@@ -892,7 +892,7 @@ export function installVitestNoOutputWatchdog(params) {
 /**
  * Forwards child output while optionally suppressing complete stderr lines.
  */
-export function forwardVitestOutput(stream, target, shouldSuppressLine = () => false) {
+function forwardVitestOutput(stream, target, shouldSuppressLine = () => false) {
   if (!stream) {
     return;
   }

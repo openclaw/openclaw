@@ -24,6 +24,7 @@ import {
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
 import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
+import { readCronTriggerScript } from "./trigger-options.js";
 
 const CRON_EDIT_LOOKUP_PAGE_SIZE = 200;
 const CRON_EDIT_LOOKUP_MAX_PAGES = 50;
@@ -118,6 +119,9 @@ export function registerCronEditCommand(cron: Command) {
       )
       .option("--stagger <duration>", "Cron stagger window (e.g. 30s, 5m)")
       .option("--exact", "Disable cron staggering (set stagger to 0)")
+      .option("--trigger-script <path|->", "Set condition script from file, or - for stdin")
+      .option("--trigger-once", "Disable after the first successful triggered run", false)
+      .option("--clear-trigger", "Remove the condition trigger", false)
       .option("--system-event <text>", "Set systemEvent payload")
       .option("--message <text>", "Set agentTurn payload message")
       .option("--command <shell>", "Set command payload run as sh -lc <shell> on the Gateway")
@@ -274,6 +278,25 @@ export function registerCronEditCommand(cron: Command) {
           }
           if (opts.clearSessionKey) {
             patch.sessionKey = null;
+          }
+
+          const triggerScriptPath = normalizeOptionalString(opts.triggerScript);
+          if (opts.clearTrigger && (triggerScriptPath || opts.triggerOnce)) {
+            throw new Error("Use --clear-trigger or trigger options, not both");
+          }
+          if (opts.clearTrigger) {
+            patch.trigger = null;
+          } else if (triggerScriptPath) {
+            patch.trigger = {
+              script: await readCronTriggerScript(triggerScriptPath),
+              ...(opts.triggerOnce ? { once: true } : {}),
+            };
+          } else if (opts.triggerOnce) {
+            const existing = await readCronJobForEdit(opts, String(id));
+            if (!existing.trigger) {
+              throw new Error("--trigger-once requires an existing trigger or --trigger-script");
+            }
+            patch.trigger = { ...existing.trigger, once: true };
           }
 
           const scheduleRequest = resolveCronEditScheduleRequest({

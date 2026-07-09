@@ -1,5 +1,6 @@
 // Control UI module implements format behavior.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatDurationHuman } from "../../../src/infra/format-time/format-duration.ts";
 import { formatRelativeTimestamp } from "../../../src/infra/format-time/format-relative.ts";
 import { t } from "../i18n/index.ts";
@@ -110,7 +111,7 @@ export function clampText(value: string, max = 120): string {
   if (value.length <= max) {
     return value;
   }
-  return `${value.slice(0, Math.max(0, max - 1))}…`;
+  return `${truncateUtf16Safe(value, Math.max(0, max - 1))}…`;
 }
 
 export function truncateText(
@@ -125,7 +126,7 @@ export function truncateText(
     return { text: value, truncated: false, total: value.length };
   }
   return {
-    text: value.slice(0, Math.max(0, max)),
+    text: truncateUtf16Safe(value, Math.max(0, max)),
     truncated: true,
     total: value.length,
   };

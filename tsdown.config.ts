@@ -367,6 +367,7 @@ function buildGatewayProtocolDistEntries(): Record<string, string> {
     index: "packages/gateway-protocol/src/index.ts",
     "client-info": "packages/gateway-protocol/src/client-info.ts",
     "connect-error-details": "packages/gateway-protocol/src/connect-error-details.ts",
+    "frame-guards": "packages/gateway-protocol/src/frame-guards.ts",
     schema: "packages/gateway-protocol/src/schema.ts",
     "startup-unavailable": "packages/gateway-protocol/src/startup-unavailable.ts",
     version: "packages/gateway-protocol/src/version.ts",

@@ -66,4 +66,18 @@ describe("chrome MCP snapshot conversion", () => {
     });
     expect(result.stats.refs).toBe(2);
   });
+
+  it("does not split a surrogate pair when truncating AI snapshots", () => {
+    const prefix = `- button "${"A".repeat(18)}`;
+    const result = buildAiSnapshotFromChromeMcpSnapshot({
+      root: {
+        role: "button",
+        name: `${"A".repeat(18)}🙂`,
+      },
+      maxChars: prefix.length + 1,
+    });
+
+    expect(result.snapshot).toBe(`${prefix}\n\n[...TRUNCATED - page too large]`);
+    expect(result.truncated).toBe(true);
+  });
 });

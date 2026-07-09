@@ -136,6 +136,15 @@ describe("infra runtime", () => {
       await vi.runAllTimersAsync();
     });
 
+    it("backs off before an emoji that crosses the restart reason limit", () => {
+      const restart = scheduleGatewaySigusr1Restart({
+        delayMs: 0,
+        reason: "x".repeat(199) + "🧠tail",
+      });
+
+      expect(restart.reason).toBe("x".repeat(199));
+    });
+
     it("tracks external restart policy", () => {
       expect(isGatewaySigusr1RestartExternallyAllowed()).toBe(false);
       setGatewaySigusr1RestartPolicy({ allowExternal: true });

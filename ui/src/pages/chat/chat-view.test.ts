@@ -4049,6 +4049,24 @@ describe("right-click Reply", () => {
     expect(target.senderLabel).toBe("User");
   });
 
+  it("backs off before an emoji that crosses the reply target limit", () => {
+    const onSetReply = vi.fn();
+    const container = renderChatView({ onSetReply });
+    const section = container.querySelector<HTMLElement>(".card.chat");
+    const group = document.createElement("div");
+    group.className = "chat-group";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.messageText = "x".repeat(499) + "🧠tail";
+    group.appendChild(bubble);
+    section!.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    document.querySelector<HTMLButtonElement>(".chat-reply-context-menu button")!.click();
+
+    expect(onSetReply.mock.calls[0][0].text).toBe("x".repeat(499));
+  });
+
   it("keeps the native context menu when Reply is unavailable", () => {
     const container = renderChatView();
     const section = container.querySelector<HTMLElement>(".card.chat");
@@ -4127,6 +4145,20 @@ describe("right-click Reply", () => {
 
     const dismiss = preview!.querySelector<HTMLButtonElement>(".chat-reply-preview__dismiss");
     expect(dismiss).not.toBeNull();
+  });
+
+  it("backs off before an emoji that crosses the reply preview limit", () => {
+    const container = renderChatView({
+      replyTarget: {
+        messageId: "msg-emoji",
+        text: "x".repeat(119) + "🧠tail",
+        senderLabel: "User",
+      },
+    });
+
+    expect(container.querySelector(".chat-reply-preview__text")?.textContent).toBe(
+      `${"x".repeat(119)}...`,
+    );
   });
 
   it("calls onClearReply when dismiss button is clicked", () => {

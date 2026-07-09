@@ -68,6 +68,5 @@ export function resolveSlackWriteClientOptions(options: WebClientOptions = {}): 
   const resolved: WebClientOptions = Object.assign({}, options);
   applySlackApiUrlAndProxyOptions(resolved);
   resolved.retryConfig ??= SLACK_WRITE_RETRY_OPTIONS;
-  resolved.maxRequestConcurrency ??= 1;
   return resolved;
 }
