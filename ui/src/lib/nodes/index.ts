@@ -330,8 +330,14 @@ async function removeInventoryEntryRpc(
   }
 }
 
-async function reloadInventory(state: InventoryState) {
-  await Promise.all([loadDevices(state), loadNodes(state)]);
+// Reload quietly and assign the failure afterwards: a non-quiet loadDevices
+// clears devicesError first, which would erase the message before it renders.
+async function reloadInventory(state: InventoryState, opts?: { error?: string }) {
+  const quiet = opts?.error !== undefined;
+  await Promise.all([loadDevices(state, { quiet }), loadNodes(state, { quiet })]);
+  if (opts?.error !== undefined) {
+    state.devicesError = opts.error;
+  }
 }
 
 export async function removeInventoryEntry(state: InventoryState, entry: InventoryRemovalRequest) {
@@ -345,10 +351,10 @@ export async function removeInventoryEntry(state: InventoryState, entry: Invento
   }
   try {
     await removeInventoryEntryRpc(client, entry);
+    await reloadInventory(state);
   } catch (err) {
-    state.devicesError = String(err);
+    await reloadInventory(state, { error: String(err) });
   }
-  await reloadInventory(state);
 }
 
 export async function removeStaleInventoryEntries(
@@ -373,10 +379,14 @@ export async function removeStaleInventoryEntries(
       failures.push(`${entry.name}: ${String(err)}`);
     }
   }
-  if (failures.length > 0) {
-    state.devicesError = `Failed to remove ${failures.length} entr${failures.length === 1 ? "y" : "ies"}: ${failures[0]}`;
-  }
-  await reloadInventory(state);
+  await reloadInventory(
+    state,
+    failures.length > 0
+      ? {
+          error: `Failed to remove ${failures.length} entr${failures.length === 1 ? "y" : "ies"}: ${failures[0]}`,
+        }
+      : undefined,
+  );
 }
 
 export async function approveNodePairingRequest(state: InventoryState, requestId: string) {
@@ -385,10 +395,10 @@ export async function approveNodePairingRequest(state: InventoryState, requestId
   }
   try {
     await state.client.request("node.pair.approve", { requestId });
+    await reloadInventory(state);
   } catch (err) {
-    state.devicesError = String(err);
+    await reloadInventory(state, { error: String(err) });
   }
-  await reloadInventory(state);
 }
 
 export async function rejectNodePairingRequest(state: InventoryState, requestId: string) {
@@ -401,10 +411,10 @@ export async function rejectNodePairingRequest(state: InventoryState, requestId:
   }
   try {
     await state.client.request("node.pair.reject", { requestId });
+    await reloadInventory(state);
   } catch (err) {
-    state.devicesError = String(err);
+    await reloadInventory(state, { error: String(err) });
   }
-  await reloadInventory(state);
 }
 
 export async function rotateDeviceToken(

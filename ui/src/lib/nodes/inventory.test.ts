@@ -112,33 +112,54 @@ describe("buildNodesInventory", () => {
     expect(groups[0].primary.device).toBeUndefined();
   });
 
-  it("flags silent pairings as auto-approved", () => {
+  it("flags silent and trusted-cidr pairings as auto-approved", () => {
     const groups = buildNodesInventory({
-      paired: [device({ deviceId: "cli-1", clientId: "cli", approvedVia: "silent" })],
+      paired: [
+        device({ deviceId: "cli-1", clientId: "cli", approvedVia: "silent" }),
+        device({ deviceId: "cidr-1", displayName: "megaclaw", approvedVia: "trusted-cidr" }),
+        device({ deviceId: "owner-1", displayName: "iPhone", approvedVia: "owner" }),
+      ],
       nodes: [],
     });
-    expect(groups[0].primary.autoApproved).toBe(true);
+    const byId = new Map(groups.map((group) => [group.primary.id, group.primary]));
+    expect(byId.get("cli-1")?.autoApproved).toBe(true);
+    expect(byId.get("cidr-1")?.autoApproved).toBe(true);
+    expect(byId.get("owner-1")?.autoApproved).toBe(false);
   });
 });
 
 describe("listStaleInventoryEntries", () => {
-  it("lists offline duplicates only", () => {
+  it("lists offline auto-approved duplicates only", () => {
     const groups = buildNodesInventory({
       paired: [
-        device({ deviceId: "new-1", displayName: "megaclaw", lastSeenAtMs: 3_000 }),
+        device({
+          deviceId: "new-1",
+          displayName: "megaclaw",
+          approvedVia: "silent",
+          lastSeenAtMs: 3_000,
+        }),
         device({
           deviceId: "live-old",
           displayName: "megaclaw",
           roles: ["node"],
+          approvedVia: "trusted-cidr",
           lastSeenAtMs: 2_000,
         }),
-        device({ deviceId: "old-1", displayName: "megaclaw", lastSeenAtMs: 1_000 }),
+        device({
+          deviceId: "old-1",
+          displayName: "megaclaw",
+          approvedVia: "trusted-cidr",
+          lastSeenAtMs: 1_000,
+        }),
+        // Owner-approved and pre-provenance duplicates never enter the bulk sweep.
+        device({ deviceId: "owner-old", displayName: "megaclaw", approvedVia: "owner" }),
+        device({ deviceId: "legacy-old", displayName: "megaclaw" }),
       ],
       nodes: [{ nodeId: "live-old", connected: true, paired: true }],
     });
 
     // Connected entry becomes primary; fresh offline entry stays a duplicate but
-    // both offline duplicates are safe to clean up.
+    // only offline auto-approved duplicates are safe to clean up.
     expect(listStaleInventoryEntries(groups).map((entry) => entry.id)).toEqual(["new-1", "old-1"]);
   });
 });

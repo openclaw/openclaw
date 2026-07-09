@@ -570,7 +570,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
             clientMode: "node",
             roles: ["operator", "node"],
             scopes: ["operator.admin", "operator.read", "operator.write"],
-            approvedVia: "silent",
+            approvedVia: "trusted-cidr",
             approvedAtMs: baseTime - 3_600_000,
             lastSeenAtMs: baseTime - 60_000,
             tokens: [
@@ -589,7 +589,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
             clientId: "node-host",
             clientMode: "node",
             roles: ["node"],
-            approvedVia: "silent",
+            approvedVia: "trusted-cidr",
             approvedAtMs: baseTime - 86_400_000,
             lastSeenAtMs: baseTime - 82_800_000,
             tokens: [{ role: "node", scopes: [], createdAtMs: baseTime - 86_400_000 }],

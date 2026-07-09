@@ -147,7 +147,7 @@ A **Search** field at the top of the sidebar opens the command palette (⌘K). T
     - Cron jobs: list/add/edit/run/enable/disable plus run history (`cron.*`).
     - Tasks: live active and recent background task ledger with linked sessions and cancellation (`tasks.*`).
     - Skills: status, enable/disable, install, API key updates (`skills.*`).
-    - Nodes: one **Nodes & devices** inventory that joins paired device records with the node catalog (`node.list`, `device.pair.list`) — one entry per machine with roles, live link status, tokens, and capabilities. Duplicate pairings of the same client collapse into an expandable group, and **Clean up N stale** removes superseded offline pairings in bulk. Entries can be removed (`node.pair.remove`, `device.pair.remove`), device pairing and node re-approvals handled inline (`device.pair.*`, `node.pair.approve`/`reject`), and mobile setup codes created from the same card.
+    - Nodes: one **Nodes & devices** inventory that joins paired device records with the node catalog (`node.list`, `device.pair.list`) — one entry per machine with roles, live link status, tokens, and capabilities. Duplicate pairings of the same client collapse into an expandable group, and **Clean up N stale** bulk-removes superseded pairings that are offline and were auto-approved (silent local or trusted-CIDR), so affected clients re-pair without user action. Entries can be removed (`node.pair.remove`, `device.pair.remove`), device pairing and node re-approvals handled inline (`device.pair.*`, `node.pair.approve`/`reject`), and mobile setup codes created from the same card.
     - Exec approvals: edit gateway or node allowlists and ask policy for `exec host=gateway/node` (`exec.approvals.*`).
 
   </Accordion>

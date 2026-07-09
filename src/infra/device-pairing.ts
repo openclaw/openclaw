@@ -108,12 +108,14 @@ export type RevokeDeviceTokenResult =
   | { ok: false; reason: RevokeDeviceTokenDenyReason; scope?: string };
 
 /**
- * How the latest pairing approval was granted. "silent" covers non-interactive
- * gateway policy approvals (local clients, trusted-CIDR nodes); those records
- * are replaceable and eligible for supersede pruning. "owner" and "bootstrap"
- * approvals required a user action and are never pruned automatically.
+ * How the latest pairing approval was granted. "silent" is a same-host local
+ * policy approval and the only prune-eligible kind: local clients re-pair
+ * silently and cannot collide with another machine's records. "trusted-cidr"
+ * is also non-interactive but crosses hosts, so it is never pruned
+ * automatically (display metadata is not a machine identity). "owner" and
+ * "bootstrap" approvals required a user action and are never pruned.
  */
-export type PairedDeviceApprovalKind = "owner" | "silent" | "bootstrap";
+export type PairedDeviceApprovalKind = "owner" | "silent" | "trusted-cidr" | "bootstrap";
 
 /** Persisted approved device record, including durable approval and active role tokens. */
 export type PairedDevice = {
@@ -547,16 +549,21 @@ function buildDeviceAuthToken(params: {
 }
 
 // Interactive approvals must stay sticky: a later silent repair/re-approve of the
-// same device id cannot downgrade an owner/bootstrap record into prune-eligible state.
+// same device id cannot downgrade an owner/bootstrap record into prune-eligible
+// state. Pre-provenance records (approvedVia undefined) may have been approved by
+// an owner, so a non-interactive re-approve must keep them protected (undefined).
 function mergeApprovalKind(
-  existing: PairedDeviceApprovalKind | undefined,
+  existing: PairedDevice | undefined,
   incoming: PairedDeviceApprovalKind,
-): PairedDeviceApprovalKind {
-  if (existing === "owner" || incoming === "owner") {
-    return "owner";
+): PairedDeviceApprovalKind | undefined {
+  if (incoming === "owner" || !existing) {
+    return incoming;
   }
-  if (existing === "bootstrap") {
-    return "bootstrap";
+  if (existing.approvedVia === undefined) {
+    return incoming === "bootstrap" ? "bootstrap" : undefined;
+  }
+  if (existing.approvedVia === "owner" || existing.approvedVia === "bootstrap") {
+    return existing.approvedVia;
   }
   return incoming;
 }
@@ -585,7 +592,7 @@ function buildApprovedPairedDevice(params: {
     approvedScopes: params.approvedScopes,
     remoteIp: params.accessMetadata?.remoteIp ?? params.pending.remoteIp,
     tokens: params.tokens,
-    approvedVia: mergeApprovalKind(params.existing?.approvedVia, params.approvedVia),
+    approvedVia: mergeApprovalKind(params.existing, params.approvedVia),
     createdAtMs: params.existing?.createdAtMs ?? params.now,
     approvedAtMs: params.now,
     lastSeenAtMs: params.accessMetadata?.lastSeenAtMs ?? params.existing?.lastSeenAtMs,
@@ -775,7 +782,7 @@ export async function approveDevicePairing(
   options: {
     callerScopes?: readonly string[];
     accessMetadata?: DevicePairingAccessMetadata;
-    approvedVia?: Extract<PairedDeviceApprovalKind, "owner" | "silent">;
+    approvedVia?: Extract<PairedDeviceApprovalKind, "owner" | "silent" | "trusted-cidr">;
   },
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult>;
@@ -785,7 +792,7 @@ export async function approveDevicePairing(
     | {
         callerScopes?: readonly string[];
         accessMetadata?: DevicePairingAccessMetadata;
-        approvedVia?: Extract<PairedDeviceApprovalKind, "owner" | "silent">;
+        approvedVia?: Extract<PairedDeviceApprovalKind, "owner" | "silent" | "trusted-cidr">;
       }
     | string,
   maybeBaseDir?: string,
@@ -1053,9 +1060,10 @@ export type PrunedSupersededPairedDevice = {
 
 /**
  * Remove silent-approved sibling records superseded by a newly approved silent
- * pairing of the same client cluster. Only prunes records whose latest approval
- * was non-interactive ("silent"): those clients re-pair silently by construction,
- * so dropping a stale record never requires user action. Currently connected
+ * pairing of the same client cluster. Only records whose latest approval was
+ * same-host local ("silent") are eligible, as anchor and as victim: local
+ * clients re-pair silently by construction and share the gateway host, so the
+ * metadata cluster key cannot match a different machine. Currently connected
  * devices are skipped so concurrent sessions with distinct state dirs keep
  * their tokens while live.
  */

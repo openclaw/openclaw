@@ -1513,7 +1513,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   : await approveDevicePairing(pairing.request.requestId, {
                       callerScopes: scopes,
                       accessMetadata: clientAccessMetadata,
-                      approvedVia: "silent",
+                      // Same-host local approvals are prune-eligible "silent";
+                      // trusted-CIDR approvals cross hosts and must never be
+                      // auto-pruned, so they carry their own provenance.
+                      approvedVia: allowSilentLocalPairing ? "silent" : "trusted-cidr",
                     });
               if (approved?.status === "approved") {
                 if (allowSetupCodeMobileBootstrapPairing && boundBootstrapProfile) {

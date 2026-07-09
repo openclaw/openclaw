@@ -226,6 +226,7 @@ describe("nodes inventory rendering", () => {
             deviceId: "mac-old",
             displayName: "MacBook",
             roles: ["operator", "node"],
+            approvedVia: "silent",
             lastSeenAtMs: 1_000,
           },
         ],

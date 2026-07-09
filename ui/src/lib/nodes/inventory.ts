@@ -150,7 +150,7 @@ function buildEntry(id: string, device?: PairedDevice, node?: NodeListEntry): No
     roles,
     scopes: stringList(device?.scopes),
     connected: node?.connected === true,
-    autoApproved: device?.approvedVia === "silent",
+    autoApproved: device?.approvedVia === "silent" || device?.approvedVia === "trusted-cidr",
     lastSeenAtMs: maxDefined(device?.lastSeenAtMs, node?.lastSeenAtMs, node?.connectedAtMs),
     approvedAtMs: maxDefined(device?.approvedAtMs, node?.approvedAtMs),
     device,
@@ -248,9 +248,16 @@ export function buildNodesInventory(params: {
   return groups.toSorted(compareGroups);
 }
 
-/** Duplicate entries safe to bulk-remove: superseded and not currently connected. */
+/**
+ * Duplicate entries safe to bulk-remove: superseded, not currently connected,
+ * and auto-approved (silent local / trusted-CIDR), so the client re-pairs
+ * without user action. Owner/QR-approved and pre-provenance duplicates keep
+ * their per-entry Remove button but never enter the bulk sweep.
+ */
 export function listStaleInventoryEntries(groups: NodesInventoryGroup[]): NodesInventoryEntry[] {
-  return groups.flatMap((group) => group.duplicates.filter((entry) => !entry.connected));
+  return groups.flatMap((group) =>
+    group.duplicates.filter((entry) => !entry.connected && entry.autoApproved),
+  );
 }
 
 /** Which pairing stores a removal must touch for this entry. */

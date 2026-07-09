@@ -20,7 +20,7 @@ async function makeBaseDir(): Promise<string> {
 async function pairDevice(params: {
   baseDir: string;
   deviceId: string;
-  approvedVia?: Extract<PairedDeviceApprovalKind, "owner" | "silent">;
+  approvedVia?: Extract<PairedDeviceApprovalKind, "owner" | "silent" | "trusted-cidr">;
   clientId?: string;
   clientMode?: string;
   displayName?: string;
@@ -97,6 +97,25 @@ describe("device pairing approval provenance", () => {
     });
     expect(repaired.approvedVia).toBe("owner");
   });
+
+  test("pre-provenance records stay unknown across a later silent re-approve", async () => {
+    const baseDir = await makeBaseDir();
+    const legacy = await pairDevice({ baseDir, deviceId: "device-legacy", approvedVia: "silent" });
+    // Simulate a record approved before provenance existed.
+    const { writeJson } = await import("./json-files.js");
+    const path = await import("node:path");
+    const { approvedVia: _approvedVia, ...legacyShape } = legacy;
+    await writeJson(path.join(baseDir, "devices", "paired.json"), {
+      [legacy.deviceId]: legacyShape,
+    });
+
+    const repaired = await pairDevice({
+      baseDir,
+      deviceId: "device-legacy",
+      approvedVia: "silent",
+    });
+    expect(repaired.approvedVia).toBeUndefined();
+  });
 });
 
 describe("pruneSupersededSilentPairedDevices", () => {
@@ -113,6 +132,7 @@ describe("pruneSupersededSilentPairedDevices", () => {
     await pairDevice({ baseDir, deviceId: "stale-1", approvedVia: "silent" });
     await pairDevice({ baseDir, deviceId: "stale-2", approvedVia: "silent" });
     await pairDevice({ baseDir, deviceId: "owner-kept" });
+    await pairDevice({ baseDir, deviceId: "cidr-kept", approvedVia: "trusted-cidr" });
     await pairDevice({
       baseDir,
       deviceId: "other-cluster",
@@ -131,7 +151,35 @@ describe("pruneSupersededSilentPairedDevices", () => {
     expect(removed.map((entry) => entry.deviceId).toSorted()).toEqual(["stale-1", "stale-2"]);
     expect(removed[0]?.roles).toEqual(["operator"]);
     const remaining = (await listDevicePairing(baseDir)).paired.map((device) => device.deviceId);
-    expect(remaining.toSorted()).toEqual(["anchor", "other-cluster", "owner-kept"]);
+    expect(remaining.toSorted()).toEqual(["anchor", "cidr-kept", "other-cluster", "owner-kept"]);
+  });
+
+  test("trusted-cidr approvals never anchor a prune", async () => {
+    const baseDir = await makeBaseDir();
+    await pairDevice({
+      baseDir,
+      deviceId: "cidr-stale",
+      approvedVia: "trusted-cidr",
+      clientId: "node-host",
+      clientMode: "node",
+      displayName: "megaclaw",
+    });
+    const anchor = await pairDevice({
+      baseDir,
+      deviceId: "cidr-anchor",
+      approvedVia: "trusted-cidr",
+      clientId: "node-host",
+      clientMode: "node",
+      displayName: "megaclaw",
+    });
+
+    const removed = await pruneSupersededSilentPairedDevices({
+      deviceId: anchor.deviceId,
+      baseDir,
+    });
+
+    expect(removed).toEqual([]);
+    expect(await getPairedDevice("cidr-stale", baseDir)).not.toBeNull();
   });
 
   test("skips connected devices and drops pending requests for pruned ids", async () => {

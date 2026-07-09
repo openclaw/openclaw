@@ -178,28 +178,35 @@ Security boundary:
 
 ## Silent pairing supersede cleanup
 
-Silent approvals (same-host local clients and trusted-CIDR node pairings)
-record their provenance on the paired-device row. Clients whose state
-directory is ephemeral (temporary homes, containers, per-run sandboxes) mint a
-fresh device keypair per run, and every run silently re-pairs as a brand-new
-device — without cleanup the paired list grows one stale row per run.
+Non-interactive approvals record their provenance on the paired-device row:
+same-host local policy approvals as `silent`, trusted-CIDR node approvals as
+`trusted-cidr`. Clients whose state directory is ephemeral (temporary homes,
+containers, per-run sandboxes) mint a fresh device keypair per run, and every
+run silently re-pairs as a brand-new device — without cleanup the paired list
+grows one stale row per run.
 
-When the Gateway silently approves a device pairing, it retires older
-**silent-approved** records that belong to the same client cluster (matching
-`clientId`, `clientMode`, and display name) and are not currently connected.
-Retired rows lose their tokens immediately; any matching legacy node pairing
-entry is cleared and a `node.pair.resolved` removal event is broadcast.
+When the Gateway silently approves a **local** device pairing, it retires
+older `silent`-approved records that belong to the same client cluster
+(matching `clientId`, `clientMode`, and display name) and are not currently
+connected. Local clients run on the gateway host itself, so the cluster key
+cannot match a different machine. Retired rows lose their tokens immediately;
+any matching legacy node pairing entry is cleared and a `node.pair.resolved`
+removal event is broadcast.
 
 Boundaries:
 
-- Only records whose latest approval was silent are eligible. Owner-approved
-  and QR/setup-code (bootstrap) pairings are never removed automatically.
+- Only records whose latest approval was same-host local (`silent`) are
+  eligible, as trigger and as target. Trusted-CIDR pairings cross hosts where
+  display metadata is not a machine identity, so they are never removed
+  automatically — use the Control UI cleanup or `openclaw nodes remove` for
+  those.
+- Owner-approved and QR/setup-code (bootstrap) pairings are never removed
+  automatically. Records approved before provenance existed stay protected,
+  even after a later silent re-approval of the same device id.
 - Currently connected devices are skipped, so concurrent local sessions with
   separate state directories keep their tokens while live.
-- An interactive approval permanently protects a record: a later silent
-  re-approval of the same device id cannot downgrade it to prune-eligible.
-- Affected clients are local/trusted by construction, so they re-pair
-  silently on their next connection.
+- Affected clients are local by construction, so they re-pair silently on
+  their next connection.
 
 ## Metadata-upgrade auto-approval
 
