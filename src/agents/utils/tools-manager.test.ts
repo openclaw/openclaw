@@ -95,24 +95,6 @@ describe("ensureTool", () => {
     expect(downloadRelease).toHaveBeenCalledOnce();
   });
 
-  it("rejects oversized release-check JSON before parsing", async () => {
-    const { ensureTool } = await import("./tools-manager.js");
-    const release = vi.fn(async () => {});
-    const oversizedBody = "x".repeat(1 * 1024 * 1024 + 1);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(oversizedBody, { status: 200 }),
-      release,
-      finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
-    });
-    const logSpy = vi.spyOn(console, "log").mockReturnValue(undefined);
-
-    await expect(ensureTool("fd")).resolves.toBeUndefined();
-
-    expect(release).toHaveBeenCalledOnce();
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Content too large"));
-    logSpy.mockRestore();
-  });
-
   it("extracts Windows zip downloads via safe archive API with size limits", async () => {
     vi.doMock("node:os", async (importOriginal) => ({
       ...(await importOriginal<typeof import("node:os")>()),

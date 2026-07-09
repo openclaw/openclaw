@@ -21,14 +21,12 @@ import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import chalk from "chalk";
 import { extractArchive } from "../../infra/archive.js";
-import { readResponseWithLimit } from "../../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { APP_NAME, getBinDir } from "../config.js";
 
 const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
-const MAX_RELEASE_JSON_BYTES = 1 * 1024 * 1024;
 const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES = 500 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES = 1_000;
@@ -158,8 +156,7 @@ async function getLatestVersion(repo: string): Promise<string> {
       throw new Error(`GitHub API error: ${response.status}`);
     }
 
-    const buffer = await readResponseWithLimit(response, MAX_RELEASE_JSON_BYTES);
-    const data = JSON.parse(buffer.toString("utf-8")) as { tag_name: string };
+    const data = (await response.json()) as { tag_name: string };
     return data.tag_name.replace(/^v/, "");
   } finally {
     await guarded.release();
