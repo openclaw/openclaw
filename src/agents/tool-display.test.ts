@@ -559,6 +559,25 @@ describe("tool display details", () => {
     ]);
   });
 
+  it("matches escaped heredoc delimiters in top-level stage splitting", () => {
+    const command = [
+      "cat <<\\EOF",
+      "body; not a stage && not a stage || not a stage",
+      "EOF",
+      "printf done && npm test",
+    ].join("\n");
+
+    expect(splitTopLevelStages(command)).toEqual([
+      [
+        "cat <<\\EOF",
+        "body; not a stage && not a stage || not a stage",
+        "EOF",
+        "printf done",
+      ].join("\n"),
+      "npm test",
+    ]);
+  });
+
   it("keeps heredoc body pipes out of top-level stage summaries", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
