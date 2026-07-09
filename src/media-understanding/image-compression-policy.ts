@@ -1,7 +1,5 @@
-import {
-  resolveModelAwareImageCompressionPolicy,
-  type ImageCompressionModelCandidate,
-} from "../agents/image-compression-policy.js";
+import { resolveModelAwareImageCompressionPolicy } from "../agents/image-compression-policy.js";
+import type { ImageCompressionModelCandidate } from "../agents/image-compression-policy.types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ImageCompressionPolicy } from "../media/web-media.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";

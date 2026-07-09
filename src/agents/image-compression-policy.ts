@@ -1,24 +1,17 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type {
-  ImageCompressionModelPolicy,
-  ImageCompressionPolicy,
-} from "../media/web-media.js";
 import { normalizeMediaProviderId } from "../media-understanding/provider-id.js";
+import type { ImageCompressionModelPolicy, ImageCompressionPolicy } from "../media/web-media.js";
 import {
   isManifestPluginAvailableForControlPlane,
   loadManifestMetadataSnapshot,
 } from "../plugins/manifest-contract-eligibility.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import {
   bundledStaticCatalogProviderUsesRuntimeAugment,
   resolveBundledStaticCatalogModel,
 } from "./embedded-agent-runner/model.static-catalog.js";
-import { resolveModelAsync } from "./embedded-agent-runner/model.js";
-
-export type ImageCompressionModelCandidate = {
-  provider: string;
-  model: string;
-};
+import type { ImageCompressionModelCandidate } from "./image-compression-policy.types.js";
 
 export type ImageCompressionPolicyDeps = {
   resolveBundledStaticCatalogModel: typeof resolveBundledStaticCatalogModel;

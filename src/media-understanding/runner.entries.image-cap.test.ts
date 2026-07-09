@@ -46,14 +46,13 @@ describe("runProviderEntry image maxBytes", () => {
       new mocks.MockImageDescriptionMaxBytesError(10 * 1024 * 1024),
     );
     const describeImage = vi.fn(async () => ({ text: "should not run" }));
-    const cache = {
-      getBuffer: vi.fn(async () => ({
-        buffer: Buffer.from("oversized-jpeg"),
-        fileName: "large.jpg",
-        mime: "image/jpeg",
-        size: 20 * 1024 * 1024,
-      })),
-    } as unknown as MediaAttachmentCache;
+    const getBuffer = vi.fn(async () => ({
+      buffer: Buffer.from("oversized-jpeg"),
+      fileName: "large.jpg",
+      mime: "image/jpeg",
+      size: 20 * 1024 * 1024,
+    }));
+    const cache = { getBuffer } as unknown as MediaAttachmentCache;
 
     await expect(
       runProviderEntry({
@@ -81,7 +80,7 @@ describe("runProviderEntry image maxBytes", () => {
       message: "Attachment 1 exceeds maxBytes 10485760",
     });
 
-    expect(cache.getBuffer).toHaveBeenCalledWith({
+    expect(getBuffer).toHaveBeenCalledWith({
       attachmentIndex: 0,
       maxBytes: 50 * 1024 * 1024,
       timeoutMs: 60_000,
