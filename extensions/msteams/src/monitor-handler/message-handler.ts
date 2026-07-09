@@ -40,11 +40,11 @@ import {
   type GraphThreadMessage,
 } from "../graph-thread.js";
 import {
+  buildMSTeamsNormalizedText,
   extractMSTeamsConversationMessageId,
   extractMSTeamsQuoteInfo,
   normalizeMSTeamsConversationId,
   parseMSTeamsActivityTimestamp,
-  stripMSTeamsMentionTags,
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
 import { createMSTeamsInboundDeadline, withMSTeamsRequestDeadline } from "../request-timeout.js";
@@ -230,7 +230,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     });
     const attachmentPlaceholder = attachmentPresentation.placeholder;
     const rawBody = text || attachmentPlaceholder;
-    const quoteInfo = extractMSTeamsQuoteInfo(attachments);
+    const quoteInfo = extractMSTeamsQuoteInfo(attachments, activity.entities);
     let quoteSenderId: string | undefined;
     let quoteSenderName: string | undefined;
     const from = activity.from;
@@ -781,6 +781,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       }
     }
     quoteSenderName ??= quoteInfo?.sender;
+    quoteSenderId ??= quoteInfo?.senderId;
 
     const envelopeFrom = isDirectMessage ? senderName : conversationType;
     const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
@@ -1094,7 +1095,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const htmlText = extractTextFromHtmlAttachments(attachments);
     const valueText =
       rawText || htmlText ? "" : serializeMSTeamsAdaptiveCardActionValue(activity.value);
-    const text = stripMSTeamsMentionTags(rawText || htmlText || valueText || "");
+    const text = buildMSTeamsNormalizedText({
+      text: rawText || htmlText || valueText || "",
+      entities: activity.entities,
+      attachments,
+      botId: activity.recipient?.id,
+      botName: activity.recipient?.name,
+    });
     const wasMentioned = wasMSTeamsBotMentioned(activity);
     const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
     const replyToId = activity.replyToId ?? undefined;
