@@ -12,7 +12,9 @@ import {
   collectExplicitAllowlist,
   DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   expandToolGroups,
+  filterRuntimeMaterializationAllowlistEntries,
   normalizeToolName,
+  replaceWithEffectiveToolAllowlist,
   resolveToolProfilePolicy,
   TOOL_GROUPS,
 } from "./tool-policy.js";
@@ -78,6 +80,56 @@ describe("tool-policy", () => {
     expect(collectExplicitAllowlist([pickSandboxToolPolicy({ alsoAllow: [" * "] })])).toEqual([
       "*",
     ]);
+  });
+
+  it("preserves runtime materialization tokens when replacing an effective allowlist", () => {
+    const target = ["stale"];
+
+    replaceWithEffectiveToolAllowlist(target, [{ name: "read" }, { name: "read" }], {
+      preserveRuntimeToolAllowlistEntries: [
+        "bundle-mcp",
+        "group:plugins",
+        "Probe__Search",
+        "lsp_hover_typescript",
+        "exec",
+        "*",
+        "",
+      ],
+    });
+
+    // Concrete tools first, then only the deferred runtime selectors; plain tools
+    // ("exec"), wildcards, and blanks in the preserve list are ignored.
+    expect(target).toEqual([
+      "read",
+      "bundle-mcp",
+      "group:plugins",
+      "probe__search",
+      "lsp_hover_typescript",
+    ]);
+  });
+
+  it("keeps preserved runtime tokens inside every effective allow layer", () => {
+    const filtered = filterRuntimeMaterializationAllowlistEntries({
+      entries: ["bundle-mcp", "group:plugins", "Probe__Search", "lsp_hover_typescript"],
+      policies: [
+        { allow: ["read", "sessions_spawn", "bundle-mcp", "group:plugins", "lsp_*"] },
+        { allow: ["read", "sessions_spawn", "probe__search", "lsp_hover_typescript"] },
+      ],
+    });
+
+    // bundle-mcp/group:plugins survive layer 1 but not layer 2's narrower allow, so
+    // only the concretely-authorized MCP/LSP selectors pass every layer.
+    expect(filtered).toEqual(["probe__search", "lsp_hover_typescript"]);
+  });
+
+  it("lets runtime bundle deny layers remove materialized child selectors", () => {
+    const filtered = filterRuntimeMaterializationAllowlistEntries({
+      entries: ["probe__search", "lsp_hover_typescript"],
+      policies: [{ allow: ["bundle-mcp", "lsp_*"] }, { deny: ["bundle-mcp"] }],
+    });
+
+    // A child cannot inherit an MCP tool the parent's deny layer removes.
+    expect(filtered).toEqual(["lsp_hover_typescript"]);
   });
 });
 

@@ -6,6 +6,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
+import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";
 import { expandToolGroups, normalizeToolList, normalizeToolName } from "./tool-policy-shared.js";
 export {
@@ -68,16 +69,126 @@ export function hasRestrictiveAllowPolicy(policy?: { allow?: string[] }): boolea
   );
 }
 
+// Deferred selectors materialize into concrete tools only at runtime (MCP servers
+// connect async; LSP/plugin tools build lazily), so they are absent from the
+// synchronous parent tool array a spawned child inherits. These tokens carry the
+// authorization to rebuild those runtimes in the child. (#85030)
+function isRuntimeMaterializationAllowlistEntry(normalized: string): boolean {
+  return (
+    normalized === "bundle-mcp" ||
+    normalized === "group:plugins" ||
+    normalized.includes(TOOL_NAME_SEPARATOR) ||
+    normalized.startsWith("lsp_")
+  );
+}
+
+// A concrete MCP tool name is authorized by its own name or by the bundle/group
+// umbrella that constructs it; an lsp_ tool by itself, bundle-lsp, or group:plugins.
+function runtimeMaterializationPolicyNames(normalized: string): string[] {
+  if (normalized === "group:plugins") {
+    return [normalized];
+  }
+  if (normalized === "bundle-mcp" || normalized.includes(TOOL_NAME_SEPARATOR)) {
+    return uniqueStrings([normalized, "bundle-mcp", "group:plugins"]);
+  }
+  if (normalized.startsWith("lsp_")) {
+    return uniqueStrings([normalized, "bundle-lsp", "group:plugins"]);
+  }
+  return [];
+}
+
+function matchesAnyRuntimeMaterializationPolicyName(
+  names: string[],
+  patterns: ReturnType<typeof compileGlobPatterns>,
+): boolean {
+  return names.some((name) => matchesAnyGlobPattern(name, patterns));
+}
+
+function isRuntimeMaterializationAllowedByPolicy(
+  normalized: string,
+  policy: ToolPolicyLike | undefined,
+): boolean {
+  if (!policy) {
+    return true;
+  }
+  const names = runtimeMaterializationPolicyNames(normalized);
+  if (names.length === 0) {
+    return false;
+  }
+  const deny = compileGlobPatterns({
+    raw: expandToolGroups(policy.deny),
+    normalize: normalizeToolName,
+  });
+  if (matchesAnyRuntimeMaterializationPolicyName(names, deny)) {
+    return false;
+  }
+  const allow = compileGlobPatterns({
+    raw: expandToolGroups(policy.allow),
+    normalize: normalizeToolName,
+  });
+  return allow.length === 0 || matchesAnyRuntimeMaterializationPolicyName(names, allow);
+}
+
+/**
+ * Filters deferred runtime-construction selectors through the same ordered
+ * authorization layers that already filtered concrete parent tools, so a child
+ * can never gain a runtime the parent's policy denies. (#85030)
+ */
+export function filterRuntimeMaterializationAllowlistEntries(params: {
+  entries: string[];
+  policies: Array<ToolPolicyLike | undefined>;
+}): string[] {
+  const filtered: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of params.entries) {
+    const normalized = normalizeToolName(entry);
+    if (
+      !normalized ||
+      seen.has(normalized) ||
+      !isRuntimeMaterializationAllowlistEntry(normalized)
+    ) {
+      continue;
+    }
+    if (
+      !params.policies.every((policy) =>
+        isRuntimeMaterializationAllowedByPolicy(normalized, policy),
+      )
+    ) {
+      continue;
+    }
+    seen.add(normalized);
+    filtered.push(normalized);
+  }
+  return filtered;
+}
+
 /** Replaces an allowlist with the normalized names of an effective tool array. */
 export function replaceWithEffectiveToolAllowlist(
   target: string[],
   tools: Array<{ name: string }>,
+  options?: {
+    preserveRuntimeToolAllowlistEntries?: string[];
+  },
 ): void {
   target.length = 0;
   const seen = new Set<string>();
   for (const tool of tools) {
     const normalized = normalizeToolName(tool.name);
     if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    target.push(normalized);
+  }
+  // Runtime-materialized tools are not always present in the parent tool array.
+  // Preserve their policy tokens so spawned child attempts can build those runtimes.
+  for (const entry of options?.preserveRuntimeToolAllowlistEntries ?? []) {
+    const normalized = normalizeToolName(entry);
+    if (
+      !normalized ||
+      seen.has(normalized) ||
+      !isRuntimeMaterializationAllowlistEntry(normalized)
+    ) {
       continue;
     }
     seen.add(normalized);
