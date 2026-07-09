@@ -47,7 +47,7 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
       ...(input.components !== undefined ? { components: input.components } : {}),
     };
     if (acknowledged) {
-      await params.interaction.reply(payload);
+      await params.interaction.editReply(payload);
       return;
     }
     if (!("update" in params.interaction) || typeof params.interaction.update !== "function") {

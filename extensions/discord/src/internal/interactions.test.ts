@@ -136,6 +136,7 @@ describe("BaseInteraction", () => {
     expect(post).toHaveBeenCalledWith("/interactions/interaction1/token1/callback", {
       body: { type: InteractionResponseType.DeferredMessageUpdate },
     });
+    expect(patch).toHaveBeenCalledTimes(1);
     expect(patch).toHaveBeenCalledWith("/webhooks/app1/token1/messages/%40original", {
       body: { content: "updated", components: [] },
     });

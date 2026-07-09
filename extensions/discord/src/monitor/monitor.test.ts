@@ -133,6 +133,7 @@ describe("discord component interactions", () => {
 
   const createComponentInteractionBase = () => {
     const reply = vi.fn().mockResolvedValue(undefined);
+    const editReply = vi.fn().mockResolvedValue(undefined);
     const defer = vi.fn().mockResolvedValue(undefined);
     const rest = {
       get: vi.fn().mockResolvedValue({ type: ChannelType.DM }),
@@ -142,6 +143,7 @@ describe("discord component interactions", () => {
     };
     return {
       reply,
+      editReply,
       defer,
       client: { rest },
       user: { id: "123456789", username: "AgentUser", discriminator: "0001" },
@@ -941,10 +943,13 @@ describe("discord component interactions", () => {
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
     expect(acknowledge).toHaveBeenCalledTimes(1);
-    expect(reply).toHaveBeenCalledWith({
+    const editReply = interaction.editReply as unknown as ReturnType<typeof vi.fn>;
+
+    expect(editReply).toHaveBeenCalledWith({
       content: "Handled",
       components: [],
     });
+    expect(reply).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
