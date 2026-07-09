@@ -3604,7 +3604,9 @@ async function runAgentTurnWithFallbackInternal(
         )?.text ?? "";
       const errorCandidate = metaErrorMsg || rawErrorPayloadText;
       const formattedErrorCandidate = errorCandidate
-        ? formatRateLimitOrOverloadedErrorCopy(errorCandidate)
+        ? isPeriodicUsageLimitErrorMessage(errorCandidate)
+          ? buildRateLimitCooldownMessage(errorCandidate)
+          : formatRateLimitOrOverloadedErrorCopy(errorCandidate)
         : undefined;
       if (formattedErrorCandidate) {
         runResult.payloads = [

@@ -4145,6 +4145,36 @@ describe("runAgentTurnWithFallback", () => {
     },
   );
 
+  it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
+    "preserves periodic usage-limit reset details from no-text mid-turn failures in $label chats",
+    async (testCase) => {
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "thinking", isReasoning: true }],
+        meta: {
+          error: {
+            kind: "rate_limit",
+            message: "You've hit your weekly limit · resets 6pm (UTC)",
+          },
+        },
+      });
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({
+          sessionCtx: createNonDirectFailureSessionCtx(testCase),
+        }),
+      );
+
+      expect(result.kind).toBe("success");
+      if (result.kind === "success") {
+        expect(result.runResult.payloads?.[0]?.isError).toBe(true);
+        expect(result.runResult.payloads?.[0]?.text).toContain("weekly limit");
+        expect(result.runResult.payloads?.[0]?.text).toContain("resets 6pm");
+        expect(result.runResult.payloads?.[0]?.text).not.toContain("few minutes");
+      }
+    },
+  );
+
   it("surfaces model capacity errors from pre-reply CLI failures", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
       new Error("Selected model is at capacity. Please try a different model."),
