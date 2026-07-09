@@ -76,8 +76,8 @@ programmatic delivery. Full flag and behavior reference:
 | Flag                        | Description                                                          |
 | --------------------------- | -------------------------------------------------------------------- |
 | `--message <text>`          | Inline message to send                                               |
-| `--message-file <path>`     | Read the message from a valid UTF-8 file                             |
-| `--message-stdin`           | Read the message from valid UTF-8 stdin                              |
+| `--message-file <path>`     | Read the message from a regular UTF-8 text file                      |
+| `--message-stdin`           | Read the message from valid UTF-8 text stdin                         |
 | `--to <dest>`               | Derive session key from a target (phone, chat id)                    |
 | `--session-key <key>`       | Use an explicit session key                                          |
 | `--agent <id>`              | Target a configured agent (uses its `main` session)                  |
@@ -100,7 +100,9 @@ programmatic delivery. Full flag and behavior reference:
   embedded runtime on the current machine.
 - Pass exactly one of `--message`, `--message-file`, or `--message-stdin`.
   File and stdin messages preserve multiline content after removing an
-  optional UTF-8 BOM.
+  optional UTF-8 BOM. File/stdin input is capped at 4 MiB and rejects symlink
+  or non-regular files, invalid UTF-8, NUL bytes, and binary-looking data
+  before dispatch.
 - If the Gateway request fails, the CLI **falls back** to the local embedded
   run; a Gateway timeout falls back with a fresh session instead of racing the
   original transcript.

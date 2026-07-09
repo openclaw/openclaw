@@ -445,6 +445,57 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("rejects symlink message files before dispatch", async () => {
+    await withTempStore(async ({ dir }) => {
+      const targetFile = path.join(dir, "target.md");
+      const messageFile = path.join(dir, "linked.md");
+      fs.writeFileSync(targetFile, "secret from symlink", "utf8");
+      fs.symlinkSync(targetFile, messageFile);
+
+      await expect(
+        agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime),
+      ).rejects.toThrow("Message file must be a regular file, not a symlink");
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects non-regular message files before dispatch", async () => {
+    await withTempStore(async ({ dir }) => {
+      await expect(
+        agentCliCommand({ messageFile: dir, sessionKey: "agent:main:incident-42" }, runtime),
+      ).rejects.toThrow("Message file must be a regular file");
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects oversized message files before dispatch", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messageFile = path.join(dir, "large.md");
+      fs.writeFileSync(messageFile, Buffer.alloc(4 * 1024 * 1024 + 1, 0x61));
+
+      await expect(
+        agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime),
+      ).rejects.toThrow("exceeds the maximum size of 4194304 bytes");
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects NUL bytes in message files before dispatch", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messageFile = path.join(dir, "task.md");
+      fs.writeFileSync(messageFile, Buffer.from("hello\0there", "utf8"));
+
+      await expect(
+        agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime),
+      ).rejects.toThrow("NUL bytes are not allowed");
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
   it("rejects message files that are not valid UTF-8", async () => {
     await withTempStore(async ({ dir }) => {
       const messageFile = path.join(dir, "task.bin");
@@ -452,8 +503,44 @@ describe("agentCliCommand", () => {
 
       await expect(
         agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime),
-      ).rejects.toThrow("Message file must be valid UTF-8");
+      ).rejects.toThrow("must be valid UTF-8");
       expect(callGateway).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects oversized stdin before dispatch", async () => {
+    await withTempStore(async () => {
+      await expect(
+        agentCliCommand({ messageStdin: true, sessionKey: "agent:main:incident-42" }, runtime, {
+          stdin: Readable.from([Buffer.alloc(4 * 1024 * 1024, 0x61), Buffer.from("x")]),
+        }),
+      ).rejects.toThrow("exceeds the maximum size of 4194304 bytes");
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects NUL bytes in stdin before dispatch", async () => {
+    await withTempStore(async () => {
+      await expect(
+        agentCliCommand({ messageStdin: true, sessionKey: "agent:main:incident-42" }, runtime, {
+          stdin: Readable.from([Buffer.from("hello\0there", "utf8")]),
+        }),
+      ).rejects.toThrow("NUL bytes are not allowed");
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects binary-looking stdin before dispatch", async () => {
+    await withTempStore(async () => {
+      await expect(
+        agentCliCommand({ messageStdin: true, sessionKey: "agent:main:incident-42" }, runtime, {
+          stdin: Readable.from([Buffer.alloc(512, 0x01)]),
+        }),
+      ).rejects.toThrow("looks like binary data");
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).not.toHaveBeenCalled();
     });
   });
 

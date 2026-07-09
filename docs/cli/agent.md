@@ -16,8 +16,8 @@ Related: [Agent send tool](/tools/agent-send)
 ## Options
 
 - `-m, --message <text>`: message body
-- `--message-file <path>`: read the message body from a UTF-8 file
-- `--message-stdin`: read the message body from stdin
+- `--message-file <path>`: read the message body from a regular UTF-8 text file
+- `--message-stdin`: read the message body from UTF-8 text stdin
 - `-t, --to <dest>`: recipient used to derive the session key
 - `--session-key <key>`: explicit session key to use for routing
 - `--session-id <id>`: explicit session id
@@ -53,7 +53,7 @@ openclaw agent --agent ops --message "Run locally" --local
 ## Notes
 
 - Pass exactly one of `--message`, `--message-file`, or `--message-stdin`.
-  File and stdin messages strip a leading UTF-8 BOM and preserve multiline content; they reject input that is not valid UTF-8.
+  File and stdin messages strip a leading UTF-8 BOM and preserve multiline content. File/stdin input is capped at 4 MiB and rejects symlink or non-regular files, invalid UTF-8, NUL bytes, and binary-looking data before dispatch.
 - Slash commands (for example `/compact`) cannot run through `--message`. The CLI rejects them and points you at the first-class command instead (`openclaw sessions compact <key>` for compaction).
 - `--local` and embedded fallback runs are one-shot: bundled MCP loopback resources and warm Claude stdio sessions opened for the run are retired after the reply, so scripted invocations do not leave local child processes running. Gateway-backed runs keep Gateway-owned MCP loopback resources under the running Gateway process instead.
 - With `--agent`, `--channel` and `--to` together, session routing follows the channel's canonical recipient and `session.dmScope`. Channels with a stable outbound-only recipient identity use a provider-owned session isolated from the agent's main session. `--reply-channel` and `--reply-account` affect delivery only.
