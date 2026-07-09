@@ -42,6 +42,7 @@ import {
   isRateLimitErrorMessage,
   isTransientHttpError,
 } from "../../agents/embedded-agent-helpers.js";
+import { isPeriodicUsageLimitErrorMessage } from "../../agents/embedded-agent-helpers/failover-matches.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
 import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
@@ -685,6 +686,10 @@ function buildRateLimitCooldownMessage(err: unknown): string {
     return BILLING_ERROR_USER_MESSAGE;
   }
   if (!isFallbackSummaryError(err)) {
+    if (isPeriodicUsageLimitErrorMessage(message)) {
+      const providerMessage = sanitizeUserFacingText(message, { errorContext: true });
+      return providerMessage.startsWith("⚠️") ? providerMessage : `⚠️ ${providerMessage}`;
+    }
     return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
   }
   const expiry = err.soonestCooldownExpiry;
@@ -952,7 +957,7 @@ function formatForwardedExternalRunFailureText(message: string): string {
   }
   const detail =
     sanitized.length > EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS
-      ? `${sanitized.slice(0, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
+      ? `${truncateUtf16Safe(sanitized, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
       : sanitized;
   const suffix = /[.!?]$/u.test(detail) ? "" : ".";
   return `⚠️ Agent failed before reply: ${detail}${suffix} Please try again, or use /new to start a fresh session.`;
@@ -981,6 +986,11 @@ function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  // OAuth refresh failure is classified before the generic provider-auth check:
+  // a FailoverError with reason:"auth" and status:401 (e.g. from the claude-cli
+  // subprocess when its stored OAuth token has expired) would otherwise match
+  // classifyProviderRequestError and surface the generic provider-auth copy
+  // instead of the targeted re-auth command for the affected provider.
   const oauthRefreshFailure =
     classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
   if (oauthRefreshFailure) {
@@ -1145,13 +1155,22 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   const isPureTransientSummary = isFallbackSummary
     ? isPureTransientRateLimitSummary(params.err)
     : false;
-  const isRateLimit = isFallbackSummary ? isPureTransientSummary : isRateLimitErrorMessage(message);
+  const failoverReason =
+    !isFallbackSummary && isFailoverError(params.err) ? params.err.reason : undefined;
+  const isOverloaded = failoverReason === "overloaded" || isOverloadedErrorMessage(message);
+  const isRateLimit = isFallbackSummary
+    ? isPureTransientSummary
+    : failoverReason
+      ? failoverReason === "rate_limit" || failoverReason === "overloaded"
+      : isRateLimitErrorMessage(message);
   const rateLimitOrOverloadedCopy =
     !isFallbackSummary || isPureTransientSummary
-      ? formatRateLimitOrOverloadedErrorCopy(message)
+      ? formatRateLimitOrOverloadedErrorCopy(
+          failoverReason === "overloaded" ? "overloaded" : message,
+        )
       : undefined;
 
-  if (isRateLimit && !isOverloadedErrorMessage(message)) {
+  if (isRateLimit && !isOverloaded) {
     return markAgentRunFailureReplyPayload({
       text: resolveExternalRunFailureTextForConversation({
         text: buildRateLimitCooldownMessage(params.err),
@@ -2424,6 +2443,7 @@ async function runAgentTurnWithFallbackInternal(
                   emitLifecycleTerminal: false,
                   onAgentRunStart: notifyAgentRunStart,
                   suppressAssistantBridge: params.followupRun.run.silentExpected,
+                  onActivity: () => params.replyOperation?.recordActivity(),
                   onAssistantText: async (text) => {
                     const textForTyping = await handlePartialForTyping({ text } as ReplyPayload);
                     if (textForTyping === undefined || !params.opts?.onPartialReply) {
@@ -2523,6 +2543,7 @@ async function runAgentTurnWithFallbackInternal(
                     lane: runLane,
                     extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                     sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
+                    taskSuggestionDeliveryMode: params.followupRun.run.taskSuggestionDeliveryMode,
                     silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
                     allowEmptyAssistantReplyAsSilent:
                       params.followupRun.run.allowEmptyAssistantReplyAsSilent,
@@ -2544,6 +2565,7 @@ async function runAgentTurnWithFallbackInternal(
                     skillsSnapshot: params.followupRun.run.skillsSnapshot,
                     messageChannel: params.followupRun.originatingChannel ?? undefined,
                     messageProvider: hookMessageProvider,
+                    clientCaps: params.followupRun.run.clientCaps,
                     currentChannelId:
                       params.followupRun.originatingTo ??
                       params.sessionCtx.OriginatingTo ??
@@ -2749,6 +2771,7 @@ async function runAgentTurnWithFallbackInternal(
                       const commentaryTextByItem = new Map<string, string>();
                       const lastEmittedCommentaryByItem = new Map<string, string>();
                       return async (evt) => {
+                        params.replyOperation?.recordActivity();
                         lifecycleBackstop.note(evt);
                         // Signal run start only after the embedded agent emits real activity.
                         const hasLifecyclePhase =
@@ -3047,6 +3070,7 @@ async function runAgentTurnWithFallbackInternal(
                           return (payload: ReplyPayload) => {
                             toolResultChain = toolResultChain
                               .then(async () => {
+                                params.replyOperation?.recordActivity();
                                 const { text, skip } = normalizeStreamingText(payload);
                                 if (skip) {
                                   return;
@@ -3306,6 +3330,9 @@ async function runAgentTurnWithFallbackInternal(
           : isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
+      // OAuth/auth-profile failures must reach buildExternalRunFailureReply so
+      // the targeted re-auth/failover copy is surfaced instead of the generic
+      // provider-auth message.
       const oauthRefreshFailure =
         classifyOAuthRefreshFailureError(err) ?? classifyOAuthRefreshFailure(message);
       const hasAuthProfileFailoverFailure = buildAuthProfileFailoverFailureText(err) !== null;
@@ -3433,12 +3460,18 @@ async function runAgentTurnWithFallbackInternal(
       const isPureTransientSummary = isFallbackSummary
         ? isPureTransientRateLimitSummary(err)
         : false;
+      const failoverReason = !isFallbackSummary && isFailoverError(err) ? err.reason : undefined;
+      const isOverloaded = failoverReason === "overloaded" || isOverloadedErrorMessage(message);
       const isRateLimit = isFallbackSummary
         ? isPureTransientSummary
-        : isRateLimitErrorMessage(message);
+        : failoverReason
+          ? failoverReason === "rate_limit" || failoverReason === "overloaded"
+          : isRateLimitErrorMessage(message);
       const rateLimitOrOverloadedCopy =
         !isFallbackSummary || isPureTransientSummary
-          ? formatRateLimitOrOverloadedErrorCopy(message)
+          ? formatRateLimitOrOverloadedErrorCopy(
+              failoverReason === "overloaded" ? "overloaded" : message,
+            )
           : undefined;
       const safeMessage = isTransientHttp
         ? sanitizeUserFacingText(message, { errorContext: true })
@@ -3446,7 +3479,7 @@ async function runAgentTurnWithFallbackInternal(
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const externalRunFailureReply =
         !isBilling &&
-        !(isRateLimit && !isOverloadedErrorMessage(message)) &&
+        !(isRateLimit && !isOverloaded) &&
         !rateLimitOrOverloadedCopy &&
         !isContextOverflow &&
         !shouldSurfaceToControlUi
@@ -3464,7 +3497,7 @@ async function runAgentTurnWithFallbackInternal(
         : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
       const fallbackText = isBilling
         ? resolveBillingFailureReplyText(err)
-        : isRateLimit && !isOverloadedErrorMessage(message)
+        : isRateLimit && !isOverloaded
           ? buildRateLimitCooldownMessage(err)
           : rateLimitOrOverloadedCopy
             ? rateLimitOrOverloadedCopy

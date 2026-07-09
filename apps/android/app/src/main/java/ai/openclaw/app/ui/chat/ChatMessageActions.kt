@@ -8,10 +8,10 @@ import android.content.Context
 import android.content.Intent
 import android.widget.Toast
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -51,6 +51,8 @@ internal fun ChatMessageActionHost(
   onReply: (String) -> Unit,
   modifier: Modifier = Modifier,
   enabled: Boolean = true,
+  listenActive: Boolean = false,
+  onToggleListen: (() -> Unit)? = null,
   content: @Composable () -> Unit,
 ) {
   if (!enabled || text.isBlank()) {
@@ -75,6 +77,12 @@ internal fun ChatMessageActionHost(
       expanded = menuExpanded,
       onDismissRequest = { menuExpanded = false },
     ) {
+      onToggleListen?.let { toggleListen ->
+        MessageActionItem(label = if (listenActive) "Stop" else "Listen") {
+          toggleListen()
+          menuExpanded = false
+        }
+      }
       MessageActionItem(label = "Copy") {
         copyChatMessage(context, text)
         menuExpanded = false

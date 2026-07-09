@@ -360,6 +360,19 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun realtimeUserTranscriptsDriveSpeechActive() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+    assertFalse(manager.speechActive.value)
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "hello"))
+    assertTrue(manager.speechActive.value)
+    manager.handleGatewayEvent("talk.event", realtimeTranscriptPayload(role = "user", text = "hello world", final = true))
+    assertFalse(manager.speechActive.value)
+  }
+
+  @Test
   fun realtimeTranscriptDeltasAccumulateVoiceConversation() {
     val manager = createManager()
 
@@ -1047,11 +1060,13 @@ private class FakeTalkAudioPlayer : TalkAudioPlaying {
 
 private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
   override fun loadEntry(
+    gatewayId: String,
     deviceId: String,
     role: String,
   ): DeviceAuthEntry? = null
 
   override fun saveToken(
+    gatewayId: String,
     deviceId: String,
     role: String,
     token: String,
@@ -1059,6 +1074,7 @@ private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
   ) = Unit
 
   override fun clearToken(
+    gatewayId: String,
     deviceId: String,
     role: String,
   ) = Unit

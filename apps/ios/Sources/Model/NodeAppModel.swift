@@ -110,7 +110,7 @@ final class NodeAppModel {
         let host: String?
         let nodeId: String?
         let agentId: String?
-        let expiresAtMs: Int?
+        let expiresAtMs: Int64?
 
         var allowsAllowAlways: Bool {
             self.allowedDecisions.contains("allow-always")
@@ -210,6 +210,7 @@ final class NodeAppModel {
     }
 
     private var mainSessionBaseKey: String = "main"
+    private var gatewaySessionScope: String?
     private var focusedChatSessionKey: String?
     // Two-part unread guard mirroring Android: the opened key survives read
     // confirmations so later unread episodes on the same open chat re-acknowledge;
@@ -254,6 +255,7 @@ final class NodeAppModel {
     private var gatewayHealthMonitorDisabled = false
     private let notificationCenter: NotificationCentering
     let voiceWake = VoiceWakeManager()
+    let voiceNoteRecorder: OpenClawVoiceNoteRecorder
     let talkMode: TalkModeManager
     private let locationService: any LocationServicing
     private let deviceStatusService: any DeviceStatusServicing
@@ -303,10 +305,17 @@ final class NodeAppModel {
     private var shareDeliveryTo: String?
     private var apnsDeviceTokenHex: String?
     private var apnsLastRegisteredTokenHex: String?
+    private var apnsLastRegisteredGatewayStableID: String?
     @ObservationIgnored private let pushRegistrationManager = PushRegistrationManager()
 
     var operatorSession: GatewayNodeSession {
         self.operatorGateway
+    }
+
+    var isTalkCaptureActive: Bool {
+        // PTT owns its Voice Wake lease before permission and audio setup.
+        // Count that pending interval so Chat cannot race another mic owner.
+        self.talkMode.isEnabled || self.talkMode.isPushToTalkActive || self.pttVoiceWakeLeaseCount > 0
     }
 
     var localChatFixture: LocalChatFixture? {
@@ -329,7 +338,7 @@ final class NodeAppModel {
         return self.isOperatorGatewayConnected ? "operator" : "offline"
     }
 
-    func makeChatTransport() -> any OpenClawChatTransport {
+    func makeChatTransport(outboxGatewayID: String? = nil) -> any OpenClawChatTransport {
         if self.isScreenshotFixtureModeEnabled {
             return LocalFixtureChatTransport(fixture: .appScreenshots)
         }
@@ -338,18 +347,20 @@ final class NodeAppModel {
         }
         return IOSGatewayChatTransport(
             gateway: self.operatorSession,
-            globalAgentId: self.chatAgentId)
+            globalAgentId: self.chatDeliveryAgentId,
+            outboxGatewayID: outboxGatewayID)
     }
 
     /// Gateway identity the transcript cache is scoped to: the active
-    /// connection's stableID, or the keychain-persisted last connection on
+    /// connection's stableID, or the keychain-persisted active gateway on
     /// cold open before the gateway session is up. Nil for fixture transports
     /// and unpaired installs so demo or foreign rows can never leak into a
     /// real gateway's transcript.
     var chatTranscriptCacheGatewayID: String? {
         guard !self.isLocalGatewayFixtureEnabled else { return nil }
         let stableID = self.activeGatewayConnectConfig?.effectiveStableID
-            ?? GatewaySettingsStore.loadLastGatewayConnection()?.stableID
+            ?? self.connectedGatewayID
+            ?? GatewaySettingsStore.activeGatewayEntry()?.stableID
         guard let stableID, !stableID.isEmpty else { return nil }
         return stableID
     }
@@ -360,6 +371,14 @@ final class NodeAppModel {
     /// from or written under another gateway's cache scope.
     var chatViewModelIdentityID: String {
         "\(self.chatTransportModeID)|\(self.chatTranscriptCacheGatewayID ?? "")|\(self.chatTranscriptCacheGeneration)"
+    }
+
+    /// Stable owner key for the long-lived chat view model. Connectivity still
+    /// changes `chatViewModelIdentityID` for session-list refreshes, but must
+    /// not rebuild Chat and discard an offline draft on the same gateway.
+    var chatViewModelOwnerID: String {
+        let modeID = self.isLocalGatewayFixtureEnabled ? self.chatTransportModeID : "gateway"
+        return "\(modeID)|\(self.chatTranscriptCacheGatewayID ?? "")|\(self.chatTranscriptCacheGeneration)"
     }
 
     private var chatTranscriptCacheGeneration = 0
@@ -373,10 +392,32 @@ final class NodeAppModel {
         if let cache = self.chatTranscriptCachesByGatewayID[gatewayID] {
             return cache
         }
-        guard let databaseURL = self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return nil }
+        guard let databaseURL = Self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return nil }
         let cache = OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: gatewayID)
         self.chatTranscriptCachesByGatewayID[gatewayID] = cache
         return cache
+    }
+
+    var hasVerifiedChatOfflineRoutingIdentity: Bool {
+        self.chatTranscriptCacheGatewayID != nil &&
+            self.chatDeliveryAgentId != nil &&
+            self.chatSessionRoutingContract != nil
+    }
+
+    func restoreChatSessionRoutingIdentityIfNeeded() async {
+        guard !self.isLocalGatewayFixtureEnabled,
+              self.chatSessionRoutingContract == nil,
+              let store = self.makeChatOfflineStore(),
+              let identity = await store.loadSessionRoutingIdentity(),
+              self.chatTranscriptCacheGatewayID == store.gatewayID,
+              self.chatSessionRoutingContract == nil
+        else { return }
+        self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: store.gatewayID)
+        self.gatewaySessionScope = identity.scope
+        self.mainSessionBaseKey = identity.mainSessionKey
+        self.gatewayDefaultAgentId = identity.defaultAgentID
+        self.talkMode.updateMainSessionKey(self.mainSessionKey)
+        self.homeCanvasRevision &+= 1
     }
 
     func loadCachedChatSessions() async -> [OpenClawChatSessionEntry] {
@@ -395,7 +436,7 @@ final class NodeAppModel {
     /// drops that gateway's queued commands.
     func purgeChatTranscriptCache(gatewayID: String? = nil) async {
         if let gatewayID, !gatewayID.isEmpty {
-            guard let databaseURL = self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return }
+            guard let databaseURL = Self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return }
             if let cache = self.chatTranscriptCachesByGatewayID[gatewayID] {
                 await cache.retire()
             }
@@ -410,7 +451,7 @@ final class NodeAppModel {
         for cache in self.chatTranscriptCachesByGatewayID.values {
             await cache.retire()
         }
-        if let directoryURL = self.chatTranscriptCacheDirectoryURL() {
+        if let directoryURL = Self.chatTranscriptCacheDirectoryURL() {
             try? FileManager.default.removeItem(at: directoryURL)
         }
         self.chatTranscriptCachesByGatewayID.removeAll()
@@ -420,22 +461,22 @@ final class NodeAppModel {
     /// Debug launch reset runs before Chat can create a cache actor, so direct
     /// file removal preserves the launch flag's synchronous startup contract.
     func purgeChatTranscriptCacheBeforeStartup() {
-        guard let directoryURL = self.chatTranscriptCacheDirectoryURL() else { return }
+        guard let directoryURL = Self.chatTranscriptCacheDirectoryURL() else { return }
         try? FileManager.default.removeItem(at: directoryURL)
         self.chatTranscriptCachesByGatewayID.removeAll()
         self.chatTranscriptCacheGeneration &+= 1
     }
 
-    private func chatTranscriptCacheDirectoryURL() -> URL? {
+    private static func chatTranscriptCacheDirectoryURL() -> URL? {
         try? OpenClawNodeStorage.appSupportDir()
             .appendingPathComponent("chat-cache", isDirectory: true)
     }
 
-    private func chatTranscriptCacheDatabaseURL(gatewayID: String) -> URL? {
+    static func chatTranscriptCacheDatabaseURL(gatewayID: String) -> URL? {
         let digest = SHA256.hash(data: Data(gatewayID.utf8))
             .map { String(format: "%02x", $0) }
             .joined()
-        return self.chatTranscriptCacheDirectoryURL()?
+        return Self.chatTranscriptCacheDirectoryURL()?
             .appendingPathComponent("\(digest).sqlite", isDirectory: false)
     }
 
@@ -452,6 +493,12 @@ final class NodeAppModel {
     var cameraHUDKind: CameraHUDKind?
     var cameraFlashNonce: Int = 0
     var screenRecordActive: Bool = false
+    private(set) var watchMessagingStatus = WatchMessagingStatus(
+        supported: false,
+        paired: false,
+        appInstalled: false,
+        reachable: false,
+        activationState: "notActivated")
 
     init(
         screen: ScreenController = ScreenController(),
@@ -466,7 +513,8 @@ final class NodeAppModel {
         remindersService: any RemindersServicing = RemindersService(),
         motionService: any MotionServicing = MotionService(),
         watchMessagingService: any WatchMessagingServicing = WatchMessagingService(),
-        talkMode: TalkModeManager = TalkModeManager())
+        talkMode: TalkModeManager = TalkModeManager(),
+        voiceNoteRecorder: OpenClawVoiceNoteRecorder = OpenClawVoiceNoteRecorder())
     {
         self.screen = screen
         self.camera = camera
@@ -481,6 +529,10 @@ final class NodeAppModel {
         self.motionService = motionService
         self.watchMessagingService = watchMessagingService
         self.talkMode = talkMode
+        self.voiceNoteRecorder = voiceNoteRecorder
+        self.voiceNoteRecorder.setCaptureAdmissionHandler { [weak self] in
+            self?.isTalkCaptureActive == false
+        }
         self.apnsDeviceTokenHex = UserDefaults.standard.string(forKey: Self.apnsDeviceTokenUserDefaultsKey)
         restorePersistedWatchExecApprovalBridgeState()
         GatewayDiagnostics.bootstrap()
@@ -540,6 +592,9 @@ final class NodeAppModel {
             } catch {
                 // Best-effort only.
             }
+        }
+        self.voiceNoteRecorder.onRecordingActiveChanged = { [weak self] isActive in
+            self?.voiceWake.setSuppressedByVoiceNote(isActive)
         }
 
         let enabled = UserDefaults.standard.bool(forKey: "voiceWake.enabled")
@@ -660,6 +715,11 @@ final class NodeAppModel {
             self.backgroundedAt = Date()
             self.reconnectAfterBackgroundArmed = true
             self.beginBackgroundConnectionGracePeriod()
+            if self.voiceNoteRecorder.isRecording || self.voiceNoteRecorder.isRequestingPermission {
+                // Cancel first: releasing the voice-note suppression reason can
+                // schedule Voice Wake, which the background suspension must catch.
+                self.voiceNoteRecorder.cancel()
+            }
             // Release voice wake mic in background.
             self.backgroundVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
             let shouldKeepTalkActive = keepTalkActive && self.talkMode.isEnabled
@@ -847,6 +907,9 @@ final class NodeAppModel {
         }
         UserDefaults.standard.set(enabled, forKey: "talk.enabled")
         if enabled {
+            if self.voiceNoteRecorder.isRecording || self.voiceNoteRecorder.isRequestingPermission {
+                self.voiceNoteRecorder.cancel()
+            }
             // Voice wake holds the microphone continuously; talk mode needs exclusive access for STT.
             // When talk is enabled from the UI, prioritize talk and pause voice wake.
             self.voiceWake.setSuppressedByTalk(true)
@@ -1006,14 +1069,23 @@ final class NodeAppModel {
 
     private func refreshBrandingFromGateway(shouldApply: () -> Bool = { true }) async {
         do {
-            let res = try await operatorGateway.request(method: "config.get", paramsJSON: "{}", timeoutSeconds: 8)
+            guard let sourceGatewayID = self.chatTranscriptCacheGatewayID,
+                  let sourceRoute = await operatorGateway.currentRoute(ifGatewayID: sourceGatewayID)
+            else { return }
+            let res = try await operatorGateway.request(
+                method: "config.get",
+                paramsJSON: "{}",
+                timeoutSeconds: 8,
+                ifCurrentRoute: sourceRoute)
             guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any] else { return }
             guard let config = json["config"] as? [String: Any] else { return }
             let session = config["session"] as? [String: Any]
             let mainKey = SessionKey.normalizeMainKey(session?["mainKey"] as? String)
-            guard shouldApply() else { return }
+            let scope = (session?["scope"] as? String) ?? "per-sender"
+            guard shouldApply(), self.chatTranscriptCacheGatewayID == sourceGatewayID else { return }
             await MainActor.run {
                 self.mainSessionBaseKey = mainKey
+                self.gatewaySessionScope = scope
                 self.talkMode.updateMainSessionKey(self.mainSessionKey)
                 self.homeCanvasRevision &+= 1
             }
@@ -1030,12 +1102,26 @@ final class NodeAppModel {
 
     private func refreshAgentsFromGateway(shouldApply: () -> Bool = { true }) async {
         do {
-            let res = try await operatorGateway.request(method: "agents.list", paramsJSON: "{}", timeoutSeconds: 8)
+            guard let sourceGatewayID = self.chatTranscriptCacheGatewayID,
+                  let sourceStore = self.makeChatOfflineStore(),
+                  sourceStore.gatewayID == sourceGatewayID,
+                  let sourceRoute = await operatorGateway.currentRoute(ifGatewayID: sourceGatewayID)
+            else { return }
+            let res = try await operatorGateway.request(
+                method: "agents.list",
+                paramsJSON: "{}",
+                timeoutSeconds: 8,
+                ifCurrentRoute: sourceRoute)
             let decoded = try JSONDecoder().decode(AgentsListResult.self, from: res)
-            guard shouldApply() else { return }
+            let routingIdentity = OpenClawChatSessionRoutingIdentity(
+                scope: decoded.scope.value as? String,
+                mainSessionKey: decoded.mainkey,
+                defaultAgentID: decoded.defaultid)
+            guard shouldApply(), self.chatTranscriptCacheGatewayID == sourceGatewayID else { return }
             await MainActor.run {
                 self.gatewayDefaultAgentId = decoded.defaultid
                 self.gatewayAgents = decoded.agents
+                self.gatewaySessionScope = decoded.scope.value as? String
                 self.applyMainSessionKey(decoded.mainkey)
 
                 let selected = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1045,6 +1131,9 @@ final class NodeAppModel {
                 }
                 self.talkMode.updateMainSessionKey(self.mainSessionKey)
                 self.homeCanvasRevision &+= 1
+            }
+            if let routingIdentity {
+                await sourceStore.storeSessionRoutingIdentity(routingIdentity)
             }
         } catch {
             // Best-effort only.
@@ -1625,7 +1714,7 @@ final class NodeAppModel {
         }
 
         let status = await notificationAuthorizationStatus()
-        guard Self.isNotificationAuthorizationAllowed(status) else {
+        guard Self.isNotificationServingEnabled(status) else {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
@@ -1679,7 +1768,7 @@ final class NodeAppModel {
 
         let shouldSpeak = params.speak ?? true
         let status = await notificationAuthorizationStatus()
-        let notificationsAllowed = Self.isNotificationAuthorizationAllowed(status)
+        let notificationsAllowed = Self.isNotificationServingEnabled(status)
         if !notificationsAllowed, !shouldSpeak {
             return BridgeInvokeResponse(
                 id: req.id,
@@ -1742,6 +1831,12 @@ final class NodeAppModel {
         case .denied, .notDetermined:
             false
         }
+    }
+
+    private static func isNotificationServingEnabled(
+        _ status: NotificationAuthorizationStatus) -> Bool
+    {
+        NotificationServingPreference.isEnabled() && self.isNotificationAuthorizationAllowed(status)
     }
 
     private func presentNotificationPermissionGuidanceForExecApprovalIfNeeded(
@@ -1914,6 +2009,7 @@ final class NodeAppModel {
 
     private func handleTalkInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         if req.command == OpenClawTalkCommand.pttOnce.rawValue {
+            try self.rejectTalkCaptureWhileVoiceNoteActive()
             self.acquirePttVoiceWakeLease()
             defer { self.releasePttVoiceWakeLease() }
             let payload = try await talkMode.runPushToTalkOnce()
@@ -1926,6 +2022,7 @@ final class NodeAppModel {
 
         switch req.command {
         case OpenClawTalkCommand.pttStart.rawValue:
+            try self.rejectTalkCaptureWhileVoiceNoteActive()
             let acquiredLease = !self.pttSessionOwnsVoiceWakeLease
             if acquiredLease {
                 self.acquirePttVoiceWakeLease()
@@ -1965,6 +2062,15 @@ final class NodeAppModel {
                 ok: false,
                 error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
         }
+    }
+
+    private func rejectTalkCaptureWhileVoiceNoteActive() throws {
+        // Remote PTT bypasses the Chat Talk toggle. Preserve the user's draft;
+        // Talk must not reconfigure AVAudioSession while its recorder owns it.
+        guard self.voiceNoteRecorder.isRecording || self.voiceNoteRecorder.isRequestingPermission else { return }
+        throw NSError(domain: "TalkMode", code: 8, userInfo: [
+            NSLocalizedDescriptionKey: "Finish or cancel the active voice note before starting push-to-talk.",
+        ])
     }
 
     private func acquirePttVoiceWakeLease() {
@@ -2195,6 +2301,47 @@ extension NodeAppModel {
         }
     }
 
+    func sendDirectWatchSetup() async throws -> WatchNotificationSendResult {
+        struct SetupCodeResponse: Decodable {
+            var setupCode: String
+        }
+
+        guard self.isOperatorGatewayConnected else {
+            throw NSError(domain: "WatchDirectSetup", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Connect the iPhone to a Gateway first.",
+            ])
+        }
+        guard self.hasOperatorAdminScope else {
+            throw NSError(domain: "WatchDirectSetup", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "The iPhone connection needs operator.admin access.",
+            ])
+        }
+        let status = await watchMessagingService.status()
+        guard status.supported, status.paired, status.appInstalled else {
+            throw NSError(domain: "WatchDirectSetup", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "Pair an Apple Watch and install the OpenClaw watch app first.",
+            ])
+        }
+
+        let response = try await operatorGateway.request(
+            method: "device.pair.setupCode",
+            paramsJSON: #"{"includeQr":false,"bootstrapProfile":"node"}"#,
+            timeoutSeconds: 20)
+        let setup = try JSONDecoder().decode(SetupCodeResponse.self, from: response)
+        guard let setupLink = GatewayConnectDeepLink.fromSetupCode(setup.setupCode),
+              setupLink.connectionEndpoints.contains(where: \.tls)
+        else {
+            throw NSError(domain: "WatchDirectSetup", code: 4, userInfo: [
+                NSLocalizedDescriptionKey: "Direct Apple Watch mode requires a trusted HTTPS Gateway endpoint.",
+            ])
+        }
+        return try await self.watchMessagingService.sendDirectNodeSetup(setupCode: setup.setupCode)
+    }
+
+    func refreshWatchMessagingStatus() async {
+        self.watchMessagingStatus = await self.watchMessagingService.status()
+    }
+
     private func locationMode() -> OpenClawLocationMode {
         let raw = UserDefaults.standard.string(forKey: "location.enabledMode") ?? "off"
         return OpenClawLocationMode(rawValue: raw) ?? .off
@@ -2342,6 +2489,26 @@ extension NodeAppModel {
             return sessionAgentId
         }
         return self.selectedOrDefaultAgentId
+    }
+
+    /// Verified routing owner for sends. Unlike `chatAgentId`, this has no
+    /// display fallback: a cold offline start must wait for persisted or
+    /// gateway-provided ownership before it can queue durable work.
+    var chatDeliveryAgentId: String? {
+        if let sessionAgentId = SessionKey.agentId(from: chatSessionKey) {
+            return sessionAgentId.lowercased()
+        }
+        let selected = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !selected.isEmpty { return selected.lowercased() }
+        let defaultId = (self.gatewayDefaultAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return defaultId.isEmpty ? nil : defaultId.lowercased()
+    }
+
+    var chatSessionRoutingContract: String? {
+        OpenClawChatSessionRoutingContract.make(
+            scope: self.gatewaySessionScope,
+            mainKey: self.mainSessionBaseKey,
+            defaultAgentID: self.gatewayDefaultAgentId)
     }
 
     var chatAgentName: String {
@@ -2599,17 +2766,30 @@ extension NodeAppModel {
     }
 
     func disconnectGateway() {
-        self.disconnectGateway(disablePersistedAutoConnect: true)
+        self.disconnectGateway(disablePersistedAutoConnect: true, invalidateConnectAttempts: true)
     }
 
     func suspendGatewayForTargetReview() {
         // Target review pauses live reconnects without changing the user's launch preference.
-        self.disconnectGateway(disablePersistedAutoConnect: false)
+        self.disconnectGateway(disablePersistedAutoConnect: false, invalidateConnectAttempts: true)
     }
 
-    private func disconnectGateway(disablePersistedAutoConnect: Bool) {
+    /// A replacement target may already own the connect generation while the forgotten route is live.
+    /// Preserve that generation so teardown cannot strand the replacement offline.
+    func disconnectForgottenGateway(preservingPendingConnectAttempt: Bool) {
+        self.disconnectGateway(
+            disablePersistedAutoConnect: !preservingPendingConnectAttempt,
+            invalidateConnectAttempts: !preservingPendingConnectAttempt)
+    }
+
+    private func disconnectGateway(
+        disablePersistedAutoConnect: Bool,
+        invalidateConnectAttempts: Bool)
+    {
         invalidateExecApprovalSurfacesForGatewayChange()
-        self.invalidateGatewayConnectAttempts()
+        if invalidateConnectAttempts {
+            self.invalidateGatewayConnectAttempts()
+        }
         self.isAppleReviewDemoModeEnabled = false
         self.isScreenshotFixtureModeEnabled = false
         if disablePersistedAutoConnect {
@@ -2636,7 +2816,6 @@ extension NodeAppModel {
         self.gatewayConnected = false
         setOperatorConnected(false)
         self.talkMode.updateGatewayConnected(false)
-        self.mainSessionBaseKey = "main"
         self.talkMode.updateMainSessionKey(self.mainSessionKey)
         ShareGatewayRelaySettings.clearConfig()
         showLocalCanvasOnDisconnect()
@@ -2684,12 +2863,18 @@ extension NodeAppModel {
         self.voiceWakeSyncTask?.cancel()
         self.voiceWakeSyncTask = nil
         LiveActivityManager.shared.endActivity(reason: "new_gateway_connect")
+        self.mainSessionBaseKey = "main"
+        self.gatewaySessionScope = nil
         self.gatewayDefaultAgentId = nil
         self.gatewayAgents = []
         self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: stableID)
         self.focusedChatSessionKey = nil
         self.homeCanvasRevision &+= 1
         self.apnsLastRegisteredTokenHex = nil
+        self.apnsLastRegisteredGatewayStableID = nil
+        Task { [weak self] in
+            await self?.restoreChatSessionRoutingIdentityIfNeeded()
+        }
     }
 
     private func clearGatewayConnectionProblem() {
@@ -2876,12 +3061,13 @@ extension NodeAppModel {
         else { return nil }
         let instanceID = GatewaySettingsStore.currentInstanceID()
         let deviceAuthGatewayID = nodeOptions.deviceAuthGatewayID ?? stableID
-        if let metadata = GatewaySettingsStore.loadGatewayCredentialMetadata(instanceId: instanceID),
-           metadata.gatewayStableID == deviceAuthGatewayID,
-           metadata.suppressStoredDeviceAuth,
-           !GatewaySettingsStore.completeGatewayCredentialHandoff(
-               instanceId: instanceID,
-               gatewayStableID: deviceAuthGatewayID)
+        if let metadata = GatewaySettingsStore.loadGatewayCredentialMetadata(
+            instanceId: instanceID,
+            gatewayStableID: deviceAuthGatewayID),
+            metadata.suppressStoredDeviceAuth,
+            !GatewaySettingsStore.completeGatewayCredentialHandoff(
+                instanceId: instanceID,
+                gatewayStableID: deviceAuthGatewayID)
         {
             return nil
         }
@@ -3087,6 +3273,9 @@ extension NodeAppModel {
         self.gatewayStatusText = "Connected"
         self.gatewayServerName = url.host ?? "gateway"
         self.gatewayConnected = true
+        _ = GatewaySettingsStore.markGatewayConnected(
+            stableID: stableID,
+            atMs: Int(Date().timeIntervalSince1970 * 1000))
         self.screen.errorText = nil
         UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
         LiveActivityManager.shared.handleReconnect()
@@ -3476,7 +3665,8 @@ extension NodeAppModel {
                 self.gatewayConnected = false
                 self.setOperatorConnected(false)
                 self.talkMode.updateGatewayConnected(false)
-                self.mainSessionBaseKey = "main"
+                // Retain the last verified routing contract for offline
+                // capture; reconnect compares it with the live gateway before replay.
                 self.talkMode.updateMainSessionKey(self.mainSessionKey)
                 self.showLocalCanvasOnDisconnect()
             }
@@ -3682,6 +3872,7 @@ extension NodeAppModel {
         self.talkMode.setEnabled(false)
         self.talkMode.statusText = "Demo mode only"
         self.mainSessionBaseKey = "main"
+        self.gatewaySessionScope = "per-sender"
         self.selectedAgentId = nil
         self.gatewayDefaultAgentId = "main"
         self.gatewayAgents = AppleReviewDemoMode.agents
@@ -3723,6 +3914,7 @@ extension NodeAppModel {
         self.setOperatorConnected(true)
         self.hasOperatorAdminScope = true
         self.mainSessionBaseKey = "main"
+        self.gatewaySessionScope = "per-sender"
         self.selectedAgentId = nil
         self.gatewayDefaultAgentId = "main"
         self.gatewayAgents = ScreenshotFixtureMode.agents
@@ -3887,7 +4079,7 @@ extension NodeAppModel {
 
         let routeGeneration = self.gatewayRouteGeneration
         guard let gatewayStableID = self.connectedGatewayID,
-              let nodeRoute = await nodeGateway.currentRoute(),
+              let nodeRoute = await self.nodeGateway.currentRoute(),
               shouldContinue(),
               self.isCurrentGatewayRoute(generation: routeGeneration, stableID: gatewayStableID)
         else { return }
@@ -4214,8 +4406,8 @@ extension NodeAppModel {
     private func persistWatchExecApprovalBridgeState() {
         self.pruneExpiredWatchExecApprovalPrompts()
         let approvals = self.watchExecApprovalPromptsByID.values.sorted { lhs, rhs in
-            let lhsExpires = lhs.expiresAtMs ?? Int.max
-            let rhsExpires = rhs.expiresAtMs ?? Int.max
+            let lhsExpires = lhs.expiresAtMs ?? Int64.max
+            let rhsExpires = rhs.expiresAtMs ?? Int64.max
             if lhsExpires != rhsExpires {
                 return lhsExpires < rhsExpires
             }
@@ -4239,8 +4431,8 @@ extension NodeAppModel {
         UserDefaults.standard.set(data, forKey: Self.watchExecApprovalBridgeStateKey)
     }
 
-    private func pruneExpiredWatchExecApprovalPrompts(nowMs: Int? = nil) {
-        let currentNowMs = nowMs ?? Int(Date().timeIntervalSince1970 * 1000)
+    private func pruneExpiredWatchExecApprovalPrompts(nowMs: Int64? = nil) {
+        let currentNowMs = nowMs ?? Int64(Date().timeIntervalSince1970 * 1000)
         self.watchExecApprovalPromptsByID = self.watchExecApprovalPromptsByID.filter { _, prompt in
             guard let expiresAtMs = prompt.expiresAtMs else { return true }
             return expiresAtMs > currentNowMs
@@ -4248,6 +4440,7 @@ extension NodeAppModel {
     }
 
     private func handleWatchMessagingStatusChanged(_ status: WatchMessagingStatus) async {
+        self.watchMessagingStatus = status
         GatewayDiagnostics.log(
             "watch exec approval: status changed "
                 + "reachable=\(status.reachable) activation=\(status.activationState) "
@@ -4348,7 +4541,7 @@ extension NodeAppModel {
         let deliveryGeneration = self.gatewayConnectGeneration
         let message = OpenClawWatchExecApprovalPromptMessage(
             approval: Self.makeWatchExecApprovalItem(from: prompt),
-            sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
+            sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
             deliveryId: UUID().uuidString,
             resetResolvingState: Self.shouldResetWatchExecApprovalResolvingStateOnPrompt(reason: reason))
         do {
@@ -4388,7 +4581,7 @@ extension NodeAppModel {
             approvalId: normalizedApprovalID,
             gatewayStableID: gatewayStableID,
             decision: decision,
-            resolvedAtMs: Int(Date().timeIntervalSince1970 * 1000),
+            resolvedAtMs: Int64(Date().timeIntervalSince1970 * 1000),
             source: source)
         do {
             _ = try await self.watchMessagingService.sendExecApprovalResolved(message)
@@ -4417,7 +4610,7 @@ extension NodeAppModel {
             approvalId: normalizedApprovalID,
             gatewayStableID: gatewayStableID,
             reason: reason,
-            expiredAtMs: Int(Date().timeIntervalSince1970 * 1000))
+            expiredAtMs: Int64(Date().timeIntervalSince1970 * 1000))
         do {
             _ = try await self.watchMessagingService.sendExecApprovalExpired(message)
         } catch {
@@ -4445,8 +4638,8 @@ extension NodeAppModel {
         let approvals = self.watchExecApprovalPromptsByID.values
             .filter(self.isExecApprovalPromptCurrent)
             .sorted { lhs, rhs in
-                let lhsExpires = lhs.expiresAtMs ?? Int.max
-                let rhsExpires = rhs.expiresAtMs ?? Int.max
+                let lhsExpires = lhs.expiresAtMs ?? Int64.max
+                let rhsExpires = rhs.expiresAtMs ?? Int64.max
                 if lhsExpires != rhsExpires {
                     return lhsExpires < rhsExpires
                 }
@@ -4456,7 +4649,7 @@ extension NodeAppModel {
         let message = OpenClawWatchExecApprovalSnapshotMessage(
             approvals: approvals,
             gatewayStableID: currentExecApprovalGatewayStableID(),
-            sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
+            sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
             snapshotId: UUID().uuidString)
         do {
             guard shouldContinue() else { return }
@@ -4510,7 +4703,7 @@ extension NodeAppModel {
         from raw: [OpenClawKit.AnyCodable],
         runId: String,
         submittedText: String,
-        submittedAtMs: Int) -> String?
+        submittedAtMs: Int64) -> String?
     {
         let entries = raw.compactMap(self.decodeWatchChatMessage)
         if let directReply = entries.last(where: {
@@ -4630,7 +4823,7 @@ extension NodeAppModel {
         return "\(trimmed.prefix(237))..."
     }
 
-    private nonisolated static func watchTimestampMs(_ timestamp: Double?) -> Int? {
+    private nonisolated static func watchTimestampMs(_ timestamp: Double?) -> Int64? {
         guard let timestamp, timestamp.isFinite, timestamp >= 0 else { return nil }
         let milliseconds = timestamp > 100_000_000_000 ? timestamp : timestamp * 1000
         let maxReasonableEpochMs: Double = 32_503_680_000_000
@@ -4640,7 +4833,7 @@ extension NodeAppModel {
         else {
             return nil
         }
-        return Int(milliseconds)
+        return Int64(milliseconds)
     }
 
     private func makeWatchAppSnapshot(
@@ -4668,7 +4861,7 @@ extension NodeAppModel {
             pendingApprovalCount: self.watchExecApprovalPromptsByID.count,
             chatItems: chatPreview?.items,
             chatStatusText: chatPreview?.statusText,
-            sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
+            sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
             snapshotId: UUID().uuidString)
     }
 
@@ -4853,7 +5046,7 @@ extension NodeAppModel {
         let thinking = messageKind == .quickReply ? "low" : "auto"
 
         do {
-            let submittedAtMs = Int(Date().timeIntervalSince1970 * 1000)
+            let submittedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
             if self.isAppleReviewDemoModeEnabled {
                 let response = try await appleReviewDemoChatTransport.sendMessage(
                     sessionKey: sessionKey,
@@ -4969,7 +5162,7 @@ extension NodeAppModel {
         sessionKey: String,
         runId: String,
         submittedText: String,
-        submittedAtMs: Int,
+        submittedAtMs: Int64,
         deadline: Date,
         expectedRoute: GatewayNodeSessionRoute) async -> String?
     {
@@ -4998,7 +5191,7 @@ extension NodeAppModel {
                 OpenClawWatchChatCompletionMessage(
                     commandId: commandId,
                     replyText: replyText,
-                    sentAtMs: Int(Date().timeIntervalSince1970 * 1000)))
+                    sentAtMs: Int64(Date().timeIntervalSince1970 * 1000)))
         } catch {
             GatewayDiagnostics.log(
                 "watch chat completion failed commandId=\(commandId) error=\(error.localizedDescription)")
@@ -5650,7 +5843,16 @@ extension NodeAppModel {
             }
             return
         }
-        if !usesRelayTransport, token == self.apnsLastRegisteredTokenHex {
+        let gatewayStableID = self.activeGatewayConnectConfig?.effectiveStableID
+            ?? self.connectedGatewayID
+            ?? ""
+        if !usesRelayTransport,
+           !Self.shouldPublishDirectAPNsRegistration(
+               token: token,
+               gatewayStableID: gatewayStableID,
+               lastToken: self.apnsLastRegisteredTokenHex,
+               lastGatewayStableID: self.apnsLastRegisteredGatewayStableID)
+        {
             return
         }
         guard let topic = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -5690,6 +5892,7 @@ extension NodeAppModel {
                 ifCurrentRoute: nodeRoute)
             guard published, shouldContinue() else { return }
             self.apnsLastRegisteredTokenHex = token
+            self.apnsLastRegisteredGatewayStableID = gatewayStableID
             if usesRelayTransport {
                 GatewayDiagnostics.pushRelay.stage("gateway registration event published")
             }
@@ -5703,9 +5906,13 @@ extension NodeAppModel {
     }
 
     private func canPublishAPNsRegistration(usesRelayTransport: Bool) async -> Bool {
-        guard PushEnrollmentConsent.disclosureAccepted else {
+        if usesRelayTransport, !PushEnrollmentConsent.disclosureAccepted {
+            GatewayDiagnostics.pushRelay.skipped("enrollment_disclosure_not_accepted")
+            return false
+        }
+        guard NotificationServingPreference.isEnabled() else {
             if usesRelayTransport {
-                GatewayDiagnostics.pushRelay.skipped("enrollment_disclosure_not_accepted")
+                GatewayDiagnostics.pushRelay.skipped("notification_serving_disabled")
             }
             return false
         }
@@ -5717,6 +5924,15 @@ extension NodeAppModel {
             return false
         }
         return true
+    }
+
+    nonisolated static func shouldPublishDirectAPNsRegistration(
+        token: String,
+        gatewayStableID: String,
+        lastToken: String?,
+        lastGatewayStableID: String?) -> Bool
+    {
+        token != lastToken || gatewayStableID != lastGatewayStableID
     }
 
     private func fetchPushRelayGatewayIdentity(
@@ -5795,7 +6011,7 @@ extension NodeAppModel {
         var host: String?
         var nodeId: String?
         var agentId: String?
-        var expiresAtMs: Int?
+        var expiresAtMs: Int64?
     }
 
     func presentExecApprovalNotificationPrompt(
@@ -6975,7 +7191,7 @@ extension NodeAppModel {
         from raw: [OpenClawKit.AnyCodable],
         runId: String,
         submittedText: String,
-        submittedAtMs: Int) -> String?
+        submittedAtMs: Int64) -> String?
     {
         self.watchChatReplyText(
             from: raw,
@@ -7150,7 +7366,7 @@ extension NodeAppModel {
         host: String?,
         nodeId: String?,
         agentId: String?,
-        expiresAtMs: Int?) -> ExecApprovalPrompt?
+        expiresAtMs: Int64?) -> ExecApprovalPrompt?
     {
         self.makeExecApprovalPrompt(
             from: ExecApprovalGetResponse(

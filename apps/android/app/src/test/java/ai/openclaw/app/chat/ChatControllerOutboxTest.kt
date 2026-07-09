@@ -24,15 +24,20 @@ class ChatControllerOutboxTest {
     private val capacity: Int = OUTBOX_MAX_QUEUED,
   ) : ChatCommandOutbox {
     val rows = LinkedHashMap<String, ChatOutboxItem>()
+    val gatewayIds = mutableMapOf<String, String>()
     val deletedSessions = mutableListOf<String>()
     private var nextCreatedAt = 0L
 
-    fun seed(item: ChatOutboxItem) {
+    fun seed(
+      item: ChatOutboxItem,
+      gatewayId: String = "gateway-test",
+    ) {
       rows[item.id] = item
+      gatewayIds[item.id] = gatewayId
       nextCreatedAt = maxOf(nextCreatedAt, item.createdAtMs + 1)
     }
 
-    override suspend fun load(gatewayId: String): List<ChatOutboxItem> = rows.values.sortedWith(compareBy({ it.createdAtMs }, { it.id }))
+    override suspend fun load(gatewayId: String): List<ChatOutboxItem> = rows.values.filter { gatewayIds[it.id] == gatewayId }.sortedWith(compareBy({ it.createdAtMs }, { it.id }))
 
     override suspend fun enqueue(
       gatewayId: String,
@@ -41,7 +46,7 @@ class ChatControllerOutboxTest {
       thinkingLevel: String,
       nowMs: Long,
     ): ChatOutboxEnqueueResult {
-      if (rows.size >= capacity) return ChatOutboxEnqueueResult.QueueFull
+      if (gatewayIds.values.count { it == gatewayId } >= capacity) return ChatOutboxEnqueueResult.QueueFull
       val createdAt = maxOf(nowMs, nextCreatedAt)
       nextCreatedAt = createdAt + 1
       val item =
@@ -56,6 +61,7 @@ class ChatControllerOutboxTest {
           lastError = null,
         )
       rows[item.id] = item
+      gatewayIds[item.id] = gatewayId
       return ChatOutboxEnqueueResult.Queued(item)
     }
 
@@ -76,6 +82,7 @@ class ChatControllerOutboxTest {
       nowMs: Long,
     ) {
       val current = rows[id] ?: return
+      if (gatewayIds[id] != gatewayId) return
       val createdAt = maxOf(nowMs, nextCreatedAt)
       nextCreatedAt = createdAt + 1
       rows[id] = current.copy(status = ChatOutboxStatus.Queued, retryCount = 0, lastError = null, createdAtMs = createdAt)
@@ -83,6 +90,7 @@ class ChatControllerOutboxTest {
 
     override suspend fun delete(id: String) {
       rows.remove(id)
+      gatewayIds.remove(id)
     }
 
     override suspend fun deleteForSession(
@@ -90,7 +98,19 @@ class ChatControllerOutboxTest {
       sessionKey: String,
     ) {
       deletedSessions += sessionKey
-      rows.values.removeAll { it.sessionKey == sessionKey }
+      val ids = rows.values.filter { gatewayIds[it.id] == gatewayId && it.sessionKey == sessionKey }.map { it.id }
+      ids.forEach {
+        rows.remove(it)
+        gatewayIds.remove(it)
+      }
+    }
+
+    override suspend fun clearGateway(gatewayId: String) {
+      val ids = gatewayIds.filterValues { it == gatewayId }.keys.toList()
+      ids.forEach {
+        rows.remove(it)
+        gatewayIds.remove(it)
+      }
     }
 
     override suspend fun requeueSendingAfterRestart() {
@@ -106,14 +126,10 @@ class ChatControllerOutboxTest {
       nowMs: Long,
     ) {
       for ((id, item) in rows) {
-        if (item.status == ChatOutboxStatus.Queued && item.createdAtMs <= nowMs - OUTBOX_EXPIRY_MS) {
+        if (gatewayIds[id] == gatewayId && item.status == ChatOutboxStatus.Queued && item.createdAtMs <= nowMs - OUTBOX_EXPIRY_MS) {
           rows[id] = item.copy(status = ChatOutboxStatus.Failed, lastError = OUTBOX_EXPIRED_ERROR)
         }
       }
-    }
-
-    override suspend fun clearAll() {
-      rows.clear()
     }
   }
 
@@ -127,6 +143,7 @@ class ChatControllerOutboxTest {
     val sentSessionKeys = mutableListOf<String>()
     val sentThinkingLevels = mutableListOf<String>()
     var historyMessagesJson = "[]"
+    var metadataModelsJson = "[]"
 
     suspend fun request(
       method: String,
@@ -145,6 +162,7 @@ class ChatControllerOutboxTest {
           sendResponse(key)
         }
         "chat.history" -> """{"sessionId":"session-1","messages":$historyMessagesJson}"""
+        "chat.metadata" -> """{"commands":[],"models":$metadataModelsJson}"""
         else -> "{}"
       }
     }
@@ -236,6 +254,65 @@ class ChatControllerOutboxTest {
     }
 
   @Test
+  fun reconnectGatesActiveSessionThinkingAndFailsOpenForOtherSessions() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val now = System.currentTimeMillis()
+      // Gating reads the controller-owned agent-scoped catalog hydrated from chat.metadata,
+      // so hydrate first (empty queue) and seed the rows afterwards; the flush loop re-reads
+      // the outbox on each health transition.
+      gateway.metadataModelsJson =
+        """[{"id":"plain","name":"Plain","provider":"openai","available":true,"input":["text"],"reasoning":false}]"""
+      val chat = controller(this, gateway, outbox)
+      gateway.online = true
+      chat.load("main")
+      advanceUntilIdle()
+
+      outbox.seed(
+        ChatOutboxItem(
+          id = "active",
+          sessionKey = "main",
+          text = "active session",
+          thinkingLevel = "high",
+          createdAtMs = now,
+          status = ChatOutboxStatus.Queued,
+          retryCount = 0,
+          lastError = null,
+        ),
+      )
+      outbox.seed(
+        ChatOutboxItem(
+          id = "other",
+          sessionKey = "other-session",
+          text = "unknown session",
+          thinkingLevel = "medium",
+          createdAtMs = now + 1,
+          status = ChatOutboxStatus.Queued,
+          retryCount = 0,
+          lastError = null,
+        ),
+      )
+      assertTrue(chat.setSessionModelAwait("main", "openai/plain"))
+      // Drop health via a transport failure mid-flush: unlike a disconnect this keeps the
+      // hydrated catalog, which is the state where the flush gate has data to act on.
+      gateway.failSendsWithTransportError = true
+      chat.retryOutboxCommand("active")
+      advanceUntilIdle()
+      assertFalse(chat.healthOk.value)
+
+      gateway.failSendsWithTransportError = false
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      // retryOutboxCommand refreshes the active row's createdAt, so the untouched
+      // unknown-session row flushes first in createdAt order.
+      assertEquals(listOf("unknown session", "active session"), gateway.sentMessages)
+      assertEquals(listOf("medium", "off"), gateway.sentThinkingLevels)
+      assertTrue(chat.outboxItems.value.isEmpty())
+    }
+
+  @Test
   fun mainAliasRowsFlushToCanonicalMainSessionAfterHello() =
     runTest {
       val gateway = FakeGateway()
@@ -315,6 +392,48 @@ class ChatControllerOutboxTest {
       val row = outbox.rows.values.single()
       assertEquals(ChatOutboxStatus.Queued, row.status)
       assertEquals(1, row.retryCount)
+    }
+
+  @Test
+  fun queuedRowsStayWithTheirGatewayAcrossSwitchAndFlushAfterSwitchBack() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      var activeScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1L)
+      val chat =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = gateway::request,
+          cacheScope = { activeScope },
+          commandOutbox = outbox,
+        )
+      chat.load("main")
+      advanceUntilIdle()
+      chat.sendMessageAwaitAcceptance(message = "gateway A queued", thinkingLevel = "off", attachments = emptyList())
+      val queuedId =
+        chat.outboxItems.value
+          .single()
+          .id
+
+      activeScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2L)
+      chat.onGatewayScopeChanging()
+      chat.onDisconnected("Offline")
+      gateway.online = true
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      assertTrue(gateway.sentMessages.isEmpty())
+      assertTrue(chat.outboxItems.value.isEmpty())
+      assertEquals(listOf(queuedId), outbox.load("gateway-a").map { it.id })
+      assertTrue(outbox.load("gateway-b").isEmpty())
+
+      activeScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 3L)
+      chat.onGatewayScopeChanging()
+      chat.onDisconnected("Offline")
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      assertEquals(listOf("gateway A queued"), gateway.sentMessages)
+      assertTrue(outbox.load("gateway-a").isEmpty())
     }
 
   @Test

@@ -64,6 +64,9 @@ describe("minimal npm extended-stable workflow", () => {
       "openclaw-npm-extended-stable-release.mjs validate-request",
     );
     expect(
+      step(parsed.jobs?.preflight_openclaw_npm, "Validate npm release request").env?.PREFLIGHT_ONLY,
+    ).toBe("${{ inputs.preflight_only }}");
+    expect(
       step(parsed.jobs?.validate_publish_request, "Validate npm release request").run,
     ).toContain("openclaw-npm-extended-stable-release.mjs validate-request");
     expect(step(parsed.jobs?.publish_openclaw_npm, "Recheck npm release request").run).toContain(
@@ -106,6 +109,31 @@ describe("minimal npm extended-stable workflow", () => {
       "${{ inputs.bypass_extended_stable_guard }}",
     );
     expect(summary.run).toContain("Extended-stable guard bypass: ${BYPASS_EXTENDED_STABLE_GUARD}");
+  });
+
+  it("accepts arbitrary SHA preflight targets and exercises every publishable plugin package", () => {
+    const parsed = workflow();
+    const preflight = parsed.jobs?.preflight_openclaw_npm;
+    const metadata = step(preflight, "Validate release metadata");
+    expect(metadata.run).toContain('RELEASE_BRANCH_REF="${RELEASE_SHA}"');
+    expect(metadata.run).not.toContain("Validation-only SHA mode only supports");
+
+    const plugins = step(preflight, "Exercise all extended-stable plugin npm packages");
+    expect(step(preflight, "Verify release contents").env).toMatchObject({
+      OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR:
+        "${{ steps.ai_runtime_tarballs.outputs.dir }}",
+    });
+    expect(plugins.if).toBe("${{ inputs.npm_dist_tag == 'extended-stable' }}");
+    expect(plugins.env).toMatchObject({
+      OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: "extended-stable",
+    });
+    expect(plugins.run).toContain("--selection-mode all-publishable");
+    expect(plugins.run).toContain("--npm-dist-tag extended-stable");
+    expect(plugins.run).toContain("scripts/check-plugin-npm-runtime-builds.mjs");
+    expect(plugins.run).toContain("scripts/plugin-npm-publish.sh --pack");
+    expect(plugins.run).toContain("OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR");
+    expect(plugins.run).not.toContain("--publish");
+    expect(step(preflight, "Upload extended-stable plugin npm packages")).toBeDefined();
   });
 
   it("authenticates exact extended-stable run and Full Validation identities", () => {

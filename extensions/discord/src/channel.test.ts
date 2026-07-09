@@ -83,6 +83,38 @@ function startDiscordAccount(cfg: OpenClawConfig, accountId = "default") {
   );
 }
 
+function prepareDiscordStartupMocks() {
+  probeDiscordMock.mockResolvedValue({
+    ok: true,
+    bot: { username: "Jarvis" },
+    application: {
+      intents: {
+        messageContent: "limited",
+        guildMembers: "disabled",
+        presence: "disabled",
+      },
+    },
+    elapsedMs: 1,
+  });
+  monitorDiscordProviderMock.mockResolvedValue(undefined);
+}
+
+async function expectDiscordStartupDelay(
+  cfg: OpenClawConfig,
+  accountId: string,
+  expectedMs: number,
+) {
+  const ctx = createStartAccountContext({ account: resolveAccount(cfg, accountId), cfg });
+  sleepWithAbortMock.mockClear();
+  await discordPlugin.gateway!.startAccount!(ctx);
+  if (expectedMs === 0) {
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
+    return;
+  }
+  expect(sleepWithAbortMock).toHaveBeenCalledOnce();
+  expect(sleepWithAbortMock).toHaveBeenCalledWith(expectedMs, ctx.abortSignal);
+}
+
 function installDiscordRuntime(discord: Record<string, unknown>) {
   setDiscordRuntime({
     channel: {
@@ -326,7 +358,7 @@ describe("discordPlugin outbound", () => {
     expect(sendOptions.mediaUrl).toBe("/tmp/image.png");
     expect(sendOptions.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
     expect(sendOptions.mediaReadFile).toBe(mediaReadFile);
-    expect(sendOptions.replyTo).toBe("reply-123");
+    expect(sendOptions.reply).toEqual({ messageId: "reply-123", scope: "all" });
     expect(result.channel).toBe("discord");
     expect(result.messageId).toBe("m1");
   });
@@ -353,7 +385,10 @@ describe("discordPlugin outbound", () => {
     expect(sendMessageDiscord).toHaveBeenCalledTimes(2);
     expect(argAt(sendMessageDiscord, 0, 0)).toBe("channel:thread-123");
     expect(argAt(sendMessageDiscord, 0, 1)).toBe("done - tiny cyber-lobster clip incoming");
-    expect(objectArgAt(sendMessageDiscord, 0, 2).replyTo).toBe("reply-123");
+    expect(objectArgAt(sendMessageDiscord, 0, 2).reply).toEqual({
+      messageId: "reply-123",
+      scope: "all",
+    });
     expect(argAt(sendMessageDiscord, 1, 0)).toBe("channel:thread-123");
     expect(argAt(sendMessageDiscord, 1, 1)).toBe("");
     expect(objectArgAt(sendMessageDiscord, 1, 2).mediaUrl).toBe("/tmp/molty.mp4");
@@ -688,19 +723,7 @@ describe("discordPlugin outbound", () => {
   });
 
   it("stagger starts later accounts in multi-bot setups", async () => {
-    probeDiscordMock.mockResolvedValue({
-      ok: true,
-      bot: { username: "Cherry" },
-      application: {
-        intents: {
-          messageContent: "limited",
-          guildMembers: "disabled",
-          presence: "disabled",
-        },
-      },
-      elapsedMs: 1,
-    });
-    monitorDiscordProviderMock.mockResolvedValue(undefined);
+    prepareDiscordStartupMocks();
 
     const cfg = {
       channels: {
@@ -714,17 +737,67 @@ describe("discordPlugin outbound", () => {
       },
     } as OpenClawConfig;
 
-    // First account (index 0) — no delay
-    await startDiscordAccount(cfg, "alpha");
-    expect(sleepWithAbortMock).not.toHaveBeenCalled();
+    await expectDiscordStartupDelay(cfg, "alpha", 0);
+    await expectDiscordStartupDelay(cfg, "zeta", 10_000);
+  });
 
-    // Second account (index 1) — 10s delay
-    const zetaContext = createStartAccountContext({
-      account: resolveAccount(cfg, "zeta"),
-      cfg,
-    });
-    await discordPlugin.gateway!.startAccount!(zetaContext);
-    expect(sleepWithAbortMock).toHaveBeenCalledWith(10_000, zetaContext.abortSignal);
+  it("starts the configured default account before staggering secondary accounts", async () => {
+    prepareDiscordStartupMocks();
+
+    const cfg = {
+      channels: {
+        discord: {
+          defaultAccount: "main",
+          accounts: {
+            billy: { token: "Bot billy-token", enabled: true },
+            farber: { token: "Bot farber-token", enabled: true },
+            main: { token: "Bot main-token", enabled: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expectDiscordStartupDelay(cfg, "main", 0);
+    await expectDiscordStartupDelay(cfg, "billy", 10_000);
+    await expectDiscordStartupDelay(cfg, "farber", 20_000);
+  });
+
+  it("does not promote a duplicate-token defaultAccount to the zero-delay startup slot", async () => {
+    prepareDiscordStartupMocks();
+
+    const cfg = {
+      channels: {
+        discord: {
+          defaultAccount: "main",
+          accounts: {
+            billy: { token: "Bot billy-token", enabled: true },
+            // "farber" sorts before "main", so it owns the shared token.
+            farber: { token: "Bot shared-token", enabled: true },
+            main: { token: "Bot shared-token", enabled: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expectDiscordStartupDelay(cfg, "billy", 0);
+    await expectDiscordStartupDelay(cfg, "farber", 10_000);
+  });
+
+  it("does not assign startup slots to enabled but unconfigured accounts", async () => {
+    prepareDiscordStartupMocks();
+
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            alpha: { enabled: true },
+            zeta: { token: "Bot zeta-token", enabled: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expectDiscordStartupDelay(cfg, "zeta", 0);
   });
 });
 

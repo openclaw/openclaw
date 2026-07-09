@@ -15,6 +15,7 @@ import {
   validateNodeEventResult,
   validateNodePairRequestParams,
   validateNodePresenceAlivePayload,
+  validateSessionsUsageParams,
   validateTasksCancelParams,
   validateTasksListParams,
   validateTalkCatalogResult,
@@ -134,6 +135,15 @@ describe("lazy protocol validators", () => {
     expect(validateChatMetadataParams({ agentId: "work" })).toBe(true);
     expect(validateChatMetadataParams({ agentId: "" })).toBe(false);
     expect(validateChatMetadataParams({ agentId: "work", view: "configured" })).toBe(false);
+  });
+
+  it("accepts an IANA time zone for session usage while retaining UTC offsets", () => {
+    expect(validateSessionsUsageParams({ mode: "specific", timeZone: "Europe/Vienna" })).toBe(
+      true,
+    );
+    expect(validateSessionsUsageParams({ mode: "specific", utcOffset: "UTC+2" })).toBe(true);
+    expect(validateSessionsUsageParams({ mode: "specific", timeZone: "" })).toBe(false);
+    expect(validateSessionsUsageParams({ mode: "specific", timeZone: 2 })).toBe(false);
   });
 
   it("validates chat sends that suppress command interpretation", () => {
@@ -794,6 +804,12 @@ describe("validateChatSendParams", () => {
     };
 
     expect(validateChatSendParams(base)).toBe(true);
+    expect(
+      validateChatSendParams({
+        ...base,
+        expectedSessionRoutingContract: "per-sender|main|main",
+      }),
+    ).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 2 })).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 0 })).toBe(false);
   });

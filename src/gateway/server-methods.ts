@@ -214,6 +214,10 @@ const loadTasksHandlers = lazyHandlerModule(
   () => import("./server-methods/tasks.js"),
   (module) => module.tasksHandlers,
 );
+const loadTaskSuggestionsHandlers = lazyHandlerModule(
+  () => import("./server-methods/task-suggestions.js"),
+  (module) => module.taskSuggestionsHandlers,
+);
 const loadToolsCatalogHandlers = lazyHandlerModule(
   () => import("./server-methods/tools-catalog.js"),
   (module) => module.toolsCatalogHandlers,
@@ -499,6 +503,15 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadTasksHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: [
+      "taskSuggestions.list",
+      "taskSuggestions.create",
+      "taskSuggestions.accept",
+      "taskSuggestions.dismiss",
+    ],
+    loadHandlers: loadTaskSuggestionsHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["tools.catalog"],
     loadHandlers: loadToolsCatalogHandlers,
   }),
@@ -516,6 +529,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "tts.enable",
       "tts.disable",
       "tts.convert",
+      "tts.speak",
       "tts.setProvider",
       "tts.personas",
       "tts.setPersona",
@@ -536,6 +550,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "skills.skillCard",
       "skills.install",
       "skills.update",
+      "skills.curator.status",
+      "skills.curator.pin",
+      "skills.curator.unpin",
+      "skills.curator.restore",
       "skills.proposals.list",
       "skills.proposals.inspect",
       "skills.proposals.create",

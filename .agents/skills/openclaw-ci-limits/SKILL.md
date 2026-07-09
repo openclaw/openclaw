@@ -132,7 +132,7 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
 - `runner-admission` on `ubuntu-24.04` with
   `OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS=90`.
 - `preflight` and `security-fast` needing `runner-admission`.
-- CI matrix caps: fast/check lanes at 12, Node test shards at 24, Windows and
+- CI matrix caps: fast/check lanes at 12, Node test shards at 28, Windows and
   Android at 2.
 - `build-artifacts` on `blacksmith-16vcpu-ubuntu-2404`.
 - lower-weight Node/check shards on `blacksmith-4vcpu-ubuntu-2404`.

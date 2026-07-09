@@ -377,7 +377,9 @@ struct CommandCenterTab: View {
     }
 
     private var sessionCategories: [String] {
-        CommandSessionGrouping.categories(from: self.recentChatSessions)
+        CommandSessionGrouping.categories(
+            from: self.recentChatSessions,
+            knownGroups: SessionGroupStore.load())
     }
 
     private var sessionControlsAvailable: Bool {
@@ -517,7 +519,7 @@ struct CommandCenterTab: View {
         defaultSessionKey: String) -> [OpenClawChatSessionEntry]
     {
         sessions.filter {
-            Self.isRecentChatSession($0.key, defaultSessionKey: defaultSessionKey)
+            self.isRecentChatSession($0.key, defaultSessionKey: defaultSessionKey)
         }
     }
 
@@ -686,10 +688,22 @@ struct CommandCenterTab: View {
 struct CommandSessionsScreen: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
+    private enum GroupEditor: Equatable {
+        case rename(String)
+        case create
+    }
+
+    /// Group mutations need the full session store, not a recency window.
+    private static let groupMemberFetchLimit = 10000
+
     @State private var sessions: [OpenClawChatSessionEntry] = []
     @State private var isLoading = false
     @State private var loadErrorText: String?
     @State private var showArchived = false
+    @State private var knownGroups = SessionGroupStore.load()
+    @State private var groupEditor: GroupEditor?
+    @State private var groupDraftText = ""
+    @State private var groupPendingDelete: String?
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let usesNativeNavigationChrome: Bool
     let openChat: () -> Void
@@ -724,6 +738,41 @@ struct CommandSessionsScreen: View {
         .toolbar(self.usesNativeNavigationChrome ? .visible : .hidden, for: .navigationBar)
         .task(id: self.refreshID) {
             await self.refreshSessions()
+        }
+        .alert(self.groupEditorTitle, isPresented: self.groupEditorBinding) {
+            TextField("Group name", text: self.$groupDraftText)
+                .font(OpenClawType.body)
+            Button {
+                self.commitGroupEditor()
+            } label: {
+                Text(self.groupEditor == .create ? "Create" : "Save")
+                    .font(OpenClawType.subheadSemiBold)
+            }
+            Button(role: .cancel) {
+                self.groupEditor = nil
+            } label: {
+                Text("Cancel")
+                    .font(OpenClawType.subheadSemiBold)
+            }
+        }
+        .alert(
+            "Delete Group?",
+            isPresented: self.groupDeleteBinding,
+            presenting: self.groupPendingDelete)
+        { group in
+            Button(role: .destructive) {
+                self.deleteGroup(group)
+            } label: {
+                Text("Delete Group")
+                    .font(OpenClawType.subheadSemiBold)
+            }
+            Button(role: .cancel) {} label: {
+                Text("Cancel")
+                    .font(OpenClawType.subheadSemiBold)
+            }
+        } message: { group in
+            Text("Sessions in \u{201C}\(group)\u{201D} move back to Ungrouped.")
+                .font(OpenClawType.caption)
         }
     }
 
@@ -790,10 +839,7 @@ struct CommandSessionsScreen: View {
                         ForEach(self.sessionSections) { section in
                             VStack(alignment: .leading, spacing: 6) {
                                 if section.showsHeader {
-                                    Text(section.title)
-                                        .font(OpenClawType.captionSemiBold)
-                                        .foregroundStyle(.secondary)
-                                        .padding(.horizontal, 4)
+                                    self.sectionHeader(section)
                                 }
                                 ForEach(section.entries) { session in
                                     self.sessionRow(session)
@@ -831,11 +877,11 @@ struct CommandSessionsScreen: View {
     }
 
     private var sessionSections: [CommandSessionSection] {
-        CommandSessionGrouping.sections(from: self.visibleSessions)
+        CommandSessionGrouping.sections(from: self.visibleSessions, knownGroups: self.knownGroups)
     }
 
     private var sessionCategories: [String] {
-        CommandSessionGrouping.categories(from: self.sessions)
+        CommandSessionGrouping.categories(from: self.sessions, knownGroups: self.knownGroups)
     }
 
     private var sessionControlsAvailable: Bool {
@@ -853,6 +899,131 @@ struct CommandSessionsScreen: View {
 
     private var refreshID: String {
         "\(self.appModel.commandSessionListMode):\(self.showArchived)"
+    }
+
+    @ViewBuilder
+    private func sectionHeader(_ section: CommandSessionSection) -> some View {
+        let title = Text(section.title)
+            .font(OpenClawType.captionSemiBold)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
+        // Group management only applies to custom categories, never the
+        // Pinned/Ungrouped built-ins.
+        if case let .category(group) = section.id, self.sessionControlsAvailable {
+            title.contextMenu {
+                self.groupMenu(for: group)
+            }
+        } else {
+            title
+        }
+    }
+
+    @ViewBuilder
+    private func groupMenu(for group: String) -> some View {
+        Button {
+            self.groupDraftText = group
+            self.groupEditor = .rename(group)
+        } label: {
+            Label("Rename Group…", systemImage: "pencil")
+                .font(OpenClawType.subhead)
+        }
+        Button {
+            self.groupDraftText = ""
+            self.groupEditor = .create
+        } label: {
+            Label("New Group…", systemImage: "folder.badge.plus")
+                .font(OpenClawType.subhead)
+        }
+        Button(role: .destructive) {
+            self.groupPendingDelete = group
+        } label: {
+            Label("Delete Group…", systemImage: "trash")
+                .font(OpenClawType.subhead)
+        }
+    }
+
+    private var groupEditorTitle: String {
+        self.groupEditor == .create ? "New Group" : "Rename Group"
+    }
+
+    private var groupEditorBinding: Binding<Bool> {
+        Binding(
+            get: { self.groupEditor != nil },
+            set: { if !$0 { self.groupEditor = nil } })
+    }
+
+    private var groupDeleteBinding: Binding<Bool> {
+        Binding(
+            get: { self.groupPendingDelete != nil },
+            set: { if !$0 { self.groupPendingDelete = nil } })
+    }
+
+    private func commitGroupEditor() {
+        let editor = self.groupEditor
+        self.groupEditor = nil
+        let name = self.groupDraftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        switch editor {
+        case let .rename(group):
+            guard name != group else { return }
+            self.updateStoredGroups { SessionGroupStore.renaming($0, from: group, to: name) }
+            self.patchGroupMembers(group, category: name)
+        case .create:
+            // Header-created groups start empty: stored-list only, no patches.
+            self.updateStoredGroups { SessionGroupStore.adding($0, name) }
+        case nil:
+            break
+        }
+    }
+
+    private func deleteGroup(_ group: String) {
+        self.groupPendingDelete = nil
+        self.updateStoredGroups { SessionGroupStore.removing($0, group) }
+        self.patchGroupMembers(group, category: nil)
+    }
+
+    private func updateStoredGroups(_ transform: ([String]) -> [String]) {
+        let updated = transform(SessionGroupStore.load())
+        SessionGroupStore.save(updated)
+        self.knownGroups = updated
+    }
+
+    /// Reassigns (or clears, when `category` is nil) every member of `group`.
+    private func patchGroupMembers(_ group: String, category: String?) {
+        self.performMutation { transport in
+            // Enumerate every member, not the windowed visible list: archived
+            // members must follow a rename so restores land in the new group.
+            // The gateway defaults an absent `limit` to 100 rows, so ask for
+            // an explicitly high limit to cover the whole store.
+            let active = try await transport.listSessions(
+                limit: Self.groupMemberFetchLimit,
+                archived: false)
+            let archived = try await transport.listSessions(
+                limit: Self.groupMemberFetchLimit,
+                archived: true)
+            let members = CommandSessionGrouping.members(
+                of: group,
+                in: [active.sessions, archived.sessions])
+            // Best effort: one failed patch must not abandon the rest of the
+            // group; the first error still surfaces via performMutation.
+            var firstError: (any Error)?
+            for member in members {
+                do {
+                    try await transport.patchSession(
+                        key: member.key,
+                        label: nil,
+                        category: .some(category),
+                        pinned: nil,
+                        archived: nil,
+                        unread: nil)
+                } catch {
+                    firstError = firstError ?? error
+                }
+            }
+            if let firstError {
+                throw firstError
+            }
+        }
     }
 
     private func sessionRow(_ session: OpenClawChatSessionEntry) -> some View {
@@ -957,6 +1128,9 @@ struct CommandSessionsScreen: View {
     }
 
     private func refreshSessions() async {
+        // Pick up groups stored by other surfaces (for example the per-session
+        // New Group editor) alongside the fresh session list.
+        self.knownGroups = SessionGroupStore.load()
         let requestsArchived = self.showArchived
         guard self.appModel.isCommandSessionListAvailable else {
             self.sessions = requestsArchived ? [] : await self.appModel.loadCachedChatSessions()

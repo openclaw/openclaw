@@ -41,6 +41,38 @@ class SessionsScreenGroupingTest {
     assertEquals(listOf("pinned"), sections.single().entries.map { it.key })
   }
 
+  @Test
+  fun knownGroupsRenderEmptyCategorySectionsInAlphabeticalMerge() {
+    val sections =
+      groupSessionEntries(
+        listOf(session("alpha", category = "Alpha"), session("loose")),
+        knownGroups = listOf(" Beta ", "beta", "alpha", "", "  "),
+      )
+
+    // Blank names drop, "beta" dedupes against " Beta ", and "alpha" merges into the populated section.
+    assertEquals(listOf("Alpha", "Beta", "Ungrouped"), sections.map { it.title })
+    assertEquals(listOf(true, true, false), sections.map { it.isCategory })
+    assertEquals(listOf("alpha"), sections[0].entries.map { it.key })
+    assertEquals(emptyList<String>(), sections[1].entries.map { it.key })
+    assertEquals(listOf("loose"), sections[2].entries.map { it.key })
+  }
+
+  @Test
+  fun knownGroupsAloneDoNotCreateSectionsWithoutSessions() {
+    assertEquals(emptyList<SessionSection>(), groupSessionEntries(emptyList(), knownGroups = listOf("Beta")))
+  }
+
+  @Test
+  fun pinnedAndUngroupedSectionsAreNotCategories() {
+    val sections =
+      groupSessionEntries(
+        listOf(session("pinned", pinned = true), session("grouped", category = "Work"), session("loose")),
+      )
+
+    assertEquals(listOf("Pinned", "Work", "Ungrouped"), sections.map { it.title })
+    assertEquals(listOf(false, true, false), sections.map { it.isCategory })
+  }
+
   private fun session(
     key: String,
     category: String? = null,

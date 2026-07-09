@@ -187,6 +187,12 @@ guidance remain available to non-Codex prompt surfaces for compatibility.
 | `api.registerNodeInvokePolicy(policy)`          | Allowlist/approval policy for node-invoked commands          |
 | `api.registerSecurityAuditCollector(collector)` | Findings collector for `openclaw security audit`             |
 
+Telegram interactive handlers can return `{ submitText }` to route text through
+Telegram's normal inbound agent path after the handler succeeds. OpenClaw keeps
+the callback button when inbound policy skips the text or processing fails, so
+the user can retry after the blocking condition changes. This result field is
+Telegram-specific; other channels keep their own interactive result contracts.
+
 ### Host hooks for workflow plugins
 
 Host hooks are the SDK seams for plugins that need to participate in the host

@@ -674,7 +674,7 @@ export function resolveCanaryArtifactPaths(extensionId, rootDir = repoRoot) {
 /**
  * Removes canary artifacts for one extension.
  */
-export function cleanupCanaryArtifacts(extensionId, rootDir = repoRoot) {
+function cleanupCanaryArtifacts(extensionId, rootDir = repoRoot) {
   const { canaryPath, tsconfigPath } = resolveCanaryArtifactPaths(extensionId, rootDir);
   rmSync(canaryPath, { force: true });
   rmSync(tsconfigPath, { force: true });

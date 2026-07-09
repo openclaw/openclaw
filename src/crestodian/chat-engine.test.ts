@@ -68,6 +68,80 @@ describe("CrestodianChatEngine", () => {
     expect(engine.hasPendingProposal()).toBe(false);
   });
 
+  it("offers masked model provider setup after a providerless bootstrap", async () => {
+    useTempStateDir();
+    const applySetup = vi.fn(async () => ({
+      configPath: "/tmp/openclaw.json",
+      lines: ["Workspace: /tmp/work"],
+    }));
+    const engine = new CrestodianChatEngine({
+      surface: "cli",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: {
+        applySetup,
+        detectInferenceBackends: async () => [],
+        loadOverview: fakeOverviewLoader(),
+      },
+    });
+    engine.propose({ kind: "setup", workspace: "/tmp/work" });
+
+    const setup = await engine.handle("yes");
+
+    expect(setup.text).toContain("Configure a model provider now?");
+    expect(engine.hasPendingProposal()).toBe(true);
+
+    const providerSetup = await engine.handle("yes");
+
+    expect(providerSetup.action).toBe("open-tui");
+    expect(providerSetup.handoff).toEqual({ kind: "model-setup", workspace: "/tmp/work" });
+  });
+
+  it("hosts model provider setup in gateway chat with sensitive replies masked", async () => {
+    useTempStateDir();
+    const answers: string[] = [];
+    const engine = new CrestodianChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runModelSetupWizard: async (workspace, prompter) => {
+        answers.push(`workspace:${workspace}`);
+        const provider = await prompter.select({
+          message: "Model/auth provider",
+          options: [{ value: "openai", label: "OpenAI" }],
+        });
+        answers.push(`provider:${provider}`);
+        const key = await prompter.text({ message: "API key", sensitive: true });
+        answers.push(`key:${key}`);
+      },
+    });
+
+    const providerStep = await engine.handle(
+      "configure model provider workspace /tmp/gateway-work",
+    );
+    expect(providerStep.text).toContain("Model/auth provider");
+
+    const keyStep = await engine.handle("1");
+    expect(keyStep.text).toContain("API key");
+    expect(keyStep.sensitive).toBe(true);
+
+    const done = await engine.handle("sk-test");
+    expect(done.text).toContain("finished without a default model");
+    expect(answers).toEqual(["workspace:/tmp/gateway-work", "provider:openai", "key:sk-test"]);
+  });
+
+  it("keeps deterministic mode available when model provider setup is declined", async () => {
+    const engine = new CrestodianChatEngine();
+    engine.propose({ kind: "model-setup" });
+
+    const reply = await engine.handle("not now");
+
+    expect(reply.text).toContain("remains available in deterministic mode");
+    expect(reply.text).toContain("configure model provider");
+    expect(engine.hasPendingProposal()).toBe(false);
+  });
+
   it("drops the proposal when the user declines", async () => {
     const runConfigSet = vi.fn(async () => {});
     const engine = new CrestodianChatEngine({ deps: { runConfigSet } });
@@ -178,6 +252,44 @@ describe("CrestodianChatEngine", () => {
     expect(reply.text).toContain("Sensitive input is not accepted");
     expect(reply.text).toContain("openclaw channels add --channel telegram");
     expect(reply.sensitive).toBeUndefined();
+
+    const handoff = await engine.handle("open channel wizard");
+    expect(handoff.action).toBe("open-setup");
+    expect(handoff.handoff).toEqual({
+      kind: "open-setup",
+      target: "channels",
+      channel: "telegram",
+    });
+
+    const channelRequired = await engine.handle("open channel wizard");
+    expect(channelRequired.action).toBe("none");
+    expect(channelRequired.text).toContain("Which channel");
+
+    const selectedChannel = await engine.handle("slack");
+    expect(selectedChannel.action).toBe("open-setup");
+    expect(selectedChannel.handoff).toEqual({
+      kind: "open-setup",
+      target: "channels",
+      channel: "slack",
+    });
+  });
+
+  it("hands typed setup switches to CLI hosts but not gateway hosts", async () => {
+    const common = {
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+    };
+    const cli = new CrestodianChatEngine({ ...common, surface: "cli" });
+    const cliReply = await cli.handle("open classic wizard");
+    expect(cliReply.action).toBe("open-setup");
+    expect(cliReply.handoff).toEqual({ kind: "open-setup", target: "classic" });
+
+    const gateway = new CrestodianChatEngine({ ...common, surface: "gateway" });
+    const gatewayReply = await gateway.handle("open setup wizard");
+    expect(gatewayReply.action).toBe("none");
+    expect(gatewayReply.handoff).toBeUndefined();
+    expect(gatewayReply.text).toContain("The app owns the setup screens here");
   });
 
   it("keeps hosted-wizard validation errors on the current prompt", async () => {
@@ -244,6 +356,21 @@ describe("CrestodianChatEngine", () => {
     expect(reply.action).toBe("open-tui");
     expect(reply.handoff).toMatchObject({ kind: "open-tui", agentId: "work" });
     expect(reply.text).toContain("Handing you over");
+  });
+
+  it("executes an open-setup directive from the agent loop", async () => {
+    const engine = new CrestodianChatEngine({
+      surface: "cli",
+      runAgentTurn: async () => ({
+        text: "Opening the menu wizard.",
+        directive: { kind: "open-setup" as const, target: "guided" as const },
+      }),
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+    const reply = await engine.handle("I would rather use menus");
+    expect(reply.action).toBe("open-setup");
+    expect(reply.handoff).toEqual({ kind: "open-setup", target: "guided" });
+    expect(reply.text).toContain("Opening the menu wizard");
   });
 
   it("starts the channel wizard from an agent-loop directive", async () => {

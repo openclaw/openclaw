@@ -1,13 +1,15 @@
 // Chat-owned composer, queue, status, context, and run controls.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../../api/types.ts";
+import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { normalizeChatSendShortcut, type ChatSendShortcut } from "../../../app/settings.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
-import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
+import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import {
@@ -20,6 +22,15 @@ import {
 } from "../../../lib/chat/commands.ts";
 import type { ChatSideResult } from "../../../lib/chat/side-result.ts";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
+import { isMonitoredAuthProvider } from "../../../lib/model-auth.ts";
+import {
+  collectProviderQuotaGroups,
+  formatQuotaReset,
+  type ProviderQuotaGroup,
+  type ProviderUsageDisplayProps,
+  type QuotaBudgetSummary,
+  type QuotaLimitSummary,
+} from "../../../lib/provider-quota-summary.ts";
 import {
   formatGoalDetail,
   formatGoalElapsed,
@@ -36,10 +47,15 @@ import {
 import { exportChatMarkdown } from "../export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
+import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
-import { renderRealtimeTalkOptions, type RealtimeTalkOptions } from "./chat-realtime-controls.ts";
+import {
+  renderChatVoiceError,
+  renderMicrophoneActivity,
+  voiceStatusLabel,
+} from "./chat-voice-activity.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
@@ -61,7 +77,7 @@ const CHAT_ATTACHMENT_ACCEPT =
   "image/*,audio/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
   ".doc,.docx,.xls,.xlsx,.ppt,.pptx";
 
-export type ChatComposerProps = {
+type ChatComposerProps = {
   paneId: string;
   sessionKey: string;
   currentAgentId: string;
@@ -79,6 +95,7 @@ export type ChatComposerProps = {
   queue: ChatQueueItem[];
   draft: string;
   sessions: SessionsListResult | null;
+  providerUsage?: ProviderUsageDisplayProps;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
   attachments?: ChatAttachment[];
@@ -87,11 +104,8 @@ export type ChatComposerProps = {
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
-  realtimeTalkTranscript?: string | null;
+  realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
-  realtimeTalkOptionsOpen?: boolean;
-  realtimeTalkOptions?: RealtimeTalkOptions;
-  canOpenRealtimeTalkSettings?: boolean;
   composerControls?: TemplateResult | typeof nothing;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
@@ -101,9 +115,6 @@ export type ChatComposerProps = {
   onSend: () => void;
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
-  onToggleRealtimeTalkOptions?: () => void;
-  onRealtimeTalkOptionsChange?: (next: Partial<RealtimeTalkOptions>) => void;
-  onOpenRealtimeTalkSettings?: () => void;
   onDismissRealtimeTalkError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
@@ -122,6 +133,11 @@ type PendingClearedSubmittedDraft = {
   value: string;
 };
 
+type ComposingDraft = {
+  key: string;
+  value: string;
+};
+
 type ChatComposerState = {
   slashMenuOpen: boolean;
   slashMenuItems: SlashCommandDef[];
@@ -132,6 +148,7 @@ type ChatComposerState = {
   slashMenuExpanded: boolean;
   slashCommandRefreshPending: boolean;
   composerComposing: boolean;
+  composingDraft: ComposingDraft | null;
   composerInputIntentKey: string | null;
   pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
   goalExpandedId: string | null;
@@ -148,6 +165,7 @@ function createChatComposerState(): ChatComposerState {
     slashMenuExpanded: false,
     slashCommandRefreshPending: false,
     composerComposing: false,
+    composingDraft: null,
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,
     goalExpandedId: null,
@@ -891,7 +909,7 @@ function renderSlashMenu(
   `;
 }
 
-export type ChatAttachmentControlsProps = {
+type ChatAttachmentControlsProps = {
   attachments?: ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
 };
@@ -1040,15 +1058,25 @@ function isSupportedChatAttachmentFile(file: Pick<File, "name" | "type">): boole
   return !/\.(?:avi|m4v|mov|mp4|mpeg|mpg|webm)$/i.test(file.name);
 }
 
-function clickComposerFileInput(event: MouseEvent) {
+function clickComposerInput(event: MouseEvent, selector: string) {
   const target = event.currentTarget;
   if (!(target instanceof HTMLElement)) {
     return;
   }
-  target
-    .closest(".agent-chat__input")
-    ?.querySelector<HTMLInputElement>(".agent-chat__file-input")
-    ?.click();
+  target.closest("details")?.removeAttribute("open");
+  target.closest(".agent-chat__composer-shell")?.querySelector<HTMLInputElement>(selector)?.click();
+}
+
+function clickComposerFileInput(event: MouseEvent) {
+  clickComposerInput(event, ".agent-chat__file-input");
+}
+
+function clickComposerPhotoInput(event: MouseEvent) {
+  clickComposerInput(event, ".agent-chat__photo-input");
+}
+
+function clickComposerCameraInput(event: MouseEvent) {
+  clickComposerInput(event, ".agent-chat__camera-input");
 }
 
 function generateAttachmentId(): string {
@@ -1245,7 +1273,10 @@ type ComposerRunStatus =
       occurredAt?: number | null;
     };
 
-export function renderChatRunStatusIndicator(status: ComposerRunStatus | null | undefined) {
+export function renderChatRunStatusIndicator(
+  status: ComposerRunStatus | null | undefined,
+  inProgressLabel = "In progress",
+) {
   if (!status) {
     return nothing;
   }
@@ -1257,7 +1288,7 @@ export function renderChatRunStatusIndicator(status: ComposerRunStatus | null | 
   }
   const label =
     status.phase === "in-progress"
-      ? "In progress"
+      ? inProgressLabel
       : status.phase === "done"
         ? "Done"
         : "Interrupted";
@@ -1352,6 +1383,7 @@ type ContextNoticeOptions = {
   compactDisabled?: boolean;
   messages?: unknown[];
   onCompact?: () => void | Promise<void>;
+  providerUsage?: ProviderUsageDisplayProps;
 };
 
 type ProviderCostStats = {
@@ -1535,27 +1567,173 @@ export function getContextNoticeViewModel(
 const RING_RADIUS = 6.5;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
+// Provider window labels arrive as compact data strings ("5h", "Week"); model
+// scoped labels (e.g. "Opus") pass through untranslated.
+function formatUsageWindowLabel(label: string): string {
+  if (label === "5h") {
+    return t("chat.composer.contextUsage.limitFiveHour");
+  }
+  if (label === "Week") {
+    return t("chat.composer.contextUsage.limitWeekly");
+  }
+  if (label === "Day") {
+    return t("chat.composer.contextUsage.limitDaily");
+  }
+  const hours = /^(\d+)h$/.exec(label);
+  if (hours) {
+    return t("chat.composer.contextUsage.limitHours", { hours: hours[1] });
+  }
+  return label;
+}
+
+function formatBudgetAmount(amount: number, unit: string): string {
+  if (/^[A-Za-z]{3}$/.test(unit)) {
+    try {
+      return new Intl.NumberFormat(undefined, {
+        style: "currency",
+        currency: unit.toUpperCase(),
+        maximumFractionDigits: 2,
+      }).format(amount);
+    } catch {
+      // Non-ISO currency codes fall through to plain unit suffix formatting.
+    }
+  }
+  return `${amount.toFixed(2)} ${unit}`;
+}
+
+function renderLimitBar(usedPercent: number, ariaLabel: string) {
+  const severity = usedPercent >= 90 ? "danger" : usedPercent >= 75 ? "warn" : null;
+  return html`
+    <div
+      class="context-usage__limit-bar"
+      role="progressbar"
+      aria-label=${ariaLabel}
+      aria-valuemin="0"
+      aria-valuemax="100"
+      aria-valuenow=${usedPercent}
+    >
+      <span
+        class=${severity ? `context-usage__limit-fill--${severity}` : ""}
+        style="width: ${usedPercent}%"
+      ></span>
+    </div>
+  `;
+}
+
+function renderQuotaLimitRow(limit: QuotaLimitSummary) {
+  const label = formatUsageWindowLabel(limit.label);
+  const reset = formatQuotaReset(limit.resetAt);
+  return html`
+    <div class="context-usage__limit">
+      <div class="context-usage__limit-head">
+        <span class="context-usage__limit-label">${label}</span>
+        <span class="context-usage__limit-meta">
+          ${reset
+            ? html`<span class="context-usage__limit-reset"
+                >${t("chat.composer.contextUsage.resets", { time: reset })}</span
+              >`
+            : nothing}
+          <strong>${limit.usedPercent}%</strong>
+        </span>
+      </div>
+      ${renderLimitBar(limit.usedPercent, label)}
+    </div>
+  `;
+}
+
+function renderQuotaBudgetRow(budget: QuotaBudgetSummary) {
+  const label = budget.label || t("chat.composer.contextUsage.usageCredits");
+  const usedPercent = Math.max(0, Math.min(100, Math.round((budget.used / budget.limit) * 100)));
+  const value = t("chat.composer.contextUsage.budgetValue", {
+    used: formatBudgetAmount(budget.used, budget.unit),
+    limit: formatBudgetAmount(budget.limit, budget.unit),
+  });
+  return html`
+    <div class="context-usage__limit">
+      <div class="context-usage__limit-head">
+        <span class="context-usage__limit-label">${label}</span>
+        <span class="context-usage__limit-meta"><strong>${value}</strong></span>
+      </div>
+      ${renderLimitBar(usedPercent, label)}
+    </div>
+  `;
+}
+
+function renderQuotaGroup(
+  group: ProviderQuotaGroup,
+  options: { usageHref: string; showProvider: boolean },
+) {
+  const heading = options.showProvider
+    ? `${t("chat.composer.contextUsage.planUsage")} · ${group.displayName}`
+    : t("chat.composer.contextUsage.planUsage");
+  return html`
+    <div class="context-usage__section-label context-usage__plan-header">
+      <span>${heading}</span>
+      <a
+        class="context-usage__plan-link"
+        href=${options.usageHref}
+        data-chat-provider-usage="true"
+        aria-label=${t("chat.composer.contextUsage.openUsage")}
+      >
+        ${group.plan ? html`<span class="context-usage__plan-badge">${group.plan}</span>` : nothing}
+        ${icons.externalLink}
+      </a>
+    </div>
+    <div class="context-usage__limits">
+      ${group.windows.map((limit) => renderQuotaLimitRow(limit))}
+      ${group.budgets.map((budget) => renderQuotaBudgetRow(budget))}
+    </div>
+  `;
+}
+
 export function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
   options: ContextNoticeOptions = {},
 ) {
   const model = getContextNoticeViewModel(session, defaultContextTokens);
-  if (!model) {
+  const quotaGroups = options.providerUsage
+    ? collectProviderQuotaGroups(
+        options.providerUsage.modelAuthStatusResult ?? null,
+        isMonitoredAuthProvider,
+      )
+    : [];
+  if (!model && quotaGroups.length === 0) {
     return nothing;
   }
-  const canRenderCompact = model.compactRecommended && options.onCompact;
+  const canRenderCompact = Boolean(model?.compactRecommended && options.onCompact);
   const compactDisabled = options.compactDisabled === true || options.compactBusy === true;
-  const summary = t("chat.composer.contextUsage.summary", {
-    used: `${model.approximate ? "~" : ""}${formatCompactTokenCount(model.used)}`,
-    limit: formatCompactTokenCount(model.limit),
-    pct: `${model.approximate ? "~" : ""}${model.pct}`,
-  });
-  const percentage = `${model.approximate ? "~" : ""}${model.pct}%`;
-  const dashOffset = RING_CIRCUMFERENCE * (1 - model.pct / 100);
-  const providerCosts = latestProviderCostStats(options.messages);
-  const provider = providerCosts?.provider ?? model.provider;
-  const responseModel = providerCosts?.model ?? model.model;
+  const summary = model
+    ? t("chat.composer.contextUsage.summary", {
+        used: `${model.approximate ? "~" : ""}${formatCompactTokenCount(model.used)}`,
+        limit: formatCompactTokenCount(model.limit),
+        pct: `${model.approximate ? "~" : ""}${model.pct}`,
+      })
+    : t("chat.usageRemaining");
+  const percentage = model ? `${model.approximate ? "~" : ""}${model.pct}%` : null;
+  const dashOffset = model ? RING_CIRCUMFERENCE * (1 - model.pct / 100) : RING_CIRCUMFERENCE;
+  const providerCosts = model ? latestProviderCostStats(options.messages) : null;
+  const provider = providerCosts?.provider ?? model?.provider;
+  const responseModel = providerCosts?.model ?? model?.model;
+  const sessionProviderKeys = new Set(
+    [model?.provider, providerCosts?.provider]
+      .filter((value): value is string => Boolean(value))
+      .map((value) => value.trim().toLowerCase()),
+  );
+  const currentGroup = quotaGroups.find((group) =>
+    group.providers.some((id) => sessionProviderKeys.has(id.trim().toLowerCase())),
+  );
+  const planGroups = currentGroup
+    ? [currentGroup, ...quotaGroups.filter((group) => group !== currentGroup)]
+    : quotaGroups;
+  // Plan-billed sessions hide dollar estimates: subscription usage is bounded
+  // by the plan windows below, and per-token math would misread as real spend.
+  // Billing mode is provider-level: session rows do not record which auth
+  // profile served the run, so a provider with both an API key and a
+  // subscription resolves to subscription display (per-run credential
+  // attribution is #102807).
+  const showCosts = !currentGroup;
+  const usageHref = `${normalizeBasePath(options.providerUsage?.basePath ?? "")}/usage`;
   const formatStat = (value: number | null) =>
     value === null ? t("usage.common.emptyValue") : formatCompactTokenCount(value);
   const renderCostStat = (label: string, value: number | undefined) =>
@@ -1568,10 +1746,13 @@ export function renderContextNotice(
           </div>
         `;
   return html`
-    <div class="context-usage" style="--ctx-color:${model.color};--ctx-bg:${model.bg}">
+    <div
+      class="context-usage"
+      style=${model ? `--ctx-color:${model.color};--ctx-bg:${model.bg}` : ""}
+    >
       <details>
         <summary
-          class="context-ring ${model.warning ? "context-ring--warning" : ""}"
+          class="context-ring ${model?.warning ? "context-ring--warning" : ""}"
           aria-label=${summary}
           title=${t("chat.composer.contextUsage.open")}
         >
@@ -1592,47 +1773,57 @@ export function renderContextNotice(
               stroke-dashoffset=${dashOffset.toFixed(2)}
             />
           </svg>
-          <span class="context-ring__pct">${percentage}</span>
+          ${percentage ? html`<span class="context-ring__pct">${percentage}</span>` : nothing}
         </summary>
         <section class="context-usage__popover" aria-label=${t("chat.composer.contextUsage.title")}>
-          <div class="context-usage__header">
-            <span class="context-usage__title"
-              >${t("chat.composer.contextUsage.contextWindow")}</span
-            >
-            <strong class="context-usage__context-value">${model.detail} · ${percentage}</strong>
-          </div>
-          <div
-            class="context-usage__bar"
-            role="progressbar"
-            aria-label=${summary}
-            aria-valuemin="0"
-            aria-valuemax="100"
-            aria-valuenow=${model.pct}
-          >
-            <span style="width: ${model.pct}%"></span>
-          </div>
-          <div class="context-usage__section-label">
-            ${t("chat.composer.contextUsage.latestRunTokens")}
-          </div>
-          <dl class="context-usage__stats">
-            <div>
-              <dt>${t("usage.breakdown.input")}</dt>
-              <dd>${formatStat(model.input)}</dd>
-            </div>
-            <div>
-              <dt>${t("usage.breakdown.output")}</dt>
-              <dd>${formatStat(model.output)}</dd>
-            </div>
-            ${model.cost === null
-              ? nothing
-              : html`
+          ${model
+            ? html`
+                <div class="context-usage__header">
+                  <span class="context-usage__title"
+                    >${t("chat.composer.contextUsage.contextWindow")}</span
+                  >
+                  <strong class="context-usage__context-value"
+                    >${model.detail} · ${percentage}</strong
+                  >
+                </div>
+                <div
+                  class="context-usage__bar"
+                  role="progressbar"
+                  aria-label=${summary}
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow=${model.pct}
+                >
+                  <span style="width: ${model.pct}%"></span>
+                </div>
+              `
+            : nothing}
+          ${model
+            ? html`
+                <div class="context-usage__section-label">
+                  ${t("chat.composer.contextUsage.latestRunTokens")}
+                </div>
+                <dl class="context-usage__stats">
                   <div>
-                    <dt>${t("chat.composer.contextUsage.estimatedCost")}</dt>
-                    <dd>${formatCost(model.cost)}</dd>
+                    <dt>${t("usage.breakdown.input")}</dt>
+                    <dd>${formatStat(model.input)}</dd>
                   </div>
-                `}
-          </dl>
-          ${providerCosts
+                  <div>
+                    <dt>${t("usage.breakdown.output")}</dt>
+                    <dd>${formatStat(model.output)}</dd>
+                  </div>
+                  ${!showCosts || model.cost === null
+                    ? nothing
+                    : html`
+                        <div>
+                          <dt>${t("chat.composer.contextUsage.estimatedCost")}</dt>
+                          <dd>${formatCost(model.cost)}</dd>
+                        </div>
+                      `}
+                </dl>
+              `
+            : nothing}
+          ${showCosts && providerCosts
             ? html`
                 <div class="context-usage__section-label">${t("usage.breakdown.costByType")}</div>
                 <dl class="context-usage__stats context-usage__stats--cost">
@@ -1643,10 +1834,16 @@ export function renderContextNotice(
                 </dl>
               `
             : nothing}
+          ${planGroups.map((group) =>
+            renderQuotaGroup(group, {
+              usageHref,
+              showProvider: planGroups.length > 1,
+            }),
+          )}
           ${provider
             ? html`
                 <div class="context-usage__model">
-                  <span>${t("sessionsView.provider")}</span>
+                  <span>${t("sessionsView.provider")}:</span>
                   <strong>${provider}</strong>
                 </div>
               `
@@ -1654,7 +1851,7 @@ export function renderContextNotice(
           ${responseModel
             ? html`
                 <div class="context-usage__model">
-                  <span>${t("sessionsView.model")}</span>
+                  <span>${t("sessionsView.model")}:</span>
                   <strong>${responseModel}</strong>
                 </div>
               `
@@ -1692,25 +1889,156 @@ export type ChatRunControlsProps = {
   canAbort: boolean;
   connected: boolean;
   draft: string;
+  hasAttachments?: boolean;
   hasMessages: boolean;
   isBusy: boolean;
   sending: boolean;
+  voiceActive?: boolean;
+  voiceStatus?: RealtimeTalkStatus;
+  voiceDetail?: string | null;
+  voiceInputLevel?: RealtimeTalkLevelSignal;
   onAbort?: () => void;
   onExport: () => void;
   onNewSession: () => void;
   onSend: () => void;
   onStoreDraft: (draft: string) => void;
+  onToggleVoice?: () => void;
+  showPrimary?: boolean;
   showSecondary?: boolean;
 };
 
-export function renderChatRunControls(props: ChatRunControlsProps) {
-  const showSecondary = props.showSecondary ?? true;
+function renderChatPrimaryActions(props: ChatRunControlsProps) {
+  const hasComposedContent = Boolean(props.draft.trim() || props.hasAttachments);
   const storeDraftAndSend = () => {
     if (props.draft.trim()) {
       props.onStoreDraft(props.draft);
     }
     props.onSend();
   };
+  const abortAction = props.canAbort
+    ? html`
+        <openclaw-tooltip .content=${t("chat.runControls.stop")}>
+          <button
+            class="chat-send-btn chat-send-btn--stop"
+            @click=${props.onAbort}
+            aria-label=${t("chat.runControls.stopGenerating")}
+          >
+            ${icons.stop}
+            <span class="agent-chat__control-label">${t("chat.runControls.stop")}</span>
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
+
+  // Transports keep the session active while reporting status "error"; the
+  // alert row above the composer owns the error message, so the control keeps
+  // only its stop affordance instead of a fake listening meter plus a
+  // duplicate announcement.
+  const voiceErrored = props.voiceStatus === "error";
+  return html`
+    ${props.voiceActive && props.onToggleVoice
+      ? html`
+          <openclaw-tooltip .content=${t("chat.composer.stopVoiceInput")}>
+            <button
+              class="chat-send-btn chat-send-btn--voice-live${voiceErrored
+                ? " chat-send-btn--voice-error"
+                : ""}"
+              @click=${props.onToggleVoice}
+              aria-label=${t("chat.composer.stopVoiceInput")}
+            >
+              ${voiceErrored
+                ? nothing
+                : renderMicrophoneActivity({
+                    status: props.voiceStatus,
+                    inputLevel: props.voiceInputLevel,
+                  })}
+              <span class="chat-send-btn__voice-stop-glyph">${icons.stop}</span>
+            </button>
+          </openclaw-tooltip>
+          ${voiceErrored
+            ? nothing
+            : html`
+                <span
+                  class="agent-chat__sr-only agent-chat__voice-status"
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                  >${voiceStatusLabel(props.voiceStatus, props.voiceDetail)}</span
+                >
+              `}
+          ${abortAction}
+        `
+      : props.canAbort
+        ? html`
+            ${hasComposedContent
+              ? html`
+                  <openclaw-tooltip .content=${t("chat.runControls.queue")}>
+                    <button
+                      class="chat-send-btn"
+                      @click=${storeDraftAndSend}
+                      ?disabled=${!props.connected || props.sending}
+                      aria-label=${t("chat.runControls.queueMessage")}
+                    >
+                      ${icons.send}
+                      <span class="agent-chat__control-label">${t("chat.runControls.queue")}</span>
+                    </button>
+                  </openclaw-tooltip>
+                `
+              : nothing}
+            <openclaw-tooltip .content=${t("chat.runControls.stop")}>
+              <button
+                class="chat-send-btn chat-send-btn--stop"
+                @click=${props.onAbort}
+                aria-label=${t("chat.runControls.stopGenerating")}
+              >
+                ${icons.stop}
+                <span class="agent-chat__control-label">${t("chat.runControls.stop")}</span>
+              </button>
+            </openclaw-tooltip>
+          `
+        : hasComposedContent || !props.onToggleVoice
+          ? html`
+              <openclaw-tooltip
+                .content=${props.isBusy ? t("chat.runControls.queue") : t("chat.runControls.send")}
+              >
+                <button
+                  class="chat-send-btn"
+                  @click=${storeDraftAndSend}
+                  ?disabled=${!props.connected || props.sending}
+                  aria-label=${props.isBusy
+                    ? t("chat.runControls.queueMessage")
+                    : t("chat.runControls.sendMessage")}
+                >
+                  ${icons.send}
+                  <span class="agent-chat__control-label"
+                    >${props.isBusy
+                      ? t("chat.runControls.queue")
+                      : t("chat.runControls.send")}</span
+                  >
+                </button>
+              </openclaw-tooltip>
+            `
+          : html`
+              <openclaw-tooltip .content=${t("chat.composer.startVoiceInput")}>
+                <button
+                  class="chat-send-btn chat-send-btn--voice"
+                  @click=${props.onToggleVoice}
+                  ?disabled=${!props.connected || props.sending || props.isBusy}
+                  aria-label=${t("chat.composer.startVoiceInput")}
+                >
+                  ${icons.mic}
+                  <span class="agent-chat__control-label"
+                    >${t("chat.composer.startVoiceInput")}</span
+                  >
+                </button>
+              </openclaw-tooltip>
+            `}
+  `;
+}
+
+export function renderChatRunControls(props: ChatRunControlsProps) {
+  const showPrimary = props.showPrimary ?? true;
+  const showSecondary = props.showSecondary ?? true;
 
   return html`
     <div class="agent-chat__toolbar-right">
@@ -1743,49 +2071,7 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
             </openclaw-tooltip>
           `
         : nothing}
-      ${props.canAbort
-        ? html`
-            <openclaw-tooltip .content=${t("chat.runControls.queue")}>
-              <button
-                class="chat-send-btn"
-                @click=${storeDraftAndSend}
-                ?disabled=${!props.connected || props.sending}
-                aria-label=${t("chat.runControls.queueMessage")}
-              >
-                ${icons.send}
-                <span class="agent-chat__control-label">${t("chat.runControls.queue")}</span>
-              </button>
-            </openclaw-tooltip>
-            <openclaw-tooltip .content=${t("chat.runControls.stop")}>
-              <button
-                class="chat-send-btn chat-send-btn--stop"
-                @click=${props.onAbort}
-                aria-label=${t("chat.runControls.stopGenerating")}
-              >
-                ${icons.stop}
-                <span class="agent-chat__control-label">${t("chat.runControls.stop")}</span>
-              </button>
-            </openclaw-tooltip>
-          `
-        : html`
-            <openclaw-tooltip
-              .content=${props.isBusy ? t("chat.runControls.queue") : t("chat.runControls.send")}
-            >
-              <button
-                class="chat-send-btn"
-                @click=${storeDraftAndSend}
-                ?disabled=${!props.connected || props.sending}
-                aria-label=${props.isBusy
-                  ? t("chat.runControls.queueMessage")
-                  : t("chat.runControls.sendMessage")}
-              >
-                ${icons.send}
-                <span class="agent-chat__control-label"
-                  >${props.isBusy ? t("chat.runControls.queue") : t("chat.runControls.send")}</span
-                >
-              </button>
-            </openclaw-tooltip>
-          `}
+      ${showPrimary ? renderChatPrimaryActions(props) : nothing}
     </div>
   `;
 }
@@ -1797,9 +2083,10 @@ export function renderChatComposer(props: ChatComposerProps) {
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const hasTerminalStatus = hasTerminalRunStatus(props.runStatus);
   const showAbortableUi = canAbort && !hasTerminalStatus;
-  const showSubmittedProgressUi = props.queue.some((item) =>
+  const submittedProgress = props.queue.find((item) =>
     isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
   );
+  const showSubmittedProgressUi = Boolean(submittedProgress);
   const composerRunStatus =
     showAbortableUi || showSubmittedProgressUi
       ? { phase: "in-progress" as const }
@@ -1808,10 +2095,34 @@ export function renderChatComposer(props: ChatComposerProps) {
     props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying";
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
   const visibleDraft = props.draft;
+  const draftKey = composerDraftKey(props);
+  const actionDraft =
+    state.composingDraft?.key === draftKey ? state.composingDraft.value : visibleDraft;
   let composerTextarea: HTMLTextAreaElement | null = null;
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const tokens = tokenEstimate(visibleDraft);
-  const composerControls = props.composerControls;
+  const contextNotice = renderContextNotice(
+    activeSession,
+    props.sessions?.defaults?.contextTokens ?? null,
+    {
+      compactBusy,
+      compactDisabled: !canCompose || isBusy || showAbortableUi,
+      messages: props.messages,
+      onCompact: props.onCompact,
+      providerUsage: props.providerUsage,
+    },
+  );
+  const composerControls = props.composerControls ?? nothing;
+  const assistantName = props.assistantName || "OpenClaw";
+  const inProgressLabel =
+    submittedProgress?.sendState === "waiting-model"
+      ? "Preparing model..."
+      : props.stream !== null
+        ? `${assistantName} is responding...`
+        : props.sending || submittedProgress
+          ? "Sending message..."
+          : `${assistantName} is working...`;
+  const mobileRunStatusIndicator = renderChatRunStatusIndicator(composerRunStatus, inProgressLabel);
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
 
@@ -1826,7 +2137,6 @@ export function renderChatComposer(props: ChatComposerProps) {
   const syncComposerDraftAfterSend = (target: HTMLTextAreaElement | null) => {
     const submittedDraft = target?.value ?? props.getDraft?.() ?? props.draft;
     const hostDraft = props.getDraft?.() ?? props.draft;
-    const draftKey = composerDraftKey(props);
     const clearedSubmittedDraft =
       hostDraft === "" && submittedDraft !== "" && target?.value === submittedDraft;
     if (clearedSubmittedDraft) {
@@ -1940,6 +2250,9 @@ export function renderChatComposer(props: ChatComposerProps) {
         if (result.preventDefault) {
           event.preventDefault();
         }
+        // History navigation updates the renderer-owned draft outside a
+        // reactive property; commit it before placing the caret in the DOM.
+        requestUpdate();
         if (result.restoreCaret) {
           restoreHistoryCaret(target, result.restoreCaret);
         }
@@ -1964,6 +2277,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     adjustTextareaHeight(target);
     commitComposerDraft(props, target.value);
     updateSlashMenu(target.value, requestUpdate, props, {}, () => target.value);
+    requestUpdate();
   };
   const handleBeforeInput = (event: InputEvent) => {
     if (!state.composerComposing && !event.isComposing) {
@@ -1972,10 +2286,14 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
   const handleInput = (event: InputEvent) => {
     const target = event.target as HTMLTextAreaElement;
-    const draftKey = composerDraftKey(props);
     const hasInputIntent = consumeComposerInputIntent(state, draftKey);
     if (state.composerComposing || event.isComposing) {
+      state.composingDraft = { key: draftKey, value: target.value };
+      requestUpdate();
       return;
+    }
+    if (state.composingDraft?.key === draftKey) {
+      state.composingDraft = null;
     }
     if (
       suppressStaleSubmittedDraftReplay(
@@ -1992,10 +2310,16 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
   const handleCompositionEnd = (event: CompositionEvent) => {
     state.composerComposing = false;
+    if (state.composingDraft?.key === draftKey) {
+      state.composingDraft = null;
+    }
     syncComposerValue(event.target as HTMLTextAreaElement);
   };
   const handleBlur = (event: FocusEvent) => {
     const target = event.target as HTMLTextAreaElement;
+    if (state.composingDraft?.key === draftKey) {
+      state.composingDraft = null;
+    }
     commitComposerDraft(props, target.value);
   };
   const handleSend = () => {
@@ -2005,6 +2329,37 @@ export function renderChatComposer(props: ChatComposerProps) {
     commitComposerDraft(props, composerTextarea?.value ?? props.draft);
     props.onSend();
     syncComposerDraftAfterSend(composerTextarea);
+  };
+  const handleVoicePrimaryAction = () => {
+    if (props.realtimeTalkActive) {
+      props.onToggleRealtimeTalk?.();
+      return;
+    }
+    const liveDraft = composerTextarea?.value ?? visibleDraft;
+    if (liveDraft.trim() || props.attachments?.length) {
+      handleSend();
+      return;
+    }
+    props.onToggleRealtimeTalk?.();
+  };
+  const runControlsProps: ChatRunControlsProps = {
+    canAbort: showAbortableUi,
+    connected: canCompose,
+    draft: actionDraft,
+    hasAttachments: Boolean(props.attachments?.length),
+    hasMessages: props.messages.length > 0,
+    isBusy,
+    sending: props.sending,
+    voiceActive: props.realtimeTalkActive,
+    voiceStatus: props.realtimeTalkStatus,
+    voiceDetail: props.realtimeTalkDetail,
+    voiceInputLevel: props.realtimeTalkInputLevel,
+    onAbort: props.onAbort,
+    onExport: () => exportMarkdown(props),
+    onNewSession: props.onNewSession,
+    onSend: handleSend,
+    onStoreDraft: () => {},
+    onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
   };
   const slashMenuVisible = canCompose && isSlashMenuVisible(state);
   const activeSlashMenuOptionId = getActiveSlashMenuOptionId(state, props.paneId);
@@ -2029,240 +2384,238 @@ export function renderChatComposer(props: ChatComposerProps) {
         `
       : nothing}
 
-    <div
-      class="agent-chat__input"
-      @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
-    >
-      ${slashMenuVisible ? renderSlashMenu(requestUpdate, props, visibleDraft) : nothing}
-      ${renderAttachmentPreview(props)}
-      ${props.replyTarget
-        ? html`
-            <div class="chat-reply-preview">
-              <span class="chat-reply-preview__icon">${icons.messageSquare}</span>
-              <span class="chat-reply-preview__label"
-                >Replying to ${props.replyTarget.senderLabel ?? "message"}</span
-              >
-              <span class="chat-reply-preview__text"
-                >${props.replyTarget.text.slice(0, 120)}${props.replyTarget.text.length > 120
-                  ? "..."
-                  : ""}</span
-              >
-              <button
-                type="button"
-                class="chat-reply-preview__dismiss"
-                @click=${() => props.onClearReply?.()}
-                aria-label="Cancel reply"
-                title="Cancel reply"
-              >
-                ${icons.x}
-              </button>
-            </div>
-          `
-        : nothing}
-      <div class="agent-chat__composer-status-stack">
-        ${renderFallbackIndicator(props.fallbackStatus)}
-        ${renderCompactionIndicator(props.compactionStatus)}
-        ${renderChatGoal(getChatComposerState(props.paneId), activeSession?.goal, {
-          canAct: canCompose,
-          onGoalCommand: props.onGoalCommand,
-          onGoalEdit: (goal) => {
-            commitComposerDraft(props, `/goal edit ${goal.objective}`);
-            requestUpdate();
-            queueMicrotask(() => composerTextarea?.focus({ preventScroll: true }));
-          },
-          requestUpdate,
-        })}
-      </div>
-
-      <input
-        type="file"
-        accept=${CHAT_ATTACHMENT_ACCEPT}
-        multiple
-        class="agent-chat__file-input"
-        ?disabled=${!canCompose}
-        @change=${(event: Event) => {
-          if (canCompose) {
-            handleChatAttachmentFileSelect(event, props);
-          }
-        }}
-      />
-
-      ${renderRealtimeTalkOptions(props)}
-      ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
+    <div class="agent-chat__composer-shell">
+      ${mobileRunStatusIndicator !== nothing && composerRunStatus
         ? html`
             <div
-              class="agent-chat__stt-interim agent-chat__talk-status"
-              role=${props.realtimeTalkStatus === "error" ? "alert" : nothing}
+              class="agent-chat__composer-progress agent-chat__composer-progress--mobile agent-chat__composer-progress--${composerRunStatus.phase}"
             >
-              <span class="agent-chat__talk-status-text">
-                ${props.realtimeTalkDetail ??
-                ((props.realtimeTalkConversation?.length ?? 0) === 0
-                  ? props.realtimeTalkTranscript
-                  : null) ??
-                (props.realtimeTalkStatus === "thinking"
-                  ? "Asking OpenClaw..."
-                  : props.realtimeTalkStatus === "connecting"
-                    ? "Connecting Talk..."
-                    : "Talk live")}
-              </span>
-              ${props.realtimeTalkStatus === "error" && props.onDismissRealtimeTalkError
-                ? html`
-                    <openclaw-tooltip .content=${t("chat.composer.dismissTalkError")}>
-                      <button
-                        class="callout__dismiss"
-                        type="button"
-                        @click=${props.onDismissRealtimeTalkError}
-                        aria-label=${t("chat.composer.dismissTalkError")}
-                      >
-                        ${icons.x}
-                      </button>
-                    </openclaw-tooltip>
-                  `
-                : nothing}
+              ${mobileRunStatusIndicator}
             </div>
           `
         : nothing}
-
-      <div class="agent-chat__composer-combobox">
-        <textarea
-          ${ref((element) => {
-            const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
-            if (composerTextarea && composerTextarea !== nextTextarea) {
-              disconnectTextareaOverflowObserver(composerTextarea);
-            }
-            composerTextarea = nextTextarea;
-            if (composerTextarea) {
-              observeTextareaOverflow(composerTextarea);
-              scheduleTextareaHeightAdjustment(composerTextarea);
-            }
+      <div
+        class="agent-chat__input"
+        @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
+      >
+        ${slashMenuVisible ? renderSlashMenu(requestUpdate, props, visibleDraft) : nothing}
+        ${renderAttachmentPreview(props)}
+        ${props.replyTarget
+          ? html`
+              <div class="chat-reply-preview">
+                <span class="chat-reply-preview__icon">${icons.messageSquare}</span>
+                <span class="chat-reply-preview__label"
+                  >Replying to ${props.replyTarget.senderLabel ?? "message"}</span
+                >
+                <span class="chat-reply-preview__text"
+                  >${truncateUtf16Safe(props.replyTarget.text, 120)}${props.replyTarget.text
+                    .length > 120
+                    ? "..."
+                    : ""}</span
+                >
+                <button
+                  type="button"
+                  class="chat-reply-preview__dismiss"
+                  @click=${() => props.onClearReply?.()}
+                  aria-label="Cancel reply"
+                  title="Cancel reply"
+                >
+                  ${icons.x}
+                </button>
+              </div>
+            `
+          : nothing}
+        <div class="agent-chat__composer-status-stack">
+          ${renderFallbackIndicator(props.fallbackStatus)}
+          ${renderCompactionIndicator(props.compactionStatus)}
+          ${renderChatGoal(state, activeSession?.goal, {
+            canAct: canCompose,
+            onGoalCommand: props.onGoalCommand,
+            onGoalEdit: (goal) => {
+              commitComposerDraft(props, `/goal edit ${goal.objective}`);
+              requestUpdate();
+              queueMicrotask(() => composerTextarea?.focus({ preventScroll: true }));
+            },
+            requestUpdate,
           })}
-          .value=${visibleDraft}
-          dir=${detectTextDirection(visibleDraft)}
+        </div>
+
+        <input
+          type="file"
+          accept=${CHAT_ATTACHMENT_ACCEPT}
+          multiple
+          class="agent-chat__file-input"
           ?disabled=${!canCompose}
-          aria-autocomplete="list"
-          aria-controls=${ifDefined(slashMenuVisible ? slashMenuListboxId : undefined)}
-          aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
-          aria-describedby=${slashMenuAnnouncementId}
-          aria-keyshortcuts=${sendShortcut === "enter" ? "Enter" : "Control+Enter Meta+Enter"}
-          @keydown=${handleKeyDown}
-          @beforeinput=${handleBeforeInput}
-          @input=${handleInput}
-          @compositionstart=${() => {
-            state.composerComposing = true;
-          }}
-          @compositionend=${handleCompositionEnd}
-          @blur=${handleBlur}
-          @paste=${(event: ClipboardEvent) => {
+          @change=${(event: Event) => {
             if (canCompose) {
-              handleChatAttachmentPaste(event, props);
+              handleChatAttachmentFileSelect(event, props);
             }
           }}
-          placeholder=${placeholder}
-          rows="1"
-        ></textarea>
-        <span
-          id=${slashMenuAnnouncementId}
-          class="agent-chat__sr-only"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          >${activeSlashMenuOptionLabel}</span
-        >
-      </div>
+        />
+        <input
+          type="file"
+          accept="image/*"
+          multiple
+          class="agent-chat__photo-input"
+          ?disabled=${!canCompose}
+          @change=${(event: Event) => {
+            if (canCompose) {
+              handleChatAttachmentFileSelect(event, props);
+            }
+          }}
+        />
+        <input
+          type="file"
+          accept="image/*"
+          capture="environment"
+          class="agent-chat__camera-input"
+          ?disabled=${!canCompose}
+          @change=${(event: Event) => {
+            if (canCompose) {
+              handleChatAttachmentFileSelect(event, props);
+            }
+          }}
+        />
 
-      <div class="agent-chat__toolbar">
-        <div class="agent-chat__toolbar-left">
-          <openclaw-tooltip .content=${t("chat.composer.attachFile")}>
-            <button
-              type="button"
-              class="agent-chat__input-btn"
-              @click=${clickComposerFileInput}
-              aria-label=${t("chat.composer.attachFile")}
-              ?disabled=${!canCompose}
+        ${renderChatVoiceError({
+          status: props.realtimeTalkStatus,
+          detail: props.realtimeTalkDetail,
+          onDismissError: props.onDismissRealtimeTalkError,
+        })}
+
+        <div class="agent-chat__composer-input-row">
+          <details class="agent-chat__attach-menu">
+            <summary
+              class="agent-chat__input-btn agent-chat__input-btn--attach"
+              aria-label=${t("chat.composer.addAttachment")}
+              aria-disabled=${canCompose ? "false" : "true"}
+              title=${t("chat.composer.addAttachment")}
+              @pointerdown=${(event: PointerEvent) => {
+                if (document.activeElement === composerTextarea) {
+                  event.preventDefault();
+                }
+              }}
+              @click=${(event: MouseEvent) => {
+                if (!canCompose) {
+                  event.preventDefault();
+                }
+              }}
             >
-              ${icons.paperclip}
-              <span class="agent-chat__control-label">${t("chat.composer.attachFile")}</span>
-            </button>
-          </openclaw-tooltip>
+              ${icons.plus}
+            </summary>
+            <div
+              class="agent-chat__attach-menu-popover"
+              role="menu"
+              aria-label=${t("chat.composer.addAttachment")}
+            >
+              <button
+                type="button"
+                class="agent-chat__attach-menu-option"
+                role="menuitem"
+                @click=${clickComposerCameraInput}
+              >
+                ${icons.camera}
+                <span>${t("chat.composer.takePhoto")}</span>
+              </button>
+              <button
+                type="button"
+                class="agent-chat__attach-menu-option"
+                role="menuitem"
+                @click=${clickComposerPhotoInput}
+              >
+                ${icons.image}
+                <span>${t("chat.composer.attachPhoto")}</span>
+              </button>
+              <button
+                type="button"
+                class="agent-chat__attach-menu-option"
+                role="menuitem"
+                @click=${clickComposerFileInput}
+              >
+                ${icons.folder}
+                <span>${t("chat.composer.attachFileOption")}</span>
+              </button>
+            </div>
+          </details>
+          <div class="agent-chat__composer-combobox">
+            <textarea
+              ${ref((element) => {
+                const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
+                if (composerTextarea && composerTextarea !== nextTextarea) {
+                  disconnectTextareaOverflowObserver(composerTextarea);
+                }
+                composerTextarea = nextTextarea;
+                if (composerTextarea) {
+                  observeTextareaOverflow(composerTextarea);
+                  scheduleTextareaHeightAdjustment(composerTextarea);
+                }
+              })}
+              .value=${visibleDraft}
+              dir=${detectTextDirection(visibleDraft)}
+              ?disabled=${!canCompose}
+              aria-autocomplete="list"
+              aria-controls=${ifDefined(slashMenuVisible ? slashMenuListboxId : undefined)}
+              aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
+              aria-describedby=${slashMenuAnnouncementId}
+              aria-keyshortcuts=${sendShortcut === "enter" ? "Enter" : "Control+Enter Meta+Enter"}
+              @keydown=${handleKeyDown}
+              @beforeinput=${handleBeforeInput}
+              @input=${handleInput}
+              @compositionstart=${(event: CompositionEvent) => {
+                state.composerComposing = true;
+                state.composingDraft = {
+                  key: draftKey,
+                  value: (event.target as HTMLTextAreaElement).value,
+                };
+              }}
+              @compositionend=${handleCompositionEnd}
+              @blur=${handleBlur}
+              @paste=${(event: ClipboardEvent) => {
+                if (canCompose) {
+                  handleChatAttachmentPaste(event, props);
+                }
+              }}
+              placeholder=${placeholder}
+              rows="1"
+            ></textarea>
+            ${tokens
+              ? html`
+                  <div class="agent-chat__token-row">
+                    <span class="agent-chat__token-count">${tokens}</span>
+                  </div>
+                `
+              : nothing}
+            <span
+              id=${slashMenuAnnouncementId}
+              class="agent-chat__sr-only"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              >${activeSlashMenuOptionLabel}</span
+            >
+          </div>
+          <div class="agent-chat__composer-actions">
+            ${renderChatPrimaryActions(runControlsProps)}
+          </div>
+        </div>
 
-          ${props.onToggleRealtimeTalk || props.onToggleRealtimeTalkOptions
+        <div class="agent-chat__composer-footer">
+          ${composerControls !== nothing
             ? html`
-                <div class="agent-chat__talk-group">
-                  ${props.onToggleRealtimeTalk
+                <div class="agent-chat__composer-controls">
+                  ${composerRunStatus
                     ? html`
-                        <openclaw-tooltip
-                          .content=${props.realtimeTalkActive
-                            ? t("chat.composer.stopTalk")
-                            : t("chat.composer.startTalk")}
-                        >
-                          <button
-                            class="agent-chat__input-btn agent-chat__talk-toggle ${props.realtimeTalkActive
-                              ? "agent-chat__input-btn--talk"
-                              : ""}"
-                            @click=${props.onToggleRealtimeTalk}
-                            aria-label=${props.realtimeTalkActive
-                              ? t("chat.composer.stopTalk")
-                              : t("chat.composer.startTalk")}
-                            ?disabled=${!canCompose && !props.realtimeTalkActive}
-                          >
-                            ${props.realtimeTalkActive ? icons.volume2 : icons.mic}
-                            <span class="agent-chat__control-label"
-                              >${props.realtimeTalkActive
-                                ? t("chat.composer.stopTalk")
-                                : t("chat.composer.startTalk")}</span
-                            >
-                          </button>
-                        </openclaw-tooltip>
+                        <div class="agent-chat__composer-run-status">
+                          ${renderChatRunStatusIndicator(composerRunStatus, inProgressLabel)}
+                        </div>
                       `
                     : nothing}
-                  ${props.onToggleRealtimeTalkOptions
-                    ? html`
-                        <openclaw-tooltip content="Talk settings">
-                          <button
-                            class="agent-chat__input-btn agent-chat__talk-caret ${props.realtimeTalkOptionsOpen
-                              ? "agent-chat__input-btn--open"
-                              : ""}"
-                            @click=${props.onToggleRealtimeTalkOptions}
-                            aria-label="Talk settings"
-                            aria-expanded=${props.realtimeTalkOptionsOpen ? "true" : "false"}
-                            ?disabled=${!canCompose || props.realtimeTalkActive}
-                          >
-                            ${icons.chevronDown}
-                            <span class="agent-chat__control-label">Talk settings</span>
-                          </button>
-                        </openclaw-tooltip>
-                      `
-                    : nothing}
+                  ${composerControls}
                 </div>
               `
             : nothing}
-          ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
-          ${renderChatRunStatusIndicator(composerRunStatus)}
+          <div class="agent-chat__composer-meta">${contextNotice}</div>
         </div>
-
-        ${composerControls && composerControls !== nothing
-          ? html`<div class="agent-chat__composer-controls">${composerControls}</div>`
-          : nothing}
-        ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
-          compactBusy,
-          compactDisabled: !canCompose || isBusy || showAbortableUi,
-          messages: props.messages,
-          onCompact: props.onCompact,
-        })}
-        ${renderChatRunControls({
-          canAbort: showAbortableUi,
-          connected: canCompose,
-          draft: visibleDraft,
-          hasMessages: props.messages.length > 0,
-          isBusy,
-          sending: props.sending,
-          onAbort: props.onAbort,
-          onExport: () => exportMarkdown(props),
-          onNewSession: props.onNewSession,
-          onSend: handleSend,
-          onStoreDraft: () => {},
-          showSecondary: false,
-        })}
       </div>
     </div>
   `;

@@ -2229,6 +2229,11 @@
       "translated": "Kurulumu değiştir"
     },
     {
+      "id": "native.android.66aad1078731e6a3",
+      "source": "Forget gateway?",
+      "translated": "Gateway unutulsun mu?"
+    },
+    {
       "id": "native.android.c6c8e0c4b8a9a7cf",
       "source": "Cancel",
       "translated": "İptal"
@@ -2269,14 +2274,34 @@
       "translated": "Bağlantıyı kes"
     },
     {
-      "id": "native.android.68959b6e93aec68b",
-      "source": "Clear this phone's saved gateway access and scan a fresh setup code.",
-      "translated": "Bu telefonun kayıtlı gateway erişimini temizleyin ve yeni bir kurulum kodu tarayın."
+      "id": "native.android.87eee1e2bafbf13b",
+      "source": "Gateways",
+      "translated": "Gateway'ler"
     },
     {
-      "id": "native.android.7fd6bb4d56f1fb3f",
-      "source": "Pair New Gateway",
-      "translated": "Yeni Gateway Eşleştir"
+      "id": "native.android.c3974020a08e239e",
+      "source": "No paired gateways.",
+      "translated": "Eşleştirilmiş Gateway yok."
+    },
+    {
+      "id": "native.android.74ee3bbbd2e37e9c",
+      "source": "Forget",
+      "translated": "Unut"
+    },
+    {
+      "id": "native.android.56e98811c4e9b027",
+      "source": "Gateway setup",
+      "translated": "Gateway kurulumu"
+    },
+    {
+      "id": "native.android.c040d4ee72a810e0",
+      "source": "Scan or paste a setup code to add another gateway.",
+      "translated": "Başka bir Gateway eklemek için bir kurulum kodunu tarayın veya yapıştırın."
+    },
+    {
+      "id": "native.android.a7c243ff3f1d6447",
+      "source": "Add gateway",
+      "translated": "Gateway ekle"
     },
     {
       "id": "native.android.77a03c8c22155ec5",
@@ -2382,6 +2407,26 @@
       "id": "native.android.b84ae70dbae95380",
       "source": "Update",
       "translated": "Güncelle"
+    },
+    {
+      "id": "native.android.aac3310699b496c8",
+      "source": "© 2026 OpenClaw Foundation — MIT License.",
+      "translated": "© 2026 OpenClaw Foundation — MIT Lisansı."
+    },
+    {
+      "id": "native.android.a157bbb606e9b398",
+      "source": "OpenClaw logo",
+      "translated": "OpenClaw logosu"
+    },
+    {
+      "id": "native.android.7b78b4869baf2160",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.ad4c14835d1b71ca",
+      "source": "Personal AI on your devices",
+      "translated": "Cihazlarınızda kişisel AI"
     },
     {
       "id": "native.android.13f70e22b5648308",
@@ -2639,9 +2684,9 @@
       "translated": "SMS"
     },
     {
-      "id": "native.android.51b5f4cf7eaa5c86",
-      "source": "Send and search SMS from this device.",
-      "translated": "Bu cihazdan SMS gönderin ve arayın."
+      "id": "native.android.cba20518e9758043",
+      "source": "Grants Android SMS access. The Gateway must separately allow `sms.search` and, only if needed, `sms.send`.",
+      "translated": "Android SMS erişimi verir. Gateway ayrıca `sms.search` iznine ve yalnızca gerekirse `sms.send` iznine izin vermelidir."
     },
     {
       "id": "native.android.8c32ca1f11a93a25",
@@ -4014,6 +4059,11 @@
       "translated": "Konuşuyor…"
     },
     {
+      "id": "native.android.6fbf0916309dbaba",
+      "source": "Mic on · waiting for gateway",
+      "translated": "Mikrofon açık · Gateway bekleniyor"
+    },
+    {
       "id": "native.android.d84c6c14e42763ff",
       "source": "Mic off",
       "translated": "Mikrofon kapalı"
@@ -4247,6 +4297,21 @@
       "id": "native.android.6ad2d3f084142bed",
       "source": "The gateway certificate changed. Continue only if you expected this.\n\nOld SHA-256:\n%1$s\n\nNew SHA-256:\n%2$s",
       "translated": "Gateway sertifikası değişti. Yalnızca bunu bekliyorsanız devam edin.\n\nEski SHA-256:\n%1$s\n\nYeni SHA-256:\n%2$s"
+    },
+    {
+      "id": "native.android.7c49ec7fe94a9063",
+      "source": "Switch gateway",
+      "translated": "Gateway değiştir"
+    },
+    {
+      "id": "native.android.9e0a677fd629a15f",
+      "source": "Select gateway",
+      "translated": "Gateway seç"
+    },
+    {
+      "id": "native.android.b0034ac5bbc6b25f",
+      "source": "Active gateway",
+      "translated": "Etkin Gateway"
     },
     {
       "id": "native.apple.8f741d09cc1d5495",
@@ -4739,6 +4804,16 @@
       "translated": "Kullanım"
     },
     {
+      "id": "native.apple.f48d33a93f53ae56",
+      "source": "Files",
+      "translated": "Dosyalar"
+    },
+    {
+      "id": "native.apple.b84aa382768fe819",
+      "source": "Workspace files",
+      "translated": "Çalışma alanı dosyaları"
+    },
+    {
       "id": "native.apple.98306aca23d04451",
       "source": "Dreaming",
       "translated": "Düş kuruyor"
@@ -5114,6 +5189,41 @@
       "translated": "Hazır"
     },
     {
+      "id": "native.apple.9c4e8b82edf0b324",
+      "source": "Files",
+      "translated": "Dosyalar"
+    },
+    {
+      "id": "native.apple.ada58d7ce8866f71",
+      "source": "This folder is empty.",
+      "translated": "Bu klasör boş."
+    },
+    {
+      "id": "native.apple.35512c4d46a2da28",
+      "source": "Load More",
+      "translated": "Daha Fazla Yükle"
+    },
+    {
+      "id": "native.apple.e617cdacc3bce5ea",
+      "source": "\\(self.entries.count) of \\(self.totalEntries)",
+      "translated": "\\(self.entries.count) / \\(self.totalEntries)"
+    },
+    {
+      "id": "native.apple.336a7eeb12d6e5f4",
+      "source": "Share file",
+      "translated": "Dosyayı paylaş"
+    },
+    {
+      "id": "native.apple.0ab324ff650d720c",
+      "source": "Could not share this file.",
+      "translated": "Bu dosya paylaşılamadı."
+    },
+    {
+      "id": "native.apple.8218f673399060cc",
+      "source": "OK",
+      "translated": "Tamam"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "Döküm dışa aktarılamıyor"
@@ -5174,14 +5284,19 @@
       "translated": "Kullanılamıyor"
     },
     {
-      "id": "native.apple.889fe76e02b8ad5d",
-      "source": "Connect to a gateway",
-      "translated": "Bir Gateway’e bağlan"
+      "id": "native.apple.4dcedefea4b49a1c",
+      "source": "Message \\(self.agentDisplayName)...",
+      "translated": "\\(self.agentDisplayName) adlı kişiye mesaj gönder..."
     },
     {
-      "id": "native.apple.e8173c7d24457256",
-      "source": "Message \\(self.agentDisplayName)...",
-      "translated": "\\(self.agentDisplayName) ile mesajlaş..."
+      "id": "native.apple.84767ec18054524b",
+      "source": "Message \\(self.agentDisplayName); sends when connected",
+      "translated": "\\(self.agentDisplayName) adlı kişiye mesaj gönder; bağlandığında gönderilir"
+    },
+    {
+      "id": "native.apple.11b20bef7e51ab69",
+      "source": "Connect to a gateway",
+      "translated": "Bir gateway'e bağlan"
     },
     {
       "id": "native.apple.14492e334b87e4f2",
@@ -6047,6 +6162,11 @@
       "id": "native.apple.feb28c9cba676ba2",
       "source": "Instances",
       "translated": "Örnekler"
+    },
+    {
+      "id": "native.apple.3f2726ccd1acd987",
+      "source": "Files",
+      "translated": "Dosyalar"
     },
     {
       "id": "native.apple.614c9b40919fb103",
@@ -8229,6 +8349,11 @@
       "translated": "Örnekler"
     },
     {
+      "id": "native.apple.d1a5c9b0c4acbfe2",
+      "source": "Files",
+      "translated": "Dosyalar"
+    },
+    {
       "id": "native.apple.ad3c65353227b63e",
       "source": "Dreaming",
       "translated": "Düşünüyor"
@@ -8317,6 +8442,11 @@
       "id": "native.apple.3579cf2750470a22",
       "source": "Sessions",
       "translated": "Oturumlar"
+    },
+    {
+      "id": "native.apple.253cb2debeb51859",
+      "source": "Files",
+      "translated": "Dosyalar"
     },
     {
       "id": "native.apple.f7e04202c3e37bd8",
@@ -13534,6 +13664,26 @@
       "translated": "Yazıyor"
     },
     {
+      "id": "native.apple.cbc285107b965641",
+      "source": "Preparing audio…",
+      "translated": "Ses hazırlanıyor…"
+    },
+    {
+      "id": "native.apple.d781ade49132fec6",
+      "source": "Speaking…",
+      "translated": "Konuşuyor…"
+    },
+    {
+      "id": "native.apple.9e4b306460f4a32d",
+      "source": "Preparing audio, tap to cancel",
+      "translated": "Ses hazırlanıyor, iptal etmek için dokunun"
+    },
+    {
+      "id": "native.apple.142c01bf6b97e380",
+      "source": "Speaking, tap to stop",
+      "translated": "Konuşuyor, durdurmak için dokunun"
+    },
+    {
       "id": "native.apple.86695104895ebed8",
       "source": "Queued",
       "translated": "Sırada"
@@ -13542,6 +13692,16 @@
       "id": "native.apple.a85f179b35d39d8f",
       "source": "Sending…",
       "translated": "Gönderiliyor…"
+    },
+    {
+      "id": "native.apple.38722ea25417ad4f",
+      "source": "Confirming…",
+      "translated": "Onaylanıyor…"
+    },
+    {
+      "id": "native.apple.78682085b14232f8",
+      "source": "Delivery unknown",
+      "translated": "Teslimat bilinmiyor"
     },
     {
       "id": "native.apple.2888a268bfa49e9e",
@@ -13557,6 +13717,16 @@
       "id": "native.apple.00e673b9c5263c5c",
       "source": "Sending",
       "translated": "Gönderiliyor"
+    },
+    {
+      "id": "native.apple.bfe7aab77abe9a2c",
+      "source": "Sent, waiting for chat history confirmation",
+      "translated": "Gönderildi, sohbet geçmişi onayı bekleniyor"
+    },
+    {
+      "id": "native.apple.7eb6eca416d33bb4",
+      "source": "Delivery unconfirmed, touch and hold to retry or delete",
+      "translated": "Teslimat onaylanmadı, yeniden denemek veya silmek için dokunup basılı tutun"
     },
     {
       "id": "native.apple.df1a81bd7a0bca36",
@@ -13589,6 +13759,16 @@
       "translated": "Sil"
     },
     {
+      "id": "native.apple.9d58b2a2a23c0d69",
+      "source": "Stop Listening",
+      "translated": "Dinlemeyi Durdur"
+    },
+    {
+      "id": "native.apple.99df7de891c8235f",
+      "source": "Listen",
+      "translated": "Dinle"
+    },
+    {
       "id": "native.apple.f84b674ad395b694",
       "source": "Jump to latest",
       "translated": "En yeniye atla"
@@ -13617,6 +13797,16 @@
       "id": "native.apple.82c2287cd78da56f",
       "source": "\\(baseName).jpg",
       "translated": "\\(baseName).jpg"
+    },
+    {
+      "id": "native.apple.2b45abdc56b2caed",
+      "source": "delivery unconfirmed",
+      "translated": "teslimat onaylanmadı"
+    },
+    {
+      "id": "native.apple.722f1f90b97e8e45",
+      "source": "queued after route change",
+      "translated": "rota değişikliğinden sonra kuyruğa alındı"
     },
     {
       "id": "native.apple.59aa8697b933d6b6",

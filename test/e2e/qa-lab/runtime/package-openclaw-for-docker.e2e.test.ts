@@ -86,6 +86,8 @@ describe("package-openclaw-for-docker", () => {
         "--output-dir",
         ".artifacts/docker",
         "--output-name=openclaw-current.tgz",
+        "--pack-json",
+        ".artifacts/docker/pack.json",
         "--source-dir",
         "/repo",
         "--skip-build",
@@ -93,6 +95,7 @@ describe("package-openclaw-for-docker", () => {
     ).toEqual({
       outputDir: ".artifacts/docker",
       outputName: "openclaw-current.tgz",
+      packJson: ".artifacts/docker/pack.json",
       skipBuild: true,
       sourceDir: "/repo",
     });
@@ -112,6 +115,7 @@ describe("package-openclaw-for-docker", () => {
     const duplicateCases = [
       ["--output-dir", ["--output-dir", "one", "--output-dir=two"]],
       ["--output-name", ["--output-name", "one.tgz", "--output-name=two.tgz"]],
+      ["--pack-json", ["--pack-json", "one.json", "--pack-json=two.json"]],
       ["--source-dir", ["--source-dir", "/repo-a", "--source-dir=/repo-b"]],
       ["--skip-build", ["--skip-build", "--skip-build"]],
     ] satisfies Array<[string, string[]]>;
@@ -381,6 +385,61 @@ describe("package-openclaw-for-docker", () => {
       "npm:pack --silent --ignore-scripts --pack-destination /out:/repo",
       "restore:/repo",
     ]);
+  });
+
+  it("writes npm pack metadata for renamed package artifacts", async () => {
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docker-pack-json-"));
+    const packJsonPath = path.join(outputDir, "pack.json");
+
+    try {
+      const tarball = await packOpenClawPackageForDocker("/repo", outputDir, {
+        outputName: "openclaw-current.tgz",
+        packJsonPath,
+        prepareBundledAiRuntime: skipBundledAiRuntime,
+        prepareChangelog: async () => {},
+        restoreChangelog: async () => {},
+        runCaptureImpl: async (
+          command: string,
+          args: string[],
+          _cwd: string,
+          options: { deferForwardedSignalExit?: boolean },
+        ) => {
+          expect(command).toBe("npm");
+          expect(args).toEqual([
+            "pack",
+            "--json",
+            "--silent",
+            "--ignore-scripts",
+            "--pack-destination",
+            outputDir,
+          ]);
+          expect(options.deferForwardedSignalExit).toBe(true);
+          fs.writeFileSync(path.join(outputDir, "openclaw-2026.5.28.tgz"), "package");
+          return JSON.stringify([
+            {
+              entryCount: 1,
+              filename: "openclaw-2026.5.28.tgz",
+              size: 7,
+              unpackedSize: 7,
+              version: "2026.5.28",
+            },
+          ]);
+        },
+      });
+
+      expect(tarball).toBe(path.join(outputDir, "openclaw-current.tgz"));
+      expect(JSON.parse(fs.readFileSync(packJsonPath, "utf8"))).toEqual([
+        {
+          entryCount: 1,
+          filename: "openclaw-current.tgz",
+          size: 7,
+          unpackedSize: 7,
+          version: "2026.5.28",
+        },
+      ]);
+    } finally {
+      fs.rmSync(outputDir, { force: true, recursive: true });
+    }
   });
 
   it("rejects path-like npm pack stdout before resolving Docker package tarballs", async () => {
