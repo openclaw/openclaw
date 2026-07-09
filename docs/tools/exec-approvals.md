@@ -115,7 +115,6 @@ Example schema:
           "id": "B0C8C0B3-2C2D-4F8A-9A3C-5A4B3C2D1E0F",
           "pattern": "~/Projects/**/bin/rg",
           "source": "allow-always",
-          "commandText": "rg -n TODO",
           "lastUsedAt": 1737150000000,
           "lastUsedCommand": "rg -n TODO",
           "lastResolvedPath": "/Users/user/Projects/.../bin/rg"
@@ -390,16 +389,16 @@ for a command segment, entries with `argPattern` do not match.
 
 Each allowlist entry supports:
 
-| Field              | Meaning                                                       |
-| ------------------ | ------------------------------------------------------------- |
-| `pattern`          | Resolved binary path glob or bare command-name glob           |
-| `argPattern`       | Optional argv regex; omitted entries are path-only            |
-| `id`               | Stable UUID used for UI identity                              |
-| `source`           | Entry source, such as `allow-always`                          |
-| `commandText`      | Command text captured when an approval flow created the entry |
-| `lastUsedAt`       | Last-used timestamp                                           |
-| `lastUsedCommand`  | Last command that matched                                     |
-| `lastResolvedPath` | Last resolved binary path                                     |
+| Field              | Meaning                                              |
+| ------------------ | ---------------------------------------------------- |
+| `pattern`          | Resolved binary path glob or bare command-name glob  |
+| `argPattern`       | Optional argv regex; omitted entries are path-only   |
+| `id`               | Stable UUID used for UI identity                     |
+| `source`           | Entry source, such as `allow-always`                 |
+| `commandText`      | Legacy input; stripped after digest-marker migration |
+| `lastUsedAt`       | Last-used timestamp                                  |
+| `lastUsedCommand`  | Last command that matched                            |
+| `lastResolvedPath` | Last resolved binary path                            |
 
 ## Auto-allow skill CLIs
 

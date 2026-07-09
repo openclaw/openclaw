@@ -2,7 +2,7 @@ import Foundation
 import OpenClawIPC
 
 enum ShellExecutor {
-    struct ShellResult {
+    struct ShellResult: Sendable {
         var stdout: String
         var stderr: String
         var exitCode: Int?

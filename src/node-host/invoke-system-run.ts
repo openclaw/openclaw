@@ -17,10 +17,10 @@ import {
   recordAllowlistMatchesUseLocked,
   resolveApprovalAuditTrustPath,
   resolveAllowAlwaysPersistenceDecision,
-  resolveExecApprovals,
   resolveExecApprovalsLocked,
   resolveExecModePolicy,
   type ExecAllowlistEntry,
+  type ExecApprovalsResolved,
   type ExecAsk,
   type ExecCommandSegment,
   type ExecSegmentSatisfiedBy,
@@ -77,6 +77,7 @@ type SystemRunInvokeResult = {
 type SystemRunDeniedReason =
   | "security=deny"
   | "approval-required"
+  | "approval-state-write-failed"
   | "allowlist-miss"
   | "execution-plan-miss"
   | "companion-unavailable"
@@ -88,8 +89,6 @@ type SystemRunExecutionContext = {
   commandText: string;
   suppressNotifyOnExit: boolean;
 };
-
-type ResolvedExecApprovals = ReturnType<typeof resolveExecApprovals>;
 
 type SystemRunParsePhase = {
   argv: string[];
@@ -113,7 +112,7 @@ type SystemRunParsePhase = {
 };
 
 type SystemRunPolicyPhase = SystemRunParsePhase & {
-  approvals: ResolvedExecApprovals;
+  approvals: ExecApprovalsResolved;
   security: ExecSecurity;
   ask: ExecAsk;
   policy: ReturnType<typeof evaluateSystemRunPolicy>;
@@ -143,12 +142,14 @@ const APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval missing script operand binding";
 const APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval script operand changed before execution";
+const APPROVAL_STATE_WRITE_FAILED_MESSAGE =
+  "SYSTEM_RUN_DENIED: approval state could not be persisted";
 type ExecToolConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["exec"]>;
 
 type EffectiveSystemRunExecPolicy = {
   agentExec: ExecToolConfig | undefined;
   globalExec: ExecToolConfig | undefined;
-  approvals: ReturnType<typeof resolveExecApprovals>;
+  approvals: ExecApprovalsResolved;
   security: ExecSecurity;
   ask: ExecAsk;
   autoReview: boolean;
@@ -268,7 +269,7 @@ export type HandleSystemRunInvokeOptions = {
     timeoutMs: number | undefined,
   ) => Promise<RunResult>;
   runViaMacAppExecHost: (params: {
-    approvals: ReturnType<typeof resolveExecApprovals>;
+    approvals: ExecApprovalsResolved;
     request: ExecHostRequest;
   }) => Promise<ExecHostResponse | null>;
   sendNodeEvent: (client: GatewayClient, event: string, payload: unknown) => Promise<void>;
@@ -278,6 +279,8 @@ export type HandleSystemRunInvokeOptions = {
   preferMacAppExecHost: boolean;
   getRuntimeConfig?: () => OpenClawConfig;
   autoReviewer?: ExecAutoReviewer;
+  persistAllowAlwaysDecision?: typeof persistAllowAlwaysDecisionLocked;
+  recordAllowlistMatchesUse?: typeof recordAllowlistMatchesUseLocked;
 };
 
 async function loadSystemRunConfig(opts: HandleSystemRunInvokeOptions): Promise<OpenClawConfig> {
@@ -838,28 +841,40 @@ async function executeSystemRunPhase(
     }
   }
 
-  if (phase.policy.approvalDecision === "allow-always") {
-    await persistAllowAlwaysDecisionLocked({
-      agentId: phase.agentId,
-      decision: resolveAllowAlwaysPersistenceDecision({
-        segments: phase.segments,
-        cwd: phase.cwd,
-        env: phase.env,
-        platform: process.platform,
-        commandText: phase.commandText,
-        strictInlineEval: phase.strictInlineEval,
-        authorizationPlan: phase.authorizationPlan,
-        runtimePayload: phase.inlineEvalHit !== null,
-      }),
-    });
-  }
+  try {
+    if (phase.policy.approvalDecision === "allow-always") {
+      await (opts.persistAllowAlwaysDecision ?? persistAllowAlwaysDecisionLocked)({
+        agentId: phase.agentId,
+        decision: resolveAllowAlwaysPersistenceDecision({
+          segments: phase.segments,
+          cwd: phase.cwd,
+          env: phase.env,
+          platform: process.platform,
+          commandText: phase.commandText,
+          strictInlineEval: phase.strictInlineEval,
+          authorizationPlan: phase.authorizationPlan,
+          runtimePayload: phase.inlineEvalHit !== null,
+        }),
+      });
+    }
 
-  await recordAllowlistMatchesUseLocked({
-    agentId: phase.agentId,
-    matches: phase.allowlistMatches,
-    command: phase.commandText,
-    resolvedPath: resolveApprovalAuditTrustPath(phase.segments[0]?.resolution ?? null, phase.cwd),
-  });
+    await (opts.recordAllowlistMatchesUse ?? recordAllowlistMatchesUseLocked)({
+      agentId: phase.agentId,
+      matches: phase.allowlistMatches,
+      command: phase.commandText,
+      resolvedPath: resolveApprovalAuditTrustPath(phase.segments[0]?.resolution ?? null, phase.cwd),
+    });
+  } catch {
+    // Approval state is part of the authorization boundary. Never execute after
+    // a failed durable grant or audit write, and consume the error in this
+    // fire-and-forget node invocation before it can terminate the host process.
+    logWarn(`security: system.run approval state write failed (runId=${phase.runId})`);
+    await sendSystemRunDenied(opts, phase.execution, {
+      reason: "approval-state-write-failed",
+      message: APPROVAL_STATE_WRITE_FAILED_MESSAGE,
+    });
+    return;
+  }
 
   if (phase.needsScreenRecording) {
     await sendSystemRunDenied(opts, phase.execution, {

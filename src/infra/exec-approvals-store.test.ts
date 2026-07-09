@@ -19,11 +19,12 @@ type ExecApprovalsModule = typeof import("./exec-approvals.js");
 
 let ensureExecApprovals: ExecApprovalsModule["ensureExecApprovals"];
 let ensureExecApprovalsSnapshot: ExecApprovalsModule["ensureExecApprovalsSnapshot"];
+let loadExecApprovals: ExecApprovalsModule["loadExecApprovals"];
 let mergeExecApprovalsSocketDefaults: ExecApprovalsModule["mergeExecApprovalsSocketDefaults"];
 let normalizeExecApprovals: ExecApprovalsModule["normalizeExecApprovals"];
 let persistAllowAlwaysDecision: ExecApprovalsModule["persistAllowAlwaysDecisionLocked"];
 let persistAllowAlwaysDecisionSync: ExecApprovalsModule["persistAllowAlwaysDecision"];
-let persistAllowAlwaysPatterns: ExecApprovalsModule["persistAllowAlwaysPatternsLocked"];
+let persistAllowAlwaysPatterns: ExecApprovalsModule["persistAllowAlwaysPatterns"];
 let readExecApprovalsSnapshot: ExecApprovalsModule["readExecApprovalsSnapshot"];
 let recordAllowlistMatchesUse: ExecApprovalsModule["recordAllowlistMatchesUseLocked"];
 let recordAllowlistMatchesUseSync: ExecApprovalsModule["recordAllowlistMatchesUse"];
@@ -44,11 +45,12 @@ beforeAll(async () => {
   const module = await import("./exec-approvals.js");
   ensureExecApprovals = module.ensureExecApprovals;
   ensureExecApprovalsSnapshot = module.ensureExecApprovalsSnapshot;
+  loadExecApprovals = module.loadExecApprovals;
   mergeExecApprovalsSocketDefaults = module.mergeExecApprovalsSocketDefaults;
   normalizeExecApprovals = module.normalizeExecApprovals;
   persistAllowAlwaysDecision = module.persistAllowAlwaysDecisionLocked;
   persistAllowAlwaysDecisionSync = module.persistAllowAlwaysDecision;
-  persistAllowAlwaysPatterns = module.persistAllowAlwaysPatternsLocked;
+  persistAllowAlwaysPatterns = module.persistAllowAlwaysPatterns;
   readExecApprovalsSnapshot = module.readExecApprovalsSnapshot;
   recordAllowlistMatchesUse = module.recordAllowlistMatchesUseLocked;
   recordAllowlistMatchesUseSync = module.recordAllowlistMatchesUse;
@@ -387,7 +389,7 @@ describe("exec approvals store helpers", () => {
     });
   });
 
-  it("returns normalized empty snapshots for missing and invalid approvals files", () => {
+  it("distinguishes a missing approvals file from malformed persisted policy", () => {
     const dir = createHomeDir();
 
     const missing = readExecApprovalsSnapshot();
@@ -402,7 +404,124 @@ describe("exec approvals store helpers", () => {
     const invalid = readExecApprovalsSnapshot();
     expect(invalid.exists).toBe(true);
     expect(invalid.raw).toBe("{invalid");
-    expect(invalid.file).toEqual(normalizeExecApprovals({ version: 1, agents: {} }));
+    expect(invalid.file.defaults).toMatchObject({
+      security: "deny",
+      ask: "off",
+      askFallback: "deny",
+      autoAllowSkills: false,
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed on load and rejects snapshots for symlinked approvals",
+    async () => {
+      const dir = createHomeDir();
+      const approvalsPath = approvalsFilePath(dir);
+      const linkedPath = path.join(dir, "linked-approvals.json");
+      fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+      fs.writeFileSync(
+        linkedPath,
+        '{"version":1,"defaults":{"security":"full","ask":"off"},"agents":{}}\n',
+        "utf8",
+      );
+      fs.symlinkSync(linkedPath, approvalsPath);
+
+      expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
+      expect(() => readExecApprovalsSnapshot()).toThrow(/symlink/);
+      await expect(
+        updateExecApprovals({
+          update: () => ({ version: 1, defaults: { security: "deny" }, agents: {} }),
+        }),
+      ).rejects.toThrow(/symlink/);
+      expect(fs.readFileSync(linkedPath, "utf8")).toContain('"security":"full"');
+    },
+  );
+
+  it("fails closed on load and rejects snapshots for non-file approvals paths", () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(approvalsPath, { recursive: true });
+
+    expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
+    expect(() => readExecApprovalsSnapshot()).toThrow(/non-file exec approvals path/);
+  });
+
+  it("does not let a stale missing-file snapshot overwrite a present empty policy", async () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    const missing = readExecApprovalsSnapshot();
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(approvalsPath, "", "utf8");
+
+    const empty = readExecApprovalsSnapshot();
+    expect(empty.hash).not.toBe(missing.hash);
+    await expect(
+      updateExecApprovals({
+        baseHash: missing.hash,
+        update: () => ({ version: 1, defaults: { security: "full" }, agents: {} }),
+      }),
+    ).resolves.toBeNull();
+    expect(fs.readFileSync(approvalsPath, "utf8")).toBe("");
+  });
+
+  it("fails closed when loading malformed or unreadable persisted approvals", () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(approvalsPath, "{invalid", "utf8");
+
+    expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
+
+    fs.writeFileSync(
+      approvalsPath,
+      '{"version":1,"defaults":{"security":"invalid"},"agents":{}}\n',
+      "utf8",
+    );
+    expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
+
+    fs.writeFileSync(
+      approvalsPath,
+      '{"version":1,"agents":{"main":{"allowlist":[{"pattern":"/usr/bin/tool","argPattern":null}]}}}\n',
+      "utf8",
+    );
+    expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
+
+    const approvalsStat = fs.statSync(approvalsPath);
+    const actualReadFileSync = fs.readFileSync.bind(fs);
+    vi.spyOn(fs, "readFileSync").mockImplementation((target, options) => {
+      const targetStat = typeof target === "number" ? fs.fstatSync(target) : null;
+      if (
+        String(target) === approvalsPath ||
+        (targetStat?.dev === approvalsStat.dev && targetStat.ino === approvalsStat.ino)
+      ) {
+        throw Object.assign(new Error("approval path blocked"), { code: "EACCES" });
+      }
+      return actualReadFileSync(target, options as never);
+    });
+
+    expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
+  });
+
+  it("keeps synchronous and locked resolution fail-closed for malformed persisted policy", async () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(approvalsPath, "", "utf8");
+
+    const syncResolved = resolveExecApprovalsSync("main", {
+      security: "full",
+      ask: "off",
+    });
+    const lockedResolved = await resolveExecApprovals("main", {
+      security: "full",
+      ask: "off",
+    });
+
+    expect(syncResolved.agent).toMatchObject({ security: "deny", ask: "off" });
+    expect(lockedResolved.agent).toMatchObject({ security: "deny", ask: "off" });
+    expect(syncResolved.token).toBe("");
+    expect(lockedResolved.token).toBe("");
+    expect(fs.readFileSync(approvalsPath, "utf8")).toBe("");
   });
 
   it("ensures approvals file with default socket path and generated token", () => {
@@ -429,6 +548,7 @@ describe("exec approvals store helpers", () => {
 
   it("does not create an approvals file when resolving the missing default no-prompt policy", async () => {
     const dir = createHomeDir();
+    const stateDir = path.dirname(approvalsFilePath(dir));
 
     const resolved = await resolveExecApprovals("main", {
       security: "full",
@@ -440,9 +560,24 @@ describe("exec approvals store helpers", () => {
     expect(resolved.socketPath).toBe(resolveExecApprovalsSocketPath());
     expect(resolved.token).toBe("");
     expect(fs.existsSync(approvalsFilePath(dir))).toBe(false);
+    expect(fs.existsSync(stateDir)).toBe(false);
   });
 
-  it("does not rewrite an empty approvals file for the default no-prompt policy", async () => {
+  it("fails closed when a writer locks the store before creating the policy file", () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      `${approvalsPath}.lock`,
+      `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`,
+      "utf8",
+    );
+
+    expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
+    expect(fs.existsSync(approvalsPath)).toBe(false);
+  });
+
+  it("does not rewrite an empty approvals file while failing closed", async () => {
     const dir = createHomeDir();
     const approvalsPath = approvalsFilePath(dir);
     fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
@@ -453,7 +588,7 @@ describe("exec approvals store helpers", () => {
       ask: "off",
     });
 
-    expect(resolved.agent.security).toBe("full");
+    expect(resolved.agent.security).toBe("deny");
     expect(resolved.agent.ask).toBe("off");
     expect(resolved.token).toBe("");
     expect(fs.statSync(approvalsPath).size).toBe(0);
@@ -516,23 +651,46 @@ describe("exec approvals store helpers", () => {
     },
   );
 
+  it("rejects non-file approvals paths before resolving the default no-prompt policy", async () => {
+    const dir = createHomeDir();
+    fs.mkdirSync(approvalsFilePath(dir), { recursive: true });
+
+    await expect(
+      resolveExecApprovals("main", {
+        security: "deny",
+        ask: "always",
+      }),
+    ).rejects.toThrow("Refusing to use non-file exec approvals path");
+  });
+
   it("does not treat approvals path access errors as a missing default policy", async () => {
     const dir = createHomeDir();
     const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      '{"version":1,"defaults":{"security":"full","ask":"off"},"agents":{}}\n',
+      "utf8",
+    );
+    const approvalsStat = fs.statSync(approvalsPath);
     const actualReadFileSync = fs.readFileSync.bind(fs);
     vi.spyOn(fs, "readFileSync").mockImplementation((target, options) => {
-      if (String(target) === approvalsPath) {
+      const targetStat = typeof target === "number" ? fs.fstatSync(target) : null;
+      if (
+        String(target) === approvalsPath ||
+        (targetStat?.dev === approvalsStat.dev && targetStat.ino === approvalsStat.ino)
+      ) {
         throw Object.assign(new Error("approval path blocked"), { code: "EACCES" });
       }
       return actualReadFileSync(target, options as never);
     });
 
-    await expect(
-      resolveExecApprovals("main", {
-        security: "full",
-        ask: "off",
-      }),
-    ).rejects.toThrow("approval path blocked");
+    const resolved = await resolveExecApprovals("main", {
+      security: "full",
+      ask: "off",
+    });
+
+    expect(resolved.agent).toMatchObject({ security: "deny", ask: "off" });
   });
 
   it("creates an approvals file when resolving a missing policy that may prompt", async () => {
@@ -666,6 +824,57 @@ describe("exec approvals store helpers", () => {
     expect(fs.readFileSync(approvalsPath, "utf8")).toContain('"security": "full"');
     expect(fs.statSync(approvalsPath).mode & 0o777).toBe(0o600);
     expect(listExecApprovalTempFiles(dir)).toStrictEqual([]);
+  });
+
+  it("fails closed while the Windows copy fallback has truncated the live policy", () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      '{"version":1,"defaults":{"security":"deny","ask":"off"},"agents":{}}\n',
+      "utf8",
+    );
+    const actualRenameSync = fs.renameSync.bind(fs);
+    vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (String(to) === approvalsPath) {
+        throw Object.assign(new Error("locked target"), { code: "EPERM" });
+      }
+      return actualRenameSync(from, to);
+    });
+    const actualReadFileSync = fs.readFileSync.bind(fs);
+    let fallbackWriteInProgress = false;
+    let approvalReadsDuringTruncate = 0;
+    vi.spyOn(fs, "readFileSync").mockImplementation((target, options) => {
+      if (fallbackWriteInProgress && String(target) === approvalsPath) {
+        approvalReadsDuringTruncate += 1;
+      }
+      return actualReadFileSync(target, options as never);
+    });
+    const actualFtruncateSync = fs.ftruncateSync.bind(fs);
+    let policyDuringTruncate: ExecApprovalsFile | undefined;
+    vi.spyOn(fs, "ftruncateSync").mockImplementation((fd, length) => {
+      const result = actualFtruncateSync(fd, length);
+      if (length === 0 && !policyDuringTruncate) {
+        fallbackWriteInProgress = true;
+        try {
+          policyDuringTruncate = loadExecApprovals();
+        } finally {
+          fallbackWriteInProgress = false;
+        }
+      }
+      return result;
+    });
+
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "full", ask: "off" },
+      agents: {},
+    });
+
+    expect(policyDuringTruncate?.defaults).toMatchObject({ security: "deny", ask: "off" });
+    expect(approvalReadsDuringTruncate).toBe(0);
+    expect(loadExecApprovals().defaults).toMatchObject({ security: "full", ask: "off" });
   });
 
   it("normalizes fallback temp files before copying", () => {
@@ -1066,12 +1275,13 @@ describe("exec approvals store helpers", () => {
     expect(persisted.agents?.main?.allowlist).toEqual([{ pattern: "/usr/bin/jq", id: "jq-id" }]);
   });
 
-  it("persists allow-always patterns with shared helper", async () => {
+  it("persists allow-always patterns with shared helper", () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(654_321);
 
-    ensureExecApprovals();
-    const patterns = await persistAllowAlwaysPatterns({
+    const approvals = ensureExecApprovals();
+    const patterns = persistAllowAlwaysPatterns({
+      approvals,
       agentId: "worker",
       platform: "win32",
       segments: [
@@ -1110,12 +1320,13 @@ describe("exec approvals store helpers", () => {
     });
   });
 
-  it("persists node command markers only for fully represented allow-always patterns", async () => {
+  it("persists node command markers only for fully represented allow-always patterns", () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(654_322);
 
-    ensureExecApprovals();
-    const completePatterns = await persistAllowAlwaysPatterns({
+    const approvals = ensureExecApprovals();
+    const completePatterns = persistAllowAlwaysPatterns({
+      approvals,
       agentId: "worker",
       commandText: "/usr/bin/tool ok",
       segments: [
@@ -1146,7 +1357,8 @@ describe("exec approvals store helpers", () => {
     ]);
     expect(allowlist.some((entry) => entry.lastUsedCommand === "/usr/bin/tool ok")).toBe(false);
 
-    const partialPatterns = await persistAllowAlwaysPatterns({
+    const partialPatterns = persistAllowAlwaysPatterns({
+      approvals,
       agentId: "worker",
       commandText: "sh -c '/bin/echo ok && missingcmd'",
       segments: [

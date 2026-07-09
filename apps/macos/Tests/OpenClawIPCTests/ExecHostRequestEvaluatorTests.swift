@@ -23,6 +23,69 @@ struct ExecHostRequestEvaluatorTests {
         }
     }
 
+    @Test func `validate request rejects a blank executable`() {
+        let request = ExecHostRequest(
+            command: [" \t\n", "operand"],
+            rawCommand: nil,
+            cwd: nil,
+            env: nil,
+            timeoutMs: nil,
+            needsScreenRecording: nil,
+            agentId: nil,
+            sessionKey: nil,
+            approvalDecision: nil)
+
+        switch ExecHostRequestEvaluator.validateRequest(request) {
+        case .success:
+            Issue.record("expected invalid request")
+        case let .failure(error):
+            #expect(error.code == "INVALID_REQUEST")
+            #expect(error.message == "command required")
+        }
+    }
+
+    @Test func `validate request preserves argv exactly`() {
+        let command = ["/usr/bin/printf", "<%s>|<%s>", "  padded  ", "-n"]
+        let request = ExecHostRequest(
+            command: command,
+            rawCommand: nil,
+            cwd: nil,
+            env: nil,
+            timeoutMs: nil,
+            needsScreenRecording: nil,
+            agentId: nil,
+            sessionKey: nil,
+            approvalDecision: nil)
+
+        switch ExecHostRequestEvaluator.validateRequest(request) {
+        case let .success(validated):
+            #expect(validated.command == command)
+        case let .failure(error):
+            Issue.record("unexpected invalid request: \(error.message)")
+        }
+    }
+
+    @Test func `validate request rejects a padded executable without normalizing it`() {
+        let request = ExecHostRequest(
+            command: [" /usr/bin/touch ", "/tmp/must-not-run"],
+            rawCommand: nil,
+            cwd: nil,
+            env: nil,
+            timeoutMs: nil,
+            needsScreenRecording: nil,
+            agentId: nil,
+            sessionKey: nil,
+            approvalDecision: nil)
+
+        switch ExecHostRequestEvaluator.validateRequest(request) {
+        case .success:
+            Issue.record("expected invalid request")
+        case let .failure(error):
+            #expect(error.code == "INVALID_REQUEST")
+            #expect(error.message == "executable has surrounding whitespace")
+        }
+    }
+
     @Test func `evaluate requires prompt on allowlist miss without decision`() {
         let context = Self.makeContext(security: .allowlist, ask: .onMiss, allowlistSatisfied: false, skillAllow: false)
         let decision = ExecHostRequestEvaluator.evaluate(context: context, approvalDecision: nil)
@@ -69,7 +132,6 @@ struct ExecHostRequestEvaluatorTests {
         skillAllow: Bool) -> ExecApprovalEvaluation
     {
         ExecApprovalEvaluation(
-            command: ["/usr/bin/echo", "hi"],
             displayCommand: "/usr/bin/echo hi",
             agentId: nil,
             security: security,
@@ -77,6 +139,7 @@ struct ExecHostRequestEvaluatorTests {
             env: [:],
             resolution: nil,
             allowlistResolutions: [],
+            boundCommand: nil,
             allowAlwaysPatterns: [],
             allowlistMatches: [],
             allowlistSatisfied: allowlistSatisfied,

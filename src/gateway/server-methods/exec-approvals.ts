@@ -13,7 +13,6 @@ import {
   ensureExecApprovalsSnapshot,
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
-  readExecApprovalsSnapshot,
   updateExecApprovals,
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
@@ -179,8 +178,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      await ensureExecApprovalsSnapshot();
-      const snapshot = readExecApprovalsSnapshot();
+      const snapshot = await ensureExecApprovalsSnapshot();
       if (!requireApprovalsBaseHash(params, snapshot, respond)) {
         return;
       }

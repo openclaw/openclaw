@@ -2,7 +2,6 @@ import Foundation
 
 struct ExecHostValidatedRequest {
     let command: [String]
-    let displayCommand: String
     let evaluationRawCommand: String?
 }
 
@@ -14,12 +13,21 @@ enum ExecHostPolicyDecision {
 
 enum ExecHostRequestEvaluator {
     static func validateRequest(_ request: ExecHostRequest) -> Result<ExecHostValidatedRequest, ExecHostError> {
-        let command = request.command.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        guard !command.isEmpty else {
+        let command = request.command
+        let executable = command.first ?? ""
+        let trimmedExecutable = executable.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedExecutable.isEmpty else {
             return .failure(
                 ExecHostError(
                     code: "INVALID_REQUEST",
                     message: "command required",
+                    reason: "invalid"))
+        }
+        guard executable == trimmedExecutable else {
+            return .failure(
+                ExecHostError(
+                    code: "INVALID_REQUEST",
+                    message: "executable has surrounding whitespace",
                     reason: "invalid"))
         }
 
@@ -30,7 +38,6 @@ enum ExecHostRequestEvaluator {
         case let .ok(resolved):
             return .success(ExecHostValidatedRequest(
                 command: command,
-                displayCommand: resolved.displayCommand,
                 evaluationRawCommand: resolved.evaluationRawCommand))
         case let .invalid(message):
             return .failure(

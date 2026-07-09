@@ -26,6 +26,25 @@ struct MacNodeRuntimeTests {
         }
     }
 
+    actor ShellRunProbe {
+        private var commands: [[String]] = []
+
+        func run(_ command: [String]) -> ShellExecutor.ShellResult {
+            self.commands.append(command)
+            return ShellExecutor.ShellResult(
+                stdout: "",
+                stderr: "",
+                exitCode: 0,
+                timedOut: false,
+                success: true,
+                errorMessage: nil)
+        }
+
+        func capturedCommands() -> [[String]] {
+            self.commands
+        }
+    }
+
     @MainActor
     final class ScreenSnapshotProbeServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
         typealias SnapshotResult = (
@@ -160,6 +179,46 @@ struct MacNodeRuntimeTests {
         let response = await runtime.handleInvoke(
             BridgeInvokeRequest(id: "req-2", command: OpenClawSystemCommand.run.rawValue, paramsJSON: json))
         #expect(response.ok == false)
+    }
+
+    @Test func `system run rejects raw command prompt spoof before execution`() async throws {
+        let probe = ShellRunProbe()
+        let runtime = MacNodeRuntime(
+            shellRunner: { command, _, _, _ in await probe.run(command) })
+        let params = OpenClawSystemRunParams(
+            command: ["/usr/bin/printf", "unsafe"],
+            rawCommand: "echo safe")
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-raw-command-spoof",
+            command: OpenClawSystemCommand.run.rawValue,
+            paramsJSON: json))
+
+        #expect(!response.ok)
+        #expect(response.error?.code == .invalidRequest)
+        #expect(response.error?.message.contains("rawCommand does not match command") == true)
+        #expect(await probe.capturedCommands().isEmpty)
+    }
+
+    @Test func `system run rejects mismatched shell payload preview before execution`() async throws {
+        let probe = ShellRunProbe()
+        let runtime = MacNodeRuntime(
+            shellRunner: { command, _, _, _ in await probe.run(command) })
+        let params = OpenClawSystemRunParams(
+            command: ["/bin/sh", "-lc", "/usr/bin/printf unsafe"],
+            rawCommand: "echo safe")
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-shell-preview-spoof",
+            command: OpenClawSystemCommand.run.rawValue,
+            paramsJSON: json))
+
+        #expect(!response.ok)
+        #expect(response.error?.code == .invalidRequest)
+        #expect(response.error?.message.contains("rawCommand does not match command") == true)
+        #expect(await probe.capturedCommands().isEmpty)
     }
 
     @Test func `system run denied event preserves gateway run id`() async throws {

@@ -4,7 +4,7 @@ import Foundation
 import OSLog
 import Security
 
-enum ExecSecurity: String, CaseIterable, Codable, Identifiable {
+enum ExecSecurity: String, CaseIterable, Codable, Identifiable, Sendable {
     case deny
     case allowlist
     case full
@@ -67,7 +67,7 @@ enum ExecApprovalQuickMode: String, CaseIterable, Identifiable {
     }
 }
 
-enum ExecAsk: String, CaseIterable, Codable, Identifiable {
+enum ExecAsk: String, CaseIterable, Codable, Identifiable, Sendable {
     case off
     case onMiss = "on-miss"
     case always
@@ -91,7 +91,7 @@ enum ExecApprovalDecision: String, Codable, Equatable {
     case deny
 }
 
-enum ExecAllowlistPatternValidationReason: String, Codable, Equatable {
+enum ExecAllowlistPatternValidationReason: String, Codable, Equatable, Sendable {
     case empty
     case missingPathComponent
 
@@ -111,27 +111,36 @@ enum ExecAllowlistPatternValidation: Equatable {
 }
 
 struct ExecAllowlistRejectedEntry: Equatable {
-    let id: UUID
+    let id: String
     let pattern: String
     let reason: ExecAllowlistPatternValidationReason
 }
 
-struct ExecAllowlistEntry: Codable, Hashable, Identifiable {
-    var id: UUID
+struct ExecAllowlistEntry: Codable, Hashable, Identifiable, Sendable {
+    var id: String
     var pattern: String
+    var source: String?
+    var commandText: String?
+    var argPattern: String?
     var lastUsedAt: Double?
     var lastUsedCommand: String?
     var lastResolvedPath: String?
 
     init(
-        id: UUID = UUID(),
+        id: String = UUID().uuidString,
         pattern: String,
+        source: String? = nil,
+        commandText: String? = nil,
+        argPattern: String? = nil,
         lastUsedAt: Double? = nil,
         lastUsedCommand: String? = nil,
         lastResolvedPath: String? = nil)
     {
         self.id = id
         self.pattern = pattern
+        self.source = source
+        self.commandText = commandText
+        self.argPattern = argPattern
         self.lastUsedAt = lastUsedAt
         self.lastUsedCommand = lastUsedCommand
         self.lastResolvedPath = lastResolvedPath
@@ -140,15 +149,32 @@ struct ExecAllowlistEntry: Codable, Hashable, Identifiable {
     private enum CodingKeys: String, CodingKey {
         case id
         case pattern
+        case source
+        case commandText
+        case argPattern
         case lastUsedAt
         case lastUsedCommand
         case lastResolvedPath
     }
 
     init(from decoder: Decoder) throws {
+        if let container = try? decoder.singleValueContainer(),
+           let legacyPattern = try? container.decode(String.self)
+        {
+            self.init(pattern: legacyPattern.trimmingCharacters(in: .whitespacesAndNewlines))
+            return
+        }
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        let decodedID = try container.decodeIfPresent(String.self, forKey: .id)
+        if let decodedID, !decodedID.isEmpty {
+            self.id = decodedID
+        } else {
+            self.id = UUID().uuidString
+        }
         self.pattern = try container.decode(String.self, forKey: .pattern)
+        self.source = try container.decodeIfPresent(String.self, forKey: .source)
+        self.commandText = try container.decodeIfPresent(String.self, forKey: .commandText)
+        self.argPattern = try container.decodeIfPresent(String.self, forKey: .argPattern)
         self.lastUsedAt = try container.decodeIfPresent(Double.self, forKey: .lastUsedAt)
         self.lastUsedCommand = try container.decodeIfPresent(String.self, forKey: .lastUsedCommand)
         self.lastResolvedPath = try container.decodeIfPresent(String.self, forKey: .lastResolvedPath)
@@ -158,20 +184,27 @@ struct ExecAllowlistEntry: Codable, Hashable, Identifiable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.id, forKey: .id)
         try container.encode(self.pattern, forKey: .pattern)
+        try container.encodeIfPresent(self.source, forKey: .source)
+        try container.encodeIfPresent(self.argPattern, forKey: .argPattern)
         try container.encodeIfPresent(self.lastUsedAt, forKey: .lastUsedAt)
         try container.encodeIfPresent(self.lastUsedCommand, forKey: .lastUsedCommand)
         try container.encodeIfPresent(self.lastResolvedPath, forKey: .lastResolvedPath)
     }
 }
 
-struct ExecApprovalsDefaults: Codable {
+struct ExecAllowlistUse: Sendable {
+    let match: ExecAllowlistEntry
+    let resolvedPath: String?
+}
+
+struct ExecApprovalsDefaults: Codable, Sendable {
     var security: ExecSecurity?
     var ask: ExecAsk?
     var askFallback: ExecSecurity?
     var autoAllowSkills: Bool?
 }
 
-struct ExecApprovalsAgent: Codable {
+struct ExecApprovalsAgent: Codable, Sendable {
     var security: ExecSecurity?
     var ask: ExecAsk?
     var askFallback: ExecSecurity?
@@ -184,19 +217,19 @@ struct ExecApprovalsAgent: Codable {
     }
 }
 
-struct ExecApprovalsSocketConfig: Codable {
+struct ExecApprovalsSocketConfig: Codable, Sendable {
     var path: String?
     var token: String?
 }
 
-struct ExecApprovalsFile: Codable {
+struct ExecApprovalsFile: Codable, Sendable {
     var version: Int
     var socket: ExecApprovalsSocketConfig?
     var defaults: ExecApprovalsDefaults?
     var agents: [String: ExecApprovalsAgent]?
 }
 
-struct ExecApprovalsSnapshot: Codable {
+struct ExecApprovalsSnapshot: Codable, Sendable {
     var path: String
     var exists: Bool
     var hash: String
@@ -211,7 +244,25 @@ enum ExecApprovalsConditionalSaveResult {
     case unavailable
 }
 
-struct ExecApprovalsResolved {
+enum ExecApprovalsMutationError: Error, Equatable, Sendable {
+    case invalidPattern(ExecAllowlistPatternValidationReason)
+    case unavailable
+
+    var message: String {
+        switch self {
+        case let .invalidPattern(reason):
+            reason.message
+        case .unavailable:
+            "Could not save exec approvals. Last known settings are shown; retry the change."
+        }
+    }
+}
+
+enum ExecApprovalsReadError: Error, Equatable, Sendable {
+    case unavailable
+}
+
+struct ExecApprovalsResolved: Sendable {
     let url: URL
     let socketPath: String
     let token: String
@@ -221,7 +272,7 @@ struct ExecApprovalsResolved {
     var file: ExecApprovalsFile
 }
 
-struct ExecApprovalsResolvedDefaults {
+struct ExecApprovalsResolvedDefaults: Sendable {
     var security: ExecSecurity
     var ask: ExecAsk
     var askFallback: ExecSecurity
@@ -231,22 +282,12 @@ struct ExecApprovalsResolvedDefaults {
 enum ExecApprovalsStore {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "exec-approvals")
     private static let defaultAgentId = "main"
-    private static let defaultSecurity: ExecSecurity = .deny
-    private static let defaultAsk: ExecAsk = .onMiss
+    // Keep omitted-file behavior aligned with the TypeScript gateway/CLI contract.
+    private static let defaultSecurity: ExecSecurity = .full
+    private static let defaultAsk: ExecAsk = .off
     private static let defaultAskFallback: ExecSecurity = .deny
     private static let defaultAutoAllowSkills = false
     private static let secureStateDirPermissions = 0o700
-    private static let fileLock = NSRecursiveLock()
-    private static let writeLockAttempts = 11
-    private static let writeLockMaxDelayMicroseconds: useconds_t = 500_000
-
-    private struct WriteLockHandle {
-        let descriptor: Int32
-        let url: URL
-        let device: UInt64
-        let inode: UInt64
-        let raw: Data
-    }
 
     private enum LegacyMigrationResult {
         case notNeeded
@@ -254,150 +295,58 @@ enum ExecApprovalsStore {
         case blocked
     }
 
-    private static func withFileLock<T>(_ body: () throws -> T) rethrows -> T {
-        self.fileLock.lock()
-        defer { self.fileLock.unlock() }
-        return try body()
-    }
-
     /// Match the TypeScript writer's `<approvals>.lock` protocol. Both processes
     /// must cover the complete read-modify-write transaction or a stale native
     /// usage update can restore policy that an administrator just revoked.
     private static func withWriteLock<T>(_ body: () throws -> T) throws -> T {
-        try self.withFileLock {
-            let handle = try self.acquireWriteLock()
-            defer { self.releaseWriteLock(handle) }
-            return try body()
-        }
-    }
-
-    private static func acquireWriteLock() throws -> WriteLockHandle {
-        self.ensureSecureStateDirectory()
         let fileURL = self.fileURL()
-        try FileManager().createDirectory(
-            at: fileURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true)
-        let realDirectory = fileURL.deletingLastPathComponent().resolvingSymlinksInPath()
-        let lockURL = realDirectory.appendingPathComponent("\(fileURL.lastPathComponent).lock")
-        var delay: useconds_t = 25000
-        var lockPayload: [String: Any] = [
-            "pid": Int(getpid()),
-            "createdAt": ISO8601DateFormatter().string(from: Date()),
-            "nonce": UUID().uuidString,
-        ]
-        if let starttime = self.processStartTime(getpid()) {
-            lockPayload["starttime"] = starttime
-        }
-        let payload = try JSONSerialization.data(
-            withJSONObject: lockPayload,
-            options: [.prettyPrinted, .sortedKeys])
-        let raw = payload + Data([0x0A])
-
-        for attempt in 0..<self.writeLockAttempts {
-            let descriptor = open(
-                lockURL.path,
-                O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
-                S_IRUSR | S_IWUSR)
-            if descriptor >= 0 {
-                var info = stat()
-                guard fstat(descriptor, &info) == 0 else {
-                    let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-                    close(descriptor)
-                    throw error
-                }
-                let handle = WriteLockHandle(
-                    descriptor: descriptor,
-                    url: lockURL,
-                    device: UInt64(info.st_dev),
-                    inode: UInt64(info.st_ino),
-                    raw: raw)
-                do {
-                    try self.writeAll(raw, to: descriptor)
-                    return handle
-                } catch {
-                    close(descriptor)
-                    self.removeWriteLockIfOwned(handle, requirePayloadMatch: false)
-                    throw error
-                }
-            }
-
-            guard errno == EEXIST else {
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-            }
-            // POSIX unlink is path-based, so an identity check cannot make stale
-            // recovery atomic. Retry live contention; stale locks fail closed.
-            guard attempt + 1 < self.writeLockAttempts else {
-                throw POSIXError(.ETIMEDOUT)
-            }
-            usleep(delay)
-            delay = min(delay * 2, self.writeLockMaxDelayMicroseconds)
-        }
-        throw POSIXError(.ETIMEDOUT)
-    }
-
-    private static func writeAll(_ data: Data, to descriptor: Int32) throws {
-        try data.withUnsafeBytes { bytes in
-            guard let base = bytes.baseAddress else { return }
-            var offset = 0
-            while offset < bytes.count {
-                let count = Darwin.write(descriptor, base.advanced(by: offset), bytes.count - offset)
-                if count < 0 {
-                    if errno == EINTR {
-                        continue
-                    }
-                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-                }
-                offset += count
-            }
-        }
-    }
-
-    private static func processStartTime(_ pid: pid_t) -> UInt64? {
-        guard pid > 0 else { return nil }
-        var info = kinfo_proc()
-        var size = MemoryLayout<kinfo_proc>.stride
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
-        guard sysctl(&mib, u_int(mib.count), &info, &size, nil, 0) == 0,
-              size > 0,
-              info.kp_proc.p_pid == pid
-        else { return nil }
-        let started = info.kp_proc.p_starttime
-        guard started.tv_sec >= 0 else { return nil }
-        return UInt64(started.tv_sec)
-    }
-
-    private static func releaseWriteLock(_ handle: WriteLockHandle) {
-        close(handle.descriptor)
-        self.removeWriteLockIfOwned(handle, requirePayloadMatch: true)
-    }
-
-    private static func removeWriteLockIfOwned(
-        _ handle: WriteLockHandle,
-        requirePayloadMatch: Bool)
-    {
-        var current = stat()
-        guard lstat(handle.url.path, &current) == 0,
-              UInt64(current.st_dev) == handle.device,
-              UInt64(current.st_ino) == handle.inode
-        else { return }
-        if requirePayloadMatch {
-            guard let raw = try? Data(contentsOf: handle.url), raw == handle.raw else { return }
-        }
-        _ = unlink(handle.url.path)
+        let trustedRoot = self.trustedRootURL()
+        try ExecApprovalsFileIO.assertSafeParentChain(of: fileURL, trustedRoot: trustedRoot)
+        try self.ensureSecureStateDirectory()
+        return try ExecApprovalsFileIO.withLock(
+            fileURL: fileURL,
+            trustedRoot: trustedRoot,
+            body)
     }
 
     static func fileURL() -> URL {
-        OpenClawPaths.stateDirURL.appendingPathComponent("exec-approvals.json")
+        self.stateDirURL().appendingPathComponent("exec-approvals.json")
     }
 
     static func socketPath() -> String {
-        OpenClawPaths.stateDirURL.appendingPathComponent("exec-approvals.sock").path
+        self.stateDirURL().appendingPathComponent("exec-approvals.sock").path
+    }
+
+    private static func trustedRootURL() -> URL {
+        guard let configured = OpenClawEnv.path("OPENCLAW_HOME") else {
+            return FileManager().homeDirectoryForCurrentUser
+        }
+        return URL(
+            fileURLWithPath: (configured as NSString).expandingTildeInPath,
+            isDirectory: true)
+    }
+
+    private static func stateDirURL() -> URL {
+        guard let configured = OpenClawEnv.path("OPENCLAW_STATE_DIR") else {
+            return self.trustedRootURL().appendingPathComponent(".openclaw", isDirectory: true)
+        }
+        let home = self.trustedRootURL().path
+        let expanded: String = if configured == "~" {
+            home
+        } else if configured.hasPrefix("~/") {
+            URL(fileURLWithPath: home, isDirectory: true)
+                .appendingPathComponent(String(configured.dropFirst(2)), isDirectory: true)
+                .path
+        } else {
+            configured
+        }
+        return URL(fileURLWithPath: expanded, isDirectory: true).standardizedFileURL
     }
 
     private static func legacyStateDirURLs() -> [URL] {
-        if let home = OpenClawEnv.path("OPENCLAW_HOME") {
+        if OpenClawEnv.path("OPENCLAW_HOME") != nil {
             var urls = [
-                URL(fileURLWithPath: home, isDirectory: true)
+                self.trustedRootURL()
                     .appendingPathComponent(".openclaw", isDirectory: true),
             ]
             let osHomeURL = FileManager().homeDirectoryForCurrentUser
@@ -416,7 +365,8 @@ enum ExecApprovalsStore {
     }
 
     private static func legacyFileURLIfPending() -> URL? {
-        guard OpenClawEnv.path("OPENCLAW_STATE_DIR") != nil else { return nil }
+        guard OpenClawEnv.path("OPENCLAW_STATE_DIR") != nil || OpenClawEnv.path("OPENCLAW_HOME") != nil
+        else { return nil }
         let targetURL = self.fileURL()
         for stateDirURL in self.legacyStateDirURLs() {
             let legacyURL = stateDirURL
@@ -424,8 +374,8 @@ enum ExecApprovalsStore {
             guard legacyURL.standardizedFileURL.path != targetURL.standardizedFileURL.path else {
                 continue
             }
-            guard FileManager().fileExists(atPath: legacyURL.path) else { continue }
-            guard !FileManager().fileExists(atPath: targetURL.path) else { return nil }
+            guard ExecApprovalsFileIO.pathExistsNoFollow(legacyURL) else { continue }
+            guard !ExecApprovalsFileIO.pathExistsNoFollow(targetURL) else { return nil }
             return legacyURL
         }
         return nil
@@ -439,7 +389,19 @@ enum ExecApprovalsStore {
                 security: .deny,
                 ask: .always,
                 askFallback: .deny,
-                autoAllowSkills: nil),
+                autoAllowSkills: false),
+            agents: [:])
+    }
+
+    private static func failClosedFallbackFile() -> ExecApprovalsFile {
+        ExecApprovalsFile(
+            version: 1,
+            socket: nil,
+            defaults: ExecApprovalsDefaults(
+                security: .deny,
+                ask: .off,
+                askFallback: .deny,
+                autoAllowSkills: false),
             agents: [:])
     }
 
@@ -454,24 +416,6 @@ enum ExecApprovalsStore {
             .path
         return URL(fileURLWithPath: expanded).standardizedFileURL.path
             == URL(fileURLWithPath: legacySocket).standardizedFileURL.path
-    }
-
-    private static func hasSymlinkParent(_ url: URL) -> Bool {
-        var cursor = url.deletingLastPathComponent()
-        let manager = FileManager()
-        while true {
-            var isDirectory = ObjCBool(false)
-            if manager.fileExists(atPath: cursor.path, isDirectory: &isDirectory) {
-                if (try? manager.destinationOfSymbolicLink(atPath: cursor.path)) != nil {
-                    return true
-                }
-            }
-            let parent = cursor.deletingLastPathComponent()
-            if parent.path == cursor.path {
-                return false
-            }
-            cursor = parent
-        }
     }
 
     private static func archiveMigratedLegacyFile(_ legacyURL: URL) throws -> URL {
@@ -514,20 +458,17 @@ enum ExecApprovalsStore {
             }
             close(fd)
             closed = true
-            let copied = copyfile(
-                tempURL.path,
-                targetURL.path,
-                nil,
-                copyfile_flags_t(COPYFILE_DATA | COPYFILE_EXCL))
-            if copied == -1 {
-                if errno == EEXIST {
-                    try? FileManager().removeItem(at: tempURL)
+            // Publish the complete 0600 temp inode atomically without replacing
+            // policy a mixed-version writer may have created meanwhile.
+            let renamed = renamex_np(tempURL.path, targetURL.path, UInt32(RENAME_EXCL))
+            if renamed == -1 {
+                let code = errno
+                try? FileManager().removeItem(at: tempURL)
+                if code == EEXIST {
                     return false
                 }
-                try? FileManager().removeItem(at: targetURL)
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
             }
-            try? FileManager().removeItem(at: tempURL)
             return true
         } catch {
             try? FileManager().removeItem(at: tempURL)
@@ -539,12 +480,24 @@ enum ExecApprovalsStore {
         guard let legacyURL = legacyFileURLIfPending() else { return .notNeeded }
         let targetURL = self.fileURL()
         do {
-            if self.hasSymlinkParent(targetURL) {
+            let trustedRoot = self.trustedRootURL()
+            try ExecApprovalsFileIO.assertSafeParentChain(of: targetURL, trustedRoot: trustedRoot)
+            let effectiveLegacyDir = trustedRoot.appendingPathComponent(".openclaw", isDirectory: true)
+            let legacyRoot = legacyURL.deletingLastPathComponent().standardizedFileURL.path
+                == effectiveLegacyDir.standardizedFileURL.path
+                ? trustedRoot
+                : FileManager().homeDirectoryForCurrentUser
+            guard let legacy = try ExecApprovalsFileIO.read(at: legacyURL, trustedRoot: legacyRoot) else {
                 throw NSError(domain: "ExecApprovals", code: 10, userInfo: [
-                    NSLocalizedDescriptionKey: "target path has a symlink parent",
+                    NSLocalizedDescriptionKey: "legacy exec approvals disappeared during migration",
                 ])
             }
-            let data = try Data(contentsOf: legacyURL)
+            let data = legacy.data
+            guard self.hasValidPersistedStructure(data) else {
+                throw NSError(domain: "ExecApprovals", code: 13, userInfo: [
+                    NSLocalizedDescriptionKey: "invalid legacy approvals structure",
+                ])
+            }
             var file = try JSONDecoder().decode(ExecApprovalsFile.self, from: data)
             guard file.version == 1 else {
                 throw NSError(domain: "ExecApprovals", code: 11, userInfo: [
@@ -563,20 +516,18 @@ enum ExecApprovalsStore {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let migrated = try encoder.encode(file)
-            self.ensureSecureStateDirectory()
+            try self.ensureSecureStateDirectory()
             try FileManager().createDirectory(
                 at: targetURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true)
-            if FileManager().fileExists(atPath: targetURL.path) {
+            try ExecApprovalsFileIO.assertSafeParentChain(of: targetURL, trustedRoot: trustedRoot)
+            if ExecApprovalsFileIO.pathExistsNoFollow(targetURL) {
                 return .notNeeded
             }
             let created = try writeMigratedFileExclusively(migrated, to: targetURL)
             if !created {
                 return .notNeeded
             }
-            try? FileManager().setAttributes(
-                [.posixPermissions: 0o600],
-                ofItemAtPath: targetURL.path)
             do {
                 _ = try self.archiveMigratedLegacyFile(legacyURL)
             } catch {
@@ -627,12 +578,21 @@ enum ExecApprovalsStore {
     }
 
     static func readSnapshot() -> ExecApprovalsSnapshot {
-        self.withFileLock {
-            self.readSnapshotUnlocked()
+        do {
+            return try self.withWriteLock {
+                try self.readSnapshotUnlocked()
+            }
+        } catch {
+            self.logger.warning("exec approvals snapshot lock failed: \(error.localizedDescription, privacy: .public)")
+            return ExecApprovalsSnapshot(
+                path: self.fileURL().path,
+                exists: ExecApprovalsFileIO.pathExistsNoFollow(self.fileURL()),
+                hash: "",
+                file: self.failClosedFallbackFile())
         }
     }
 
-    private static func readSnapshotUnlocked() -> ExecApprovalsSnapshot {
+    private static func readSnapshotUnlocked() throws -> ExecApprovalsSnapshot {
         if self.legacyFileURLIfPending() != nil {
             let file = self.unmigratedLegacyFallbackFile()
             return ExecApprovalsSnapshot(
@@ -642,23 +602,16 @@ enum ExecApprovalsStore {
                 file: file)
         }
         let url = self.fileURL()
-        guard FileManager().fileExists(atPath: url.path) else {
+        guard let current = try ExecApprovalsFileIO.read(at: url, trustedRoot: self.trustedRootURL()) else {
             return ExecApprovalsSnapshot(
                 path: url.path,
                 exists: false,
                 hash: self.hashRaw(nil),
                 file: ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:]))
         }
-        let raw = try? String(contentsOf: url, encoding: .utf8)
-        let data = raw.flatMap { $0.data(using: .utf8) }
-        let decoded: ExecApprovalsFile = {
-            if let data, let file = try? JSONDecoder().decode(ExecApprovalsFile.self, from: data),
-               file.version == 1
-            {
-                return file
-            }
-            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
-        }()
+        let raw = String(bytes: current.data, encoding: .utf8) ?? ""
+        let decoded = (try? self.decodeCurrentFile(current.data))
+            .map(self.normalizeIncoming) ?? self.failClosedFallbackFile()
         return ExecApprovalsSnapshot(
             path: url.path,
             exists: true,
@@ -686,39 +639,60 @@ enum ExecApprovalsStore {
         if self.legacyFileURLIfPending() != nil {
             return self.ensureFile()
         }
-        return self.withFileLock {
-            self.loadFileUnlocked()
+        do {
+            return try self.withWriteLock {
+                self.loadFileUnlocked()
+            }
+        } catch {
+            self.logger.warning("exec approvals read lock failed: \(error.localizedDescription, privacy: .public)")
+            return self.failClosedFallbackFile()
         }
     }
 
     private static func loadFileUnlocked() -> ExecApprovalsFile {
-        let url = self.fileURL()
-        guard FileManager().fileExists(atPath: url.path) else {
-            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
-        }
         do {
-            let data = try Data(contentsOf: url)
-            let decoded = try JSONDecoder().decode(ExecApprovalsFile.self, from: data)
-            if decoded.version != 1 {
-                return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
-            }
-            return decoded
+            return try self.loadFileForMutationUnlocked()
         } catch {
             self.logger.warning("exec approvals load failed: \(error.localizedDescription, privacy: .public)")
-            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+            return self.failClosedFallbackFile()
         }
     }
 
-    private static func fileHasUnpersistedAllowlistIDs(_ url: URL) -> Bool {
-        guard let data = try? Data(contentsOf: url),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+    /// Existing unreadable files are policy state, not equivalent to an absent
+    /// file. Mutations must fail instead of replacing them with permissive defaults.
+    private static func loadFileForMutationUnlocked() throws -> ExecApprovalsFile {
+        let url = self.fileURL()
+        guard let current = try ExecApprovalsFileIO.read(at: url, trustedRoot: self.trustedRootURL()) else {
+            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+        }
+        return try self.normalizeIncoming(self.decodeCurrentFile(current.data))
+    }
+
+    private static func decodeCurrentFile(_ data: Data) throws -> ExecApprovalsFile {
+        guard self.hasValidPersistedStructure(data) else {
+            throw NSError(domain: "ExecApprovals", code: 13, userInfo: [
+                NSLocalizedDescriptionKey: "invalid exec approvals structure",
+            ])
+        }
+        let decoded = try JSONDecoder().decode(ExecApprovalsFile.self, from: data)
+        guard decoded.version == 1 else {
+            throw NSError(domain: "ExecApprovals", code: 12, userInfo: [
+                NSLocalizedDescriptionKey: "unsupported exec approvals version \(decoded.version)",
+            ])
+        }
+        return decoded
+    }
+
+    private static func fileNeedsAllowlistRewrite(_ data: Data) -> Bool {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let agents = root["agents"] as? [String: Any]
         else { return false }
         for case let agent as [String: Any] in agents.values {
-            guard let allowlist = agent["allowlist"] as? [[String: Any]] else { continue }
-            if allowlist.contains(where: { entry in
+            guard let allowlist = agent["allowlist"] as? [Any] else { continue }
+            if allowlist.contains(where: { value in
+                guard let entry = value as? [String: Any] else { return true }
                 guard let rawID = entry["id"] as? String else { return true }
-                return UUID(uuidString: rawID) == nil
+                return rawID.isEmpty || entry["commandText"] != nil
             }) {
                 return true
             }
@@ -726,27 +700,90 @@ enum ExecApprovalsStore {
         return false
     }
 
-    static func saveFile(_ file: ExecApprovalsFile) {
-        do {
-            try self.withWriteLock {
-                try self.saveFileUnlocked(file)
-            }
-        } catch {
-            self.logger.error("exec approvals save failed: \(error.localizedDescription, privacy: .public)")
+    private static func hasValidPersistedStructure(_ data: Data) -> Bool {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let version = root["version"] as? NSNumber,
+              CFGetTypeID(version) != CFBooleanGetTypeID(),
+              version.doubleValue == 1
+        else { return false }
+
+        if let socket = root["socket"] {
+            guard let object = socket as? [String: Any],
+                  self.hasOptionalString(object, key: "path"),
+                  self.hasOptionalString(object, key: "token")
+            else { return false }
         }
+        if let defaults = root["defaults"], !self.hasValidPolicyFields(defaults) {
+            return false
+        }
+        if let agents = root["agents"] {
+            guard let object = agents as? [String: Any] else { return false }
+            for value in object.values {
+                guard self.hasValidPolicyFields(value), let agent = value as? [String: Any] else { return false }
+                if let allowlist = agent["allowlist"] {
+                    guard let entries = allowlist as? [Any],
+                          entries.allSatisfy(self.hasValidAllowlistEntry)
+                    else { return false }
+                }
+            }
+        }
+        return true
+    }
+
+    private static func hasValidAllowlistEntry(_ value: Any) -> Bool {
+        if let pattern = value as? String {
+            return !pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        guard let object = value as? [String: Any],
+              let pattern = object["pattern"] as? String,
+              !pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return false }
+        for key in ["id", "source", "commandText", "argPattern", "lastUsedCommand", "lastResolvedPath"] {
+            if let value = object[key], !(value is String) {
+                return false
+            }
+        }
+        if let lastUsedAt = object["lastUsedAt"] {
+            guard let number = lastUsedAt as? NSNumber,
+                  CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  number.doubleValue.isFinite
+            else { return false }
+        }
+        return true
+    }
+
+    private static func hasValidPolicyFields(_ value: Any) -> Bool {
+        guard let object = value as? [String: Any] else { return false }
+        if let security = object["security"] {
+            guard let raw = security as? String, ExecSecurity(rawValue: raw) != nil else { return false }
+        }
+        if let ask = object["ask"] {
+            guard let raw = ask as? String, ExecAsk(rawValue: raw) != nil else { return false }
+        }
+        if let fallback = object["askFallback"] {
+            guard let raw = fallback as? String, ExecSecurity(rawValue: raw) != nil else { return false }
+        }
+        if let autoAllowSkills = object["autoAllowSkills"], !(autoAllowSkills is Bool) {
+            return false
+        }
+        return true
+    }
+
+    private static func hasOptionalString(_ object: [String: Any], key: String) -> Bool {
+        guard let value = object[key] else { return true }
+        return value is String
     }
 
     private static func saveFileUnlocked(_ file: ExecApprovalsFile) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(file)
+        let data = try encoder.encode(self.normalizeIncoming(file))
         let url = self.fileURL()
-        self.ensureSecureStateDirectory()
+        try self.ensureSecureStateDirectory()
         try FileManager().createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true)
-        try data.write(to: url, options: [.atomic])
-        try? FileManager().setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        try ExecApprovalsFileIO.write(data, to: url, trustedRoot: self.trustedRootURL())
     }
 
     static func ensureFile() -> ExecApprovalsFile {
@@ -756,10 +793,7 @@ enum ExecApprovalsStore {
             }
         } catch {
             self.logger.error("exec approvals ensure failed: \(error.localizedDescription, privacy: .public)")
-            if self.legacyFileURLIfPending() != nil {
-                return self.unmigratedLegacyFallbackFile()
-            }
-            return self.loadFileUnlocked()
+            return self.failClosedFallbackFile()
         }
     }
 
@@ -769,14 +803,18 @@ enum ExecApprovalsStore {
             case .migrated, .notNeeded:
                 break
             case .blocked:
-                return self.unmigratedLegacyFallbackFile()
+                throw NSError(domain: "ExecApprovals", code: 18, userInfo: [
+                    NSLocalizedDescriptionKey: "legacy exec approvals migration blocked",
+                ])
             }
         }
-        self.ensureSecureStateDirectory()
+        try self.ensureSecureStateDirectory()
         let url = self.fileURL()
-        let existed = FileManager().fileExists(atPath: url.path)
-        let needsIDBackfill = existed && self.fileHasUnpersistedAllowlistIDs(url)
-        let loaded = self.loadFileUnlocked()
+        let current = try ExecApprovalsFileIO.read(at: url, trustedRoot: self.trustedRootURL())
+        let existed = current != nil
+        let needsAllowlistRewrite = current.map { self.fileNeedsAllowlistRewrite($0.data) } ?? false
+        let loaded = try current.map { try self.decodeCurrentFile($0.data) }
+            ?? ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
         let loadedHash = self.hashFile(loaded)
 
         var file = self.normalizeIncoming(loaded)
@@ -794,7 +832,7 @@ enum ExecApprovalsStore {
         if file.agents == nil {
             file.agents = [:]
         }
-        if !existed || needsIDBackfill || loadedHash != self.hashFile(file) {
+        if !existed || needsAllowlistRewrite || current?.linkCount != 1 || loadedHash != self.hashFile(file) {
             try self.saveFileUnlocked(file)
         }
         return file
@@ -807,7 +845,7 @@ enum ExecApprovalsStore {
         do {
             return try self.withWriteLock {
                 let current = try self.ensureFileUnlocked()
-                let snapshot = self.readSnapshotUnlocked()
+                let snapshot = try self.readSnapshotUnlocked()
                 if snapshot.exists {
                     if snapshot.hash.isEmpty {
                         return .baseHashUnavailable
@@ -834,7 +872,7 @@ enum ExecApprovalsStore {
                 normalized.socket = ExecApprovalsSocketConfig(path: resolvedPath, token: resolvedToken)
 
                 try self.saveFileUnlocked(normalized)
-                return .saved(self.readSnapshotUnlocked())
+                return try .saved(self.readSnapshotUnlocked())
             }
         } catch {
             self.logger.error("exec approvals conditional save failed: \(error.localizedDescription, privacy: .public)")
@@ -843,14 +881,51 @@ enum ExecApprovalsStore {
     }
 
     static func resolve(agentId: String?) -> ExecApprovalsResolved {
-        let file = self.ensureFile()
-        return self.resolveFromFile(file, agentId: agentId)
+        switch self.resolveResult(agentId: agentId) {
+        case let .success(resolved):
+            resolved
+        case .failure:
+            self.resolveFromFile(self.failClosedFallbackFile(), agentId: agentId)
+        }
+    }
+
+    static func resolveResult(
+        agentId: String?) -> Result<ExecApprovalsResolved, ExecApprovalsReadError>
+    {
+        do {
+            let file = try self.withWriteLock {
+                try self.ensureFileUnlocked()
+            }
+            return .success(self.resolveFromFile(file, agentId: agentId))
+        } catch {
+            self.logger.warning("exec approvals resolve failed: \(error.localizedDescription, privacy: .public)")
+            return .failure(.unavailable)
+        }
+    }
+
+    static func resolveAsyncResult(
+        agentId: String?) async -> Result<ExecApprovalsResolved, ExecApprovalsReadError>
+    {
+        await Task.detached(priority: .userInitiated) {
+            self.resolveResult(agentId: agentId)
+        }.value
     }
 
     /// Read-only resolve: loads file without writing (no ensureFile side effects).
     /// Safe to call from background threads / off MainActor.
     static func resolveReadOnly(agentId: String?) -> ExecApprovalsResolved {
-        let file = self.loadFile()
+        let file: ExecApprovalsFile
+        do {
+            file = try self.withWriteLock {
+                guard self.legacyFileURLIfPending() == nil else {
+                    return self.unmigratedLegacyFallbackFile()
+                }
+                return self.loadFileUnlocked()
+            }
+        } catch {
+            self.logger.warning("exec approvals read-only lock failed: \(error.localizedDescription, privacy: .public)")
+            file = self.failClosedFallbackFile()
+        }
         return self.resolveFromFile(file, agentId: agentId)
     }
 
@@ -887,22 +962,30 @@ enum ExecApprovalsStore {
     }
 
     static func resolveDefaults() -> ExecApprovalsResolvedDefaults {
-        let file = self.ensureFile()
-        let defaults = file.defaults ?? ExecApprovalsDefaults()
-        return ExecApprovalsResolvedDefaults(
-            security: defaults.security ?? self.defaultSecurity,
-            ask: defaults.ask ?? self.defaultAsk,
-            askFallback: defaults.askFallback ?? self.defaultAskFallback,
-            autoAllowSkills: defaults.autoAllowSkills ?? self.defaultAutoAllowSkills)
-    }
-
-    static func saveDefaults(_ defaults: ExecApprovalsDefaults) {
-        self.updateFile { file in
-            file.defaults = defaults
+        switch self.resolveDefaultsResult() {
+        case let .success(defaults):
+            defaults
+        case .failure:
+            self.resolveFromFile(self.failClosedFallbackFile(), agentId: nil).defaults
         }
     }
 
-    static func updateDefaults(_ mutate: (inout ExecApprovalsDefaults) -> Void) {
+    static func resolveDefaultsResult() -> Result<ExecApprovalsResolvedDefaults, ExecApprovalsReadError> {
+        self.resolveResult(agentId: nil).map(\.defaults)
+    }
+
+    static func resolveDefaultsAsyncResult() async
+        -> Result<ExecApprovalsResolvedDefaults, ExecApprovalsReadError>
+    {
+        await self.resolveAsyncResult(agentId: nil).map(\.defaults)
+    }
+}
+
+extension ExecApprovalsStore {
+    @discardableResult
+    static func updateDefaults(
+        _ mutate: (inout ExecApprovalsDefaults) -> Void) -> Result<Void, ExecApprovalsMutationError>
+    {
         self.updateFile { file in
             var defaults = file.defaults ?? ExecApprovalsDefaults()
             mutate(&defaults)
@@ -910,65 +993,63 @@ enum ExecApprovalsStore {
         }
     }
 
-    static func saveAgent(_ agent: ExecApprovalsAgent, agentId: String?) {
-        self.updateFile { file in
-            var agents = file.agents ?? [:]
-            let key = self.agentKey(agentId)
-            if agent.isEmpty {
-                agents.removeValue(forKey: key)
-            } else {
-                agents[key] = agent
-            }
-            file.agents = agents.isEmpty ? nil : agents
-        }
+    @discardableResult
+    static func addAllowlistEntry(
+        agentId: String?,
+        pattern: String,
+        source: String? = nil,
+        commandText: String? = nil,
+        argPattern: String? = nil) -> Result<Void, ExecApprovalsMutationError>
+    {
+        self.addAllowlistEntries(
+            agentId: agentId,
+            entries: [ExecAllowlistEntry(
+                pattern: pattern,
+                source: source,
+                commandText: commandText,
+                argPattern: argPattern)])
     }
 
     @discardableResult
-    static func addAllowlistEntry(agentId: String?, pattern: String) -> ExecAllowlistPatternValidationReason? {
-        let normalizedPattern: String
-        switch ExecApprovalHelpers.validateAllowlistPattern(pattern) {
-        case let .valid(validPattern):
-            normalizedPattern = validPattern
-        case let .invalid(reason):
-            return reason
+    static func addAllowlistEntries(
+        agentId: String?,
+        entries: [ExecAllowlistEntry]) -> Result<Void, ExecApprovalsMutationError>
+    {
+        var normalizedEntries: [ExecAllowlistEntry] = []
+        normalizedEntries.reserveCapacity(entries.count)
+        for var item in entries {
+            switch ExecApprovalHelpers.validateAllowlistPattern(item.pattern) {
+            case let .valid(pattern):
+                item.pattern = pattern
+            case let .invalid(reason):
+                return .failure(.invalidPattern(reason))
+            }
+            item.commandText = nil
+            item.argPattern = self.normalizeOptionalString(item.argPattern)
+            normalizedEntries.append(item)
         }
 
-        self.updateFile { file in
+        return self.updateFile { file in
             let key = self.agentKey(agentId)
             var agents = file.agents ?? [:]
             var entry = agents[key] ?? ExecApprovalsAgent()
             var allowlist = entry.allowlist ?? []
-            if allowlist.contains(where: { $0.pattern == normalizedPattern }) {
-                return
-            }
-            allowlist.append(ExecAllowlistEntry(
-                pattern: normalizedPattern,
-                lastUsedAt: Date().timeIntervalSince1970 * 1000))
-            entry.allowlist = allowlist
-            agents[key] = entry
-            file.agents = agents
-        }
-        return nil
-    }
-
-    static func recordAllowlistUse(
-        agentId: String?,
-        pattern: String,
-        command: String,
-        resolvedPath: String?)
-    {
-        self.updateFile { file in
-            let key = self.agentKey(agentId)
-            var agents = file.agents ?? [:]
-            var entry = agents[key] ?? ExecApprovalsAgent()
-            let allowlist = (entry.allowlist ?? []).map { item -> ExecAllowlistEntry in
-                guard item.pattern == pattern else { return item }
-                return ExecAllowlistEntry(
-                    id: item.id,
-                    pattern: item.pattern,
-                    lastUsedAt: Date().timeIntervalSince1970 * 1000,
-                    lastUsedCommand: command,
-                    lastResolvedPath: resolvedPath)
+            let now = Date().timeIntervalSince1970 * 1000
+            for incoming in normalizedEntries {
+                if let index = allowlist.firstIndex(where: {
+                    self.allowlistEntryMatchKey($0) == self.allowlistEntryMatchKey(incoming)
+                }) {
+                    if let source = incoming.source {
+                        allowlist[index].source = source
+                    }
+                    allowlist[index].lastUsedAt = now
+                    continue
+                }
+                allowlist.append(ExecAllowlistEntry(
+                    pattern: incoming.pattern,
+                    source: incoming.source,
+                    argPattern: incoming.argPattern,
+                    lastUsedAt: now))
             }
             entry.allowlist = allowlist
             agents[key] = entry
@@ -977,9 +1058,56 @@ enum ExecApprovalsStore {
     }
 
     @discardableResult
-    static func updateAllowlist(agentId: String?, allowlist: [ExecAllowlistEntry]) -> [ExecAllowlistRejectedEntry] {
+    static func recordAllowlistUse(
+        agentId: String?,
+        match: ExecAllowlistEntry,
+        command: String,
+        resolvedPath: String?) -> Result<Void, ExecApprovalsMutationError>
+    {
+        self.recordAllowlistUses(
+            agentId: agentId,
+            uses: [ExecAllowlistUse(match: match, resolvedPath: resolvedPath)],
+            command: command)
+    }
+
+    @discardableResult
+    static func recordAllowlistUses(
+        agentId: String?,
+        uses: [ExecAllowlistUse],
+        command: String) -> Result<Void, ExecApprovalsMutationError>
+    {
+        guard !uses.isEmpty else { return .success(()) }
+        let usesByKey = Dictionary(
+            uses.map { (self.allowlistEntryMatchKey($0.match), $0) },
+            uniquingKeysWith: { first, _ in first })
+        return self.updateFile { file in
+            let key = self.agentKey(agentId)
+            var agents = file.agents ?? [:]
+            var entry = agents[key] ?? ExecApprovalsAgent()
+            let allowlist = (entry.allowlist ?? []).map { item -> ExecAllowlistEntry in
+                guard let use = usesByKey[self.allowlistEntryMatchKey(item)] else { return item }
+                return ExecAllowlistEntry(
+                    id: item.id,
+                    pattern: item.pattern,
+                    source: item.source,
+                    argPattern: item.argPattern,
+                    lastUsedAt: Date().timeIntervalSince1970 * 1000,
+                    lastUsedCommand: command,
+                    lastResolvedPath: use.resolvedPath)
+            }
+            entry.allowlist = allowlist
+            agents[key] = entry
+            file.agents = agents
+        }
+    }
+
+    @discardableResult
+    static func updateAllowlist(
+        agentId: String?,
+        allowlist: [ExecAllowlistEntry]) -> Result<[ExecAllowlistRejectedEntry], ExecApprovalsMutationError>
+    {
         var rejected: [ExecAllowlistRejectedEntry] = []
-        self.updateFile { file in
+        let result = self.updateFile { file in
             let key = self.agentKey(agentId)
             var agents = file.agents ?? [:]
             var entry = agents[key] ?? ExecApprovalsAgent()
@@ -990,24 +1118,24 @@ enum ExecApprovalsStore {
             agents[key] = entry
             file.agents = agents
         }
-        return rejected
+        return result.map { rejected }
     }
 
     @discardableResult
     static func updateAllowlistEntry(
         agentId: String?,
-        id: UUID,
-        pattern: String) -> ExecAllowlistPatternValidationReason?
+        id: String,
+        pattern: String) -> Result<Void, ExecApprovalsMutationError>
     {
         let normalizedPattern: String
         switch ExecApprovalHelpers.validateAllowlistPattern(pattern) {
         case let .valid(validPattern):
             normalizedPattern = validPattern
         case let .invalid(reason):
-            return reason
+            return .failure(.invalidPattern(reason))
         }
 
-        self.updateFile { file in
+        return self.updateFile { file in
             let key = self.agentKey(agentId)
             var agents = file.agents ?? [:]
             var agent = agents[key] ?? ExecApprovalsAgent()
@@ -1018,10 +1146,13 @@ enum ExecApprovalsStore {
             agents[key] = agent
             file.agents = agents
         }
-        return nil
     }
 
-    static func removeAllowlistEntry(agentId: String?, id: UUID) {
+    @discardableResult
+    static func removeAllowlistEntry(
+        agentId: String?,
+        id: String) -> Result<Void, ExecApprovalsMutationError>
+    {
         self.updateFile { file in
             let key = self.agentKey(agentId)
             var agents = file.agents ?? [:]
@@ -1033,7 +1164,11 @@ enum ExecApprovalsStore {
         }
     }
 
-    static func updateAgentSettings(agentId: String?, mutate: (inout ExecApprovalsAgent) -> Void) {
+    @discardableResult
+    static func updateAgentSettings(
+        agentId: String?,
+        mutate: (inout ExecApprovalsAgent) -> Void) -> Result<Void, ExecApprovalsMutationError>
+    {
         self.updateFile { file in
             let key = self.agentKey(agentId)
             var agents = file.agents ?? [:]
@@ -1048,32 +1183,39 @@ enum ExecApprovalsStore {
         }
     }
 
-    private static func updateFile(_ mutate: (inout ExecApprovalsFile) -> Void) {
+    private static func updateFile(
+        _ mutate: (inout ExecApprovalsFile) -> Void) -> Result<Void, ExecApprovalsMutationError>
+    {
         do {
             try self.withWriteLock {
                 var file = try self.ensureFileUnlocked()
                 mutate(&file)
                 try self.saveFileUnlocked(file)
             }
+            return .success(())
         } catch {
             self.logger.error("exec approvals update failed: \(error.localizedDescription, privacy: .public)")
+            return .failure(.unavailable)
         }
     }
 
-    private static func ensureSecureStateDirectory() {
-        let url = OpenClawPaths.stateDirURL
-        do {
-            try FileManager().createDirectory(at: url, withIntermediateDirectories: true)
-            try FileManager().setAttributes(
-                [.posixPermissions: self.secureStateDirPermissions],
-                ofItemAtPath: url.path)
-        } catch {
-            let message =
-                "exec approvals state dir permission hardening failed: \(error.localizedDescription)"
-            self.logger
-                .warning(
-                    "\(message, privacy: .public)")
-        }
+    private static func normalizeOptionalString(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func allowlistEntryMatchKey(_ entry: ExecAllowlistEntry) -> String {
+        "\(entry.pattern)\0\(entry.argPattern?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")"
+    }
+
+    private static func ensureSecureStateDirectory() throws {
+        let url = self.stateDirURL()
+        try FileManager().createDirectory(at: url, withIntermediateDirectories: true)
+        try ExecApprovalsFileIO.assertSafeDirectory(at: url)
+        try FileManager().setAttributes(
+            [.posixPermissions: self.secureStateDirPermissions],
+            ofItemAtPath: url.path)
+        try ExecApprovalsFileIO.assertSafeDirectory(at: url)
     }
 
     private static func generateToken() -> String {
@@ -1092,7 +1234,8 @@ enum ExecApprovalsStore {
     private static func hashRaw(_ raw: String?) -> String {
         let data = Data((raw ?? "").utf8)
         let digest = SHA256.hash(data: data)
-        return digest.map { String(format: "%02x", $0) }.joined()
+        let hash = digest.map { String(format: "%02x", $0) }.joined()
+        return raw == nil ? "missing:\(hash)" : hash
     }
 
     private static func hashFile(_ file: ExecApprovalsFile) -> String {
@@ -1103,15 +1246,18 @@ enum ExecApprovalsStore {
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func expandPath(_ raw: String) -> String {
+    static func expandPath(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let configuredHome = OpenClawEnv.path("OPENCLAW_HOME")
+            .map { ($0 as NSString).expandingTildeInPath }
+        let home = configuredHome.map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? FileManager().homeDirectoryForCurrentUser
         if trimmed == "~" {
-            return FileManager().homeDirectoryForCurrentUser.path
+            return home.path
         }
         if trimmed.hasPrefix("~/") {
             let suffix = trimmed.dropFirst(2)
-            return FileManager().homeDirectoryForCurrentUser
-                .appendingPathComponent(String(suffix)).path
+            return home.appendingPathComponent(String(suffix)).path
         }
         return trimmed
     }
@@ -1145,6 +1291,9 @@ enum ExecApprovalsStore {
             return ExecAllowlistEntry(
                 id: entry.id,
                 pattern: migratedPattern,
+                source: entry.source,
+                commandText: entry.commandText,
+                argPattern: entry.argPattern,
                 lastUsedAt: entry.lastUsedAt,
                 lastUsedCommand: entry.lastUsedCommand,
                 lastResolvedPath: normalizedResolved)
@@ -1155,6 +1304,9 @@ enum ExecApprovalsStore {
             return ExecAllowlistEntry(
                 id: entry.id,
                 pattern: pattern,
+                source: entry.source,
+                commandText: entry.commandText,
+                argPattern: entry.argPattern,
                 lastUsedAt: entry.lastUsedAt,
                 lastUsedCommand: entry.lastUsedCommand,
                 lastResolvedPath: normalizedResolved)
@@ -1164,6 +1316,9 @@ enum ExecApprovalsStore {
                 return ExecAllowlistEntry(
                     id: entry.id,
                     pattern: migratedPattern,
+                    source: entry.source,
+                    commandText: entry.commandText,
+                    argPattern: entry.argPattern,
                     lastUsedAt: entry.lastUsedAt,
                     lastUsedCommand: entry.lastUsedCommand,
                     lastResolvedPath: normalizedResolved)
@@ -1171,6 +1326,9 @@ enum ExecApprovalsStore {
                 return ExecAllowlistEntry(
                     id: entry.id,
                     pattern: trimmedPattern,
+                    source: entry.source,
+                    commandText: entry.commandText,
+                    argPattern: entry.argPattern,
                     lastUsedAt: entry.lastUsedAt,
                     lastUsedCommand: entry.lastUsedCommand,
                     lastResolvedPath: normalizedResolved)
@@ -1187,7 +1345,10 @@ enum ExecApprovalsStore {
         var rejected: [ExecAllowlistRejectedEntry] = []
 
         for entry in entries {
-            let migrated = self.migrateLegacyPattern(entry)
+            var migrated = self.migrateLegacyPattern(entry)
+            // Command text can contain secrets; it is accepted only for legacy decode.
+            migrated.commandText = nil
+            let normalizedArgPattern = self.normalizeOptionalString(migrated.argPattern)
             let trimmedPattern = migrated.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
             let trimmedResolvedPath = migrated.lastResolvedPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let normalizedResolvedPath = trimmedResolvedPath.isEmpty ? nil : trimmedResolvedPath
@@ -1198,6 +1359,9 @@ enum ExecApprovalsStore {
                     ExecAllowlistEntry(
                         id: migrated.id,
                         pattern: pattern,
+                        source: migrated.source,
+                        commandText: migrated.commandText,
+                        argPattern: normalizedArgPattern,
                         lastUsedAt: migrated.lastUsedAt,
                         lastUsedCommand: migrated.lastUsedCommand,
                         lastResolvedPath: normalizedResolvedPath))
@@ -1213,6 +1377,9 @@ enum ExecApprovalsStore {
                         ExecAllowlistEntry(
                             id: migrated.id,
                             pattern: trimmedPattern,
+                            source: migrated.source,
+                            commandText: migrated.commandText,
+                            argPattern: normalizedArgPattern,
                             lastUsedAt: migrated.lastUsedAt,
                             lastUsedCommand: migrated.lastUsedCommand,
                             lastResolvedPath: normalizedResolvedPath))
@@ -1232,7 +1399,11 @@ enum ExecApprovalsStore {
         var seen = Set<String>()
         var allowlist: [ExecAllowlistEntry] = []
         func append(_ entry: ExecAllowlistEntry) {
-            guard let key = normalizedPattern(entry.pattern), !seen.contains(key) else {
+            guard let patternKey = normalizedPattern(entry.pattern) else {
+                return
+            }
+            let key = "\(patternKey)\0\(entry.argPattern?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")"
+            guard !seen.contains(key) else {
                 return
             }
             seen.insert(key)
@@ -1297,7 +1468,8 @@ enum ExecApprovalHelpers {
     }
 
     static func allowlistPattern(command: [String], resolution: ExecCommandResolution?) -> String? {
-        let pattern = resolution?.resolvedPath ?? resolution?.rawExecutable ?? command.first ?? ""
+        let pattern = resolution?.resolvedRealPath ?? resolution?.resolvedPath ?? resolution?.rawExecutable ??
+            command.first ?? ""
         return pattern.isEmpty ? nil : pattern
     }
 
@@ -1373,7 +1545,7 @@ actor SkillBinsCache {
     static func normalizeResolvedPath(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmed.isEmpty else { return nil }
-        return URL(fileURLWithPath: trimmed).standardizedFileURL.path
+        return URL(fileURLWithPath: trimmed).resolvingSymlinksInPath().standardizedFileURL.path
     }
 
     static func buildTrustIndex(

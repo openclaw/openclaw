@@ -11,7 +11,6 @@ import {
   ensureExecApprovalsSnapshot,
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
-  readExecApprovalsSnapshot,
   resolveAllowAlwaysPatternCoverage,
   updateExecApprovals,
   type ExecAsk,
@@ -38,6 +37,7 @@ import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
+import { logWarn } from "../logger.js";
 import {
   buildSystemRunApprovalPlan,
   handleSystemRunInvoke,
@@ -589,6 +589,31 @@ export async function handleInvoke(
   client: GatewayClient,
   skillBins: SkillBinsProvider,
 ) {
+  try {
+    await dispatchInvoke(frame, client, skillBins);
+  } catch (err) {
+    // Gateway events launch this handler without awaiting it. Consume unexpected
+    // failures here so one bad request cannot terminate the node-host process.
+    logWarn(
+      `node host invoke failed (command=${frame.command ?? "unknown"}, id=${frame.id}): ${String(err)}`,
+    );
+    try {
+      await sendErrorResult(client, frame, "UNAVAILABLE", "node invocation failed");
+    } catch (sendErr) {
+      // The caller intentionally detaches this promise. A failed result send is
+      // terminal for this request and must not surface as an unhandled rejection.
+      logWarn(
+        `node host invoke failure response could not be sent (id=${frame.id}): ${String(sendErr)}`,
+      );
+    }
+  }
+}
+
+async function dispatchInvoke(
+  frame: NodeInvokeRequestPayload,
+  client: GatewayClient,
+  skillBins: SkillBinsProvider,
+) {
   const command = frame.command ?? "";
   if (command === "system.execApprovals.get") {
     try {
@@ -616,8 +641,7 @@ export async function handleInvoke(
       if (!params.file || typeof params.file !== "object") {
         throw new Error("INVALID_REQUEST: exec approvals file required");
       }
-      await ensureExecApprovalsSnapshot();
-      const snapshot = readExecApprovalsSnapshot();
+      const snapshot = await ensureExecApprovalsSnapshot();
       requireExecApprovalsBaseHash(params, snapshot);
       const normalized = normalizeExecApprovals(params.file);
       const nextSnapshot = await updateExecApprovals({

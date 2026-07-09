@@ -32,7 +32,8 @@ import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke } from "./invoke-system-run.js";
 import type { HandleSystemRunInvokeOptions } from "./invoke-system-run.js";
 
-vi.mock("../logger.js", () => ({
+vi.mock("../logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logger.js")>()),
   logWarn: vi.fn(),
 }));
 
@@ -136,10 +137,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   function requireInvokeResult(sendInvokeResult: MockedSendInvokeResult): {
     ok?: boolean;
     payloadJSON?: string;
-    error?: { message?: string };
+    error?: { code?: string; message?: string };
   } {
     const result = firstMockCallArg(sendInvokeResult, "sendInvokeResult", 0);
-    return result as { ok?: boolean; payloadJSON?: string; error?: { message?: string } };
+    return result as {
+      ok?: boolean;
+      payloadJSON?: string;
+      error?: { code?: string; message?: string };
+    };
   }
 
   function requireFirstRunCommandArgs(runCommand: MockedRunCommand): string[] {
@@ -169,13 +174,16 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     return call[argIndex];
   }
 
-  function expectExecDeniedEvent(sendNodeEvent: MockedSendNodeEvent): void {
+  function expectExecDeniedEvent(
+    sendNodeEvent: MockedSendNodeEvent,
+    reason = "approval-required",
+  ): void {
     const call = sendNodeEvent.mock.calls[0];
     if (!call) {
       throw new Error("expected sendNodeEvent call");
     }
     expect(call[1]).toBe("exec.denied");
-    expect((call[2] as { reason?: string }).reason).toBe("approval-required");
+    expect((call[2] as { reason?: string }).reason).toBe(reason);
   }
 
   function expectApprovalRequiredDenied(params: {
@@ -186,6 +194,20 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expectInvokeErrorMessage(params.sendInvokeResult, {
       message: "SYSTEM_RUN_DENIED: approval required",
       exact: true,
+    });
+  }
+
+  function expectApprovalStateWriteDenied(params: {
+    sendNodeEvent: MockedSendNodeEvent;
+    sendInvokeResult: MockedSendInvokeResult;
+  }) {
+    expectExecDeniedEvent(params.sendNodeEvent, "approval-state-write-failed");
+    expect(requireInvokeResult(params.sendInvokeResult)).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "SYSTEM_RUN_DENIED: approval state could not be persisted",
+      },
     });
   }
 
@@ -441,6 +463,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     resolveExecSecurity?: HandleSystemRunInvokeOptions["resolveExecSecurity"];
     resolveExecAsk?: HandleSystemRunInvokeOptions["resolveExecAsk"];
     autoReviewer?: ExecAutoReviewer;
+    persistAllowAlwaysDecision?: HandleSystemRunInvokeOptions["persistAllowAlwaysDecision"];
+    recordAllowlistMatchesUse?: HandleSystemRunInvokeOptions["recordAllowlistMatchesUse"];
   }): Promise<{
     runCommand: MockedRunCommand;
     runViaMacAppExecHost: MockedRunViaMacAppExecHost;
@@ -510,6 +534,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       preferMacAppExecHost: params.preferMacAppExecHost,
       getRuntimeConfig: () => getRuntimeConfigSnapshot() ?? {},
       autoReviewer: params.autoReviewer,
+      persistAllowAlwaysDecision: params.persistAllowAlwaysDecision,
+      recordAllowlistMatchesUse: params.recordAllowlistMatchesUse,
     });
 
     return {
@@ -1657,6 +1683,60 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     } finally {
       clearRuntimeConfigSnapshot();
     }
+  });
+
+  it("fails closed when allow-always approval persistence fails", async () => {
+    await withTempApprovalsHome({
+      approvals: createAllowlistOnMissApprovals(),
+      run: async () => {
+        const tempDir = createFixtureDir("openclaw-allow-always-write-failure-");
+        const executablePath = createTempExecutable({ dir: tempDir, name: "approved-tool" });
+        const invoke = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: [executablePath],
+          security: "allowlist",
+          ask: "on-miss",
+          approvalDecision: "allow-always",
+          approved: true,
+          persistAllowAlwaysDecision: async () => {
+            throw new Error("approval lock unavailable");
+          },
+        });
+
+        expect(invoke.runCommand).not.toHaveBeenCalled();
+        expect(invoke.sendExecFinishedEvent).not.toHaveBeenCalled();
+        expectApprovalStateWriteDenied(invoke);
+      },
+    });
+  });
+
+  it("fails closed when allowlist usage persistence fails", async () => {
+    const tempDir = createFixtureDir("openclaw-allowlist-usage-write-failure-");
+    const executablePath = createTempExecutable({ dir: tempDir, name: "allowlisted-tool" });
+    await withTempApprovalsHome({
+      approvals: createAllowlistOnMissApprovals({
+        agents: {
+          main: {
+            allowlist: [{ pattern: fs.realpathSync(executablePath) }],
+          },
+        },
+      }),
+      run: async () => {
+        const invoke = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: [executablePath],
+          security: "allowlist",
+          ask: "off",
+          recordAllowlistMatchesUse: async () => {
+            throw new Error("approval lock unavailable");
+          },
+        });
+
+        expect(invoke.runCommand).not.toHaveBeenCalled();
+        expect(invoke.sendExecFinishedEvent).not.toHaveBeenCalled();
+        expectApprovalStateWriteDenied(invoke);
+      },
+    });
   });
 
   it("does not persist allow-always approvals for strict inline-eval carriers", async () => {

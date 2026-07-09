@@ -16,6 +16,12 @@ actor MacNodeRuntime {
     private let refreshCanvasSurfaceUrl: @Sendable () async -> String?
     private let codexThreadCatalogEnabled: @Sendable () -> Bool
     private let codexThreadListRequest: @Sendable (String?) async throws -> String
+    private let execApprovalStoreMutations: ExecApprovalStoreMutations
+    private let shellRunner: @Sendable (
+        _ command: [String],
+        _ cwd: String?,
+        _ env: [String: String]?,
+        _ timeout: Double?) async -> ShellExecutor.ShellResult
     private var cachedMainActorServices: (any MacNodeRuntimeMainActorServices)?
     private var mainSessionKey: String = "main"
     private var eventSender: (@Sendable (String, String?) async -> Void)?
@@ -40,6 +46,14 @@ actor MacNodeRuntime {
         },
         codexThreadListRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
             try await MacNodeCodexThreadCatalog.list(paramsJSON: paramsJSON)
+        },
+        execApprovalStoreMutations: ExecApprovalStoreMutations = .live,
+        shellRunner: @escaping @Sendable (
+            _ command: [String],
+            _ cwd: String?,
+            _ env: [String: String]?,
+            _ timeout: Double?) async -> ShellExecutor.ShellResult = { command, cwd, env, timeout in
+            await ShellExecutor.runDetailed(command: command, cwd: cwd, env: env, timeout: timeout)
         })
     {
         self.makeMainActorServices = makeMainActorServices
@@ -49,6 +63,8 @@ actor MacNodeRuntime {
         self.refreshCanvasSurfaceUrl = refreshCanvasSurfaceUrl
         self.codexThreadCatalogEnabled = codexThreadCatalogEnabled
         self.codexThreadListRequest = codexThreadListRequest
+        self.execApprovalStoreMutations = execApprovalStoreMutations
+        self.shellRunner = shellRunner
     }
 
     func updateMainSessionKey(_ sessionKey: String) {
@@ -611,6 +627,16 @@ actor MacNodeRuntime {
         guard !command.isEmpty else {
             return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: command required")
         }
+        let validatedCommand: ExecSystemRunCommandValidator.ResolvedCommand
+        switch ExecSystemRunCommandValidator.resolve(
+            command: command,
+            rawCommand: params.rawCommand)
+        {
+        case let .ok(resolved):
+            validatedCommand = resolved
+        case let .invalid(message):
+            return Self.errorResponse(req, code: .invalidRequest, message: message)
+        }
         let sessionKey = (params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
             ? params.sessionKey!.trimmingCharacters(in: .whitespacesAndNewlines)
             : self.mainSessionKey
@@ -635,7 +661,7 @@ actor MacNodeRuntime {
         }
         let evaluation = await ExecApprovalEvaluator.evaluate(
             command: command,
-            rawCommand: params.rawCommand,
+            rawCommand: validatedCommand.evaluationRawCommand,
             cwd: params.cwd,
             envOverrides: params.env,
             agentId: params.agentId)
@@ -673,11 +699,19 @@ actor MacNodeRuntime {
         }
         let approvedByAsk = approval.approvedByAsk
         let persistAllowlist = approval.persistAllowlist
-        self.persistAllowlistPatterns(
+        let persistenceResult = self.persistAllowlistPatterns(
             persistAllowlist: persistAllowlist,
             security: evaluation.security,
             agentId: evaluation.agentId,
+            boundCommand: evaluation.boundCommand,
             allowAlwaysPatterns: evaluation.allowAlwaysPatterns)
+        if case .failure = persistenceResult {
+            return await self.execApprovalMutationFailure(
+                req: req,
+                sessionKey: sessionKey,
+                runId: runId,
+                displayCommand: evaluation.displayCommand)
+        }
 
         if evaluation.security == .allowlist, !evaluation.allowlistSatisfied, !evaluation.skillAllow, !approvedByAsk {
             await self.emitExecEvent(
@@ -694,13 +728,44 @@ actor MacNodeRuntime {
                 message: "SYSTEM_RUN_DENIED: allowlist miss")
         }
 
-        self.recordAllowlistMatches(
+        let reusableAuthorization = evaluation.security == .allowlist &&
+            !approvedByAsk &&
+            (evaluation.allowlistSatisfied || evaluation.skillAllow)
+        let executionCommand: [String]
+        if reusableAuthorization {
+            guard let boundCommand = evaluation.boundCommand else {
+                await self.emitExecEvent(
+                    "exec.denied",
+                    payload: ExecEventPayload(
+                        sessionKey: sessionKey,
+                        runId: runId,
+                        host: "node",
+                        command: evaluation.displayCommand,
+                        reason: "allowlist-unbound"))
+                return Self.errorResponse(
+                    req,
+                    code: .unavailable,
+                    message: "SYSTEM_RUN_DENIED: reusable approval could not bind executable")
+            }
+            executionCommand = boundCommand
+        } else {
+            executionCommand = command
+        }
+
+        let usageResult = self.recordAllowlistMatches(
             security: evaluation.security,
             allowlistSatisfied: evaluation.allowlistSatisfied,
             agentId: evaluation.agentId,
             allowlistMatches: evaluation.allowlistMatches,
             allowlistResolutions: evaluation.allowlistResolutions,
             displayCommand: evaluation.displayCommand)
+        if case .failure = usageResult {
+            return await self.execApprovalMutationFailure(
+                req: req,
+                sessionKey: sessionKey,
+                runId: runId,
+                displayCommand: evaluation.displayCommand)
+        }
 
         if let permissionResponse = await self.validateScreenRecordingIfNeeded(
             req: req,
@@ -715,7 +780,7 @@ actor MacNodeRuntime {
         return try await self.executeSystemRun(
             req: req,
             params: params,
-            command: command,
+            command: executionCommand,
             env: evaluation.env,
             sessionKey: sessionKey,
             runId: runId,
@@ -968,13 +1033,18 @@ extension MacNodeRuntime {
         persistAllowlist: Bool,
         security: ExecSecurity,
         agentId: String?,
-        allowAlwaysPatterns: [String])
+        boundCommand: [String]?,
+        allowAlwaysPatterns: [String]) -> Result<Void, ExecApprovalsMutationError>
     {
-        guard persistAllowlist, security == .allowlist else { return }
+        guard persistAllowlist, security == .allowlist, boundCommand != nil else { return .success(()) }
         var seenPatterns = Set<String>()
-        for pattern in allowAlwaysPatterns where seenPatterns.insert(pattern).inserted {
-            ExecApprovalsStore.addAllowlistEntry(agentId: agentId, pattern: pattern)
+        let entries = allowAlwaysPatterns.compactMap { pattern -> ExecAllowlistEntry? in
+            guard seenPatterns.insert(pattern).inserted else { return nil }
+            return ExecAllowlistEntry(
+                pattern: pattern,
+                source: "allow-always")
         }
+        return self.execApprovalStoreMutations.addAllowlistEntries(agentId, entries)
     }
 
     private func recordAllowlistMatches(
@@ -983,21 +1053,41 @@ extension MacNodeRuntime {
         agentId: String?,
         allowlistMatches: [ExecAllowlistEntry],
         allowlistResolutions: [ExecCommandResolution],
-        displayCommand: String)
+        displayCommand: String) -> Result<Void, ExecApprovalsMutationError>
     {
-        guard security == .allowlist, allowlistSatisfied else { return }
-        var seenPatterns = Set<String>()
+        guard security == .allowlist, allowlistSatisfied else { return .success(()) }
+        var seenEntries = Set<String>()
+        var uses: [ExecAllowlistUse] = []
         for (idx, match) in allowlistMatches.enumerated() {
-            if !seenPatterns.insert(match.pattern).inserted {
+            if !seenEntries.insert(ExecApprovalsStore.allowlistEntryMatchKey(match)).inserted {
                 continue
             }
-            let resolvedPath = idx < allowlistResolutions.count ? allowlistResolutions[idx].resolvedPath : nil
-            ExecApprovalsStore.recordAllowlistUse(
-                agentId: agentId,
-                pattern: match.pattern,
-                command: displayCommand,
-                resolvedPath: resolvedPath)
+            let resolvedPath = idx < allowlistResolutions.count
+                ? allowlistResolutions[idx].resolvedRealPath ?? allowlistResolutions[idx].resolvedPath
+                : nil
+            uses.append(ExecAllowlistUse(match: match, resolvedPath: resolvedPath))
         }
+        return self.execApprovalStoreMutations.recordAllowlistUses(agentId, uses, displayCommand)
+    }
+
+    private func execApprovalMutationFailure(
+        req: BridgeInvokeRequest,
+        sessionKey: String,
+        runId: String,
+        displayCommand: String) async -> BridgeInvokeResponse
+    {
+        await self.emitExecEvent(
+            "exec.denied",
+            payload: ExecEventPayload(
+                sessionKey: sessionKey,
+                runId: runId,
+                host: "node",
+                command: displayCommand,
+                reason: "approval-store-unavailable"))
+        return Self.errorResponse(
+            req,
+            code: .unavailable,
+            message: "SYSTEM_RUN_DENIED: exec approvals update unavailable")
     }
 
     private func validateScreenRecordingIfNeeded(
@@ -1044,11 +1134,7 @@ extension MacNodeRuntime {
                 runId: runId,
                 host: "node",
                 command: displayCommand))
-        let result = await ShellExecutor.runDetailed(
-            command: command,
-            cwd: params.cwd,
-            env: env,
-            timeout: timeoutSec)
+        let result = await self.shellRunner(command, params.cwd, env, timeoutSec)
         let combined = [result.stdout, result.stderr, result.errorMessage]
             .compactMap(\.self)
             .filter { !$0.isEmpty }
