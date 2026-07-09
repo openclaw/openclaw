@@ -695,7 +695,7 @@ function startThemeWatcher(): void {
     ) ?? undefined;
 }
 
-export function stopThemeWatcher(): void {
+function stopThemeWatcher(): void {
   if (themeReloadTimer) {
     clearTimeout(themeReloadTimer);
     themeReloadTimer = undefined;

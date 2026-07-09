@@ -6,6 +6,8 @@ import type { Server } from "node:http";
 import type { RunningChrome } from "./chrome.js";
 import type { BrowserTab, BrowserTransport } from "./client.types.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
+import type { BrowserErrorResponse } from "./errors.js";
+import type { ExtensionRelayHandle } from "./extension-relay/relay-server.js";
 
 export type { BrowserTab };
 
@@ -39,11 +41,18 @@ export type BrowserServerState = {
   port: number;
   resolved: ResolvedBrowserConfig;
   profiles: Map<string, ProfileRuntimeState>;
+  /** Running extension relay servers keyed by profile name (extension driver). */
+  extensionRelays?: Map<string, ExtensionRelayHandle>;
   stopTrackedTabCleanup?: () => void;
   stopUnhandledRejectionHandler?: () => void;
 };
 
-export type EnsureTabAvailableOptions = {
+export type BrowserOperationOptions = {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+};
+
+export type EnsureTabAvailableOptions = BrowserOperationOptions & {
   /** Allow a target-id-only tab when the caller can continue through Playwright. */
   allowPlaywrightFallback?: boolean;
 };
@@ -60,7 +69,7 @@ type BrowserProfileActions = {
     timeoutMs?: number,
     options?: { ephemeral?: boolean; signal?: AbortSignal },
   ) => Promise<boolean>;
-  listTabs: () => Promise<BrowserTab[]>;
+  listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
   openTab: (url: string, opts?: { label?: string }) => Promise<BrowserTab>;
   labelTab: (targetId: string, label: string) => Promise<BrowserTab>;
   focusTab: (targetId: string) => Promise<void>;
@@ -75,7 +84,7 @@ export type BrowserRouteContext = {
   forProfile: (profileName?: string) => ProfileContext;
   listProfiles: () => Promise<ProfileStatus[]>;
   // Legacy methods delegate to default profile for backward compatibility
-  mapTabError: (err: unknown) => { status: number; message: string } | null;
+  mapTabError: (err: unknown) => BrowserErrorResponse | null;
 } & BrowserProfileActions;
 
 /** Operations scoped to a single resolved Browser profile. */

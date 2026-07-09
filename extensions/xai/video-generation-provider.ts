@@ -1,4 +1,5 @@
 // Xai provider module implements model/runtime integration.
+import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -9,6 +10,7 @@ import {
   fetchProviderDownloadResponse,
   fetchProviderOperationResponse,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   waitProviderOperationPollInterval,
@@ -69,9 +71,12 @@ type VideoGenerationSourceInput = {
 async function readXaiVideoJson(response: Response): Promise<Record<string, unknown>> {
   let payload: unknown;
   try {
-    payload = await response.json();
-  } catch {
-    throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
+    payload = await readProviderJsonResponse<unknown>(response, "xAI video generation response");
+  } catch (error) {
+    if (error instanceof Error && error.message.endsWith(": malformed JSON response")) {
+      throw new Error(XAI_VIDEO_MALFORMED_RESPONSE, { cause: error });
+    }
+    throw error;
   }
   if (!isRecord(payload)) {
     throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
@@ -124,10 +129,6 @@ function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
   return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
-function toDataUrl(buffer: Buffer, mimeType: string): string {
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
-}
-
 function resolveImageUrl(input: VideoGenerationSourceInput | undefined): string | undefined {
   if (!input) {
     return undefined;
@@ -139,7 +140,7 @@ function resolveImageUrl(input: VideoGenerationSourceInput | undefined): string 
   if (!input.buffer) {
     throw new Error("xAI image-to-video input is missing image data.");
   }
-  return toDataUrl(input.buffer, normalizeOptionalString(input.mimeType) ?? "image/png");
+  return toImageDataUrl({ ...input, buffer: input.buffer, defaultMimeType: "image/png" });
 }
 
 function resolveRequiredImageUrl(input: VideoGenerationSourceInput): string {

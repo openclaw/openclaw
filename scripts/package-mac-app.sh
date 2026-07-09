@@ -6,6 +6,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
+source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"
 APP_ROOT="$ROOT_DIR/dist/OpenClaw.app"
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
@@ -150,6 +151,8 @@ merge_framework_machos() {
   done < <(find "$primary" -type f -print0)
 }
 
+require_swift_toolchain
+
 if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
   echo "📦 Ensuring deps (pnpm install --frozen-lockfile)"
   run_pnpm install --frozen-lockfile --config.node-linker=hoisted
@@ -194,7 +197,9 @@ cd "$ROOT_DIR/apps/macos"
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
 for arch in "${BUILD_ARCHS[@]}"; do
   BUILD_PATH="$(build_path_for_arch "$arch")"
+  echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [$arch]"
   swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  echo "🔨 Building $MLX_TTS_HELPER_PRODUCT ($BUILD_CONFIG) [$arch]"
   swift build --package-path "$MLX_TTS_HELPER_ROOT" -c "$BUILD_CONFIG" --product "$MLX_TTS_HELPER_PRODUCT" --build-path "$(helper_build_path_for_arch "$arch")" --arch "$arch"
 done
 
@@ -282,6 +287,19 @@ cp "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/OpenClaw.icns" "$APP_ROOT/Co
 echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
 cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
+
+echo "📦 Copying CLI installer"
+INSTALL_CLI_SRC="$ROOT_DIR/scripts/install-cli.sh"
+if [ ! -f "$INSTALL_CLI_SRC" ]; then
+  echo "ERROR: CLI installer missing at $INSTALL_CLI_SRC" >&2
+  exit 1
+fi
+cp "$INSTALL_CLI_SRC" "$APP_ROOT/Contents/Resources/install-cli.sh"
+chmod 0644 "$APP_ROOT/Contents/Resources/install-cli.sh"
+
+echo "🌐 Copying app localizations"
+node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos \
+  --output "$APP_ROOT/Contents/Resources"
 
 echo "📦 Copying Control UI assets"
 CONTROL_UI_SRC="$ROOT_DIR/dist/control-ui"

@@ -9,7 +9,7 @@ type MockChild = EventEmitter & {
   kill: ReturnType<typeof vi.fn>;
   stdout?: EventEmitter;
   stderr?: EventEmitter;
-  stdin?: { write: ReturnType<typeof vi.fn> };
+  stdin?: EventEmitter & { write: ReturnType<typeof vi.fn> };
 };
 
 const children: MockChild[] = [];
@@ -34,7 +34,7 @@ vi.mock("node:child_process", async (importOriginal) => {
         }),
         stdout: new EventEmitter(),
         stderr: new EventEmitter(),
-        stdin: { write: vi.fn() },
+        stdin: Object.assign(new EventEmitter(), { write: vi.fn() }),
       }) as MockChild;
       children.push(child);
       return child;
@@ -86,6 +86,41 @@ describe("google-meet node host bridge sessions", () => {
       expect(start).toEqual({ launched: false });
       expect(spawnSync).not.toHaveBeenCalled();
       expect(children).toHaveLength(0);
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    }
+  });
+
+  it("passes the Meet URL before Chrome profile args when launching a profiled browser", async () => {
+    const originalPlatform = process.platform;
+    children.length = 0;
+    vi.mocked(spawnSync).mockClear();
+
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    try {
+      const start = JSON.parse(
+        await handleGoogleMeetNodeHostCommand(
+          JSON.stringify({
+            action: "start",
+            url: "https://meet.google.com/xyz-abcd-uvw",
+            mode: "transcribe",
+            browserProfile: "Profile 2",
+          }),
+        ),
+      );
+
+      expect(start.launched).toBe(true);
+      expect(spawnSync).toHaveBeenCalledWith(
+        "open",
+        [
+          "-a",
+          "Google Chrome",
+          "https://meet.google.com/xyz-abcd-uvw",
+          "--args",
+          "--profile-directory=Profile 2",
+        ],
+        expect.objectContaining({ encoding: "utf8" }),
+      );
     } finally {
       Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
     }
@@ -161,6 +196,48 @@ describe("google-meet node host bridge sessions", () => {
           bridgeId: start.bridgeId,
         }),
       );
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    }
+  });
+
+  it("closes once when command-pair streams fail together", async () => {
+    const originalPlatform = process.platform;
+    children.length = 0;
+
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    try {
+      const start = JSON.parse(
+        await handleGoogleMeetNodeHostCommand(
+          JSON.stringify({
+            action: "start",
+            url: "https://meet.google.com/xyz-abcd-uvw",
+            mode: "realtime",
+            launch: false,
+            audioInputCommand: ["mock-rec"],
+            audioOutputCommand: ["mock-play"],
+          }),
+        ),
+      );
+      const [outputProcess, inputProcess] = children;
+      if (!outputProcess || !inputProcess) {
+        throw new Error("expected Google Meet node host command-pair processes");
+      }
+
+      outputProcess.stderr?.emit("error", new Error("output stderr failed"));
+      inputProcess.stdout?.emit("error", new Error("input stdout failed"));
+      inputProcess.stderr?.emit("error", new Error("input stderr failed"));
+
+      const status = JSON.parse(
+        await handleGoogleMeetNodeHostCommand(
+          JSON.stringify({ action: "status", bridgeId: start.bridgeId }),
+        ),
+      );
+      expect(status.bridge.closed).toBe(true);
+      expect(outputProcess.kill).toHaveBeenCalledTimes(1);
+      expect(inputProcess.kill).toHaveBeenCalledTimes(1);
+      expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(inputProcess.kill).toHaveBeenCalledWith("SIGTERM");
     } finally {
       Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
     }

@@ -11,7 +11,7 @@ import { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
 import { getWhatsAppRuntime } from "./runtime.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
 
-export function normalizeWhatsAppChannelPayloadText(text: string | undefined): string {
+function normalizeWhatsAppChannelPayloadText(text: string | undefined): string {
   return normalizeWhatsAppPayloadTextPreservingIndentation(text);
 }
 
@@ -77,12 +77,16 @@ export const whatsappMessageAdapter = defineChannelMessageAdapter({
     },
   },
   send: {
-    text: async (ctx) =>
-      toWhatsAppMessageSendResult(
-        await whatsappChannelOutbound.sendText!({
-          ...ctx,
-        }),
-        ctx.replyToId,
-      ),
+    text: async ({ onDeliveryResult, ...ctx }) => {
+      const result = await whatsappChannelOutbound.sendText!({
+        ...ctx,
+        onDeliveryResult: onDeliveryResult
+          ? async (progress) => {
+              await onDeliveryResult(toWhatsAppMessageSendResult(progress, ctx.replyToId));
+            }
+          : undefined,
+      });
+      return toWhatsAppMessageSendResult(result, ctx.replyToId);
+    },
   },
 });

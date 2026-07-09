@@ -5,6 +5,7 @@
  */
 import crypto from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import { isApprovalNotFoundError } from "../infra/approval-errors.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
 import {
@@ -146,7 +147,7 @@ export function createExecApprovalPendingState(params: {
 }
 
 /** Builds pending approval state plus rounded notice duration. */
-export function createExecApprovalRequestState(params: {
+function createExecApprovalRequestState(params: {
   warnings: string[];
   timeoutMs: number;
   approvalRunningNoticeMs: number;
@@ -162,7 +163,7 @@ export function createExecApprovalRequestState(params: {
 }
 
 /** Creates a fresh approval id/slug/context key for a pending request. */
-export function createExecApprovalRequestContext(params: {
+function createExecApprovalRequestContext(params: {
   warnings: string[];
   timeoutMs: number;
   approvalRunningNoticeMs: number;
@@ -187,7 +188,7 @@ export function createExecApprovalRequestContext(params: {
 }
 
 /** Creates a pending approval context using the default approval timeout. */
-export function createDefaultExecApprovalRequestContext(params: {
+function createDefaultExecApprovalRequestContext(params: {
   warnings: string[];
   approvalRunningNoticeMs: number;
   createApprovalSlug: (approvalId: string) => string;
@@ -481,6 +482,9 @@ export async function sendExecApprovalFollowupResult(
         }
       : {}),
   }).catch((error: unknown) => {
+    if (isApprovalNotFoundError(error)) {
+      return;
+    }
     const message = formatErrorMessage(error);
     const key = `${target.approvalId}:${message}`;
     if (!rememberExecApprovalFollowupFailureKey(key)) {

@@ -60,17 +60,19 @@ private struct ExecApprovalPromptCard: View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Exec approval required")
-                    .font(.headline)
+                    .font(OpenClawType.headline)
                 Text("Review this exec request before continuing. Your decision will be sent back to the gateway.")
-                    .font(.subheadline)
+                    .font(OpenClawType.subhead)
                     .foregroundStyle(.secondary)
             }
 
             Text(self.prompt.commandText)
-                .font(.system(size: 15, weight: .regular, design: .monospaced))
+                .font(OpenClawType.mono)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(10)
-                .background(.black.opacity(0.14), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(
+                    .black.opacity(0.14),
+                    in: RoundedRectangle(cornerRadius: OpenClawRadius.md, style: .continuous))
 
             VStack(alignment: .leading, spacing: 8) {
                 if let host = self.normalized(self.prompt.host) {
@@ -89,7 +91,7 @@ private struct ExecApprovalPromptCard: View {
 
             if let errorText = self.normalized(self.errorText) {
                 Text(errorText)
-                    .font(.footnote)
+                    .font(OpenClawType.footnote)
                     .foregroundStyle(OpenClawBrand.danger)
             }
 
@@ -98,7 +100,7 @@ private struct ExecApprovalPromptCard: View {
                     ProgressView()
                         .progressViewStyle(.circular)
                     Text("Resolving…")
-                        .font(.footnote)
+                        .font(OpenClawType.footnote)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -108,6 +110,7 @@ private struct ExecApprovalPromptCard: View {
                     self.onAllowOnce()
                 } label: {
                     Text("Allow Once")
+                        .font(OpenClawType.subheadSemiBold)
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
@@ -118,6 +121,7 @@ private struct ExecApprovalPromptCard: View {
                         self.onAllowAlways()
                     } label: {
                         Text("Allow Always")
+                            .font(OpenClawType.subheadSemiBold)
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
@@ -129,6 +133,7 @@ private struct ExecApprovalPromptCard: View {
                         self.onDeny()
                     } label: {
                         Text("Deny")
+                            .font(OpenClawType.subheadSemiBold)
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
@@ -138,6 +143,7 @@ private struct ExecApprovalPromptCard: View {
                         self.onCancel()
                     } label: {
                         Text("Cancel")
+                            .font(OpenClawType.subheadSemiBold)
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
@@ -156,7 +162,7 @@ private struct ExecApprovalPromptCard: View {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    private func expiresText(_ expiresAtMs: Int?) -> String? {
+    private func expiresText(_ expiresAtMs: Int64?) -> String? {
         guard let expiresAtMs else { return nil }
         let remainingSeconds = Int((Double(expiresAtMs) / 1000.0) - Date().timeIntervalSince1970)
         if remainingSeconds <= 0 {
@@ -181,10 +187,10 @@ private struct ExecApprovalPromptMetadataRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(self.label)
-                .font(.caption)
+                .font(OpenClawType.caption)
                 .foregroundStyle(.secondary)
             Text(self.value)
-                .font(.footnote)
+                .font(OpenClawType.footnote)
                 .textSelection(.enabled)
         }
     }
@@ -192,6 +198,6 @@ private struct ExecApprovalPromptMetadataRow: View {
 
 extension View {
     func execApprovalPromptDialog(suppressedApprovalID: String? = nil) -> some View {
-        self.modifier(ExecApprovalPromptDialogModifier(suppressedApprovalID: suppressedApprovalID))
+        modifier(ExecApprovalPromptDialogModifier(suppressedApprovalID: suppressedApprovalID))
     }
 }

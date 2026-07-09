@@ -47,6 +47,7 @@ const PRE_CONNECT_ERROR_CODES = new Set([
   "ENETDOWN", // Local network interface is down before connect completes (never sent)
   "ENETUNREACH", // No route to host (never sent)
   "EHOSTUNREACH", // Host unreachable (never sent)
+  "UND_ERR_CONNECT_TIMEOUT", // TCP/TLS connect timeout (request never sent)
 ]);
 
 const RECOVERABLE_ERROR_NAMES = new Set([
@@ -141,8 +142,16 @@ export function isTelegramMisdirectedRequestError(err: unknown): boolean {
   return false;
 }
 
-export type TelegramNetworkErrorContext = "polling" | "send" | "webhook" | "unknown";
-export type TelegramNetworkErrorOrigin = {
+type TelegramNetworkErrorContext =
+  | "polling"
+  | "send"
+  | "webhook"
+  | "delete"
+  | "react"
+  | "edit"
+  | "action"
+  | "unknown";
+type TelegramNetworkErrorOrigin = {
   method?: string | null;
   url?: string | null;
 };
@@ -334,4 +343,15 @@ export function isRecoverableTelegramNetworkError(
   }
 
   return false;
+}
+
+export function isRetryableTelegramApiError(
+  err: unknown,
+  options: { context?: TelegramNetworkErrorContext; allowMessageMatch?: boolean } = {},
+): boolean {
+  return (
+    isRecoverableTelegramNetworkError(err, options) ||
+    isTelegramServerError(err) ||
+    isTelegramRateLimitError(err)
+  );
 }

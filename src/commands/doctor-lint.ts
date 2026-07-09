@@ -26,6 +26,7 @@ interface DoctorLintCliOptions {
   readonly onlyIds?: readonly string[];
   readonly allowExec?: boolean;
   readonly deep?: boolean;
+  readonly includeAllChecks?: boolean;
 }
 
 function detectMode(opts: DoctorLintCliOptions): "human" | "json" {
@@ -86,6 +87,7 @@ export async function runDoctorLintCli(
 
   const runOpts: DoctorLintRunOptions = {
     checks: [...coreChecks.map((check) => withCoreLintContext(check, coreCtx)), ...extensionChecks],
+    includeAllChecks: opts.includeAllChecks === true,
     ...(opts.skipIds && opts.skipIds.length > 0 ? { skipIds: opts.skipIds } : {}),
     ...(opts.onlyIds && opts.onlyIds.length > 0 ? { onlyIds: opts.onlyIds } : {}),
   };

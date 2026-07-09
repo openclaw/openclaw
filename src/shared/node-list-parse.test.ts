@@ -60,4 +60,30 @@ describe("shared/node-list-parse", () => {
       paired: [{ nodeId: "n1" }],
     });
   });
+
+  it("drops pairing rows with a non-string or empty required id instead of emitting empty-id sentinels", () => {
+    const { pending, paired } = parsePairingList({
+      pending: [
+        { requestId: 7, nodeId: {}, ts: 1 }, // non-string required ids -> dropped
+        { requestId: "  ", nodeId: "n0", ts: 2 }, // whitespace-only requestId -> dropped
+        { requestId: "r1", nodeId: "n1", displayName: 42, remoteIp: 99, platform: true, ts: 3 },
+      ],
+      paired: [
+        { nodeId: 5, token: 3 }, // non-string nodeId -> dropped
+        { nodeId: "n2", displayName: { x: 1 }, remoteIp: [], lastSeenReason: 0 },
+      ],
+    });
+    // A malformed required id drops the whole row (no "" sentinel a consumer would trust); the valid
+    // row survives with optional scalars normalized to undefined so renderers never trim a non-string.
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({ requestId: "r1", nodeId: "n1" });
+    expect(pending[0].displayName).toBeUndefined();
+    expect(pending[0].remoteIp).toBeUndefined();
+    expect(pending[0].platform).toBeUndefined();
+    expect(paired).toHaveLength(1);
+    expect(paired[0]).toMatchObject({ nodeId: "n2" });
+    expect(paired[0].displayName).toBeUndefined();
+    expect(paired[0].remoteIp).toBeUndefined();
+    expect(paired[0].lastSeenReason).toBeUndefined();
+  });
 });

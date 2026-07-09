@@ -44,8 +44,10 @@ export function createDiscordDraftPreviewController(params: {
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(params.discordConfig) ??
     params.cfg.agents?.defaults?.blockStreamingDefault === "on";
+  const canStreamProgressDraftForToolOnlySource =
+    params.sourceRepliesAreToolOnly && discordStreamMode === "progress";
   const canStreamDraft =
-    !params.sourceRepliesAreToolOnly &&
+    (!params.sourceRepliesAreToolOnly || canStreamProgressDraftForToolOnlySource) &&
     discordStreamMode !== "off" &&
     !accountBlockStreamingEnabled;
   const draftStream = canStreamDraft
@@ -89,6 +91,10 @@ export function createDiscordDraftPreviewController(params: {
     mode: discordStreamMode,
     active: Boolean(draftStream),
     seed: progressSeed,
+    reasoningLinePrefix: "🧠 ",
+    commentaryLinePrefix: "💬 ",
+    reasoningGate: true,
+    commentaryItalics: false,
     update: async (previewText, options) => {
       lastPartialText = previewText;
       draftText = previewText;
@@ -254,6 +260,8 @@ export function createDiscordDraftPreviewController(params: {
       });
     },
     handleAssistantMessageBoundary() {
+      // Queued/followup turns need a fresh progress draft after the primary final.
+      progressDraft.beginNewTurn();
       if (discordStreamMode === "progress") {
         return;
       }

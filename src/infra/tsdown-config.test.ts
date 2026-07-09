@@ -116,6 +116,8 @@ describe("tsdown config", () => {
       "plugins/runtime/index",
       "plugins/synthetic-auth.runtime",
       "web-fetch/runtime",
+      "mcp/openclaw-tools-serve",
+      "mcp/plugin-tools-serve",
       "plugin-sdk/compat",
       "plugin-sdk/index",
       bundledEntry("active-memory"),
@@ -266,6 +268,8 @@ describe("tsdown config", () => {
 
     expect(alwaysBundle("@openclaw/fs-safe")).toBe(true);
     expect(alwaysBundle("@openclaw/fs-safe/path")).toBe(true);
+    expect(alwaysBundle("openclaw/plugin-sdk/ssrf-runtime-internal")).toBe(true);
+    expect(alwaysBundle("openclaw/plugin-sdk/ssrf-runtime")).toBe(false);
     expect(alwaysBundle("zod")).toBe(true);
     expect(alwaysBundle("zod/v4/core")).toBe(true);
     expect(alwaysBundle("not-a-runtime-dependency")).toBe(false);

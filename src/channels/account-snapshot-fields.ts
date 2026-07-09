@@ -237,6 +237,9 @@ export function projectSafeChannelAccountSnapshotFields(
       : {}),
     ...(statusState ? { statusState } : {}),
     ...(healthState ? { healthState } : {}),
+    ...(readBoolean(record, "terminalDisconnect") !== undefined
+      ? { terminalDisconnect: readBoolean(record, "terminalDisconnect") }
+      : {}),
     ...(readBoolean(record, "busy") !== undefined ? { busy: readBoolean(record, "busy") } : {}),
     ...(readNumber(record, "activeRuns") !== undefined
       ? { activeRuns: readNumber(record, "activeRuns") }

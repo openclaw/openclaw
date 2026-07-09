@@ -13,6 +13,7 @@ import type {
 } from "@modelcontextprotocol/sdk/validation/types.js";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Compile } from "typebox/compile";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
@@ -24,6 +25,7 @@ import {
   normalizeJsonSchemaForTypeBox,
 } from "../shared/json-schema-defaults.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { matchesMcpToolFilterPattern } from "./agent-bundle-mcp-filter.js";
 import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import type {
   McpCatalogTool,
@@ -35,6 +37,7 @@ import type {
 } from "./agent-bundle-mcp-types.js";
 import { loadEmbeddedAgentMcpConfig } from "./embedded-agent-mcp.js";
 import { isMcpConfigRecord } from "./mcp-config-shared.js";
+import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 
 type BundleMcpSession = {
@@ -45,6 +48,7 @@ type BundleMcpSession = {
   requestTimeoutMs: number;
   supportsParallelToolCalls: boolean;
   connected: boolean;
+  disconnectReason?: string;
   retiring: boolean;
   catalogUseCount: number;
   sharedAcrossCatalogGenerations: boolean;
@@ -65,9 +69,23 @@ const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
 const BUNDLE_MCP_FAILURE_THRESHOLD = 3;
 const BUNDLE_MCP_FAILURE_COOLDOWN_MS = 60_000;
 const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 1_500;
+const BUNDLE_MCP_DISPOSE_TIMEOUT_MS = 5_000;
 const BUNDLE_MCP_CATALOG_CONNECT_CONCURRENCY = 6;
 const BUNDLE_MCP_METADATA_TEXT_LIMIT = 1_200;
 let bundleMcpCatalogListTimeoutMs: number | undefined;
+const BUNDLE_MCP_TEST_STATE_KEY = Symbol.for("openclaw.bundleMcpTestState");
+type BundleMcpTestState = { disposeTimeoutMs?: number };
+
+function getBundleMcpTestState(): BundleMcpTestState {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalStore[BUNDLE_MCP_TEST_STATE_KEY] as BundleMcpTestState | undefined;
+  if (existing) {
+    return existing;
+  }
+  const state: BundleMcpTestState = {};
+  globalStore[BUNDLE_MCP_TEST_STATE_KEY] = state;
+  return state;
+}
 
 type McpToolSelection = {
   include?: readonly string[];
@@ -169,13 +187,21 @@ export function createBundleMcpJsonSchemaValidator(): jsonSchemaValidator {
       if (!isDraft202012Schema(schema)) {
         return defaultValidator.getValidator<T>(schema);
       }
-      const schemaError = findJsonSchemaShapeError(schema as never);
-      if (schemaError) {
-        throw new Error(`Invalid MCP draft-2020-12 JSON Schema: ${schemaError}`);
+      let validator: ReturnType<typeof Compile>;
+      try {
+        const schemaError = findJsonSchemaShapeError(schema as never);
+        if (schemaError) {
+          throw new Error(schemaError);
+        }
+        validator = Compile(
+          normalizeJsonSchemaForTypeBox(stripJsonSchemaFormats(schema) as never) as never,
+        );
+      } catch (error) {
+        const setupError = toErrorObject(error, "schema setup failed");
+        throw new Error(`Invalid MCP draft-2020-12 JSON Schema: ${setupError.message}`, {
+          cause: error,
+        });
       }
-      const validator = Compile(
-        normalizeJsonSchemaForTypeBox(stripJsonSchemaFormats(schema) as never) as never,
-      );
       return (input: unknown) => {
         const valid = validator.Check(input);
         if (valid) {
@@ -286,6 +312,15 @@ function setBundleMcpCatalogListTimeoutMsForTest(timeoutMs?: number): void {
       ? Math.floor(timeoutMs)
       : undefined;
 }
+
+function setBundleMcpDisposeTimeoutMsForTest(timeoutMs?: number): void {
+  // Non-isolated test workers can reload this module while a facade still
+  // references an older copy. Share the override across those copies.
+  getBundleMcpTestState().disposeTimeoutMs =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? Math.floor(timeoutMs)
+      : undefined;
+}
 async function listAllResources(client: Client, timeoutMs: number) {
   const resources: unknown[] = [];
   let cursor: string | undefined;
@@ -310,21 +345,6 @@ async function listAllPrompts(client: Client, timeoutMs: number) {
   return prompts;
 }
 
-function escapeRegex(value: string): string {
-  return value.replace(/[\\^$+?.()|[\]{}]/g, "\\$&");
-}
-
-function globMatches(pattern: string, value: string): boolean {
-  const trimmed = pattern.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (!trimmed.includes("*")) {
-    return trimmed === value;
-  }
-  return new RegExp(`^${trimmed.split("*").map(escapeRegex).join(".*")}$`).test(value);
-}
-
 function normalizeStringList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -346,10 +366,13 @@ function getMcpToolSelection(rawServer: unknown): McpToolSelection {
 function shouldExposeMcpTool(selection: McpToolSelection, toolName: string): boolean {
   const include = selection.include ?? [];
   const exclude = selection.exclude ?? [];
-  if (include.length > 0 && !include.some((pattern) => globMatches(pattern, toolName))) {
+  if (
+    include.length > 0 &&
+    !include.some((pattern) => matchesMcpToolFilterPattern(pattern, toolName))
+  ) {
     return false;
   }
-  return !exclude.some((pattern) => globMatches(pattern, toolName));
+  return !exclude.some((pattern) => matchesMcpToolFilterPattern(pattern, toolName));
 }
 
 function sanitizeMcpMetadataText(value: string | undefined): string | undefined {
@@ -368,7 +391,7 @@ function sanitizeMcpMetadataText(value: string | undefined): string | undefined 
     )
     .replace(/system\s+prompt/gi, "system prompt");
   return scrubbed.length > BUNDLE_MCP_METADATA_TEXT_LIMIT
-    ? `${scrubbed.slice(0, BUNDLE_MCP_METADATA_TEXT_LIMIT)}...`
+    ? `${truncateUtf16Safe(scrubbed, BUNDLE_MCP_METADATA_TEXT_LIMIT)}...`
     : scrubbed;
 }
 
@@ -385,14 +408,30 @@ function summarizeServerCapabilities(capabilities: ServerCapabilities | undefine
       : undefined,
   };
 }
-// Safety net for hung MCP servers, not a tuning parameter.
-const DISPOSE_TIMEOUT_MS = 5_000;
+async function settleWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return await Promise.race([
+    promise.then(
+      () => true,
+      () => true,
+    ),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        resolve();
+      }, timeoutMs);
+      timer.unref?.();
+    }).then(() => false),
+  ]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
+}
 
 async function disposeSession(session: BundleMcpSession) {
   session.detachStderr?.();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
-  await Promise.race([
+  const timeoutMs = getBundleMcpTestState().disposeTimeoutMs ?? BUNDLE_MCP_DISPOSE_TIMEOUT_MS;
+  const closed = await settleWithin(
     (async () => {
       if (session.transportType === "streamable-http") {
         await (session.transport as StreamableHTTPClientTransport)
@@ -402,28 +441,24 @@ async function disposeSession(session: BundleMcpSession) {
       await session.transport.close().catch(() => {});
       await session.client.close().catch(() => {});
     })(),
-    new Promise<void>((resolve) => {
-      timer = setTimeout(() => {
-        timedOut = true;
-        resolve();
-      }, DISPOSE_TIMEOUT_MS);
-      timer.unref?.();
-    }),
-  ]).finally(() => {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  });
-  if (timedOut) {
+    timeoutMs,
+  );
+  if (!closed) {
     // Force-close transport and client so a hung terminateSession() DELETE
-    // gets its AbortSignal triggered by the transport teardown.
-    await session.transport.close().catch(() => {});
-    await session.client.close().catch(() => {});
+    // gets its AbortSignal triggered by teardown. Stdio owns a process group,
+    // so force it dead before disposal can report completion.
+    const transportClose =
+      session.transport instanceof OpenClawStdioClientTransport
+        ? session.transport.forceClose()
+        : session.transport.close();
+    await settleWithin(Promise.allSettled([transportClose, session.client.close()]), timeoutMs);
   }
 }
 
 function createCatalogFingerprint(servers: Record<string, unknown>): string {
-  return crypto.createHash("sha1").update(JSON.stringify(servers)).digest("hex");
+  // Session MCP fingerprints only invalidate in-memory runtime catalogs.
+  // Algorithm changes can cause one cache miss, but no persisted state migration.
+  return crypto.createHash("sha256").update(JSON.stringify(servers)).digest("hex");
 }
 
 function loadSessionMcpConfig(params: {
@@ -540,6 +575,17 @@ export function createSessionMcpRuntime(params: {
       throw createDisposedError(params.sessionId);
     }
   };
+  const requireConnectedSession = (serverName: string): BundleMcpSession => {
+    const session = sessions.get(serverName);
+    if (!session || !session.connected) {
+      throw new Error(
+        session?.disconnectReason
+          ? `bundle-mcp server "${serverName}" is disconnected: ${session.disconnectReason}`
+          : `bundle-mcp server "${serverName}" is not connected`,
+      );
+    }
+    return session;
+  };
   const ensureSessionConnected = async (
     session: BundleMcpSession,
     connectionTimeoutMs: number,
@@ -638,6 +684,18 @@ export function createSessionMcpRuntime(params: {
               failIfDisposed();
 
               let session = sessions.get(serverName);
+              while (
+                session &&
+                !session.retiring &&
+                !session.connected &&
+                !session.connectPromise
+              ) {
+                // A closed SDK client cannot reconnect cleanly on the same transport.
+                await retireSessionIfCurrent(serverName, session);
+                // Retirement yields while closing. Preserve any replacement that a
+                // newer catalog generation installed during that await.
+                session = sessions.get(serverName);
+              }
               if (session?.retiring) {
                 session = undefined;
               }
@@ -668,7 +726,7 @@ export function createSessionMcpRuntime(params: {
                     },
                   },
                 );
-                session = {
+                const createdSession: BundleMcpSession = {
                   serverName,
                   client,
                   transport: resolved.transport,
@@ -681,6 +739,14 @@ export function createSessionMcpRuntime(params: {
                   sharedAcrossCatalogGenerations: false,
                   detachStderr: resolved.detachStderr,
                 };
+                // The SDK exposes lifecycle hooks as callback properties. A close is
+                // terminal for this client/transport pair.
+                // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client is not an EventTarget.
+                client.onclose = () => {
+                  createdSession.connected = false;
+                  createdSession.disconnectReason = "mcp transport closed";
+                };
+                session = createdSession;
                 sessions.set(serverName, session);
               }
 
@@ -691,11 +757,9 @@ export function createSessionMcpRuntime(params: {
                 session.sharedAcrossCatalogGenerations = true;
               }
               session.catalogUseCount += 1;
-              let connectedForCatalog = false;
               try {
                 failIfDisposed();
                 await ensureSessionConnected(session, resolved.connectionTimeoutMs);
-                connectedForCatalog = true;
                 failIfDisposed();
                 const capabilities = summarizeServerCapabilities(
                   session.client.getServerCapabilities(),
@@ -780,9 +844,9 @@ export function createSessionMcpRuntime(params: {
                 ];
                 const sharedWithNewerGeneration =
                   session.sharedAcrossCatalogGenerations || session.catalogUseCount > 1;
-                if (!connectedForCatalog && !session.connected) {
-                  // Timed-out connects can still leave the SDK client bound to a
-                  // transport. Delete before async close so future catalogs start fresh.
+                if (!session.connected) {
+                  // A close is terminal for every catalog generation sharing this
+                  // session. The identity guard preserves any newer replacement.
                   await retireSessionIfCurrent(serverName, session);
                 } else if (!reusedSession && !sharedWithNewerGeneration) {
                   // Catalog invalidation can overlap generations; an older failed
@@ -892,10 +956,7 @@ export function createSessionMcpRuntime(params: {
     async callTool(serverName, toolName, input) {
       failIfDisposed();
       await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
+      const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(
         serverName,
         async () =>
@@ -912,10 +973,7 @@ export function createSessionMcpRuntime(params: {
     async listResources(serverName) {
       failIfDisposed();
       await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
+      const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(serverName, async () =>
         listAllResources(session.client, session.requestTimeoutMs),
       );
@@ -923,10 +981,7 @@ export function createSessionMcpRuntime(params: {
     async readResource(serverName, uri) {
       failIfDisposed();
       await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
+      const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(
         serverName,
         async () =>
@@ -936,10 +991,7 @@ export function createSessionMcpRuntime(params: {
     async listPrompts(serverName) {
       failIfDisposed();
       await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
+      const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(serverName, async () =>
         listAllPrompts(session.client, session.requestTimeoutMs),
       );
@@ -947,10 +999,7 @@ export function createSessionMcpRuntime(params: {
     async getPrompt(serverName, name, args) {
       failIfDisposed();
       await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
+      const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(
         serverName,
         async () =>
@@ -1258,11 +1307,13 @@ export const testing = {
   async resetSessionMcpRuntimeManager() {
     await disposeAllSessionMcpRuntimes();
     setBundleMcpCatalogListTimeoutMsForTest();
+    setBundleMcpDisposeTimeoutMsForTest();
   },
   getCachedSessionIds() {
     return getSessionMcpRuntimeManager().listSessionIds();
   },
   setBundleMcpCatalogListTimeoutMsForTest,
+  setBundleMcpDisposeTimeoutMsForTest,
   resolveSessionMcpRuntimeIdleTtlMs,
 };
 export { testing as __testing };

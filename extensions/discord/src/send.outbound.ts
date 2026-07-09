@@ -9,10 +9,15 @@ import { resolveChunkMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chun
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
 import { createChannelMessage, createThread, type RequestClient } from "./internal/discord.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
+import {
+  createReusableDiscordReplyReference,
+  type DiscordReplyReference,
+} from "./reply-reference.js";
 import { createDiscordSendResult, type DiscordReceiptResultSource } from "./send.receipt.js";
 import {
   buildDiscordMessageRequest,
@@ -28,6 +33,8 @@ import {
   resolveDiscordSendEmbeds,
   sendDiscordMedia,
   sendDiscordText,
+  type DiscordAllowedMentions,
+  type DiscordSendProgress,
   type DiscordSendComponents,
   type DiscordSendEmbeds,
 } from "./send.shared.js";
@@ -43,7 +50,7 @@ type DiscordSendOpts = {
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   verbose?: boolean;
   rest?: RequestClient;
-  replyTo?: string;
+  reply?: DiscordReplyReference;
   retry?: RetryConfig;
   textLimit?: number;
   maxLinesPerMessage?: number;
@@ -53,6 +60,9 @@ type DiscordSendOpts = {
   embeds?: DiscordSendEmbeds;
   silent?: boolean;
   suppressEmbeds?: boolean;
+  allowedMentions?: DiscordAllowedMentions;
+  /** Persist each concrete platform send before any later chunk can fail. */
+  onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
 };
 
 type DiscordClientRequest = ReturnType<typeof createDiscordClient>["request"];
@@ -71,22 +81,23 @@ async function sendDiscordThreadTextChunks(params: {
   maxChars?: number;
   silent?: boolean;
   suppressEmbeds?: boolean;
+  allowedMentions?: DiscordAllowedMentions;
+  onResult?: DiscordSendProgress;
 }): Promise<void> {
   for (const chunk of params.chunks) {
-    await sendDiscordText(
-      params.rest,
-      params.threadId,
-      chunk,
-      undefined,
-      params.request,
-      params.maxLinesPerMessage,
-      undefined,
-      undefined,
-      params.chunkMode,
-      params.silent,
-      params.suppressEmbeds,
-      params.maxChars,
-    );
+    await sendDiscordText({
+      rest: params.rest,
+      channelId: params.threadId,
+      text: chunk,
+      request: params.request,
+      maxLinesPerMessage: params.maxLinesPerMessage,
+      chunkMode: params.chunkMode,
+      silent: params.silent,
+      suppressEmbeds: params.suppressEmbeds,
+      allowedMentions: params.allowedMentions,
+      maxChars: params.maxChars,
+      onResult: params.onResult,
+    });
   }
 }
 
@@ -104,7 +115,9 @@ const DISCORD_THREAD_NAME_LIMIT = 100;
 function deriveForumThreadName(text: string): string {
   const firstLine =
     normalizeOptionalString(text.split("\n").find((line) => normalizeOptionalString(line))) ?? "";
-  return firstLine.slice(0, DISCORD_THREAD_NAME_LIMIT) || new Date().toISOString().slice(0, 16);
+  return (
+    truncateUtf16Safe(firstLine, DISCORD_THREAD_NAME_LIMIT) || new Date().toISOString().slice(0, 16)
+  );
 }
 
 /** Forum/Media channels cannot receive regular messages; detect them here. */
@@ -118,7 +131,7 @@ function toDiscordSendResult(
   params: {
     kind?: Parameters<typeof createDiscordSendResult>[0]["kind"];
     threadId?: string | number;
-    replyToId?: string;
+    reply?: DiscordReplyReference;
   } = {},
 ): DiscordSendResult {
   const resultParams: Parameters<typeof createDiscordSendResult>[0] = {
@@ -129,8 +142,8 @@ function toDiscordSendResult(
   if (params.threadId != null) {
     resultParams.threadId = params.threadId;
   }
-  if (params.replyToId) {
-    resultParams.replyToId = params.replyToId;
+  if (params.reply) {
+    resultParams.reply = params.reply;
   }
   return createDiscordSendResult(resultParams);
 }
@@ -211,6 +224,7 @@ export async function sendMessageDiscord(
       components: starterComponents,
       embeds: starterEmbeds,
       flags: starterFlags,
+      allowedMentions: opts.allowedMentions,
     });
     let threadRes: { id: string; message?: { id: string; channel_id: string } };
     try {
@@ -242,30 +256,42 @@ export async function sendMessageDiscord(
     const messageId = threadRes.message?.id ?? threadId;
     const resultChannelId = threadRes.message?.channel_id ?? threadId;
     const remainingChunks = chunks.slice(1);
+    await opts.onDeliveryResult?.(
+      toDiscordSendResult(
+        {
+          id: messageId,
+          channel_id: resultChannelId,
+        },
+        channelId,
+        { kind: "text", threadId },
+      ),
+    );
+    const reportThreadResult: DiscordSendProgress = async (result, kind) => {
+      await opts.onDeliveryResult?.(toDiscordSendResult(result, threadId, { kind, threadId }));
+    };
 
     try {
       if (opts.mediaUrl) {
         const [mediaCaption, ...afterMediaChunks] = remainingChunks;
-        await sendDiscordMedia(
+        await sendDiscordMedia({
           rest,
-          threadId,
-          mediaCaption ?? "",
-          opts.mediaUrl,
-          opts.filename,
-          opts.mediaAccess,
-          opts.mediaLocalRoots,
-          opts.mediaReadFile,
-          mediaMaxBytes,
-          undefined,
+          channelId: threadId,
+          text: mediaCaption ?? "",
+          mediaUrl: opts.mediaUrl,
+          filename: opts.filename,
+          mediaAccess: opts.mediaAccess,
+          mediaLocalRoots: opts.mediaLocalRoots,
+          mediaReadFile: opts.mediaReadFile,
+          maxBytes: mediaMaxBytes,
           request,
           maxLinesPerMessage,
-          undefined,
-          undefined,
           chunkMode,
-          opts.silent,
+          silent: opts.silent,
           suppressEmbeds,
-          textLimit,
-        );
+          allowedMentions: opts.allowedMentions,
+          maxChars: textLimit,
+          onResult: reportThreadResult,
+        });
         await sendDiscordThreadTextChunks({
           rest,
           threadId,
@@ -276,6 +302,8 @@ export async function sendMessageDiscord(
           maxChars: textLimit,
           silent: opts.silent,
           suppressEmbeds,
+          allowedMentions: opts.allowedMentions,
+          onResult: reportThreadResult,
         });
       } else {
         await sendDiscordThreadTextChunks({
@@ -288,6 +316,8 @@ export async function sendMessageDiscord(
           maxChars: textLimit,
           silent: opts.silent,
           suppressEmbeds,
+          allowedMentions: opts.allowedMentions,
+          onResult: reportThreadResult,
         });
       }
     } catch (err) {
@@ -316,43 +346,55 @@ export async function sendMessageDiscord(
   }
 
   let result: DiscordChannelMessageResult;
+  const reportResult: DiscordSendProgress = async (progressResult, kind, replyToId) => {
+    await opts.onDeliveryResult?.(
+      toDiscordSendResult(progressResult, channelId, {
+        kind,
+        reply: createReusableDiscordReplyReference(replyToId),
+      }),
+    );
+  };
   try {
     if (opts.mediaUrl) {
-      result = await sendDiscordMedia(
+      result = await sendDiscordMedia({
         rest,
         channelId,
-        textWithMentions,
-        opts.mediaUrl,
-        opts.filename,
-        opts.mediaAccess,
-        opts.mediaLocalRoots,
-        opts.mediaReadFile,
-        mediaMaxBytes,
-        opts.replyTo,
+        text: textWithMentions,
+        mediaUrl: opts.mediaUrl,
+        filename: opts.filename,
+        mediaAccess: opts.mediaAccess,
+        mediaLocalRoots: opts.mediaLocalRoots,
+        mediaReadFile: opts.mediaReadFile,
+        maxBytes: mediaMaxBytes,
+        reply: opts.reply,
         request,
         maxLinesPerMessage,
-        opts.components,
-        opts.embeds,
+        components: opts.components,
+        embeds: opts.embeds,
         chunkMode,
-        opts.silent,
+        silent: opts.silent,
         suppressEmbeds,
-        textLimit,
-      );
+        allowedMentions: opts.allowedMentions,
+        maxChars: textLimit,
+        onResult: reportResult,
+      });
     } else {
-      result = await sendDiscordText(
+      result = await sendDiscordText({
         rest,
         channelId,
-        textWithMentions,
-        opts.replyTo,
+        text: textWithMentions,
+        reply: opts.reply,
         request,
         maxLinesPerMessage,
-        opts.components,
-        opts.embeds,
+        components: opts.components,
+        embeds: opts.embeds,
         chunkMode,
-        opts.silent,
+        silent: opts.silent,
         suppressEmbeds,
-        textLimit,
-      );
+        allowedMentions: opts.allowedMentions,
+        maxChars: textLimit,
+        onResult: reportResult,
+      });
     }
   } catch (err) {
     throw await buildDiscordSendError(err, {
@@ -371,7 +413,7 @@ export async function sendMessageDiscord(
   });
   return toDiscordSendResult(result, channelId, {
     kind: opts.mediaUrl ? "media" : opts.components || opts.embeds ? "card" : "text",
-    replyToId: opts.replyTo,
+    reply: opts.reply,
   });
 }
 

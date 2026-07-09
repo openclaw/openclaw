@@ -272,13 +272,31 @@ export async function readResponseText(
         bytesRead += chunk.byteLength;
         parts.push(chunk);
 
-        if (truncated || bytesRead >= maxBytes) {
+        if (truncated) {
+          break;
+        }
+        if (bytesRead >= maxBytes) {
+          // Reached the byte cap. A body that is exactly maxBytes bytes is
+          // complete only once EOF confirms it. Keep the conservative result
+          // if that confirming read fails or the body continues.
           truncated = true;
+          while (true) {
+            const { done: atEnd, value: extra } = await reader.read();
+            if (atEnd) {
+              truncated = false;
+              break;
+            }
+            if (extra && extra.byteLength > 0) {
+              truncated = true;
+              break;
+            }
+          }
           break;
         }
       }
     } catch {
-      // Best-effort: return whatever we read so far.
+      // Stream errors mean the accumulated bytes are only a partial body.
+      truncated = true;
     } finally {
       if (truncated) {
         // Some mocked or non-compliant streams never settle cancel(); do not
@@ -287,11 +305,23 @@ export async function readResponseText(
       }
       try {
         reader.releaseLock();
-      } catch {}
+      } catch {
+        // The read/cancel path already produced the best-effort body result;
+        // lock-release failures must not replace that outcome.
+      }
     }
 
     const bytes = concatBytes(parts, bytesRead);
     return { text: decodeResponseBytes(res, bytes), truncated, bytesRead };
+  }
+
+  if (maxBytes) {
+    if (res instanceof Response && res.body === null) {
+      return { text: "", truncated: false, bytesRead: 0 };
+    }
+    // Whole-body fallbacks allocate before returning, so they cannot honor a byte cap.
+    // Fail closed instead of making maxBytes a returned-text limit only.
+    return { text: "", truncated: true, bytesRead: 0 };
   }
 
   const readBytes = (res as { arrayBuffer?: () => Promise<ArrayBuffer> }).arrayBuffer;
@@ -310,7 +340,8 @@ export async function readResponseText(
 
   try {
     const text = await res.text();
-    return { text, truncated: false, bytesRead: text.length };
+    const bytes = new TextEncoder().encode(text);
+    return { text, truncated: false, bytesRead: bytes.byteLength };
   } catch {
     return { text: "", truncated: false, bytesRead: 0 };
   }

@@ -51,7 +51,11 @@ struct GatewayChannelConnectTests {
         }
 
         func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
-            _ = url
+            self.makeWebSocketTask(request: URLRequest(url: url))
+        }
+
+        func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
+            _ = request
             let task = GatewayTestWebSocketTask(receiveHook: { _, receiveIndex in
                 if receiveIndex == 0 {
                     return .data(GatewayWebSocketTestSupport.connectChallengeData())
@@ -110,21 +114,15 @@ struct GatewayChannelConnectTests {
             })
     }
 
+    @MainActor
     private func withTemporaryStateDir<T>(_ operation: () async throws -> T) async throws -> T {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
-        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
-        defer {
-            if let previousStateDir {
-                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
-            } else {
-                unsetenv("OPENCLAW_STATE_DIR")
-            }
-            try? FileManager.default.removeItem(at: tempDir)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        return try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": tempDir.path]) {
+            try await operation()
         }
-        return try await operation()
     }
 
     @Test func `concurrent connect is single flight on success`() async throws {
@@ -243,7 +241,7 @@ struct GatewayChannelConnectTests {
     @Test func `stored device token connect scopes reuse cached scopes`() async throws {
         try await self.withTemporaryStateDir {
             let identity = DeviceIdentityStore.loadOrCreate()
-            let storedEntry = DeviceAuthStore.storeToken(
+            let storedEntry: DeviceAuthEntry = DeviceAuthStore.storeToken(
                 deviceId: identity.deviceId,
                 role: "operator",
                 token: "bootstrap-device-token",

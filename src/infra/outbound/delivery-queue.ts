@@ -3,9 +3,13 @@ export {
   ackDelivery,
   enqueueDelivery,
   failDelivery,
+  failDeliveryAfterPlatformSend,
+  failDeliveryBeforePlatformSend,
+  failPendingDelivery,
   loadPendingDelivery,
   loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
+  markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
   moveToFailed,
 } from "./delivery-queue-storage.js";

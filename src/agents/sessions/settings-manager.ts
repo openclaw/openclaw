@@ -6,6 +6,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import lockfile from "proper-lockfile";
 import type { Transport } from "../../llm/types.js";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
@@ -250,7 +251,9 @@ export class SettingsManager {
   private storage: SettingsStorage;
   private globalSettings: Settings;
   private projectSettings: Settings;
-  private settings: Settings;
+  private settings: Settings = {};
+  // Non-persisted overrides layered above global/project settings for this manager.
+  private runtimeOverrides: Settings = {};
   private modifiedFields = new Set<keyof Settings>(); // Track global fields modified during session
   private modifiedNestedFields = new Map<keyof Settings, Set<string>>(); // Track global nested field modifications
   private modifiedProjectFields = new Set<keyof Settings>(); // Track project fields modified during session
@@ -274,7 +277,7 @@ export class SettingsManager {
     this.globalSettingsLoadError = globalLoadError;
     this.projectSettingsLoadError = projectLoadError;
     this.errors = [...initialErrors];
-    this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+    this.recomputeSettings();
   }
 
   /** Create a SettingsManager that loads from files */
@@ -417,6 +420,13 @@ export class SettingsManager {
     return structuredClone(this.projectSettings);
   }
 
+  private recomputeSettings(): void {
+    this.settings = deepMergeSettings(
+      deepMergeSettings(this.globalSettings, this.projectSettings),
+      this.runtimeOverrides,
+    );
+  }
+
   async reload(): Promise<void> {
     await this.writeQueue;
     const globalLoad = SettingsManager.tryLoadFromStorage(this.storage, "global");
@@ -442,12 +452,13 @@ export class SettingsManager {
       this.recordError("project", projectLoad.error);
     }
 
-    this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+    this.recomputeSettings();
   }
 
-  /** Apply additional overrides on top of current settings */
+  /** Apply non-persisted overrides on top of global/project settings. */
   applyOverrides(overrides: Partial<Settings>): void {
-    this.settings = deepMergeSettings(this.settings, overrides);
+    this.runtimeOverrides = deepMergeSettings(this.runtimeOverrides, overrides);
+    this.recomputeSettings();
   }
 
   /** Mark a global field as modified during this session */
@@ -541,7 +552,7 @@ export class SettingsManager {
   }
 
   private save(): void {
-    this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+    this.recomputeSettings();
 
     if (this.globalSettingsLoadError) {
       return;
@@ -563,7 +574,7 @@ export class SettingsManager {
 
   private saveProjectSettings(settings: Settings): void {
     this.projectSettings = structuredClone(settings);
-    this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+    this.recomputeSettings();
 
     if (this.projectSettingsLoadError) {
       return;
@@ -977,11 +988,7 @@ export class SettingsManager {
   }
 
   getImageWidthCells(): number {
-    const width = this.settings.terminal?.imageWidthCells;
-    if (typeof width !== "number" || !Number.isFinite(width)) {
-      return 60;
-    }
-    return Math.max(1, Math.floor(width));
+    return resolveIntegerOption(this.settings.terminal?.imageWidthCells, 60, { min: 1 });
   }
 
   setImageWidthCells(width: number): void {

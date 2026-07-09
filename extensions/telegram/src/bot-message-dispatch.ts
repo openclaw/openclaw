@@ -7,11 +7,7 @@ import {
   logTypingFailure,
   removeAckReactionAfterReply,
 } from "openclaw/plugin-sdk/channel-feedback";
-import {
-  formatInboundEnvelope,
-  resolveEnvelopeFormatOptions,
-  runChannelInboundEvent,
-} from "openclaw/plugin-sdk/channel-inbound";
+import { runChannelInboundEvent } from "openclaw/plugin-sdk/channel-inbound";
 import { CURRENT_MESSAGE_MARKER } from "openclaw/plugin-sdk/channel-mention-gating";
 import {
   createChannelMessageReplyPipeline,
@@ -26,6 +22,7 @@ import {
   type ChannelProgressDraftLine,
   type ChannelProgressDraftCompositorLine,
   createChannelProgressDraftCompositor,
+  isChannelProgressDraftWorkToolName,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
   resolveTranscriptBackedChannelFinalText,
@@ -57,6 +54,8 @@ import {
   appendAssistantMirrorMessageByIdentity,
   readLatestAssistantTextByIdentity,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -84,7 +83,6 @@ import {
   buildTelegramGroupPeerId,
   buildTelegramGroupFrom,
   buildTelegramInboundOriginTarget,
-  buildGroupLabel,
   buildTypingThreadParams,
   getTelegramTextParts,
   resolveTelegramReplyId,
@@ -107,7 +105,12 @@ import {
 } from "./error-policy.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { renderTelegramHtmlText } from "./format.js";
-import { includesRecentTelegramGroupHistoryContext } from "./group-history-context.js";
+import {
+  isTelegramHistoryEntryAfterAmbientWatermark,
+  mergeTelegramGroupHistoryPromptContext,
+  retainTelegramGroupHistoryPromptContext,
+  selectTelegramGroupHistoryAfterLastSelf,
+} from "./group-history-window.js";
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
 import {
   createLaneDeliveryStateTracker,
@@ -117,7 +120,14 @@ import {
   type LaneName,
 } from "./lane-delivery.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
-import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
+import {
+  recordOutboundMessageForPromptContext,
+  withTelegramPromptContextTimestampMs,
+} from "./outbound-message-context.js";
+import {
+  createTelegramProgressSummaryTracker,
+  formatTelegramProgressSummaryLine,
+} from "./progress-summary.js";
 import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
@@ -147,6 +157,8 @@ import { clipTelegramProgressText } from "./truncate.js";
 
 export { resetTelegramReplyFenceForTests };
 
+// Telegram sendChatAction can fail transiently; keep the tolerance scoped to this transport.
+const TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES = 5;
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
 
@@ -237,13 +249,12 @@ type DispatchTelegramMessageParams = {
   suppressFailureFallback?: boolean;
 };
 
-export type TelegramDispatchResult =
-  | { kind: "completed" }
-  | { kind: "failed-retryable"; error: unknown };
+type TelegramDispatchResult = { kind: "completed" } | { kind: "failed-retryable"; error: unknown };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
 
 type TelegramTranscriptMirrorPayload = { text?: string; mediaUrls?: string[] };
+type CurrentTurnTranscriptFinal = { text: string; timestamp: number };
 type TelegramScopedTranscriptSession = { sessionId: string; storePath: string };
 type FreshTelegramSessionEntryLoader = ((
   agentId: string,
@@ -385,6 +396,19 @@ function formatTelegramProgressLine(text: string): string {
     : formatProgressAsMarkdownCode(text);
 }
 
+function buildTelegramThinkingProgressLine(progressTokens: number): ChannelProgressDraftLine {
+  const label = `Thinking… (~${Math.round(progressTokens)} tokens)`;
+  const text = `🧠 ${label}`;
+  return {
+    id: "reasoning:token-progress",
+    kind: "item",
+    icon: "🧠",
+    label,
+    text,
+    prefix: false,
+  };
+}
+
 function escapeTelegramProgressHtml(text: string): string {
   return text
     .replaceAll("&", "&amp;")
@@ -394,12 +418,23 @@ function escapeTelegramProgressHtml(text: string): string {
 }
 
 function renderTelegramProgressStringLine(text: string): string {
-  const clipped = clipTelegramProgressText(text.trim());
-  const italic = clipped.match(/^_(.*)_$/u);
-  if (italic) {
-    return `<i>${escapeTelegramProgressHtml(italic[1] ?? "")}</i>`;
-  }
-  return `<code>${escapeTelegramProgressHtml(clipped)}</code>`;
+  // Reasoning/commentary lanes carry model-authored markdown (e.g. `**bold**`,
+  // inline `` `code` ``, `_italic_` reasoning behind a 🧠/💬 marker). Render it
+  // through renderTelegramHtmlText — the parse_mode=HTML-safe converter — NOT
+  // markdownToTelegramRichHtml, whose rich-only block output (<h2> from a
+  // setext heading, <hr>, lists) makes Telegram reject the edit and drops the
+  // whole preview to unformatted plain text. Callers convert ONE line at a
+  // time, which also keeps block markdown from forming (`---` under a
+  // paragraph is a setext heading only when they share a document).
+  const trimmed = text.trim();
+  // Clip INSIDE a whole-line `_…_` wrapper (the reasoning-lane contract, marker
+  // optional): clipping the assembled line chops the closing underscore, which
+  // silently degrades every long reasoning line from italic to plain text.
+  const italic = trimmed.match(/^(\S+ )?_(.*)_$/u);
+  const clipped = italic
+    ? `${italic[1] ?? ""}_${clipTelegramProgressText(italic[2] ?? "")}_`
+    : clipTelegramProgressText(trimmed);
+  return renderTelegramHtmlText(clipped);
 }
 
 function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): string {
@@ -407,7 +442,16 @@ function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): s
     return line.split(/\r?\n/u).map(renderTelegramProgressStringLine).filter(Boolean).join("<br>");
   }
   if (!line.icon && line.label === "Commentary") {
-    return renderTelegramProgressStringLine(line.text);
+    // Commentary is model prose behind a 💬 marker: render its markdown (plain
+    // unless the model emphasized) via the shared converter — distinct from the
+    // 🧠 italic reasoning lane, mirroring Discord. Multi-line notes keep their
+    // line structure (Discord parity); converting per line also prevents block
+    // markdown (setext headings) from forming across lines.
+    return line.text
+      .split(/\r?\n/u)
+      .map(renderTelegramProgressStringLine)
+      .filter(Boolean)
+      .join("<br>");
   }
   const label = [line.icon, line.label].filter(Boolean).join(" ");
   const parts = [`<b>${escapeTelegramProgressHtml(label)}</b>`];
@@ -417,7 +461,10 @@ function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): s
   } else {
     const text = line.text.trim();
     if (text && text !== label) {
-      parts.push(renderTelegramProgressStringLine(text));
+      // Generic item payload (e.g. an "Update" line) keeps the monospace payload
+      // styling shared with tool details; only the reasoning/commentary lanes
+      // carry model markdown that needs converting.
+      parts.push(`<code>${escapeTelegramProgressHtml(clipTelegramProgressText(text))}</code>`);
     }
   }
   if (line.status && line.status !== "completed" && line.status !== line.detail) {
@@ -526,53 +573,6 @@ function extractCurrentTelegramBody(body: string | undefined): string {
   return body.slice(markerIndex + CURRENT_MESSAGE_MARKER.length).trimStart();
 }
 
-function includesRecoveredTelegramGroupHistoryContext(context: TelegramMessageContext): boolean {
-  return Boolean(
-    context.isGroup &&
-    context.groupHistoryContextMode &&
-    includesRecentTelegramGroupHistoryContext(context.groupHistoryContextMode),
-  );
-}
-
-function buildRecoveredTelegramBody(params: {
-  cfg: OpenClawConfig;
-  context: TelegramMessageContext;
-  currentMessage: string;
-  historyKey?: string;
-  threadSpec: TelegramThreadSpec;
-}): string {
-  if (
-    !includesRecoveredTelegramGroupHistoryContext(params.context) ||
-    !params.historyKey ||
-    params.context.historyLimit <= 0
-  ) {
-    return params.currentMessage;
-  }
-  const groupLabel = buildGroupLabel(
-    params.context.msg,
-    params.context.chatId,
-    params.threadSpec.id,
-  );
-  const envelopeOptions = resolveEnvelopeFormatOptions(params.cfg);
-  return createChannelHistoryWindow({
-    historyMap: params.context.groupHistories,
-  }).buildPendingContext({
-    historyKey: params.historyKey,
-    limit: params.context.historyLimit,
-    currentMessage: params.currentMessage,
-    formatEntry: (entry) =>
-      formatInboundEnvelope({
-        channel: "Telegram",
-        from: groupLabel,
-        timestamp: entry.timestamp,
-        body: `${entry.body} [id:${entry.messageId ?? "unknown"} chat:${params.context.chatId}]`,
-        chatType: "group",
-        senderLabel: entry.sender,
-        envelope: envelopeOptions,
-      }),
-  });
-}
-
 function buildRecoveredTelegramChatActionSender(params: {
   context: TelegramMessageContext;
   threadId?: number;
@@ -600,15 +600,14 @@ function buildRecoveredTelegramChatActionSender(params: {
   };
 }
 
-function migrateRecoveredTelegramRoomEventHistory(params: {
+function migrateRecoveredTelegramGroupHistory(params: {
   context: TelegramMessageContext;
   recoveredHistoryKey?: string;
 }) {
   const originalHistoryKey = params.context.historyKey;
   const recoveredHistoryKey = params.recoveredHistoryKey;
   if (
-    !includesRecoveredTelegramGroupHistoryContext(params.context) ||
-    params.context.ctxPayload.InboundEventKind !== "room_event" ||
+    !params.context.isGroup ||
     !originalHistoryKey ||
     !recoveredHistoryKey ||
     originalHistoryKey === recoveredHistoryKey ||
@@ -616,6 +615,8 @@ function migrateRecoveredTelegramRoomEventHistory(params: {
   ) {
     return;
   }
+  // Topic recovery mutates the raw in-memory buffer before any prompt is built;
+  // prompt readers apply the ambient transcript watermark after recovery.
   const originalEntries = params.context.groupHistories.get(originalHistoryKey);
   if (!originalEntries?.length) {
     return;
@@ -645,7 +646,6 @@ function migrateRecoveredTelegramRoomEventHistory(params: {
 }
 
 function resolveDispatchTelegramContext(params: {
-  cfg: OpenClawConfig;
   context: TelegramMessageContext;
 }): TelegramMessageContext {
   const threadSpec = resolveDispatchTelegramThreadSpec({
@@ -674,30 +674,58 @@ function resolveDispatchTelegramContext(params: {
   const recoveredHistoryKey = params.context.isGroup
     ? buildTelegramGroupPeerId(params.context.chatId, threadSpec.id)
     : params.context.historyKey;
-  const includeRecoveredGroupHistory = includesRecoveredTelegramGroupHistoryContext(params.context);
-  migrateRecoveredTelegramRoomEventHistory({
-    context: params.context,
-    recoveredHistoryKey,
-  });
+  const recoveredHistoryEntries =
+    recoveredHistoryKey && params.context.historyLimit > 0
+      ? (params.context.groupHistories.get(recoveredHistoryKey) ?? [])
+          .filter((entry) =>
+            isTelegramHistoryEntryAfterAmbientWatermark(
+              entry,
+              params.context.ctxPayload.AmbientTranscriptPreviousMessageId
+                ? {
+                    messageId: params.context.ctxPayload.AmbientTranscriptPreviousMessageId,
+                    ...(params.context.ctxPayload.AmbientTranscriptPreviousTimestampMs !== undefined
+                      ? {
+                          timestampMs:
+                            params.context.ctxPayload.AmbientTranscriptPreviousTimestampMs,
+                        }
+                      : {}),
+                  }
+                : undefined,
+            ),
+          )
+          .slice(-params.context.historyLimit)
+      : [];
+  const recoveredWatermarkedHistoryEntries = selectTelegramGroupHistoryAfterLastSelf(
+    recoveredHistoryEntries,
+  ).slice(-params.context.historyLimit);
+  const recoveredPromptHistoryEntries =
+    params.context.isGroup && recoveredHistoryKey && params.context.historyLimit > 0
+      ? params.context.ctxPayload.InboundEventKind === "room_event"
+        ? recoveredHistoryEntries
+        : recoveredWatermarkedHistoryEntries
+      : [];
   const recoveredInboundHistory =
-    includeRecoveredGroupHistory && recoveredHistoryKey && params.context.historyLimit > 0
-      ? createChannelHistoryWindow({
-          historyMap: params.context.groupHistories,
-        }).buildInboundHistory({
-          historyKey: recoveredHistoryKey,
-          limit: params.context.historyLimit,
-        })
+    params.context.isGroup && recoveredHistoryKey && params.context.historyLimit > 0
+      ? recoveredPromptHistoryEntries.length > 0
+        ? recoveredPromptHistoryEntries
+        : undefined
       : params.context.ctxPayload.InboundHistory;
   const recoveredBodyForAgent = extractCurrentTelegramBody(
     params.context.ctxPayload.BodyForAgent ?? params.context.ctxPayload.Body,
   );
-  const recoveredBody = buildRecoveredTelegramBody({
-    cfg: params.cfg,
-    context: params.context,
-    currentMessage: recoveredBodyForAgent,
-    historyKey: recoveredHistoryKey,
-    threadSpec,
+  const recoveredPromptContextBase = retainTelegramGroupHistoryPromptContext({
+    promptContext: params.context.ctxPayload.UntrustedStructuredContext ?? [],
+    entries: recoveredPromptHistoryEntries,
   });
+  const recoveredPromptContext =
+    recoveredPromptHistoryEntries.length > 0
+      ? mergeTelegramGroupHistoryPromptContext({
+          promptContext: recoveredPromptContextBase ?? [],
+          entries: recoveredPromptHistoryEntries,
+        })
+      : recoveredPromptContextBase?.length
+        ? recoveredPromptContextBase
+        : undefined;
   const recoveredSendTyping = buildRecoveredTelegramChatActionSender({
     context: params.context,
     threadId: threadSpec.id,
@@ -707,6 +735,10 @@ function resolveDispatchTelegramContext(params: {
     context: params.context,
     threadId: threadSpec.id,
     action: "record_voice",
+  });
+  migrateRecoveredTelegramGroupHistory({
+    context: params.context,
+    recoveredHistoryKey,
   });
   return {
     ...params.context,
@@ -728,7 +760,7 @@ function resolveDispatchTelegramContext(params: {
         ? params.context.ctxPayload
         : {
             ...params.context.ctxPayload,
-            Body: recoveredBody,
+            Body: recoveredBodyForAgent,
             BodyForAgent: recoveredBodyForAgent,
             From: recoveredFrom,
             InboundHistory: recoveredInboundHistory,
@@ -736,6 +768,7 @@ function resolveDispatchTelegramContext(params: {
             OriginatingTo: recoveredRoutingTarget,
             To: recoveredRoutingTarget,
             TransportThreadId: threadSpec.id,
+            UntrustedStructuredContext: recoveredPromptContext,
           },
   };
 }
@@ -755,7 +788,7 @@ export const dispatchTelegramMessage = async ({
   suppressFailureFallback = false,
 }: DispatchTelegramMessageParams): Promise<TelegramDispatchResult> => {
   const dispatchStartedAt = Date.now();
-  const dispatchContext = resolveDispatchTelegramContext({ cfg, context });
+  const dispatchContext = resolveDispatchTelegramContext({ context });
   const telegramDeps =
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
   const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });
@@ -768,8 +801,6 @@ export const dispatchTelegramMessage = async ({
     topicConfig,
     threadSpec,
     historyKey,
-    historyLimit,
-    groupHistories,
     route,
     skillFilter,
     sendTyping,
@@ -896,7 +927,14 @@ export const dispatchTelegramMessage = async ({
     agentId: route.agentId,
     loadFreshSessionEntry,
   });
-  const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
+  // Progress mode's ephemeral working-lane window IS the streaming mechanism and
+  // is independent of reasoning persistence (Discord keeps its window alive
+  // regardless of /reasoning). Only non-progress modes upgrade reasoning-on to
+  // block streaming. Forcing block streaming in progress mode killed the whole
+  // window (no commentary/tool lanes, no collapse bar) and suppressed all
+  // streamed output for message_tool_only providers.
+  const forceBlockStreamingForReasoning =
+    resolvedReasoningLevel === "on" && streamMode !== "progress";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";
   const streamDeliveryEnabled = !isRoomEvent && streamMode !== "off";
   const rawReplyQuoteText =
@@ -1005,6 +1043,8 @@ export const dispatchTelegramMessage = async ({
   };
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
+  const durableReasoningPayloadsEnabled =
+    resolvedReasoningLevel === "on" || Boolean(reasoningLane.stream);
   const streamToolProgressEnabled = resolveChannelStreamingPreviewToolProgress(telegramCfg);
   let lastAnswerPartialText = "";
   let activeAnswerDraftIsToolProgressOnly = false;
@@ -1033,18 +1073,41 @@ export const dispatchTelegramMessage = async ({
     if (activeAnswerDraftIsToolProgressOnly) {
       return;
     }
-    if (answerLane.hasStreamedMessage) {
+    // Progress mode keeps ONE stationary window: interim answer text never
+    // streams into it (updateDraftFromPartial returns early), so hasStreamedMessage
+    // is only ever set by tool progress on this same message — never rotate here.
+    // The rotate exists for block/partial, where answer text streams first and a
+    // following tool run needs its own message.
+    if (streamMode !== "progress" && answerLane.hasStreamedMessage) {
       await rotateAnswerLaneForNewMessage();
     }
     activeAnswerDraftIsToolProgressOnly = true;
   }
+  // Tracks whether the ephemeral progress window ever actually rendered this
+  // turn (rv mode delivers everything durably and the window stays empty). The
+  // collapse summary must reflect what ACTUALLY streamed, so it is gated on
+  // this flag, not on the compositor gate having started (Bug 6).
+  let progressDraftEverRendered = false;
+  // Turn-activity tally for the post-turn collapse summary (Discord parity).
+  // Counters feed a one-line digest posted when the progress window collapses.
+  const progressSummaryStartedAt = Date.now();
+  const progressSummary = createTelegramProgressSummaryTracker();
+  let progressSummaryDelivered = false;
   const progressDraft = createChannelProgressDraftCompositor({
     entry: telegramCfg,
     mode: streamMode,
     active: Boolean(answerLane.stream),
     seed: progressSeed,
     formatLine: formatTelegramProgressLine,
+    reasoningGate: streamReasoningInProgressDraft,
+    // Distinguish the streamed lanes in the window the way Discord does: 🧠
+    // reasoning (italic, default) vs 💬 commentary (plain). Without these the
+    // two lanes render identically and are indistinguishable.
+    reasoningLinePrefix: "🧠 ",
+    commentaryLinePrefix: "💬 ",
+    commentaryItalics: false,
     update: async (streamText, options) => {
+      progressDraftEverRendered = true;
       await prepareAnswerLaneForToolProgress();
       answerLane.lastPartialText = streamText;
       answerLane.hasStreamedMessage = true;
@@ -1063,13 +1126,15 @@ export const dispatchTelegramMessage = async ({
   });
   let finalAnswerDeliveryStarted = false;
   let finalAnswerDelivered = false;
-  // While the durable verbose lane is active, the ephemeral draft yields its
-  // commentary lines so they render once. Tool/plan status lines keep the
-  // draft: they have no durable counterpart in streamed runs.
+  // While the durable verbose lane is active it owns EVERY progress surface
+  // (commentary, tool, plan, command output, patch summaries), posting each as
+  // its own persistent message. The ephemeral window must therefore render none
+  // of them, or each renders twice (invariant: persistent message XOR window).
   let verboseProgressActive: () => boolean = () => false;
   const canPushStreamToolProgress = () =>
     Boolean(
       answerLane.stream &&
+      !verboseProgressActive() &&
       !answerLane.finalized &&
       !finalAnswerDeliveryStarted &&
       !finalAnswerDelivered,
@@ -1087,9 +1152,28 @@ export const dispatchTelegramMessage = async ({
     text?: string;
     isReasoningSnapshot?: boolean;
   }) => {
+    // Opens (or keeps open) the current window reasoning burst for the collapse
+    // summary whenever window-destined reasoning text arrives — independent of
+    // whether this particular push renders, so a short burst between renders is
+    // still counted at the summary flush (mirrors Discord's windowReasoningOpen).
+    // Gated on the window lane: durable reasoning (/reasoning on) must not feed
+    // the bar (Bug 6: the bar counts only what streamed to the window).
+    if (streamReasoningInProgressDraft && payload.text) {
+      progressSummary.noteReasoningActivity();
+    }
     return await progressDraft.pushReasoningProgress(payload.text, {
       snapshot: payload.isReasoningSnapshot === true,
     });
+  };
+  const pushStreamThinkingTokenProgress = async (progressTokens: number) => {
+    const rendered = await pushStreamToolProgress(
+      buildTelegramThinkingProgressLine(progressTokens),
+      { startImmediately: true },
+    );
+    if (rendered) {
+      progressSummary.noteReasoningActivity();
+    }
+    return rendered;
   };
   const markProgressFinalStarted = () => {
     finalAnswerDeliveryStarted = true;
@@ -1097,6 +1181,7 @@ export const dispatchTelegramMessage = async ({
   };
   const markProgressFinalDelivered = () => {
     finalAnswerDelivered = true;
+    sawProgressFinal = true;
     progressDraft.markFinalReplyDelivered();
   };
   const resetProgressDraftState = () => {
@@ -1194,8 +1279,15 @@ export const dispatchTelegramMessage = async ({
     if (!activeAnswerDraftIsToolProgressOnly) {
       return false;
     }
-    await answerLane.stream?.clear();
-    answerLane.stream?.forceNewMessage();
+    // Reposition, don't delete-then-repost: rewind so the replacement message
+    // sends below, and defer the tool-progress window's delete until after it
+    // lands. Deleting first (clear) scroll-jumps the client when a durable 🧠
+    // was posted between the window and the replacement (the on-off jump).
+    if (answerLane.stream?.rotateToNewMessageDeferringDelete) {
+      answerLane.stream.rotateToNewMessageDeferringDelete();
+    } else {
+      answerLane.stream?.forceNewMessage();
+    }
     resetDraftLaneState(answerLane);
     suppressProgressDraftState();
     rotateAnswerLaneWhenQueuedBlocksSettle = false;
@@ -1213,6 +1305,15 @@ export const dispatchTelegramMessage = async ({
     return true;
   };
   const prepareAnswerLaneForText = async (): Promise<boolean> => {
+    // Single stationary window in progress mode: interim answer text never
+    // renders into the window (updateDraftFromPartial returns early for the
+    // answer lane), so it must NOT rotate/reposition the tool-progress window
+    // either. The one window message stays put through every lane handover and
+    // is edited into the summary bar at collapse (deliverProgressModeFinalAnswer);
+    // rotating here spawned a fresh bubble per interim answer chunk (churn).
+    if (streamMode === "progress") {
+      return false;
+    }
     if (await rotateAnswerLaneAfterToolProgress()) {
       return true;
     }
@@ -1429,14 +1530,6 @@ export const dispatchTelegramMessage = async ({
     ? ctxPayload.ReplyToQuoteEntities
     : undefined;
   const deliveryState = createLaneDeliveryStateTracker();
-  const clearGroupHistory = () => {
-    if (isGroup && historyKey) {
-      createChannelHistoryWindow({ historyMap: groupHistories }).clear({
-        historyKey,
-        limit: historyLimit,
-      });
-    }
-  };
   const beginDeliveryCorrelation = () =>
     beginTelegramInboundEventDeliveryCorrelation(
       ctxPayload.SessionKey,
@@ -1445,9 +1538,6 @@ export const dispatchTelegramMessage = async ({
         outboundAccountId: route.accountId,
         markInboundEventDelivered: () => {
           deliveryState.markDelivered();
-          if (isRoomEvent) {
-            clearGroupHistory();
-          }
         },
       },
       { inboundEventKind: ctxPayload.InboundEventKind },
@@ -1456,9 +1546,15 @@ export const dispatchTelegramMessage = async ({
   const sessionKey = ctxPayload.SessionKey;
   let transcriptMirrorSequence = 0;
   const transcriptMirrorTurnId = `${chatId}:${ctxPayload.MessageSid ?? msg.message_id ?? dispatchStartedAt}`;
-  const resolveCurrentTurnTranscriptFinalText = async (): Promise<string | undefined> => {
+  let currentTurnTranscriptFinal: CurrentTurnTranscriptFinal | undefined;
+  const resolveCurrentTurnTranscriptFinal = async (): Promise<
+    CurrentTurnTranscriptFinal | undefined
+  > => {
     if (!sessionKey) {
       return undefined;
+    }
+    if (currentTurnTranscriptFinal) {
+      return currentTurnTranscriptFinal;
     }
     try {
       const { entry: sessionEntry, storePath } = loadFreshSessionEntry(route.agentId, sessionKey);
@@ -1474,11 +1570,29 @@ export const dispatchTelegramMessage = async ({
       if (!latest?.timestamp || latest.timestamp < dispatchStartedAt) {
         return undefined;
       }
-      return latest.text;
+      currentTurnTranscriptFinal = {
+        text: latest.text,
+        timestamp: latest.timestamp,
+      };
+      return currentTurnTranscriptFinal;
     } catch (err) {
       logVerbose(`telegram transcript final candidate lookup failed: ${formatErrorMessage(err)}`);
       return undefined;
     }
+  };
+  const resolveCurrentTurnTranscriptFinalText = async (): Promise<string | undefined> =>
+    (await resolveCurrentTurnTranscriptFinal())?.text;
+  const normalizePromptContextTimestampText = (text: string): string =>
+    stripInlineDirectiveTagsForDelivery(text).text.trim();
+  const resolvePromptContextTimestampMs = async (text: string): Promise<number | undefined> => {
+    const final = await resolveCurrentTurnTranscriptFinal();
+    if (
+      !final ||
+      normalizePromptContextTimestampText(final.text) !== normalizePromptContextTimestampText(text)
+    ) {
+      return undefined;
+    }
+    return final.timestamp;
   };
   const deliveryBaseOptions = {
     chatId: String(chatId),
@@ -1520,6 +1634,11 @@ export const dispatchTelegramMessage = async ({
   const silentErrorReplies = telegramCfg.silentErrorReplies === true;
   const isDmTopic = !isGroup && threadSpec.scope === "dm" && threadSpec.id != null;
   let queuedFinal = false;
+  // A final answer was produced this turn (in-band or out-of-band). Out-of-band
+  // finals (message_tool_only / codex) never flow through
+  // deliverProgressModeFinalAnswer, so the collapse bar must be posted from the
+  // cleanup fallback instead — see the finally block.
+  let sawProgressFinal = false;
   let skippedDuplicateAnswerBlockDraftDelivery = false;
   let suppressSilentReplyFallback = false;
   let hadErrorReplyFailureOrSkip = false;
@@ -1600,13 +1719,19 @@ export const dispatchTelegramMessage = async ({
       return { ...payload, replyToId: implicitQuoteReplyTargetId };
     };
     const normalizeDeliveryPayload = (payload: ReplyPayload): ReplyPayload | undefined => {
-      return projectOutboundPayloadPlanForDelivery(
-        createOutboundPayloadPlan([payload], {
+      const keepReasoningLane = payload.isReasoning === true && durableReasoningPayloadsEnabled;
+      const payloadForPlan = keepReasoningLane ? { ...payload } : payload;
+      if (keepReasoningLane) {
+        delete payloadForPlan.isReasoning;
+      }
+      const normalized = projectOutboundPayloadPlanForDelivery(
+        createOutboundPayloadPlan([payloadForPlan], {
           cfg,
           sessionKey: ctxPayload.SessionKey,
           surface: "telegram",
         }),
       )[0];
+      return normalized;
     };
     const usesNativeTelegramQuote = (payload: ReplyPayload): boolean => {
       if (replyQuoteText != null) {
@@ -1616,12 +1741,20 @@ export const dispatchTelegramMessage = async ({
     };
     const sendPayload = async (
       payload: ReplyPayload,
-      options?: { durable?: boolean; silent?: boolean },
+      options?: { durable?: boolean; silent?: boolean; mirrorTranscript?: boolean },
     ) => {
       if (isDispatchSuperseded()) {
         return false;
       }
       const deliverablePayload = applyQuoteReplyTarget(payload);
+      const promptContextTimestampMs =
+        options?.durable && deliverablePayload.text
+          ? await resolvePromptContextTimestampMs(deliverablePayload.text)
+          : undefined;
+      const effectivePayload = withTelegramPromptContextTimestampMs(
+        deliverablePayload,
+        promptContextTimestampMs,
+      );
       const silent = options?.silent ?? (silentErrorReplies && payload.isError === true);
       const durableDelivery = telegramDeps.deliverInboundReplyWithMessageSendContext;
       if (options?.durable && durableDelivery) {
@@ -1632,7 +1765,7 @@ export const dispatchTelegramMessage = async ({
           accountId: route.accountId,
           agentId: route.agentId,
           ctxPayload,
-          payload: deliverablePayload,
+          payload: effectivePayload,
           info: { kind: "final" },
           replyToMode,
           threadId: threadSpec.id,
@@ -1643,13 +1776,13 @@ export const dispatchTelegramMessage = async ({
           },
           silent,
           requiredCapabilities: deriveDurableFinalDeliveryRequirements({
-            payload: deliverablePayload,
-            replyToId: deliverablePayload.replyToId,
+            payload: effectivePayload,
+            replyToId: effectivePayload.replyToId,
             threadId: threadSpec.id,
             silent,
             payloadTransport: true,
             extraCapabilities: {
-              nativeQuote: usesNativeTelegramQuote(deliverablePayload),
+              nativeQuote: usesNativeTelegramQuote(effectivePayload),
             },
           }),
         });
@@ -1666,8 +1799,16 @@ export const dispatchTelegramMessage = async ({
       }
       const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
         ...deliveryBaseOptions,
-        transcriptMirror: options?.durable ? deliveryBaseOptions.transcriptMirror : undefined,
-        replies: [deliverablePayload],
+        // The collapse bar is a cosmetic activity digest, not an assistant
+        // message: pass mirrorTranscript:false so it never enters the session
+        // transcript (the model must not read it back as its own prior turn).
+        // Discord parity: its summary bar (reply-delivery.ts deliverDiscordReply)
+        // has no transcript-mirror seam either. Real finals keep the default.
+        transcriptMirror:
+          options?.durable && options?.mirrorTranscript !== false
+            ? deliveryBaseOptions.transcriptMirror
+            : undefined,
+        replies: [effectivePayload],
         onVoiceRecording: sendRecordVoice,
         silent,
         mediaLoader: telegramDeps.loadWebMedia,
@@ -1692,6 +1833,10 @@ export const dispatchTelegramMessage = async ({
         groupId: deliveryBaseOptions.mirrorGroupId,
       });
       try {
+        const promptContextContent =
+          result.delivery.promptContextContent ?? result.delivery.content;
+        const promptContextTimestampMs =
+          await resolvePromptContextTimestampMs(promptContextContent);
         await (
           telegramDeps.recordOutboundMessageForPromptContext ??
           recordOutboundMessageForPromptContext
@@ -1701,7 +1846,8 @@ export const dispatchTelegramMessage = async ({
           chatId: deliveryBaseOptions.chatId,
           message: { message_id: result.delivery.messageId },
           messageId: result.delivery.messageId,
-          text: result.delivery.promptContextContent ?? result.delivery.content,
+          text: promptContextContent,
+          ...(promptContextTimestampMs !== undefined ? { promptContextTimestampMs } : {}),
           ...(threadSpec.id !== undefined ? { messageThreadId: threadSpec.id } : {}),
         });
       } catch (error) {
@@ -1841,17 +1987,133 @@ export const dispatchTelegramMessage = async ({
       await emitPreviewFinalizedHook(result);
       return result.kind !== "skipped";
     };
-    const deliverProgressModeFinalAnswer = async (
-      payload: ReplyPayload,
-      text: string,
-    ): Promise<LaneDeliveryResult> => {
+    // The one-line activity digest for the collapse bar, or undefined when the
+    // window never rendered (rv mode delivers everything durably — no bar) or
+    // the summary was already emitted this turn.
+    const resolveProgressCollapseSummaryLine = (): string | undefined => {
+      if (progressSummaryDelivered) {
+        return undefined;
+      }
+      progressSummaryDelivered = true;
+      if (!progressDraftEverRendered) {
+        return undefined;
+      }
+      const line = formatTelegramProgressSummaryLine(
+        progressSummary.counts(),
+        Date.now() - progressSummaryStartedAt,
+      );
+      return line || undefined;
+    };
+    // The collapse summary bar is cosmetic and always reaches the user AFTER the
+    // real final answer (edited in place, or posted below it). A flood-wait /
+    // network throw from its durable send must never fail an otherwise-complete
+    // turn. Shared by BOTH bar-post fallbacks (the cleanup path and the
+    // finalizeToPreview-miss path) so neither can propagate a cosmetic failure
+    // into turn delivery; sendPayload throws durable.error on delivery failure.
+    const postCosmeticSummaryBar = async (line: string) => {
+      try {
+        await sendPayload({ text: line }, { durable: true, mirrorTranscript: false });
+      } catch (err) {
+        logVerbose(`telegram: collapse summary bar send failed: ${formatErrorMessage(err)}`);
+      }
+    };
+    // Post-turn collapse summary (Discord parity) as a durable standalone
+    // message. Used when there is no live window to collapse in place — the
+    // final answer posts below so the timeline reads thoughts/tools → summary →
+    // answer. Emitted at most once per turn.
+    const deliverProgressCollapseSummary = async () => {
+      const line = resolveProgressCollapseSummaryLine();
+      if (!line) {
+        return;
+      }
+      // Cleanup fallback bar (message_tool_only/codex turns): the once-guard
+      // already fired in resolveProgressCollapseSummaryLine, so no retry storm.
+      await postCosmeticSummaryBar(line);
+    };
+    // Apply a pre-resolved bar line to the window: edit the live window message
+    // IN PLACE into the bar (no delete — deleting scroll-jumps the client), or
+    // post it durably when there is no live window message to edit. NOTHING is
+    // deleted. Returns "edited" | "posted". The line is snapshotted by the
+    // caller BEFORE the final answer is sent, so the final's own delivery cannot
+    // perturb the counts; the EDIT itself runs AFTER the final so shrinking the
+    // tall window bubble down to one line happens above the anchored viewport
+    // (the final already sits at the bottom) and never drops the final off
+    // screen (the edit-shrink anchor loss). finalizeToPreview settles pending
+    // previews so a still-pending tool-progress window is materialized and
+    // edited rather than missed.
+    const applyProgressCollapseSummary = async (line: string): Promise<"edited" | "posted"> => {
+      const messageId = await answerLane.stream?.finalizeToPreview(renderStreamText(line));
+      if (typeof messageId === "number") {
+        return "edited";
+      }
+      // finalizeToPreview could not edit in place (no live window id, or a
+      // flood-wait/terminal edit): post the bar durably instead. This send is
+      // cosmetic and runs after the final answer, so a throw must not fail the
+      // turn — the shared guarded helper swallows and logs.
+      await postCosmeticSummaryBar(line);
+      return "posted";
+    };
+    // Reset answer-lane bookkeeping after a bar was edited/posted in place,
+    // WITHOUT clear() — the window message stays (as the bar) and must not be
+    // deleted (no focus-jump). forceNewMessage only rewinds the stream so the
+    // next send starts a new message.
+    const resetAnswerLaneAfterCollapse = () => {
+      if (activeAnswerDraftIsToolProgressOnly) {
+        resetAnswerToolProgressDraft();
+        suppressProgressDraftState();
+        rotateAnswerLaneWhenQueuedBlocksSettle = false;
+      }
+      answerLane.stream?.forceNewMessage();
+      resetDraftLaneState(answerLane);
+    };
+    // Tear the window down (delete) — only when there is NO bar to keep it on
+    // screen for (error final, or a turn with nothing to summarize). A bar
+    // collapse never reaches here, so clear()/delete never runs when a bar
+    // exists (the on-off focus-jump).
+    const teardownProgressWindow = async () => {
       if (activeAnswerDraftIsToolProgressOnly) {
         await rotateAnswerLaneAfterToolProgress();
       } else {
         await answerLane.stream?.clear();
         resetDraftLaneState(answerLane);
       }
+    };
+    const deliverProgressModeFinalAnswer = async (
+      payload: ReplyPayload,
+      text: string,
+    ): Promise<LaneDeliveryResult> => {
+      if (payload.isError === true) {
+        // Error finals get no collapse summary (Discord parity); tear down, then
+        // deliver the error below.
+        progressSummaryDelivered = true;
+        await teardownProgressWindow();
+        const delivered = await sendPayload(applyTextToPayload(payload, text), { durable: true });
+        if (!delivered) {
+          return { kind: "skipped" };
+        }
+        answerLane.finalized = true;
+        markProgressFinalDelivered();
+        return { kind: "sent" };
+      }
+      // Snapshot the bar line BEFORE the final send so the final's own delivery
+      // cannot perturb the counts/timer (and the once-guard fires exactly once).
+      const barLine = resolveProgressCollapseSummaryLine();
+      // Send the final FIRST so it lands at the bottom of the anchored viewport;
+      // THEN collapse the window above it. Editing the tall window down to a
+      // one-line bar after the final is delivered keeps the shrink above the
+      // anchor, so the final never scrolls off screen (edit-shrink anchor loss).
       const delivered = await sendPayload(applyTextToPayload(payload, text), { durable: true });
+      // Collapse AFTER the final either way — don't leave a stale window even
+      // when the final skipped/failed. resetAnswerLaneAfterCollapse resets lane
+      // state (clearing `finalized`), so mark the final delivered LAST.
+      if (barLine) {
+        await applyProgressCollapseSummary(barLine);
+        resetAnswerLaneAfterCollapse();
+      } else {
+        // Nothing to summarize (window never rendered / empty counts): tear the
+        // stale window down rather than leaving it above the final.
+        await teardownProgressWindow();
+      }
       if (!delivered) {
         return { kind: "skipped" };
       }
@@ -1859,11 +2121,13 @@ export const dispatchTelegramMessage = async ({
       markProgressFinalDelivered();
       return { kind: "sent" };
     };
-    const resolveTranscriptBackedFinalText = async (text: string): Promise<string> =>
-      await resolveTranscriptBackedChannelFinalText({
+    const resolveTranscriptBackedFinalText = async (text: string): Promise<string> => {
+      const candidate = await resolveCurrentTurnTranscriptFinal();
+      return await resolveTranscriptBackedChannelFinalText({
         finalText: text,
-        resolveCandidateText: resolveCurrentTurnTranscriptFinalText,
+        resolveCandidateText: async () => candidate?.text,
       });
+    };
 
     if (isDmTopic) {
       try {
@@ -1893,6 +2157,7 @@ export const dispatchTelegramMessage = async ({
       accountId: route.accountId,
       typing: {
         start: sendTyping,
+        maxConsecutiveFailures: TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES,
         onStartError: (err) => {
           logTypingFailure({
             log: logVerbose,
@@ -2151,7 +2416,21 @@ export const dispatchTelegramMessage = async ({
                         !ownedByQueuedAnswerBlockRotation &&
                         segment.update.text.trimEnd() === answerLane.lastPartialText.trimEnd();
 
-                      if (skipTextOnlyBlock) {
+                      // Progress mode: the window is a pure activity log — interim
+                      // answer blocks (intermediate assistant messages before the
+                      // final) never render into it (Discord parity). Buffer the
+                      // block so it still feeds the final/collapse, and skip the
+                      // draft stream. Media/approval/button blocks fall through to
+                      // normal delivery (they are not plain interim prose).
+                      const suppressProgressAnswerBlock =
+                        streamMode === "progress" &&
+                        info.kind === "block" &&
+                        segment.lane === "answer" &&
+                        !reply.hasMedia &&
+                        !hasExecApprovalPayload(effectivePayload) &&
+                        telegramButtons === undefined;
+
+                      if (skipTextOnlyBlock || suppressProgressAnswerBlock) {
                         // Keep duplicate blocks available for later rotation/finalization.
                         skippedDuplicateAnswerBlockDraftDelivery = true;
                         lastAnswerBlockPayload = effectivePayload;
@@ -2169,7 +2448,15 @@ export const dispatchTelegramMessage = async ({
                           lanePayload,
                           info.assistantMessageIndex,
                         );
-                        if (shouldRotateQueuedBlock && !preparedAnswerLane) {
+                        // Single stationary window in progress mode: plain interim
+                        // answer blocks are already suppressed above, so only
+                        // media/approval/button blocks reach here in progress — they
+                        // still must not rotate the window to a fresh bubble.
+                        if (
+                          streamMode !== "progress" &&
+                          shouldRotateQueuedBlock &&
+                          !preparedAnswerLane
+                        ) {
                           await rotateAnswerLaneForNewMessage();
                           rotateAnswerLaneWhenQueuedBlocksSettle = false;
                         }
@@ -2375,6 +2662,12 @@ export const dispatchTelegramMessage = async ({
                             await pushStreamReasoningProgress(payload);
                           })
                       : undefined,
+                  onReasoningProgress: answerLane.stream
+                    ? (payload) =>
+                        enqueueDraftLaneEvent(async () => {
+                          await pushStreamThinkingTokenProgress(payload.progressTokens);
+                        })
+                    : undefined,
                   onAssistantMessageStart: answerLane.stream
                     ? () =>
                         enqueueDraftLaneEvent(async () => {
@@ -2397,10 +2690,17 @@ export const dispatchTelegramMessage = async ({
                   onReasoningEnd: reasoningLane.stream
                     ? () =>
                         enqueueDraftLaneEvent(async () => {
+                          progressSummary.closeReasoningBurst();
                           splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
                           resetProgressDraftState();
                         })
-                    : undefined,
+                    : () => {
+                        // Window-reasoning turns have no separate reasoning lane;
+                        // reasoning-end is still a burst boundary for the collapse
+                        // summary (some models never fire it — the tracker also
+                        // closes at the next tool call or the summary flush).
+                        progressSummary.closeReasoningBurst();
+                      },
                   suppressDefaultToolProgressMessages:
                     !streamDeliveryEnabled || Boolean(answerLane.stream),
                   forceToolResultProgress: streamMode === "progress" && streamToolProgressEnabled,
@@ -2411,8 +2711,39 @@ export const dispatchTelegramMessage = async ({
                   },
                   commentaryProgressEnabled:
                     streamMode === "progress" ? progressDraft.commentaryProgressEnabled : undefined,
+                  reasoningPayloadsEnabled: durableReasoningPayloadsEnabled,
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
+                    // Only the "start" phase is a boundary (later phases of the same
+                    // call must not inflate the tally). The tool closes the preceding
+                    // reasoning AND commentary bursts, counting each per-burst — so a
+                    // turn's notes sharing the turn-local id "commentary-0" tally as
+                    // N, not 1 (D3). The tool itself is counted only when it renders
+                    // to the window: under verbose, tool summaries persist as their
+                    // own durable messages and must NOT also feed the bar (invariant:
+                    // persistent message XOR bar count — D2).
+                    if (payload.phase === "start") {
+                      // Count a tool only when the WINDOW actually renders it, so the
+                      // bar's 🛠️ tally matches what streamed. The compositor renders
+                      // a tool line only for work tools (isChannelProgressDraftWorkToolName
+                      // rejects message/reply/react/typing/etc.) and only when
+                      // toolProgress is on; a start-phase message tool (codex/
+                      // message_tool_only) otherwise inflated the count with no tool
+                      // line. canPushStreamToolProgress() is false under verbose (the
+                      // durable lane owns the tool message: persistent XOR window). In
+                      // every non-counting case the tool start is still a burst
+                      // boundary, so close reasoning/commentary without counting it.
+                      const windowRendersTool =
+                        canPushStreamToolProgress() &&
+                        streamToolProgressEnabled &&
+                        isChannelProgressDraftWorkToolName(toolName);
+                      if (windowRendersTool) {
+                        progressSummary.noteToolCall();
+                      } else {
+                        progressSummary.closeReasoningBurst();
+                        progressSummary.closeCommentaryBurst();
+                      }
+                    }
                     const progressPromise = pushStreamToolProgress(
                       buildChannelProgressDraftLineForEntry(
                         telegramCfg,
@@ -2436,8 +2767,13 @@ export const dispatchTelegramMessage = async ({
                   onItemEvent: async (payload) => {
                     if (payload.kind === "preamble") {
                       if (verboseProgressActive()) {
+                        // Durable verbose lane owns commentary; not counted toward
+                        // the collapse summary — it did not stream to the window.
                         return;
                       }
+                      // Window path: the note renders to the progress window, so
+                      // tally it for the collapse bar (counted per-burst, D3).
+                      progressSummary.noteCommentary(payload.itemId, payload.progressText);
                       await progressDraft.pushCommentaryProgress(payload.progressText, {
                         itemId: payload.itemId,
                       });
@@ -2562,6 +2898,12 @@ export const dispatchTelegramMessage = async ({
         return { kind: "completed" };
       }
       ({ queuedFinal } = turnResult.dispatchResult);
+      // Out-of-band finals (message_tool_only) never run the in-band final-delivery
+      // path, so record the final from the dispatch counts for the cleanup-time
+      // collapse-bar fallback.
+      if ((turnResult.dispatchResult.counts?.final ?? 0) > 0) {
+        sawProgressFinal = true;
+      }
       suppressSilentReplyFallback =
         turnResult.dispatchResult.sourceReplyDeliveryMode === "message_tool_only";
     } catch (err) {
@@ -2589,6 +2931,20 @@ export const dispatchTelegramMessage = async ({
         } else {
           await stream.clear();
         }
+      }
+      // Fallback collapse summary (Discord parity): finals that bypass
+      // deliverProgressModeFinalAnswer — notably message_tool_only/codex turns
+      // whose final is delivered out-of-band — still collapse here. The internal
+      // once-guard and progressDraftEverRendered check keep this from
+      // double-posting or firing when the window never rendered.
+      if (
+        streamMode === "progress" &&
+        sawProgressFinal &&
+        !dispatchError &&
+        !hadErrorReplyFailureOrSkip &&
+        !isDispatchSuperseded()
+      ) {
+        await deliverProgressCollapseSummary();
       }
     }
   } finally {
@@ -2623,9 +2979,6 @@ export const dispatchTelegramMessage = async ({
         },
       });
     }
-    if (!isRoomEvent || deliveryState.snapshot().delivered) {
-      clearGroupHistory();
-    }
     return { kind: "completed" };
   }
   let sentFallback = false;
@@ -2633,9 +2986,8 @@ export const dispatchTelegramMessage = async ({
   const shouldSendFailureFallback =
     !isRoomEvent &&
     !suppressFailureFallback &&
-    (dispatchError ||
-      (!deliverySummary.delivered &&
-        (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0)));
+    !finalAnswerDelivered &&
+    (dispatchError || deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0);
   if (shouldSendFailureFallback) {
     const fallbackText = dispatchError
       ? "Something went wrong while processing your request. Please try again."
@@ -2686,9 +3038,11 @@ export const dispatchTelegramMessage = async ({
   }
 
   const hasFinalResponse =
+    finalAnswerDelivered || sentFallback || suppressSilentReplyFallback || queuedFinal;
+  const hasVisibleResponse =
     deliverySummary.delivered || sentFallback || suppressSilentReplyFallback || queuedFinal;
   const deliveryFailureWithoutFinalResponse =
-    !deliverySummary.delivered &&
+    !finalAnswerDelivered &&
     (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0);
   const retryableDispatchFailure =
     dispatchError ??
@@ -2698,7 +3052,7 @@ export const dispatchTelegramMessage = async ({
         )
       : null);
 
-  if (statusReactionController && !hasFinalResponse) {
+  if (statusReactionController && !hasVisibleResponse) {
     void finalizeTelegramStatusReaction({ outcome: "error", hasFinalResponse: false }).catch(
       (err: unknown) => {
         logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
@@ -2706,24 +3060,22 @@ export const dispatchTelegramMessage = async ({
     );
   }
 
-  const shouldClearGroupHistory =
-    !isRoomEvent || deliverySummary.delivered || sentFallback || queuedFinal;
+  const shouldReturnRetryableDispatchFailure =
+    retryDispatchErrors &&
+    ((dispatchError != null && !hasFinalResponse) ||
+      (dispatchError == null && deliveryFailureWithoutFinalResponse && !hasVisibleResponse));
 
-  if (retryableDispatchFailure && retryDispatchErrors && !hasFinalResponse) {
+  if (retryableDispatchFailure && shouldReturnRetryableDispatchFailure) {
     return { kind: "failed-retryable", error: retryableDispatchFailure };
   }
 
-  if (!hasFinalResponse) {
-    if (!shouldClearGroupHistory) {
-      return { kind: "completed" };
-    }
-    clearGroupHistory();
+  if (!hasVisibleResponse) {
     return { kind: "completed" };
   }
 
   // Fire-and-forget: auto-rename DM topic on first message.
   if (isDmTopic && isFirstTurnInSession) {
-    const userMessage = (ctxPayload.RawBody ?? ctxPayload.Body ?? "").slice(0, 500);
+    const userMessage = truncateUtf16Safe(ctxPayload.RawBody ?? ctxPayload.Body ?? "", 500);
     if (userMessage.trim()) {
       const agentDir = resolveAgentDir(cfg, route.agentId);
       const directAutoTopicLabel =
@@ -2762,7 +3114,8 @@ export const dispatchTelegramMessage = async ({
   }
 
   if (statusReactionController) {
-    const statusReactionOutcome = dispatchError || sentFallback ? "error" : "done";
+    const statusReactionOutcome =
+      !finalAnswerDelivered && (dispatchError != null || sentFallback) ? "error" : "done";
     void finalizeTelegramStatusReaction({
       outcome: statusReactionOutcome,
       hasFinalResponse: true,
@@ -2788,9 +3141,6 @@ export const dispatchTelegramMessage = async ({
         });
       },
     });
-  }
-  if (shouldClearGroupHistory) {
-    clearGroupHistory();
   }
   return { kind: "completed" };
 };

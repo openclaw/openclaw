@@ -28,6 +28,7 @@ import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { initFastReplySessionState } from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { stripStructuralPrefixes } from "./mentions.js";
+import { persistReplySessionEntry } from "./session-entry-persistence.js";
 import type { createTypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
@@ -137,6 +138,34 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     commandAuthorized: params.commandAuthorized,
     workspaceDir: params.workspaceDir,
   });
+  if (params.commandAuthorized) {
+    const creatingSession = sessionState.initialSessionEntry === undefined;
+    const initializationEntry = sessionState.initialSessionEntry ?? sessionState.sessionEntry;
+    const persistence = await persistReplySessionEntry({
+      storePath: sessionState.storePath,
+      sessionKey: sessionState.sessionKey,
+      allowCreate: creatingSession,
+      initialEntry: initializationEntry,
+      entry: sessionState.sessionEntry,
+      skipMaintenance: !creatingSession,
+    });
+    if (persistence.status === "lifecycle-invalidated") {
+      params.typing.cleanup();
+      return {
+        handled: true,
+        reply: markCommandReplyForDelivery({
+          text: persistence.error,
+        }),
+      };
+    }
+    const persistedInitialEntry = persistence.entry;
+    // Commit the synthesized activity/channel touch before commands or directives
+    // capture their own mutation baseline.
+    sessionState.sessionEntry = persistedInitialEntry;
+    sessionState.sessionEntryHandle.replaceCurrent(persistedInitialEntry);
+    sessionState.sessionStore[sessionState.sessionKey] = persistedInitialEntry;
+    sessionState.sessionId = persistedInitialEntry.sessionId;
+  }
   const command = buildCommandContext({
     ctx: params.ctx,
     cfg: params.cfg,

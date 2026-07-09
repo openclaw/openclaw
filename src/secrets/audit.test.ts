@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   resolveAuthProfileDatabasePath,
   writePersistedAuthProfileStoreRaw,
@@ -221,6 +221,17 @@ async function seedAuditFixture(fixture: AuditFixture): Promise<void> {
 
 describe("secrets audit", () => {
   let fixture: AuditFixture;
+
+  beforeAll(async () => {
+    const warmFixture = await createAuditFixture();
+    try {
+      await seedAuditFixture(warmFixture);
+      await runSecretsAudit({ env: warmFixture.env });
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      await fs.rm(warmFixture.rootDir, { recursive: true, force: true });
+    }
+  });
 
   async function writeModelsProvider(
     overrides: Partial<{
@@ -768,6 +779,67 @@ describe("secrets audit", () => {
           entry.code === "PLAINTEXT_FOUND" &&
           entry.file === fixture.configPath &&
           entry.jsonPath === "models.providers.openai.request.headers.X-Proxy-Region",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not flag openclaw.json model provider apiKey marker values as plaintext", async () => {
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          lmstudio: {
+            baseUrl: "http://127.0.0.1:1234/v1",
+            api: "openai-completions",
+            apiKey: "lmstudio-local",
+            models: [{ id: "lmstudio-local", name: "lmstudio-local" }],
+          },
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434/v1",
+            api: "openai-completions",
+            apiKey: "ollama-local",
+            models: [{ id: "ollama-local", name: "ollama-local" }],
+          },
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: "sk-real-plaintext",
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {},
+    });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.configPath &&
+          entry.jsonPath === "models.providers.lmstudio.apiKey",
+      ),
+    ).toBe(false);
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.configPath &&
+          entry.jsonPath === "models.providers.ollama.apiKey",
+      ),
+    ).toBe(false);
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.configPath &&
+          entry.jsonPath === "models.providers.openai.apiKey",
       ),
     ).toBe(true);
   });

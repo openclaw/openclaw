@@ -40,7 +40,7 @@ extension OnboardingView {
         view.state.connectionMode = .local
         _ = view.welcomePage()
         _ = view.connectionPage()
-        _ = view.wizardPage()
+        _ = view.aiSetupPage()
         _ = view.permissionsPage()
         _ = view.cliPage()
         _ = view.workspacePage()

@@ -1,5 +1,7 @@
 // Builds OpenAI-compatible embedding provider entries for plugins.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { resolveConfiguredSecretInputString } from "../gateway/resolve-configured-secret-input-string.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -285,11 +287,7 @@ function readEmbeddingVectors(
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {
-  try {
-    return await response.json();
-  } catch (cause) {
-    throw new Error("openai-compatible embeddings failed: malformed JSON response", { cause });
-  }
+  return await readProviderJsonResponse(response, "openai-compatible embeddings failed");
 }
 
 function concatBytes(chunks: Uint8Array[], totalLength: number): Uint8Array {
@@ -344,7 +342,7 @@ async function readEmbeddingErrorBodySnippet(response: Response): Promise<string
   }
   const text = new TextDecoder().decode(concatBytes(chunks, totalLength));
   if (text.length > EMBEDDING_ERROR_BODY_MAX_CHARS) {
-    return `${text.slice(0, EMBEDDING_ERROR_BODY_MAX_CHARS)}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}`;
+    return `${truncateUtf16Safe(text, EMBEDDING_ERROR_BODY_MAX_CHARS)}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}`;
   }
   return truncated ? `${text}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}` : text;
 }
@@ -395,7 +393,7 @@ async function postEmbeddingRequest(params: {
 }
 
 /** Creates a normalized OpenAI-compatible embedding client from runtime config. */
-export async function createOpenAICompatibleEmbeddingClient(
+async function createOpenAICompatibleEmbeddingClient(
   options: EmbeddingProviderCreateOptions,
 ): Promise<OpenAICompatibleEmbeddingClient> {
   const configuredProvider = resolveConfiguredProvider(options);

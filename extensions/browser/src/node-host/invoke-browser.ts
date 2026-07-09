@@ -5,6 +5,12 @@
 import fsPromises from "node:fs/promises";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  BROWSER_PROXY_ERROR_ENVELOPE,
+  createBrowserProxyFailure,
+  type BrowserProxyEnvelope,
+  type BrowserProxyFile,
+} from "../browser-proxy-envelope.js";
 import { redactCdpUrl } from "../browser/cdp.helpers.js";
 import { loadBrowserConfigForRuntimeRefresh } from "../browser/config-refresh-source.js";
 import { resolveBrowserConfig } from "../browser/config.js";
@@ -28,17 +34,7 @@ type BrowserProxyParams = {
   body?: unknown;
   timeoutMs?: number;
   profile?: string;
-};
-
-type BrowserProxyFile = {
-  path: string;
-  base64: string;
-  mimeType?: string;
-};
-
-type BrowserProxyResult = {
-  result: unknown;
-  files?: BrowserProxyFile[];
+  errorEnvelope?: unknown;
 };
 
 const BROWSER_PROXY_MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -152,10 +148,12 @@ function isBrowserProxyTimeoutError(err: unknown): boolean {
 function isWsBackedBrowserProxyPath(path: string): boolean {
   return (
     path === "/act" ||
+    path === "/download" ||
     path === "/navigate" ||
     path === "/pdf" ||
     path === "/screenshot" ||
-    path === "/snapshot"
+    path === "/snapshot" ||
+    path === "/wait/download"
   );
 }
 
@@ -315,11 +313,16 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
     );
   }
   if (response.status >= 400) {
-    const message =
+    if (params.errorEnvelope === BROWSER_PROXY_ERROR_ENVELOPE) {
+      // New callers opt into the closed envelope; older Gateways retain the
+      // shipped status-prefixed node error during rolling upgrades.
+      return JSON.stringify(createBrowserProxyFailure(response.status, response.body));
+    }
+    const detail =
       response.body && typeof response.body === "object" && "error" in response.body
-        ? String((response.body as { error?: unknown }).error)
-        : `HTTP ${response.status}`;
-    throw new Error(message);
+        ? String((response.body as { error?: unknown }).error).trim()
+        : "";
+    throw new Error(detail ? `${response.status}: ${detail}` : `HTTP ${response.status}`);
   }
 
   const result = response.body;
@@ -359,6 +362,6 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
     }
   }
 
-  const payload: BrowserProxyResult = files ? { result, files } : { result };
+  const payload: BrowserProxyEnvelope = files ? { result, files } : { result };
   return JSON.stringify(payload);
 }

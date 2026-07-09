@@ -244,6 +244,29 @@ describe("acquireSessionWriteLock", () => {
     });
   });
 
+  it("cancels a contended infinite acquisition without leaving a lock waiter", async () => {
+    await withTempSessionLockFile(async ({ sessionFile }) => {
+      const heldLock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      const abortController = new AbortController();
+      const abortError = new Error("stop requested");
+      abortError.name = "AbortError";
+      const pendingLock = acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: Number.POSITIVE_INFINITY,
+        signal: abortController.signal,
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
+      abortController.abort(abortError);
+
+      await expect(pendingLock).rejects.toBe(abortError);
+      await heldLock.release();
+      const nextLock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      await nextLock.release();
+    });
+  });
+
   it("does not reenter locks by default through symlinked session paths", async () => {
     await withSymlinkedSessionPaths(async ({ sessionReal, sessionLink }) => {
       const lock = await acquireSessionWriteLock({ sessionFile: sessionReal, timeoutMs: 500 });
@@ -506,7 +529,7 @@ describe("acquireSessionWriteLock", () => {
       }) as typeof fs.readFile);
 
       try {
-        const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 5_000, staleMs: 1_000 });
+        const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500, staleMs: 10 });
         await lock.release();
         expect(lockReads).toBeGreaterThanOrEqual(3);
         await expectPathMissing(lockPath);
@@ -561,7 +584,7 @@ describe("acquireSessionWriteLock", () => {
       }) as typeof fs.readFile);
 
       try {
-        const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 5_000, staleMs: 1_000 });
+        const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500, staleMs: 10 });
         await lock.release();
         expect(lockReads).toBeGreaterThanOrEqual(3);
         await expectPathMissing(lockPath);
@@ -610,7 +633,7 @@ describe("acquireSessionWriteLock", () => {
       }) as typeof fs.readFile);
 
       try {
-        const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 5_000, staleMs: 1_000 });
+        const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 800, staleMs: 10 });
         await lock.release();
         expect(lockReads).toBeGreaterThanOrEqual(3);
         await expectPathMissing(lockPath);

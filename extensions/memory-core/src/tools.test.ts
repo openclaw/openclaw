@@ -1,4 +1,5 @@
 // Memory Core tests cover tools plugin behavior.
+import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMemoryCloseMockCalls,
@@ -381,6 +382,115 @@ describe("memory_search unavailable payloads", () => {
     expect(searchCalls).toBe(2);
   });
 
+  it("keeps the zero-hit bootstrap retry for one-shot qmd searches", async () => {
+    setMemoryBackend("qmd");
+    let searchCalls = 0;
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      if (searchCalls === 1) {
+        return [];
+      }
+      return [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Thread-hidden codename: ORBIT-22.",
+          source: "memory" as const,
+        },
+      ];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { backend: "qmd", citations: "off" },
+      },
+      oneShotCliRun: true,
+    });
+    const result = await tool.execute("qmd-zero-hit-cli", {
+      query: "hidden thread codename",
+    });
+
+    expect((result.details as { results?: Array<{ path: string }> }).results?.[0]?.path).toBe(
+      "MEMORY.md",
+    );
+    expect(searchCalls).toBe(2);
+    expect(getMemorySyncMockCalls()).toBe(1);
+  });
+
+  it("returns qmd runtime debug without forcing a zero-hit retry", async () => {
+    setMemoryBackend("qmd");
+    let searchCalls = 0;
+    setMemorySearchImpl(async (opts) => {
+      searchCalls += 1;
+      opts?.onDebug?.({
+        backend: "qmd",
+        configuredMode: "search",
+        effectiveMode: "search",
+        qmd: {
+          collectionValidation: {
+            cacheState: "hit",
+            elapsedMs: 2,
+            collectionCount: 2,
+            listCalls: 0,
+            showCalls: 0,
+          },
+          multiCollectionProbe: {
+            cacheState: "hit",
+            elapsedMs: 1,
+            supported: true,
+          },
+          searchPlan: {
+            command: "search",
+            collectionCount: 2,
+            groupCount: 2,
+            sources: ["memory", "sessions"],
+          },
+        },
+      });
+      return [];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { backend: "qmd", citations: "off" },
+      },
+    });
+    const result = await tool.execute("zero-hit-debug-single", {
+      query: "hidden thread codename",
+    });
+    const details = result.details as {
+      debug?: {
+        effectiveMode?: string;
+        fallback?: string;
+        qmd?: MemorySearchRuntimeDebug["qmd"];
+      };
+    };
+
+    expect((result.details as { results?: Array<unknown> }).results).toEqual([]);
+    expect(searchCalls).toBe(1);
+    expect(getMemorySyncMockCalls()).toBe(0);
+    expect(details.debug?.effectiveMode).toBe("search");
+    expect(details.debug?.fallback).toBeUndefined();
+    expect(details.debug?.qmd?.collectionValidation).toMatchObject({
+      cacheState: "hit",
+      collectionCount: 2,
+    });
+    expect(details.debug?.qmd?.multiCollectionProbe).toMatchObject({
+      cacheState: "hit",
+      supported: true,
+    });
+    expect(details.debug?.qmd?.searchPlan).toEqual({
+      command: "search",
+      collectionCount: 2,
+      groupCount: 2,
+      sources: ["memory", "sessions"],
+    });
+  });
+
   it("returns unavailable metadata when the index identity is paused", async () => {
     let searchCalls = 0;
     setMemorySearchImpl(async () => {
@@ -422,6 +532,14 @@ describe("memory_search unavailable payloads", () => {
         configuredMode: opts.qmdSearchModeOverride ?? "query",
         effectiveMode: "query",
         fallback: "unsupported-search-flags",
+        qmd: {
+          searchPlan: {
+            command: "query",
+            collectionCount: 2,
+            groupCount: 2,
+            sources: ["memory", "sessions"],
+          },
+        },
       });
       return [
         {
@@ -470,6 +588,18 @@ describe("memory_search unavailable payloads", () => {
         fallback?: unknown;
         hits?: unknown;
         searchMs?: number;
+        toolMs?: number;
+        managerMs?: number;
+        outsideSearchMs?: number;
+        managerCacheState?: unknown;
+        qmd?: {
+          searchPlan?: {
+            command?: unknown;
+            collectionCount?: unknown;
+            groupCount?: unknown;
+            sources?: unknown;
+          };
+        };
       };
     };
     expect(details.mode).toBe("query");
@@ -479,6 +609,94 @@ describe("memory_search unavailable payloads", () => {
     expect(details.debug?.fallback).toBe("unsupported-search-flags");
     expect(details.debug?.hits).toBe(1);
     expect(details.debug?.searchMs).toBeGreaterThanOrEqual(0);
+    expect(details.debug?.toolMs).toBeGreaterThanOrEqual(details.debug?.searchMs ?? 0);
+    expect(details.debug?.outsideSearchMs).toBeGreaterThanOrEqual(0);
+    expect(details.debug?.managerMs).toBeGreaterThanOrEqual(0);
+    expect(details.debug?.managerCacheState).toBeUndefined();
+    expect(details.debug?.qmd?.searchPlan).toEqual({
+      command: "query",
+      collectionCount: 2,
+      groupCount: 2,
+      sources: ["memory", "sessions"],
+    });
+  });
+
+  it("includes manager acquisition timing and cache-state debug payload", async () => {
+    setMemorySearchManagerImpl(
+      async () =>
+        ({
+          manager: {
+            search: vi.fn(async () => {
+              return [
+                {
+                  path: "MEMORY.md",
+                  startLine: 1,
+                  endLine: 2,
+                  score: 0.9,
+                  snippet: "ramen",
+                  source: "memory",
+                },
+              ];
+            }),
+            readFile: vi.fn(),
+            status: vi.fn(() => ({
+              backend: "qmd",
+              provider: "qmd",
+              model: "qmd",
+              requestedProvider: "qmd",
+              files: 0,
+              chunks: 0,
+              dirty: false,
+              workspaceDir: "/tmp/workspace",
+              dbPath: "/tmp/workspace/index.sqlite",
+              sources: ["memory"],
+              sourceCounts: [{ source: "memory", files: 0, chunks: 0 }],
+            })),
+            sync: vi.fn(async () => {}),
+            probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+            probeVectorAvailability: vi.fn(async () => true),
+          },
+          debug: {
+            managerMs: 17,
+            managerCacheState: "cached-full-hit",
+          },
+        }) as any,
+    );
+    setMemorySearchImpl(async () => [
+      {
+        path: "MEMORY.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.9,
+        snippet: "ramen",
+        source: "memory",
+      },
+    ]);
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { backend: "qmd" },
+      },
+    });
+    const result = await tool.execute("manager-debug", { query: "favorite food" });
+    const details = result.details as {
+      debug?: {
+        backend?: string;
+        managerMs?: number;
+        toolMs?: number;
+        outsideSearchMs?: number;
+        managerCacheState?: string;
+        hits?: number;
+        searchMs?: number;
+      };
+    };
+
+    expect(details.debug?.backend).toBe("qmd");
+    expect(details.debug?.managerMs).toBe(17);
+    expect(details.debug?.toolMs).toBeGreaterThanOrEqual(details.debug?.searchMs ?? 0);
+    expect(details.debug?.outsideSearchMs).toBeGreaterThanOrEqual(0);
+    expect(details.debug?.managerCacheState).toBe("cached-full-hit");
   });
 });
 

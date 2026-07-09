@@ -25,6 +25,7 @@ import {
   sendGroupMessageWithStory,
 } from "./urbit/send.js";
 import { uploadImageFromUrl } from "./urbit/upload.js";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 
 type ResolvedTlonAccount = ReturnType<typeof resolveTlonAccount>;
 type ConfiguredTlonAccount = ResolvedTlonAccount & {
@@ -76,7 +77,7 @@ async function createHttpPokeApi(params: {
 
       try {
         if (!response.ok && response.status !== 204) {
-          const errorText = await response.text();
+          const errorText = await readResponseTextLimited(response, 16 * 1024);
           throw new Error(`Poke failed: ${response.status} - ${errorText}`);
         }
 

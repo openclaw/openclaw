@@ -13,7 +13,9 @@ import type { CronServiceContract } from "../../cron/service-contract.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WizardSession } from "../../wizard/session.js";
+import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
@@ -28,6 +30,8 @@ import type {
 } from "../server-chat-state.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
+import type { TerminalLaunchResolution } from "../terminal/launch.js";
+import type { TerminalSessionManager } from "../terminal/session-manager.js";
 
 /**
  * Shared gateway request types used by every server-method module.
@@ -46,6 +50,7 @@ export type GatewayClient = {
   internal?: {
     allowModelOverride?: boolean;
     approvalRuntime?: boolean;
+    agentRuntimeIdentity?: AgentRuntimeIdentity;
     pluginRuntimeOwnerId?: string;
     agentRunTracking?: "plugin_subagent";
   };
@@ -65,6 +70,8 @@ export type GatewayRequestContext = {
   cron: CronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
+  isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   loadGatewayModelCatalog: (params?: { readOnly?: boolean }) => Promise<ModelCatalogEntry[]>;
@@ -96,11 +103,17 @@ export type GatewayRequestContext = {
     deviceId: string,
     opts?: { role?: string; reason?: string },
   ) => void;
+  hasConnectedClientsForDevice?: (deviceId: string) => boolean;
   disconnectClientsUsingSharedGatewayAuth?: () => void;
   enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
   nodeRegistry: NodeRegistry;
+  // Operator terminal session store. Absent in local/in-process contexts where
+  // no PTY surface is served.
+  terminalSessions?: TerminalSessionManager;
   agentRunSeq: Map<string, number>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  /** Cancel identities for turns waiting in the followup/collect queue. */
+  chatQueuedTurns: Map<string, import("../chat-queued-turns.js").QueuedChatTurnEntry>;
   chatAbortedRuns: Map<string, ChatAbortMarker>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
@@ -124,13 +137,16 @@ export type GatewayRequestContext = {
   registerToolEventRecipient: (runId: string, connId: string) => void;
   dedupe: Map<string, DedupeEntry>;
   wizardSessions: Map<string, WizardSession>;
+  crestodianSessions: Map<string, import("./crestodian.js").CrestodianChatSession>;
   findRunningWizard: () => string | null;
   purgeWizardSession: (id: string) => void;
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
+  getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
   startChannel: (
     channel: import("../../channels/plugins/types.public.js").ChannelId,
     accountId?: string,
+    opts?: import("../server-channels.js").StartChannelOptions,
   ) => Promise<void>;
   stopChannel: (
     channel: import("../../channels/plugins/types.public.js").ChannelId,

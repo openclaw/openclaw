@@ -9,6 +9,7 @@ import { en } from "../locales/en.ts";
 import { es } from "../locales/es.ts";
 import { fa } from "../locales/fa.ts";
 import { fr } from "../locales/fr.ts";
+import { hi } from "../locales/hi.ts";
 import { id } from "../locales/id.ts";
 import { it as itLocale } from "../locales/it.ts";
 import { ja_JP } from "../locales/ja-JP.ts";
@@ -16,6 +17,7 @@ import { ko } from "../locales/ko.ts";
 import { nl } from "../locales/nl.ts";
 import { pl } from "../locales/pl.ts";
 import { pt_BR } from "../locales/pt-BR.ts";
+import { ru } from "../locales/ru.ts";
 import { th } from "../locales/th.ts";
 import { tr } from "../locales/tr.ts";
 import { uk } from "../locales/uk.ts";
@@ -29,6 +31,7 @@ const shippedLocales = {
   es,
   fa,
   fr,
+  hi,
   id,
   it: itLocale,
   ja_JP,
@@ -36,6 +39,7 @@ const shippedLocales = {
   nl,
   pl,
   pt_BR,
+  ru,
   th,
   tr,
   uk,
@@ -156,6 +160,7 @@ describe("i18n", () => {
     const englishHealth = (en.common as { health: string }).health;
     for (const [locale, value] of Object.entries({
       ar,
+      hi,
       fa,
       it: itLocale,
       nl,
@@ -177,6 +182,7 @@ describe("i18n", () => {
       es,
       fa,
       fr,
+      hi,
       id,
       it: itLocale,
       ja_JP,
@@ -184,6 +190,7 @@ describe("i18n", () => {
       nl,
       pl,
       pt_BR,
+      ru,
       th,
       tr,
       uk,
@@ -191,6 +198,28 @@ describe("i18n", () => {
       zh_CN,
       zh_TW,
     })) {
+      for (const key of checkedKeys) {
+        expect(readString(value, key), `${locale}:${key}`).not.toBe(readString(en, key));
+      }
+    }
+  });
+
+  it("keeps mobile pairing copy localized in shipped locale bundles", () => {
+    const checkedKeys = flatten(en).filter(
+      (key) => key.startsWith("nodes.pairing.") && key !== "nodes.pairing.title",
+    );
+
+    for (const [locale, value] of Object.entries(shippedLocales)) {
+      for (const key of checkedKeys) {
+        expect(readString(value, key), `${locale}:${key}`).not.toBe(readString(en, key));
+      }
+    }
+  });
+
+  it("keeps new chat composer commands localized in shipped locale bundles", () => {
+    const checkedKeys = ["chat.composer.addAttachment", "chat.composer.attachFileOption"];
+
+    for (const [locale, value] of Object.entries(shippedLocales)) {
       for (const key of checkedKeys) {
         expect(readString(value, key), `${locale}:${key}`).not.toBe(readString(en, key));
       }
