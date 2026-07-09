@@ -1,6 +1,6 @@
 // Imessage plugin module implements cli output behavior.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const IMESSAGE_CLI_STDOUT_MAX_CHARS = 8 * 1024 * 1024;
 const IMESSAGE_CLI_STDERR_TAIL_CHARS = 64 * 1024;
