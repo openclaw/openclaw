@@ -292,6 +292,31 @@ describe("gateway usage helpers", () => {
     expect(range.endMs).toBe(Date.UTC(2026, 9, 25, 23) - 1);
   });
 
+  it("resolveDateRange crosses a skipped IANA civil date for the prior day's end", () => {
+    const range = expectDateRange(
+      testApi.resolveDateRange({
+        startDate: "2011-12-29",
+        endDate: "2011-12-29",
+        mode: "specific",
+        timeZone: "Pacific/Apia",
+      }),
+    );
+
+    expect(range.startMs).toBe(Date.parse("2011-12-29T10:00:00.000Z"));
+    expect(range.endMs).toBe(Date.parse("2011-12-30T10:00:00.000Z") - 1);
+    expect(
+      testApi.resolveDateRange({
+        startDate: "2011-12-30",
+        endDate: "2011-12-30",
+        mode: "specific",
+        timeZone: "Pacific/Apia",
+      }),
+    ).toEqual({
+      ok: false,
+      error: "calendar day does not exist in requested time zone",
+    });
+  });
+
   it("resolveDateRange falls back to UTC when specific mode offset is missing or invalid", () => {
     const missingOffset = expectDateRange(
       testApi.resolveDateRange({

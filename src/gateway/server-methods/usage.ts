@@ -99,6 +99,8 @@ type DateInterpretationResolution =
   | { ok: false; error: string };
 type DateParts = { year: number; monthIndex: number; day: number };
 
+const MAX_CONSECUTIVE_SKIPPED_TIME_ZONE_DAYS = 1;
+
 type CostUsageCacheEntry = {
   summary?: CostUsageSummary;
   updatedAt?: number;
@@ -225,8 +227,17 @@ const datePartsToEndMs = (
   parts: DateParts,
   interpretation: DateInterpretation,
 ): number | undefined => {
-  const nextDayStartMs = datePartsToStartMs(shiftDateParts(parts, 1), interpretation);
-  return nextDayStartMs === undefined ? undefined : nextDayStartMs - 1;
+  const lookaheadDays =
+    interpretation.mode === "time-zone" ? 1 + MAX_CONSECUTIVE_SKIPPED_TIME_ZONE_DAYS : 1;
+  // A 24-hour date-line transition can remove one civil date entirely. Range
+  // resolution separately verifies the requested day; this only finds its end.
+  for (let daysAhead = 1; daysAhead <= lookaheadDays; daysAhead += 1) {
+    const nextDayStartMs = datePartsToStartMs(shiftDateParts(parts, daysAhead), interpretation);
+    if (nextDayStartMs !== undefined) {
+      return nextDayStartMs - 1;
+    }
+  }
+  return undefined;
 };
 
 // usage.cost / sessions.usage accept optional startDate/endDate. parseDateParts returns
@@ -415,10 +426,7 @@ const resolveTrailingDays = (
   days: number,
   interpretation: DateInterpretation,
 ): DateRangeResolution => {
-  const startMs = datePartsToStartMs(
-    shiftDateParts(endDateParts, -(days - 1)),
-    interpretation,
-  );
+  const startMs = datePartsToStartMs(shiftDateParts(endDateParts, -(days - 1)), interpretation);
   const endMs = datePartsToEndMs(endDateParts, interpretation);
   if (startMs === undefined || endMs === undefined) {
     return { ok: false, error: "calendar day does not exist in requested time zone" };
