@@ -318,6 +318,7 @@ async function resolveComputerNode(
       if (ineligible && !isEligibleComputerNode(ineligible)) {
         throw new Error(
           `node "${trimmed}" is not computer-capable (needs a connected macOS node advertising ${COMPUTER_ACT_COMMAND}; ${NOT_COMPUTER_CAPABLE_HINT})`,
+          { cause: err },
         );
       }
       throw err instanceof Error ? err : new Error(String(err));
