@@ -99,6 +99,9 @@ export function createTeamsReplyStreamController(params: {
   // an appending sink produces "chunk1 + chunk2 + chunk3..." duplication. We
   // track the length of text we've already emitted and forward only the delta.
   let emittedTextLength = 0;
+  // Last cumulative text emitted, used to detect when a tool boundary starts
+  // a new text segment whose cumulative text does not extend the prior one.
+  let lastEmittedText = "";
 
   const wasCanceled = () => canceledLocally || Boolean(stream?.canceled);
 
@@ -176,10 +179,24 @@ export function createTeamsReplyStreamController(params: {
       if (fullText.length <= emittedTextLength) {
         return;
       }
+      // A new text segment after a tool call does not extend the previously
+      // emitted cumulative text. Emitting it sliced at the stale offset would
+      // merge it mid-word into the prior streamed bubble (#102274, a regression
+      // of #56071 dropped by the #76262 rebase). Finalize the prior stream and
+      // reset so the new segment is delivered as a separate message via
+      // preparePayload instead of being sliced against the prior offset.
+      if (lastEmittedText && !fullText.startsWith(lastEmittedText)) {
+        streamFinalizationPending = true;
+        tokensEmitted = false;
+        emittedTextLength = 0;
+        lastEmittedText = "";
+        return;
+      }
       const delta = fullText.slice(emittedTextLength);
       try {
         stream.emit(delta);
         emittedTextLength = fullText.length;
+        lastEmittedText = fullText;
         tokensEmitted = true;
       } catch (err) {
         if (isStreamCancelledError(err)) {

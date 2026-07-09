@@ -152,6 +152,29 @@ describe("createTeamsReplyStreamController", () => {
     });
   });
 
+  it("does not slice a post-tool text segment at the preamble offset (#102274)", () => {
+    // Regression of #56071 (dropped by the #76262 rebase): when the pipeline
+    // sends a NEW text segment's cumulative text after a tool call, that text
+    // does not extend the streamed preamble. Slicing it at the preamble's
+    // emitted length merges it mid-word into the prior bubble.
+    const stream = makeStream();
+    const ctrl = makeController({ stream });
+
+    // Preamble streamed before the tool call (19 chars).
+    ctrl.onPartialReply({ text: "I'll check the CRM." });
+    // Tool boundary: the pipeline sends the new segment's cumulative text,
+    // which does NOT start with the preamble.
+    ctrl.onPartialReply({ text: "There are 190 contacts in RForce." });
+
+    // The streamed bubble must contain only the preamble. The post-tool
+    // segment is delivered as a separate message, not sliced-and-merged.
+    expect(stream.emit).toHaveBeenCalledTimes(1);
+    expect(stream.emit).toHaveBeenNthCalledWith(1, "I'll check the CRM.");
+    expect(ctrl.preparePayload({ text: "There are 190 contacts in RForce." })).toEqual({
+      text: "There are 190 contacts in RForce.",
+    });
+  });
+
   it("drops the payload after the stream is canceled (e.g. user Stop)", () => {
     // After the user presses Stop in Teams, the streamed prefix is already
     // visible. Returning the full payload here would render as a SECOND
