@@ -4,6 +4,7 @@ import { formatRawAssistantErrorForUi } from "../agents/embedded-agent-helpers.j
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { FallbackNoticeState } from "../status/fallback-notice-state.js";
+import { truncateUtf16Safe } from "../utils.js";
 import { formatProviderModelRef } from "./model-runtime.js";
 import type { RuntimeFallbackAttempt } from "./reply/agent-runner-execution.js";
 
@@ -29,7 +30,7 @@ function truncateFallbackReasonPart(value: string, max = FALLBACK_REASON_PART_MA
   if (text.length <= max) {
     return text;
   }
-  return `${text.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+  return `${truncateUtf16Safe(text, Math.max(0, max - 1)).trimEnd()}…`;
 }
 
 function formatFallbackAttemptErrorPreview(attempt: RuntimeFallbackAttempt): string | undefined {

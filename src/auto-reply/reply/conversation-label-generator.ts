@@ -7,6 +7,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import type { TextContent } from "../../llm/types.js";
+import { truncateUtf16Safe } from "../../utils.js";
 
 const DEFAULT_MAX_LABEL_LENGTH = 128;
 // Reasoning models spend output tokens before emitting the short visible label.
@@ -114,7 +115,7 @@ export async function generateConversationLabel(
       return null;
     }
 
-    return text.slice(0, maxLength);
+    return truncateUtf16Safe(text, maxLength);
   } catch (err) {
     logVerbose(`conversation-label-generator: completion failed: ${String(err)}`);
     return null;

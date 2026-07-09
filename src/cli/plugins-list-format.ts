@@ -2,7 +2,7 @@
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { PluginRecord } from "../plugins/registry.js";
-import { shortenHomeInString } from "../utils.js";
+import { shortenHomeInString, truncateUtf16Safe } from "../utils.js";
 
 export function formatPluginLine(plugin: PluginRecord, verbose = false): string {
   const status =
@@ -16,7 +16,7 @@ export function formatPluginLine(plugin: PluginRecord, verbose = false): string 
   const desc = plugin.description
     ? theme.muted(
         plugin.description.length > 60
-          ? `${plugin.description.slice(0, 57)}...`
+          ? `${truncateUtf16Safe(plugin.description, 57)}...`
           : plugin.description,
       )
     : theme.muted("(no description)");

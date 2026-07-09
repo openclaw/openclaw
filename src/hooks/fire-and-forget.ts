@@ -3,6 +3,7 @@ import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import { truncateUtf16Safe } from "../utils.js";
 
 const DEFAULT_MAX_CONCURRENT_FIRE_AND_FORGET_HOOKS = 16;
 const DEFAULT_MAX_QUEUED_FIRE_AND_FORGET_HOOKS = 256;
@@ -72,7 +73,7 @@ export function formatHookErrorForLog(err: unknown): string {
   const formatted = replaceLogControlCharacters(formatErrorMessage(err))
     .replace(/\s+/g, " ")
     .trim();
-  return (formatted || "unknown error").slice(0, MAX_HOOK_LOG_MESSAGE_LENGTH);
+  return truncateUtf16Safe(formatted || "unknown error", MAX_HOOK_LOG_MESSAGE_LENGTH);
 }
 
 /** Run a hook promise without awaiting it, logging rejection safely. */
