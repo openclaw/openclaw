@@ -191,7 +191,7 @@ async function writeArchiveStreamToFile(params: {
 }): Promise<void> {
   // Own both stream lifecycles so a tar read error closes the output handle
   // before retry cleanup touches the partial archive.
-  await pipeline(params.archiveStream, createWriteStream(params.archivePath));
+  await pipeline(params.archiveStream, createWriteStream(params.archivePath, { mode: 0o600 }));
 }
 
 async function writeTarArchiveWithRetry(params: {

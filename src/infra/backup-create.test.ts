@@ -1315,4 +1315,27 @@ describe("createBackupArchive", () => {
       },
     );
   });
+
+  it("writes the published archive with owner-only 0o600 permissions", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-mode-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        await fs.mkdir(outputDir, { recursive: true });
+
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 4, 9, 12, 0, 0),
+        });
+
+        const stat = await fs.stat(result.archivePath);
+        expect(stat.mode & 0o777).toBe(0o600);
+      },
+    );
+  });
 });
