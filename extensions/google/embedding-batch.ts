@@ -12,6 +12,7 @@ import {
 import {
   createProviderHttpError,
   readProviderJsonResponse,
+  readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GeminiEmbeddingClient, GeminiTextEmbeddingRequest } from "./embedding-provider.js";
@@ -54,6 +55,7 @@ type GeminiBatchOutputLine = {
 };
 
 const GEMINI_BATCH_MAX_REQUESTS = 50000;
+const GEMINI_BATCH_FILE_CONTENT_MAX_BYTES = 64 * 1024 * 1024;
 function hashText(text: string): string {
   return crypto.createHash("sha256").update(text).digest("hex");
 }
@@ -220,7 +222,7 @@ async function fetchGeminiFileContent(params: {
       if (!res.ok) {
         throw await createProviderHttpError(res, "gemini batch file content failed");
       }
-      return await res.text();
+      return await readResponseTextLimited(res, GEMINI_BATCH_FILE_CONTENT_MAX_BYTES);
     },
   });
 }
