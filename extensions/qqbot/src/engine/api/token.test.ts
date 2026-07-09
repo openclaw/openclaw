@@ -74,6 +74,7 @@ describe("QQBot token manager", () => {
         hostnameAllowlist: ["bots.qq.com"],
         allowRfc2544BenchmarkRange: true,
       },
+      timeoutMs: 30_000,
       init: {
         method: "POST",
         headers: {
@@ -175,6 +176,19 @@ describe("QQBot token manager", () => {
     expect(manager.getStatus("app-id")).toEqual({ status: "none", expiresAt: null });
     expect(logger.debug).toHaveBeenCalledWith(
       "[qqbot:token:app-id] Not cached: invalid process clock",
+    );
+  });
+
+  it("passes timeoutMs to fetchWithSsrFGuard on every token fetch", async () => {
+    mockGuardedTokenResponse('{"access_token":"token-1","expires_in":7200}', {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    await new TokenManager().getAccessToken("app-id", "secret");
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 30_000 }),
     );
   });
 });
