@@ -27,7 +27,7 @@ type MSTeamsActivity = {
   locale?: string;
   serviceUrl?: string;
   channelData?: {
-    team?: { id?: string; name?: string };
+    team?: { id?: string; aadGroupId?: string; name?: string };
     channel?: { id?: string; name?: string };
     tenant?: { id?: string };
     [key: string]: unknown;

@@ -8,7 +8,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
@@ -19,7 +18,6 @@ import {
   encodeGraphShareId,
   GRAPH_ROOT,
   inferPlaceholder,
-  readNestedString,
   isUrlAllowed,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
@@ -52,92 +50,40 @@ type GraphAttachment = {
   content?: unknown;
 };
 
-export function buildMSTeamsGraphMessageUrls(params: {
+export function buildMSTeamsGraphMessageUrl(params: {
   conversationType?: string | null;
   conversationId?: string | null;
   messageId?: string | null;
-  replyToId?: string | null;
-  conversationMessageId?: string | null;
-  channelData?: unknown;
-}): string[] {
+  threadRootMessageId?: string | null;
+  teamAadGroupId?: string | null;
+  channelId?: string | null;
+}): string | undefined {
   const conversationType = normalizeLowercaseStringOrEmpty(params.conversationType ?? "");
-  const messageIdCandidates = new Set<string>();
-  const pushCandidate = (value: string | null | undefined) => {
-    const trimmed = normalizeOptionalString(value) ?? "";
-    if (trimmed) {
-      messageIdCandidates.add(trimmed);
-    }
-  };
-
-  pushCandidate(params.messageId);
-  pushCandidate(params.conversationMessageId);
-  pushCandidate(readNestedString(params.channelData, ["messageId"]));
-  pushCandidate(readNestedString(params.channelData, ["teamsMessageId"]));
-
-  const replyToId = normalizeOptionalString(params.replyToId) ?? "";
+  const messageId = normalizeOptionalString(params.messageId);
+  if (!messageId) {
+    return undefined;
+  }
 
   if (conversationType === "channel") {
-    const teamId =
-      readNestedString(params.channelData, ["team", "aadGroupId"]) ??
-      readNestedString(params.channelData, ["aadGroupId"]) ??
-      readNestedString(params.channelData, ["team", "id"]) ??
-      readNestedString(params.channelData, ["teamId"]);
-    const channelId =
-      readNestedString(params.channelData, ["channel", "id"]) ??
-      readNestedString(params.channelData, ["channelId"]) ??
-      readNestedString(params.channelData, ["teamsChannelId"]);
-    if (!teamId || !channelId) {
-      return [];
+    const teamAadGroupId = normalizeOptionalString(params.teamAadGroupId);
+    const channelId = normalizeOptionalString(params.channelId);
+    if (!teamAadGroupId || !channelId) {
+      return undefined;
     }
-    const selfId = normalizeOptionalString(params.messageId) ?? "";
-    if (messageIdCandidates.size === 0 && replyToId) {
-      messageIdCandidates.add(replyToId);
-    }
-    const urls: string[] = [];
-    // A channel reply is addressable only at /messages/{rootId}/replies/{replyId} — never at
-    // /messages/{replyId} (which 404s), and fetching the bare root returns the wrong (root) file.
-    // The thread root arrives as replyToId and/or conversationMessageId, so treat any candidate
-    // that is not the current message id as a potential parent and build the reply URL first.
-    const parentIds = new Set<string>();
-    if (replyToId) {
-      parentIds.add(replyToId);
-    }
-    for (const candidate of messageIdCandidates) {
-      if (candidate !== selfId) {
-        parentIds.add(candidate);
-      }
-    }
-    if (selfId) {
-      for (const parentId of parentIds) {
-        urls.push(
-          `${GRAPH_ROOT}/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(parentId)}/replies/${encodeURIComponent(selfId)}`,
-        );
-      }
-      urls.push(
-        `${GRAPH_ROOT}/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(selfId)}`,
-      );
-    } else {
-      for (const candidate of messageIdCandidates) {
-        urls.push(
-          `${GRAPH_ROOT}/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(candidate)}`,
-        );
-      }
-    }
-    return uniqueStrings(urls);
+    const messageRoot = `${GRAPH_ROOT}/teams/${encodeURIComponent(teamAadGroupId)}/channels/${encodeURIComponent(channelId)}/messages`;
+    const threadRootMessageId = normalizeOptionalString(params.threadRootMessageId);
+    // Graph addresses replies only beneath the thread root. A bare reply ID is
+    // not a top-level message, while fetching the root would attach the wrong file.
+    return threadRootMessageId && threadRootMessageId !== messageId
+      ? `${messageRoot}/${encodeURIComponent(threadRootMessageId)}/replies/${encodeURIComponent(messageId)}`
+      : `${messageRoot}/${encodeURIComponent(messageId)}`;
   }
 
-  const chatId = params.conversationId?.trim() || readNestedString(params.channelData, ["chatId"]);
+  const chatId = normalizeOptionalString(params.conversationId);
   if (!chatId) {
-    return [];
+    return undefined;
   }
-  if (messageIdCandidates.size === 0 && replyToId) {
-    messageIdCandidates.add(replyToId);
-  }
-  const urls = Array.from(messageIdCandidates).map(
-    (candidate) =>
-      `${GRAPH_ROOT}/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(candidate)}`,
-  );
-  return uniqueStrings(urls);
+  return `${GRAPH_ROOT}/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`;
 }
 
 async function fetchGraphCollection(params: {

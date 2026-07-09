@@ -1,7 +1,7 @@
 // Msteams plugin module implements inbound media behavior.
 import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
 import {
-  buildMSTeamsGraphMessageUrls,
+  buildMSTeamsGraphMessageUrl,
   downloadMSTeamsAttachments,
   downloadMSTeamsBotFrameworkAttachments,
   downloadMSTeamsGraphMedia,
@@ -84,17 +84,15 @@ export async function resolveMSTeamsInboundMedia(params: {
   });
 
   if (mediaList.length === 0) {
-    // `<attachment id="...">` markers inside `text/html` attachments identify
-    // real file attachments in personal chats and gate the Bot Framework path.
+    // Explicit attachment markers remain the fallback gate for personal chats.
+    // Channel and group-chat activities can omit them while Graph holds a file.
     const attachmentIds = extractMSTeamsHtmlAttachmentIds(attachments);
     const hasHtmlFileAttachment = attachmentIds.length > 0;
-    // Channel/group @mention activities carry only a `text/html` stub without
-    // `<attachment id>` markers even when a file is attached (#89594), so the
-    // Graph fallback keys off the stub itself — and stays skipped for messages
-    // with no `text/html` attachment at all (#58617).
-    const hasTextHtmlAttachment =
-      hasHtmlFileAttachment ||
-      attachments.some((attachment) => attachment.contentType === "text/html");
+    const normalizedConversationType = conversationType.trim().toLowerCase();
+    const hasChannelOrGroupHtml =
+      (normalizedConversationType === "channel" || normalizedConversationType === "groupchat") &&
+      (htmlSummary?.htmlAttachments ?? 0) > 0;
+    const shouldFetchGraphMessage = hasHtmlFileAttachment || hasChannelOrGroupHtml;
 
     // Personal DMs with the bot use Bot Framework conversation IDs (`a:...`
     // or `8:orgid:...`) which Graph's `/chats/{id}` endpoint rejects with
@@ -128,19 +126,19 @@ export async function resolveMSTeamsInboundMedia(params: {
     }
 
     if (
-      hasTextHtmlAttachment &&
+      shouldFetchGraphMessage &&
       mediaList.length === 0 &&
       !isBotFrameworkPersonalChatId(conversationId)
     ) {
-      const messageUrls = buildMSTeamsGraphMessageUrls({
+      const messageUrl = buildMSTeamsGraphMessageUrl({
         conversationType,
         conversationId,
         messageId: activity.id ?? undefined,
-        replyToId: activity.replyToId ?? undefined,
-        conversationMessageId,
-        channelData: activity.channelData,
+        threadRootMessageId: conversationMessageId ?? activity.replyToId,
+        teamAadGroupId: activity.channelData?.team?.aadGroupId,
+        channelId: activity.channelData?.channel?.id,
       });
-      if (messageUrls.length === 0) {
+      if (!messageUrl) {
         log.debug?.("graph message url unavailable", {
           conversationType,
           hasChannelData: Boolean(activity.channelData),
@@ -148,44 +146,27 @@ export async function resolveMSTeamsInboundMedia(params: {
           replyToId: activity.replyToId ?? undefined,
         });
       } else {
-        const attempts: Array<{
-          url: string;
-          hostedStatus?: number;
-          attachmentStatus?: number;
-          hostedCount?: number;
-          attachmentCount?: number;
-          tokenError?: boolean;
-        }> = [];
-        for (const messageUrl of messageUrls) {
-          const graphMedia = await downloadMSTeamsGraphMedia({
+        const graphMedia = await downloadMSTeamsGraphMedia({
+          messageUrl,
+          tokenProvider,
+          maxBytes,
+          allowHosts,
+          authAllowHosts: params.authAllowHosts,
+          preserveFilenames,
+          log,
+          logger: log,
+        });
+        if (graphMedia.media.length > 0) {
+          mediaList = graphMedia.media;
+        }
+        if (mediaList.length === 0) {
+          log.debug?.("graph media fetch empty", {
             messageUrl,
-            tokenProvider,
-            maxBytes,
-            allowHosts,
-            authAllowHosts: params.authAllowHosts,
-            preserveFilenames,
-            log,
-            logger: log,
-          });
-          attempts.push({
-            url: messageUrl,
             hostedStatus: graphMedia.hostedStatus,
             attachmentStatus: graphMedia.attachmentStatus,
             hostedCount: graphMedia.hostedCount,
             attachmentCount: graphMedia.attachmentCount,
             tokenError: graphMedia.tokenError,
-          });
-          if (graphMedia.media.length > 0) {
-            mediaList = graphMedia.media;
-            break;
-          }
-          if (graphMedia.tokenError) {
-            break;
-          }
-        }
-        if (mediaList.length === 0) {
-          log.debug?.("graph media fetch empty", {
-            attempts,
             attachmentIdCount: attachmentIds.length,
           });
         }
