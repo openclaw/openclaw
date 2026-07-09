@@ -736,6 +736,23 @@ extension MacNodeRuntime {
 extension MacNodeRuntime {
     private func handleSystemRun(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         let params = try Self.decodeParams(OpenClawSystemRunParams.self, from: req.paramsJSON)
+        let approvalSource: ExecApprovalRequestSource?
+        switch params.approvalSource {
+        case nil:
+            approvalSource = nil
+        case "ask-fallback":
+            approvalSource = .askFallback
+        case "auto-review":
+            approvalSource = .autoReview
+        default:
+            return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: approvalSource invalid")
+        }
+        if approvalSource != nil, params.approved != nil || params.approvalDecision != nil {
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "INVALID_REQUEST: approvalSource cannot be combined with explicit approval")
+        }
         let command = params.command
         let validatedCommand: ExecHostValidatedRequest
         switch ExecHostRequestEvaluator.validateCommand(
@@ -779,8 +796,11 @@ extension MacNodeRuntime {
             cwd: params.cwd,
             envOverrides: params.env,
             agentId: params.agentId)
+        let security = approvalSource == .askFallback
+            ? ExecSecurity.narrower(evaluation.security, evaluation.askFallback)
+            : evaluation.security
 
-        if evaluation.security == .deny {
+        if security == .deny {
             await self.emitExecEvent(
                 "exec.denied",
                 payload: ExecEventPayload(
@@ -795,40 +815,54 @@ extension MacNodeRuntime {
                 message: "SYSTEM_RUN_DISABLED: security=deny")
         }
 
-        let approval = await resolveSystemRunApproval(
-            req: req,
-            params: params,
-            context: ExecRunContext(
-                displayCommand: evaluation.displayCommand,
-                security: evaluation.security,
-                ask: evaluation.ask,
-                agentId: evaluation.agentId,
-                resolution: evaluation.resolution,
-                allowlistMatch: evaluation.allowlistMatch,
-                skillAllow: evaluation.skillAllow,
-                allowAlwaysEligible: evaluation.canPersistAllowAlways,
-                sessionKey: sessionKey,
-                runId: runId))
-        if let response = approval.response {
-            return response
-        }
-        let approvedByAsk = approval.approvedByAsk
-        let persistAllowlist = approval.persistAllowlist
-        let persistenceResult = persistAllowlistPatterns(
-            persistAllowlist: persistAllowlist,
-            security: evaluation.security,
-            agentId: evaluation.agentId,
-            boundCommand: evaluation.boundCommand,
-            allowAlwaysPatterns: evaluation.allowAlwaysPatterns)
-        if case .failure = persistenceResult {
-            return await self.execApprovalMutationFailure(
-                req: req,
-                sessionKey: sessionKey,
-                runId: runId,
-                displayCommand: evaluation.displayCommand)
+        if approvalSource == .autoReview, evaluation.ask == .always {
+            await self.emitExecEvent(
+                "exec.denied",
+                payload: ExecEventPayload(
+                    sessionKey: sessionKey,
+                    runId: runId,
+                    host: "node",
+                    command: evaluation.displayCommand,
+                    reason: "ask=always"))
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "SYSTEM_RUN_DENIED: auto-review cannot bypass ask=always")
         }
 
-        if evaluation.security == .allowlist, !evaluation.allowlistSatisfied, !evaluation.skillAllow, !approvedByAsk {
+        let approvedByAsk: Bool
+        let persistAllowlist: Bool
+        if approvalSource == .askFallback {
+            approvedByAsk = false
+            persistAllowlist = false
+        } else if approvalSource == .autoReview {
+            approvedByAsk = true
+            persistAllowlist = false
+        } else {
+            let approval = await self.resolveSystemRunApproval(
+                req: req,
+                params: params,
+                context: ExecRunContext(
+                    displayCommand: evaluation.displayCommand,
+                    security: evaluation.security,
+                    ask: evaluation.ask,
+                    agentId: evaluation.agentId,
+                    resolution: evaluation.resolution,
+                    allowlistMatch: evaluation.allowlistMatch,
+                    skillAllow: evaluation.skillAllow,
+                    allowAlwaysEligible: evaluation.canPersistAllowAlways,
+                    sessionKey: sessionKey,
+                    runId: runId))
+            if let response = approval.response {
+                return response
+            }
+            approvedByAsk = approval.approvedByAsk
+            persistAllowlist = approval.persistAllowlist
+        }
+        if security == .allowlist,
+           evaluation.authorizationBasis == nil,
+           !approvedByAsk
+        {
             await self.emitExecEvent(
                 "exec.denied",
                 payload: ExecEventPayload(
@@ -843,9 +877,9 @@ extension MacNodeRuntime {
                 message: "SYSTEM_RUN_DENIED: allowlist miss")
         }
 
-        let reusableAuthorization = evaluation.security == .allowlist &&
+        let reusableAuthorization = security == .allowlist &&
             !approvedByAsk &&
-            (evaluation.allowlistSatisfied || evaluation.skillAllow)
+            evaluation.authorizationBasis != nil
         let executionCommand: [String]
         if reusableAuthorization {
             guard let boundCommand = evaluation.boundCommand else {
@@ -867,22 +901,7 @@ extension MacNodeRuntime {
             executionCommand = command
         }
 
-        let usageResult = recordAllowlistMatches(
-            security: evaluation.security,
-            allowlistSatisfied: evaluation.allowlistSatisfied,
-            agentId: evaluation.agentId,
-            allowlistMatches: evaluation.allowlistMatches,
-            allowlistResolutions: evaluation.allowlistResolutions,
-            displayCommand: evaluation.displayCommand)
-        if case .failure = usageResult {
-            return await self.execApprovalMutationFailure(
-                req: req,
-                sessionKey: sessionKey,
-                runId: runId,
-                displayCommand: evaluation.displayCommand)
-        }
-
-        if let permissionResponse = await validateScreenRecordingIfNeeded(
+        if let permissionResponse = await self.validateScreenRecordingIfNeeded(
             req: req,
             needsScreenRecording: params.needsScreenRecording,
             sessionKey: sessionKey,
@@ -892,14 +911,35 @@ extension MacNodeRuntime {
             return permissionResponse
         }
 
-        return try await executeSystemRun(
+        let executionCommit = ExecApprovalExecutionCommit.build(
+            context: evaluation,
+            effectiveSecurity: security,
+            approvalSource: approvalSource,
+            explicitlyApproved: approvedByAsk,
+            persistAllowlist: persistAllowlist)
+        let timeoutSec = params.timeoutMs.flatMap { Double($0) / 1000.0 }
+        let cwd = params.cwd
+        let executionEnv = evaluation.env
+        let shellRunner = self.shellRunner
+        if case .failure = self.execApprovalStoreMutations.commitExecution(executionCommit) {
+            return await self.execApprovalMutationFailure(
+                req: req,
+                sessionKey: sessionKey,
+                runId: runId,
+                displayCommand: evaluation.displayCommand)
+        }
+
+        // The locked store commit is the authorization linearization point.
+        // Enqueue execution synchronously next; later revocations govern later commits.
+        let execution = Task.detached {
+            await shellRunner(executionCommand, cwd, executionEnv, timeoutSec)
+        }
+        return try await self.completeSystemRun(
             req: req,
-            params: params,
-            command: executionCommand,
-            env: evaluation.env,
             sessionKey: sessionKey,
             runId: runId,
-            displayCommand: evaluation.displayCommand)
+            displayCommand: evaluation.displayCommand,
+            execution: execution)
     }
 
     private func handleSystemWhich(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
@@ -1156,47 +1196,6 @@ extension MacNodeRuntime {
 // MARK: - System command support
 
 extension MacNodeRuntime {
-    private func persistAllowlistPatterns(
-        persistAllowlist: Bool,
-        security: ExecSecurity,
-        agentId: String?,
-        boundCommand: [String]?,
-        allowAlwaysPatterns: [String]) -> Result<Void, ExecApprovalsMutationError>
-    {
-        guard persistAllowlist, security == .allowlist, boundCommand != nil else { return .success(()) }
-        var seenPatterns = Set<String>()
-        let entries = allowAlwaysPatterns.compactMap { pattern -> ExecAllowlistEntry? in
-            guard seenPatterns.insert(pattern).inserted else { return nil }
-            return ExecAllowlistEntry(
-                pattern: pattern,
-                source: "allow-always")
-        }
-        return self.execApprovalStoreMutations.addAllowlistEntries(agentId, entries)
-    }
-
-    private func recordAllowlistMatches(
-        security: ExecSecurity,
-        allowlistSatisfied: Bool,
-        agentId: String?,
-        allowlistMatches: [ExecAllowlistEntry],
-        allowlistResolutions: [ExecCommandResolution],
-        displayCommand: String) -> Result<Void, ExecApprovalsMutationError>
-    {
-        guard security == .allowlist, allowlistSatisfied else { return .success(()) }
-        var seenEntries = Set<String>()
-        var uses: [ExecAllowlistUse] = []
-        for (idx, match) in allowlistMatches.enumerated() {
-            if !seenEntries.insert(ExecApprovalsStore.allowlistEntryMatchKey(match)).inserted {
-                continue
-            }
-            let resolvedPath = idx < allowlistResolutions.count
-                ? allowlistResolutions[idx].resolvedRealPath ?? allowlistResolutions[idx].resolvedPath
-                : nil
-            uses.append(ExecAllowlistUse(match: match, resolvedPath: resolvedPath))
-        }
-        return self.execApprovalStoreMutations.recordAllowlistUses(agentId, uses, displayCommand)
-    }
-
     private func execApprovalMutationFailure(
         req: BridgeInvokeRequest,
         sessionKey: String,
@@ -1242,16 +1241,13 @@ extension MacNodeRuntime {
             message: "PERMISSION_MISSING: screenRecording")
     }
 
-    private func executeSystemRun(
+    private func completeSystemRun(
         req: BridgeInvokeRequest,
-        params: OpenClawSystemRunParams,
-        command: [String],
-        env: [String: String],
         sessionKey: String,
         runId: String,
-        displayCommand: String) async throws -> BridgeInvokeResponse
+        displayCommand: String,
+        execution: Task<ShellExecutor.ShellResult, Never>) async throws -> BridgeInvokeResponse
     {
-        let timeoutSec = params.timeoutMs.flatMap { Double($0) / 1000.0 }
         await self.emitExecEvent(
             "exec.started",
             payload: ExecEventPayload(
@@ -1259,7 +1255,7 @@ extension MacNodeRuntime {
                 runId: runId,
                 host: "node",
                 command: displayCommand))
-        let result = await self.shellRunner(command, params.cwd, env, timeoutSec)
+        let result = await execution.value
         let combined = [result.stdout, result.stderr, result.errorMessage]
             .compactMap(\.self)
             .filter { !$0.isEmpty }

@@ -5,41 +5,170 @@ struct ExecApprovalEvaluation {
     let agentId: String?
     let security: ExecSecurity
     let ask: ExecAsk
+    let askFallback: ExecSecurity
     let env: [String: String]
     let resolution: ExecCommandResolution?
     let allowlistResolutions: [ExecCommandResolution]
     let boundCommand: [String]?
     let allowAlwaysPatterns: [String]
     let allowlistMatches: [ExecAllowlistEntry]
+    let allowlistAuthorizationSatisfied: Bool
     let allowlistSatisfied: Bool
     let allowlistMatch: ExecAllowlistEntry?
     let skillAllow: Bool
+    let policySnapshot: ExecApprovalPolicySnapshot
 
     var canPersistAllowAlways: Bool {
         self.security == .allowlist && self.boundCommand != nil && !self.allowAlwaysPatterns.isEmpty
     }
+
+    var authorizationBasis: ExecApprovalAuthorization.Basis? {
+        if self.allowlistAuthorizationSatisfied {
+            return .allowlistEntries
+        }
+        if self.skillAllow {
+            return .autoAllowedSkill
+        }
+        return nil
+    }
+}
+
+enum ExecApprovalRequestSource: Sendable, Equatable {
+    case askFallback
+    case autoReview
+}
+
+struct ExecApprovalPolicySnapshot: Sendable, Equatable {
+    struct AllowlistRule: Sendable, Hashable {
+        let pattern: String
+        let argPattern: String?
+        let source: String?
+    }
+
+    let security: ExecSecurity
+    let ask: ExecAsk
+    let askFallback: ExecSecurity
+    let autoAllowSkills: Bool
+    let allowlistRules: Set<AllowlistRule>
+
+    init(
+        security: ExecSecurity,
+        ask: ExecAsk,
+        askFallback: ExecSecurity,
+        autoAllowSkills: Bool,
+        allowlist: [ExecAllowlistEntry])
+    {
+        self.security = security
+        self.ask = ask
+        self.askFallback = askFallback
+        self.autoAllowSkills = autoAllowSkills
+        self.allowlistRules = Set(allowlist.map { entry in
+            AllowlistRule(
+                pattern: entry.pattern,
+                argPattern: entry.argPattern,
+                source: entry.source)
+        })
+    }
+}
+
+enum ExecApprovalAuthorization: Sendable {
+    enum Basis: Sendable, Equatable {
+        case allowlistEntries
+        case autoAllowedSkill
+    }
+
+    case currentPolicy(evaluatedSecurity: ExecSecurity, evaluatedAsk: ExecAsk, basis: Basis?)
+    case askFallback(evaluatedSecurity: ExecSecurity, basis: Basis?)
+    case autoReview(evaluatedSecurity: ExecSecurity)
+    case explicitOnce(evaluatedSecurity: ExecSecurity)
+    case explicitAlways(
+        evaluatedSecurity: ExecSecurity,
+        policySnapshot: ExecApprovalPolicySnapshot,
+        grants: [ExecAllowlistUse])
+}
+
+struct ExecApprovalExecutionCommit: Sendable {
+    let agentId: String?
+    let command: String
+    let authorization: ExecApprovalAuthorization
+    let uses: [ExecAllowlistUse]
+
+    static func build(
+        context: ExecApprovalEvaluation,
+        effectiveSecurity: ExecSecurity,
+        approvalSource: ExecApprovalRequestSource?,
+        explicitlyApproved: Bool,
+        persistAllowlist: Bool) -> ExecApprovalExecutionCommit
+    {
+        let uses = effectiveSecurity == .allowlist &&
+            context.authorizationBasis == .allowlistEntries
+            ? self.allowlistUses(context: context)
+            : []
+        let grants = persistAllowlist ? self.allowAlwaysGrants(context: context) : []
+        let basis = effectiveSecurity == .allowlist ? context.authorizationBasis : nil
+        let authorization: ExecApprovalAuthorization = if approvalSource == .askFallback {
+            .askFallback(evaluatedSecurity: effectiveSecurity, basis: basis)
+        } else if approvalSource == .autoReview {
+            .autoReview(evaluatedSecurity: effectiveSecurity)
+        } else if explicitlyApproved {
+            if grants.isEmpty {
+                .explicitOnce(evaluatedSecurity: effectiveSecurity)
+            } else {
+                .explicitAlways(
+                    evaluatedSecurity: effectiveSecurity,
+                    policySnapshot: context.policySnapshot,
+                    grants: grants)
+            }
+        } else {
+            .currentPolicy(
+                evaluatedSecurity: effectiveSecurity,
+                evaluatedAsk: context.ask,
+                basis: basis)
+        }
+        return ExecApprovalExecutionCommit(
+            agentId: context.agentId,
+            command: context.displayCommand,
+            authorization: authorization,
+            uses: uses)
+    }
+
+    private static func allowlistUses(context: ExecApprovalEvaluation) -> [ExecAllowlistUse] {
+        var seenEntries = Set<String>()
+        var uses: [ExecAllowlistUse] = []
+        for (idx, match) in context.allowlistMatches.enumerated() {
+            if !seenEntries.insert(ExecApprovalsStore.allowlistEntryMatchKey(match)).inserted {
+                continue
+            }
+            let resolvedPath = idx < context.allowlistResolutions.count
+                ? context.allowlistResolutions[idx].resolvedRealPath ??
+                context.allowlistResolutions[idx].resolvedPath
+                : nil
+            uses.append(ExecAllowlistUse(match: match, resolvedPath: resolvedPath))
+        }
+        return uses
+    }
+
+    private static func allowAlwaysGrants(context: ExecApprovalEvaluation) -> [ExecAllowlistUse] {
+        guard context.canPersistAllowAlways else { return [] }
+        let resolvedPath = context.allowlistResolutions.first?.resolvedRealPath ??
+            context.allowlistResolutions.first?.resolvedPath
+        var seenPatterns = Set<String>()
+        return context.allowAlwaysPatterns.compactMap { pattern in
+            guard seenPatterns.insert(pattern).inserted else { return nil }
+            return ExecAllowlistUse(
+                match: ExecAllowlistEntry(pattern: pattern, source: "allow-always"),
+                resolvedPath: resolvedPath)
+        }
+    }
 }
 
 struct ExecApprovalStoreMutations: Sendable {
-    let addAllowlistEntries: @Sendable (
-        _ agentId: String?,
-        _ entries: [ExecAllowlistEntry]) -> Result<Void, ExecApprovalsMutationError>
-    let recordAllowlistUses: @Sendable (
-        _ agentId: String?,
-        _ uses: [ExecAllowlistUse],
-        _ command: String) -> Result<Void, ExecApprovalsMutationError>
+    let commitExecution: @Sendable (
+        _ commit: ExecApprovalExecutionCommit) -> Result<Void, ExecApprovalsMutationError>
 
     static let live = ExecApprovalStoreMutations(
-        addAllowlistEntries: { agentId, entries in
-            ExecApprovalsStore.addAllowlistEntries(
-                agentId: agentId,
-                entries: entries)
-        },
-        recordAllowlistUses: { agentId, uses, command in
-            ExecApprovalsStore.recordAllowlistUses(
-                agentId: agentId,
-                uses: uses,
-                command: command)
+        commitExecution: { commit in
+            ExecApprovalsStore.commitExecution(commit)
         })
 }
 
@@ -78,15 +207,16 @@ enum ExecApprovalEvaluator {
             command: command,
             rawCommand: allowlistRawCommand,
             resolutions: allowlistResolutions)
-        let allowlistMatches = security == .allowlist
-            ? ExecAllowlistMatcher.matchAll(entries: approvals.allowlist, resolutions: allowlistResolutions)
-            : []
+        let allowlistMatches = ExecAllowlistMatcher.matchAll(
+            entries: approvals.allowlist,
+            resolutions: allowlistResolutions)
         // Reusable trust must be executable as the same canonical path we
         // matched. Unbindable shell plans are misses so on-miss can still ask.
-        let allowlistSatisfied = security == .allowlist &&
+        let allowlistAuthorizationSatisfied =
             boundCommand != nil &&
             !allowlistResolutions.isEmpty &&
             allowlistMatches.count == allowlistResolutions.count
+        let allowlistSatisfied = security == .allowlist && allowlistAuthorizationSatisfied
 
         let skillAllow: Bool
         if approvals.agent.autoAllowSkills, !allowlistResolutions.isEmpty {
@@ -102,15 +232,23 @@ enum ExecApprovalEvaluator {
             agentId: normalizedAgentId,
             security: security,
             ask: ask,
+            askFallback: approvals.agent.askFallback,
             env: env,
             resolution: allowlistResolutions.first,
             allowlistResolutions: allowlistResolutions,
             boundCommand: boundCommand,
             allowAlwaysPatterns: allowAlwaysPatterns,
             allowlistMatches: allowlistMatches,
+            allowlistAuthorizationSatisfied: allowlistAuthorizationSatisfied,
             allowlistSatisfied: allowlistSatisfied,
             allowlistMatch: allowlistSatisfied ? allowlistMatches.first : nil,
-            skillAllow: skillAllow)
+            skillAllow: skillAllow,
+            policySnapshot: ExecApprovalPolicySnapshot(
+                security: approvals.agent.security,
+                ask: approvals.agent.ask,
+                askFallback: approvals.agent.askFallback,
+                autoAllowSkills: approvals.agent.autoAllowSkills,
+                allowlist: approvals.allowlist))
     }
 
     static func isSkillAutoAllowed(

@@ -810,8 +810,21 @@ async function dispatchInvoke(
     sendInvokeResult: async (result) => {
       await sendInvokeResult(client, frame, result);
     },
-    sendExecFinishedEvent: async ({ sessionKey, runId, commandText, result }) => {
-      await sendExecFinishedEvent({ client, sessionKey, runId, commandText, result });
+    sendExecFinishedEvent: async ({
+      sessionKey,
+      runId,
+      commandText,
+      result,
+      suppressNotifyOnExit,
+    }) => {
+      await sendExecFinishedEvent({
+        client,
+        sessionKey,
+        runId,
+        commandText,
+        result,
+        suppressNotifyOnExit,
+      });
     },
     preferMacAppExecHost,
   });

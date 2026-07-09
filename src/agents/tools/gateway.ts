@@ -307,18 +307,22 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
   method: string;
   opts: GatewayCallOptions;
   target: GatewayOverrideTarget;
+  required?: boolean;
 }): Promise<string | undefined> {
-  if (!AGENT_RUNTIME_IDENTITY_METHODS.has(params.method)) {
+  if (!params.required && !AGENT_RUNTIME_IDENTITY_METHODS.has(params.method)) {
     return undefined;
   }
   const identity = getGatewayToolCallerIdentity();
   if (!identity) {
+    if (params.required) {
+      throw new Error("trusted agent runtime identity required for this gateway call");
+    }
     return undefined;
   }
   const hasGatewayUrlOverride = trimToUndefined(params.opts.gatewayUrl) !== undefined;
   const hasGatewayTokenOverride = trimToUndefined(params.opts.gatewayToken) !== undefined;
   if (hasGatewayUrlOverride || hasGatewayTokenOverride || params.target !== "local") {
-    throw new Error("agent cron gateway calls require the trusted local gateway context");
+    throw new Error("agent gateway calls require the trusted local gateway context");
   }
   return await mintAgentRuntimeIdentityToken(identity);
 }
@@ -342,7 +346,7 @@ function isStaleGatewayAgentRuntimeIdentityRejection(error: unknown): boolean {
 function staleGatewayAgentRuntimeIdentityError(cause: unknown): Error {
   return new Error(
     [
-      "The running Gateway is from an older OpenClaw build and rejected current agent cron connection metadata.",
+      "The running Gateway is from an older OpenClaw build and rejected current agent runtime connection metadata.",
       "Restart the Gateway with `openclaw gateway restart`, then retry.",
     ].join(" "),
     { cause },
@@ -356,7 +360,12 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   method: string,
   opts: GatewayCallOptions,
   params?: unknown,
-  extra?: { expectFinal?: boolean; scopes?: OperatorScope[]; signal?: AbortSignal },
+  extra?: {
+    expectFinal?: boolean;
+    scopes?: OperatorScope[];
+    requireAgentRuntimeIdentity?: boolean;
+    signal?: AbortSignal;
+  },
 ) {
   const gateway = resolveGatewayOptions(opts);
   const scopes = Array.isArray(extra?.scopes)
@@ -371,6 +380,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     method,
     opts,
     target: gateway.target,
+    required: extra?.requireAgentRuntimeIdentity,
   });
   const deviceIdentity = resolveApprovalRequesterDeviceIdentityForGatewayTool({
     method,

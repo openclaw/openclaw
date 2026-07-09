@@ -16,6 +16,12 @@ enum ExecAllowlistMatcher {
 
         var pathOnlyMatch: ExecAllowlistEntry?
         for entry in entries {
+            let controlPattern = entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Shared stores preserve TypeScript's durable-command markers.
+            // They are metadata, never basename patterns for native execution.
+            if controlPattern.hasPrefix("=command:") || controlPattern.hasPrefix("=node-command:") {
+                continue
+            }
             switch ExecApprovalHelpers.validateAllowlistPattern(entry.pattern) {
             case let .valid(pattern):
                 guard self.matchesExecutable(pattern: pattern, resolution: resolution) else { continue }

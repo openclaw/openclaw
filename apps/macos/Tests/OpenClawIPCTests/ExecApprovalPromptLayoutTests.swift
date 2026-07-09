@@ -71,15 +71,23 @@ struct ExecApprovalPromptLayoutTests {
                 agentId: "main",
                 security: security,
                 ask: .onMiss,
+                askFallback: .deny,
                 env: [:],
                 resolution: nil,
                 allowlistResolutions: [],
                 boundCommand: boundCommand,
                 allowAlwaysPatterns: patterns,
                 allowlistMatches: [],
+                allowlistAuthorizationSatisfied: false,
                 allowlistSatisfied: false,
                 allowlistMatch: nil,
-                skillAllow: false)
+                skillAllow: false,
+                policySnapshot: ExecApprovalPolicySnapshot(
+                    security: security,
+                    ask: .onMiss,
+                    askFallback: .deny,
+                    autoAllowSkills: false,
+                    allowlist: []))
         }
 
         #expect(evaluation(
