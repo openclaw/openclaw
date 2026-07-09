@@ -45,7 +45,11 @@
               "cacheWrite": 0
             },
             "compat": {
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsUsageInStreaming": false,
               "supportsReasoningEffort": true,
+              "supportsStrictMode": false,
               "supportedReasoningEfforts": ["low", "medium", "high"],
               "maxTokensField": "max_tokens",
               "reasoningEffortMap": {
@@ -101,7 +105,11 @@
               "cacheWrite": 0
             },
             "compat": {
+              "supportsStore": false,
+              "supportsDeveloperRole": false,
+              "supportsUsageInStreaming": false,
               "supportsReasoningEffort": true,
+              "supportsStrictMode": false,
               "supportedReasoningEfforts": ["low", "medium", "high"],
               "maxTokensField": "max_tokens",
               "reasoningEffortMap": {

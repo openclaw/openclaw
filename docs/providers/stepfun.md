@@ -158,7 +158,11 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
                 contextWindow: 262144,
                 maxTokens: 262144,
                 compat: {
+                  supportsStore: false,
+                  supportsDeveloperRole: false,
+                  supportsUsageInStreaming: false,
                   supportsReasoningEffort: true,
+                  supportsStrictMode: false,
                   supportedReasoningEfforts: ["low", "medium", "high"],
                   maxTokensField: "max_tokens",
                   reasoningEffortMap: {
@@ -214,7 +218,11 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
                 contextWindow: 262144,
                 maxTokens: 262144,
                 compat: {
+                  supportsStore: false,
+                  supportsDeveloperRole: false,
+                  supportsUsageInStreaming: false,
                   supportsReasoningEffort: true,
+                  supportsStrictMode: false,
                   supportedReasoningEfforts: ["low", "medium", "high"],
                   maxTokensField: "max_tokens",
                   reasoningEffortMap: {

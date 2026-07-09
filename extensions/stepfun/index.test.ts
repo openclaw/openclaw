@@ -59,7 +59,11 @@ describe("stepfun provider registration", () => {
       maxTokens: 262144,
       cost: { input: 0.2, output: 1.15, cacheRead: 0.04, cacheWrite: 0 },
       compat: {
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        supportsUsageInStreaming: false,
         supportsReasoningEffort: true,
+        supportsStrictMode: false,
         supportedReasoningEfforts: ["low", "medium", "high"],
         maxTokensField: "max_tokens",
         reasoningEffortMap: expect.objectContaining({ off: "low", medium: "medium", max: "high" }),
@@ -73,7 +77,11 @@ describe("stepfun provider registration", () => {
       maxTokens: 262144,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       compat: {
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        supportsUsageInStreaming: false,
         supportsReasoningEffort: true,
+        supportsStrictMode: false,
         supportedReasoningEfforts: ["low", "medium", "high"],
         maxTokensField: "max_tokens",
         reasoningEffortMap: expect.objectContaining({ off: "low", medium: "medium", max: "high" }),
@@ -86,7 +94,10 @@ describe("stepfun provider registration", () => {
       api: "openai-completions",
       baseUrl: standard.baseUrl,
     } as Model<"openai-completions">;
-    const context = { messages: [{ role: "user", content: "hi", timestamp: 1 }] } as Context;
+    const context = {
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+    } as Context;
     const offReasoning = standardModel.thinkingLevelMap?.off;
     expect(offReasoning).toBe("low");
     const lowPayload = buildOpenAICompletionsParams(transportModel, context, {
@@ -96,6 +107,14 @@ describe("stepfun provider registration", () => {
     expect(lowPayload.reasoning_effort).toBe("low");
     expect(lowPayload.max_tokens).toBe(128);
     expect(lowPayload).not.toHaveProperty("max_completion_tokens");
+    expect(lowPayload).not.toHaveProperty("store");
+    expect(lowPayload).not.toHaveProperty("stream_options");
+    expect(lowPayload.messages).toEqual(
+      expect.arrayContaining([expect.objectContaining({ role: "system", content: "system" })]),
+    );
+    expect(lowPayload.messages).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ role: "developer" })]),
+    );
     expect(
       buildOpenAICompletionsParams(transportModel, context, { reasoning: "high" } as never)
         .reasoning_effort,
