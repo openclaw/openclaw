@@ -21,6 +21,11 @@ describe("gateway ws log helpers", () => {
       input: " short ",
       expected: "short",
     },
+    {
+      name: "does not split a surrogate pair at the start edge",
+      input: `${"a".repeat(11)}😀${"b".repeat(20)}`,
+      expected: `${"a".repeat(11)}…${"b".repeat(4)}`,
+    },
   ])("shortId $name", ({ input, expected }) => {
     expect(shortId(input)).toBe(expected);
   });
