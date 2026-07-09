@@ -2706,6 +2706,33 @@ describe("google transport stream", () => {
     },
   );
 
+  it.each(["google/gemini-3.1-pro-preview", "models/gemini-3.1-pro-preview"])(
+    "keeps image parts inside function responses for prefixed Gemini 3 model %s",
+    (modelId) => {
+      const params = buildGoogleGenerativeAiParams(
+        buildGeminiModel({ id: modelId, input: ["text", "image"] }),
+        {
+          messages: [
+            { role: "user", content: "Take a screenshot.", timestamp: 0 },
+            googleToolCallAssistantTurn({
+              model: modelId,
+              name: "screenshot",
+              args: {},
+            }),
+            googleToolResultMessage("screenshot"),
+          ],
+        } as never,
+      );
+
+      const functionResponse = (params.contents[2] as GoogleTestContentTurn).parts[0]
+        ?.functionResponse as { parts?: unknown };
+      expect(params.contents.map((content) => content.role)).toEqual(["user", "model", "user"]);
+      expect(functionResponse.parts).toEqual([
+        { inlineData: { mimeType: "image/png", data: "png-bytes" } },
+      ]);
+    },
+  );
+
   it.each([
     ["gemini-2.5-flash-lite", "minimal", 512],
     ["gemini-2.5-flash-lite", "low", 2048],

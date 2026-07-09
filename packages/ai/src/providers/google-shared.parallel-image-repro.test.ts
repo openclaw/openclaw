@@ -90,4 +90,32 @@ describe("google-shared convertMessages — parallel tool results with an image 
       expect(contents.slice(3).some((c) => countFunctionResponses(c.parts) > 0)).toBe(false);
     },
   );
+
+  it.each(["google/gemini-3.1-pro-preview", "models/gemini-3.1-pro-preview"])(
+    "keeps image parts inside function responses for prefixed Gemini 3 model %s",
+    (modelId) => {
+      const model = makeVisionModel(modelId);
+      const contents = convertMessagesForTest(model, {
+        messages: [
+          { role: "user", content: "Take a screenshot." },
+          makeGoogleAssistantMessage(model.id, [
+            { type: "toolCall", id: "call_1", name: "screenshot", arguments: {} },
+          ]),
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "screenshot",
+            content: [{ type: "image", mimeType: "image/png", data: "AAAA" }],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      } as unknown as Context);
+
+      expect(contents.map((content) => content.role)).toEqual(["user", "model", "user"]);
+      expect(contents[2]?.parts?.[0]?.functionResponse?.parts).toEqual([
+        { inlineData: { mimeType: "image/png", data: "AAAA" } },
+      ]);
+    },
+  );
 });
