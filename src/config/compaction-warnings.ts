@@ -33,7 +33,7 @@ export function collectInactiveActiveTranscriptByteGuardWarnings(
   return [
     {
       path: INACTIVE_MAX_ACTIVE_TRANSCRIPT_BYTES_PATH,
-      message: formatInactiveByteGuardMessage(maxActiveTranscriptBytes),
+      message: formatInactiveByteGuardMessage(maxActiveTranscriptBytes ?? parsed),
     },
   ];
 }
