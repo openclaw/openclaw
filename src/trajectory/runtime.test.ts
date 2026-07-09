@@ -546,10 +546,10 @@ describe("compareTrajectoryWindowLines total order", () => {
   it("is antisymmetric across a mixed set", () => {
     const lines = [goodLater, corruptA, goodEarly, corruptB];
     const sign = (x: number) => (x > 0 ? 1 : x < 0 ? -1 : 0);
-    for (let i = 0; i < lines.length; i++) {
-      for (let j = 0; j < lines.length; j++) {
-        const cij = compareTrajectoryWindowLines(lines[i], lines[j]);
-        const cji = compareTrajectoryWindowLines(lines[j], lines[i]);
+    for (const [, left] of lines.entries()) {
+      for (const [, right] of lines.entries()) {
+        const cij = compareTrajectoryWindowLines(left, right);
+        const cji = compareTrajectoryWindowLines(right, left);
         expect(Number.isFinite(cij)).toBe(true);
         // Opposite signs (sum to 0); avoids +0/-0 Object.is pitfalls of toBe(-x).
         expect(sign(cij) + sign(cji)).toBe(0);
@@ -559,10 +559,10 @@ describe("compareTrajectoryWindowLines total order", () => {
 
   it("produces a deterministic sort with corrupted lines last", () => {
     const lines = [goodLater, corruptA, goodEarly, corruptB];
-    const sorted = [...lines].sort(compareTrajectoryWindowLines);
+    const sorted = [...lines].toSorted(compareTrajectoryWindowLines);
     expect(sorted[0]).toBe(goodEarly);
     expect(sorted[1]).toBe(goodLater);
     // Both corrupted lines end up at the tail in a deterministic raw-string order.
-    expect(sorted.slice(2)).toStrictEqual([corruptA, corruptB].sort());
+    expect(sorted.slice(2)).toStrictEqual([corruptA, corruptB].toSorted());
   });
 });
