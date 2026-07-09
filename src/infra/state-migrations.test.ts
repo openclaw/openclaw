@@ -485,6 +485,32 @@ describe("state migrations", () => {
     expect(result.changes).toContain("Migrated fixture environment");
   });
 
+  it("does not migrate default-profile approval files into a named profile (#102846)", async () => {
+    const root = await createTempDir();
+    const customHome = path.join(root, "custom-home");
+    const defaultOpenclaw = path.join(customHome, ".openclaw");
+    fsSync.mkdirSync(defaultOpenclaw, { recursive: true });
+    fsSync.writeFileSync(path.join(defaultOpenclaw, "exec-approvals.json"), "{}", "utf-8");
+    fsSync.writeFileSync(
+      path.join(defaultOpenclaw, "plugin-binding-approvals.json"),
+      "{}",
+      "utf-8",
+    );
+    const stateDir = path.join(root, "profile-state");
+    const env = {
+      ...process.env,
+      HOME: customHome,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_PROFILE: "crestodian-e2e",
+    } as NodeJS.ProcessEnv;
+    const cfg = createConfig();
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => customHome });
+    // Named profiles are isolated: the default profile's approval files must NOT
+    // be detected as legacy migration sources for the named profile's state dir.
+    expect(detected.execApprovals.hasLegacy).toBe(false);
+    expect(detected.pluginBindingApprovals.hasLegacy).toBe(false);
+  });
+
   it("detects legacy sessions, agent files, channel auth, and allowFrom copies", () => {
     expect(detectionCase.targetAgentId).toBe("worker-1");
     expect(detectionCase.targetMainKey).toBe("desk");

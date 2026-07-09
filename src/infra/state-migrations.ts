@@ -349,6 +349,7 @@ function detectLegacyExecApprovalsMigration(params: {
     targetPath,
     hasLegacy:
       Boolean(params.env.OPENCLAW_STATE_DIR?.trim()) &&
+      !params.env.OPENCLAW_PROFILE?.trim() &&
       path.resolve(sourcePath) !== path.resolve(targetPath) &&
       fileExists(sourcePath) &&
       !fileExists(targetPath),
@@ -4305,7 +4306,8 @@ export async function detectLegacyStateMigrations(params: {
   const pluginBindingApprovals = {
     sourcePath: resolveLegacyPluginBindingApprovalsPath(env, homedir),
   };
-  const hasPluginBindingApprovals = fileExists(pluginBindingApprovals.sourcePath);
+  const hasPluginBindingApprovals =
+    fileExists(pluginBindingApprovals.sourcePath) && !env.OPENCLAW_PROFILE?.trim();
   const currentConversationBindings = {
     sourcePath: resolveLegacyCurrentConversationBindingsPath(stateDir),
   };
