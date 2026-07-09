@@ -70,6 +70,34 @@ function serializeFrameField(name: "payload" | "stateVersion", value: unknown): 
   return fieldJSON.startsWith(prefix) ? `,${keyJSON}:${fieldJSON.slice(prefix.length, -1)}` : "";
 }
 
+function createFrameBaseGetter(
+  event: string,
+  payload: unknown,
+  stateVersion: GatewayBroadcastOpts["stateVersion"] | undefined,
+) {
+  const payloadHolder: { value: unknown } = { value: payload };
+  let frameBase:
+    | {
+        eventJSON: string;
+        payloadFragment: string;
+        stateVersionFragment: string;
+      }
+    | undefined;
+  return () => {
+    if (!frameBase) {
+      frameBase = {
+        eventJSON: JSON.stringify(event),
+        payloadFragment: serializeFrameField("payload", payloadHolder.value),
+        stateVersionFragment:
+          stateVersion === undefined ? "" : serializeFrameField("stateVersion", stateVersion),
+      };
+      // Release large raw payload objects once the shared frame string exists.
+      payloadHolder.value = undefined;
+    }
+    return frameBase;
+  };
+}
+
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
   const required = EVENT_SCOPE_GUARDS[event];
   // Plugin-defined gateway broadcast events (plugin.* namespace) are allowed
@@ -132,26 +160,7 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       }
       logWs("out", "event", logMeta);
     }
-    let frameBase:
-      | {
-          eventJSON: string;
-          payloadFragment: string;
-          stateVersionFragment: string;
-        }
-      | undefined;
-    const getFrameBase = () => {
-      if (!frameBase) {
-        frameBase = {
-          eventJSON: JSON.stringify(event),
-          payloadFragment: serializeFrameField("payload", payload),
-          stateVersionFragment:
-            opts?.stateVersion === undefined
-              ? ""
-              : serializeFrameField("stateVersion", opts.stateVersion),
-        };
-      }
-      return frameBase;
-    };
+    const getFrameBase = createFrameBaseGetter(event, payload, opts?.stateVersion);
     for (const c of params.clients) {
       if (targetConnIds && !targetConnIds.has(c.connId)) {
         continue;
