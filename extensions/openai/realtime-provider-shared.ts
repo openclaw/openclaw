@@ -19,6 +19,7 @@ const OPENAI_REALTIME_SSRF_POLICY = {
   allowIpv6UniqueLocalRange: true,
   hostnameAllowlist: [new URL(OPENAI_REALTIME_API_BASE_URL).hostname],
 } satisfies SsrFPolicy;
+const OPENAI_REALTIME_CLIENT_SECRET_REQUEST_TIMEOUT_MS = 20_000;
 
 export const trimToUndefined = normalizeOptionalString;
 export { asFiniteNumber, asObjectRecord };
@@ -113,6 +114,7 @@ async function createOpenAIRealtimeSecret(
       body: JSON.stringify(params.body),
     },
     policy: OPENAI_REALTIME_SSRF_POLICY,
+    timeoutMs: OPENAI_REALTIME_CLIENT_SECRET_REQUEST_TIMEOUT_MS,
     auditContext: params.auditContext,
   });
   const payload = await (async () => {
