@@ -101,12 +101,14 @@ function safeJsonStringify(value: unknown): string {
   }
 }
 
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+
 function truncateForSummary(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
   }
   const truncatedChars = text.length - maxChars;
-  return `${text.slice(0, maxChars)}\n\n[... ${truncatedChars} more characters truncated]`;
+  return `${truncateUtf16Safe(text, maxChars)}\n\n[... ${truncatedChars} more characters truncated]`;
 }
 
 /** Extract text that compaction both estimates and includes in summary prompts. */
