@@ -598,7 +598,9 @@ export const zh_TW: TranslationMap = {
   },
   tasksPage: {
     active: "進行中",
+    activeSub: "Queued and running background work.",
     recent: "最近",
+    recentSub: "Latest completed, failed, and cancelled tasks.",
     loading: "正在載入任務…",
     empty: "尚無背景任務。",
     emptyActive: "沒有排入佇列或正在執行的任務。",
@@ -1895,8 +1897,7 @@ export const zh_TW: TranslationMap = {
     },
     summary: {
       enabled: "已啟用",
-      yes: "是",
-      no: "否",
+      scheduler: "Scheduler",
       jobs: "工作",
       nextWake: "下次喚醒",
       refreshing: "重新整理中...",

@@ -608,7 +608,9 @@ export const ru: TranslationMap = {
   },
   tasksPage: {
     active: "Активно",
+    activeSub: "Queued and running background work.",
     recent: "Недавние",
+    recentSub: "Latest completed, failed, and cancelled tasks.",
     loading: "Загрузка задач…",
     empty: "Фоновых задач пока нет.",
     emptyActive: "Нет задач в очереди или в работе.",
@@ -1954,8 +1956,7 @@ export const ru: TranslationMap = {
     },
     summary: {
       enabled: "Включено",
-      yes: "Да",
-      no: "Нет",
+      scheduler: "Планировщик",
       jobs: "Задачи",
       nextWake: "Следующее пробуждение",
       refreshing: "Обновление...",

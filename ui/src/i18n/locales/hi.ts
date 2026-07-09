@@ -601,7 +601,9 @@ export const hi: TranslationMap = {
   },
   tasksPage: {
     active: "सक्रिय",
+    activeSub: "Queued and running background work.",
     recent: "हाल के",
+    recentSub: "Latest completed, failed, and cancelled tasks.",
     loading: "कार्य लोड हो रहे हैं…",
     empty: "अभी तक कोई पृष्ठभूमि कार्य नहीं है.",
     emptyActive: "कोई कतारबद्ध या चल रहा कार्य नहीं है.",
@@ -1920,8 +1922,7 @@ export const hi: TranslationMap = {
     },
     summary: {
       enabled: "सक्षम",
-      yes: "हाँ",
-      no: "नहीं",
+      scheduler: "शेड्यूलर",
       jobs: "जॉब्स",
       nextWake: "अगला वेक",
       refreshing: "रीफ़्रेश हो रहा है...",

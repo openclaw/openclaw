@@ -602,7 +602,9 @@ export const id: TranslationMap = {
   },
   tasksPage: {
     active: "Aktif",
+    activeSub: "Queued and running background work.",
     recent: "Terbaru",
+    recentSub: "Latest completed, failed, and cancelled tasks.",
     loading: "Memuat tugas…",
     empty: "Belum ada tugas latar belakang.",
     emptyActive: "Tidak ada tugas dalam antrean atau sedang berjalan.",
@@ -1939,8 +1941,7 @@ export const id: TranslationMap = {
     },
     summary: {
       enabled: "Diaktifkan",
-      yes: "Ya",
-      no: "Tidak",
+      scheduler: "Scheduler",
       jobs: "Tugas",
       nextWake: "Bangun berikutnya",
       refreshing: "Memuat ulang...",

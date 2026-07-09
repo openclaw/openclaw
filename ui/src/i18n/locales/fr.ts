@@ -610,7 +610,9 @@ export const fr: TranslationMap = {
   },
   tasksPage: {
     active: "Actives",
+    activeSub: "Queued and running background work.",
     recent: "Récentes",
+    recentSub: "Latest completed, failed, and cancelled tasks.",
     loading: "Chargement des tâches…",
     empty: "Aucune tâche en arrière-plan pour le moment.",
     emptyActive: "Aucune tâche en file d’attente ou en cours d’exécution.",
@@ -1966,8 +1968,7 @@ export const fr: TranslationMap = {
     },
     summary: {
       enabled: "Activé",
-      yes: "Oui",
-      no: "Non",
+      scheduler: "Scheduler",
       jobs: "Tâches",
       nextWake: "Prochain réveil",
       refreshing: "Actualisation...",

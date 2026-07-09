@@ -599,7 +599,9 @@ export const th: TranslationMap = {
   },
   tasksPage: {
     active: "กำลังใช้งาน",
+    activeSub: "Queued and running background work.",
     recent: "ล่าสุด",
+    recentSub: "Latest completed, failed, and cancelled tasks.",
     loading: "กำลังโหลดงาน…",
     empty: "ยังไม่มีงานเบื้องหลัง",
     emptyActive: "ไม่มีงานที่อยู่ในคิวหรือกำลังทำงาน",
@@ -1899,8 +1901,7 @@ export const th: TranslationMap = {
     },
     summary: {
       enabled: "เปิดใช้งาน",
-      yes: "ใช่",
-      no: "ไม่",
+      scheduler: "Scheduler",
       jobs: "งาน",
       nextWake: "ปลุกครั้งถัดไป",
       refreshing: "กำลังรีเฟรช...",
