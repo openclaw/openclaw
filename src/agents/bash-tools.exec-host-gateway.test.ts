@@ -160,8 +160,8 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
   hasExactCommandDurableExecApproval: hasExactCommandDurableExecApprovalMock,
   buildEnforcedShellCommand: buildEnforcedShellCommandMock,
   requiresExecApproval: requiresExecApprovalMock,
-  recordAllowlistMatchesUse: recordAllowlistMatchesUseMock,
-  persistAllowAlwaysDecision: persistAllowAlwaysDecisionMock,
+  recordAllowlistMatchesUseLocked: recordAllowlistMatchesUseMock,
+  persistAllowAlwaysDecisionLocked: persistAllowAlwaysDecisionMock,
   resolveApprovalAuditTrustPath: vi.fn(() => null),
   resolveAllowAlwaysPatterns: vi.fn(() => []),
   resolveExecApprovalAllowedDecisions: resolveExecApprovalAllowedDecisionsMock,
@@ -923,7 +923,6 @@ describe("processGatewayAllowlist", () => {
 
     const command = "sh -c 'git status'";
     const env = { PATH: "/usr/bin:/bin" };
-    const approvalsFile = { version: 1, agents: {} };
     const authorizationPlan = await planShellAuthorization({ command, env });
     expect(authorizationPlan.ok).toBe(true);
     if (!authorizationPlan.ok) {
@@ -942,7 +941,7 @@ describe("processGatewayAllowlist", () => {
       authorizationPlan,
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: approvalsFile },
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
       hostSecurity: "allowlist",
       hostAsk: "on-miss",
       askFallback: "deny",
@@ -970,18 +969,12 @@ describe("processGatewayAllowlist", () => {
         allowedDecisions: ["allow-once", "allow-always", "deny"],
       }),
     );
-    expect(approvalsFile.agents).toEqual({
-      main: {
-        allowlist: [
-          expect.objectContaining({
-            pattern: "/usr/bin/git",
-            source: "allow-always",
-          }),
-          expect.objectContaining({
-            pattern: expect.stringMatching(/^=node-command:[0-9a-f]{16}$/),
-            source: "allow-always",
-          }),
-        ],
+    expect(persistAllowAlwaysDecisionMock).toHaveBeenCalledWith({
+      agentId: undefined,
+      decision: {
+        kind: "patterns",
+        commandText: "sh -c 'git status'",
+        patterns: [{ pattern: "/usr/bin/git", argPattern: undefined }],
       },
     });
   });

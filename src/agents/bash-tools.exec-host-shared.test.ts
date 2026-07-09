@@ -46,7 +46,7 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
   return {
     ...mod,
-    resolveExecApprovals: mocks.resolveExecApprovals,
+    resolveExecApprovalsLocked: mocks.resolveExecApprovals,
   };
 });
 

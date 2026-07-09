@@ -198,7 +198,7 @@ vi.mock("../infra/exec-approvals.js", async () => {
   return {
     ...actual,
     readExecApprovalsSnapshot: mocks.readExecApprovalsSnapshot,
-    restoreExecApprovalsSnapshot: mocks.restoreExecApprovalsSnapshot,
+    restoreExecApprovalsSnapshotLocked: mocks.restoreExecApprovalsSnapshot,
     updateExecApprovals: mocks.updateExecApprovals,
   };
 });
