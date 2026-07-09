@@ -122,12 +122,15 @@ function createTestMcpLoopbackServerConfig(port: number) {
           "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
           "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
           "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
+          "x-openclaw-client-caps": "${OPENCLAW_MCP_CLIENT_CAPS}",
           "x-openclaw-current-channel-id": "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
           "x-openclaw-current-thread-ts": "${OPENCLAW_MCP_CURRENT_THREAD_TS}",
           "x-openclaw-current-message-id": "${OPENCLAW_MCP_CURRENT_MESSAGE_ID}",
           "x-openclaw-current-inbound-audio": "${OPENCLAW_MCP_CURRENT_INBOUND_AUDIO}",
           "x-openclaw-inbound-event-kind": "${OPENCLAW_MCP_INBOUND_EVENT_KIND}",
           "x-openclaw-source-reply-delivery-mode": "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
+          "x-openclaw-task-suggestion-delivery-mode":
+            "${OPENCLAW_MCP_TASK_SUGGESTION_DELIVERY_MODE}",
           "x-openclaw-require-explicit-message-target":
             "${OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET}",
           "x-openclaw-cli-capture-key": "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
@@ -2802,6 +2805,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         cfg: expect.any(Object),
         sessionKey: "agent:main:test",
         messageProvider: undefined,
+        clientCaps: undefined,
         currentChannelId: undefined,
         currentThreadTs: undefined,
         currentMessageId: undefined,
@@ -2809,6 +2813,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         accountId: undefined,
         inboundEventKind: undefined,
         sourceReplyDeliveryMode: undefined,
+        taskSuggestionDeliveryMode: undefined,
         requireExplicitMessageTarget: false,
         senderIsOwner: undefined,
       });
@@ -2963,29 +2968,35 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         config: createCliBackendConfig(),
         currentInboundEventKind: "room_event",
         messageChannel: "telegram",
+        clientCaps: ["tool-events", "inline-widgets"],
         currentChannelId: "telegram:-100123:topic:42",
         currentThreadTs: "42",
         currentMessageId: "reply-message-1",
         currentInboundAudio: true,
         sourceReplyDeliveryMode: "message_tool_only",
+        taskSuggestionDeliveryMode: "gateway",
         requireExplicitMessageTarget: true,
       });
 
       expect(context.preparedBackend.env).toMatchObject({
         OPENCLAW_MCP_SESSION_ID: "session-test",
         OPENCLAW_MCP_MESSAGE_CHANNEL: "telegram",
+        OPENCLAW_MCP_CLIENT_CAPS: "tool-events,inline-widgets",
         OPENCLAW_MCP_CURRENT_CHANNEL_ID: "telegram:-100123:topic:42",
         OPENCLAW_MCP_CURRENT_THREAD_TS: "42",
         OPENCLAW_MCP_CURRENT_MESSAGE_ID: "reply-message-1",
         OPENCLAW_MCP_CURRENT_INBOUND_AUDIO: "true",
         OPENCLAW_MCP_INBOUND_EVENT_KIND: "room_event",
         OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: "message_tool_only",
+        OPENCLAW_MCP_TASK_SUGGESTION_DELIVERY_MODE: "gateway",
         OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET: "true",
         OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
       });
       expect(context.mcpDeliveryCapture).toBe(true);
       expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
         expect.objectContaining({
+          clientCaps: ["tool-events", "inline-widgets"],
+          taskSuggestionDeliveryMode: "gateway",
           requireExplicitMessageTarget: true,
         }),
       );

@@ -57,6 +57,12 @@ public enum SessionFileRelevance: String, Codable, Sendable {
     case mixed = "mixed"
 }
 
+public enum TaskSuggestionResolution: String, Codable, Sendable {
+    case dismissed = "dismissed"
+    case accepted = "accepted"
+    case expired = "expired"
+}
+
 public struct ConnectParams: Codable, Sendable {
     public let minprotocol: Int
     public let maxprotocol: Int
@@ -1289,68 +1295,6 @@ public struct WorktreesGcResult: Codable, Sendable {
     }
 }
 
-public struct NodePairRequestParams: Codable, Sendable {
-    public let nodeid: String
-    public let displayname: String?
-    public let platform: String?
-    public let version: String?
-    public let coreversion: String?
-    public let uiversion: String?
-    public let devicefamily: String?
-    public let modelidentifier: String?
-    public let caps: [String]?
-    public let commands: [String]?
-    public let permissions: [String: AnyCodable]?
-    public let remoteip: String?
-    public let silent: Bool?
-
-    public init(
-        nodeid: String,
-        displayname: String?,
-        platform: String?,
-        version: String?,
-        coreversion: String?,
-        uiversion: String?,
-        devicefamily: String?,
-        modelidentifier: String?,
-        caps: [String]?,
-        commands: [String]?,
-        permissions: [String: AnyCodable]?,
-        remoteip: String?,
-        silent: Bool?)
-    {
-        self.nodeid = nodeid
-        self.displayname = displayname
-        self.platform = platform
-        self.version = version
-        self.coreversion = coreversion
-        self.uiversion = uiversion
-        self.devicefamily = devicefamily
-        self.modelidentifier = modelidentifier
-        self.caps = caps
-        self.commands = commands
-        self.permissions = permissions
-        self.remoteip = remoteip
-        self.silent = silent
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case nodeid = "nodeId"
-        case displayname = "displayName"
-        case platform
-        case version
-        case coreversion = "coreVersion"
-        case uiversion = "uiVersion"
-        case devicefamily = "deviceFamily"
-        case modelidentifier = "modelIdentifier"
-        case caps
-        case commands
-        case permissions
-        case remoteip = "remoteIp"
-        case silent
-    }
-}
-
 public struct NodePairListParams: Codable, Sendable {}
 
 public struct NodePairApproveParams: Codable, Sendable {
@@ -1392,24 +1336,6 @@ public struct NodePairRemoveParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case nodeid = "nodeId"
-    }
-}
-
-public struct NodePairVerifyParams: Codable, Sendable {
-    public let nodeid: String
-    public let token: String
-
-    public init(
-        nodeid: String,
-        token: String)
-    {
-        self.nodeid = nodeid
-        self.token = token
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case nodeid = "nodeId"
-        case token
     }
 }
 
@@ -2602,6 +2528,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let task: String?
     public let message: String?
     public let worktree: Bool?
+    public let cwd: String?
 
     public init(
         key: String?,
@@ -2613,7 +2540,8 @@ public struct SessionsCreateParams: Codable, Sendable {
         emitcommandhooks: Bool?,
         task: String?,
         message: String?,
-        worktree: Bool?)
+        worktree: Bool?,
+        cwd: String?)
     {
         self.key = key
         self.agentid = agentid
@@ -2625,6 +2553,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.task = task
         self.message = message
         self.worktree = worktree
+        self.cwd = cwd
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2638,6 +2567,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case task
         case message
         case worktree
+        case cwd
     }
 }
 
@@ -3046,6 +2976,7 @@ public struct SessionsUsageParams: Codable, Sendable {
     public let groupby: AnyCodable?
     public let includehistorical: Bool?
     public let utcoffset: String?
+    public let timezone: String?
     public let limit: Int?
     public let includecontextweight: Bool?
 
@@ -3060,6 +2991,7 @@ public struct SessionsUsageParams: Codable, Sendable {
         groupby: AnyCodable?,
         includehistorical: Bool?,
         utcoffset: String?,
+        timezone: String? = nil,
         limit: Int?,
         includecontextweight: Bool?)
     {
@@ -3073,6 +3005,7 @@ public struct SessionsUsageParams: Codable, Sendable {
         self.groupby = groupby
         self.includehistorical = includehistorical
         self.utcoffset = utcoffset
+        self.timezone = timezone
         self.limit = limit
         self.includecontextweight = includecontextweight
     }
@@ -3088,6 +3021,7 @@ public struct SessionsUsageParams: Codable, Sendable {
         case groupby = "groupBy"
         case includehistorical = "includeHistorical"
         case utcoffset = "utcOffset"
+        case timezone = "timeZone"
         case limit
         case includecontextweight = "includeContextWeight"
     }
@@ -3228,6 +3162,200 @@ public struct AuditListResult: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case events
         case nextcursor = "nextCursor"
+    }
+}
+
+public struct TaskSuggestion: Codable, Sendable {
+    public let id: String
+    public let title: String
+    public let prompt: String
+    public let tldr: String
+    public let cwd: String
+    public let sessionkey: String
+    public let agentid: String?
+    public let createdat: Int
+
+    public init(
+        id: String,
+        title: String,
+        prompt: String,
+        tldr: String,
+        cwd: String,
+        sessionkey: String,
+        agentid: String? = nil,
+        createdat: Int)
+    {
+        self.id = id
+        self.title = title
+        self.prompt = prompt
+        self.tldr = tldr
+        self.cwd = cwd
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.createdat = createdat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case prompt
+        case tldr
+        case cwd
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case createdat = "createdAt"
+    }
+}
+
+public struct TaskSuggestionsAcceptParams: Codable, Sendable {
+    public let taskid: String
+
+    public init(
+        taskid: String)
+    {
+        self.taskid = taskid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case taskid = "taskId"
+    }
+}
+
+public struct TaskSuggestionsAcceptResult: Codable, Sendable {
+    public let taskid: String
+    public let key: String
+
+    public init(
+        taskid: String,
+        key: String)
+    {
+        self.taskid = taskid
+        self.key = key
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case taskid = "taskId"
+        case key
+    }
+}
+
+public struct TaskSuggestionsCreateParams: Codable, Sendable {
+    public let title: String
+    public let prompt: String
+    public let tldr: String
+    public let cwd: String
+    public let sessionkey: String
+    public let agentid: String?
+
+    public init(
+        title: String,
+        prompt: String,
+        tldr: String,
+        cwd: String,
+        sessionkey: String,
+        agentid: String? = nil)
+    {
+        self.title = title
+        self.prompt = prompt
+        self.tldr = tldr
+        self.cwd = cwd
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case title
+        case prompt
+        case tldr
+        case cwd
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+    }
+}
+
+public struct TaskSuggestionsCreateResult: Codable, Sendable {
+    public let taskid: String
+    public let suggestion: TaskSuggestion
+
+    public init(
+        taskid: String,
+        suggestion: TaskSuggestion)
+    {
+        self.taskid = taskid
+        self.suggestion = suggestion
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case taskid = "taskId"
+        case suggestion
+    }
+}
+
+public struct TaskSuggestionsDismissParams: Codable, Sendable {
+    public let taskid: String
+    public let reason: String?
+
+    public init(
+        taskid: String,
+        reason: String?)
+    {
+        self.taskid = taskid
+        self.reason = reason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case taskid = "taskId"
+        case reason
+    }
+}
+
+public struct TaskSuggestionsDismissResult: Codable, Sendable {
+    public let taskid: String
+    public let dismissed: Bool
+
+    public init(
+        taskid: String,
+        dismissed: Bool)
+    {
+        self.taskid = taskid
+        self.dismissed = dismissed
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case taskid = "taskId"
+        case dismissed
+    }
+}
+
+public struct TaskSuggestionsListParams: Codable, Sendable {
+    public let sessionkey: String?
+    public let agentid: String?
+
+    public init(
+        sessionkey: String?,
+        agentid: String? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+    }
+}
+
+public struct TaskSuggestionsListResult: Codable, Sendable {
+    public let suggestions: [TaskSuggestion]
+
+    public init(
+        suggestions: [TaskSuggestion])
+    {
+        self.suggestions = suggestions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case suggestions
     }
 }
 
@@ -8475,21 +8603,25 @@ public struct DevicePairSetupCodeParams: Codable, Sendable {
     public let publicurl: String?
     public let preferremoteurl: Bool?
     public let includeqr: Bool?
+    public let bootstrapprofile: String?
 
     public init(
         publicurl: String?,
         preferremoteurl: Bool?,
-        includeqr: Bool?)
+        includeqr: Bool?,
+        bootstrapprofile: String?)
     {
         self.publicurl = publicurl
         self.preferremoteurl = preferremoteurl
         self.includeqr = includeqr
+        self.bootstrapprofile = bootstrapprofile
     }
 
     private enum CodingKeys: String, CodingKey {
         case publicurl = "publicUrl"
         case preferremoteurl = "preferRemoteUrl"
         case includeqr = "includeQr"
+        case bootstrapprofile = "bootstrapProfile"
     }
 }
 

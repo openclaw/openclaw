@@ -174,10 +174,10 @@ extension SettingsProTab {
                 title: "Privacy",
                 route: .privacy)
             self.settingsListRow(
-                icon: "bell.fill",
-                iconColor: .red,
-                title: "Notifications",
-                route: .notifications)
+                icon: "applewatch",
+                iconColor: .green,
+                title: "Apple Watch",
+                route: .appleWatch)
             self.settingsListRow(
                 icon: "info.circle.fill",
                 iconColor: .gray,
@@ -229,6 +229,8 @@ extension SettingsProTab {
                 switch route {
                 case .gateway:
                     self.gatewayDestination
+                case .appleWatch:
+                    self.appleWatchDestination
                 case .approvals:
                     self.approvalsDestination
                 case .permissions:
@@ -252,6 +254,10 @@ extension SettingsProTab {
             .font(OpenClawType.body)
             .navigationTitle(title(for: route))
             .navigationBarTitleDisplayMode(.inline)
+            .task(id: route) {
+                guard route == .appleWatch else { return }
+                await self.appModel.refreshWatchMessagingStatus()
+            }
             .toolbar {
                 if let headerLeadingAction {
                     ToolbarItem(placement: .topBarLeading) {
@@ -357,6 +363,50 @@ extension SettingsProTab {
             }
 
             self.approvalsReviewCard
+        }
+    }
+
+    var appleWatchDestination: some View {
+        Group {
+            let watchStatus = self.appModel.watchMessagingStatus
+            self.detailStatusCard(
+                icon: "applewatch",
+                title: "Apple Watch",
+                detail: watchStatus.appInstalled
+                    ? "Relay remains available; direct mode adds an independent Gateway node."
+                    : "Install the OpenClaw watch app before enabling direct mode.",
+                value: watchStatus.reachable ? "Reachable" : (watchStatus.appInstalled ? "Installed" : "Unavailable"),
+                color: watchStatus.appInstalled ? OpenClawBrand.ok : OpenClawBrand.warn)
+
+            Section {
+                Button {
+                    Task { await self.sendDirectWatchSetup() }
+                } label: {
+                    Label("Enable Direct Gateway Connection", systemImage: "point.3.connected.trianglepath.dotted")
+                        .font(OpenClawType.body)
+                }
+                .disabled(
+                    self.isSendingWatchDirectSetup
+                        || !self.appModel.isOperatorGatewayConnected
+                        || !self.appModel.hasOperatorAdminScope
+                        || !watchStatus.appInstalled)
+
+                if let statusText = self.watchDirectSetupStatusText {
+                    Text(statusText)
+                        .font(OpenClawType.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } footer: {
+                Text(
+                    "The watch receives a one-time pairing code and stores its own device token. A reachable secure Gateway URL is required away from the iPhone.")
+                    .font(OpenClawType.footnote)
+            }
+
+            Section("Direct node features") {
+                SettingsDetailRow("Device", value: "Info and status")
+                SettingsDetailRow("Notifications", value: "While app is active")
+            }
         }
     }
 
@@ -500,6 +550,8 @@ extension SettingsProTab {
 
     var privacyDestination: some View {
         Group {
+            self.notificationsSection
+
             self.detailStatusCard(
                 icon: "hand.raised",
                 title: "Privacy",
@@ -522,49 +574,42 @@ extension SettingsProTab {
     }
 
     var notificationsDestination: some View {
-        Group {
-            self.detailStatusCard(
-                icon: "bell",
-                title: "Notifications",
-                detail: self.notificationStatusDetail,
-                value: self.notificationStatusText,
-                color: self.notificationStatus.color)
+        self.notificationsSection
+    }
 
-            Section {
-                VStack(alignment: .leading, spacing: 12) {
-                    Button {
-                        self.handleNotificationAction()
-                    } label: {
-                        Label(
-                            self.notificationActionText,
-                            systemImage: self.notificationStatus.actionIcon)
-                            .font(OpenClawType.captionSemiBold)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(self.notificationStatus == .checking || self.isRequestingNotificationAuthorization)
-
+    var notificationsSection: some View {
+        Section("Notifications") {
+            HStack(spacing: 12) {
+                SettingsIcon(systemName: "bell.fill", color: self.notificationStatusColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Notifications")
+                        .font(OpenClawType.subheadSemiBold)
                     Text(self.notificationStatusDetail)
                         .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-
-                    Divider()
-
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "network")
-                            .font(OpenClawType.captionSemiBold)
-                            .foregroundStyle(OpenClawBrand.accent)
-                            .frame(width: 22, height: 22)
-                        Text(self.notificationRelayDetail)
-                            .font(OpenClawType.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                 }
+                Spacer(minLength: 8)
+                Toggle("Notifications", isOn: self.notificationToggleBinding)
+                    .labelsHidden()
+                    .disabled(self.notificationStatus == .checking || self.isRequestingNotificationAuthorization)
+                    .accessibilityIdentifier("settings-notifications-toggle")
+                    .accessibilityValue(self.notificationServingActive ? "On" : "Off")
+                    .accessibilityHint("Turns OpenClaw notification delivery on or off")
+            }
+
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "network")
+                    .font(OpenClawType.captionSemiBold)
+                    .foregroundStyle(OpenClawBrand.accent)
+                    .frame(width: 22, height: 22)
+                Text(self.notificationRelayDetail)
+                    .font(OpenClawType.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .accessibilityIdentifier("settings-privacy-notifications-section")
     }
 
     var gatewayActions: some View {
@@ -965,7 +1010,21 @@ extension SettingsProTab {
             TextField("Port", text: self.manualPortBinding)
                 .font(OpenClawType.body)
                 .keyboardType(.numberPad)
-            self.settingsToggle("Use TLS", isOn: self.$manualGatewayTLS)
+            Picker("Connection security", selection: self.manualGatewayTLSBinding) {
+                Text("Unencrypted")
+                    .font(OpenClawType.captionSemiBold)
+                    .tag(false)
+                Text("Secure (TLS)")
+                    .font(OpenClawType.captionSemiBold)
+                    .tag(true)
+            }
+            .pickerStyle(.segmented)
+            .disabled(self.manualGatewayTransport.requiresTLS)
+            if let helperText = self.manualGatewayTransport.helperText {
+                Text(helperText)
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
+            }
             self.gatewayActionButton(
                 title: "Connect Manual",
                 icon: "network",
@@ -978,6 +1037,21 @@ extension SettingsProTab {
             }
         }
         .disabled(self.setupAttemptID != nil)
+    }
+
+    private var manualGatewayTransport: GatewayManualTransportPresentation {
+        GatewayConnectionController.manualTransportPresentation(
+            host: self.manualGatewayHost,
+            requestedTLS: self.manualGatewayTLS)
+    }
+
+    private var manualGatewayTLSBinding: Binding<Bool> {
+        Binding(
+            get: { self.manualGatewayTransport.effectiveTLS },
+            set: { enabled in
+                guard !self.manualGatewayTransport.requiresTLS else { return }
+                self.manualGatewayTLS = enabled
+            })
     }
 
     var gatewayAdvancedCard: some View {

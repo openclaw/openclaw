@@ -1,17 +1,15 @@
 // Chat-owned composer, queue, status, context, and run controls.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../../api/types.ts";
+import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { normalizeChatSendShortcut, type ChatSendShortcut } from "../../../app/settings.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
-import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
-import {
-  renderProviderQuotaPill,
-  type ProviderQuotaPillProps,
-} from "../../../components/provider-quota-pill.ts";
 import "../../../components/tooltip.ts";
+import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import {
@@ -24,6 +22,15 @@ import {
 } from "../../../lib/chat/commands.ts";
 import type { ChatSideResult } from "../../../lib/chat/side-result.ts";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
+import { isMonitoredAuthProvider } from "../../../lib/model-auth.ts";
+import {
+  collectProviderQuotaGroups,
+  formatQuotaReset,
+  type ProviderQuotaGroup,
+  type ProviderUsageDisplayProps,
+  type QuotaBudgetSummary,
+  type QuotaLimitSummary,
+} from "../../../lib/provider-quota-summary.ts";
 import {
   formatGoalDetail,
   formatGoalElapsed,
@@ -40,9 +47,15 @@ import {
 import { exportChatMarkdown } from "../export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
+import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
+import {
+  renderChatVoiceError,
+  renderMicrophoneActivity,
+  voiceStatusLabel,
+} from "./chat-voice-activity.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
@@ -82,7 +95,7 @@ type ChatComposerProps = {
   queue: ChatQueueItem[];
   draft: string;
   sessions: SessionsListResult | null;
-  providerQuota?: ProviderQuotaPillProps;
+  providerUsage?: ProviderUsageDisplayProps;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
   attachments?: ChatAttachment[];
@@ -91,6 +104,7 @@ type ChatComposerProps = {
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
+  realtimeTalkInputLevel?: RealtimeTalkLevelSignal;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   composerControls?: TemplateResult | typeof nothing;
   getDraft?: () => string;
@@ -1369,7 +1383,7 @@ type ContextNoticeOptions = {
   compactDisabled?: boolean;
   messages?: unknown[];
   onCompact?: () => void | Promise<void>;
-  providerQuota?: ProviderQuotaPillProps;
+  providerUsage?: ProviderUsageDisplayProps;
 };
 
 type ProviderCostStats = {
@@ -1553,14 +1567,138 @@ export function getContextNoticeViewModel(
 const RING_RADIUS = 6.5;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
+// Provider window labels arrive as compact data strings ("5h", "Week"); model
+// scoped labels (e.g. "Opus") pass through untranslated.
+function formatUsageWindowLabel(label: string): string {
+  if (label === "5h") {
+    return t("chat.composer.contextUsage.limitFiveHour");
+  }
+  if (label === "Week") {
+    return t("chat.composer.contextUsage.limitWeekly");
+  }
+  if (label === "Day") {
+    return t("chat.composer.contextUsage.limitDaily");
+  }
+  const hours = /^(\d+)h$/.exec(label);
+  if (hours) {
+    return t("chat.composer.contextUsage.limitHours", { hours: hours[1] });
+  }
+  return label;
+}
+
+function formatBudgetAmount(amount: number, unit: string): string {
+  if (/^[A-Za-z]{3}$/.test(unit)) {
+    try {
+      return new Intl.NumberFormat(undefined, {
+        style: "currency",
+        currency: unit.toUpperCase(),
+        maximumFractionDigits: 2,
+      }).format(amount);
+    } catch {
+      // Non-ISO currency codes fall through to plain unit suffix formatting.
+    }
+  }
+  return `${amount.toFixed(2)} ${unit}`;
+}
+
+function renderLimitBar(usedPercent: number, ariaLabel: string) {
+  const severity = usedPercent >= 90 ? "danger" : usedPercent >= 75 ? "warn" : null;
+  return html`
+    <div
+      class="context-usage__limit-bar"
+      role="progressbar"
+      aria-label=${ariaLabel}
+      aria-valuemin="0"
+      aria-valuemax="100"
+      aria-valuenow=${usedPercent}
+    >
+      <span
+        class=${severity ? `context-usage__limit-fill--${severity}` : ""}
+        style="width: ${usedPercent}%"
+      ></span>
+    </div>
+  `;
+}
+
+function renderQuotaLimitRow(limit: QuotaLimitSummary) {
+  const label = formatUsageWindowLabel(limit.label);
+  const reset = formatQuotaReset(limit.resetAt);
+  return html`
+    <div class="context-usage__limit">
+      <div class="context-usage__limit-head">
+        <span class="context-usage__limit-label">${label}</span>
+        <span class="context-usage__limit-meta">
+          ${reset
+            ? html`<span class="context-usage__limit-reset"
+                >${t("chat.composer.contextUsage.resets", { time: reset })}</span
+              >`
+            : nothing}
+          <strong>${limit.usedPercent}%</strong>
+        </span>
+      </div>
+      ${renderLimitBar(limit.usedPercent, label)}
+    </div>
+  `;
+}
+
+function renderQuotaBudgetRow(budget: QuotaBudgetSummary) {
+  const label = budget.label || t("chat.composer.contextUsage.usageCredits");
+  const usedPercent = Math.max(0, Math.min(100, Math.round((budget.used / budget.limit) * 100)));
+  const value = t("chat.composer.contextUsage.budgetValue", {
+    used: formatBudgetAmount(budget.used, budget.unit),
+    limit: formatBudgetAmount(budget.limit, budget.unit),
+  });
+  return html`
+    <div class="context-usage__limit">
+      <div class="context-usage__limit-head">
+        <span class="context-usage__limit-label">${label}</span>
+        <span class="context-usage__limit-meta"><strong>${value}</strong></span>
+      </div>
+      ${renderLimitBar(usedPercent, label)}
+    </div>
+  `;
+}
+
+function renderQuotaGroup(
+  group: ProviderQuotaGroup,
+  options: { usageHref: string; showProvider: boolean },
+) {
+  const heading = options.showProvider
+    ? `${t("chat.composer.contextUsage.planUsage")} · ${group.displayName}`
+    : t("chat.composer.contextUsage.planUsage");
+  return html`
+    <div class="context-usage__section-label context-usage__plan-header">
+      <span>${heading}</span>
+      <a
+        class="context-usage__plan-link"
+        href=${options.usageHref}
+        data-chat-provider-usage="true"
+        aria-label=${t("chat.composer.contextUsage.openUsage")}
+      >
+        ${group.plan ? html`<span class="context-usage__plan-badge">${group.plan}</span>` : nothing}
+        ${icons.externalLink}
+      </a>
+    </div>
+    <div class="context-usage__limits">
+      ${group.windows.map((limit) => renderQuotaLimitRow(limit))}
+      ${group.budgets.map((budget) => renderQuotaBudgetRow(budget))}
+    </div>
+  `;
+}
+
 export function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
   options: ContextNoticeOptions = {},
 ) {
   const model = getContextNoticeViewModel(session, defaultContextTokens);
-  const providerQuota = options.providerQuota ? renderProviderQuotaPill(options.providerQuota) : "";
-  if (!model && (providerQuota === "" || providerQuota === nothing)) {
+  const quotaGroups = options.providerUsage
+    ? collectProviderQuotaGroups(
+        options.providerUsage.modelAuthStatusResult ?? null,
+        isMonitoredAuthProvider,
+      )
+    : [];
+  if (!model && quotaGroups.length === 0) {
     return nothing;
   }
   const canRenderCompact = Boolean(model?.compactRecommended && options.onCompact);
@@ -1577,6 +1715,25 @@ export function renderContextNotice(
   const providerCosts = model ? latestProviderCostStats(options.messages) : null;
   const provider = providerCosts?.provider ?? model?.provider;
   const responseModel = providerCosts?.model ?? model?.model;
+  const sessionProviderKeys = new Set(
+    [model?.provider, providerCosts?.provider]
+      .filter((value): value is string => Boolean(value))
+      .map((value) => value.trim().toLowerCase()),
+  );
+  const currentGroup = quotaGroups.find((group) =>
+    group.providers.some((id) => sessionProviderKeys.has(id.trim().toLowerCase())),
+  );
+  const planGroups = currentGroup
+    ? [currentGroup, ...quotaGroups.filter((group) => group !== currentGroup)]
+    : quotaGroups;
+  // Plan-billed sessions hide dollar estimates: subscription usage is bounded
+  // by the plan windows below, and per-token math would misread as real spend.
+  // Billing mode is provider-level: session rows do not record which auth
+  // profile served the run, so a provider with both an API key and a
+  // subscription resolves to subscription display (per-run credential
+  // attribution is #102807).
+  const showCosts = !currentGroup;
+  const usageHref = `${normalizeBasePath(options.providerUsage?.basePath ?? "")}/usage`;
   const formatStat = (value: number | null) =>
     value === null ? t("usage.common.emptyValue") : formatCompactTokenCount(value);
   const renderCostStat = (label: string, value: number | undefined) =>
@@ -1641,9 +1798,6 @@ export function renderContextNotice(
                 </div>
               `
             : nothing}
-          ${providerQuota === "" || providerQuota === nothing
-            ? nothing
-            : html`<div class="context-usage__quota">${providerQuota}</div>`}
           ${model
             ? html`
                 <div class="context-usage__section-label">
@@ -1658,7 +1812,7 @@ export function renderContextNotice(
                     <dt>${t("usage.breakdown.output")}</dt>
                     <dd>${formatStat(model.output)}</dd>
                   </div>
-                  ${model.cost === null
+                  ${!showCosts || model.cost === null
                     ? nothing
                     : html`
                         <div>
@@ -1669,7 +1823,7 @@ export function renderContextNotice(
                 </dl>
               `
             : nothing}
-          ${providerCosts
+          ${showCosts && providerCosts
             ? html`
                 <div class="context-usage__section-label">${t("usage.breakdown.costByType")}</div>
                 <dl class="context-usage__stats context-usage__stats--cost">
@@ -1680,6 +1834,12 @@ export function renderContextNotice(
                 </dl>
               `
             : nothing}
+          ${planGroups.map((group) =>
+            renderQuotaGroup(group, {
+              usageHref,
+              showProvider: planGroups.length > 1,
+            }),
+          )}
           ${provider
             ? html`
                 <div class="context-usage__model">
@@ -1734,6 +1894,9 @@ export type ChatRunControlsProps = {
   isBusy: boolean;
   sending: boolean;
   voiceActive?: boolean;
+  voiceStatus?: RealtimeTalkStatus;
+  voiceDetail?: string | null;
+  voiceInputLevel?: RealtimeTalkLevelSignal;
   onAbort?: () => void;
   onExport: () => void;
   onNewSession: () => void;
@@ -1767,19 +1930,42 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
       `
     : nothing;
 
+  // Transports keep the session active while reporting status "error"; the
+  // alert row above the composer owns the error message, so the control keeps
+  // only its stop affordance instead of a fake listening meter plus a
+  // duplicate announcement.
+  const voiceErrored = props.voiceStatus === "error";
   return html`
     ${props.voiceActive && props.onToggleVoice
       ? html`
           <openclaw-tooltip .content=${t("chat.composer.stopVoiceInput")}>
             <button
-              class="chat-send-btn chat-send-btn--stop"
+              class="chat-send-btn chat-send-btn--voice-live${voiceErrored
+                ? " chat-send-btn--voice-error"
+                : ""}"
               @click=${props.onToggleVoice}
               aria-label=${t("chat.composer.stopVoiceInput")}
             >
-              ${icons.stop}
-              <span class="agent-chat__control-label">${t("chat.composer.stopVoiceInput")}</span>
+              ${voiceErrored
+                ? nothing
+                : renderMicrophoneActivity({
+                    status: props.voiceStatus,
+                    inputLevel: props.voiceInputLevel,
+                  })}
+              <span class="chat-send-btn__voice-stop-glyph">${icons.stop}</span>
             </button>
           </openclaw-tooltip>
+          ${voiceErrored
+            ? nothing
+            : html`
+                <span
+                  class="agent-chat__sr-only agent-chat__voice-status"
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                  >${voiceStatusLabel(props.voiceStatus, props.voiceDetail)}</span
+                >
+              `}
           ${abortAction}
         `
       : props.canAbort
@@ -1923,7 +2109,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       compactDisabled: !canCompose || isBusy || showAbortableUi,
       messages: props.messages,
       onCompact: props.onCompact,
-      providerQuota: props.providerQuota,
+      providerUsage: props.providerUsage,
     },
   );
   const composerControls = props.composerControls ?? nothing;
@@ -2064,6 +2250,9 @@ export function renderChatComposer(props: ChatComposerProps) {
         if (result.preventDefault) {
           event.preventDefault();
         }
+        // History navigation updates the renderer-owned draft outside a
+        // reactive property; commit it before placing the caret in the DOM.
+        requestUpdate();
         if (result.restoreCaret) {
           restoreHistoryCaret(target, result.restoreCaret);
         }
@@ -2162,6 +2351,9 @@ export function renderChatComposer(props: ChatComposerProps) {
     isBusy,
     sending: props.sending,
     voiceActive: props.realtimeTalkActive,
+    voiceStatus: props.realtimeTalkStatus,
+    voiceDetail: props.realtimeTalkDetail,
+    voiceInputLevel: props.realtimeTalkInputLevel,
     onAbort: props.onAbort,
     onExport: () => exportMarkdown(props),
     onNewSession: props.onNewSession,
@@ -2216,7 +2408,8 @@ export function renderChatComposer(props: ChatComposerProps) {
                   >Replying to ${props.replyTarget.senderLabel ?? "message"}</span
                 >
                 <span class="chat-reply-preview__text"
-                  >${props.replyTarget.text.slice(0, 120)}${props.replyTarget.text.length > 120
+                  >${truncateUtf16Safe(props.replyTarget.text, 120)}${props.replyTarget.text
+                    .length > 120
                     ? "..."
                     : ""}</span
                 >
@@ -2284,37 +2477,11 @@ export function renderChatComposer(props: ChatComposerProps) {
           }}
         />
 
-        ${props.realtimeTalkActive || props.realtimeTalkDetail
-          ? html`
-              <div
-                class="agent-chat__stt-interim agent-chat__talk-status"
-                role=${props.realtimeTalkStatus === "error" ? "alert" : nothing}
-              >
-                <span class="agent-chat__talk-status-text">
-                  ${props.realtimeTalkDetail ??
-                  (props.realtimeTalkStatus === "thinking"
-                    ? "Asking OpenClaw..."
-                    : props.realtimeTalkStatus === "connecting"
-                      ? "Connecting voice input..."
-                      : "Listening...")}
-                </span>
-                ${props.realtimeTalkStatus === "error" && props.onDismissRealtimeTalkError
-                  ? html`
-                      <openclaw-tooltip .content=${t("chat.composer.dismissVoiceInputError")}>
-                        <button
-                          class="callout__dismiss"
-                          type="button"
-                          @click=${props.onDismissRealtimeTalkError}
-                          aria-label=${t("chat.composer.dismissVoiceInputError")}
-                        >
-                          ${icons.x}
-                        </button>
-                      </openclaw-tooltip>
-                    `
-                  : nothing}
-              </div>
-            `
-          : nothing}
+        ${renderChatVoiceError({
+          status: props.realtimeTalkStatus,
+          detail: props.realtimeTalkDetail,
+          onDismissError: props.onDismissRealtimeTalkError,
+        })}
 
         <div class="agent-chat__composer-input-row">
           <details class="agent-chat__attach-menu">

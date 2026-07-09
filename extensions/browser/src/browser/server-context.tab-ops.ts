@@ -255,7 +255,10 @@ export function createProfileTabOps({
         continue;
       }
       if (tab.wsUrl) {
-        await assertCdpEndpointAllowed(tab.wsUrl, cdpControlPolicy, { source: "discovered" });
+        await assertCdpEndpointAllowed(tab.wsUrl, cdpControlPolicy, {
+          source: "discovered",
+          configuredUrl: profile.cdpUrl,
+        });
       }
       tabs.push(tab);
     }
@@ -423,7 +426,10 @@ export function createProfileTabOps({
     await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });
     const wsUrl = normalizeWsUrl(created.webSocketDebuggerUrl, profile.cdpUrl);
     if (wsUrl) {
-      await assertCdpEndpointAllowed(wsUrl, getCdpControlPolicy(), { source: "discovered" });
+      await assertCdpEndpointAllowed(wsUrl, getCdpControlPolicy(), {
+        source: "discovered",
+        configuredUrl: profile.cdpUrl,
+      });
     }
     triggerManagedTabLimit(created.id);
     return assignTabAlias({

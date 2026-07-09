@@ -1596,7 +1596,7 @@ function buildChatSendUserTurnMedia(savedMedia: SavedMedia[]): NonNullable<UserT
   }));
 }
 
-export function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
+function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
   const role =
     message &&
     typeof message === "object" &&
@@ -3750,6 +3750,10 @@ export const chatHandlers: GatewayRequestHandlers = {
   "chat.send": async ({ params, respond, context, client }) => {
     const chatSendReceivedAtMs = performance.now();
     const clientInfo = client?.connect?.client;
+    const supportsTaskSuggestions =
+      isOperatorUiClient(clientInfo) &&
+      client?.connect?.scopes?.includes("operator.admin") === true &&
+      hasGatewayClientCap(client?.connect?.caps, GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS);
     const controlUiReconnectResume = resolveControlUiReconnectResumeParams(params, clientInfo);
     if (!validateChatSendParams(controlUiReconnectResume.params)) {
       respond(
@@ -4593,6 +4597,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             }
           : {}),
         GatewayClientScopes: client?.connect?.scopes ?? [],
+        GatewayClientCaps: client?.connect?.caps ?? [],
       };
       const isInternalTextSlashCommandTurn =
         ctx.Provider === INTERNAL_MESSAGE_CHANNEL && ctx.CommandSource === "text";
@@ -4862,6 +4867,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                           sessionKey: activeRunScopeKey,
                         }),
                       }
+                    : {}),
+                  ...(supportsTaskSuggestions
+                    ? { taskSuggestionDeliveryMode: "gateway" as const }
                     : {}),
                   requestedSessionId,
                   resumeRequestedSession: controlUiReconnectResume.resumeRequested,

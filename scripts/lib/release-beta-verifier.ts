@@ -11,7 +11,7 @@ import {
 
 type JsonRecord = Record<string, unknown>;
 
-export type ReleaseVerifyBetaArgs = {
+type ReleaseVerifyBetaArgs = {
   version: string;
   tag: string;
   distTag: string;
@@ -35,7 +35,7 @@ export type ReleaseVerifyBetaArgs = {
   };
 };
 
-export type NpmViewFields = {
+type NpmViewFields = {
   version?: string;
   distTagVersion?: string;
   integrity?: string;

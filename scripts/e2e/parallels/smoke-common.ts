@@ -24,12 +24,13 @@ export interface SmokeRunOptions {
   json: boolean;
   keepServer: boolean;
   mode: Mode;
+  npmRegistry?: string;
   provider: Provider;
   snapshotHint: string;
   targetPackageSpec?: string;
 }
 
-export interface SmokeLaneStatuses {
+interface SmokeLaneStatuses {
   freshAgent: string;
   freshGateway: string;
   freshMain: string;
@@ -41,7 +42,7 @@ export interface SmokeLaneStatuses {
   upgradeVersion: string;
 }
 
-export interface CommonSmokeSummary {
+interface CommonSmokeSummary {
   currentHead: string;
   freshMain: {
     agent: string;
