@@ -64,6 +64,30 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     expect(specs[0]?.skillFile).toBe(entry.skill.filePath);
   });
 
+  it("caps the debug-once dedupe set to prevent unbounded growth", () => {
+    // 600+ skill entries each trigger a unique debugSkillCommandOnce call
+    // via missing command-tool. The dedupe Set must stay bounded.
+    const count = 600;
+    const entries: SkillEntry[] = [];
+    for (let i = 0; i < count; i++) {
+      entries.push(
+        createFixtureSkillEntry(`skill-${i}`, {
+          frontmatter: {
+            "command-dispatch": "tool",
+            // Missing command-tool triggers debugSkillCommandOnce per entry.
+          },
+        }),
+      );
+    }
+
+    const specs = buildWorkspaceSkillCommandSpecs("/workspace", { entries });
+
+    expect(specs).toHaveLength(count);
+    for (let i = 0; i < count; i++) {
+      expect(specs[i]?.skillName).toBe(`skill-${i}`);
+    }
+  });
+
   it("preserves bundle command descriptions for provider-specific limits", () => {
     const prefix = "a".repeat(98);
     const description = `${prefix}😀 extra text beyond the limit`;

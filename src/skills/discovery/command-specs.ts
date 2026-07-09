@@ -20,14 +20,21 @@ const skillsLogger = createSubsystemLogger("skills");
 const skillCommandDebugOnce = new Set<string>();
 const SKILL_COMMAND_MAX_LENGTH = 32;
 const SKILL_COMMAND_FALLBACK = "skill";
+const MAX_SKILL_COMMAND_DEBUG_ONCE_SIZE = 500;
 
 // De-duplicate noisy skill command diagnostics across large workspace scans.
+// The dedupe set is capped to prevent unbounded growth during long-running
+// gateways that scan many workspace skills over their lifetime.
 function debugSkillCommandOnce(
   messageKey: string,
   message: string,
   meta?: Record<string, unknown>,
 ) {
   if (skillCommandDebugOnce.has(messageKey)) {
+    return;
+  }
+  if (skillCommandDebugOnce.size >= MAX_SKILL_COMMAND_DEBUG_ONCE_SIZE) {
+    skillsLogger.debug(message, meta);
     return;
   }
   skillCommandDebugOnce.add(messageKey);
@@ -40,6 +47,10 @@ function traceSkillCommandOnce(
   meta?: Record<string, unknown>,
 ) {
   if (skillCommandDebugOnce.has(messageKey)) {
+    return;
+  }
+  if (skillCommandDebugOnce.size >= MAX_SKILL_COMMAND_DEBUG_ONCE_SIZE) {
+    skillsLogger.trace(message, meta);
     return;
   }
   skillCommandDebugOnce.add(messageKey);
