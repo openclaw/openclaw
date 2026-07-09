@@ -1014,6 +1014,10 @@
   color: var(--muted);
 }
 
+.workboard-card__move--wide {
+  width: 100%;
+}
+
 .workboard-card__move-icon {
   position: absolute;
   left: 7px;
@@ -1073,6 +1077,11 @@
 .workboard-card__move-select:disabled {
   cursor: not-allowed;
   opacity: 0.58;
+}
+
+.workboard-card__move--wide .workboard-card__move-select {
+  max-width: none;
+  color: var(--text);
 }
 
 .workboard-card__quick-actions .workboard-card__icon,
@@ -1493,6 +1502,7 @@
 
 .workboard-detail__actions {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   margin-top: auto;
   padding-top: 12px;
@@ -1501,6 +1511,13 @@
 
 .workboard-detail__actions > .btn {
   justify-content: center;
+  min-width: 0;
+  white-space: normal;
+}
+
+.workboard-detail__actions > .workboard-card__move,
+.workboard-detail__actions > .workboard-card__execution-controls {
+  grid-column: 1 / -1;
 }
 
 @media (max-width: 860px) {

@@ -361,6 +361,25 @@ export function configureSqliteWalMaintenance(
   };
 }
 
+/**
+ * Register a best-effort exit-time close for a SQLite handle cache. Returns an
+ * unregister callback the cache's orderly close path must invoke, so tests and
+ * runtime shutdowns do not accumulate listeners on shared worker processes.
+ */
+export function registerSqliteCacheExitClose(closeAll: () => void): () => void {
+  const closeOnExit = () => {
+    try {
+      closeAll();
+    } catch {
+      // Exit-time close is best-effort; unclean exits rely on WAL recovery.
+    }
+  };
+  process.once("exit", closeOnExit);
+  return () => {
+    process.removeListener("exit", closeOnExit);
+  };
+}
+
 /** Configure per-connection SQLite pragmas in the safe lock-retry/WAL order. */
 export function configureSqliteConnectionPragmas(
   db: DatabaseSync,

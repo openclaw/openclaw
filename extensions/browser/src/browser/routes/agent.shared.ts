@@ -150,6 +150,8 @@ export async function withRouteTabContext<T>(
     // Agent routes can address local-managed tabs through Playwright when per-tab WS discovery lags.
     const tab = await profileCtx.ensureTabAvailable(params.targetId, {
       allowPlaywrightFallback: true,
+      signal: params.req.signal,
+      timeoutMs: params.ctx.state().resolved.actionTimeoutMs,
     });
     if (params.enforceCurrentUrlAllowed) {
       await assertBrowserNavigationResultAllowed({
@@ -167,6 +169,8 @@ export async function withRouteTabContext<T>(
           profileCtx,
           targetId: tab.targetId,
           fallbackUrl,
+          signal: params.req.signal,
+          timeoutMs: params.ctx.state().resolved.actionTimeoutMs,
         }),
     });
   } catch (err) {
@@ -184,8 +188,16 @@ export async function resolveSafeRouteTabUrl(params: {
   profileCtx: ProfileContext;
   targetId: string;
   fallbackUrl?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }): Promise<string | undefined> {
-  const tabs = await params.profileCtx.listTabs().catch(() => []);
+  let tabs: Array<{ targetId: string; url: string }>;
+  try {
+    tabs = await params.profileCtx.listTabs({ signal: params.signal, timeoutMs: params.timeoutMs });
+  } catch {
+    params.signal?.throwIfAborted();
+    tabs = [];
+  }
   const candidateUrl =
     tabs.find((tab) => tab.targetId === params.targetId)?.url ?? params.fallbackUrl;
   if (!candidateUrl) {

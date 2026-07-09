@@ -60,7 +60,7 @@ import {
 } from "../../agents/run-timeout-attribution.js";
 import {
   normalizeSpawnedRunMetadata,
-  resolveIngressWorkspaceOverrideForSpawnedRun,
+  resolveIngressWorkspaceOverrideForSessionRun,
 } from "../../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
@@ -3368,9 +3368,10 @@ export const agentHandlers: GatewayRequestHandlers = {
                 }
               },
               // Internal-only: allow workspace override for spawned subagent runs.
-              workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({
+              workspaceDir: resolveIngressWorkspaceOverrideForSessionRun({
                 spawnedBy: spawnedByValue,
                 workspaceDir: sessionEntry?.spawnedWorkspaceDir,
+                cwd: sessionEntry?.spawnedCwd,
               }),
               cwd: resolveSessionRuntimeCwd({
                 requestedCwd: request.cwd,

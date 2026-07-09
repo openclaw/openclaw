@@ -3663,6 +3663,53 @@ describe("createFollowupRunner progress forwarding", () => {
     expect(onCommandOutput).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps queued tool-error fallbacks when the channel declines failed progress", async () => {
+    const onCommandOutput = vi.fn(async () => false as const);
+    let completedAfterEvent = false;
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+        suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
+      }) => {
+        const shouldSuppress = args.suppressToolErrorWarnings as () => boolean | undefined;
+        expect(shouldSuppress()).toBeUndefined();
+        await args.onAgentEvent?.({
+          stream: "command_output",
+          data: {
+            phase: "end",
+            name: "exec",
+            status: "failed",
+            exitCode: 1,
+          },
+        });
+        expect(shouldSuppress()).toBeUndefined();
+        completedAfterEvent = true;
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onCommandOutput },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "on",
+        },
+      }),
+    );
+
+    expect(onCommandOutput).toHaveBeenCalledTimes(1);
+    expect(completedAfterEvent).toBe(true);
+  });
+
   it("keeps queued full-verbose tool-error fallbacks available after failed progress", async () => {
     const onCommandOutput = vi.fn(async () => {});
 

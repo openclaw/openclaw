@@ -338,8 +338,14 @@ describe("manifest model id normalization", () => {
 
     const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
 
-    expect(listOpenClawPluginManifestMetadata(process.env)).toHaveLength(1);
-    expect(listOpenClawPluginManifestMetadata(process.env)).toHaveLength(1);
+    // The scan also lists source-checkout extensions/ manifests when tests run
+    // from a repo checkout, so only pin the record for the plugin under test.
+    const listNormalizerRecords = () =>
+      listOpenClawPluginManifestMetadata(process.env).filter(
+        (record) => record.pluginDir === pluginDir,
+      );
+    expect(listNormalizerRecords()).toHaveLength(1);
+    expect(listNormalizerRecords()).toHaveLength(1);
 
     const manifestReads = readFileSyncSpy.mock.calls.filter(
       ([filePath]) => String(filePath) === manifestPath,

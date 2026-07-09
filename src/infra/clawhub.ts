@@ -404,10 +404,6 @@ export type ClawHubDownloadResult = {
   cleanup: () => Promise<void>;
 };
 
-export type ClawHubInstallTelemetrySkill = {
-  version?: string | null;
-};
-
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 type ClawHubRequestParams = {
@@ -1619,8 +1615,9 @@ export async function downloadClawHubGitHubSkillArchive(params: {
 export async function reportClawHubSkillInstallTelemetry(params: {
   baseUrl?: string;
   token?: string;
-  root: string;
-  skills: Record<string, ClawHubInstallTelemetrySkill>;
+  slug: string;
+  ownerHandle?: string;
+  version?: string | null;
   timeoutMs?: number;
   fetchImpl?: FetchLike;
 }): Promise<void> {
@@ -1628,12 +1625,10 @@ export async function reportClawHubSkillInstallTelemetry(params: {
   if (!token || isClawHubTelemetryDisabled()) {
     return;
   }
-  const skills = Object.entries(params.skills)
-    .map(([slug, entry]) => ({
-      slug,
-      version: entry.version ?? null,
-    }))
-    .filter((entry) => entry.slug.length > 0);
+  const slug = params.slug.trim();
+  if (!slug) {
+    return;
+  }
 
   const { response, url, hasToken } = await clawhubRequest({
     baseUrl: params.baseUrl,
@@ -1643,13 +1638,10 @@ export async function reportClawHubSkillInstallTelemetry(params: {
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
     json: {
-      roots: [
-        {
-          rootId: digestSha256Hex(path.resolve(params.root)),
-          label: formatTelemetryRootLabel(params.root),
-          skills,
-        },
-      ],
+      event: "install",
+      slug,
+      ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+      version: params.version ?? undefined,
     },
   });
   if (!response.ok) {
@@ -1663,20 +1655,6 @@ function isClawHubTelemetryDisabled(): boolean {
     return false;
   }
   return ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
-}
-
-function formatTelemetryRootLabel(root: string): string {
-  const home = os.homedir();
-  const absolute = path.resolve(root);
-  if (absolute === home) {
-    return "~";
-  }
-  const normalized = absolute.replaceAll("\\", "/");
-  const normalizedHome = home.replaceAll("\\", "/");
-  const withinHome = normalized.startsWith(`${normalizedHome}/`);
-  const stripped = withinHome ? normalized.slice(normalizedHome.length + 1) : normalized;
-  const tail = stripped.split("/").filter(Boolean).slice(-2).join("/");
-  return withinHome ? `~/${tail}` : tail || absolute;
 }
 
 /** Resolves the preferred latest package version from detail metadata. */
@@ -1904,10 +1882,10 @@ export async function fetchClawHubPromotion(params: {
 // claim` always revalidates against the live API so the kill switch wins
 // regardless of snapshot staleness.
 
-export const CLAWHUB_PROMOTIONS_FEED_ID = "clawhub-promotions";
+const CLAWHUB_PROMOTIONS_FEED_ID = "clawhub-promotions";
 // Strict cross-repo wire contract with ClawHub's promotionsFeed publisher.
 // Bump only in lockstep with the server-side schema.
-export const CLAWHUB_PROMOTIONS_FEED_SCHEMA_VERSION = 1;
+const CLAWHUB_PROMOTIONS_FEED_SCHEMA_VERSION = 1;
 
 export function parseClawHubPromotionsFeed(value: unknown): ClawHubPromotionsFeed {
   const context = "promotions feed";

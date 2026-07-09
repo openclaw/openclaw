@@ -63,7 +63,7 @@ export type SessionListOptions = {
   append?: boolean;
 };
 
-export type SessionRefreshOptions = SessionListOptions & {
+type SessionRefreshOptions = SessionListOptions & {
   force?: boolean;
   // Sidebar startup hydration must not block session creation or drop the open session.
   backgroundHydrate?: boolean;
@@ -89,29 +89,29 @@ export type SessionPatch = {
   unread?: boolean;
 };
 
-export type SessionDeleteOptions = {
+type SessionDeleteOptions = {
   agentId?: string;
   deleteTranscript?: boolean;
 };
 
-export type SessionDeleteTarget = {
+type SessionDeleteTarget = {
   key: string;
   agentId?: string;
 };
 
-export type SessionDeleteBatchResult = {
+type SessionDeleteBatchResult = {
   deleted: string[];
   errors: string[];
 };
 
-export type SessionCompactResult = {
+type SessionCompactResult = {
   ok?: boolean;
   compacted?: boolean;
   reason?: string;
   result?: { tokensBefore?: number; tokensAfter?: number };
 };
 
-export type SessionSteerResult = {
+type SessionSteerResult = {
   runId?: string;
   status?: unknown;
 };
@@ -120,7 +120,7 @@ export type SessionResetOptions = {
   agentId?: string | null;
 };
 
-export type SessionGateway = {
+type SessionGateway = {
   readonly snapshot: {
     client: GatewayBrowserClient | null;
     connected: boolean;
@@ -134,7 +134,7 @@ export type SessionGateway = {
 
 type SessionRequestClient = Pick<GatewayBrowserClient, "request">;
 
-export type SessionMessageSubscription = {
+type SessionMessageSubscription = {
   key: string;
   agentId?: string | null;
 };
@@ -309,7 +309,7 @@ function requestSessionPatch(
   });
 }
 
-export function requestSessionDelete(
+function requestSessionDelete(
   client: SessionRequestClient,
   key: string,
   options: SessionDeleteOptions = {},

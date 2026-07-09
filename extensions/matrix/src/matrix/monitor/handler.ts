@@ -44,6 +44,7 @@ import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
   CoreConfig,
   MatrixConfig,
@@ -434,7 +435,7 @@ function formatMatrixToolProgressMarkdownCode(text: string): string {
   const clipped =
     text.length <= MATRIX_TOOL_PROGRESS_MAX_CHARS
       ? text
-      : `${text.slice(0, MATRIX_TOOL_PROGRESS_MAX_CHARS - 1).trimEnd()}...`;
+      : `${truncateUtf16Safe(text, MATRIX_TOOL_PROGRESS_MAX_CHARS - 1).trimEnd()}...`;
   const safe = clipped.replaceAll("`", "'");
   return `\`${safe}\``;
 }

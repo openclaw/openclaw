@@ -82,7 +82,7 @@ export type PluginUpdateLogger = {
 /** Outcome status for one plugin update attempt. */
 export type PluginUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
 
-export type PluginUpdateChannelFallback = {
+type PluginUpdateChannelFallback = {
   requestedSpec: string;
   usedSpec: string;
   requestedLabel: string;

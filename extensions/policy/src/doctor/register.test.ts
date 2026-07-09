@@ -1739,6 +1739,185 @@ describe("registerPolicyDoctorChecks", () => {
     });
   });
 
+  it("repairs denied gateway HTTP endpoint findings", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      gateway: {
+        http: {
+          endpoints: {
+            chatCompletions: {
+              enabled: true,
+              images: { allowUrl: true },
+            },
+            responses: {
+              enabled: true,
+              files: { allowUrl: true },
+              images: { allowUrl: true, urlAllowlist: ["images.example.test"] },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          http: {
+            denyEndpoints: ["chatCompletions", "responses"],
+            requireUrlAllowlists: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/gateway-http-endpoint-enabled",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("repaired");
+    expect(result.changes).toEqual([
+      "Set gateway.http.endpoints.chatCompletions.enabled=false for policy conformance.",
+      "Set gateway.http.endpoints.responses.enabled=false for policy conformance.",
+    ]);
+    expect(result.remainingFindings).toEqual([]);
+    expect(result.config.gateway?.http?.endpoints).toMatchObject({
+      chatCompletions: {
+        enabled: false,
+        images: { allowUrl: true },
+      },
+      responses: {
+        enabled: false,
+        files: { allowUrl: true },
+        images: { allowUrl: true, urlAllowlist: ["images.example.test"] },
+      },
+    });
+  });
+
+  it("previews review-required gateway bind repair without mutating config", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      gateway: { bind: "lan" },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ gateway: { exposure: { allowNonLoopbackBind: false } } }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/gateway-non-loopback-bind",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("policy repair requires review before changing config");
+    expect(result.changes).toEqual([
+      "Review required: set gateway.bind=loopback for policy conformance.",
+    ]);
+    expect(result.warnings).toEqual([
+      "Review required: set gateway.bind=loopback for policy conformance.",
+    ]);
+    expect(result.effects).toEqual([
+      {
+        kind: "config",
+        action: "would-set-after-review",
+        target: "gateway.bind=loopback",
+        dryRunSafe: true,
+      },
+    ]);
+    expect(result.config.gateway?.bind).toBe("lan");
+    expect(result.remainingFindings).toHaveLength(1);
+  });
+
+  it("previews review-required custom gateway bind repair without mutating config", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      gateway: { bind: "custom", customBindHost: "10.0.0.4" },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ gateway: { exposure: { allowNonLoopbackBind: false } } }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/gateway-non-loopback-bind",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        ocPath: "oc://openclaw.config/gateway/customBindHost",
+      }),
+    ]);
+    expect(result.status).toBe("skipped");
+    expect(result.changes).toEqual([
+      "Review required: set gateway.bind=loopback for policy conformance.",
+    ]);
+    expect(result.warnings).toEqual([
+      "Review required: set gateway.bind=loopback for policy conformance.",
+    ]);
+    expect(result.effects).toEqual([
+      {
+        kind: "config",
+        action: "would-set-after-review",
+        target: "gateway.bind=loopback",
+        dryRunSafe: true,
+      },
+    ]);
+    expect(result.config.gateway).toMatchObject({
+      bind: "custom",
+      customBindHost: "10.0.0.4",
+    });
+    expect(result.remainingFindings).toHaveLength(1);
+  });
+
+  it("previews review-required gateway node command repairs without mutating config", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      gateway: { nodes: { denyCommands: ["mcp.help"] } },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ gateway: { nodes: { denyCommands: ["mcp.help", "system.run"] } } }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/gateway-node-command-denied",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("policy repair requires review before changing config");
+    expect(result.changes).toEqual([
+      "Review required: add system.run to gateway.nodes.denyCommands for policy conformance.",
+    ]);
+    expect(result.warnings).toEqual([
+      "Review required: add system.run to gateway.nodes.denyCommands for policy conformance.",
+    ]);
+    expect(result.effects).toEqual([
+      {
+        kind: "config",
+        action: "would-append-after-review",
+        target: "gateway.nodes.denyCommands += system.run",
+        dryRunSafe: true,
+      },
+    ]);
+    expect(result.config.gateway?.nodes?.denyCommands).toEqual(["mcp.help"]);
+    expect(result.remainingFindings).toHaveLength(1);
+  });
+
   it("repairs automatic channel ingress narrowing findings", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
@@ -2103,7 +2282,7 @@ describe("registerPolicyDoctorChecks", () => {
     ]);
   });
 
-  it("does not register repair for review-required policy findings", () => {
+  it("does not register repair for non-previewable policy findings", () => {
     const check = registerChecks().find(
       (entry) => entry.id === "policy/gateway-http-url-fetch-unrestricted",
     );

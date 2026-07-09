@@ -48,6 +48,7 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type {
@@ -462,7 +463,7 @@ function stringifyRedactedPayload(value: unknown): string {
       return "<empty>";
     }
     const redacted = redactSensitiveText(encoded, { mode: "tools" });
-    return redacted.length > 8000 ? `${redacted.slice(0, 8000)}…<truncated>` : redacted;
+    return redacted.length > 8000 ? `${truncateUtf16Safe(redacted, 8000)}…<truncated>` : redacted;
   } catch {
     return "<unserializable>";
   }
@@ -470,7 +471,7 @@ function stringifyRedactedPayload(value: unknown): string {
 
 function stringifyRedactedEvent(value: unknown): string {
   const redacted = stringifyRedactedPayload(value);
-  return redacted.length > 2000 ? `${redacted.slice(0, 2000)}…<truncated>` : redacted;
+  return redacted.length > 2000 ? `${truncateUtf16Safe(redacted, 2000)}…<truncated>` : redacted;
 }
 
 type ResponsesFailedNoDetailsObservation = {
@@ -4529,5 +4530,7 @@ export const testing = {
   summarizeResponsesFailedNoDetailsObservation,
   summarizeResponsesPayload,
   summarizeResponsesTools,
+  stringifyRedactedEvent,
+  stringifyRedactedPayload,
 };
 export { testing as __testing };

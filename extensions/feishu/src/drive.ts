@@ -594,7 +594,7 @@ async function queryCommentById(
   return response.data?.items?.find((comment) => comment.comment_id?.trim() === params.comment_id);
 }
 
-export async function replyComment(
+async function replyComment(
   client: Lark.Client,
   params: {
     file_token: string;

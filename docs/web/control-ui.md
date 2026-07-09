@@ -130,6 +130,7 @@ A **Search** field at the top of the sidebar opens the command palette (⌘K). T
     - Hovering or keyboard-focusing a public GitHub issue or pull request link shows its state, title, author, recent activity, comments, and change statistics. The connected Gateway fetches and caches public metadata without changing the link target, including when the UI uses a remote Gateway. The Gateway uses `GH_TOKEN` or `GITHUB_TOKEN` when available, after confirming the repository is public; otherwise it uses GitHub's anonymous API with a longer cache.
     - Talk through browser realtime sessions. OpenAI uses direct WebRTC, Google Live uses a constrained one-use browser token over WebSocket, and backend-only realtime voice plugins use the Gateway relay transport. Client-owned provider sessions start with `talk.client.create`; Gateway relay sessions start with `talk.session.create`. The relay keeps provider credentials on the Gateway while the browser streams microphone PCM through `talk.session.appendAudio`, forwards `openclaw_agent_consult` provider tool calls through `talk.client.toolCall` for Gateway policy and the larger configured OpenClaw model, and routes active-run voice steering through `talk.client.steer` or `talk.session.steer`.
     - Stream tool calls and live tool output cards in Chat (agent events).
+    - Start or dismiss ephemeral model-suggested follow-up tasks; accepted suggestions open a fresh managed-worktree session with the proposed prompt.
     - Activity tab with browser-local, redaction-first summaries of live tool activity from existing `session.tool` / tool event delivery.
 
   </Accordion>
@@ -283,13 +284,15 @@ The terminal is also available as a full-screen, terminal-only document at `/?vi
 ## Connection loss and reconnect
 
 Once a session is established, a dropped Gateway connection does not log you out. The dashboard
-stays visible with an amber "Gateway connection lost — reconnecting…" banner while the client
-retries automatically with backoff (800 ms up to 15 s). Live updates and actions pause until the
-connection returns; **Retry now** in the banner forces an immediate attempt.
+stays visible with a floating amber "Gateway connection lost — Reconnecting…" pill under the top
+bar while the client retries automatically with backoff (800 ms up to 15 s). Live updates and
+actions pause until the connection returns; **Retry now** in the pill forces an immediate attempt.
 
-The login gate only appears when there is no established session yet (first open, page reload
-before connect) or when the Gateway actively rejects the credentials (bad token/password, revoked
-pairing) — states that need your input rather than waiting.
+When this browser already holds credentials (a configured token/password or an approved device
+token), first opens and reloads show a small animated OpenClaw mark while the connection is
+established instead of flashing the login gate. The login gate only appears when no credentials
+are stored yet or when the Gateway actively rejects them (bad token/password, revoked pairing) —
+states that need your input rather than waiting.
 
 ## PWA install and web push
 
