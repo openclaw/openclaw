@@ -7,7 +7,7 @@ export default defineConfig({
   base: "./",
   resolve: {
     alias: {
-      "@openclaw/normalization-core/utf16-slice": path.resolve(
+      "openclaw/plugin-sdk/text-utility-runtime": path.resolve(
         import.meta.dirname,
         "../../../packages/normalization-core/src/utf16-slice.ts",
       ),

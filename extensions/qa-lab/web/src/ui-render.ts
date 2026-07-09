@@ -1,4 +1,4 @@
-import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
   QaEvidenceArtifactView,
   QaEvidenceGalleryEntryView,
