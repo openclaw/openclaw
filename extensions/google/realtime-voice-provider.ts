@@ -328,7 +328,9 @@ function buildThinkingConfig(
       thinkingLevel: config.thinkingLevel,
       thinkingBudget: config.thinkingBudget,
     });
-    return thinkingLevel ? { thinkingLevel } : undefined;
+    return thinkingLevel
+      ? { thinkingLevel: thinkingLevel as ThinkingConfig["thinkingLevel"] }
+      : undefined;
   }
   if (typeof config.thinkingBudget === "number") {
     return { thinkingBudget: config.thinkingBudget };
