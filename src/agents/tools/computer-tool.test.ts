@@ -125,6 +125,31 @@ describe("buildComputerActParams", () => {
   });
 });
 
+describe("createComputerTool schema", () => {
+  it("publishes Codex-compatible fixed-size coordinate arrays", () => {
+    const properties = (
+      createComputerTool().parameters as {
+        properties?: Record<string, Record<string, unknown>>;
+      }
+    ).properties;
+
+    for (const key of ["coordinate", "startCoordinate"] as const) {
+      const schema = properties?.[key];
+      if (!schema) {
+        throw new Error(`missing ${key} schema`);
+      }
+      expect(schema).toMatchObject({
+        type: "array",
+        items: { type: "number" },
+        minItems: 2,
+        maxItems: 2,
+      });
+      expect(Array.isArray(schema.items)).toBe(false);
+      expect(schema).not.toHaveProperty("additionalItems");
+    }
+  });
+});
+
 describe("createComputerTool node resolution", () => {
   beforeEach(() => {
     listNodesMock.mockReset();
