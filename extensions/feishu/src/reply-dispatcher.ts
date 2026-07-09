@@ -433,7 +433,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     hasStreamingFinalText = false;
   };
 
-  const closeStreaming = async (options?: { markClosedForReply?: boolean }) => {
+  const closeStreaming = async (options?: { markClosedForReply?: boolean }): Promise<boolean> => {
+    let contentVisible = false;
     try {
       if (streamingStartPromise) {
         await streamingStartPromise;
@@ -443,7 +444,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         statusLine = "";
         const text = buildCombinedStreamText(reasoningText, streamText);
         const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-        const contentVisible = await streaming.close(text, { note: finalNote });
+        contentVisible = await streaming.close(text, { note: finalNote });
         // Track the raw streamed text so the duplicate-final check in deliver()
         // can skip the redundant text delivery that arrives after onIdle closes
         // the streaming card.
@@ -457,6 +458,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
         }
       }
+      return contentVisible;
     } finally {
       resetStreamingState();
     }
@@ -779,6 +781,31 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               snapshotBaseText = "";
               lastSnapshotTextLength = text.length;
               flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+            }
+            if (info?.kind === "final" && hasMedia) {
+              const closedVisibleText = await closeStreaming();
+              if (!closedVisibleText && text) {
+                // Media success only proves the attachment is visible; preserve
+                // final prose when the streaming card accepted no text content.
+                await sendChunkedTextReply({
+                  text,
+                  useCard: false,
+                  infoKind: "final",
+                  sendChunk: async ({ chunk }) => {
+                    await sendMessageFeishu({
+                      cfg,
+                      to: sendTarget,
+                      text: chunk,
+                      replyToMessageId: sendReplyToMessageId,
+                      replyInThread: effectiveReplyInThread,
+                      allowTopLevelReplyFallback,
+                      accountId,
+                    });
+                  },
+                });
+              }
+              await sendMediaReplies(payload);
+              return;
             }
             // Send media even when streaming handled the text
             if (hasMedia) {

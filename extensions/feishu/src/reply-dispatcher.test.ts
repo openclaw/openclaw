@@ -1466,6 +1466,59 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("closes final streaming text before sending regular media attachments", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.deliver(
+      {
+        text: "Daily sales summary\nRevenue is up 12%.",
+        mediaUrls: ["https://example.com/dashboard.png"],
+      },
+      { kind: "final" },
+    );
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith(
+      "Daily sales summary\nRevenue is up 12%.",
+      { note: "Agent: agent" },
+    );
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expectMockArgFields(sendMediaFeishuMock, "media send params", {
+      mediaUrl: "https://example.com/dashboard.png",
+    });
+    await expect(result.ensureNoVisibleReplyFallback("dispatch-complete")).resolves.toBe(false);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to text before media when final streaming close has no visible content", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    result.replyOptions.onPartialReply?.({ text: "Dashboard caption" });
+    streamingInstances[0].close = vi.fn(async () => {
+      streamingInstances[0].active = false;
+      return false;
+    });
+
+    await options.deliver(
+      {
+        text: "Dashboard caption",
+        mediaUrls: ["https://example.com/dashboard.png"],
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      text: "Dashboard caption",
+    });
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    await expect(result.ensureNoVisibleReplyFallback("dispatch-complete")).resolves.toBe(false);
+  });
+
   it("passes replyInThread to sendMessageFeishu for plain text", async () => {
     useNonStreamingAutoAccount();
     const { options } = createDispatcherHarness({
