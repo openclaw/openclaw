@@ -121,6 +121,8 @@ export type RunEmbeddedAgentParams = {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** Controls whether caller-visible session side effects should be surfaced. */
+  sessionEffects?: "visible" | "internal";
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
   modelRun?: boolean;
   /** Explicit system prompt mode override for trusted callers. */
