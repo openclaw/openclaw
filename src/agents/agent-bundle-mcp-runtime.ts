@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { ErrorCode, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv-provider.js";
@@ -390,7 +391,7 @@ function sanitizeMcpMetadataText(value: string | undefined): string | undefined 
     )
     .replace(/system\s+prompt/gi, "system prompt");
   return scrubbed.length > BUNDLE_MCP_METADATA_TEXT_LIMIT
-    ? `${scrubbed.slice(0, BUNDLE_MCP_METADATA_TEXT_LIMIT)}...`
+    ? `${truncateUtf16Safe(scrubbed, BUNDLE_MCP_METADATA_TEXT_LIMIT)}...`
     : scrubbed;
 }
 
