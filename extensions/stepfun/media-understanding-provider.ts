@@ -4,6 +4,7 @@ import {
   coerceOpenAiCompatibleVideoText,
   resolveMediaUnderstandingString,
   type MediaUnderstandingProvider,
+  type OpenAiCompatibleVideoPayload,
   type VideoDescriptionRequest,
   type VideoDescriptionResult,
 } from "openclaw/plugin-sdk/media-understanding";
@@ -27,12 +28,8 @@ export async function describeStepfunVideo(
   const mime = resolveMediaUnderstandingString(params.mime, "video/mp4");
   const prompt = resolveMediaUnderstandingString(params.prompt, DEFAULT_STEPFUN_VIDEO_PROMPT);
 
-  // Step Plan endpoints do not support video understanding; force standard API.
-  const rawBaseUrl =
-    typeof params.baseUrl === "string" ? params.baseUrl.trim() : "";
-  const baseUrl = rawBaseUrl.includes("/step_plan/")
-    ? DEFAULT_STEPFUN_VIDEO_BASE_URL
-    : rawBaseUrl || DEFAULT_STEPFUN_VIDEO_BASE_URL;
+  const baseUrl =
+    typeof params.baseUrl === "string" ? params.baseUrl.trim() : DEFAULT_STEPFUN_VIDEO_BASE_URL;
 
   const { allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveProviderHttpRequestConfig({
@@ -71,7 +68,10 @@ export async function describeStepfunVideo(
 
   try {
     await assertOkOrThrowHttpError(res, "Step 3.7 Flash video description failed");
-    const payload = await readProviderJsonResponse(res, "Step 3.7 Flash video description failed");
+    const payload = await readProviderJsonResponse<OpenAiCompatibleVideoPayload>(
+      res,
+      "Step 3.7 Flash video description failed",
+    );
     const text = coerceOpenAiCompatibleVideoText(payload);
     if (!text) {
       throw new Error("Step 3.7 Flash video description response missing content");
