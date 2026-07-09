@@ -1,5 +1,4 @@
 // Codex plugin module implements event projector behavior.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   classifyAgentHarnessTerminalOutcome,
   embeddedAgentLog,
@@ -27,6 +26,7 @@ import { generatedImageAssetFromBase64 } from "openclaw/plugin-sdk/image-generat
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import {
