@@ -1464,7 +1464,7 @@ describe("openai-completions stop-reason tool-call guard", () => {
     );
   });
 
-  it("surfaces refusal text when content is absent", async () => {
+  it("surfaces streaming refusal delta when content is absent", async () => {
     mockChunksRef.chunks = [
       {
         id: "chatcmpl-test",
@@ -1487,6 +1487,33 @@ describe("openai-completions stop-reason tool-call guard", () => {
 
     const textBlock = result.content.find(
       (b) => b.type === "text" && b.text.includes("I cannot help with that."),
+    );
+    expect(textBlock).toBeTruthy();
+  });
+
+  it("surfaces aggregated message refusal when content is absent", async () => {
+    mockChunksRef.chunks = [
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", refusal: "I cannot comply with that request." },
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ];
+
+    const stream = streamOpenAICompletions(
+      model,
+      { messages: [{ role: "user", content: "bad request", timestamp: 0 }] } as unknown as Context,
+      { apiKey: "sk-test" },
+    );
+    const result = await stream.result();
+
+    const textBlock = result.content.find(
+      (b) => b.type === "text" && b.text.includes("I cannot comply with that request."),
     );
     expect(textBlock).toBeTruthy();
   });

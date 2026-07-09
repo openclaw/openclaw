@@ -516,6 +516,19 @@ export const streamOpenAICompletions: StreamFunction<
             appendTextDelta(refusalText);
           }
         }
+
+        // Aggregated (non-streaming) response: surface choice.message.refusal
+        // when content is absent, matching the streaming delta path above.
+        if (!choice.delta && choice.message) {
+          const messageRefusal = (choice.message as Record<string, unknown>).refusal;
+          if (
+            typeof messageRefusal === "string" &&
+            messageRefusal.trim().length > 0 &&
+            output.content.length === 0
+          ) {
+            appendTextDelta(messageRefusal);
+          }
+        }
       }
 
       flushPartitionedContent();
