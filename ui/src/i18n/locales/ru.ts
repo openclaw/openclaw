@@ -1570,6 +1570,15 @@ export const ru: TranslationMap = {
   chat: {
     disconnected: "Отключено от gateway.",
     archivedSessionDisabled: "Восстановите этот сеанс, чтобы отправлять сообщения.",
+    taskSuggestions: {
+      eyebrow: "Suggested follow-up",
+      start: "Start in worktree",
+      starting: "Starting…",
+      dismiss: "Dismiss {title}",
+      project: "Project",
+      instructions: "Instructions",
+      adminRequired: "Administrator access is required to create a worktree from this project.",
+    },
     refreshTitle: "Обновить данные чата",
     settings: "Настройки чата",
     usageRemaining: "Оставшееся использование",

@@ -1564,6 +1564,15 @@ export const ja_JP: TranslationMap = {
   chat: {
     disconnected: "Gateway から切断されました。",
     archivedSessionDisabled: "メッセージを送信するには、このセッションを復元してください。",
+    taskSuggestions: {
+      eyebrow: "Suggested follow-up",
+      start: "Start in worktree",
+      starting: "Starting…",
+      dismiss: "Dismiss {title}",
+      project: "Project",
+      instructions: "Instructions",
+      adminRequired: "Administrator access is required to create a worktree from this project.",
+    },
     refreshTitle: "チャットデータを更新",
     settings: "チャット設定",
     usageRemaining: "残りの使用量",

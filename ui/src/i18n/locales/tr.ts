@@ -1563,6 +1563,15 @@ export const tr: TranslationMap = {
   chat: {
     disconnected: "Gateway bağlantısı kesildi.",
     archivedSessionDisabled: "Mesaj göndermek için bu oturumu geri yükleyin.",
+    taskSuggestions: {
+      eyebrow: "Suggested follow-up",
+      start: "Start in worktree",
+      starting: "Starting…",
+      dismiss: "Dismiss {title}",
+      project: "Project",
+      instructions: "Instructions",
+      adminRequired: "Administrator access is required to create a worktree from this project.",
+    },
     refreshTitle: "Sohbet verilerini yenile",
     settings: "Sohbet ayarları",
     usageRemaining: "Kalan kullanım",

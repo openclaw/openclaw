@@ -1563,6 +1563,15 @@ export const nl: TranslationMap = {
   chat: {
     disconnected: "Verbinding met Gateway verbroken.",
     archivedSessionDisabled: "Herstel deze sessie om berichten te verzenden.",
+    taskSuggestions: {
+      eyebrow: "Suggested follow-up",
+      start: "Start in worktree",
+      starting: "Starting…",
+      dismiss: "Dismiss {title}",
+      project: "Project",
+      instructions: "Instructions",
+      adminRequired: "Administrator access is required to create a worktree from this project.",
+    },
     refreshTitle: "Chatgegevens vernieuwen",
     settings: "Chatinstellingen",
     usageRemaining: "Resterend gebruik",

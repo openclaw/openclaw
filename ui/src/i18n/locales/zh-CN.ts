@@ -1518,6 +1518,15 @@ export const zh_CN: TranslationMap = {
   chat: {
     disconnected: "已断开与网关的连接。",
     archivedSessionDisabled: "恢复此会话以发送消息。",
+    taskSuggestions: {
+      eyebrow: "Suggested follow-up",
+      start: "Start in worktree",
+      starting: "Starting…",
+      dismiss: "Dismiss {title}",
+      project: "Project",
+      instructions: "Instructions",
+      adminRequired: "Administrator access is required to create a worktree from this project.",
+    },
     refreshTitle: "刷新聊天数据",
     settings: "聊天设置",
     usageRemaining: "剩余用量",

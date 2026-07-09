@@ -1539,6 +1539,15 @@ export const ar: TranslationMap = {
   chat: {
     disconnected: "تم قطع الاتصال بـ Gateway.",
     archivedSessionDisabled: "استعِد هذه الجلسة لإرسال الرسائل.",
+    taskSuggestions: {
+      eyebrow: "Suggested follow-up",
+      start: "Start in worktree",
+      starting: "Starting…",
+      dismiss: "Dismiss {title}",
+      project: "Project",
+      instructions: "Instructions",
+      adminRequired: "Administrator access is required to create a worktree from this project.",
+    },
     refreshTitle: "تحديث بيانات الدردشة",
     settings: "إعدادات الدردشة",
     usageRemaining: "الاستخدام المتبقي",

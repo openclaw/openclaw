@@ -1523,6 +1523,15 @@ export const th: TranslationMap = {
   chat: {
     disconnected: "ตัดการเชื่อมต่อจากเกตเวย์แล้ว",
     archivedSessionDisabled: "กู้คืนเซสชันนี้เพื่อส่งข้อความ",
+    taskSuggestions: {
+      eyebrow: "Suggested follow-up",
+      start: "Start in worktree",
+      starting: "Starting…",
+      dismiss: "Dismiss {title}",
+      project: "Project",
+      instructions: "Instructions",
+      adminRequired: "Administrator access is required to create a worktree from this project.",
+    },
     refreshTitle: "รีเฟรชข้อมูลแชต",
     settings: "การตั้งค่าแชท",
     usageRemaining: "การใช้งานคงเหลือ",

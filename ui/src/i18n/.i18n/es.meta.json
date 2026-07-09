@@ -1,11 +1,19 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-07-08T13:50:17.716Z",
+  "fallbackKeys": [
+    "chat.taskSuggestions.adminRequired",
+    "chat.taskSuggestions.dismiss",
+    "chat.taskSuggestions.eyebrow",
+    "chat.taskSuggestions.instructions",
+    "chat.taskSuggestions.project",
+    "chat.taskSuggestions.start",
+    "chat.taskSuggestions.starting"
+  ],
+  "generatedAt": "2026-07-09T02:23:54.294Z",
   "locale": "es",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "46a510a0c1922e82db6836aedafbded1b740535fc1aa22071f5398692b5aeee9",
-  "totalKeys": 1669,
+  "sourceHash": "ef47733c644c36f1edaca392ff9cc2997ad9ae3ebb143371684bf16c204b7f9c",
+  "totalKeys": 1676,
   "translatedKeys": 1669,
   "workflow": 1
 }

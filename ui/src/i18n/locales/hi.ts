@@ -1541,6 +1541,15 @@ export const hi: TranslationMap = {
   chat: {
     disconnected: "Gateway से डिस्कनेक्ट हो गया।",
     archivedSessionDisabled: "संदेश भेजने के लिए इस सत्र को बहाल करें।",
+    taskSuggestions: {
+      eyebrow: "Suggested follow-up",
+      start: "Start in worktree",
+      starting: "Starting…",
+      dismiss: "Dismiss {title}",
+      project: "Project",
+      instructions: "Instructions",
+      adminRequired: "Administrator access is required to create a worktree from this project.",
+    },
     refreshTitle: "चैट डेटा रीफ़्रेश करें",
     settings: "चैट सेटिंग्स",
     usageRemaining: "शेष उपयोग",

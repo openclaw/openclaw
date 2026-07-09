@@ -1008,6 +1008,11 @@ export function createOpenClawCodingTools(options?: {
           fsPolicy,
           workspaceDir: workspaceRoot,
           spawnWorkspaceDir: capabilityProfile.workspace.spawnWorkspaceRoot,
+          // Sandboxes execute against copied roots, but accepted suggestions create host
+          // worktrees. Unsandboxed task-repo sessions must stay on their runtime cwd.
+          cwd: sandbox
+            ? (capabilityProfile.workspace.spawnWorkspaceRoot ?? runtimeRoot)
+            : runtimeRoot,
           sandboxed: Boolean(sandbox),
           config: options?.config,
           pluginToolAllowlist,
