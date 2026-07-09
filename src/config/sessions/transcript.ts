@@ -9,7 +9,12 @@ import {
   extractAssistantVisibleText,
   extractFirstTextBlock,
 } from "../../shared/chat-message-content.js";
-import { isTranscriptOnlyOpenClawAssistantModel } from "../../shared/transcript-only-openclaw-assistant.js";
+import {
+  OPENCLAW_DELIVERY_MIRROR_MODEL,
+  OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+  OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+  isTranscriptOnlyOpenClawAssistantModel,
+} from "../../shared/transcript-only-openclaw-assistant.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   resolveDefaultSessionStorePath,
@@ -31,10 +36,16 @@ export type SessionTranscriptAppendResult =
     };
 
 export type SessionTranscriptUpdateMode = "inline" | "file-only" | "none";
-export type SessionTranscriptDeliveryMirror = {
-  kind: "channel-final";
-  sourceMessageId?: string;
-};
+export type SessionTranscriptDeliveryMirror =
+  | {
+      kind: "channel-final";
+      sourceMessageId?: string;
+    }
+  | {
+      kind: "channel-final-suppressed";
+      reason: "stale-foreground";
+      sourceMessageId?: string;
+    };
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
@@ -323,6 +334,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   agentId?: string;
   sessionKey: string;
   expectedSessionId?: string;
+  expectedLifecycleRevision?: string;
   text?: string;
   mediaUrls?: string[];
   idempotencyKey?: string;
@@ -350,6 +362,9 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     agentId: params.agentId,
     sessionKey,
     ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
+    ...(params.expectedLifecycleRevision
+      ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
+      : {}),
     storePath: params.storePath,
     idempotencyKey: params.idempotencyKey,
     updateMode: params.updateMode,
@@ -358,9 +373,9 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     message: {
       role: "assistant" as const,
       content: [{ type: "text", text: mirrorText }],
-      api: "openai-responses",
-      provider: "openclaw",
-      model: "delivery-mirror",
+      api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+      provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+      model: OPENCLAW_DELIVERY_MIRROR_MODEL,
       usage: {
         input: 0,
         output: 0,
@@ -386,6 +401,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   agentId?: string;
   sessionKey: string;
   expectedSessionId?: string;
+  expectedLifecycleRevision?: string;
   message: SessionTranscriptAssistantMessage;
   idempotencyKey?: string;
   storePath?: string;
@@ -411,6 +427,16 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   const resolved = resolveSessionStoreEntry({ store, sessionKey });
   const entry = resolved.existing;
   if (params.expectedSessionId && entry?.sessionId !== params.expectedSessionId) {
+    return {
+      ok: false,
+      code: "session-rebound",
+      reason: `session rebound for sessionKey: ${sessionKey}`,
+    };
+  }
+  if (
+    params.expectedLifecycleRevision &&
+    entry?.lifecycleRevision !== params.expectedLifecycleRevision
+  ) {
     return {
       ok: false,
       code: "session-rebound",
@@ -448,11 +474,11 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         reason: "blocked by before_message_write",
       };
     }
-    const identifiedChannelFinal =
-      Boolean(explicitIdempotencyKey) && isChannelFinalDeliveryMirror(params.message);
+    const identifiedDeliveryMirror =
+      Boolean(explicitIdempotencyKey) && isIdentifiedDeliveryMirror(params.message);
     let latestEquivalentAssistantId: string | undefined;
-    // Unidentified delivery mirrors dedupe by latest text. Identified channel finals use their
-    // idempotency key so repeated replies on separate user turns remain distinct.
+    // Identified delivery mirrors, including suppressed finals, dedupe only by
+    // key so same-text markers from different source ids remain separate rows.
     const turn = await persistSessionTranscriptTurn(
       {
         sessionId: currentEntry.sessionId,
@@ -464,6 +490,9 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       {
         cwd: currentEntry.spawnedCwd,
         ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
+        ...(params.expectedLifecycleRevision
+          ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
+          : {}),
         ...(params.config ? { config: params.config } : {}),
         updateMode: params.updateMode ?? "inline",
         touchSessionEntry: true,
@@ -485,7 +514,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
               : {}),
             shouldAppend: async (target) => {
               latestEquivalentAssistantId =
-                isRedundantDeliveryMirror(params.message) && !identifiedChannelFinal
+                isRedundantDeliveryMirror(params.message) && !identifiedDeliveryMirror
                   ? await findLatestEquivalentAssistantMessageId(
                       target.sessionFile,
                       preparedUnkeyedMessage as SessionTranscriptAssistantMessage,
@@ -548,13 +577,19 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
 }
 
 function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {
-  return message.provider === "openclaw" && message.model === "delivery-mirror";
+  return (
+    message.provider === OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER &&
+    message.model === OPENCLAW_DELIVERY_MIRROR_MODEL
+  );
 }
 
-function isChannelFinalDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {
+function isIdentifiedDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {
   const marker = (message as { openclawDeliveryMirror?: SessionTranscriptDeliveryMirror })
     .openclawDeliveryMirror;
-  return isRedundantDeliveryMirror(message) && marker?.kind === "channel-final";
+  return (
+    isRedundantDeliveryMirror(message) &&
+    (marker?.kind === "channel-final" || marker?.kind === "channel-final-suppressed")
+  );
 }
 
 function extractAssistantMessageText(message: SessionTranscriptAssistantMessage): string | null {

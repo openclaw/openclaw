@@ -44,6 +44,9 @@ apps/shared/OpenClawKit/.build/
 apps/shared/*/.build/
 packages/*/dist/
 apps/shared/OpenClawKit/Package.resolved
+# Xcode rewrites local-package Package.resolved with the iOS app supergraph on
+# every resolve; swabble's only runtime dep is exact-pinned in Package.swift.
+apps/swabble/Package.resolved
 **/ModuleCache/
 bin/
 bin/clawdbot-mac

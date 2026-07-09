@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { authenticate } from "./urbit/auth.js";
 import { scryUrbitPath } from "./urbit/channel-ops.js";
@@ -44,6 +45,9 @@ type UploadResult = {
 };
 
 const MEMEX_BASE_URL = "https://memex.tlon.network";
+
+/** Max bytes to read from the Memex upload JSON response. */
+const MEMEX_UPLOAD_RESPONSE_MAX_BYTES = 64 * 1024;
 
 let currentClientConfig: ClientConfig | null = null;
 
@@ -252,7 +256,11 @@ async function getMemexUploadUrl(params: {
       throw new Error(`Memex upload request failed: ${guarded.response.status}`);
     }
 
-    const data = (await guarded.response.json()) as { url?: string; filePath?: string } | null;
+    const data = await readProviderJsonResponse<{ url?: string; filePath?: string } | null>(
+      guarded.response,
+      "Memex upload",
+      { maxBytes: MEMEX_UPLOAD_RESPONSE_MAX_BYTES },
+    );
     if (!data?.url || !data.filePath) {
       throw new Error("Invalid response from Memex");
     }

@@ -1,4 +1,6 @@
 // Message channel constants define internal channel ids shared across routing.
+import { isStringOption } from "./string-readers.js";
+
 export const INTERNAL_MESSAGE_CHANNEL = "webchat" as const;
 export type InternalMessageChannel = typeof INTERNAL_MESSAGE_CHANNEL;
 
@@ -19,7 +21,7 @@ const INTERNAL_NON_DELIVERY_CHANNELS = [
 export function isInternalNonDeliveryChannel(
   value: string,
 ): value is (typeof INTERNAL_NON_DELIVERY_CHANNELS)[number] {
-  return (INTERNAL_NON_DELIVERY_CHANNELS as readonly string[]).includes(value);
+  return isStringOption(value, INTERNAL_NON_DELIVERY_CHANNELS);
 }
 
 // Channels that ship a native chat exec approval client (in-chat `/approve`
@@ -49,8 +51,5 @@ export type NativeApprovalChannel = (typeof NATIVE_APPROVAL_CHANNELS)[number];
 export function isNativeApprovalChannel(
   value: string | null | undefined,
 ): value is NativeApprovalChannel {
-  if (typeof value !== "string") {
-    return false;
-  }
-  return (NATIVE_APPROVAL_CHANNELS as readonly string[]).includes(value);
+  return isStringOption(value, NATIVE_APPROVAL_CHANNELS);
 }

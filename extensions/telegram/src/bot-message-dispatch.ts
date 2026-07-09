@@ -54,6 +54,8 @@ import {
   appendAssistantMirrorMessageByIdentity,
   readLatestAssistantTextByIdentity,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -109,10 +111,6 @@ import {
   retainTelegramGroupHistoryPromptContext,
   selectTelegramGroupHistoryAfterLastSelf,
 } from "./group-history-window.js";
-import {
-  createTelegramProgressSummaryTracker,
-  formatTelegramProgressSummaryLine,
-} from "./progress-summary.js";
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
 import {
   createLaneDeliveryStateTracker,
@@ -126,6 +124,10 @@ import {
   recordOutboundMessageForPromptContext,
   withTelegramPromptContextTimestampMs,
 } from "./outbound-message-context.js";
+import {
+  createTelegramProgressSummaryTracker,
+  formatTelegramProgressSummaryLine,
+} from "./progress-summary.js";
 import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
@@ -155,6 +157,8 @@ import { clipTelegramProgressText } from "./truncate.js";
 
 export { resetTelegramReplyFenceForTests };
 
+// Telegram sendChatAction can fail transiently; keep the tolerance scoped to this transport.
+const TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES = 5;
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
 
@@ -245,9 +249,7 @@ type DispatchTelegramMessageParams = {
   suppressFailureFallback?: boolean;
 };
 
-export type TelegramDispatchResult =
-  | { kind: "completed" }
-  | { kind: "failed-retryable"; error: unknown };
+type TelegramDispatchResult = { kind: "completed" } | { kind: "failed-retryable"; error: unknown };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
 
@@ -392,6 +394,19 @@ function formatTelegramProgressLine(text: string): string {
   return trimmed.startsWith("_") && trimmed.endsWith("_")
     ? trimmed
     : formatProgressAsMarkdownCode(text);
+}
+
+function buildTelegramThinkingProgressLine(progressTokens: number): ChannelProgressDraftLine {
+  const label = `Thinking… (~${Math.round(progressTokens)} tokens)`;
+  const text = `🧠 ${label}`;
+  return {
+    id: "reasoning:token-progress",
+    kind: "item",
+    icon: "🧠",
+    label,
+    text,
+    prefix: false,
+  };
 }
 
 function escapeTelegramProgressHtml(text: string): string {
@@ -1150,6 +1165,16 @@ export const dispatchTelegramMessage = async ({
       snapshot: payload.isReasoningSnapshot === true,
     });
   };
+  const pushStreamThinkingTokenProgress = async (progressTokens: number) => {
+    const rendered = await pushStreamToolProgress(
+      buildTelegramThinkingProgressLine(progressTokens),
+      { startImmediately: true },
+    );
+    if (rendered) {
+      progressSummary.noteReasoningActivity();
+    }
+    return rendered;
+  };
   const markProgressFinalStarted = () => {
     finalAnswerDeliveryStarted = true;
     progressDraft.markFinalReplyStarted();
@@ -1557,9 +1582,14 @@ export const dispatchTelegramMessage = async ({
   };
   const resolveCurrentTurnTranscriptFinalText = async (): Promise<string | undefined> =>
     (await resolveCurrentTurnTranscriptFinal())?.text;
+  const normalizePromptContextTimestampText = (text: string): string =>
+    stripInlineDirectiveTagsForDelivery(text).text.trim();
   const resolvePromptContextTimestampMs = async (text: string): Promise<number | undefined> => {
     const final = await resolveCurrentTurnTranscriptFinal();
-    if (final?.text.trim() !== text.trim()) {
+    if (
+      !final ||
+      normalizePromptContextTimestampText(final.text) !== normalizePromptContextTimestampText(text)
+    ) {
       return undefined;
     }
     return final.timestamp;
@@ -2127,6 +2157,7 @@ export const dispatchTelegramMessage = async ({
       accountId: route.accountId,
       typing: {
         start: sendTyping,
+        maxConsecutiveFailures: TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES,
         onStartError: (err) => {
           logTypingFailure({
             log: logVerbose,
@@ -2631,6 +2662,12 @@ export const dispatchTelegramMessage = async ({
                             await pushStreamReasoningProgress(payload);
                           })
                       : undefined,
+                  onReasoningProgress: answerLane.stream
+                    ? (payload) =>
+                        enqueueDraftLaneEvent(async () => {
+                          await pushStreamThinkingTokenProgress(payload.progressTokens);
+                        })
+                    : undefined,
                   onAssistantMessageStart: answerLane.stream
                     ? () =>
                         enqueueDraftLaneEvent(async () => {
@@ -2949,9 +2986,8 @@ export const dispatchTelegramMessage = async ({
   const shouldSendFailureFallback =
     !isRoomEvent &&
     !suppressFailureFallback &&
-    (dispatchError ||
-      (!deliverySummary.delivered &&
-        (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0)));
+    !finalAnswerDelivered &&
+    (dispatchError || deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0);
   if (shouldSendFailureFallback) {
     const fallbackText = dispatchError
       ? "Something went wrong while processing your request. Please try again."
@@ -3002,9 +3038,11 @@ export const dispatchTelegramMessage = async ({
   }
 
   const hasFinalResponse =
+    finalAnswerDelivered || sentFallback || suppressSilentReplyFallback || queuedFinal;
+  const hasVisibleResponse =
     deliverySummary.delivered || sentFallback || suppressSilentReplyFallback || queuedFinal;
   const deliveryFailureWithoutFinalResponse =
-    !deliverySummary.delivered &&
+    !finalAnswerDelivered &&
     (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0);
   const retryableDispatchFailure =
     dispatchError ??
@@ -3014,7 +3052,7 @@ export const dispatchTelegramMessage = async ({
         )
       : null);
 
-  if (statusReactionController && !hasFinalResponse) {
+  if (statusReactionController && !hasVisibleResponse) {
     void finalizeTelegramStatusReaction({ outcome: "error", hasFinalResponse: false }).catch(
       (err: unknown) => {
         logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
@@ -3022,17 +3060,22 @@ export const dispatchTelegramMessage = async ({
     );
   }
 
-  if (retryableDispatchFailure && retryDispatchErrors && !hasFinalResponse) {
+  const shouldReturnRetryableDispatchFailure =
+    retryDispatchErrors &&
+    ((dispatchError != null && !hasFinalResponse) ||
+      (dispatchError == null && deliveryFailureWithoutFinalResponse && !hasVisibleResponse));
+
+  if (retryableDispatchFailure && shouldReturnRetryableDispatchFailure) {
     return { kind: "failed-retryable", error: retryableDispatchFailure };
   }
 
-  if (!hasFinalResponse) {
+  if (!hasVisibleResponse) {
     return { kind: "completed" };
   }
 
   // Fire-and-forget: auto-rename DM topic on first message.
   if (isDmTopic && isFirstTurnInSession) {
-    const userMessage = (ctxPayload.RawBody ?? ctxPayload.Body ?? "").slice(0, 500);
+    const userMessage = truncateUtf16Safe(ctxPayload.RawBody ?? ctxPayload.Body ?? "", 500);
     if (userMessage.trim()) {
       const agentDir = resolveAgentDir(cfg, route.agentId);
       const directAutoTopicLabel =
@@ -3071,7 +3114,8 @@ export const dispatchTelegramMessage = async ({
   }
 
   if (statusReactionController) {
-    const statusReactionOutcome = dispatchError || sentFallback ? "error" : "done";
+    const statusReactionOutcome =
+      !finalAnswerDelivered && (dispatchError != null || sentFallback) ? "error" : "done";
     void finalizeTelegramStatusReaction({
       outcome: statusReactionOutcome,
       hasFinalResponse: true,

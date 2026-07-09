@@ -499,6 +499,10 @@
 html,
 body {
   height: 100%;
+  /* App shell: inner panes scroll, the root never should. Without this the
+     macOS WKWebView (Mac app) and Safari rubber-band the whole window, even
+     when nothing overflows. */
+  overscroll-behavior: none;
 }
 
 body {
@@ -563,7 +567,6 @@ openclaw-app {
     width: 100%;
     height: 100%;
     overflow: hidden;
-    overscroll-behavior: none;
   }
 
   @supports (height: 100dvh) {

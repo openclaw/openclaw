@@ -14,6 +14,8 @@ import {
   markBackgrounded,
   markExited,
   resetProcessRegistryForTests,
+  setJobTtlMs,
+  tail,
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 
@@ -104,6 +106,37 @@ describe("bash process registry", () => {
     expect(session.truncated).toBe(true);
   });
 
+  it("keeps aggregate, pending, and tail suffix cuts on UTF-16 boundaries", () => {
+    const session = createRegistrySession({
+      maxOutputChars: 3,
+      pendingMaxOutputChars: 3,
+      backgrounded: true,
+    });
+
+    addSession(session);
+    appendOutput(session, "stdout", "a🎉bc");
+
+    expect(session.aggregated).toBe("bc");
+    expect(session.pendingStdoutChars).toBe(2);
+    expect(drainSession(session).stdout).toBe("bc");
+    expect(tail("a🎉bc", 3)).toBe("bc");
+  });
+
+  it("keeps multi-chunk pending output on a UTF-16 boundary", () => {
+    const session = createRegistrySession({
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 3,
+      backgrounded: true,
+    });
+
+    addSession(session);
+    appendOutput(session, "stdout", "a🎉");
+    appendOutput(session, "stdout", "bc");
+
+    expect(session.pendingStdoutChars).toBe(2);
+    expect(drainSession(session).stdout).toBe("bc");
+  });
+
   it("only persists finished sessions when backgrounded", () => {
     const session = createRegistrySession({
       maxOutputChars: 100,
@@ -138,6 +171,34 @@ describe("bash process registry", () => {
         totalOutputChars: 0,
       },
     ]);
+  });
+
+  it("clamps a zero retention TTL to one minute", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-07-09T00:00:00Z"));
+      setJobTtlMs(0);
+
+      const session = createRegistrySession({
+        id: "zero-ttl",
+        maxOutputChars: 100,
+        pendingMaxOutputChars: 30_000,
+        backgrounded: true,
+      });
+      addSession(session);
+      markExited(session, 0, null, "completed");
+
+      vi.advanceTimersByTime(30_000);
+      expect(listFinishedSessions()).toHaveLength(1);
+
+      vi.advanceTimersByTime(60_000);
+      expect(listFinishedSessions()).toHaveLength(0);
+    } finally {
+      resetProcessRegistryForTests();
+      setJobTtlMs(30 * 60 * 1000);
+      resetProcessRegistryForTests();
+      vi.useRealTimers();
+    }
   });
 });
 

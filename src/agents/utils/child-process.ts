@@ -6,14 +6,14 @@
 import type { ChildProcess } from "node:child_process";
 
 const EXIT_STDIO_GRACE_MS = 100;
+const EXIT_STDIO_MAX_DRAIN_MS = 1_000;
 
 /**
  * Wait for a child process to terminate without hanging on inherited stdio handles.
  *
- * On Windows, daemonized descendants can inherit the child's stdout/stderr pipe
- * handles. In that case the child emits `exit`, but `close` can hang forever even
- * though the original process is already gone. We wait briefly for stdio to end,
- * then forcibly stop tracking the inherited handles.
+ * A detached descendant may keep stdout/stderr open after the child exits. Wait
+ * until those pipes are idle, re-arming the grace timer for every late chunk, so
+ * active output drains without hanging forever on an inherited handle.
  */
 export function waitForChildProcess(child: ChildProcess): Promise<number | null> {
   return new Promise((resolve, reject) => {
@@ -21,6 +21,7 @@ export function waitForChildProcess(child: ChildProcess): Promise<number | null>
     let exited = false;
     let exitCode: number | null = null;
     let postExitTimer: NodeJS.Timeout | undefined;
+    let postExitDeadlineTimer: NodeJS.Timeout | undefined;
     let stdoutEnded = child.stdout === null;
     let stderrEnded = child.stderr === null;
 
@@ -29,11 +30,19 @@ export function waitForChildProcess(child: ChildProcess): Promise<number | null>
         clearTimeout(postExitTimer);
         postExitTimer = undefined;
       }
+      if (postExitDeadlineTimer) {
+        clearTimeout(postExitDeadlineTimer);
+        postExitDeadlineTimer = undefined;
+      }
       child.removeListener("error", onError);
       child.removeListener("exit", onExit);
       child.removeListener("close", onClose);
       child.stdout?.removeListener("end", onStdoutEnd);
       child.stderr?.removeListener("end", onStderrEnd);
+      child.stdout?.removeListener("data", onData);
+      child.stderr?.removeListener("data", onData);
+      child.stdout?.removeListener("error", onStreamError);
+      child.stderr?.removeListener("error", onStreamError);
     };
 
     const finalize = (code: number | null) => {
@@ -56,6 +65,19 @@ export function waitForChildProcess(child: ChildProcess): Promise<number | null>
       }
     };
 
+    const armIdleTimer = () => {
+      if (postExitTimer) {
+        clearTimeout(postExitTimer);
+      }
+      postExitTimer = setTimeout(() => finalize(exitCode), EXIT_STDIO_GRACE_MS);
+    };
+
+    const onData = () => {
+      if (exited && !settled) {
+        armIdleTimer();
+      }
+    };
+
     const onStdoutEnd = () => {
       stdoutEnded = true;
       maybeFinalizeAfterExit();
@@ -75,12 +97,20 @@ export function waitForChildProcess(child: ChildProcess): Promise<number | null>
       reject(err);
     };
 
+    const onStreamError = () => {
+      // Stream read errors on stdout/stderr are non-fatal; the child process
+      // error/exit/close handlers report the real outcome.
+    };
+
     const onExit = (code: number | null) => {
       exited = true;
       exitCode = code;
       maybeFinalizeAfterExit();
       if (!settled) {
-        postExitTimer = setTimeout(() => finalize(code), EXIT_STDIO_GRACE_MS);
+        // Drain finite descendant tails, but never let a chatty inherited pipe
+        // keep an already-exited command alive indefinitely.
+        postExitDeadlineTimer = setTimeout(() => finalize(exitCode), EXIT_STDIO_MAX_DRAIN_MS);
+        armIdleTimer();
       }
     };
 
@@ -90,6 +120,10 @@ export function waitForChildProcess(child: ChildProcess): Promise<number | null>
 
     child.stdout?.once("end", onStdoutEnd);
     child.stderr?.once("end", onStderrEnd);
+    child.stdout?.on("error", onStreamError);
+    child.stderr?.on("error", onStreamError);
+    child.stdout?.on("data", onData);
+    child.stderr?.on("data", onData);
     child.once("error", onError);
     child.once("exit", onExit);
     child.once("close", onClose);

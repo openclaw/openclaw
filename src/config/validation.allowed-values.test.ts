@@ -28,6 +28,14 @@ function mapFirstIssue(
 }
 
 describe("config validation allowed-values metadata", () => {
+  it("accepts extended-stable as an additive update channel", () => {
+    expect(
+      validateConfigObjectRaw({
+        update: { channel: "extended-stable" },
+      }),
+    ).toMatchObject({ ok: true });
+  });
+
   it("adds allowed values for invalid union paths", () => {
     const result = validateConfigObjectRaw({
       update: { channel: "nightly" },
@@ -36,8 +44,10 @@ describe("config validation allowed-values metadata", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       const issue = requireIssue(result.issues, "update.channel");
-      expect(issue.message).toContain('(allowed: "stable", "beta", "dev")');
-      expect(issue.allowedValues).toEqual(["stable", "beta", "dev"]);
+      expect(issue.message).toContain(
+        '(allowed: "stable", "extended-stable", "beta", "dev")',
+      );
+      expect(issue.allowedValues).toEqual(["stable", "extended-stable", "beta", "dev"]);
       expect(issue.allowedValuesHiddenCount).toBe(0);
     }
   });

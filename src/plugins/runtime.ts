@@ -63,10 +63,10 @@ function registryHasPluginHostCleanupWork(registry: PluginRegistry | null): bool
   }
   return (
     registry.plugins.some((plugin) => plugin.status === "loaded") ||
-    (registry.sessionExtensions?.length ?? 0) > 0 ||
-    (registry.runtimeLifecycles?.length ?? 0) > 0 ||
-    (registry.agentEventSubscriptions?.length ?? 0) > 0 ||
-    (registry.sessionSchedulerJobs?.length ?? 0) > 0
+    registry.sessionExtensions.length > 0 ||
+    registry.runtimeLifecycles.length > 0 ||
+    registry.agentEventSubscriptions.length > 0 ||
+    registry.sessionSchedulerJobs.length > 0
   );
 }
 

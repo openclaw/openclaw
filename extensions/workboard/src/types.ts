@@ -228,6 +228,8 @@ export type WorkboardWorkspace = {
   kind: "scratch" | "dir" | "worktree";
   path?: string;
   branch?: string;
+  sourcePath?: string;
+  sourceBranch?: string;
 };
 
 export type WorkboardAutomation = {

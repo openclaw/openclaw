@@ -1,8 +1,8 @@
 // Persistent dedupe helpers give plugins bounded replay protection across process restarts.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import { resolveNonNegativeIntegerOption } from "../../packages/normalization-core/src/number-coercion.js";
 import { createDedupeCache } from "../infra/dedupe.js";
-import { resolveNonNegativeIntegerOption } from "../infra/numeric-options.js";
 import {
   createCorePluginStateSyncKeyedStore,
   createPluginStateSyncKeyedStore,

@@ -103,7 +103,7 @@ export function formatGithubWarning(finding) {
   const file = escapeGithubCommandProperty(finding.file);
   const line = escapeGithubCommandProperty(finding.line);
   const message = escapeGithubCommandValue(
-    `${finding.reason}: prefer useAutoCleanupTempDirTracker() from test/helpers/temp-dir.ts for new test-owned temp directories.`,
+    `${finding.reason}: prefer useAutoCleanupTempDirTracker(afterEach) from test/helpers/temp-dir.ts for new test-owned temp directories.`,
   );
   return `::warning file=${file},line=${line}::${message}`;
 }
@@ -466,7 +466,7 @@ export async function main(argv, io) {
       stderr.write(`- ${finding.file}:${finding.line} ${finding.reason}: ${finding.source}\n`);
     }
     stderr.write(
-      "Prefer useAutoCleanupTempDirTracker() from test/helpers/temp-dir.ts for new test-owned temp directories.\n",
+      "Prefer useAutoCleanupTempDirTracker(afterEach) from test/helpers/temp-dir.ts for new test-owned temp directories.\n",
     );
   }
 

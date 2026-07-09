@@ -1,5 +1,6 @@
 // Reconciles stale task-flow records with their child task state.
 import { listTasksForFlowId } from "./runtime-internal.js";
+import { isTaskFlowCancellationPending } from "./task-cancellation-state.js";
 import {
   listTaskFlowAuditFindings,
   summarizeTaskFlowAuditFindings,
@@ -32,9 +33,7 @@ function isTerminalFlow(flow: TaskFlowRecord): boolean {
 }
 
 function hasActiveLinkedTasks(flowId: string): boolean {
-  return listTasksForFlowId(flowId).some(
-    (task) => task.status === "queued" || task.status === "running",
-  );
+  return listTasksForFlowId(flowId).some(isTaskFlowCancellationPending);
 }
 
 function resolveTerminalAt(flow: TaskFlowRecord): number {

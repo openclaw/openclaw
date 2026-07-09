@@ -1,8 +1,9 @@
+import OpenClawChatUI
 import Testing
 @testable import OpenClaw
 
-@Suite struct TalkProStateTests {
-    @Test func disabledTalkWithoutLoadedConfigCanStartAndRetryLoad() {
+struct TalkProStateTests {
+    @Test func `disabled talk without loaded config can start and retry load`() {
         let state = TalkProState(
             gatewayConnected: true,
             isDemoMode: false,
@@ -15,13 +16,12 @@ import Testing
             permissionState: .unknown)
 
         #expect(state.title == "Voice config unavailable")
-        #expect(state.chipText == "Config")
         #expect(state.primaryAction == .start)
         #expect(state.primaryButtonTitle == "Start Talk")
-        #expect(state.waveformMode(micLevel: 0.8) == .still)
+        #expect(state.waveformPhase(micLevel: 0.8, playbackLevel: nil) == .idle)
     }
 
-    @Test func enabledTalkWithoutLoadedConfigCanBeStopped() {
+    @Test func `enabled talk without loaded config can be stopped`() {
         let state = TalkProState(
             gatewayConnected: true,
             isDemoMode: false,
@@ -34,13 +34,12 @@ import Testing
             permissionState: .unknown)
 
         #expect(state.title == "Voice config unavailable")
-        #expect(state.chipText == "Config")
         #expect(state.primaryAction == .stop)
         #expect(state.primaryButtonTitle == "Stop Talk")
-        #expect(state.waveformMode(micLevel: 0.8) == .still)
+        #expect(state.waveformPhase(micLevel: 0.8, playbackLevel: nil) == .idle)
     }
 
-    @Test func enabledTalkWithLoadedConfigCanBeStopped() {
+    @Test func `enabled talk with loaded config can be stopped`() {
         let state = TalkProState(
             gatewayConnected: true,
             isDemoMode: false,
@@ -53,11 +52,10 @@ import Testing
             permissionState: .ready)
 
         #expect(state.title == "Ready to talk")
-        #expect(state.chipText == "Ready")
         #expect(state.primaryAction == .stop)
     }
 
-    @Test func missingScopeTakesPriorityOverUnloadedConfig() {
+    @Test func `missing scope takes priority over unloaded config`() {
         let state = TalkProState(
             gatewayConnected: true,
             isDemoMode: false,
@@ -70,12 +68,11 @@ import Testing
             permissionState: .missingScope("operator.talk.secrets"))
 
         #expect(state.title == "Gateway permission required")
-        #expect(state.chipText == "Needs approval")
         #expect(state.primaryAction == .enablePermission)
         #expect(state.primaryButtonTitle == "Enable Talk")
     }
 
-    @Test func demoModeKeepsTalkDisabled() {
+    @Test func `demo mode keeps talk disabled`() {
         let state = TalkProState(
             gatewayConnected: true,
             isDemoMode: true,
@@ -88,11 +85,44 @@ import Testing
             permissionState: .ready)
 
         #expect(state.title == "Demo mode only")
-        #expect(state.chipText == "Demo")
-        #expect(state.icon == "waveform.slash")
         #expect(state.primaryAction == .waiting)
         #expect(state.primaryButtonTitle == "Demo Mode Only")
         #expect(state.primaryButtonIcon == "lock.fill")
-        #expect(state.waveformMode(micLevel: 0.8) == .still)
+        #expect(state.waveformPhase(micLevel: 0.8, playbackLevel: nil) == .idle)
+    }
+
+    @Test func `listening drives the wave with the real mic level`() {
+        let state = Self.readyState(isListening: true)
+        #expect(state.waveformPhase(micLevel: 0.4, playbackLevel: nil)
+            == .listening(level: 0.4, speechActive: false))
+    }
+
+    @Test func `detected speech keeps the real mic level and marks speech active`() {
+        let state = Self.readyState(isListening: true, isUserSpeechDetected: true)
+        #expect(state.waveformPhase(micLevel: 0.7, playbackLevel: nil)
+            == .listening(level: 0.7, speechActive: true))
+    }
+
+    @Test func `speaking forwards the playback envelope when available`() {
+        let state = Self.readyState(isSpeaking: true)
+        #expect(state.waveformPhase(micLevel: 0, playbackLevel: 0.55) == .speaking(level: 0.55))
+        #expect(state.waveformPhase(micLevel: 0, playbackLevel: nil) == .speaking(level: nil))
+    }
+
+    private static func readyState(
+        isListening: Bool = false,
+        isSpeaking: Bool = false,
+        isUserSpeechDetected: Bool = false) -> TalkProState
+    {
+        TalkProState(
+            gatewayConnected: true,
+            isDemoMode: false,
+            isEnabled: true,
+            statusText: "Ready",
+            isConfigLoaded: true,
+            isListening: isListening,
+            isSpeaking: isSpeaking,
+            isUserSpeechDetected: isUserSpeechDetected,
+            permissionState: .ready)
     }
 }

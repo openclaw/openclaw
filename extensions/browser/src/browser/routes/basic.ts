@@ -19,6 +19,7 @@ import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./t
 import {
   asyncBrowserRoute,
   getProfileContext,
+  jsonBrowserError,
   jsonError,
   toBoolean,
   toStringOrEmpty,
@@ -53,7 +54,7 @@ async function probeChromeMcpPageReady(profileCtx: ProfileContext, timeoutMs: nu
 function handleBrowserRouteError(res: BrowserResponse, err: unknown) {
   const mapped = toBrowserErrorResponse(err);
   if (mapped) {
-    return jsonError(res, mapped.status, mapped.message);
+    return jsonBrowserError(res, mapped);
   }
   jsonError(res, 500, String(err));
 }
@@ -195,7 +196,11 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
     enabled: current.resolved.enabled,
     profile: profileCtx.profile.name,
     driver: profileCtx.profile.driver,
-    transport: capabilities.usesChromeMcp ? ("chrome-mcp" as const) : ("cdp" as const),
+    transport: capabilities.usesChromeMcp
+      ? ("chrome-mcp" as const)
+      : capabilities.mode === "local-extension"
+        ? ("extension" as const)
+        : ("cdp" as const),
     running: cdpReady,
     cdpReady,
     cdpHttp,

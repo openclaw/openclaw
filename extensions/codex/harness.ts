@@ -7,11 +7,13 @@ import type {
   AgentHarnessCompactResult,
   ContextEngineHostCapability,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   CodexAppServerListModelsOptions,
   CodexAppServerModel,
   CodexAppServerModelListResult,
 } from "./src/app-server/models.js";
+import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
 const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
@@ -37,12 +39,14 @@ type CodexAppServerAgentHarness = AgentHarness & {
  * Creates the Codex app-server harness used for attempts, side questions,
  * compaction, reset, and disposal.
  */
-export function createCodexAppServerAgentHarness(options?: {
+export function createCodexAppServerAgentHarness(options: {
   id?: string;
   label?: string;
   providerIds?: Iterable<string>;
   pluginConfig?: unknown;
   resolvePluginConfig?: () => unknown;
+  resolveConfig?: () => OpenClawConfig | undefined;
+  bindingStore: CodexAppServerBindingStore;
 }): AgentHarness {
   const providerIds = new Set(
     [...(options?.providerIds ?? DEFAULT_CODEX_HARNESS_PROVIDER_IDS)].map((id) =>
@@ -71,6 +75,7 @@ export function createCodexAppServerAgentHarness(options?: {
       // cold provider catalog reads do not pull in the whole Codex runtime.
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
       return runCodexAppServerAttempt(params, {
+        bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
         nativeHookRelay: { enabled: true },
       });
@@ -78,6 +83,7 @@ export function createCodexAppServerAgentHarness(options?: {
     runSideQuestion: async (params) => {
       const { runCodexAppServerSideQuestion } = await import("./src/app-server/side-question.js");
       return runCodexAppServerSideQuestion(params, {
+        bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
         nativeHookRelay: { enabled: true },
       });
@@ -85,20 +91,43 @@ export function createCodexAppServerAgentHarness(options?: {
     compact: async (params) => {
       const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
       return maybeCompactCodexAppServerSession(params, {
+        bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
       });
     },
     compactAfterContextEngine: async (params) => {
       const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
       return maybeCompactCodexAppServerSession(params, {
+        bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
         allowNonManualNativeRequest: true,
       });
     },
     reset: async (params) => {
-      if (params.sessionFile) {
-        const { clearCodexAppServerBinding } = await import("./src/app-server/session-binding.js");
-        await clearCodexAppServerBinding(params.sessionFile);
+      if (params.sessionId) {
+        const { reclaimCurrentCodexSessionGeneration, sessionBindingIdentity } =
+          await import("./src/app-server/session-binding.js");
+        const identity = sessionBindingIdentity({
+          agentId: params.agentId,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+        });
+        let retired = await options.bindingStore.retireSessionGeneration(identity);
+        if (retired === "conflict") {
+          const reclaimed = await reclaimCurrentCodexSessionGeneration({
+            bindingStore: options.bindingStore,
+            identity,
+            config: options.resolveConfig?.(),
+          });
+          if (reclaimed) {
+            retired = await options.bindingStore.retireSessionGeneration(identity);
+          }
+        }
+        if (retired === "conflict") {
+          throw new Error(
+            `Codex binding generation changed before session ${params.sessionId} could reset`,
+          );
+        }
       }
     },
     dispose: async () => {

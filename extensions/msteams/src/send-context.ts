@@ -31,7 +31,7 @@ import type { MSTeamsApp } from "./sdk.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
-export type MSTeamsConversationType = "personal" | "groupChat" | "channel";
+type MSTeamsConversationType = "personal" | "groupChat" | "channel";
 
 export type MSTeamsProactiveContext = {
   appId: string;

@@ -80,6 +80,18 @@ function shouldUseJitiFsCache(): boolean {
   return readJitiBooleanEnv("JITI_FS_CACHE", readJitiBooleanEnv("JITI_CACHE", true));
 }
 
+function resolvePluginLoaderJitiNativeModules(): string[] {
+  try {
+    const configured: unknown = JSON.parse(process.env.JITI_NATIVE_MODULES ?? "[]");
+    const nativeModules = Array.isArray(configured)
+      ? configured.filter((entry): entry is string => typeof entry === "string")
+      : [];
+    return [...new Set([...nativeModules, "openclaw"])];
+  } catch {
+    return ["openclaw"];
+  }
+}
+
 export function normalizeJitiAliasTargetPath(targetPath: string): string {
   return process.platform === "win32" ? targetPath.replace(/\\/g, "/") : targetPath;
 }
@@ -563,6 +575,13 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
   {
     packageName: "@openclaw/gateway-protocol",
     packageDir: "gateway-protocol",
+    subpath: "frame-guards",
+    srcFile: "frame-guards.ts",
+    distFile: "frame-guards.mjs",
+  },
+  {
+    packageName: "@openclaw/gateway-protocol",
+    packageDir: "gateway-protocol",
     subpath: "schema",
     srcFile: "schema.ts",
     distFile: "schema.mjs",
@@ -750,18 +769,25 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
     distFile: "read-byte-stream-with-limit.mjs",
   },
   {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "read-response-with-limit",
-    srcFile: "read-response-with-limit.ts",
-    distFile: "read-response-with-limit.mjs",
-  },
-  {
     packageName: "@openclaw/normalization-core",
     packageDir: "normalization-core",
     subpath: "",
     srcFile: "index.ts",
     distFile: "index.mjs",
+  },
+  {
+    packageName: "@openclaw/normalization-core",
+    packageDir: "normalization-core",
+    subpath: "boolean-coercion",
+    srcFile: "boolean-coercion.ts",
+    distFile: "boolean-coercion.mjs",
+  },
+  {
+    packageName: "@openclaw/normalization-core",
+    packageDir: "normalization-core",
+    subpath: "error-coercion",
+    srcFile: "error-coercion.ts",
+    distFile: "error-coercion.mjs",
   },
   {
     packageName: "@openclaw/normalization-core",
@@ -790,6 +816,13 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
     subpath: "string-normalization",
     srcFile: "string-normalization.ts",
     distFile: "string-normalization.mjs",
+  },
+  {
+    packageName: "@openclaw/normalization-core",
+    packageDir: "normalization-core",
+    subpath: "utf16-slice",
+    srcFile: "utf16-slice.ts",
+    distFile: "utf16-slice.mjs",
   },
   {
     packageName: "@openclaw/terminal-core",
@@ -944,6 +977,13 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
     subpath: "redact-sensitive-url",
     srcFile: "redact-sensitive-url.ts",
     distFile: "redact-sensitive-url.mjs",
+  },
+  {
+    packageName: "@openclaw/net-policy",
+    packageDir: "net-policy",
+    subpath: "url-protocol",
+    srcFile: "url-protocol.ts",
+    distFile: "url-protocol.mjs",
   },
   {
     packageName: "@openclaw/net-policy",
@@ -2010,6 +2050,9 @@ export function buildPluginLoaderJitiOptions(
     // Prefer Node's native sync ESM loader for built dist/*.js modules so
     // bundled plugins and plugin-sdk subpaths stay on the canonical module graph.
     tryNative: true,
+    // When jiti must transform a plugin entry, keep OpenClaw's own package
+    // chunks on the native module graph instead of re-evaluating them in jiti.
+    nativeModules: resolvePluginLoaderJitiNativeModules(),
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
     ...(hasAliases
       ? {
