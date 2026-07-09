@@ -91,6 +91,22 @@ export OPENCLAW_VAULT_AUTH_METHOD=token_file
 export VAULT_TOKEN_FILE=/vault/secrets/token
 ```
 
+For a Vault server signed by a private CA, either install that CA in the host
+trust store and enable Node system trust:
+
+```bash
+export NODE_USE_SYSTEM_CA=1
+```
+
+Or provide a PEM bundle directly:
+
+```bash
+export NODE_EXTRA_CA_CERTS=/path/to/vault-ca.pem
+```
+
+These variables must be present when OpenClaw starts. The Vault plugin forwards
+them to its resolver process.
+
 For non-interactive JWT auth, use a workload JWT file and a Vault role of type
 `jwt`:
 

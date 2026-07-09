@@ -267,6 +267,8 @@ describe("plugin manifest", () => {
         "OPENCLAW_VAULT_AUTH_MOUNT",
         "OPENCLAW_VAULT_AUTH_ROLE",
         "OPENCLAW_VAULT_JWT_FILE",
+        "NODE_EXTRA_CA_CERTS",
+        "NODE_USE_SYSTEM_CA",
       ]),
     });
     expect(childTimeoutMs).toBeGreaterThan(0);

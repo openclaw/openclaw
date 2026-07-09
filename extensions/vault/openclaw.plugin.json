@@ -33,7 +33,9 @@
         "OPENCLAW_VAULT_AUTH_ROLE",
         "OPENCLAW_VAULT_JWT_FILE",
         "OPENCLAW_VAULT_KV_MOUNT",
-        "OPENCLAW_VAULT_KV_VERSION"
+        "OPENCLAW_VAULT_KV_VERSION",
+        "NODE_EXTRA_CA_CERTS",
+        "NODE_USE_SYSTEM_CA"
       ]
     }
   },
