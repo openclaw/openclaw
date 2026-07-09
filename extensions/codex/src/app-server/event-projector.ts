@@ -539,6 +539,8 @@ export class CodexAppServerEventProjector {
   private readonly nativeGeneratedMediaUrlsByItemId = new Map<string, string>();
   private readonly nativeToolLifecycleProjector: CodexNativeToolLifecycleProjector;
   private readonly afterToolCallObservedItemIds = new Set<string>();
+  private readonly warnedUnknownNotificationMethods = new Set<string>();
+  private readonly warnedCorrelationMismatches = new Set<string>();
   private assistantStarted = false;
   private reasoningStarted = false;
   private reasoningEnded = false;
@@ -660,14 +662,17 @@ export class CodexAppServerEventProjector {
     }
     if (isHookNotificationMethod(notification.method)) {
       if (!this.isHookNotificationForCurrentThread(params)) {
+        this.warnCorrelationMismatchOnce(notification.method, params);
         return;
       }
     } else if (notification.method === "guardianWarning") {
       // Codex guardian warnings are thread-scoped and carry no turn id.
       if (readCodexNotificationThreadId(params) !== this.threadId) {
+        this.warnCorrelationMismatchOnce(notification.method, params);
         return;
       }
     } else if (!this.isNotificationForTurn(params)) {
+      this.warnCorrelationMismatchOnce(notification.method, params);
       return;
     }
     this.nativeToolLifecycleProjector.handleNotification(notification);
@@ -723,6 +728,7 @@ export class CodexAppServerEventProjector {
         this.promptErrorSource = "prompt";
         break;
       default:
+        this.warnUnknownNotificationMethodOnce(notification.method, params);
         break;
     }
   }
@@ -2443,6 +2449,41 @@ export class CodexAppServerEventProjector {
     const turnId = params.turnId;
     return threadId === this.threadId && (turnId === this.turnId || turnId === null);
   }
+
+  private warnUnknownNotificationMethodOnce(method: string, params: JsonObject): void {
+    if (this.warnedUnknownNotificationMethods.has(method)) {
+      return;
+    }
+    this.warnedUnknownNotificationMethods.add(method);
+    embeddedAgentLog.warn("codex app-server notification method not handled by projector", {
+      method,
+      threadId: this.threadId,
+      turnId: this.turnId,
+      notificationThreadId: readCodexNotificationThreadId(params),
+    });
+  }
+
+  private warnCorrelationMismatchOnce(method: string, params: JsonObject): void {
+    // turn/completed mismatches are already surfaced by the turn-watch layer;
+    // skip them here to avoid duplicate warnings on the same-thread path.
+    if (method === "turn/completed") {
+      return;
+    }
+    const notificationThreadId = readCodexNotificationThreadId(params);
+    const notificationTurnId = readCodexNotificationTurnId(params);
+    const key = `${method}\0${notificationThreadId ?? "<missing>"}\0${notificationTurnId ?? "<missing>"}`;
+    if (this.warnedCorrelationMismatches.has(key)) {
+      return;
+    }
+    this.warnedCorrelationMismatches.add(key);
+    embeddedAgentLog.warn("codex app-server notification did not match active thread/turn", {
+      method,
+      notificationThreadId,
+      notificationTurnId,
+      activeThreadId: this.threadId,
+      activeTurnId: this.turnId,
+    });
+  }
 }
 
 function isHookNotificationMethod(method: string): method is "hook/started" | "hook/completed" {
@@ -2537,7 +2578,6 @@ function readNonNegativeInteger(record: JsonObject, key: string): number | undef
   const value = readNumber(record, key);
   return value !== undefined && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
-
 
 function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
   const error = record.error;
@@ -2674,6 +2714,21 @@ function itemTitle(item: CodexThreadItem): string {
   }
 }
 
+const warnedUnknownItemStatuses = new Set<string>();
+
+function warnUnknownItemStatusOnce(item: CodexThreadItem, status: string): void {
+  const key = `${item.type}\0${status}`;
+  if (warnedUnknownItemStatuses.has(key)) {
+    return;
+  }
+  warnedUnknownItemStatuses.add(key);
+  embeddedAgentLog.warn("codex app-server item carried an unrecognized status", {
+    itemType: item.type,
+    itemId: item.id,
+    status,
+  });
+}
+
 function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" | "blocked" {
   const status = readItemString(item, "status");
   if (status === "failed" || status === "error") {
@@ -2685,7 +2740,14 @@ function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" |
   if (status === "inProgress" || status === "in_progress" || status === "running") {
     return "running";
   }
-  return "completed";
+  if (status === "completed" || status === undefined) {
+    return "completed";
+  }
+  // An unrecognized status does not prove success. Fail closed (mirroring
+  // auditNativeToolTerminalStatus) and warn once per item type + status so the
+  // breadcrumb is not lost without spamming on repeat occurrences.
+  warnUnknownItemStatusOnce(item, status);
+  return "failed";
 }
 
 function auditNativeToolTerminalStatus(item: CodexThreadItem): CodexNativeToolAuditStatus {
