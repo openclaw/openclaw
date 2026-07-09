@@ -128,4 +128,12 @@ class DeviceNotificationListenerServiceTest {
     assertTrue(limiter.allow(nowEpochMs = nowEpochMs, maxEventsPerMinute = 2))
     assertFalse(limiter.allow(nowEpochMs = nowEpochMs, maxEventsPerMinute = 2))
   }
+
+  @Test
+  fun sanitizeNotificationText_preservesUtf16BoundariesAtLimit() {
+    val prefix = "a".repeat(511)
+    val result = sanitizeNotificationText("$prefix🚀 trailing text")
+
+    assertEquals(prefix, result)
+  }
 }
