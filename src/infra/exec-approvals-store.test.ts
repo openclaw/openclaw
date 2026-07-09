@@ -137,7 +137,7 @@ describe("exec approvals store helpers", () => {
     expect(resolveExecApprovalsDisplayPath()).toBe("~/.openclaw/exec-approvals.json");
   });
 
-  it("uses OPENCLAW_STATE_DIR for default file and socket paths", async () => {
+  it("uses OPENCLAW_STATE_DIR for default file and socket paths", () => {
     const dir = createHomeDir();
     const stateDir = path.join(dir, "custom-state");
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
@@ -151,7 +151,7 @@ describe("exec approvals store helpers", () => {
     expect(resolveExecApprovalsDisplayPath()).toBe(stateApprovalsFilePath(stateDir));
     expect(resolveExecApprovalsTranscriptPath()).toBe("$OPENCLAW_STATE_DIR/exec-approvals.json");
 
-    const ensured = await ensureExecApprovals();
+    const ensured = ensureExecApprovals();
 
     expect(ensured.socket?.path).toBe(resolveExecApprovalsSocketPath());
     expect(fs.existsSync(stateApprovalsFilePath(stateDir))).toBe(true);
@@ -183,7 +183,7 @@ describe("exec approvals store helpers", () => {
 
   it("persists synchronous compatibility writes without restoring revoked policy", async () => {
     const dir = createHomeDir();
-    await ensureExecApprovals();
+    ensureExecApprovals();
     await updateExecApprovals({
       update: (file) => ({
         ...file,
@@ -320,7 +320,7 @@ describe("exec approvals store helpers", () => {
     expect(fs.existsSync(stateApprovalsFilePath(stateDir))).toBe(false);
     expect(fs.existsSync(approvalsFilePath(dir))).toBe(true);
 
-    const ensured = await ensureExecApprovals();
+    const ensured = ensureExecApprovals();
 
     expect(ensured.defaults).toEqual({
       security: "deny",
@@ -338,13 +338,13 @@ describe("exec approvals store helpers", () => {
     expect(fs.existsSync(stateApprovalsFilePath(stateDir))).toBe(false);
   });
 
-  it("keeps the default approvals path when only legacy state exists", async () => {
+  it("keeps the default approvals path when only legacy state exists", () => {
     const dir = createHomeDir();
     fs.mkdirSync(path.join(dir, ".clawdbot"), { recursive: true });
 
     expect(path.normalize(resolveExecApprovalsPath())).toBe(path.normalize(approvalsFilePath(dir)));
 
-    await ensureExecApprovals();
+    ensureExecApprovals();
 
     expect(fs.existsSync(approvalsFilePath(dir))).toBe(true);
     expect(fs.existsSync(path.join(dir, ".clawdbot", "exec-approvals.json"))).toBe(false);
@@ -405,10 +405,10 @@ describe("exec approvals store helpers", () => {
     expect(invalid.file).toEqual(normalizeExecApprovals({ version: 1, agents: {} }));
   });
 
-  it("ensures approvals file with default socket path and generated token", async () => {
+  it("ensures approvals file with default socket path and generated token", () => {
     const dir = createHomeDir();
 
-    const ensured = await ensureExecApprovals();
+    const ensured = ensureExecApprovals();
     const raw = fs.readFileSync(approvalsFilePath(dir), "utf8");
 
     expect(ensured.socket?.path).toBe(resolveExecApprovalsSocketPath());
@@ -843,7 +843,7 @@ describe("exec approvals store helpers", () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(321_000);
 
-    await ensureExecApprovals();
+    ensureExecApprovals();
     await persistAllowAlwaysDecision({
       agentId: "worker",
       decision: {
@@ -864,7 +864,7 @@ describe("exec approvals store helpers", () => {
 
   it("applies allow-always grants to the latest file after a concurrent policy write", async () => {
     const dir = createHomeDir();
-    await ensureExecApprovals();
+    ensureExecApprovals();
     const snapshot = readExecApprovalsSnapshot();
 
     const policyWrite = updateExecApprovals({
@@ -912,7 +912,7 @@ describe("exec approvals store helpers", () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(321_000);
 
-    await ensureExecApprovals();
+    ensureExecApprovals();
     await persistAllowAlwaysDecision({
       agentId: "worker",
       decision: {
@@ -1070,7 +1070,7 @@ describe("exec approvals store helpers", () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(654_321);
 
-    await ensureExecApprovals();
+    ensureExecApprovals();
     const patterns = await persistAllowAlwaysPatterns({
       agentId: "worker",
       platform: "win32",
@@ -1114,7 +1114,7 @@ describe("exec approvals store helpers", () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(654_322);
 
-    await ensureExecApprovals();
+    ensureExecApprovals();
     const completePatterns = await persistAllowAlwaysPatterns({
       agentId: "worker",
       commandText: "/usr/bin/tool ok",
