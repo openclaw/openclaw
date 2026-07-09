@@ -416,10 +416,12 @@ export function archiveSessionTranscriptsDetailed(opts: {
   onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[] {
   const archived: ArchivedSessionTranscript[] = [];
-  const storeDir =
-    opts.restrictToStoreDir && opts.storePath
-      ? canonicalizePathForComparison(path.dirname(opts.storePath))
-      : null;
+  const safeStoreDir = opts.storePath
+    ? canonicalizePathForComparison(path.dirname(opts.storePath))
+    : canonicalizePathForComparison(
+        path.join(resolveRequiredHomeDir(process.env, os.homedir), ".openclaw", "sessions"),
+      );
+  const storeDir = safeStoreDir;
   for (const candidate of resolveSessionTranscriptCandidates(
     opts.sessionId,
     opts.storePath,
