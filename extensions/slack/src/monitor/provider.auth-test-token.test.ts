@@ -138,6 +138,27 @@ describe("auth.test boot call", () => {
     await expect(stopSlackMonitor(monitor)).resolves.toBeUndefined();
   });
 
+  it("starts an org-wide Socket Mode account when auth.test omits app_id", async () => {
+    resetSlackTestState({
+      channels: {
+        slack: {
+          enterpriseOrgInstall: true,
+          dmPolicy: "disabled",
+          groupPolicy: "open",
+        },
+      },
+    });
+    getSlackClient().auth.test.mockResolvedValueOnce({
+      enterprise_id: "E1",
+      is_enterprise_install: true,
+    });
+
+    const monitor = startSlackMonitor(monitorSlackProvider, {
+      appToken: "xapp-1-A1-opaque",
+    });
+    await expect(stopSlackMonitor(monitor)).resolves.toBeUndefined();
+  });
+
   it("rejects enterprise startup with the default pairing DM policy", async () => {
     resetSlackTestState({
       channels: {

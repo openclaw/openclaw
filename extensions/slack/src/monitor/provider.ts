@@ -408,6 +408,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     enterpriseOrgInstall,
     auth: authTestFailed ? undefined : authTestIdentity,
     authError: authTestError,
+    transportApiAppId: expectedApiAppIdFromAppToken,
   });
   const teamId = installationIdentity.kind === "workspace" ? installationIdentity.teamId : "";
   const apiAppId =

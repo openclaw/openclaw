@@ -51,7 +51,7 @@ export function resolveSlackEventScope(params: {
   if (!apiAppId) {
     return { ok: false, reason: "missing_api_app_id" };
   }
-  if (apiAppId !== params.identity.apiAppId) {
+  if (params.identity.apiAppId && apiAppId !== params.identity.apiAppId) {
     return { ok: false, reason: "wrong_app" };
   }
   if (context.isEnterpriseInstall !== true) {

@@ -26,6 +26,25 @@ describe("resolveSlackEventScope", () => {
     expect(result.ok && result.scope?.client).toBe(client);
   });
 
+  it("accepts a signed enterprise event when startup auth.test omitted app_id", () => {
+    const result = resolveSlackEventScope({
+      identity: { kind: "enterprise", enterpriseId: "E123" },
+      body: { api_app_id: "A123" },
+      context: { isEnterpriseInstall: true, enterpriseId: "E123", teamId: "T111" },
+      client,
+    });
+    expect(result).toEqual({
+      ok: true,
+      scope: {
+        apiAppId: "A123",
+        enterpriseId: "E123",
+        teamId: "T111",
+        isEnterpriseInstall: true,
+        client,
+      },
+    });
+  });
+
   it("relies on WebClient team scoping instead of adding team_id to method payloads", async () => {
     let encodedRequestBody = "";
     const teamScopedClient = new WebClient("xoxb-test", {

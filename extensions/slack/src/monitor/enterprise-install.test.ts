@@ -56,8 +56,8 @@ describe("resolveSlackInstallationIdentity", () => {
     ).toEqual({ kind: "workspace", teamId: "T123" });
   });
 
-  it("requires app_id for an org-wide installation", () => {
-    expect(() =>
+  it("accepts an org-wide auth.test response without app_id", () => {
+    expect(
       resolveSlackInstallationIdentity({
         enterpriseOrgInstall: true,
         auth: {
@@ -65,7 +65,34 @@ describe("resolveSlackInstallationIdentity", () => {
           is_enterprise_install: true,
         },
       }),
-    ).toThrow(/no app_id/);
+    ).toEqual({ kind: "enterprise", enterpriseId: "E123" });
+  });
+
+  it("uses the transport app id when org-wide auth.test omits app_id", () => {
+    expect(
+      resolveSlackInstallationIdentity({
+        enterpriseOrgInstall: true,
+        transportApiAppId: "A123",
+        auth: {
+          enterprise_id: "E123",
+          is_enterprise_install: true,
+        },
+      }),
+    ).toEqual({ kind: "enterprise", apiAppId: "A123", enterpriseId: "E123" });
+  });
+
+  it("rejects mismatched bot and transport app ids", () => {
+    expect(() =>
+      resolveSlackInstallationIdentity({
+        enterpriseOrgInstall: true,
+        transportApiAppId: "A_TRANSPORT",
+        auth: {
+          app_id: "A_BOT",
+          enterprise_id: "E123",
+          is_enterprise_install: true,
+        },
+      }),
+    ).toThrow(/token mismatch/);
   });
 });
 

@@ -13,7 +13,7 @@ export type SlackInstallationIdentity =
     }
   | {
       kind: "enterprise";
-      apiAppId: string;
+      apiAppId?: string;
       enterpriseId: string;
     }
   | {
@@ -188,6 +188,7 @@ export function resolveSlackInstallationIdentity(params: {
   enterpriseOrgInstall: boolean;
   auth?: SlackAuthTestIdentity;
   authError?: unknown;
+  transportApiAppId?: string;
 }): SlackInstallationIdentity {
   const auth = params.auth;
   if (!auth) {
@@ -211,13 +212,23 @@ export function resolveSlackInstallationIdentity(params: {
   const apiAppId = normalizeOptionalString(auth.app_id);
   const enterpriseId = normalizeOptionalString(auth.enterprise_id);
   if (params.enterpriseOrgInstall) {
-    if (!apiAppId) {
-      throw new Error("Slack org-wide auth.test returned no app_id");
-    }
     if (!enterpriseId) {
       throw new Error("Slack org-wide auth.test returned no enterprise_id");
     }
-    return { kind: "enterprise", apiAppId, enterpriseId };
+    // Slack auth.test does not guarantee app_id. Socket Mode can derive it from the
+    // app token; HTTP authenticates the signed event that carries api_app_id.
+    const transportApiAppId = normalizeOptionalString(params.transportApiAppId);
+    if (apiAppId && transportApiAppId && apiAppId !== transportApiAppId) {
+      throw new Error(
+        `Slack token mismatch: bot token app_id=${apiAppId} but transport app_id=${transportApiAppId}`,
+      );
+    }
+    const effectiveApiAppId = apiAppId ?? transportApiAppId;
+    return {
+      kind: "enterprise",
+      ...(effectiveApiAppId ? { apiAppId: effectiveApiAppId } : {}),
+      enterpriseId,
+    };
   }
   const teamId = normalizeOptionalString(auth.team_id);
   if (!teamId) {
