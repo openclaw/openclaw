@@ -98,6 +98,26 @@ class CronRuntimeGuardTest {
   }
 
   @Test
+  fun detailDisposalRetainsNoticeUntilExplicitJobDismissal() {
+    val runtime = createTestRuntime()
+    val actionState = readField<MutableStateFlow<GatewayCronActionState>>(runtime, "_cronActionState")
+    val notice =
+      GatewayCronActionState.Notice(
+        id = "job-a",
+        message = "Cron job updated.",
+        kind = GatewayCronNoticeKind.Success,
+      )
+    actionState.value = notice
+
+    runtime.clearCronJobDetail()
+    assertEquals(notice, actionState.value)
+    runtime.dismissCronActionNotice("job-b")
+    assertEquals(notice, actionState.value)
+    runtime.dismissCronActionNotice("job-a")
+    assertEquals(GatewayCronActionState.Idle, actionState.value)
+  }
+
+  @Test
   fun runningStateBlocksMutationAfterMutexRelease() =
     runBlocking {
       val runtime = createTestRuntime()

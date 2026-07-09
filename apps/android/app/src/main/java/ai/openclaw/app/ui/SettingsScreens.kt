@@ -5,6 +5,8 @@ import ai.openclaw.app.AppLanguage
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.CronEditorDraftState
+import ai.openclaw.app.decodeCronEditorDraftState
+import ai.openclaw.app.encodeCronEditorDraftState
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
@@ -35,6 +37,7 @@ import ai.openclaw.app.loadAndroidLicenseNotices
 import ai.openclaw.app.locationModeAfterBackgroundSettings
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
+import ai.openclaw.app.reconcileRestoredAction
 import ai.openclaw.app.setAppLanguage
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
@@ -56,6 +59,7 @@ import ai.openclaw.app.ui.design.OpenClawMascot
 import ai.openclaw.app.ui.design.TalkWaveform
 import ai.openclaw.app.ui.design.TalkWaveformPhase
 import android.Manifest
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -334,16 +338,26 @@ private fun CronJobDetailSettingsScreen(
   jobName: String?,
   onBack: () -> Unit,
 ) {
-  BackHandler(onBack = onBack)
+  fun leaveDetail() {
+    viewModel.dismissCronActionNotice(jobId)
+    onBack()
+  }
+  BackHandler(onBack = ::leaveDetail)
 
   val detailState by viewModel.cronJobDetailState.collectAsState()
   val historyState by viewModel.cronRunHistoryState.collectAsState()
   val actionState by viewModel.cronActionState.collectAsState()
   val operatorAdminScopeAvailable by viewModel.operatorAdminScopeAvailable.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
+  val activity = LocalContext.current as? Activity
 
-  DisposableEffect(viewModel, jobId) {
-    onDispose { viewModel.clearCronJobDetail() }
+  DisposableEffect(activity, viewModel, jobId) {
+    onDispose {
+      viewModel.clearCronJobDetail()
+      if (cronDetailDisposalDismissesAction(activity?.isChangingConfigurations == true)) {
+        viewModel.dismissCronActionNotice(jobId)
+      }
+    }
   }
 
   LaunchedEffect(isConnected, jobId) {
@@ -353,23 +367,48 @@ private fun CronJobDetailSettingsScreen(
   }
 
   val current = (detailState as? GatewayCronJobDetailState.Loaded)?.job?.takeIf { it.id == jobId }
-  var editorDraft by remember(jobId) { mutableStateOf<CronEditorDraftState?>(null) }
+  var savedEditorDraft by rememberSaveable(jobId) { mutableStateOf<String?>(null) }
+  // Mirror every transition into saved state so retained runtime actions survive Activity
+  // recreation; the restored-action check aborts pending state after process death.
+  var editorDraft by remember(jobId) {
+    mutableStateOf(savedEditorDraft?.let(::decodeCronEditorDraftState))
+  }
+  var restoredDraftNeedsActionCheck by remember(jobId) {
+    mutableStateOf(editorDraft?.savePending == true)
+  }
+  fun updateEditorDraft(value: CronEditorDraftState?) {
+    editorDraft = value
+    savedEditorDraft = value?.let(::encodeCronEditorDraftState)
+  }
+  LaunchedEffect(isConnected, actionState, restoredDraftNeedsActionCheck) {
+    if (restoredDraftNeedsActionCheck) {
+      updateEditorDraft(
+        editorDraft?.reconcileRestoredAction(
+          isConnected = isConnected,
+          jobId = jobId,
+          actionState = actionState,
+        ),
+      )
+      restoredDraftNeedsActionCheck = false
+    }
+  }
   LaunchedEffect(isConnected) {
-    if (!isConnected) editorDraft = editorDraft?.saveAborted()
+    if (!isConnected) updateEditorDraft(editorDraft?.saveAborted())
   }
   LaunchedEffect(current) {
     current?.let { job ->
-      editorDraft = editorDraft?.observeJob(job) ?: CronEditorDraftState.from(job)
+      updateEditorDraft(editorDraft?.observeJob(job) ?: CronEditorDraftState.from(job))
     }
   }
   LaunchedEffect(actionState, current) {
     val notice = actionState as? GatewayCronActionState.Notice
     if (notice?.id == jobId) {
       val observed = editorDraft?.observeSaveNotice(notice.kind)
-      editorDraft =
+      updateEditorDraft(
         current?.let { job ->
           observed?.observeJob(job) ?: CronEditorDraftState.from(job)
-        } ?: observed
+        } ?: observed,
+      )
     }
   }
   val loading = (detailState as? GatewayCronJobDetailState.Loading)?.id == jobId
@@ -380,13 +419,13 @@ private fun CronJobDetailSettingsScreen(
       ?.deleted == true
 
   LaunchedEffect(deleted) {
-    if (deleted) onBack()
+    if (deleted) leaveDetail()
   }
   SettingsDetailFrame(
     title = current?.name ?: jobName ?: "Cron Job",
     subtitle = "Inspect scheduled gateway work.",
     icon = Icons.Default.Bolt,
-    onBack = onBack,
+    onBack = ::leaveDetail,
   ) {
     ClawSecondaryButton(
       text = if (loading) "Refreshing" else "Refresh",
@@ -419,7 +458,7 @@ private fun CronJobDetailSettingsScreen(
         CronJobDetailPanel(
           job = current,
           editorDraft = editorDraft ?: CronEditorDraftState.from(current),
-          onEditorDraftChange = { editorDraft = it },
+          onEditorDraftChange = ::updateEditorDraft,
           historyState = historyState,
           actionState = actionState,
           operatorAdminScopeAvailable = operatorAdminScopeAvailable,
@@ -445,6 +484,9 @@ internal fun cronDetailRefreshEnabled(
   isConnected &&
     !loading &&
     (!hasCurrentJob || !draftRequiresResolution || saveSucceeded)
+
+internal fun cronDetailDisposalDismissesAction(isChangingConfigurations: Boolean): Boolean =
+  !isChangingConfigurations
 
 @Composable
 private fun AgentsSettingsScreen(

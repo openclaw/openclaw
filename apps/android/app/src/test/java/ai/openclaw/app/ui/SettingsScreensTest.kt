@@ -116,6 +116,12 @@ class SettingsScreensTest {
     )
   }
 
+  @Test
+  fun cronDetailDisposalRetainsActionOnlyForActivityRecreation() {
+    assertEquals(false, cronDetailDisposalDismissesAction(isChangingConfigurations = true))
+    assertEquals(true, cronDetailDisposalDismissesAction(isChangingConfigurations = false))
+  }
+
   private fun authProblem(code: String): GatewayConnectionProblem =
     GatewayConnectionProblem(
       code = code,

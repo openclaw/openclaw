@@ -102,6 +102,25 @@ class CronJobManagementTest {
   }
 
   @Test
+  fun commandArgvPreservesWhitespaceOnlyEntriesAllowedByGateway() {
+    val original =
+      requireNotNull(
+        parseGatewayCronJobDetail(
+          jobJson(payload = """{"kind":"command","argv":["printf"," "],"cwd":"/tmp"}"""),
+        ),
+      )
+    val edit = original.toCronJobEdit().copy(name = "Renamed command")
+
+    val patch =
+      objectJson(buildCronUpdateParams(original = original, edit = edit))
+        .getValue("patch")
+        .jsonObject
+
+    assertEquals(setOf("name"), patch.keys)
+    assertEquals("Renamed command", patch.getValue("name").jsonPrimitive.content)
+  }
+
+  @Test
   fun commandPayloadRejectsClearingAnExistingWorkingDirectory() {
     val original =
       requireNotNull(
@@ -235,6 +254,115 @@ class CronJobManagementTest {
     assertEquals(draft.baseline, draft.edit)
     assertFalse(draft.savePending)
     assertFalse(draft.saveSucceeded)
+  }
+
+  @Test
+  fun editorDraftSavedStateRoundTripsEveryScheduleAndPayloadShape() {
+    val schedules =
+      listOf(
+        GatewayCronScheduleEdit.At("2026-07-10T09:00:00Z"),
+        GatewayCronScheduleEdit.Every(everyMs = "60000", anchorMs = "1000"),
+        GatewayCronScheduleEdit.Cron(expression = "0 9 * * *", timezone = "UTC", staggerMs = "3000"),
+        GatewayCronScheduleEdit.OnExit(command = "build", cwd = "/tmp"),
+      )
+    val payloads =
+      listOf(
+        GatewayCronPayloadEdit.SystemEvent("Wake up"),
+        GatewayCronPayloadEdit.AgentTurn(message = "Summarize", model = "openai/gpt-5.5", thinking = "high"),
+        GatewayCronPayloadEdit.Command(argvJson = """["printf"," "]""", cwd = "/tmp"),
+        GatewayCronPayloadEdit.Command(argvJson = """["true"]""", cwd = ""),
+      )
+
+    schedules.zip(payloads).forEachIndexed { index, (schedule, payload) ->
+      val baseline =
+        GatewayCronJobEdit(
+          name = "Job $index",
+          description = "Saved draft",
+          enabled = index % 2 == 0,
+          deleteAfterRun = index % 2 != 0,
+          schedule = schedule,
+          sessionTarget = "isolated",
+          wakeMode = "now",
+          payload = payload,
+        )
+      val state =
+        CronEditorDraftState(
+          baselineRevision = index.toLong(),
+          baseline = baseline,
+          edit = baseline.copy(name = "Unsaved $index"),
+          savePending = true,
+          saveSucceeded = false,
+          hasIncomingConflict = true,
+        )
+
+      assertEquals(state, decodeCronEditorDraftState(encodeCronEditorDraftState(state)))
+    }
+  }
+
+  @Test
+  fun restoredPendingSaveTracksRetainedRuntimeAndRecoversAfterProcessDeath() {
+    val original = requireNotNull(parseGatewayCronJobDetail(jobJson()))
+    val pending =
+      CronEditorDraftState
+        .from(original)
+        .withEdit(original.toCronJobEdit().copy(name = "Saved name"))
+        .saveStarted()
+    val running = GatewayCronActionState.Running(id = original.id, action = GatewayCronAction.Save)
+    val success =
+      GatewayCronActionState.Notice(
+        id = original.id,
+        message = "Cron job updated.",
+        kind = GatewayCronNoticeKind.Success,
+      )
+
+    assertEquals(
+      pending,
+      pending.reconcileRestoredAction(isConnected = true, jobId = original.id, actionState = running),
+    )
+    assertEquals(
+      pending,
+      pending.reconcileRestoredAction(isConnected = true, jobId = original.id, actionState = success),
+    )
+    assertFalse(
+      pending
+        .reconcileRestoredAction(
+          isConnected = true,
+          jobId = original.id,
+          actionState = GatewayCronActionState.Idle,
+        ).savePending,
+    )
+    assertFalse(
+      pending
+        .reconcileRestoredAction(
+          isConnected = false,
+          jobId = original.id,
+          actionState = running,
+        ).savePending,
+    )
+
+    val applied =
+      requireNotNull(
+        parseGatewayCronJobDetail(
+          jobJson(name = "Saved name", updatedAtMs = 4000),
+        ),
+      )
+    val recovered = pending.saveAborted().observeJob(applied)
+    assertEquals(recovered.baseline, recovered.edit)
+    assertFalse(recovered.requiresResolution)
+  }
+
+  @Test
+  fun latestRefreshGuardRejectsStaleAndInvalidatedResults() {
+    val guard = LatestGatewayRefreshGuard()
+    val stale = guard.begin()
+    val current = guard.begin()
+    var published = "none"
+
+    assertFalse(guard.publishIfCurrent(stale) { published = "stale" })
+    assertTrue(guard.publishIfCurrent(current) { published = "current" })
+    guard.invalidate()
+    assertFalse(guard.publishIfCurrent(current) { published = "invalidated" })
+    assertEquals("current", published)
   }
 
   private fun objectJson(raw: String) = Json.parseToJsonElement(raw).jsonObject

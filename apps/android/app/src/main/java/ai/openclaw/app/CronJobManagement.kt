@@ -2,6 +2,9 @@ package ai.openclaw.app
 
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -70,45 +73,55 @@ sealed interface GatewayCronActionState {
   ) : GatewayCronActionState
 }
 
+@Serializable
 sealed interface GatewayCronScheduleEdit {
+  @Serializable
   data class At(
     val at: String,
   ) : GatewayCronScheduleEdit
 
+  @Serializable
   data class Every(
     val everyMs: String,
     val anchorMs: String,
   ) : GatewayCronScheduleEdit
 
+  @Serializable
   data class Cron(
     val expression: String,
     val timezone: String,
     val staggerMs: String,
   ) : GatewayCronScheduleEdit
 
+  @Serializable
   data class OnExit(
     val command: String,
     val cwd: String,
   ) : GatewayCronScheduleEdit
 }
 
+@Serializable
 sealed interface GatewayCronPayloadEdit {
+  @Serializable
   data class SystemEvent(
     val text: String,
   ) : GatewayCronPayloadEdit
 
+  @Serializable
   data class AgentTurn(
     val message: String,
     val model: String,
     val thinking: String,
   ) : GatewayCronPayloadEdit
 
+  @Serializable
   data class Command(
     val argvJson: String,
     val cwd: String,
   ) : GatewayCronPayloadEdit
 }
 
+@Serializable
 data class GatewayCronJobEdit(
   val name: String,
   val description: String,
@@ -120,6 +133,7 @@ data class GatewayCronJobEdit(
   val payload: GatewayCronPayloadEdit,
 )
 
+@Serializable
 internal data class CronEditorDraftState(
   val baselineRevision: Long,
   val baseline: GatewayCronJobEdit,
@@ -151,6 +165,13 @@ internal data class CronEditorDraftState(
 
   fun observeJob(job: GatewayCronJobDetail): CronEditorDraftState {
     val incoming = job.toCronJobEdit()
+    if (incoming == edit) {
+      return CronEditorDraftState(
+        baselineRevision = job.updatedAtMs,
+        baseline = incoming,
+        edit = incoming,
+      )
+    }
     if (incoming == baseline) {
       return copy(
         baselineRevision = job.updatedAtMs,
@@ -178,6 +199,29 @@ internal data class CronEditorDraftState(
       )
     }
   }
+}
+
+internal fun encodeCronEditorDraftState(state: CronEditorDraftState): String = Json.encodeToString(state)
+
+internal fun decodeCronEditorDraftState(raw: String): CronEditorDraftState? =
+  runCatching { Json.decodeFromString<CronEditorDraftState>(raw) }.getOrNull()
+
+internal fun CronEditorDraftState.reconcileRestoredAction(
+  isConnected: Boolean,
+  jobId: String,
+  actionState: GatewayCronActionState,
+): CronEditorDraftState {
+  if (!savePending) return this
+  // Activity recreation retains the runtime action; process death does not.
+  // Preserve pending only when the restored runtime still owns this Save.
+  val retainedSaveState =
+    when (actionState) {
+      is GatewayCronActionState.Running ->
+        actionState.id == jobId && actionState.action == GatewayCronAction.Save
+      is GatewayCronActionState.Notice -> actionState.id == jobId
+      GatewayCronActionState.Idle -> false
+    }
+  return if (isConnected && retainedSaveState) this else saveAborted()
 }
 
 internal enum class GatewayCronRunSkipReason(
@@ -476,7 +520,7 @@ private fun parseCommandArgv(raw: String): List<String> {
   val argv =
     value.map { item ->
       val primitive = item as? JsonPrimitive
-      primitive?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
+      primitive?.takeIf { it.isString }?.content?.takeIf { it.isNotEmpty() }
         ?: error("Command argv entries must be non-empty strings.")
     }
   require(argv.isNotEmpty()) { "Command argv must contain at least one entry." }
