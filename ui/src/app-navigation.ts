@@ -62,7 +62,7 @@ export function sidebarMoreRoutes(pinned: readonly SidebarNavRoute[]): SidebarNa
   return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.includes(routeId));
 }
 
-export type SettingsNavigationGroup = {
+type SettingsNavigationGroup = {
   /** i18n key for the group heading; null renders the group without a label. */
   labelKey: string | null;
   routes: readonly NavigationRouteId[];

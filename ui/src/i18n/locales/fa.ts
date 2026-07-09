@@ -81,6 +81,12 @@ export const fa: TranslationMap = {
     waitForScan: "انتظار برای اسکن",
     logout: "خروج",
   },
+  nativeLinkMenu: {
+    label: "اقدامات پیوند",
+    openInline: "باز کردن در نوار کناری",
+    openExternal: "باز کردن در مرورگر پیش‌فرض",
+    copy: "کپی کردن پیوند",
+  },
   channels: {
     health: {
       title: "سلامت کانال",

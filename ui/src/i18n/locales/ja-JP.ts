@@ -81,6 +81,12 @@ export const ja_JP: TranslationMap = {
     waitForScan: "スキャンを待機",
     logout: "ログアウト",
   },
+  nativeLinkMenu: {
+    label: "リンクのアクション",
+    openInline: "サイドバーで開く",
+    openExternal: "デフォルトブラウザで開く",
+    copy: "リンクをコピー",
+  },
   channels: {
     health: {
       title: "チャネルの状態",
