@@ -33,6 +33,7 @@ describe("buildMcpToolSchema", () => {
   });
 
   it("serializes union schema properties named __proto__ as own keys", () => {
+    const protoKey = "__proto__";
     const [entry] = buildMcpToolSchema([
       {
         name: "proof_tool",
@@ -41,8 +42,8 @@ describe("buildMcpToolSchema", () => {
           anyOf: [
             {
               type: "object",
-              properties: Object.fromEntries([["__proto__", { type: "string" }]]),
-              required: ["__proto__"],
+              properties: Object.fromEntries([[protoKey, { type: "string" }]]),
+              required: [protoKey],
             },
           ],
         },
@@ -53,10 +54,10 @@ describe("buildMcpToolSchema", () => {
       | { properties?: Record<string, unknown>; required?: string[] }
       | undefined;
 
-    expect(Object.hasOwn(inputSchema?.properties ?? {}, "__proto__")).toBe(true);
-    expect(inputSchema?.properties?.["__proto__"]).toEqual({ type: "string" });
+    expect(Object.hasOwn(inputSchema?.properties ?? {}, protoKey)).toBe(true);
+    expect(inputSchema?.properties?.[protoKey]).toEqual({ type: "string" });
     expect(JSON.stringify(inputSchema?.properties)).toContain('"__proto__"');
-    expect(inputSchema?.required).toEqual(["__proto__"]);
+    expect(inputSchema?.required).toEqual([protoKey]);
   });
 
   it("does not keep inherited prototype names as required schema keys", () => {
