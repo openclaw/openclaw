@@ -471,6 +471,11 @@ export const hi: TranslationMap = {
   nav: {
     chat: "चैट",
     settings: "सेटिंग्स",
+    settingsGeneral: "सामान्य",
+    settingsGroupConnections: "कनेक्शन",
+    settingsGroupAgents: "एजेंट और टूल्स",
+    settingsGroupSystem: "सिस्टम",
+    exitSettings: "ऐप पर वापस जाएँ",
     expand: "साइडबार फैलाएँ",
     collapse: "साइडबार समेटें",
     resize: "साइडबार का आकार बदलें",

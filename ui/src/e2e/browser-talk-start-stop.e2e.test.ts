@@ -18,7 +18,18 @@ let server: ControlUiE2eServer;
 
 async function installTalkBrowserFixtures(page: Page) {
   await page.addInitScript(() => {
-    const state = { audioContextsClosed: 0, tracksStopped: 0, constraints: [] as unknown[] };
+    type InputProcessor = {
+      onaudioprocess:
+        | ((event: { inputBuffer: { getChannelData: () => Float32Array } }) => void)
+        | null;
+    };
+    const state = {
+      audioContextsClosed: 0,
+      tracksStopped: 0,
+      constraints: [] as unknown[],
+      inputProcessor: null as InputProcessor | null,
+      meterLevel: 0,
+    };
     const track = { stop: () => (state.tracksStopped += 1) };
     Object.defineProperty(navigator, "mediaDevices", {
       configurable: true,
@@ -49,7 +60,20 @@ async function installTalkBrowserFixtures(page: Page) {
       }
 
       createScriptProcessor() {
-        return { connect() {}, disconnect() {}, onaudioprocess: null };
+        const processor = { connect() {}, disconnect() {}, onaudioprocess: null };
+        state.inputProcessor = processor;
+        return processor;
+      }
+
+      createAnalyser() {
+        return {
+          fftSize: 0,
+          smoothingTimeConstant: 0,
+          disconnect() {},
+          getFloatTimeDomainData(samples: Float32Array) {
+            samples.fill(state.meterLevel);
+          },
+        };
       }
 
       async close() {
@@ -116,6 +140,7 @@ describeControlUiE2e("Control UI browser Talk", () => {
     await installTalkBrowserFixtures(page);
 
     try {
+      await page.emulateMedia({ reducedMotion: "reduce" });
       await page.goto(`${server.baseUrl}chat`);
       await page.setViewportSize({ width: 320, height: 720 });
       await expect
@@ -157,18 +182,77 @@ describeControlUiE2e("Control UI browser Talk", () => {
           "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=auth_tokens%2Fbrowser-talk-e2e",
         ]);
 
+      await expect
+        .poll(() => page.locator('.agent-chat__voice-activity[data-status="connecting"]').count())
+        .toBe(1);
+      await expect
+        .poll(() =>
+          page
+            .locator(".agent-chat__voice-activity-bar")
+            .first()
+            .evaluate((element) => {
+              return getComputedStyle(element).animationName;
+            }),
+        )
+        .toBe("none");
+      const connectingReducedMotionTransform = await page
+        .locator(".agent-chat__voice-activity-bar")
+        .first()
+        .evaluate((element) => getComputedStyle(element).transform);
+
       await gateway.deliverLatest({ setupComplete: {} });
       await expect
-        .poll(async () =>
-          (await page.locator(".agent-chat__talk-status-text").textContent())?.trim(),
-        )
+        .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())
+        .toBe(1);
+      await expect.poll(() => page.locator(".agent-chat__talk-status-text").count()).toBe(0);
+      await expect
+        .poll(() => page.locator('[role="status"] .agent-chat__sr-only').textContent())
         .toBe("Listening...");
+      const reducedMotionTransform = await page
+        .locator(".agent-chat__voice-activity-bar")
+        .first()
+        .evaluate((element) => getComputedStyle(element).transform);
+      expect(reducedMotionTransform).not.toBe(connectingReducedMotionTransform);
+
+      await page.evaluate(() => {
+        const state = (
+          window as Window & {
+            openclawTalkE2eState?: {
+              inputProcessor?: {
+                onaudioprocess?: (event: {
+                  inputBuffer: { getChannelData: () => Float32Array };
+                }) => void;
+              };
+              meterLevel?: number;
+            };
+          }
+        ).openclawTalkE2eState;
+        if (state) {
+          state.meterLevel = 0.25;
+        }
+        state?.inputProcessor?.onaudioprocess?.({
+          inputBuffer: { getChannelData: () => new Float32Array(4096).fill(0.25) },
+        });
+      });
+      await expect
+        .poll(async () =>
+          Number(await page.locator(".agent-chat__voice-activity").getAttribute("data-level")),
+        )
+        .toBeGreaterThan(0);
+      await expect
+        .poll(() =>
+          page
+            .locator(".agent-chat__voice-activity-bar")
+            .first()
+            .evaluate((element) => getComputedStyle(element).transform),
+        )
+        .toBe(reducedMotionTransform);
 
       await page.getByRole("button", { name: "Stop voice input" }).click();
       await expect
         .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
         .toBe(true);
-      await expect.poll(() => page.locator(".agent-chat__talk-status-text").count()).toBe(0);
+      await expect.poll(() => page.locator(".agent-chat__voice-activity").count()).toBe(0);
       await expect
         .poll(() =>
           page.evaluate(() => {

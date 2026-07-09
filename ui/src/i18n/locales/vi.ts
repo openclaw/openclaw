@@ -471,6 +471,11 @@ export const vi: TranslationMap = {
   nav: {
     chat: "Trò chuyện",
     settings: "Cài đặt",
+    settingsGeneral: "Chung",
+    settingsGroupConnections: "Kết nối",
+    settingsGroupAgents: "Tác nhân & Công cụ",
+    settingsGroupSystem: "Hệ thống",
+    exitSettings: "Quay lại ứng dụng",
     expand: "Mở rộng thanh bên",
     collapse: "Thu gọn thanh bên",
     resize: "Thay đổi kích thước thanh bên",
