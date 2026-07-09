@@ -49,6 +49,12 @@ const MEMEX_BASE_URL = "https://memex.tlon.network";
 /** Max bytes to read from the Memex upload JSON response. */
 const MEMEX_UPLOAD_RESPONSE_MAX_BYTES = 64 * 1024;
 
+/** Timeout for the Memex upload URL lookup request. */
+const TLON_MEMEX_UPLOAD_URL_TIMEOUT_MS = 30_000;
+
+/** Timeout for the actual file upload to Memex or a custom S3 target. */
+const TLON_UPLOAD_TIMEOUT_MS = 120_000;
+
 let currentClientConfig: ClientConfig | null = null;
 
 export function configureClient(params: ClientConfig): void {
@@ -250,6 +256,7 @@ async function getMemexUploadUrl(params: {
       auditContext: "tlon-memex-upload-url",
       capture: false,
       maxRedirects: 0,
+      timeoutMs: TLON_MEMEX_UPLOAD_URL_TIMEOUT_MS,
     });
     release = guarded.release;
     if (!guarded.response.ok) {
@@ -317,6 +324,7 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
         auditContext: "tlon-memex-upload",
         capture: false,
         maxRedirects: 0,
+        timeoutMs: TLON_UPLOAD_TIMEOUT_MS,
       });
       release = guarded.release;
       assertTrustedMemexUploadUrl(guarded.finalUrl, "Memex final upload URL");
@@ -381,6 +389,7 @@ export async function uploadFile(params: UploadFileParams): Promise<UploadResult
       capture: false,
       maxRedirects: 0,
       policy: privateNetworkPolicy,
+      timeoutMs: TLON_UPLOAD_TIMEOUT_MS,
     });
     release = guarded.release;
     if (!guarded.response.ok) {
