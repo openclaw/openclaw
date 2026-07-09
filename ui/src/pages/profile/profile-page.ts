@@ -165,10 +165,6 @@ class ProfilePage extends LitElement {
     const requestId = ++this.requestId;
     this.loading = true;
     this.error = null;
-    // Day buckets use the browser's current fixed UTC offset — the same "local"
-    // semantics as the Usage page. Midnight-adjacent history from the opposite
-    // DST season can land on a neighboring day; DST-aware bucketing needs an
-    // IANA-timezone protocol parameter (tracked as a usage-wide follow-up).
     const dateParams = buildSessionUsageDateParams("local");
     try {
       const [costSummary, sessionsResult] = await Promise.all([
