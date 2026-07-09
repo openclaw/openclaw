@@ -78,8 +78,7 @@ describe("pw-session target-list CDP discovery policy", () => {
 
     // A distinctive caller flag that the scoped discovery policy must carry
     // through to the fetch layer. Before the fix the fetch received no policy
-    // argument, so this flag was dropped and private-network resolution fell
-    // back to the permissive default.
+    // argument, so this caller flag was dropped.
     await getPageForTargetId({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "TARGET_B",
