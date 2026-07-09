@@ -33,6 +33,7 @@ type EventHandlerChatLog = {
     result: unknown,
     options?: { partial?: boolean; isError?: boolean },
   ) => void;
+  recordToolActivity: (runId: string, toolName: string, toolCallId: string) => void;
   addSystem: (text: string) => void;
   addPendingSystem: (runId: string, text: string) => void;
   dismissPendingSystem: (runId: string) => void;
@@ -1034,16 +1035,21 @@ export function createEventHandlers(context: EventHandlerContext) {
         armStreamingWatchdog(evt.runId);
       }
       const verbose = state.sessionInfo.verboseLevel ?? "off";
-      const allowToolEvents = verbose !== "off";
       const allowToolOutput = verbose === "full";
-      if (!allowToolEvents) {
-        return;
-      }
       const data = evt.data ?? {};
       const phase = asString(data.phase, "");
       const toolCallId = asString(data.toolCallId, "");
       const toolName = asString(data.name, "tool");
       if (!toolCallId) {
+        return;
+      }
+      if (verbose === "off") {
+        // Full tool cards are suppressed entirely in this mode; fall back to a
+        // compact one-line fuzzy summary so the user still sees that tools ran.
+        if (phase === "start") {
+          chatLog.recordToolActivity(evt.runId, toolName, toolCallId);
+          tui.requestRender();
+        }
         return;
       }
       if (phase === "start") {
