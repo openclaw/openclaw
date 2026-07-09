@@ -1,7 +1,6 @@
-// Twitch outbound must strip assistant internal tool-trace scaffolding, matching
-// the sibling channel fixes tracked under #90684 (Matrix #97372 / Slack #97367 /
-// IRC #97214 / Google Chat #95084). The hook runs in core delivery before chunk
-// planning, so the 500-char Twitch chunker only ever sees sanitized text.
+// Twitch outbound must strip assistant internal tool-trace scaffolding before
+// delivery (#90684). The hook runs in core delivery before chunk planning, so
+// the 500-char Twitch chunker only ever sees sanitized text.
 import { describe, expect, it } from "vitest";
 import { twitchPlugin } from "./plugin.js";
 
