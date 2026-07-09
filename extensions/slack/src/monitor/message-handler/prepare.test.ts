@@ -4198,6 +4198,8 @@ describe("prepareSlackMessage sender prefix", () => {
       resolveChannelName: async () => ({ name: "general", type: "channel" }),
       resolveUserName: async () => ({ name: "Alice" }),
       setSlackThreadStatus: async () => undefined,
+      rememberSlackChannelType: () => {},
+      recallSlackChannelType: () => undefined,
     } as unknown as SlackMonitorContext;
   }
 
@@ -4357,6 +4359,60 @@ describe("prepareSlackMessage sender prefix", () => {
       throw new Error("expected sender prefix message result");
     }
     expect(result.ctxPayload?.CommandAuthorized).toBe(true);
+  });
+
+  it("keeps one mpDM classification when a later event omits channel_type (#102676)", async () => {
+    const slackCtx = createInboundSlackTestContext({
+      cfg: {
+        channels: { slack: { enabled: true, allowBots: true, groupPolicy: "open" } },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+    slackCtx.resolveChannelName = async () => ({});
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+    const account = createSlackTestAccount({ allowBots: true });
+
+    const humanMsg = await prepareSlackMessage({
+      ctx: slackCtx,
+      account,
+      message: {
+        channel: "C0MPDM42",
+        channel_type: "mpim",
+        user: "U_HUMAN",
+        text: "hello everyone",
+        ts: "1.000",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+    if (!humanMsg) {
+      throw new Error("expected human mpim message");
+    }
+    expect(humanMsg.ctxPayload.ChatType).toBe("group");
+    expect(humanMsg.ctxPayload.From).toMatch(/^slack:group:/);
+
+    const botMsg = await prepareSlackMessage({
+      ctx: slackCtx,
+      account,
+      message: {
+        channel: "C0MPDM42",
+        // No channel_type — bot-authored messages lack it
+        user: undefined,
+        bot_id: "B_OTHER",
+        subtype: "bot_message",
+        text: "I am a bot",
+        ts: "2.000",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+    if (!botMsg) {
+      throw new Error("expected bot mpim message");
+    }
+    expect(botMsg.ctxPayload.ChatType).toBe("group");
+    expect(botMsg.ctxPayload.From).toMatch(/^slack:group:/);
+
+    // Both messages share the same session key family
+    expect(humanMsg.ctxPayload.From).toBe(botMsg.ctxPayload.From);
   });
 });
 

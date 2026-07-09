@@ -171,6 +171,15 @@ export type SlackMonitorContext = {
     purpose?: string;
   }>;
   resolveUserName: (userId: string, eventScope?: SlackEventScope) => Promise<{ name?: string }>;
+  rememberSlackChannelType: (
+    channelId: string,
+    type: SlackMessageEvent["channel_type"],
+    eventScope?: SlackEventScope,
+  ) => void;
+  recallSlackChannelType: (
+    channelId: string,
+    eventScope?: SlackEventScope,
+  ) => SlackMessageEvent["channel_type"] | undefined;
   setSlackThreadStatus: (params: {
     channelId: string;
     threadTs?: string;
@@ -252,6 +261,11 @@ export function createSlackMonitorContext(params: {
       purpose?: string;
     }
   >();
+  /** Remembers authoritative channel types from explicit event data so
+   *  later messages in the same channel that lack channel_type (e.g.
+   *  bot-authored mpDM messages) can reuse the correct classification
+   *  instead of falling back to C-prefix → "channel" inference. */
+  const channelTypeMemory = new Map<string, SlackMessageEvent["channel_type"]>();
   const userCache = new Map<string, { name?: string }>();
   const seenMessages = createDedupeCache({ ttlMs: 60_000, maxSize: 500 });
   const assistantThreadContexts = new Map<string, SlackAssistantThreadContext>();
@@ -268,6 +282,21 @@ export function createSlackMonitorContext(params: {
 
   const scopedKey = (key: string, eventScope?: SlackEventScope) =>
     eventScope ? `${params.accountId}:${eventScope.teamId}:${key}` : key;
+
+  const rememberSlackChannelType = (
+    channelId: string,
+    type: SlackMessageEvent["channel_type"],
+    eventScope?: SlackEventScope,
+  ) => {
+    channelTypeMemory.set(scopedKey(channelId, eventScope), type);
+  };
+
+  const recallSlackChannelType = (
+    channelId: string,
+    eventScope?: SlackEventScope,
+  ): SlackMessageEvent["channel_type"] | undefined => {
+    return channelTypeMemory.get(scopedKey(channelId, eventScope));
+  };
 
   const markMessageSeen = (
     channelId: string | undefined,
@@ -350,7 +379,10 @@ export function createSlackMonitorContext(params: {
   }) => {
     const channelId = normalizeOptionalString(p.channelId) ?? "";
     const senderId = normalizeOptionalString(p.senderId) ?? "";
-    const channelType = normalizeSlackChannelType(p.channelType, channelId);
+    const channelType = normalizeSlackChannelType(
+      p.channelType ?? recallSlackChannelType(channelId),
+      channelId,
+    );
     const isDirectMessage = channelType === "im";
     if (!channelId && (!isDirectMessage || !senderId)) {
       return params.mainKey;
@@ -692,6 +724,8 @@ export function createSlackMonitorContext(params: {
     isChannelAllowed,
     resolveChannelName,
     resolveUserName,
+    rememberSlackChannelType,
+    recallSlackChannelType,
     setSlackThreadStatus,
     getSlackAssistantThreadContext,
     saveSlackAssistantThreadContext,

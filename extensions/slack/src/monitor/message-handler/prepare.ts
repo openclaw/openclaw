@@ -505,10 +505,16 @@ async function resolveSlackConversationContext(params: {
   if (resolvedChannelType !== "im" && (!message.channel_type || message.channel_type !== "im")) {
     channelInfo = await ctx.resolveChannelName(message.channel, params.eventScope);
     resolvedChannelType = normalizeSlackChannelType(
-      message.channel_type ?? channelInfo.type,
+      message.channel_type ??
+        channelInfo.type ??
+        ctx.recallSlackChannelType(message.channel, params.eventScope),
       message.channel,
     );
   }
+  // Remember the resolved channel type so later messages in the same room
+  // that lack channel_type (e.g. bot-authored mpDM messages) can reuse it
+  // instead of falling back to C-prefix → "channel" inference (#102676).
+  ctx.rememberSlackChannelType(message.channel, resolvedChannelType, params.eventScope);
   const channelName = channelInfo?.name;
   const isDirectMessage = resolvedChannelType === "im";
   const isGroupDm = resolvedChannelType === "mpim";
