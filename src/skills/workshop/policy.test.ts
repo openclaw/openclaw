@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH } from "../../infra/plugin-approvals.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -94,6 +95,42 @@ describe("resolveSkillWorkshopToolApproval", () => {
       `Body size: ${(Buffer.byteLength(proposal.content, "utf8") / 1024).toFixed(1)} KB`,
     );
     expect(approvalDescription).toContain("Target skill: nnn");
+  });
+
+  it("keeps truncated target skill names UTF-16 safe", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-policy-utf16-");
+    const description = "d".repeat(160);
+    const content = "# Unicode name\n";
+    const proposalIdLength = 60 + 1 + 8 + 1 + 10;
+    const fixedLines = [
+      `Proposal ID: ${"p".repeat(proposalIdLength)}`,
+      `Description: ${description}`,
+      "Support files: 0",
+      `Body size: ${(Buffer.byteLength(content, "utf8") / 1024).toFixed(1)} KB`,
+    ];
+    const skillPrefix = "Target skill: ";
+    const fixedLength = fixedLines.join("\n").length + skillPrefix.length + fixedLines.length;
+    const availableSkillNameLength = Math.max(
+      1,
+      PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH - fixedLength,
+    );
+    const prefix = "n".repeat(availableSkillNameLength - 2);
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: `${prefix}\u{1F600}tail`,
+      description,
+      content,
+    });
+
+    const result = await resolveSkillWorkshopToolApproval({
+      toolName: "skill_workshop",
+      toolParams: { action: "apply", proposal_id: proposal.record.id },
+      workspaceDir,
+    });
+    const targetLine = result?.requireApproval?.description.split("\n")[1] ?? "";
+
+    expect(targetLine).toBe(`Target skill: ${prefix}…`);
+    expect(targetLine).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
   });
 
   it("renders proposal-controlled fields without approval-line injection", async () => {
