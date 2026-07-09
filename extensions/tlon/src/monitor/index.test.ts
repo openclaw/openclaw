@@ -1,34 +1,60 @@
-// Tlon monitor tests cover retry cleanup behavior.
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { waitForTlonAuthRetryDelay } from "./index.js";
+// Tlon monitor tests cover authentication retry scheduling.
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { describe, expect, it, vi } from "vitest";
 
-describe("waitForTlonAuthRetryDelay", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
+const { authenticateMock, sleepWithAbortMock } = vi.hoisted(() => ({
+  authenticateMock: vi.fn(),
+  sleepWithAbortMock: vi.fn(),
+}));
 
-  it("removes the abort listener after the retry delay resolves", async () => {
-    vi.useFakeTimers();
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    sleepWithAbort: sleepWithAbortMock,
+  };
+});
+
+vi.mock("../runtime.js", () => ({
+  getTlonRuntime: () => ({
+    config: {
+      current: () => ({
+        channels: {
+          tlon: {
+            code: "code",
+            ship: "~zod",
+            url: "https://urbit.example.com",
+          },
+        },
+      }),
+    },
+    logging: {
+      getChildLogger: () => ({}),
+    },
+  }),
+}));
+
+vi.mock("../urbit/auth.js", () => ({
+  authenticate: authenticateMock,
+}));
+
+import { monitorTlonProvider } from "./index.js";
+
+describe("monitorTlonProvider authentication retry", () => {
+  it("uses the shared abort-aware sleep for retry backoff", async () => {
     const controller = new AbortController();
-    const removeListener = vi.spyOn(controller.signal, "removeEventListener");
+    const runtime = { error: vi.fn(), log: vi.fn() } as RuntimeEnv;
+    authenticateMock.mockRejectedValueOnce(new Error("login failed"));
+    sleepWithAbortMock.mockRejectedValueOnce(new Error("aborted"));
 
-    const pending = waitForTlonAuthRetryDelay(1000, controller.signal);
-    await vi.advanceTimersByTimeAsync(1000);
+    await expect(
+      monitorTlonProvider({
+        abortSignal: controller.signal,
+        runtime,
+      }),
+    ).rejects.toThrow("aborted");
 
-    await expect(pending).resolves.toBeUndefined();
-    expect(removeListener).toHaveBeenCalledWith("abort", expect.any(Function));
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("clears the retry timer when aborted", async () => {
-    vi.useFakeTimers();
-    const controller = new AbortController();
-
-    const pending = waitForTlonAuthRetryDelay(1000, controller.signal);
-    controller.abort();
-
-    await expect(pending).rejects.toThrow("Aborted");
-    expect(vi.getTimerCount()).toBe(0);
+    expect(authenticateMock).toHaveBeenCalledTimes(1);
+    expect(sleepWithAbortMock).toHaveBeenCalledWith(1_000, controller.signal);
   });
 });
