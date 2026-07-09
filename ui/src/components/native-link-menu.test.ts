@@ -1,15 +1,21 @@
 /* @vitest-environment jsdom */
 
 import { html, render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
 import { NativeLinkMenu, type NativeLinkMenuAction } from "./native-link-menu.ts";
 
 const containers: HTMLElement[] = [];
 
-afterEach(() => {
+beforeEach(async () => {
+  await i18n.setLocale("en");
+});
+
+afterEach(async () => {
   for (const container of containers.splice(0)) {
     container.remove();
   }
+  await i18n.setLocale("en");
 });
 
 async function mountMenu(options: {
@@ -59,6 +65,20 @@ describe("native link menu", () => {
 
     items[0]?.click();
     expect(calls).toEqual(["close", "inline"]);
+  });
+
+  it("rerenders open actions when the locale changes", async () => {
+    const menu = await mountMenu({});
+
+    await i18n.setLocale("de");
+    await menu.updateComplete;
+
+    expect(menu.querySelector('[role="menu"]')?.getAttribute("aria-label")).toBe("Link-Aktionen");
+    expect(menuItems(menu).map((item) => item.textContent?.trim())).toEqual([
+      "In der Seitenleiste öffnen",
+      "Im Standardbrowser öffnen",
+      "Link kopieren",
+    ]);
   });
 
   it("closes on Escape and outside pointerdown while preserving trigger clicks", async () => {

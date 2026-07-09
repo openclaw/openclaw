@@ -44,6 +44,7 @@ import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { createComputerTool } from "./tools/computer-tool.js";
 import { createCrestodianTool } from "./tools/crestodian-tool.js";
 import { createCronTool, type CronCreatorToolAllowlistEntry } from "./tools/cron-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
@@ -463,6 +464,10 @@ export function createOpenClawTools(
       ? []
       : [
           nodesTool,
+          createComputerTool({
+            config: options?.config,
+            modelHasVision: options?.modelHasVision,
+          }),
           createCronTool({
             agentSessionKey: options?.agentSessionKey,
             currentDeliveryContext: {

@@ -90,7 +90,10 @@ describeControlUiE2e("Control UI agents Set Default mocked Gateway E2E", () => {
       // these implicitly assert the dropdown loaded and Set Default is clickable for a
       // non-default agent.
       await page.locator(".agent-select__trigger").click();
-      await page.getByRole("option", { name: "Kimi agent" }).click();
+      await page
+        .getByRole("listbox", { name: "Select an agent" })
+        .getByRole("option", { name: "Kimi agent", exact: true })
+        .click();
       await page.getByRole("button", { name: "Set Default", exact: true }).click();
 
       // The fix routes Set Default through the canonical save path; without it the click
