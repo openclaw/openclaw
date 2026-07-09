@@ -1,5 +1,5 @@
 // Memory Host SDK module implements response snippet behavior.
-import { truncateUtf16Safe } from "./string-utils.js";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 const DEFAULT_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const DEFAULT_ERROR_BODY_MAX_CHARS = 1_000;
