@@ -24,6 +24,7 @@ import { readFileWindowFullySync } from "../infra/file-read.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { parseInlineOptionToken } from "../infra/inline-option-token.js";
 import {
+  BUN_OPTIONS_WITH_VALUE,
   normalizePackageManagerExecToken,
   PNPM_CASE_SENSITIVE_OPTIONS_WITH_VALUE,
   PNPM_DLX_OPTIONS_WITH_VALUE,
@@ -86,38 +87,6 @@ const BUN_SUBCOMMANDS = new Set([
   "update",
   "upgrade",
   "x",
-]);
-
-const BUN_OPTIONS_WITH_VALUE = new Set([
-  "--backend",
-  "--bunfig",
-  "--conditions",
-  "--config",
-  "--console-depth",
-  "--cwd",
-  "--define",
-  "--elide-lines",
-  "--env-file",
-  "--extension-order",
-  "--filter",
-  "--hot",
-  "--inspect",
-  "--inspect-brk",
-  "--inspect-wait",
-  "--install",
-  "--jsx-factory",
-  "--jsx-fragment",
-  "--jsx-import-source",
-  "--loader",
-  "--origin",
-  "--port",
-  "--preload",
-  "--smol",
-  "--tsconfig-override",
-  "-c",
-  "-e",
-  "-p",
-  "-r",
 ]);
 
 const DENO_RUN_OPTIONS_WITH_VALUE = new Set([

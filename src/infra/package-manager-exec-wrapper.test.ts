@@ -26,21 +26,30 @@ describe("resolveKnownPackageManagerExecInvocation", () => {
       ).toEqual({ kind: "unwrapped", argv: ["tsx", "./run.ts"] });
     });
 
-    it.each(["-c", "--config", "--cwd", "--env-file", "--unknown-global-option"])(
-      "selects the token after the space-valued global %s like bun dispatch does",
+    it.each(["-c", "--config", "--cwd", "--env-file"])(
+      "fails closed when dispatch after the space-valued global %s is model-dependent",
       (flag) => {
-        // A literal "x" in value position is what bun's selector dispatches
-        // to bunx, so the tail unwraps to the inner command.
+        // A literal "x" in value position is the subcommand under one
+        // dispatch model and the option value under the other.
         expect(
           resolveKnownPackageManagerExecInvocation(["bun", flag, "x", "sh", "-c", "id > marker"]),
-        ).toEqual({ kind: "unwrapped", argv: ["sh", "-c", "id > marker"] });
-        // A non-"x" token after the global is the selected command (bun runs
-        // it as an ordinary invocation), so no package-exec unwrapping.
+        ).toEqual({ kind: "unsafe-exec" });
+        // Consuming the value selects "x"; skipping dash tokens selects the
+        // value token instead.
         expect(
           resolveKnownPackageManagerExecInvocation(["bun", flag, "./pkg", "x", "tsx", "./run.ts"]),
-        ).toEqual({ kind: "not-exec" });
+        ).toEqual({ kind: "unsafe-exec" });
       },
     );
+
+    it("fails closed on unknown globals only when x can be selected", () => {
+      expect(
+        resolveKnownPackageManagerExecInvocation(["bun", "--unknown-global-option", "x", "sh"]),
+      ).toEqual({ kind: "unsafe-exec" });
+      expect(
+        resolveKnownPackageManagerExecInvocation(["bun", "--unknown-global-option", "run", "dev"]),
+      ).toEqual({ kind: "not-exec" });
+    });
 
     it("keeps non-exec bun invocations out of unwrapping", () => {
       expect(resolveKnownPackageManagerExecInvocation(["bun", "run", "build"])).toEqual({
