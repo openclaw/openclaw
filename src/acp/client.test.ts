@@ -555,6 +555,40 @@ describe("resolvePermissionRequest", () => {
     expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
   });
 
+  it("auto-approves search when only locations resolve inside cwd", async () => {
+    await expectAutoAllowWithoutPrompt({
+      request: {
+        toolCall: {
+          toolCallId: "tool-search-location-inside-cwd",
+          title: "search: TODO",
+          status: "pending",
+          rawInput: { name: "search", query: "TODO" },
+          locations: [{ path: "src/index.ts" }],
+        },
+      },
+      cwd: "/tmp/openclaw-acp-cwd",
+    });
+  });
+
+  it("prompts for search when only locations escape cwd", async () => {
+    const prompt = vi.fn(async () => false);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-search-location-escape-cwd",
+          title: "search: TODO",
+          status: "pending",
+          rawInput: { name: "search", query: "TODO" },
+          locations: [{ path: "/etc/passwd" }],
+        },
+      }),
+      { prompt, log: () => {}, cwd: "/tmp/openclaw-acp-cwd/workspace" },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith("search", "search: TODO");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+  });
+
   it("prompts when raw input spoofs a safe tool name for a dangerous title", async () => {
     const prompt = vi.fn(async () => false);
     const res = await resolvePermissionRequest(

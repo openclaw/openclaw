@@ -46,6 +46,13 @@ type AcpApprovalClassification = {
   autoApprove: boolean;
 };
 
+type AcpApprovalToolCall = {
+  title?: string | null;
+  _meta?: unknown;
+  rawInput?: unknown;
+  locations?: unknown;
+};
+
 function readFirstStringValue(
   source: Record<string, unknown> | undefined,
   keys: string[],
@@ -126,18 +133,31 @@ function extractPathFromToolTitle(
   return toolName === "read" ? tail : undefined;
 }
 
-function resolveToolPathCandidate(
-  params: {
-    toolCall?: { rawInput?: unknown };
-  },
-  toolName: string | undefined,
-  toolTitle: string | undefined,
-): string | undefined {
+function readLocationPaths(locations: unknown): string[] {
+  if (!Array.isArray(locations)) {
+    return [];
+  }
+  const paths: string[] = [];
+  for (const location of locations) {
+    const pathValue = readFirstStringValue(asRecord(location), ["path", "file_path", "filePath"]);
+    if (pathValue) {
+      paths.push(pathValue);
+    }
+  }
+  return paths;
+}
+
+function resolveToolPathCandidates(params: {
+  toolCall?: AcpApprovalToolCall;
+  toolName: string | undefined;
+  toolTitle: string | undefined;
+}): string[] {
   const rawInput = asRecord(params.toolCall?.rawInput);
-  return (
-    readFirstStringValue(rawInput, ["path", "file_path", "filePath"]) ??
-    extractPathFromToolTitle(toolTitle, toolName)
-  );
+  return [
+    readFirstStringValue(rawInput, ["path", "file_path", "filePath"]),
+    extractPathFromToolTitle(params.toolTitle, params.toolName),
+    ...readLocationPaths(params.toolCall?.locations),
+  ].filter((value): value is string => value !== undefined);
 }
 
 function resolveAbsoluteScopedPath(value: string, cwd: string): string | undefined {
@@ -171,11 +191,7 @@ function isToolPathScopedToCwd(rawPath: string, cwd: string): boolean {
 
 /** Resolves the ACP approval class for one tool call, failing closed on spoofed tool identity. */
 export function classifyAcpToolApproval(params: {
-  toolCall?: {
-    title?: string | null;
-    _meta?: unknown;
-    rawInput?: unknown;
-  };
+  toolCall?: AcpApprovalToolCall;
   cwd: string;
 }): AcpApprovalClassification {
   const toolName = resolveToolNameForPermission(params);
@@ -185,8 +201,14 @@ export function classifyAcpToolApproval(params: {
 
   const isTrustedToolId = isKnownCoreToolId(toolName) || TRUSTED_SAFE_TOOL_ALIASES.has(toolName);
   if (toolName === "read" && isTrustedToolId) {
-    const rawPath = resolveToolPathCandidate(params, toolName, params.toolCall?.title ?? undefined);
-    const autoApprove = rawPath ? isToolPathScopedToCwd(rawPath, params.cwd) : false;
+    const rawPaths = resolveToolPathCandidates({
+      toolCall: params.toolCall,
+      toolName,
+      toolTitle: params.toolCall?.title ?? undefined,
+    });
+    const autoApprove =
+      rawPaths.length > 0 &&
+      rawPaths.every((rawPath) => isToolPathScopedToCwd(rawPath, params.cwd));
     return {
       toolName,
       approvalClass: autoApprove ? "readonly_scoped" : "other",
@@ -194,8 +216,12 @@ export function classifyAcpToolApproval(params: {
     };
   }
   if (SAFE_SEARCH_TOOL_IDS.has(toolName) && isTrustedToolId) {
-    const rawPath = resolveToolPathCandidate(params, toolName, params.toolCall?.title ?? undefined);
-    if (rawPath && !isToolPathScopedToCwd(rawPath, params.cwd)) {
+    const rawPaths = resolveToolPathCandidates({
+      toolCall: params.toolCall,
+      toolName,
+      toolTitle: params.toolCall?.title ?? undefined,
+    });
+    if (rawPaths.some((rawPath) => !isToolPathScopedToCwd(rawPath, params.cwd))) {
       return { toolName, approvalClass: "other", autoApprove: false };
     }
     return { toolName, approvalClass: "readonly_search", autoApprove: true };

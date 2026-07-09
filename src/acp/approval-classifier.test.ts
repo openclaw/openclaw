@@ -4,6 +4,7 @@ import { classifyAcpToolApproval } from "./approval-classifier.js";
 
 function classify(params: {
   title: string;
+  locations?: Array<{ path: string; line?: number }>;
   rawInput?: Record<string, unknown>;
   meta?: Record<string, unknown>;
   cwd?: string;
@@ -12,6 +13,7 @@ function classify(params: {
     cwd: params.cwd ?? "/workspace",
     toolCall: {
       title: params.title,
+      locations: params.locations,
       rawInput: params.rawInput,
       _meta: params.meta,
     },
@@ -89,6 +91,34 @@ describe("classifyAcpToolApproval", () => {
       classify({
         title: "search: path: /etc",
         rawInput: { name: "search", query: "shadow" },
+      }),
+    ).toEqual({
+      toolName: "search",
+      approvalClass: "other",
+      autoApprove: false,
+    });
+  });
+
+  it("does not auto-approve alias search when only locations escape cwd", () => {
+    expect(
+      classify({
+        title: "search: TODO",
+        rawInput: { name: "search", query: "TODO" },
+        locations: [{ path: "/etc/passwd" }],
+      }),
+    ).toEqual({
+      toolName: "search",
+      approvalClass: "other",
+      autoApprove: false,
+    });
+  });
+
+  it("does not auto-approve alias search when any location escapes cwd", () => {
+    expect(
+      classify({
+        title: "search: TODO",
+        rawInput: { name: "search", query: "TODO" },
+        locations: [{ path: "src/index.ts" }, { path: "/etc/passwd" }],
       }),
     ).toEqual({
       toolName: "search",
