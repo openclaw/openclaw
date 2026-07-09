@@ -21,6 +21,8 @@ vi.mock("openclaw/plugin-sdk/agent-sessions", async () => {
 import {
   buildStageSplitPlan,
   buildSummaryChunks,
+  estimateMessagesTokens,
+  projectCompactionMessagesForPlanning,
   sanitizeCompactionMessages,
 } from "./compaction-planning.js";
 
@@ -87,5 +89,29 @@ describe("compaction token accounting sanitization", () => {
     expect(sanitized).toHaveLength(2);
     expect(sanitized[0]).not.toHaveProperty("details");
     expect(sanitized.map((message) => message.role)).toEqual(["toolResult", "user"]);
+  });
+
+  it("bounds oversized tool-result text before worker cloning while preserving token pressure", () => {
+    const hugeText = "x".repeat(120_000);
+    const messages: AgentMessage[] = [
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "browser",
+        isError: false,
+        content: [{ type: "text", text: hugeText }],
+        timestamp: 1,
+      } as AgentMessage,
+    ];
+
+    const projected = projectCompactionMessagesForPlanning(messages);
+    const originalJson = JSON.stringify(messages);
+    const projectedJson = JSON.stringify(projected);
+
+    expect(projectedJson.length).toBeLessThan(originalJson.length / 4);
+    expect(projectedJson).not.toContain(hugeText);
+    expect(estimateMessagesTokens(projected)).toBeGreaterThanOrEqual(
+      estimateMessagesTokens(messages),
+    );
   });
 });

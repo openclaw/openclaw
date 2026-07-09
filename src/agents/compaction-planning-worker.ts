@@ -13,6 +13,7 @@ import {
   buildStageSplitPlan,
   buildSummaryChunks,
   computeAdaptiveChunkRatio,
+  projectCompactionMessagesForPlanning,
   sanitizeCompactionMessages,
   type HistoryPrunePlan,
   type OversizedFallbackPlan,
@@ -206,10 +207,11 @@ export async function buildSummaryChunksWithWorker(params: {
   if (!shouldUsePlanningWorker(messages.length)) {
     return buildSummaryChunks(params);
   }
+  const planningMessages = projectCompactionMessagesForPlanning(messages);
   const value = await runWithUnavailableFallback({
     input: {
       kind: "summaryChunks",
-      messages,
+      messages: planningMessages,
       maxChunkTokens: params.maxChunkTokens,
     },
     signal: params.signal,
@@ -235,10 +237,11 @@ export async function buildOversizedFallbackPlanWithWorker(params: {
   if (!shouldUsePlanningWorker(messages.length)) {
     return buildOversizedFallbackPlan(params);
   }
+  const planningMessages = projectCompactionMessagesForPlanning(messages);
   const value = await runWithUnavailableFallback({
     input: {
       kind: "oversizedFallback",
-      messages,
+      messages: planningMessages,
       contextWindow: params.contextWindow,
     },
     signal: params.signal,
@@ -269,10 +272,11 @@ export async function buildStageSplitPlanWithWorker(params: {
   if (!shouldUsePlanningWorker(messages.length)) {
     return buildStageSplitPlan(params);
   }
+  const planningMessages = projectCompactionMessagesForPlanning(messages);
   const value = await runWithUnavailableFallback({
     input: {
       kind: "stageSplit",
-      messages,
+      messages: planningMessages,
       maxChunkTokens: params.maxChunkTokens,
       parts: params.parts,
       minMessagesForSplit: params.minMessagesForSplit,
@@ -305,11 +309,13 @@ export async function buildHistoryPrunePlanWithWorker(params: {
   if (!shouldUsePlanningWorker(messagesToSummarize.length + turnPrefixMessages.length)) {
     return buildHistoryPrunePlan(params);
   }
+  const planningMessagesToSummarize = projectCompactionMessagesForPlanning(messagesToSummarize);
+  const planningTurnPrefixMessages = projectCompactionMessagesForPlanning(turnPrefixMessages);
   const value = await runWithUnavailableFallback({
     input: {
       kind: "historyPrune",
-      messagesToSummarize,
-      turnPrefixMessages,
+      messagesToSummarize: planningMessagesToSummarize,
+      turnPrefixMessages: planningTurnPrefixMessages,
       tokensBefore: params.tokensBefore,
       contextWindowTokens: params.contextWindowTokens,
       maxHistoryShare: params.maxHistoryShare,
@@ -343,10 +349,11 @@ export async function computeAdaptiveChunkRatioWithWorker(params: {
   if (!shouldUsePlanningWorker(messages.length)) {
     return computeAdaptiveChunkRatio(params.messages, params.contextWindow);
   }
+  const planningMessages = projectCompactionMessagesForPlanning(messages);
   const value = await runWithUnavailableFallback({
     input: {
       kind: "adaptiveChunkRatio",
-      messages,
+      messages: planningMessages,
       contextWindow: params.contextWindow,
     },
     signal: params.signal,
