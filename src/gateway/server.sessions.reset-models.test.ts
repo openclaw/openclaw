@@ -77,7 +77,7 @@ type ResetSessionEntry = {
 type ModelResetEntry = Pick<
   ResetSessionEntry,
   "providerOverride" | "modelOverride" | "modelOverrideSource" | "modelProvider" | "model"
->;
+> & { resolvedModel?: { provider: string; model: string } };
 type SessionEntryOverrides = NonNullable<Parameters<typeof sessionStoreEntry>[1]>;
 
 const ownedChildMetadata = {
@@ -153,6 +153,7 @@ async function expectMainResetModelFields(params: {
   sessionId: string;
   entry: SessionEntryOverrides & ModelResetEntry;
   expected: ModelResetEntry;
+  expectedResolvedModel?: { provider: string; model: string };
 }) {
   const { storePath } = await createSessionStoreDir();
   testState.agentConfig = {
@@ -171,16 +172,40 @@ async function expectMainResetModelFields(params: {
     ok: true;
     key: string;
     entry: ModelResetEntry;
+    resolvedModel?: { provider: string; model: string };
   }>("sessions.reset", { key: "main" });
 
   expect(reset.ok).toBe(true);
-  expectModelResetFields(reset.payload?.entry, params.expected);
+
+  const nonModelKeys: Array<
+    keyof Pick<ModelResetEntry, "providerOverride" | "modelOverride" | "modelOverrideSource">
+  > = ["providerOverride", "modelOverride", "modelOverrideSource"];
+
+  if (params.expectedResolvedModel) {
+    // Default-derived model info is in resolvedModel, not in the stored entry.
+    expect(reset.payload?.resolvedModel).toEqual(params.expectedResolvedModel);
+    for (const entry of [reset.payload?.entry]) {
+      for (const key of nonModelKeys) {
+        expect((entry as Record<string, unknown> | undefined)?.[key]).toBe(params.expected[key]);
+      }
+    }
+  } else {
+    expectModelResetFields(reset.payload?.entry, params.expected);
+  }
 
   const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
     string,
     ModelResetEntry
   >;
-  expectModelResetFields(store["agent:main:main"], params.expected);
+  if (params.expectedResolvedModel) {
+    for (const key of nonModelKeys) {
+      expect(store["agent:main:main"]?.[key]).toBe(params.expected[key]);
+    }
+    expect(store["agent:main:main"]?.modelProvider).toBeUndefined();
+    expect(store["agent:main:main"]?.model).toBeUndefined();
+  } else {
+    expectModelResetFields(store["agent:main:main"], params.expected);
+  }
 }
 
 test("sessions.reset recomputes model from defaults instead of stale runtime model", async () => {
@@ -207,10 +232,11 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
     entry: {
       sessionId: string;
       sessionFile?: string;
+      contextTokens?: number;
       modelProvider?: string;
       model?: string;
-      contextTokens?: number;
     };
+    resolvedModel?: { provider: string; model: string };
   }>("sessions.reset", { key: "main" });
 
   expect(reset.ok).toBe(true);
@@ -220,8 +246,13 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
   if (!sessionFile) {
     throw new Error("expected reset session file");
   }
-  expect(reset.payload?.entry.modelProvider).toBe("openai");
-  expect(reset.payload?.entry.model).toBe("gpt-test-a");
+  // Model info is in resolvedModel instead of entry for default-derived sessions.
+  expect(reset.payload?.resolvedModel).toEqual({
+    provider: "openai",
+    model: "gpt-test-a",
+  });
+  expect(reset.payload?.entry.modelProvider).toBeUndefined();
+  expect(reset.payload?.entry.model).toBeUndefined();
   expect(reset.payload?.entry.contextTokens).toBeUndefined();
   expect((await fs.stat(sessionFile)).isFile()).toBe(true);
 });
@@ -457,9 +488,8 @@ test("sessions.reset clears fallback-pinned model overrides and restores the sel
     expected: {
       providerOverride: undefined,
       modelOverride: undefined,
-      modelProvider: "openai",
-      model: "gpt-test-a",
     },
+    expectedResolvedModel: { provider: "openai", model: "gpt-test-a" },
   });
 });
 
@@ -478,9 +508,8 @@ test("sessions.reset follows the updated default after an auto fallback pinned a
     expected: {
       providerOverride: undefined,
       modelOverride: undefined,
-      modelProvider: "openai",
-      model: "gpt-test-c",
     },
+    expectedResolvedModel: { provider: "openai", model: "gpt-test-c" },
   });
 });
 

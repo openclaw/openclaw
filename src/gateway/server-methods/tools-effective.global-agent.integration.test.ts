@@ -107,6 +107,8 @@ describe("tools.effective global agent integration", () => {
         global: sessionStoreEntry("sess-work-global", {
           modelProvider: "openai",
           model: "work-model",
+          providerOverride: "openai",
+          modelOverride: "work-model",
         }),
       },
     });

@@ -121,8 +121,13 @@ function inheritSessionRuntimeSelection(
     ...(parentEntry.agentRuntimeOverride
       ? { agentRuntimeOverride: parentEntry.agentRuntimeOverride }
       : {}),
-    ...(parentEntry.modelProvider ? { modelProvider: parentEntry.modelProvider } : {}),
-    ...(parentEntry.model ? { model: parentEntry.model } : {}),
+    // Only inherit runtime model metadata when the parent entry carries
+    // explicit user overrides — default-derived values may be stale after
+    // a config hot-reload. The resolver re-resolves from current config
+    // at query time when no overrides are present.
+    ...(parentEntry.providerOverride && parentEntry.modelOverride
+      ? { modelProvider: parentEntry.modelProvider, model: parentEntry.model }
+      : {}),
     ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
     ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
     ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),

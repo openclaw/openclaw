@@ -676,7 +676,19 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (!result.ok) {
       throw new Error(result.error.message);
     }
-    return { ok: true as const, key: result.key, entry: result.entry };
+    return {
+      ok: true as const,
+      key: result.key,
+      entry: result.entry,
+      ...(result.resolvedModel
+        ? {
+            resolved: {
+              modelProvider: result.resolvedModel.provider,
+              model: result.resolvedModel.model,
+            },
+          }
+        : {}),
+    };
   }
 
   async createSession(opts: TuiSessionCreateOptions) {

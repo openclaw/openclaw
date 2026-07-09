@@ -35,13 +35,13 @@ import {
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
   waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
@@ -2255,7 +2255,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, result.error);
       return;
     }
-    respond(true, { ok: true, key: result.key, entry: result.entry }, undefined);
+    respond(
+      true,
+      { ok: true, key: result.key, entry: result.entry, resolvedModel: result.resolvedModel },
+      undefined,
+    );
     emitSessionsChanged(context, {
       sessionKey: result.key,
       ...(result.key === "global" ? { agentId: result.agentId } : {}),
@@ -2852,8 +2856,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
               spawnedBy: latestEntry.spawnedBy,
               workspaceDir: latestEntry.spawnedWorkspaceDir,
               cwd: latestEntry.spawnedCwd,
-            }) ??
-            resolveAgentWorkspaceDir(cfg, target.agentId);
+            }) ?? resolveAgentWorkspaceDir(cfg, target.agentId);
           const operationId = randomUUID();
           emitSessionOperation(context, {
             operationId,

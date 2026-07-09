@@ -876,7 +876,14 @@ export async function performGatewaySessionReset(params: {
   assertCurrent?: () => void;
   onCommitted?: (commit: { key: string; sessionId: string }) => void;
 }): Promise<
-  | { ok: true; key: string; entry: SessionEntry; agentId: string; storePath: string }
+  | {
+      ok: true;
+      key: string;
+      entry: SessionEntry;
+      resolvedModel?: { provider: string; model: string };
+      agentId: string;
+      storePath: string;
+    }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
   const resetTarget = (() => {
@@ -1060,6 +1067,8 @@ export async function performGatewaySessionReset(params: {
         });
       }
 
+      let lifecycleResolvedModel: { provider: string; model: string } | undefined;
+
       const lifecycle = await resetSessionEntryLifecycle({
         agentId: target.agentId,
         storePath,
@@ -1091,6 +1100,7 @@ export async function performGatewaySessionReset(params: {
             ...resetPreservedSelection,
           };
           const resolvedModel = resolveSessionModelRef(cfg, resetEntry, sessionAgentId);
+          lifecycleResolvedModel = resolvedModel;
           const now = Date.now();
           const nextSessionId = randomUUID();
           const sessionFile = resolveResetSessionFile({
@@ -1124,8 +1134,14 @@ export async function performGatewaySessionReset(params: {
             groupActivation: currentEntry?.groupActivation,
             groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
             chatType: currentEntry?.chatType,
-            model: resolvedModel.model,
-            modelProvider: resolvedModel.provider,
+            // Only cache runtime model metadata when it came from a preserved
+            // override (user explicit selection), not from agent defaults. After
+            // a config hot-reload, sessions without cached metadata automatically
+            // re-resolve from the current config so the model change takes effect
+            // without a full gateway restart.
+            ...(resetPreservedSelection.providerOverride || resetPreservedSelection.modelOverride
+              ? { model: resolvedModel.model, modelProvider: resolvedModel.provider }
+              : {}),
             contextTokens: resetEntry?.contextTokens,
             compactionCount: currentEntry?.compactionCount,
             compactionCheckpoints: currentEntry?.compactionCheckpoints,
@@ -1269,6 +1285,7 @@ export async function performGatewaySessionReset(params: {
         ok: true,
         key: target.canonicalKey,
         entry: next,
+        resolvedModel: lifecycleResolvedModel,
         agentId: target.agentId,
         storePath,
       };

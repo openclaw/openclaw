@@ -93,7 +93,6 @@ import {
   resolveAvatarMime,
 } from "../shared/avatar-policy.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
-import { truncateUtf16Safe } from "../utils.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import type { ModelCostConfig } from "../utils/usage-format.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
@@ -230,7 +229,7 @@ function truncateTitle(text: string, maxLen: number): string {
   if (text.length <= maxLen) {
     return text;
   }
-  const cut = truncateUtf16Safe(text, maxLen - 1);
+  const cut = text.slice(0, maxLen - 1);
   const lastSpace = cut.lastIndexOf(" ");
   if (lastSpace > maxLen * 0.6) {
     return cut.slice(0, lastSpace) + "…";
@@ -1646,7 +1645,17 @@ export function resolveSessionModelRef(
   const runtimeProvider = normalizeOptionalString(entry?.modelProvider);
   const runtimeModel = normalizeOptionalString(entry?.model);
   if (runtimeProvider && runtimeModel) {
-    return { provider: runtimeProvider, model: runtimeModel };
+    if (normalizedOverride.providerOverride && normalizedOverride.modelOverride) {
+      return { provider: runtimeProvider, model: runtimeModel };
+    }
+    // No overrides. If this session has an agentId, the runtime metadata is
+    // default-derived and may be stale after a config hot-reload; fall through
+    // to re-resolve from current config. Without an agentId, preserve runtime
+    // values as-is (backward compat).
+    if (!agentId) {
+      return { provider: runtimeProvider, model: runtimeModel };
+    }
+    // agentId available, no overrides — runtime metadata is stale.
   }
 
   const resolved = agentId
@@ -1662,10 +1671,19 @@ export function resolveSessionModelRef(
         allowPluginNormalization: options?.allowPluginNormalization,
       });
 
+  // Runtime metadata that was present but stale (agentId + no overrides)
+  // must not reach resolvePersistedModelRef — it returns runtime before defaults.
+  const skipStaleRuntime =
+    agentId &&
+    runtimeProvider &&
+    runtimeModel &&
+    !normalizedOverride.providerOverride &&
+    !normalizedOverride.modelOverride;
+
   const persisted = resolvePersistedSelectedModelRef({
     defaultProvider: resolved.provider || DEFAULT_PROVIDER,
-    runtimeProvider,
-    runtimeModel,
+    runtimeProvider: skipStaleRuntime ? undefined : runtimeProvider,
+    runtimeModel: skipStaleRuntime ? undefined : runtimeModel,
     overrideProvider: normalizedOverride.providerOverride,
     overrideModel: normalizedOverride.modelOverride,
     allowPluginNormalization: options?.allowPluginNormalization,
