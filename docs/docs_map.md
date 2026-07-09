@@ -2979,6 +2979,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: References
   - H2: Related
 
+## design/continuation-tools-infographics.md
+
+- Route: /design/continuation-tools-infographics
+- Headings:
+  - H1: Continuation tools infographics
+  - H2: continuework() — same-session successor turn
+  - H2: continuedelegate() — child worker shard and return routing
+  - H2: requestcompaction() — elective compaction seam
+  - H2: One-screen comparison
+
 ## design/continue-work-signal-v2.md
 
 - Route: /design/continue-work-signal-v2
