@@ -5,6 +5,7 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import net from "node:net";
 import { URL } from "node:url";
+import { truncateUtf8PrefixFromBuffer } from "../utils/utf8-truncate.js";
 import { ensureDebugProxyCa } from "./ca.js";
 import type { DebugProxySettings } from "./env.js";
 import { getDebugProxyCaptureStore } from "./store.sqlite.js";
@@ -113,11 +114,16 @@ function normalizeTargetUrl(req: IncomingMessage): URL {
   return new URL(`http://${host}${req.url ?? "/"}`);
 }
 
-function createBodyPreviewCapture(): BodyPreviewCapture {
+// Exported for tests asserting the byte-bounded UTF-8 preview boundary.
+export function createBodyPreviewCapture(): BodyPreviewCapture {
   return { chunks: [], previewBytes: 0, totalBytes: 0, truncated: false };
 }
 
-function appendBodyPreviewCapture(capture: BodyPreviewCapture, chunk: Buffer | string): void {
+// Exported for tests asserting the byte-bounded UTF-8 preview boundary.
+export function appendBodyPreviewCapture(
+  capture: BodyPreviewCapture,
+  chunk: Buffer | string,
+): void {
   const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
   capture.totalBytes += buffer.byteLength;
   const remaining = CAPTURE_BODY_PREVIEW_BYTES - capture.previewBytes;
@@ -133,12 +139,18 @@ function appendBodyPreviewCapture(capture: BodyPreviewCapture, chunk: Buffer | s
   }
 }
 
-function finishBodyPreviewCapture(capture: BodyPreviewCapture): {
+// Exported for tests asserting the byte-bounded UTF-8 preview boundary.
+export function finishBodyPreviewCapture(capture: BodyPreviewCapture): {
   dataText: string;
   metaJson?: string;
 } {
   return {
-    dataText: Buffer.concat(capture.chunks, capture.previewBytes).toString("utf8"),
+    // The captured chunk slice may end mid-multibyte-sequence when the body was
+    // truncated at the byte budget; decode on a UTF-8 boundary to avoid U+FFFD.
+    dataText: truncateUtf8PrefixFromBuffer(
+      Buffer.concat(capture.chunks, capture.previewBytes),
+      CAPTURE_BODY_PREVIEW_BYTES,
+    ),
     metaJson: capture.truncated
       ? JSON.stringify({
           bodyBytes: capture.totalBytes,
