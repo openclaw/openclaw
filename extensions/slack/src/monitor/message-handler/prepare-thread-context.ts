@@ -19,6 +19,7 @@ import {
   applySlackThreadHistoryFilterPolicy,
   ensureSlackThreadHistoryHasBotRoot,
   formatSlackBotStarterThreadLabel,
+  formatSlackThreadLabelSnippet,
   isSlackThreadAuthorCurrentBot,
   resolveSlackThreadHistoryFilterPolicy,
   shouldIncludeBotThreadStarterContext,
@@ -224,7 +225,7 @@ export async function resolveSlackThreadContextData(params: {
 
   if (starter?.text && includeStarterContext) {
     threadStarterBody = starter.text;
-    const snippet = starter.text.replace(/\s+/g, " ").slice(0, 80);
+    const snippet = formatSlackThreadLabelSnippet(starter.text);
     threadLabel = `Slack thread ${params.roomLabel}${snippet ? `: ${snippet}` : ""}`;
     // Root media seeds a new thread session once. Rehydrating it later makes
     // old files look like current-turn uploads and repeats media processing.

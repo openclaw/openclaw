@@ -94,13 +94,13 @@ type DistJavaScriptFileListResult =
   | { files: string[]; limitExceeded: false }
   | { files: string[]; limit: number; limitExceeded: true };
 
-export type PublishedInstallScenario = {
+type PublishedInstallScenario = {
   name: string;
   installSpecs: string[];
   expectedVersion: string;
 };
 
-export type OpenClawNpmPostpublishVerifyArgs =
+type OpenClawNpmPostpublishVerifyArgs =
   | {
       help: false;
       version: string;

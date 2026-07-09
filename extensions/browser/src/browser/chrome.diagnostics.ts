@@ -19,6 +19,7 @@ import {
   normalizeCdpHttpBaseForJsonEndpoints,
   openCdpWebSocket,
   redactCdpUrl,
+  scopeCdpPolicyToConfiguredEndpoint,
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
@@ -346,6 +347,7 @@ export async function diagnoseChromeCdp(
       startedAt,
     });
   }
+  const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(cdpUrl, ssrfPolicy);
 
   if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
     return await diagnoseCdpWebSocketEndpoint({
@@ -361,7 +363,7 @@ export async function diagnoseChromeCdp(
     : cdpUrl;
   let version: ChromeVersion;
   try {
-    version = await readChromeVersion(discoveryUrl, timeoutMs, ssrfPolicy);
+    version = await readChromeVersion(discoveryUrl, timeoutMs, cdpControlPolicy);
   } catch (err) {
     if (isWebSocketUrl(cdpUrl)) {
       return await diagnoseCdpWebSocketEndpoint({
@@ -400,7 +402,10 @@ export async function diagnoseChromeCdp(
   }
   const wsUrl = normalizeCdpWsUrl(wsUrlRaw, discoveryUrl);
   try {
-    await assertCdpEndpointAllowed(wsUrl, ssrfPolicy, { source: "discovered" });
+    await assertCdpEndpointAllowed(wsUrl, cdpControlPolicy, {
+      source: "discovered",
+      configuredUrl: cdpUrl,
+    });
   } catch (err) {
     return failureDiagnostic({
       cdpUrl,

@@ -3710,6 +3710,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /gateway/secrets
 - Headings:
   - H2: Runtime model
+  - H2: Egress-time injection (sentinels)
   - H2: Agent-access boundary
   - H2: Active-surface filtering
   - H2: Gateway auth surface diagnostics
@@ -4199,6 +4200,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Prerequisites
   - H2: Containerized gateway
   - H3: Manual flow
+  - H3: Upgrading container images
   - H3: Environment variables
   - H3: Observability
   - H3: Health checks
@@ -4467,6 +4469,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Podman and Tailscale
   - H2: Systemd (Quadlet, optional)
   - H2: Config, env, and storage
+  - H2: Upgrading images
   - H2: Useful commands
   - H2: Troubleshooting
   - H2: Related

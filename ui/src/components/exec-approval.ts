@@ -16,7 +16,7 @@ const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "deny",
 ] as const satisfies readonly ExecApprovalDecision[];
 
-export type ExecApprovalProps = {
+type ExecApprovalProps = {
   queue: readonly ExecApprovalRequest[];
   busy: boolean;
   error: string | null;
