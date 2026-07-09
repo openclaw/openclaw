@@ -2229,6 +2229,57 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("preserves final text and media after partial streaming start fails", async () => {
+    const errorMock = vi.fn();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const origPush = streamingInstances.push.bind(streamingInstances);
+    streamingInstances.push = (...args: StreamingSessionStub[]) => {
+      if (streamingInstances.length === 0) {
+        args[0].start = vi
+          .fn()
+          .mockRejectedValue(new Error("Create card request failed with HTTP 400"));
+      }
+      return origPush(...args);
+    };
+
+    try {
+      const { result, options } = createDispatcherHarness({
+        runtime: { log: vi.fn(), error: errorMock } as never,
+      });
+
+      await result.replyOptions.onPartialReply?.({
+        text: "Feishu MEDIA regression proof",
+      });
+      await options.deliver(
+        {
+          text:
+            "Feishu MEDIA regression proof\n" +
+            "If this fix works, this text and the image both appear.",
+          mediaUrl: "/tmp/openclaw-feishu-proof/media.png",
+          mediaUrls: ["/tmp/openclaw-feishu-proof/media.png"],
+        },
+        { kind: "final" },
+      );
+
+      expect(errorMock.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
+        "streaming start failed",
+      );
+      expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
+      expectMockArgFields(sendStructuredCardFeishuMock, "structured card params", {
+        text:
+          "Feishu MEDIA regression proof\n" +
+          "If this fix works, this text and the image both appear.",
+      });
+      expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+      expectMockArgFields(sendMediaFeishuMock, "media send params", {
+        mediaUrl: "/tmp/openclaw-feishu-proof/media.png",
+      });
+    } finally {
+      streamingInstances.push = origPush;
+      nowSpy.mockRestore();
+    }
+  });
+
   it("backs off streaming retries after start() throws (HTTP 400)", async () => {
     const errorMock = vi.fn();
     let shouldFailStart = true;
