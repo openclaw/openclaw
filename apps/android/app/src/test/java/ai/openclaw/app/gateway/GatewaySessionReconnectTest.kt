@@ -329,12 +329,14 @@ class GatewaySessionReconnectTest {
           """{"type":"res","id":"$requestId","ok":true,"payload":{"auth":{"deviceToken":"issued-token","role":"node","scopes":[]},"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}""",
         )
         listener.onFailure(socket, IOException("test failure"), null)
-        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { terminalCallback.await() }
+        delay(100)
+        assertFalse(terminalCallback.isCompleted)
 
         allowBlockEvent.countDown()
 
         assertEquals("issued-token", withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { authStore.savedToken.await() })
         assertEquals(0, retiredInvokeCount.get())
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { terminalCallback.await() }
         withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { harness.session.disconnectAndJoin() }
       } finally {
         allowBlockEvent.countDown()

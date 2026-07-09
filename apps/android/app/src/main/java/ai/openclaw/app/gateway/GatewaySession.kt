@@ -728,20 +728,24 @@ class GatewaySession(
       if (!terminalCallbackClaimed.compareAndSet(false, true)) return
       val shouldNotify = state.getAndSet(ConnectionState.CLOSED) != ConnectionState.CLOSED
       incomingMessages.close()
-      try {
-        if (shouldNotify) onDisconnected(message)
-      } finally {
-        messagePumpJob.invokeOnCompletion {
-          // OkHttp can deliver onClosed immediately after onMessage. Let an accepted connect
-          // response finish so auth retry state and issued device tokens survive the close.
-          if (connectResponseAccepted.get()) {
-            connectHandshakeJob?.invokeOnCompletion {
-              finalizeTransport(connectError)
-            } ?: finalizeTransport(connectError)
-          } else {
-            connectNonceDeferred.completeExceptionally(connectError)
+      messagePumpJob.invokeOnCompletion {
+        val completeTerminalCallback = {
+          try {
+            if (shouldNotify) onDisconnected(message)
+          } finally {
             finalizeTransport(connectError)
           }
+        }
+        // OkHttp can deliver onClosed immediately after onMessage. Let an accepted connect
+        // response finish so auth retry state and issued device tokens survive the close. The
+        // terminal callback must observe that same drained boundary; consumers clear run state.
+        if (connectResponseAccepted.get()) {
+          connectHandshakeJob?.invokeOnCompletion {
+            completeTerminalCallback()
+          } ?: completeTerminalCallback()
+        } else {
+          connectNonceDeferred.completeExceptionally(connectError)
+          completeTerminalCallback()
         }
       }
     }
