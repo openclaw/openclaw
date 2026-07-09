@@ -118,7 +118,13 @@ data class GatewayCronJobEdit(
   val sessionTarget: String,
   val wakeMode: String,
   val payload: GatewayCronPayloadEdit,
-)
+) {
+  fun withSchedule(value: GatewayCronScheduleEdit): GatewayCronJobEdit =
+    copy(
+      schedule = value,
+      deleteAfterRun = deleteAfterRun && value is GatewayCronScheduleEdit.At,
+    )
+}
 
 internal data class CronEditorDraftState(
   val baselineRevision: Long,
@@ -232,7 +238,8 @@ internal fun GatewayCronJobDetail.toCronJobEdit(): GatewayCronJobEdit =
     name = name,
     description = description,
     enabled = enabled,
-    deleteAfterRun = deleteAfterRun,
+    // Gateway deletion only runs after a successful one-shot schedule.
+    deleteAfterRun = deleteAfterRun && scheduleKind == "at",
     schedule =
       when (scheduleKind) {
         "at" -> GatewayCronScheduleEdit.At(at = scheduleAt.orEmpty())

@@ -256,13 +256,15 @@ private fun CronEditorPanel(
         onCheckedChange = { onDraftChange(draft.withEdit(edit.copy(enabled = it))) },
         enabled = enabled,
       )
-      CronSwitchRow(
-        title = "Delete after run",
-        subtitle = "Remove this job after a successful one-shot run.",
-        checked = edit.deleteAfterRun,
-        onCheckedChange = { onDraftChange(draft.withEdit(edit.copy(deleteAfterRun = it))) },
-        enabled = enabled,
-      )
+      if (edit.schedule is GatewayCronScheduleEdit.At) {
+        CronSwitchRow(
+          title = "Delete after run",
+          subtitle = "Remove this job after a successful one-shot run.",
+          checked = edit.deleteAfterRun,
+          onCheckedChange = { onDraftChange(draft.withEdit(edit.copy(deleteAfterRun = it))) },
+          enabled = enabled,
+        )
+      }
       ClawTextField(
         value = edit.name,
         onValueChange = { onDraftChange(draft.withEdit(edit.copy(name = it))) },
@@ -281,7 +283,7 @@ private fun CronEditorPanel(
       CronScheduleEditor(
         schedule = edit.schedule,
         enabled = enabled,
-        onChange = { onDraftChange(draft.withEdit(edit.copy(schedule = it))) },
+        onChange = { onDraftChange(draft.withEdit(edit.withSchedule(it))) },
       )
       ClawTextField(
         value = edit.sessionTarget,

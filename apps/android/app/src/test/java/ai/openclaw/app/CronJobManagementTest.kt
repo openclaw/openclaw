@@ -85,6 +85,31 @@ class CronJobManagementTest {
   }
 
   @Test
+  fun deleteAfterRunStaysAvailableOnlyForOneShotSchedules() {
+    val recurring =
+      requireNotNull(
+        parseGatewayCronJobDetail(jobJson(deleteAfterRun = true)),
+      ).toCronJobEdit()
+    val oneShot =
+      requireNotNull(
+        parseGatewayCronJobDetail(
+          jobJson(
+            deleteAfterRun = true,
+            schedule = """{"kind":"at","at":"2026-07-10T09:00:00Z"}""",
+          ),
+        ),
+      ).toCronJobEdit()
+
+    assertFalse(recurring.deleteAfterRun)
+    assertTrue(oneShot.deleteAfterRun)
+    assertFalse(
+      oneShot
+        .withSchedule(GatewayCronScheduleEdit.Every(everyMs = "60000", anchorMs = ""))
+        .deleteAfterRun,
+    )
+  }
+
+  @Test
   fun commandArgvRejectsNonStringJsonPrimitives() {
     val original =
       requireNotNull(
@@ -327,6 +352,7 @@ class CronJobManagementTest {
   private fun jobJson(
     name: String = "Daily report",
     updatedAtMs: Long = 2000,
+    deleteAfterRun: Boolean = false,
     schedule: String = """{"kind":"cron","expr":"0 9 * * *","tz":"UTC"}""",
     payload: String =
       """{"kind":"agentTurn","message":"Summarize the day","model":"openai/gpt-5.5","thinking":"high"}""",
@@ -337,7 +363,7 @@ class CronJobManagementTest {
       "name":"$name",
       "description":"Daily digest",
       "enabled":true,
-      "deleteAfterRun":false,
+      "deleteAfterRun":$deleteAfterRun,
       "createdAtMs":1000,
       "updatedAtMs":$updatedAtMs,
       "schedule":$schedule,

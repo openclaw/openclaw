@@ -907,7 +907,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 260,
+      "line": 261,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Delete after run",
       "surface": "android",
@@ -915,7 +915,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 261,
+      "line": 262,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Remove this job after a successful one-shot run.",
       "surface": "android",
@@ -923,7 +923,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 269,
+      "line": 271,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Job name",
       "surface": "android",
@@ -931,7 +931,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 270,
+      "line": 272,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Name",
       "surface": "android",
@@ -939,7 +939,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 276,
+      "line": 278,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Optional description",
       "surface": "android",
@@ -947,7 +947,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 277,
+      "line": 279,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Description",
       "surface": "android",
@@ -955,7 +955,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 289,
+      "line": 291,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "main, isolated, current, or session:<id>",
       "surface": "android",
@@ -963,7 +963,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 290,
+      "line": 292,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Session target",
       "surface": "android",
@@ -971,7 +971,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 307,
+      "line": 309,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Save Changes",
       "surface": "android",
@@ -979,7 +979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 307,
+      "line": 309,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Working",
       "surface": "android",
@@ -987,7 +987,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 323,
+      "line": 325,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Revert Changes",
       "surface": "android",
@@ -995,7 +995,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 372,
+      "line": 374,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Schedule · ${cronScheduleKindLabel(schedule)}",
       "surface": "android",
@@ -1003,7 +1003,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 381,
+      "line": 383,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "ISO time, e.g. 2026-07-09T09:30:00Z",
       "surface": "android",
@@ -1011,7 +1011,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 382,
+      "line": 384,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Run at",
       "surface": "android",
@@ -1019,7 +1019,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 389,
+      "line": 391,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Milliseconds",
       "surface": "android",
@@ -1027,7 +1027,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 390,
+      "line": 392,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Interval",
       "surface": "android",
@@ -1035,7 +1035,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 396,
+      "line": 398,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Epoch milliseconds (optional)",
       "surface": "android",
@@ -1043,7 +1043,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 397,
+      "line": 399,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Anchor",
       "surface": "android",
@@ -1051,7 +1051,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 405,
+      "line": 407,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Cron expression, e.g. 0 9 * * *",
       "surface": "android",
@@ -1059,7 +1059,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 406,
+      "line": 408,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Expression",
       "surface": "android",
@@ -1067,7 +1067,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 413,
+      "line": 415,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "e.g. America/New_York",
       "surface": "android",
@@ -1075,7 +1075,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 414,
+      "line": 416,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Timezone",
       "surface": "android",
@@ -1083,7 +1083,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 421,
+      "line": 423,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "0 = exact",
       "surface": "android",
@@ -1091,7 +1091,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 422,
+      "line": 424,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Stagger ms",
       "surface": "android",
@@ -1099,7 +1099,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 432,
+      "line": 434,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Command to watch",
       "surface": "android",
@@ -1107,7 +1107,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 433,
+      "line": 435,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Command",
       "surface": "android",
@@ -1115,7 +1115,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 440,
+      "line": 442,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Working directory",
       "surface": "android",
@@ -1123,7 +1123,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 455,
+      "line": 457,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Payload · ${cronPayloadKindLabel(payload)}",
       "surface": "android",
@@ -1131,7 +1131,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 464,
+      "line": 466,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "System event text",
       "surface": "android",
@@ -1139,7 +1139,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 465,
+      "line": 467,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Event text",
       "surface": "android",
@@ -1147,7 +1147,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 473,
+      "line": 475,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Agent message",
       "surface": "android",
@@ -1155,7 +1155,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 474,
+      "line": 476,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Message",
       "surface": "android",
@@ -1163,7 +1163,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 483,
+      "line": 485,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Model",
       "surface": "android",
@@ -1171,7 +1171,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 490,
+      "line": 492,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Optional override",
       "surface": "android",
@@ -1179,7 +1179,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 491,
+      "line": 493,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Thinking",
       "surface": "android",
@@ -1187,7 +1187,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 502,
+      "line": 504,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Command argv JSON array",
       "surface": "android",
@@ -1195,7 +1195,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 503,
+      "line": 505,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Arguments",
       "surface": "android",
@@ -1203,7 +1203,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 514,
+      "line": 516,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Optional path",
       "surface": "android",
@@ -1211,7 +1211,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 525,
+      "line": 527,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "The gateway can change this path but cannot clear an existing path.",
       "surface": "android",
@@ -1219,7 +1219,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 555,
+      "line": 557,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Run History",
       "surface": "android",
@@ -1227,7 +1227,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 561,
+      "line": 563,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Loading",
       "surface": "android",
@@ -1235,7 +1235,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 561,
+      "line": 563,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Reload",
       "surface": "android",
@@ -1243,7 +1243,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 575,
+      "line": 577,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Loading run history…",
       "surface": "android",
@@ -1251,7 +1251,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 575,
+      "line": 577,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "No run history yet.",
       "surface": "android",
@@ -1259,7 +1259,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 597,
+      "line": 599,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "One time",
       "surface": "android",
@@ -1267,7 +1267,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 599,
+      "line": 601,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Cron",
       "surface": "android",
@@ -1275,7 +1275,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 600,
+      "line": 602,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "On command exit",
       "surface": "android",
@@ -1283,7 +1283,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 605,
+      "line": 607,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "System event",
       "surface": "android",
@@ -1291,7 +1291,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 606,
+      "line": 608,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Agent turn",
       "surface": "android",
