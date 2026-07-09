@@ -1033,7 +1033,9 @@ describe("msteams monitor handler authz", () => {
   it("replaces a DM quote preview with the complete Graph message", async () => {
     resetThreadMocks();
     graphThreadMockState.fetchChatMessageText.mockResolvedValueOnce("complete quoted message");
-    const { deps } = createDeps({ channels: { msteams: { dmPolicy: "open" } } } as OpenClawConfig);
+    const { deps } = createDeps({
+      channels: { msteams: { dmPolicy: "open", allowFrom: ["*"] } },
+    } as OpenClawConfig);
     const handler = createMSTeamsMessageHandler(deps);
 
     await handler(
