@@ -441,7 +441,10 @@ export async function resolveAnthropicUsageAuth(
 
   // Claude CLI-only setups have their keychain login synced under the
   // claude-cli profile, not anthropic; without this fallback those setups
-  // never surface subscription usage windows.
+  // never surface subscription usage windows. Usage snapshots are keyed per
+  // provider, so when a native anthropic OAuth account and a different Claude
+  // Code account coexist, the native account wins and both auth rows display
+  // its quota. Per-profile usage attribution is tracked in #102807.
   const claudeCliToken = await ctx.resolveOAuthToken({ provider: CLAUDE_CLI_BACKEND_ID });
   if (claudeCliToken) {
     return claudeCliToken;

@@ -1728,6 +1728,10 @@ export function renderContextNotice(
     : quotaGroups;
   // Plan-billed sessions hide dollar estimates: subscription usage is bounded
   // by the plan windows below, and per-token math would misread as real spend.
+  // Billing mode is provider-level: session rows do not record which auth
+  // profile served the run, so a provider with both an API key and a
+  // subscription resolves to subscription display (per-run credential
+  // attribution is #102807).
   const showCosts = !currentGroup;
   const usageHref = `${normalizeBasePath(options.providerUsage?.basePath ?? "")}/usage`;
   const formatStat = (value: number | null) =>

@@ -61,7 +61,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
               displayName: "Codex",
               status: "ok",
               profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
-              usage: { windows: [{ label: "Week", usedPercent: 72 }] },
+              usage: { providerId: "openai", windows: [{ label: "Week", usedPercent: 72 }] },
             },
           ],
         },
