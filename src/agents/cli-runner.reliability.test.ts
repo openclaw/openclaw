@@ -1674,6 +1674,8 @@ describe("runCliAgent reliability", () => {
   it("keeps non-capture live-session artifacts through fresh recovery retry", async () => {
     vi.useFakeTimers();
     supervisorSpawnMock.mockClear();
+    const transcriptProbe = vi.fn(async () => false);
+    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: transcriptProbe });
     const artifactDir = autoCleanupTempDirs.make("openclaw-live-retry-artifacts-");
     const mcpConfigPath = path.join(artifactDir, "mcp.json");
     const skillsDir = path.join(artifactDir, "skills-plugin");
@@ -1826,6 +1828,8 @@ describe("runCliAgent reliability", () => {
 
     expect(result.payloads).toEqual([{ text: "fresh ok" }]);
     expect(result.meta.finalPromptText).toContain("User: earlier context");
+    expect(result.meta.agentMeta?.cliSessionBinding?.sessionId).toBe("fresh-live");
+    expect(transcriptProbe).not.toHaveBeenCalled();
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
     expect(clearBeforeRetry).toHaveBeenCalledWith({
       provider: "claude-cli",

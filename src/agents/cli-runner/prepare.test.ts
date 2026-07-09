@@ -3311,7 +3311,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       // Candidate is invalidated (no native --resume) yet reseed still fires:
       // prepare hands the prior OpenClaw conversation forward as history.
-      expect(context.reusableCliSession).toEqual({ invalidatedReason: "missing-transcript" });
+      expect(context.reusableCliSession).toEqual({
+        mode: "invalidate",
+        invalidatedReason: "missing-transcript",
+      });
       expect(context.openClawHistoryPrompt).toContain("prior claude-cli ask");
       expect(context.openClawHistoryPrompt).toContain("latest ask");
     } finally {

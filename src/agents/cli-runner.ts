@@ -20,11 +20,11 @@ import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isHeartbeatLifecycleRunKind } from "./bootstrap-mode.js";
 import type { CliOutput } from "./cli-output.js";
+import { shouldUseClaudeLiveSession } from "./cli-runner/claude-live-session.js";
 import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
 } from "./cli-runner/delivery-evidence.js";
-import { shouldUseClaudeLiveSession } from "./cli-runner/claude-live-session.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import {
