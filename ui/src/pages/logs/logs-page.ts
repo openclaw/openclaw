@@ -274,14 +274,7 @@ class LogsPage extends LitElement {
           <div class="page-sub">${subtitleForRoute("logs")}</div>
         </div>
       </section>
-      ${renderSettingsWorkspace(
-        this.context.basePath,
-        body,
-        "logs",
-        (routeId) => this.context.navigate(routeId),
-        (routeId) => this.context.preload(routeId),
-        { fillHeight: true },
-      )}
+      ${renderSettingsWorkspace(body, { fillHeight: true })}
     `;
   }
 }

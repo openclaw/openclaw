@@ -370,7 +370,7 @@ public struct OpenClawChatView: View {
             self.messageRow(for: msg)
         }
 
-        if self.viewModel.pendingRunCount > 0 {
+        if self.viewModel.hasBlockingRunActivity {
             ChatTypingIndicatorBubble(
                 style: self.style,
                 assistantName: self.assistantName,
@@ -657,7 +657,7 @@ public struct OpenClawChatView: View {
     }
 
     private var hasVisibleTransientContent: Bool {
-        self.viewModel.pendingRunCount > 0 ||
+        self.viewModel.hasBlockingRunActivity ||
             !self.viewModel.pendingToolCalls.isEmpty ||
             (self.viewModel.streamingAssistantText.map {
                 AssistantTextParser.hasVisibleContent(in: $0, includeThinking: self.showsAssistantTrace)
@@ -716,7 +716,7 @@ public struct OpenClawChatView: View {
             !(self.viewModel.streamingAssistantText.map {
                 AssistantTextParser.hasVisibleContent(in: $0, includeThinking: self.showsAssistantTrace)
             } ?? false) &&
-            self.viewModel.pendingRunCount == 0 &&
+            !self.viewModel.hasBlockingRunActivity &&
             self.viewModel.pendingToolCalls.isEmpty
     }
 
@@ -768,7 +768,7 @@ public struct OpenClawChatView: View {
     private func handleTimelineChange() {
         guard self.hasPerformedInitialScroll else { return }
         if self.viewModel.messages.isEmpty,
-           self.viewModel.pendingRunCount == 0,
+           !self.viewModel.hasBlockingRunActivity,
            self.viewModel.pendingToolCalls.isEmpty,
            self.viewModel.streamingAssistantText == nil
         {
