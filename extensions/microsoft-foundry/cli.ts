@@ -8,6 +8,30 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { AzAccessToken, AzAccount } from "./shared.js";
 import { COGNITIVE_SERVICES_RESOURCE } from "./shared.js";
 
+// On Windows the Azure CLI ships as az.cmd, which execFile/execFileSync cannot
+// resolve without shell:true. shell:true passes args through cmd.exe, enabling
+// command injection. Resolve the full .cmd path so we can drop shell:true.
+let _resolvedAzCommand: string | undefined;
+function resolveAzCommand(): string {
+  if (_resolvedAzCommand === undefined) {
+    if (process.platform === "win32") {
+      try {
+        const result = execFileSync("where", ["az"], {
+          encoding: "utf-8",
+          timeout: 5_000,
+        });
+        const first = result.trim().split(/\r?\n/)[0];
+        _resolvedAzCommand = first?.trim() || "az.cmd";
+      } catch {
+        _resolvedAzCommand = "az.cmd";
+      }
+    } else {
+      _resolvedAzCommand = "az";
+    }
+  }
+  return _resolvedAzCommand;
+}
+
 function summarizeAzErrorMessage(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -46,10 +70,9 @@ function buildAzCommandError(error: Error, stderr: string, stdout: string): Erro
 export function execAz(args: string[]): string {
   return (
     normalizeOptionalString(
-      execFileSync("az", args, {
+      execFileSync(resolveAzCommand(), args, {
         encoding: "utf-8",
         timeout: 30_000,
-        shell: process.platform === "win32",
       }),
     ) ?? ""
   );
@@ -58,12 +81,11 @@ export function execAz(args: string[]): string {
 async function execAzAsync(args: string[]): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
     execFile(
-      "az",
+      resolveAzCommand(),
       args,
       {
         encoding: "utf-8",
         timeout: 30_000,
-        shell: process.platform === "win32",
       },
       (error, stdout, stderr) => {
         if (error) {
@@ -164,9 +186,8 @@ export async function azLoginDeviceCodeWithOptions(params: {
       ...(params.tenantId ? ["--tenant", params.tenantId] : []),
       ...(params.allowNoSubscriptions ? ["--allow-no-subscriptions"] : []),
     ];
-    const child = spawn("az", args, {
+    const child = spawn(resolveAzCommand(), args, {
       stdio: ["inherit", "pipe", "pipe"],
-      shell: process.platform === "win32",
     });
     const stdoutChunks: string[] = [];
     const stderrChunks: string[] = [];
