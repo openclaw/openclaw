@@ -309,4 +309,43 @@ describe("GitHub Copilot OAuth error body redaction", () => {
     // Structured code is preserved but raw JSON keys are not leaked
     await expect(refreshGitHubCopilotToken("refresh-token")).rejects.toThrow(/code=rate_limited/);
   });
+
+  it("redacts error body via the device code flow", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ error: "invalid_request", error_description: "missing client_id" }),
+            { status: 400, headers: { "Content-Type": "application/json" } },
+          ),
+      ),
+    );
+
+    await expect(testing.startDeviceFlow("github.com")).rejects.toThrow(
+      "GitHub Copilot device code request failed with status 400",
+    );
+    await expect(testing.startDeviceFlow("github.com")).rejects.not.toThrow(/error_description/);
+  });
+
+  it("handles non-JSON error bodies with bounded detail", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("Internal Server Error", {
+            status: 500,
+            headers: { "Content-Type": "text/plain" },
+          }),
+      ),
+    );
+
+    // For non-JSON bodies the detail is the body text itself (bounded by readResponseTextLimited).
+    // The error message should include the status code and the bounded body as detail.
+    await expect(refreshGitHubCopilotToken("refresh-token")).rejects.toThrow(
+      /GitHub Copilot token refresh request failed with status 500/,
+    );
+    // Raw JSON syntax like {"error": must never appear for non-JSON responses
+    await expect(refreshGitHubCopilotToken("refresh-token")).rejects.not.toThrow(/\{"error"/);
+  });
 });
