@@ -4271,6 +4271,35 @@ function sanitizeCompletionsReasoningReplayFields(
   }
 }
 
+function sanitizeCompletionsToolCallArguments(messages: unknown): void {
+  if (!Array.isArray(messages)) {
+    return;
+  }
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const record = msg as Record<string, unknown>;
+    if (record.role !== "assistant" || !Array.isArray(record.tool_calls)) {
+      continue;
+    }
+    for (const toolCall of record.tool_calls) {
+      if (!toolCall || typeof toolCall !== "object") {
+        continue;
+      }
+      const fn = (toolCall as { function?: unknown }).function;
+      if (!fn || typeof fn !== "object") {
+        continue;
+      }
+      const functionRecord = fn as Record<string, unknown>;
+      if (typeof functionRecord.arguments === "string") {
+        continue;
+      }
+      functionRecord.arguments = JSON.stringify(functionRecord.arguments ?? {});
+    }
+  }
+}
+
 export function buildOpenAICompletionsParams(
   model: OpenAIModeModel,
   context: Context,
@@ -4291,6 +4320,7 @@ export function buildOpenAICompletionsParams(
       compat.thinkingFormat === "openrouter" && shouldPreserveOpenRouterReasoningReplay(model),
     preserveReasoningContent: shouldPreserveReasoningContentReplay(model, compat),
   });
+  sanitizeCompletionsToolCallArguments(messages);
   if (compat.strictMessageKeys) {
     messages = stripCompletionMessagesToRoleContent(messages) as typeof messages;
   }
@@ -4516,6 +4546,7 @@ export const testing = {
   enforceCodeModeResponsesToolSurface,
   sanitizeOpenAICodexResponsesParams,
   buildOpenAICompletionsClientConfig,
+  sanitizeCompletionsToolCallArguments,
   processOpenAICompletionsStream,
   processResponsesStream,
   shouldEmitOpenAICompletionsReasoningForModel,

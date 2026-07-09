@@ -11685,6 +11685,39 @@ describe("openai transport stream", () => {
   });
 });
 
+describe("sanitizeCompletionsToolCallArguments", () => {
+  it("stringifies raw replay tool call arguments for OpenAI-compatible payloads", () => {
+    const messages = [
+      {
+        role: "assistant",
+        tool_calls: [
+          {
+            id: "call_exec",
+            type: "function",
+            function: {
+              name: "exec",
+              arguments: { command: "echo hei-fra-glm" },
+            },
+          },
+          {
+            id: "call_read",
+            type: "function",
+            function: {
+              name: "read",
+              arguments: '{"path":"README.md"}',
+            },
+          },
+        ],
+      },
+    ];
+
+    testing.sanitizeCompletionsToolCallArguments(messages);
+
+    expect(messages[0]?.tool_calls[0]?.function.arguments).toBe('{"command":"echo hei-fra-glm"}');
+    expect(messages[0]?.tool_calls[1]?.function.arguments).toBe('{"path":"README.md"}');
+  });
+});
+
 describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () => {
   const openRouterModel = {
     id: "deepseek/deepseek-v4-flash",
