@@ -279,7 +279,6 @@ data class GatewayConnectionProblem(
   val minimumProbeProtocol: Int? = null,
 ) {
   val isPairingRequired: Boolean = code == "PAIRING_REQUIRED"
-  val isProtocolMismatch: Boolean = code == "PROTOCOL_MISMATCH"
   val canAutoRetry: Boolean =
     isPairingRequired &&
       (
@@ -1259,6 +1258,15 @@ class NodeRuntime private constructor(
 
   val talkModeSpeaking: StateFlow<Boolean>
     get() = talkMode.isSpeaking
+
+  val talkInputLevel: StateFlow<Float>
+    get() = talkMode.inputLevel
+
+  val talkOutputLevel: StateFlow<Float?>
+    get() = talkMode.outputLevel
+
+  val talkSpeechActive: StateFlow<Boolean>
+    get() = talkMode.speechActive
 
   val talkModeStatusText: StateFlow<String>
     get() = talkMode.statusText

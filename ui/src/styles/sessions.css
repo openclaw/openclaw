@@ -47,10 +47,8 @@
   gap: 11px;
   min-width: 0;
   padding: 11px 13px;
-  background:
-    linear-gradient(180deg, var(--card-highlight), transparent 55%),
-    color-mix(in srgb, var(--card) 92%, transparent);
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
 }
 
@@ -62,7 +60,6 @@
   flex: 0 0 auto;
   color: var(--muted);
   background: var(--bg-hover);
-  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
   border-radius: var(--radius-sm);
 }
 
@@ -115,7 +112,6 @@
 
 .sessions-overview__tile--live.sessions-overview__tile--active .sessions-overview__icon {
   background: var(--ok-subtle);
-  border-color: color-mix(in srgb, var(--ok) 28%, var(--border));
 }
 
 .sessions-overview__tile--unread.sessions-overview__tile--active .sessions-overview__icon,
@@ -125,7 +121,6 @@
 
 .sessions-overview__tile--unread.sessions-overview__tile--active .sessions-overview__icon {
   background: var(--accent-2-subtle);
-  border-color: color-mix(in srgb, var(--accent-2) 28%, var(--border));
 }
 
 /* --- Toolbar: search + filters + grouping in one strip --- */
@@ -410,7 +405,6 @@
   flex: 0 0 auto;
   color: var(--muted);
   background: var(--bg-hover);
-  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
   border-radius: var(--radius-sm);
 }
 
@@ -427,25 +421,21 @@
 .session-avatar--cron {
   color: var(--ok);
   background: var(--ok-subtle);
-  border-color: color-mix(in srgb, var(--ok) 22%, var(--border));
 }
 
 .session-avatar--direct {
   color: var(--accent-2);
   background: var(--accent-2-subtle);
-  border-color: color-mix(in srgb, var(--accent-2) 22%, var(--border));
 }
 
 .session-avatar--group {
   color: var(--info);
   background: rgba(59, 130, 246, 0.1);
-  border-color: color-mix(in srgb, var(--info) 22%, var(--border));
 }
 
 .session-avatar--global {
   color: var(--warn);
   background: var(--warn-subtle);
-  border-color: color-mix(in srgb, var(--warn) 22%, var(--border));
 }
 
 .session-avatar__status {
@@ -627,8 +617,8 @@
   box-sizing: border-box;
   padding: 3px 7px;
   color: color-mix(in srgb, var(--text) 78%, var(--muted));
-  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   font-size: 12px;
   line-height: 1.2;
@@ -696,15 +686,9 @@
   width: 72%;
   max-width: 150px;
   height: 12px;
-  background: linear-gradient(
-    90deg,
-    var(--bg-hover) 25%,
-    color-mix(in srgb, var(--bg-hover) 55%, var(--border-strong)) 50%,
-    var(--bg-hover) 75%
-  );
-  background-size: 200% 100%;
+  background: var(--bg-hover);
   border-radius: var(--radius-full);
-  animation: session-skeleton-shimmer 1.4s ease-in-out infinite;
+  animation: session-skeleton-pulse 1.4s ease-in-out infinite;
 }
 
 .session-skeleton--key {
@@ -713,12 +697,13 @@
   height: 14px;
 }
 
-@keyframes session-skeleton-shimmer {
-  from {
-    background-position: 200% 0;
+@keyframes session-skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
   }
-  to {
-    background-position: -200% 0;
+  50% {
+    opacity: 0.45;
   }
 }
 
@@ -771,7 +756,7 @@
   width: 84px;
   height: 3px;
   overflow: hidden;
-  background: color-mix(in srgb, var(--border-strong) 55%, transparent);
+  background: var(--bg-hover);
   border-radius: var(--radius-full);
 }
 
@@ -968,8 +953,7 @@
 /* --- Row drawer: overrides, stats, compaction history --- */
 .session-details-row td {
   padding: 0;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 34%), var(--bg-accent);
+  background: var(--bg-accent);
 }
 
 .session-details-panel {
@@ -985,10 +969,9 @@
   justify-content: space-between;
   gap: 14px;
   padding: 14px;
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--card) 90%, transparent);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  background: var(--card);
 }
 
 .session-details-panel__badges {
@@ -1026,9 +1009,9 @@
   display: grid;
   gap: 10px;
   padding: 14px;
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
+  background: var(--bg-elevated);
 }
 
 .session-details-section__header {
@@ -1095,9 +1078,9 @@ input.session-override-field__control {
 .session-detail-stat {
   min-width: 0;
   padding: 11px 12px;
-  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--card) 86%, transparent);
+  background: var(--card);
 }
 
 .session-detail-stat__label {
@@ -1135,7 +1118,7 @@ input.session-override-field__control {
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--card) 92%, transparent);
+  background: var(--card);
 }
 
 .session-checkpoint-card__header {

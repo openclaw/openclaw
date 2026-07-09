@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
@@ -140,8 +141,8 @@ type ConnectFrame = {
     auth?: { token?: string; password?: string; deviceToken?: string };
     maxProtocol?: number;
     minProtocol?: number;
-    scopes?: string[];
     caps?: string[];
+    scopes?: string[];
   };
 };
 
@@ -413,8 +414,12 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
     expect(connectFrame.params?.maxProtocol).toBe(PROTOCOL_VERSION);
+    expect(connectFrame.params?.caps).toEqual([
+      GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
+      GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+      GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
+    ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
-    expect(connectFrame.params?.caps).toEqual(["tool-events", "inline-widgets"]);
   });
 
   it("adds the current Control UI protocol to bare protocol mismatch errors", () => {

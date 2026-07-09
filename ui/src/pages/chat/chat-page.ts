@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, LitElement, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
@@ -11,6 +11,8 @@ import { t } from "../../i18n/index.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "./chat-pane.ts";
 import {
   resolveSplitDropZone,
@@ -43,8 +45,8 @@ const NARROW_SPLIT_QUERY = "(max-width: 1099px)";
 type DropIndicator = { paneId: string; zone: SplitDropZone; rect: SplitDropRect };
 type ChatPaneElement = HTMLElement & { paneId?: string };
 
-export class ChatPage extends LitElement {
-  @consume({ context: applicationContext, subscribe: false })
+export class ChatPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
   @property({ attribute: false }) data!: ChatRouteData;
   @state() private layout: ChatSplitLayout | undefined;
@@ -54,17 +56,16 @@ export class ChatPage extends LitElement {
   // the fixed toolbar track mirrors it so segments stay over their panes.
   @state() private splitScrollLeft = 0;
 
+  private readonly subscriptions = new SubscriptionsController(this).watch(
+    () => this.context?.sessions,
+    (sessions, notify) => sessions.subscribe(notify),
+  );
   private mediaQuery: MediaQueryList | null = null;
-  private sessionsCleanup: (() => void) | null = null;
   // Light-DOM enter/leave events bubble from every nested child, so only clear
   // the shared preview after the whole balanced drag has left the page.
   private dragDepth = 0;
   private dragFrame = 0;
   private pendingDragOver: { pane: ChatPaneElement; x: number; y: number } | null = null;
-
-  override createRenderRoot() {
-    return this;
-  }
 
   override connectedCallback() {
     super.connectedCallback();
@@ -72,7 +73,6 @@ export class ChatPage extends LitElement {
     this.mediaQuery = window.matchMedia(NARROW_SPLIT_QUERY);
     this.narrow = this.mediaQuery.matches;
     this.mediaQuery.addEventListener("change", this.handleViewportChange);
-    this.sessionsCleanup = this.context?.sessions?.subscribe(() => this.requestUpdate()) ?? null;
     this.addEventListener("dragenter", this.handleDragEnter);
     this.addEventListener("dragover", this.handleDragOver);
     this.addEventListener("dragleave", this.handleDragLeave);
@@ -82,10 +82,9 @@ export class ChatPage extends LitElement {
   }
 
   override disconnectedCallback() {
+    this.subscriptions.clear();
     this.mediaQuery?.removeEventListener("change", this.handleViewportChange);
     this.mediaQuery = null;
-    this.sessionsCleanup?.();
-    this.sessionsCleanup = null;
     this.removeEventListener("dragenter", this.handleDragEnter);
     this.removeEventListener("dragover", this.handleDragOver);
     this.removeEventListener("dragleave", this.handleDragLeave);
@@ -98,12 +97,6 @@ export class ChatPage extends LitElement {
   override updated(changedProperties: Map<PropertyKey, unknown>) {
     if (changedProperties.has("data")) {
       this.syncRouteToActivePane();
-    }
-    for (const select of this.querySelectorAll<HTMLSelectElement>(".chat-pane__session-select")) {
-      const sessionKey = select.dataset.sessionKey;
-      if (sessionKey && select.value !== sessionKey) {
-        select.value = sessionKey;
-      }
     }
   }
 
@@ -426,40 +419,20 @@ export class ChatPage extends LitElement {
   private renderSplitToolbarPane(layout: ChatSplitLayout, pane: ChatSplitPane) {
     const sessions = this.context?.sessions?.state.result?.sessions ?? [];
     const active = pane.id === layout.activePaneId;
-    const currentSession = sessions.find((row) => row.key === pane.sessionKey);
-    const options = currentSession ? sessions : [{ key: pane.sessionKey }, ...sessions];
+    const title = resolveSessionDisplayName(
+      pane.sessionKey,
+      sessions.find((row) => row.key === pane.sessionKey),
+    );
     return html`
       <div
         class="chat-split-toolbar__pane ${active ? "chat-split-toolbar__pane--active" : ""}"
         @pointerdown=${() => this.handleFocusPane(pane.id)}
         @focusin=${() => this.handleToolbarPaneFocus(pane.id)}
       >
-        <label class="chat-pane__session-label">
-          <span class="agent-chat__sr-only">${t("chat.splitView.sessionSelect")}</span>
-          <select
-            class="chat-pane__session-select"
-            data-session-key=${pane.sessionKey}
-            aria-label=${t("chat.splitView.sessionSelect")}
-            .value=${pane.sessionKey}
-            @change=${(event: Event) => {
-              const nextSessionKey = (event.target as HTMLSelectElement).value;
-              if (nextSessionKey && nextSessionKey !== pane.sessionKey) {
-                this.handlePaneSessionChange(pane.id, nextSessionKey);
-              }
-            }}
-          >
-            ${options.map(
-              (row) => html`
-                <option value=${row.key}>
-                  ${resolveSessionDisplayName(
-                    row.key,
-                    sessions.find((session) => session.key === row.key),
-                  )}
-                </option>
-              `,
-            )}
-          </select>
-        </label>
+        <!-- Static text on purpose: this strip doubles as the Mac app titlebar
+             drag area, and an interactive session picker here swallows window
+             drags. Panes change sessions via the sidebar or drag-and-drop. -->
+        <span class="chat-pane__session-title" title=${title}>${title}</span>
         <div class="chat-pane__actions">
           ${!this.narrow
             ? html`
