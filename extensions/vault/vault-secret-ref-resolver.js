@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { readFile } from "node:fs/promises";
+import { parseVaultSecretId } from "./vault-secret-id.js";
 
 const KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token";
 const VAULT_FETCH_TIMEOUT_MS = 5000;
@@ -100,26 +101,6 @@ function resolveKvVersion() {
     return 1;
   }
   throw new Error("OPENCLAW_VAULT_KV_VERSION must be 1 or 2.");
-}
-
-function parseVaultId(id) {
-  const parts = id.split("/").filter(Boolean);
-  if (parts.length < 2) {
-    throw new Error(
-      `Vault SecretRef id "${id}" must use "<path>/<field>", for example "providers/openai/apiKey".`,
-    );
-  }
-  if (parts.some((part) => part === "." || part === "..")) {
-    throw new Error(`Vault SecretRef id "${id}" must not contain dot path segments.`);
-  }
-  const field = parts.at(-1);
-  if (!field) {
-    throw new Error(`Vault SecretRef id "${id}" is missing a field.`);
-  }
-  return {
-    secretPath: parts.slice(0, -1).join("/"),
-    field,
-  };
 }
 
 function encodePath(pathValue) {
@@ -252,7 +233,7 @@ function readStringField(payload, parsedId) {
 }
 
 async function readVaultSecret(baseUrl, vaultToken, id) {
-  const parsedId = parseVaultId(id);
+  const parsedId = parseVaultSecretId(id);
   const headers = {
     "X-Vault-Token": vaultToken,
   };

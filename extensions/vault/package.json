@@ -16,6 +16,10 @@
         {
           "source": "./vault-secret-ref-resolver.js",
           "output": "vault-secret-ref-resolver.js"
+        },
+        {
+          "source": "./vault-secret-id.js",
+          "output": "vault-secret-id.js"
         }
       ]
     }

@@ -144,6 +144,17 @@ describe("vault CLI setup plan", () => {
     );
   });
 
+  it.each([
+    "providers/openai/apiKey/",
+    "/providers/openai/apiKey",
+    "providers//openai/apiKey",
+    "apiKey",
+  ])("rejects non-canonical Vault secret id %s", (secretId) => {
+    expect(() => testing.parseProviderKeyMappings([`openai=${secretId}`])).toThrow(
+      "Invalid --provider-key openai Vault secret id",
+    );
+  });
+
   it("rejects unsupported config target paths", () => {
     expect(() =>
       testing.createConfigSecretTarget({

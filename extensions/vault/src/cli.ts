@@ -8,6 +8,7 @@ import {
   resolvePlanTargetAgainstRegistry,
 } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { parseVaultSecretId } from "../vault-secret-id.js";
 
 type CommandLike = {
   command(name: string): CommandLike;
@@ -98,7 +99,6 @@ type ProviderStatus = {
 const VAULT_PROVIDER_ALIAS = "vault";
 const SECRET_PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const MODEL_PROVIDER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-const EXEC_SECRET_REF_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$/;
 const FORBIDDEN_PATH_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 const AUTH_PROFILE_TARGET_TYPES = ["auth-profiles.api_key.key", "auth-profiles.token.token"];
 
@@ -144,10 +144,9 @@ function assertValidModelProviderId(label: string, value: string): void {
 }
 
 function assertValidVaultSecretId(label: string, value: string): void {
-  if (
-    !EXEC_SECRET_REF_ID_PATTERN.test(value) ||
-    value.split("/").some((part) => part === "." || part === "..")
-  ) {
+  try {
+    parseVaultSecretId(value);
+  } catch {
     throw new Error(`Invalid ${label} Vault secret id: ${value}`);
   }
 }

@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 const resolverPath = fileURLToPath(new URL("../vault-secret-ref-resolver.js", import.meta.url));
+const secretIdHelperPath = fileURLToPath(new URL("../vault-secret-id.js", import.meta.url));
 const manifestPath = fileURLToPath(new URL("../openclaw.plugin.json", import.meta.url));
 const packagePath = fileURLToPath(new URL("../package.json", import.meta.url));
 
@@ -276,6 +277,11 @@ describe("plugin manifest", () => {
       source: "./vault-secret-ref-resolver.js",
       output: "vault-secret-ref-resolver.js",
     });
+    expect(packageJson.openclaw?.build?.staticAssets).toContainEqual({
+      source: "./vault-secret-id.js",
+      output: "vault-secret-id.js",
+    });
+    expect(readFileSync(secretIdHelperPath, "utf8")).toContain("parseVaultSecretId");
   });
 });
 
@@ -366,6 +372,36 @@ describe("vault SecretRef resolver", () => {
     });
     expect(fixture.requests).toEqual([]);
   });
+
+  it.each(["/providers/openai/apiKey", "providers/openai/apiKey/", "providers//openai/apiKey"])(
+    "rejects empty path segments in Vault id %s",
+    async (id) => {
+      const fixture = await startVaultFixture();
+      const result = await runResolver({
+        request: {
+          protocolVersion: 1,
+          provider: "vault",
+          ids: [id],
+        },
+        env: {
+          VAULT_ADDR: fixture.vaultAddr,
+          VAULT_TOKEN: "not-a-real-auth-header",
+        },
+      });
+
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toEqual({
+        protocolVersion: 1,
+        values: {},
+        errors: {
+          [id]: {
+            message: `Vault SecretRef id "${id}" must not contain empty path segments.`,
+          },
+        },
+      });
+      expect(fixture.requests).toEqual([]);
+    },
+  );
 
   it("reads the Vault client token from a token file", async () => {
     const fixture = await startVaultFixture();
