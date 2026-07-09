@@ -854,9 +854,9 @@ async function sendMessageTelegramWithContext(
   to: string,
   text: string,
   opts: TelegramSendOpts,
-  context: TelegramApiContext,
+  apiContext: TelegramApiContext,
 ): Promise<TelegramSendResult> {
-  const { cfg, account, api, leaseClientOptions } = context;
+  const { cfg, account, api, leaseClientOptions } = apiContext;
   const target = parseTelegramTarget(to);
   const chatId = await resolveAndPersistChatId({
     cfg,
