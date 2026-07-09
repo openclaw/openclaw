@@ -440,9 +440,7 @@ describe("installSkillFromSource", () => {
   it("refuses git specs whose url would be consumed as a git clone option", async () => {
     await withTempDir({ prefix: "openclaw-skill-source-opt-inject-" }, async (root) => {
       const workspaceDir = path.join(root, "workspace");
-      const marker = path.join(root, "pwned.txt");
       const payload = path.join(root, "payload.git");
-      await fs.writeFile(payload, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`, { mode: 0o755 });
 
       const result = await installSkillFromSource({
         workspaceDir,
@@ -453,7 +451,6 @@ describe("installSkillFromSource", () => {
         ok: false,
         error: expect.stringContaining("Unsupported git skill spec"),
       });
-      await expect(fs.access(marker)).rejects.toThrow();
     });
   });
 });

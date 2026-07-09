@@ -175,6 +175,19 @@ describe("installPluginFromGitSpec", () => {
     );
   });
 
+  it("rejects option-leading clone sources before invoking git", async () => {
+    const result = await installPluginFromGitSpec({
+      spec: "git:--upload-pack=/tmp/pwn.git",
+      dryRun: true,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "unsupported git: plugin spec: git:--upload-pack=/tmp/pwn.git",
+    });
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+  });
+
   it("clones, checks out refs, installs from the clone, and returns commit metadata", async () => {
     runCommandWithTimeoutMock
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
