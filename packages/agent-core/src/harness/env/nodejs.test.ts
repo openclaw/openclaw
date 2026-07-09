@@ -12,6 +12,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   vi.clearAllMocks();
 });
@@ -212,10 +213,15 @@ describe("NodeExecutionEnv exec stream errors", () => {
   it("contains stdout errors during Windows shell discovery", async () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    // Force PATH discovery even on Windows hosts with Git Bash in Program Files.
+    vi.stubEnv("ProgramFiles", "");
+    vi.stubEnv("ProgramFiles(x86)", "");
     try {
       const child = mockSpawnChild();
       const resultPromise = new NodeExecutionEnv({ cwd: process.cwd() }).exec("echo hello");
       await waitForSpawnCall();
+      expect(spawnMock.mock.calls[0]?.[0]).toBe("where");
+      expect(spawnMock.mock.calls[0]?.[1]).toEqual(["bash.exe"]);
 
       child.stdout.emit("error", new Error("where stdout failed"));
 
@@ -224,7 +230,6 @@ describe("NodeExecutionEnv exec stream errors", () => {
       if (!result.ok) {
         expect(result.error.code).toBe("shell_unavailable");
       }
-      expect(spawnMock.mock.calls[0]?.[0]).toBe("where");
     } finally {
       if (platformDescriptor) {
         Object.defineProperty(process, "platform", platformDescriptor);
