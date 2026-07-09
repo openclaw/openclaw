@@ -582,13 +582,13 @@ function renderChatModelReasoningSelect(params: {
                 ${formatChatModelProviderLabel(entry.provider)}
               </span>
             </span>
-            <span
-              class="chat-controls__inline-select-check"
-              aria-hidden="true"
-              ?hidden=${!selected}
-            >
-              ${icons.check}
-            </span>
+            ${selected
+              ? html`
+                  <span class="chat-controls__inline-select-check" aria-hidden="true">
+                    ${icons.check}
+                  </span>
+                `
+              : ""}
           </button>
         </openclaw-tooltip>
       </div>
