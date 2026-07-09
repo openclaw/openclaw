@@ -197,4 +197,19 @@ describe("generateConversationLabel", () => {
       }),
     ).resolves.toBe("A very long ");
   });
+
+  it("keeps the label on a UTF-16 boundary", async () => {
+    completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      content: [{ type: "text", text: `${"a".repeat(127)}🚀tail` }],
+    });
+
+    await expect(
+      generateConversationLabel({
+        userMessage: "Need help with invoices",
+        prompt: "Generate a label",
+        cfg: {},
+        maxLength: 128,
+      }),
+    ).resolves.toBe("a".repeat(127));
+  });
 });
