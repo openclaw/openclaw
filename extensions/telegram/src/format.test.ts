@@ -635,8 +635,12 @@ describe("markdownToTelegramHtml", () => {
     expect(containsLoneSurrogate(output)).toBe(false);
   });
 
-  it("fails loudly when tag overhead leaves no room for text", () => {
-    expect(() => splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10)).toThrow(/tag overhead/i);
+  it("delivers content instead of throwing when tag overhead fills the chunk", () => {
+    const chunks = splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10);
+    expect(chunks).toHaveLength(1);
+    // Content is delivered even though the chunk exceeds the limit;
+    // throwing would cause complete message loss.
+    expect(chunks[0]).toContain("x");
   });
 
   it("does not split an astral char across the chunk boundary", () => {

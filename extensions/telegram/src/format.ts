@@ -1523,9 +1523,12 @@ export function splitTelegramHtmlChunks(
         normalizedLimit - current.length - buildTelegramHtmlCloseSuffixLength(openTags);
       if (available <= 0) {
         if (!chunkHasPayload) {
-          throw new Error(
-            `Telegram HTML chunk limit exceeded by tag overhead (limit=${normalizedLimit})`,
-          );
+          // Tag overhead fills the entire chunk with no room for text.
+          // Still deliver content to avoid complete message loss — Telegram
+          // accepts oversized chunks in practice.
+          chunkHasPayload = true;
+          current += remaining;
+          break;
         }
         flushCurrent();
         continue;
