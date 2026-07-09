@@ -4,8 +4,8 @@
  * Resolves model, thinking, and timeout choices before the sessions_spawn executor launches work.
  */
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
-import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
@@ -65,12 +65,13 @@ export function resolveConfiguredSubagentAnnounceTarget(params: {
   if (params.announceTarget) {
     return params.announceTarget;
   }
-  const requesterAgentConfig =
-    params.requesterAgentId && Array.isArray(params.cfg?.agents?.list)
-      ? (params.cfg.agents.list.find((agent) => agent.id === params.requesterAgentId) as
-          | AgentConfig
-          | undefined)
-      : undefined;
+  // Match the canonical agent lookup used elsewhere (routing, requireAgentId):
+  // requesterAgentId arrives already normalized, so a raw agent.id === id compare
+  // silently drops per-agent overrides whenever the configured id casing/format
+  // differs. resolveAgentConfig normalizes both sides.
+  const requesterAgentConfig = params.requesterAgentId
+    ? resolveAgentConfig(params.cfg, params.requesterAgentId)
+    : undefined;
   return (
     readConfiguredAnnounceTarget(requesterAgentConfig?.subagents?.announceTarget) ??
     readConfiguredAnnounceTarget(params.cfg?.agents?.defaults?.subagents?.announceTarget) ??
