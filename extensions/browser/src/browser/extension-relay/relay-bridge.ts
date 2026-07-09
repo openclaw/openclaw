@@ -41,10 +41,6 @@ type CdpRequest = {
   sessionId?: string;
 };
 
-type CdpRequestParseResult =
-  | { ok: true; request: CdpRequest }
-  | { ok: false; id: number | null; sessionId?: string; message: string; code: number };
-
 type PendingExtensionCommand = {
   resolve: (result: unknown) => void;
   reject: (err: Error) => void;
@@ -83,30 +79,8 @@ function toErrorPayload(
   sessionId: string | undefined,
   message: string,
   code = -32000,
-) {
+): string {
   return JSON.stringify({ id, ...(sessionId ? { sessionId } : {}), error: { code, message } });
-}
-
-function parseCdpRequest(raw: string): CdpRequestParseResult {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { ok: false, id: null, message: "Parse error", code: -32700 };
-  }
-
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { ok: false, id: null, message: "Invalid request", code: -32600 };
-  }
-
-  const request = parsed as Record<string, unknown>;
-  const id = typeof request.id === "number" ? request.id : null;
-  const sessionId = typeof request.sessionId === "string" ? request.sessionId : undefined;
-  if (typeof request.id !== "number" || typeof request.method !== "string") {
-    return { ok: false, id, sessionId, message: "Invalid request", code: -32600 };
-  }
-
-  return { ok: true, request: parsed as CdpRequest };
 }
 
 /**
@@ -525,14 +499,26 @@ export class ExtensionRelayBridge {
     const client: CdpClientState = { socket, autoAttach: false, announcedSessions: new Set() };
     this.clients.add(client);
     const onMessage = (raw: string) => {
-      const parsed = parseCdpRequest(raw);
-      if (!parsed.ok) {
-        client.socket.send(
-          toErrorPayload(parsed.id, parsed.sessionId, parsed.message, parsed.code),
-        );
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        client.socket.send(toErrorPayload(null, undefined, "Parse error", -32700));
         return;
       }
-      void this.handleCdpRequest(client, parsed.request);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        client.socket.send(toErrorPayload(null, undefined, "Invalid request", -32600));
+        return;
+      }
+      const request = parsed as Record<string, unknown>;
+      if (typeof request.id !== "number" || typeof request.method !== "string") {
+        const id = typeof request.id === "number" ? request.id : null;
+        const sessionId = typeof request.sessionId === "string" ? request.sessionId : undefined;
+        // Flat CDP routes responses by sessionId before matching the request id.
+        client.socket.send(toErrorPayload(id, sessionId, "Invalid request", -32600));
+        return;
+      }
+      void this.handleCdpRequest(client, request as CdpRequest);
     };
     const onClose = () => {
       this.clients.delete(client);
