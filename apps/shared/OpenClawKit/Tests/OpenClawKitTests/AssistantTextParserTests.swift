@@ -48,4 +48,13 @@ import Testing
         #expect(AssistantTextParser.hasVisibleContent(in: "<think>internal</think>") == false)
         #expect(AssistantTextParser.hasVisibleContent(in: "<think>internal</think>", includeThinking: true))
     }
+
+    @Test func usesStableSegmentIDsAcrossRepeatedParses() {
+        let raw = "<think>internal</think>\n\n<final>Hello there</final>"
+        let first = AssistantTextParser.segments(from: raw, includeThinking: true)
+        let second = AssistantTextParser.segments(from: raw, includeThinking: true)
+
+        #expect(first.map(\.id) == ["thinking-0", "response-1"])
+        #expect(first.map(\.id) == second.map(\.id))
+    }
 }
