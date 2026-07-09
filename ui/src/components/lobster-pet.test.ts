@@ -71,14 +71,22 @@ describe("lobster pet look", () => {
   it("stays within the variant catalog for many seeds", () => {
     const palettes = new Set<string>();
     const personalities = new Set<string>();
+    const builds = new Set<string>();
+    const clawSizes = new Set<string>();
+    const tailFans = new Set<boolean>();
     for (let seed = 0; seed < 300; seed++) {
       const look = createLobsterPetLook(seed);
       palettes.add(look.palette.id);
       personalities.add(look.personality);
+      builds.add(look.build);
+      clawSizes.add(look.clawSize);
+      tailFans.add(look.tailFan);
       expect(LOBSTER_PET_PALETTE_IDS).toContain(look.palette.id);
       expect([1.7, 2, 2.5]).toContain(look.scale);
       expect(["none", "crown", "sprout", "patch"]).toContain(look.accessory);
       expect(["perky", "droopy"]).toContain(look.antennae);
+      expect(["round", "squat", "slender"]).toContain(look.build);
+      expect(["dainty", "regular", "mighty"]).toContain(look.clawSize);
       const zone = SPOT_ZONES[look.side];
       expect(look.spotPct).toBeGreaterThanOrEqual(zone[0]);
       expect(look.spotPct).toBeLessThanOrEqual(zone[1]);
@@ -86,6 +94,9 @@ describe("lobster pet look", () => {
     // Sessions should feel different: many seeds must not collapse onto one look.
     expect(palettes.size).toBeGreaterThan(2);
     expect(personalities.size).toBeGreaterThan(2);
+    expect(builds.size).toBe(3);
+    expect(clawSizes.size).toBe(3);
+    expect(tailFans.size).toBe(2);
   });
 
   it("hatches every rarity tier, with rares staying rare", () => {

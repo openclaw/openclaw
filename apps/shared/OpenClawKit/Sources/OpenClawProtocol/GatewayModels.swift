@@ -3056,6 +3056,7 @@ public struct SessionsUsageParams: Codable, Sendable {
     public let groupby: AnyCodable?
     public let includehistorical: Bool?
     public let utcoffset: String?
+    public let timezone: String?
     public let limit: Int?
     public let includecontextweight: Bool?
 
@@ -3070,6 +3071,7 @@ public struct SessionsUsageParams: Codable, Sendable {
         groupby: AnyCodable?,
         includehistorical: Bool?,
         utcoffset: String?,
+        timezone: String? = nil,
         limit: Int?,
         includecontextweight: Bool?)
     {
@@ -3083,6 +3085,7 @@ public struct SessionsUsageParams: Codable, Sendable {
         self.groupby = groupby
         self.includehistorical = includehistorical
         self.utcoffset = utcoffset
+        self.timezone = timezone
         self.limit = limit
         self.includecontextweight = includecontextweight
     }
@@ -3098,6 +3101,7 @@ public struct SessionsUsageParams: Codable, Sendable {
         case groupby = "groupBy"
         case includehistorical = "includeHistorical"
         case utcoffset = "utcOffset"
+        case timezone = "timeZone"
         case limit
         case includecontextweight = "includeContextWeight"
     }

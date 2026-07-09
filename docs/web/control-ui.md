@@ -246,6 +246,7 @@ The terminal is also available as a full-screen, terminal-only document at `/?vi
     - In the macOS app, the OpenClaw mark uses the otherwise-empty native titlebar strip next to the window controls instead of consuming a sidebar row.
     - On desktop widths, chat controls stay on one compact row and collapse while scrolling down the transcript; scrolling up, returning to the top, or reaching the bottom restores the controls.
     - Consecutive duplicate text-only messages render as one bubble with a count badge. Messages that carry images, attachments, tool output, or canvas previews are left uncollapsed.
+    - The session workspace rail on the right side of each Chat pane lists session files, project files, and artifacts. Press ⇧⌘B to expand or collapse the active pane's rail; the separate file, tool, and Canvas detail panel is unaffected.
     - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
     - **Split view:** open it from the bottom-right page action, then split the active pane right or down for as many panes as fit. Each pane has its own session, transcript, composer, and tool stream.
     - Drag a session from the sidebar into chat to open it in a pane. An animated drop preview glides between zones and labels the outcome — "Split" over the exact half a new pane will occupy, "Open here" over a whole pane — and drops also work from single-pane mode.

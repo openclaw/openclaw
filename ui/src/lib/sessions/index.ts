@@ -38,6 +38,7 @@ export {
   requestSessionUsage,
   requestSessionUsageLogs,
   requestSessionUsageTimeSeries,
+  requestSessionsUsage,
 } from "./usage.ts";
 export type { SessionUsageQuery } from "./usage.ts";
 
