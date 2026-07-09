@@ -76,9 +76,16 @@ export function createDiscordDraftPreviewController(params: {
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
   let finalReplyDelivered = false;
-  // Final delivery cancels the compositor gate before Discord decides whether
-  // to edit the progress preview, so keep the pre-final eligibility bit.
+  // Gate cancellation (e.g. on abort) can clear hasStarted before the collapse
+  // check in shouldCollapseProgressDraft, causing a stuck progress bar when the
+  // draft was actually started. Snapshot hasStarted at markFinalReplyStarted so
+  // collapse eligibility survives gate cancellation.
   let progressDraftStartedBeforeFinal = false;
+  // Prevent re-collapse after markPreviewFinalized has already turned the
+  // draft into a summary. Without this guard a subsequent final-payload
+  // delivery in the same turn would re-trigger collapse on the now-cleaned
+  // stream (because the gate is still active), corrupting downstream delivery.
+  let progressDraftCollapsed = false;
   const previewToolProgressEnabled =
     Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(params.discordConfig);
   const narrationProgressEnabled =
@@ -155,7 +162,9 @@ export function createDiscordDraftPreviewController(params: {
       return discordStreamMode === "progress";
     },
     get hasProgressDraftStarted() {
-      return progressDraft.hasStarted || progressDraftStartedBeforeFinal;
+      return (
+        !progressDraftCollapsed && (progressDraft.hasStarted || progressDraftStartedBeforeFinal)
+      );
     },
     get finalizedViaPreviewMessage() {
       return finalizedViaPreviewMessage;
@@ -169,6 +178,8 @@ export function createDiscordDraftPreviewController(params: {
       progressDraft.markFinalReplyDelivered();
     },
     markPreviewFinalized() {
+      progressDraftCollapsed = true;
+      progressDraftStartedBeforeFinal = false;
       finalizedViaPreviewMessage = true;
     },
     disableBlockStreamingForDraft: draftStream ? true : undefined,
@@ -278,6 +289,7 @@ export function createDiscordDraftPreviewController(params: {
     },
     handleAssistantMessageBoundary() {
       // Queued/followup turns need a fresh progress draft after the primary final.
+      progressDraftCollapsed = false;
       progressDraft.beginNewTurn();
       if (discordStreamMode === "progress") {
         return;
