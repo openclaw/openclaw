@@ -1547,6 +1547,26 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(text).toContain("/srv/app/config.yaml");
   });
 
+  it("redacts credential name/value shapes from non-JSON string arguments", () => {
+    // Regression: invalid JSON tool args with "token: deadbeef..." leaked into
+    // extractOpaqueIdentifiers because only prefix redaction ran later.
+    const text = extractMessageTextForIdentifiers({
+      role: "assistant",
+      content: [
+        {
+          type: "functionCall",
+          id: "call_raw_cred",
+          name: "auth",
+          arguments: "token: deadbeef12345678 path=/srv/app/config.yaml", // pragma: allowlist secret
+        },
+      ],
+    });
+    expect(text).not.toContain("deadbeef12345678"); // pragma: allowlist secret
+    expect(text).toContain("/srv/app/config.yaml");
+    const ids = extractOpaqueIdentifiers(text);
+    expect(ids).not.toContain("DEADBEEF12345678"); // pragma: allowlist secret
+  });
+
   it("extracts credential-shaped values from tool result content", () => {
     const text = extractMessageTextForIdentifiers({
       role: "toolResult",
@@ -2434,6 +2454,73 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(result.cancel).toBe(true);
     const reason = consumeCompactionSafeguardCancelReason(sessionManager);
     expect(reason).toContain("required identifier");
+  });
+
+  it("skips post-cap strict identifier audit when qualityGuard is disabled", async () => {
+    // Users with qualityGuard.enabled:false must keep the opt-out: post-cap
+    // recovery/cancel is part of the audit surface and must not fire alone.
+    mockSummarizeInStages.mockReset();
+    const overCapSummary =
+      [
+        "## Decisions",
+        "Keep current flow.",
+        "## Open TODOs",
+        "None.",
+        "## Constraints/Rules",
+        "Follow rules.",
+        "## Pending user asks",
+        "deploy service",
+        "## Exact identifiers",
+        "None.",
+      ].join("\n") +
+      "\n" +
+      "x".repeat(MAX_COMPACTION_SUMMARY_CHARS + 500);
+    mockSummarizeInStages.mockResolvedValueOnce(overCapSummary);
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: false,
+      qualityGuardMaxRetries: 0,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          {
+            role: "user",
+            content: "deploy with hash a1b2c3d4e5f6",
+            timestamp: 1,
+          },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).toBeFalsy();
+    expect(result.compaction?.summary).toBeTruthy();
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeFalsy();
   });
 
   it("preserves split-turn and recent-turn suffixes when retry fallback is capped", async () => {

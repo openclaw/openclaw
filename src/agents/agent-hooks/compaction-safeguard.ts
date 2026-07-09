@@ -1345,9 +1345,15 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
       // Validate identifiers survived final capping. The quality guard loop
       // checks the uncapped summary; capping can remove identifiers at the
-      // truncation boundary. In strict mode, re-append lost identifiers only
-      // when the recovered summary stays within the cap budget.
-      if (identifierPolicy === "strict" && transcriptIdentifiers.length > 0) {
+      // truncation boundary. Honor qualityGuard.enabled so users who opt out
+      // of audit retries do not still hit strict post-cap mutation/cancel.
+      // In strict mode, re-append lost identifiers only when the recovered
+      // summary stays within the cap budget.
+      if (
+        qualityGuardEnabled &&
+        identifierPolicy === "strict" &&
+        transcriptIdentifiers.length > 0
+      ) {
         const postCapLost = computeLostIdentifiers(transcriptIdentifiers, summary);
         if (postCapLost.length > 0) {
           const recoveryBlock = postCapLost.map((id) => `- ${id}`).join("\n");

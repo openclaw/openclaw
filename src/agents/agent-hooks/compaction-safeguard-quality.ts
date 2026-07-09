@@ -211,6 +211,15 @@ function redactCredentials(text: string): string {
   return text.replace(CREDENTIAL_REDACT_PATTERN, "");
 }
 
+// Name/value credential shapes in non-JSON tool argument strings
+// (e.g. "token: deadbeef12345678") that lack a known secret prefix.
+const CREDENTIAL_NAME_VALUE_PATTERN =
+  /\b(?:token|api[_-]?key|password|secret|auth|credential|access[_-]?token)\s*[:=]\s*[A-Za-z0-9_+\-./=]{8,}/gi;
+
+function redactUnsafeRawToolArgument(text: string): string {
+  return redactCredentials(text.replace(CREDENTIAL_NAME_VALUE_PATTERN, ""));
+}
+
 function isPureHexIdentifier(value: string): boolean {
   return /^[A-Fa-f0-9]{8,}$/.test(value);
 }
@@ -284,9 +293,13 @@ export function extractMessageTextForIdentifiers(message: unknown): string {
               parts.push(args);
             }
           } catch {
-            // Not valid JSON; include as-is (identifier extractor will still
-            // apply credential-prefix redaction downstream).
-            parts.push(args);
+            // Not valid JSON; redact name/value credential shapes and known
+            // prefixes before identifier extraction so hex-looking secrets
+            // do not land in ## Exact identifiers.
+            const redacted = redactUnsafeRawToolArgument(args);
+            if (redacted.trim()) {
+              parts.push(redacted);
+            }
           }
         } else if (args && typeof args === "object") {
           try {
