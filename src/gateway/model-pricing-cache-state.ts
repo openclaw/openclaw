@@ -82,10 +82,20 @@ export function replaceGatewayModelPricingCache(
     });
     cachedPricing = new Map(sorted.slice(0, MAX_PRICING_CACHE_ENTRIES));
     cachedAt = nextCachedAt;
+    prunePricingAccessTimestamps();
     return;
   }
   cachedPricing = nextPricing;
   cachedAt = nextCachedAt;
+  prunePricingAccessTimestamps();
+}
+
+function prunePricingAccessTimestamps(): void {
+  for (const key of pricingAccessTimestamps.keys()) {
+    if (!cachedPricing.has(key)) {
+      pricingAccessTimestamps.delete(key);
+    }
+  }
 }
 
 export function clearGatewayModelPricingCacheState(): void {
