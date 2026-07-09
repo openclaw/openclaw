@@ -20,7 +20,7 @@ import {
 } from "../../app/user-identity.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { resolveAssistantTextAvatar, resolveChatAvatarRenderUrl } from "../../lib/avatar.ts";
 import { formatDurationHuman } from "../../lib/format.ts";
@@ -213,7 +213,7 @@ function resolveAssistantPreviewAvatarUrl(props: QuickSettingsProps): string | n
   });
 }
 
-function formatAssistantAvatarSource(value: string | null | undefined): string | null {
+export function formatAssistantAvatarSource(value: string | null | undefined): string | null {
   const source = normalizeOptionalString(value);
   if (!source) {
     return null;
@@ -222,7 +222,7 @@ function formatAssistantAvatarSource(value: string | null | undefined): string |
     const header = source.slice(0, source.indexOf(",") > 0 ? source.indexOf(",") : 32);
     return `${header},...`;
   }
-  return source.length > 72 ? `${truncateUtf16Safe(source, 34)}...${source.slice(-24)}` : source;
+  return source.length > 72 ? `${truncateUtf16Safe(source, 34)}...${sliceUtf16Safe(source, -24)}` : source;
 }
 
 function formatAssistantAvatarIssue(

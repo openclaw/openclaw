@@ -2,7 +2,11 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderQuickSettings, type QuickSettingsProps } from "./quick.ts";
+import {
+  formatAssistantAvatarSource,
+  renderQuickSettings,
+  type QuickSettingsProps,
+} from "./quick.ts";
 
 function expectButtonByText(container: Element, text: string): HTMLButtonElement {
   const button = Array.from(container.querySelectorAll("button")).find(
@@ -596,5 +600,30 @@ describe("renderQuickSettings", () => {
 
     expect(setTheme).toHaveBeenCalledWith("custom", { element: customThemeButton });
     expect(onOpenCustomThemeImport).not.toHaveBeenCalled();
+  });
+});
+
+describe("formatAssistantAvatarSource", () => {
+  it("does not break surrogate pairs at the suffix truncation boundary", () => {
+    // Build a 74-char string where an emoji straddles the -24 suffix boundary
+    const prefix = "a".repeat(49);
+    const emoji = "\u{1F600}"; // 😀, 2 UTF-16 code units at positions 49-50
+    const suffix = "b".repeat(23);
+    const source = `${prefix}${emoji}${suffix}`; // length = 74 > 72
+
+    const result = formatAssistantAvatarSource(source);
+
+    expect(result).not.toBeNull();
+    // Result: prefix 34 + "..." + suffix (emoji excluded from both halves)
+    expect(result).toBe(`${"a".repeat(34)}...${suffix}`);
+    // No isolated surrogate in output
+    for (let i = 0; i < result!.length; i++) {
+      const code = result!.charCodeAt(i);
+      if (code >= 0xd800 && code <= 0xdbff) {
+        // High surrogate must be followed by a low surrogate
+        expect(result!.charCodeAt(i + 1)).toBeGreaterThanOrEqual(0xdc00);
+        i++;
+      }
+    }
   });
 });
