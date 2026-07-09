@@ -733,7 +733,7 @@ describe("exec approvals CLI", () => {
     );
     expectFields(saved, "saved approvals", {
       version: 1,
-      agents: undefined,
+      agents: {},
     });
     expect(runtimeErrors).toHaveLength(0);
   });
