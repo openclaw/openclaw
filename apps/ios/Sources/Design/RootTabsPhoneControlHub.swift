@@ -33,6 +33,8 @@ struct RootTabsPhoneControlHub: View {
                     } header: {
                         if let title = self.sectionTitle(for: group) {
                             Text(title)
+                                .font(OpenClawType.captionSemiBold)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -60,10 +62,10 @@ struct RootTabsPhoneControlHub: View {
                 color: self.gatewayStateColor)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Gateway")
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                     .foregroundStyle(.primary)
                 Text(self.sidebarActiveAgentTitle)
-                    .font(.footnote)
+                    .font(OpenClawType.footnote)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -71,10 +73,10 @@ struct RootTabsPhoneControlHub: View {
             HStack(spacing: 6) {
                 ProStatusDot(color: self.gatewayStateColor)
                 Text(self.gatewayStateText)
-                    .font(.footnote.weight(.semibold))
+                    .font(OpenClawType.footnoteSemiBold)
                     .foregroundStyle(self.gatewayStateColor)
                 Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawType.captionSemiBold)
                     .foregroundStyle(.secondary)
             }
         }
@@ -95,7 +97,7 @@ struct RootTabsPhoneControlHub: View {
                     self.rowLabel(destination)
                     Spacer(minLength: 8)
                     Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
+                        .font(OpenClawType.captionSemiBold)
                         .foregroundStyle(.secondary)
                 }
                 .contentShape(Rectangle())
@@ -109,13 +111,13 @@ struct RootTabsPhoneControlHub: View {
     }
 
     private func rowLabel(_ destination: RootTabs.SidebarDestination) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            ProIconBadge(systemName: destination.systemImage, color: .secondary)
+        Label {
             Text(destination.title)
-                .font(.subheadline.weight(.semibold))
+                .font(OpenClawType.subheadSemiBold)
                 .foregroundStyle(.primary)
+        } icon: {
+            ProIconBadge(systemName: destination.systemImage, color: .secondary)
         }
-        .padding(.vertical, 3)
     }
 
     @ViewBuilder
@@ -157,6 +159,11 @@ struct RootTabsPhoneControlHub: View {
             CommandSessionsScreen(
                 usesNativeNavigationChrome: true,
                 openChat: { self.openChatFromControlDetail(.sessions) })
+        case .files:
+            AgentProTab(
+                directRoute: .files,
+                headerTitle: "Files",
+                openSettings: { self.openGatewayDetail() })
         case .dreaming:
             AgentProTab(
                 directRoute: .dreaming,
@@ -172,6 +179,10 @@ struct RootTabsPhoneControlHub: View {
                 directRoute: .cron,
                 headerTitle: "Cron Jobs",
                 openSettings: { self.openGatewayDetail() })
+        case .terminal:
+            TerminalHubScreen(
+                usesNativeNavigationChrome: true,
+                gatewayAction: { self.openGatewayDetail() })
         case .docs:
             OpenClawDocsScreen(
                 usesNativeNavigationChrome: true,

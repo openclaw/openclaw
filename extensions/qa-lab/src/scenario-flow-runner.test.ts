@@ -19,6 +19,7 @@ function formatTestTranscript(state: ReturnType<typeof createQaBusState>) {
 async function runLoadedScenarioFlow(
   scenarioId: string,
   params: {
+    omitOutboundSequence?: boolean;
     onWaitForOutboundMessage?: (params: {
       waitCount: number;
       state: ReturnType<typeof createQaBusState>;
@@ -74,9 +75,16 @@ async function runLoadedScenarioFlow(
       }
       throw new Error(`timed out after ${input.timeoutMs}ms waiting for outbound marker`);
     },
+    ...(params.omitOutboundSequence
+      ? {}
+      : {
+          waitForOutboundSequence: async () => {
+            throw new Error("outbound sequence not configured for this fixture");
+          },
+        }),
   };
   const api = {
-    env: {},
+    env: { providerMode: "mock-openai" },
     transport,
     state,
     scenario,
@@ -84,6 +92,7 @@ async function runLoadedScenarioFlow(
     randomUUID: () => "00000000-0000-4000-8000-000000000000",
     liveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
     waitForGatewayHealthy: async () => undefined,
+    waitForTransportReady: async () => undefined,
     waitForQaChannelReady: async () => undefined,
     waitForNoOutbound: async () => undefined,
     sleep: async () => undefined,
@@ -138,6 +147,16 @@ async function runLoadedScenarioFlow(
 }
 
 describe("scenario-flow-runner", () => {
+  it("fails when a flow calls a transport method the adapter does not implement", async () => {
+    await expect(
+      runLoadedScenarioFlow("channel-message-flows", {
+        omitOutboundSequence: true,
+      }),
+    ).rejects.toThrow(
+      'QA scenario "channel-message-flows" cannot run "waitForOutboundSequence": the active transport adapter does not implement this method.',
+    );
+  });
+
   it("supports qaImport inside flow expressions", async () => {
     const result = await runScenarioFlow({
       api: {

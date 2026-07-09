@@ -48,7 +48,7 @@ function fishWords(values: readonly string[]): string {
   return values.join(" ");
 }
 
-function fishOptionFlags(options: Command["options"], wantsValue: boolean): string[] {
+function completionOptionFlags(options: Command["options"], wantsValue: boolean): string[] {
   return options.flatMap((option) => {
     if ((option.required || option.optional) !== wantsValue) {
       return [];
@@ -57,19 +57,36 @@ function fishOptionFlags(options: Command["options"], wantsValue: boolean): stri
   });
 }
 
+// Aliases are typeable command words; every completion surface must offer them
+// alongside the canonical name or advertised commands appear nonexistent.
+function commandNameVariants(cmd: Command): string[] {
+  return [cmd.name(), ...cmd.aliases()];
+}
+
+// Alias-typed paths must keep completing like the canonical command. Variants
+// multiply by (1 + alias count) per aliased ancestor, so nesting aliased
+// commands under each other grows emitted paths multiplicatively; today no
+// aliased command nests under another.
+function childPathVariants(parentVariants: readonly string[][], sub: Command): string[][] {
+  return parentVariants.flatMap((parents) =>
+    commandNameVariants(sub).map((name) => parents.concat(name)),
+  );
+}
+
 function collectFishPathOptionFlags(
   program: Command,
   parents: readonly string[],
   wantsValue: boolean,
 ): string[] {
-  const flags = new Set(fishOptionFlags(program.options, wantsValue));
+  const flags = new Set(completionOptionFlags(program.options, wantsValue));
   let current: Command | undefined = program;
   for (const name of parents) {
-    current = current?.commands.find((cmd) => cmd.name() === name);
+    // Path segments can be aliases when the user typed one; resolve both forms.
+    current = current?.commands.find((cmd) => commandNameVariants(cmd).includes(name));
     if (!current) {
       break;
     }
-    for (const flag of fishOptionFlags(current.options, wantsValue)) {
+    for (const flag of completionOptionFlags(current.options, wantsValue)) {
       flags.add(flag);
     }
   }
@@ -258,7 +275,7 @@ _${rootCmd}_root_completion() {
   case $state in
     (args)
       case $line[1] in
-        ${program.commands.map((cmd) => `(${cmd.name()}) _${rootCmd}_${cmd.name().replace(/-/g, "_")} ;;`).join("\n        ")}
+        ${program.commands.map((cmd) => `(${commandNameVariants(cmd).join("|")}) _${rootCmd}_${cmd.name().replace(/-/g, "_")} ;;`).join("\n        ")}
       esac
       ;;
   esac
@@ -304,14 +321,14 @@ function generateZshArgs(cmd: Command): string {
 
 function generateZshSubcmdList(cmd: Command): string {
   const list = cmd.commands
-    .map((c) => {
+    .flatMap((c) => {
       const desc = c
         .description()
         .replace(/\\/g, "\\\\")
         .replace(/'/g, "'\\''")
         .replace(/\[/g, "\\[")
         .replace(/\]/g, "\\]");
-      return `'${c.name()}[${desc}]'`;
+      return commandNameVariants(c).map((name) => `'${name}[${desc}]'`);
     })
     .join(" ");
   return `"1: :_values 'command' ${list}"`;
@@ -353,7 +370,7 @@ ${funcName}() {
   case $state in
     (args)
       case $line[1] in
-        ${subCommands.map((sub) => `(${sub.name()}) ${funcName}_${sub.name().replace(/-/g, "_")} ;;`).join("\n        ")}
+        ${subCommands.map((sub) => `(${commandNameVariants(sub).join("|")}) ${funcName}_${sub.name().replace(/-/g, "_")} ;;`).join("\n        ")}
       esac
       ;;
   esac
@@ -376,31 +393,42 @@ ${funcName}() {
 }
 
 function generateBashCompletion(program: Command): string {
-  // Simplified Bash completion using dynamic iteration logic (often hardcoded in static scripts)
-  // For a robust implementation, usually one maps out the tree.
-  // This assumes a simple structure.
   const rootCmd = program.name();
-
-  // We can use a recursive function to build the case statements
+  const rootCompletions = [
+    ...program.commands.flatMap((command) => commandNameVariants(command)),
+    ...program.options.map((option) => preferredCompletionFlag(option.flags)),
+  ];
+  const rootValueOptions = completionOptionFlags(program.options, true);
+  const contexts = collectBashCompletionContexts(program, rootValueOptions);
+  const commandPathUpdate = generateBashCommandPathUpdate(contexts);
   return `
 _${rootCmd}_completion() {
-    local cur prev opts
+    local cur opts command_path candidate_path value_options word flag i
     COMPREPLY=()
     cur="\${COMP_WORDS[COMP_CWORD]}"
-    prev="\${COMP_WORDS[COMP_CWORD-1]}"
-    
-    # Simple top-level completion for now
-    opts="${program.commands.map((c) => c.name()).join(" ")} ${program.options.map((o) => preferredCompletionFlag(o.flags)).join(" ")}"
-    
-    case "\${prev}" in
-      ${program.commands.map((cmd) => generateBashSubcommand(cmd)).join("\n      ")}
-    esac
+    opts="${rootCompletions.join(" ")}"
+    value_options="${rootValueOptions.join(" ")}"
+    command_path=""
 
-    if [[ \${cur} == -* ]] ; then
-        COMPREPLY=( $(compgen -W "\${opts}" -- \${cur}) )
-        return 0
-    fi
-    
+    for ((i = 1; i < COMP_CWORD; i++)); do
+        word="\${COMP_WORDS[i]}"
+        if [[ \${word} == -* ]]; then
+            flag="\${word%%=*}"
+            if [[ \${word} != *=* && " \${value_options} " == *" \${flag} "* ]]; then
+                i=$((i + 1))
+            fi
+            continue
+        fi
+
+        if [[ -n "\${command_path}" ]]; then
+            candidate_path="\${command_path} \${word}"
+        else
+            candidate_path="\${word}"
+        fi
+
+${commandPathUpdate}
+    done
+
     COMPREPLY=( $(compgen -W "\${opts}" -- \${cur}) )
 }
 
@@ -408,14 +436,69 @@ complete -F _${rootCmd}_completion ${rootCmd}
 `;
 }
 
-function generateBashSubcommand(cmd: Command): string {
-  // This is a naive implementation; fully recursive bash completion is complex to generate as a single string without improved state tracking.
-  // For now, let's provide top-level command recognition.
-  return `${cmd.name()})
-        opts="${cmd.commands.map((c) => c.name()).join(" ")} ${cmd.options.map((o) => preferredCompletionFlag(o.flags)).join(" ")}"
-        COMPREPLY=( $(compgen -W "\${opts}" -- \${cur}) )
-        return 0
-        ;;`;
+type BashCompletionContext = {
+  pathVariants: string[][];
+  completions: string[];
+  valueOptions: string[];
+};
+
+function collectBashCompletionContexts(
+  program: Command,
+  rootValueOptions: string[],
+): BashCompletionContext[] {
+  const contexts: BashCompletionContext[] = [];
+
+  const visit = (cmd: Command, pathVariants: string[][], inheritedValueOptions: string[]) => {
+    const completions = [
+      ...cmd.commands.flatMap((command) => commandNameVariants(command)),
+      ...cmd.options.map((option) => preferredCompletionFlag(option.flags)),
+    ];
+    const valueOptions = [
+      ...new Set([...inheritedValueOptions, ...completionOptionFlags(cmd.options, true)]),
+    ];
+    contexts.push({ pathVariants, completions, valueOptions });
+
+    for (const sub of cmd.commands) {
+      visit(sub, childPathVariants(pathVariants, sub), valueOptions);
+    }
+  };
+
+  for (const sub of program.commands) {
+    visit(sub, childPathVariants([[]], sub), rootValueOptions);
+  }
+
+  return contexts;
+}
+
+function generateBashCompletionContextCases(contexts: BashCompletionContext[]): string {
+  const segments = contexts.map((context) => {
+    const patterns = context.pathVariants
+      .map((commandPath) => `"${commandPath.join(" ")}"`)
+      .join("|");
+    return `              ${patterns})
+                opts="${context.completions.join(" ")}"
+                value_options="${context.valueOptions.join(" ")}"
+                ;;`;
+  });
+  return segments.join("\n");
+}
+
+function generateBashCommandPathUpdate(contexts: BashCompletionContext[]): string {
+  if (contexts.length === 0) {
+    return "";
+  }
+  const commandPathPatterns = contexts
+    .flatMap((context) => context.pathVariants)
+    .map((commandPath) => `"${commandPath.join(" ")}"`)
+    .join("|");
+  return `        case "\${candidate_path}" in
+          ${commandPathPatterns})
+            command_path="\${candidate_path}"
+            case "\${command_path}" in
+${generateBashCompletionContextCases(contexts)}
+            esac
+            ;;
+        esac`;
 }
 
 function generatePowerShellCompletion(program: Command): string {
@@ -424,16 +507,19 @@ function generatePowerShellCompletion(program: Command): string {
   const formatPowerShellArray = (entries: string[]) =>
     entries.length > 0 ? `@(${entries.map((entry) => `'${entry}'`).join(",")})` : "@()";
 
-  const visit = (cmd: Command, pathSegments: string[]) => {
-    const fullPath = pathSegments.join(" ");
-
+  const visit = (cmd: Command, pathVariants: string[][]) => {
     // Command completion for this level
-    const subCommands = cmd.commands.map((c) => c.name());
+    const subCommands = cmd.commands.flatMap((c) => commandNameVariants(c));
     const options = cmd.options.map((o) => preferredCompletionFlag(o.flags));
     const allCompletions = formatPowerShellArray([...subCommands, ...options]);
 
-    if (fullPath.length > 0 && [...subCommands, ...options].length > 0) {
-      segments.push(`
+    if ([...subCommands, ...options].length > 0) {
+      for (const pathSegments of pathVariants) {
+        const fullPath = pathSegments.join(" ");
+        if (fullPath.length === 0) {
+          continue;
+        }
+        segments.push(`
             if ($commandPath -eq '${fullPath}') {
                 $completions = ${allCompletions}
                 $completions | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
@@ -441,14 +527,15 @@ function generatePowerShellCompletion(program: Command): string {
                 }
             }
 `);
+      }
     }
 
     for (const sub of cmd.commands) {
-      visit(sub, [...pathSegments, sub.name()]);
+      visit(sub, childPathVariants(pathVariants, sub));
     }
   };
 
-  visit(program, []);
+  visit(program, [[]]);
   const rootBody = segments.join("");
 
   return `
@@ -471,7 +558,7 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
     # Root command
     if ($commandPath -eq "") {
          $completions = ${formatPowerShellArray([
-           ...program.commands.map((command) => command.name()),
+           ...program.commands.flatMap((command) => commandNameVariants(command)),
            ...program.options.map((option) => preferredCompletionFlag(option.flags)),
          ])}
          $completions | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
@@ -488,43 +575,27 @@ function generateFishCompletion(program: Command): string {
   const rootCmd = program.name();
   const segments: string[] = [generateFishPathHelper(rootCmd)];
 
-  const visit = (cmd: Command, parents: string[]) => {
-    // Root logic
-    if (parents.length === 0) {
-      // Subcommands of root
+  const visit = (cmd: Command, parentVariants: string[][]) => {
+    // One condition per alias-expanded parent path so completion keeps working
+    // after the user typed an alias segment.
+    const conditions = parentVariants.map((parents) =>
+      parents.length === 0
+        ? "__fish_use_subcommand"
+        : fishCommandPathCondition(program, rootCmd, parents),
+    );
+    for (const condition of conditions) {
+      // Subcommands (canonical names and aliases)
       for (const sub of cmd.commands) {
-        segments.push(
-          buildFishSubcommandCompletionLine({
-            rootCmd,
-            condition: "__fish_use_subcommand",
-            name: sub.name(),
-            description: sub.description(),
-          }),
-        );
-      }
-      // Options of root
-      for (const opt of cmd.options) {
-        segments.push(
-          buildFishOptionCompletionLine({
-            rootCmd,
-            condition: "__fish_use_subcommand",
-            flags: opt.flags,
-            description: opt.description,
-          }),
-        );
-      }
-    } else {
-      const condition = fishCommandPathCondition(program, rootCmd, parents);
-      // Subcommands
-      for (const sub of cmd.commands) {
-        segments.push(
-          buildFishSubcommandCompletionLine({
-            rootCmd,
-            condition,
-            name: sub.name(),
-            description: sub.description(),
-          }),
-        );
+        for (const name of commandNameVariants(sub)) {
+          segments.push(
+            buildFishSubcommandCompletionLine({
+              rootCmd,
+              condition,
+              name,
+              description: sub.description(),
+            }),
+          );
+        }
       }
       // Options
       for (const opt of cmd.options) {
@@ -540,10 +611,10 @@ function generateFishCompletion(program: Command): string {
     }
 
     for (const sub of cmd.commands) {
-      visit(sub, parents.length === 0 ? [sub.name()] : [...parents, sub.name()]);
+      visit(sub, childPathVariants(parentVariants, sub));
     }
   };
 
-  visit(program, []);
+  visit(program, [[]]);
   return segments.join("");
 }

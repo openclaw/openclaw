@@ -1,3 +1,4 @@
+import { onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
 /**
  * Wraps LLM streams with idle-timeout detection and diagnostics.
  */
@@ -8,7 +9,6 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { toErrorObject } from "../../../infra/errors.js";
-import { onLlmRequestActivity } from "../../../shared/llm-request-activity.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
@@ -198,6 +198,43 @@ function isOllamaCloudModel(model: { id?: string; provider?: string } | undefine
   return bareModelId.endsWith(":cloud");
 }
 
+type RuntimeModelLocality = {
+  isLocalRuntimeModel: boolean;
+  isExplicitLocalHostnameRuntimeModel: boolean;
+  isSelfHostedHostnameRuntimeModel: boolean;
+};
+
+/**
+ * Classifies the model endpoint locality shared by the idle and first-event
+ * watchdogs. Ollama `*:cloud` models stay "cloud" even behind a local proxy.
+ */
+function resolveRuntimeModelLocality(params?: {
+  cfg?: OpenClawConfig;
+  model?: { baseUrl?: string; id?: string; provider?: string };
+}): RuntimeModelLocality {
+  const baseUrl = params?.model?.baseUrl;
+  if (typeof baseUrl !== "string" || baseUrl.length === 0) {
+    return {
+      isLocalRuntimeModel: false,
+      isExplicitLocalHostnameRuntimeModel: false,
+      isSelfHostedHostnameRuntimeModel: false,
+    };
+  }
+  const notCloudModel = !isOllamaCloudModel(params?.model);
+  return {
+    isLocalRuntimeModel: isLocalProviderBaseUrl(baseUrl) && notCloudModel,
+    isExplicitLocalHostnameRuntimeModel: isExplicitLocalHostnameBaseUrl(baseUrl) && notCloudModel,
+    isSelfHostedHostnameRuntimeModel:
+      isBareProviderHostnameBaseUrl(baseUrl) &&
+      (isSelfHostedProviderId(params?.model?.provider) ||
+        hasConfiguredLocalProviderSignal({
+          cfg: params?.cfg,
+          provider: params?.model?.provider,
+        })) &&
+      notCloudModel,
+  };
+}
+
 /**
  * Resolves the stream-idle watchdog timeout for one embedded run. Explicit
  * provider request timeouts and bounded run/agent timeouts cap the watchdog;
@@ -220,22 +257,11 @@ export function resolveLlmIdleTimeoutMs(params?: {
   const hasExplicitRunTimeout =
     typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0;
   const runTimeoutIsNoTimeout = hasExplicitRunTimeout && runTimeoutMs >= MAX_TIMER_TIMEOUT_MS;
-  const baseUrl = params?.model?.baseUrl;
-  const isLocalProvider =
-    typeof baseUrl === "string" && baseUrl.length > 0 && isLocalProviderBaseUrl(baseUrl);
-  const isLocalRuntimeModel = isLocalProvider && !isOllamaCloudModel(params?.model);
-  const isExplicitLocalHostnameRuntimeModel =
-    typeof baseUrl === "string" &&
-    baseUrl.length > 0 &&
-    isExplicitLocalHostnameBaseUrl(baseUrl) &&
-    !isOllamaCloudModel(params?.model);
-  const isSelfHostedHostnameRuntimeModel =
-    typeof baseUrl === "string" &&
-    baseUrl.length > 0 &&
-    isBareProviderHostnameBaseUrl(baseUrl) &&
-    (isSelfHostedProviderId(params?.model?.provider) ||
-      hasConfiguredLocalProviderSignal({ cfg: params?.cfg, provider: params?.model?.provider })) &&
-    !isOllamaCloudModel(params?.model);
+  const {
+    isLocalRuntimeModel,
+    isExplicitLocalHostnameRuntimeModel,
+    isSelfHostedHostnameRuntimeModel,
+  } = resolveRuntimeModelLocality(params);
   const timeoutBounds = [
     runTimeoutIsNoTimeout ? undefined : runTimeoutMs,
     hasExplicitRunTimeout ? undefined : agentTimeoutMs,
@@ -320,22 +346,11 @@ export function resolveLlmFirstEventTimeoutMs(params?: {
   const hasExplicitRunTimeout =
     typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0;
   const runTimeoutIsBounded = hasExplicitRunTimeout && runTimeoutMs < MAX_TIMER_TIMEOUT_MS;
-  const baseUrl = params?.model?.baseUrl;
-  const isLocalProvider =
-    typeof baseUrl === "string" && baseUrl.length > 0 && isLocalProviderBaseUrl(baseUrl);
-  const isLocalRuntimeModel = isLocalProvider && !isOllamaCloudModel(params?.model);
-  const isExplicitLocalHostnameRuntimeModel =
-    typeof baseUrl === "string" &&
-    baseUrl.length > 0 &&
-    isExplicitLocalHostnameBaseUrl(baseUrl) &&
-    !isOllamaCloudModel(params?.model);
-  const isSelfHostedHostnameRuntimeModel =
-    typeof baseUrl === "string" &&
-    baseUrl.length > 0 &&
-    isBareProviderHostnameBaseUrl(baseUrl) &&
-    (isSelfHostedProviderId(params?.model?.provider) ||
-      hasConfiguredLocalProviderSignal({ cfg: params?.cfg, provider: params?.model?.provider })) &&
-    !isOllamaCloudModel(params?.model);
+  const {
+    isLocalRuntimeModel,
+    isExplicitLocalHostnameRuntimeModel,
+    isSelfHostedHostnameRuntimeModel,
+  } = resolveRuntimeModelLocality(params);
   const timeoutBounds = [
     runTimeoutIsBounded ? runTimeoutMs : undefined,
     hasExplicitRunTimeout ? undefined : agentTimeoutMs,

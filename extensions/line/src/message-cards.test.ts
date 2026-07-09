@@ -420,6 +420,27 @@ describe("action label/data surrogate-safe truncation", () => {
     expect(loneHighSurrogate.test(action.data)).toBe(false);
   });
 
+  it("/card receipt altText truncates on a surrogate boundary", async () => {
+    // The emoji's surrogate pair straddles the 400-char altText cap; a raw
+    // slice used to leave a lone high surrogate in the receipt flex altText.
+    const registerCommand = (command: unknown) => {
+      const { handler } = command as {
+        handler: (ctx: { args: string; channel: string }) => Promise<unknown>;
+      };
+      return handler({
+        channel: "line",
+        args: `receipt "R" "${"a".repeat(395)}:😀x" --total "$30"`,
+      });
+    };
+    const result = (await registerCommandWithHandler(registerCommand)) as {
+      channelData: { line: { flexMessage: { altText: string } } };
+    };
+    const altText = result.channelData.line.flexMessage.altText;
+
+    expect(altText.length).toBeLessThanOrEqual(400);
+    expect(loneHighSurrogate.test(altText)).toBe(false);
+  });
+
   it("media control postback labels truncate on surrogate boundaries", () => {
     const card = createMediaPlayerCard({
       title: "Track",

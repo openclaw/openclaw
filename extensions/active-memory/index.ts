@@ -37,6 +37,7 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_AGENT_ID = "main";
@@ -2570,15 +2571,16 @@ function truncateSummary(summary: string, maxSummaryChars: number): string {
     return ellipsis.slice(0, Math.max(0, maxSummaryChars));
   }
   const contentMaxChars = maxSummaryChars - ellipsis.length;
-  const bounded = trimmed.slice(0, contentMaxChars).trimEnd();
+  const rawBounded = trimmed.slice(0, contentMaxChars).trimEnd();
+  const bounded = truncateUtf16Safe(trimmed, contentMaxChars).trimEnd();
   const nextChar = trimmed.charAt(contentMaxChars);
   if (!nextChar || /\s/.test(nextChar)) {
     return `${bounded}${ellipsis}`;
   }
 
-  const lastBoundary = bounded.search(/\s\S*$/);
+  const lastBoundary = rawBounded.search(/\s\S*$/);
   if (lastBoundary > 0) {
-    return `${bounded.slice(0, lastBoundary).trimEnd()}${ellipsis}`;
+    return `${truncateUtf16Safe(trimmed, lastBoundary).trimEnd()}${ellipsis}`;
   }
 
   return `${bounded}${ellipsis}`;
@@ -2733,11 +2735,10 @@ function buildSearchQuery(params: {
   if (!previousUser) {
     return latest || clampSearchQuery(params.latestUserMessage);
   }
-  const context = clampSearchQuery(
-    normalizeSearchQueryText(stripRecalledContextNoise(previousUser.text)),
-  )
-    .slice(0, 120)
-    .trim();
+  const context = truncateUtf16Safe(
+    clampSearchQuery(normalizeSearchQueryText(stripRecalledContextNoise(previousUser.text))),
+    120,
+  ).trim();
   return clampSearchQuery(context ? `${context} ${latest}` : latest);
 }
 
@@ -3753,6 +3754,7 @@ export default definePluginEntry({
 });
 
 const testing = {
+  buildSearchQuery,
   buildCacheKey,
   buildCircuitBreakerKey,
   buildMetadata,

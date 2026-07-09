@@ -496,6 +496,7 @@ describe("sessions tools", () => {
       params: {
         activeMinutes: undefined,
         agentId: "main",
+        archived: false,
         includeDerivedTitles: false,
         includeLastMessage: false,
         includeGlobal: true,
@@ -631,6 +632,10 @@ describe("sessions tools", () => {
           channel: "unknown",
           origin: undefined,
           spawnedBy: undefined,
+          archived: false,
+          archivedAt: undefined,
+          pinned: false,
+          pinnedAt: undefined,
           label: undefined,
           displayName: undefined,
           derivedTitle: "Visible project kickoff",

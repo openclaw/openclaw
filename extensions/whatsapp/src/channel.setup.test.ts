@@ -58,14 +58,6 @@ vi.mock("openclaw/plugin-sdk/setup", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/setup")>(
     "openclaw/plugin-sdk/setup",
   );
-  const normalizeE164 = (value?: string | null) => {
-    const raw = (value ?? "").trim();
-    if (!raw) {
-      return "";
-    }
-    const digits = raw.replace(/[^\d+]/g, "");
-    return digits.startsWith("+") ? digits : `+${digits}`;
-  };
   return {
     ...actual,
     DEFAULT_ACCOUNT_ID,
@@ -80,7 +72,6 @@ vi.mock("openclaw/plugin-sdk/setup", async () => {
       }
       return [...normalized];
     },
-    normalizeE164,
     splitSetupEntries: splitSetupEntriesForMock,
     setSetupChannelEnabled: (cfg: OpenClawConfig, channel: string, enabled: boolean) => ({
       ...cfg,

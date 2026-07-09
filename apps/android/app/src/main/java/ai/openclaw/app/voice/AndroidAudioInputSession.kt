@@ -8,7 +8,6 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -95,14 +94,12 @@ internal class AndroidAudioInputSession private constructor(
     buffer: ByteArray,
     offset: Int,
     size: Int,
-  ): Int = audioRecord.read(buffer, offset, size)
+  ): Int = checkAudioRecordReadResult(audioRecord.read(buffer, offset, size))
 
   private fun openRoute() {
     audioManager.registerAudioDeviceCallback(deviceCallback, callbackHandler)
     synchronized(lock) { callbackRegistered = true }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-      bluetoothCommunicationRoute.begin(communicationRouteOwner)
-    }
+    bluetoothCommunicationRoute.begin(communicationRouteOwner)
     refreshRouteSafely()
   }
 
@@ -119,18 +116,8 @@ internal class AndroidAudioInputSession private constructor(
     synchronized(lock) {
       if (closed) return
       val inputs = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS).toList()
-      val communicationDevice =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-          selectBluetoothDevice(audioManager.availableCommunicationDevices, requestedCommunicationDevice)
-        } else {
-          null
-        }
-      val communicationSelected =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-          bluetoothCommunicationRoute.update(audioManager, communicationRouteOwner, communicationDevice)
-        } else {
-          false
-        }
+      val communicationDevice = selectBluetoothDevice(audioManager.availableCommunicationDevices, requestedCommunicationDevice)
+      val communicationSelected = bluetoothCommunicationRoute.update(audioManager, communicationRouteOwner, communicationDevice)
       requestedCommunicationDevice = communicationDevice.takeIf { communicationSelected }
       val input = selectBluetoothInput(inputs, requestedInput, requestedCommunicationDevice)
       if (!sameDevice(requestedInput, input) || !sameDevice(selectedInput, input)) {
@@ -161,9 +148,7 @@ internal class AndroidAudioInputSession private constructor(
         runCatching { audioRecord.stop() }
       }
       runCatching { audioRecord.release() }
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        bluetoothCommunicationRoute.close(audioManager, communicationRouteOwner)
-      }
+      bluetoothCommunicationRoute.close(audioManager, communicationRouteOwner)
       requestedCommunicationDevice = null
     }
   }
@@ -217,6 +202,20 @@ private class BluetoothCommunicationRoute {
 }
 
 private val bluetoothCommunicationRoute = BluetoothCommunicationRoute()
+
+/** Converts AudioRecord's negative return codes into capture-session failures. */
+internal fun checkAudioRecordReadResult(result: Int): Int {
+  if (result >= 0) return result
+  val label =
+    when (result) {
+      AudioRecord.ERROR -> "ERROR"
+      AudioRecord.ERROR_BAD_VALUE -> "ERROR_BAD_VALUE"
+      AudioRecord.ERROR_INVALID_OPERATION -> "ERROR_INVALID_OPERATION"
+      AudioRecord.ERROR_DEAD_OBJECT -> "ERROR_DEAD_OBJECT"
+      else -> "code=$result"
+    }
+  throw IllegalStateException("microphone read failed: $label")
+}
 
 private fun selectBluetoothDevice(
   devices: List<AudioDeviceInfo>,

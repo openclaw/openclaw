@@ -136,6 +136,21 @@ describe("buildCliArgs — issue #80374", () => {
     expect(args).not.toContain(PROMPT_FILE);
   });
 
+  it("soft system-prompt drift includes --append-system-prompt-file on legacy resume", () => {
+    const args = buildCliArgs({
+      backend: BACKEND_FIRST as CliBackendConfig,
+      baseArgs: BASE_ARGS,
+      modelId: "claude-haiku-4-5",
+      sessionId: "test-session-id",
+      systemPrompt: SYSTEM_PROMPT,
+      systemPromptFilePath: PROMPT_FILE,
+      useResume: true,
+      sendSystemPromptOnResume: true,
+    });
+    expect(args).toContain("--append-system-prompt-file");
+    expect(args).toContain(PROMPT_FILE);
+  });
+
   it("new 'always': includes --append-system-prompt-file on resume (issue #80374)", () => {
     const args = buildCliArgs({
       backend: BACKEND_ALWAYS as CliBackendConfig,

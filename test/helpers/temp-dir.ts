@@ -2,11 +2,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach } from "vitest";
 
 // Synchronous temporary directory helpers for tests.
 
 export type TempDirCollection = string[] | Set<string>;
+export type RegisterTempDirCleanup = (cleanup: () => void) => unknown;
 
 export interface TestTempDirTracker {
   readonly dirs: ReadonlySet<string>;
@@ -55,9 +55,11 @@ export function createTempDirTracker(): TestTempDirTracker {
 }
 
 /** Create a temp dir tracker that Vitest cleans up after each test. */
-export function useAutoCleanupTempDirTracker(): AutoCleanupTempDirTracker {
+export function useAutoCleanupTempDirTracker(
+  registerCleanup: RegisterTempDirCleanup,
+): AutoCleanupTempDirTracker {
   const tracker = createTempDirTracker();
-  afterEach(() => {
+  registerCleanup(() => {
     tracker.cleanup();
   });
   return {

@@ -14,7 +14,7 @@ export type BlockReplyContext = {
 };
 
 /** Context passed to onModelSelected callback with actual model used. */
-export type ModelSelectedContext = {
+type ModelSelectedContext = {
   provider: string;
   model: string;
   thinkLevel: string | undefined;
@@ -43,7 +43,14 @@ export type QueuedReplyDeliveryCorrelation = {
 
 /** Lifecycle hooks for queued follow-up replies. */
 export type QueuedReplyLifecycle = {
-  onEnqueued?: () => void;
+  /** Stable cancellation owner used to keep collect-mode batches authorization-safe. */
+  ownerKey?: string;
+  /** Return false when the external owner rejects this queue identity. */
+  onEnqueued?: () => boolean | void;
+  /** Retires this source's cancellation ownership while retaining its live identity. */
+  onCancellationRetired?: () => void;
+  /** Called after the queued turn owns the reply lane, before model/tool execution. */
+  onAdmitted?: () => void;
   onComplete?: () => void;
 };
 
@@ -58,6 +65,10 @@ type ReasoningStreamPayload = Pick<
   "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
 > & {
   requiresReasoningProgressOptIn?: boolean;
+};
+
+type ReasoningProgressPayload = {
+  progressTokens: number;
 };
 
 /** Reply generation options shared by auto-reply, webchat, channels, and tests. */
@@ -126,6 +137,7 @@ export type GetReplyOptions = {
   onVerboseProgressVisibility?: (isActive: () => boolean) => void;
   onPartialReply?: (payload: PartialReplyPayload) => Promise<void> | void;
   onReasoningStream?: (payload: ReasoningStreamPayload) => Promise<void> | void;
+  onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void> | void;
   streamReasoningInNonStreamModes?: boolean;
   /** Called when a thinking/reasoning block ends. */
   onReasoningEnd?: () => Promise<void> | void;

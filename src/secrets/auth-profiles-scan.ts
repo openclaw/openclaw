@@ -82,7 +82,7 @@ const AUTH_PROFILE_FIELD_SPEC_BY_TYPE = (() => {
 })();
 
 /** Returns the value/ref field names for one auth-profile credential type. */
-export function getAuthProfileFieldSpec(type: AuthProfileCredentialType): AuthProfileFieldSpec {
+function getAuthProfileFieldSpec(type: AuthProfileCredentialType): AuthProfileFieldSpec {
   return AUTH_PROFILE_FIELD_SPEC_BY_TYPE[type];
 }
 

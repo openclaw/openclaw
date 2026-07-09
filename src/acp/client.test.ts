@@ -6,7 +6,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
-  listKnownProviderAuthEnvVarNames: () => ["OPENAI_API_KEY", "GITHUB_TOKEN", "HF_TOKEN"],
+  listKnownProviderAuthEnvVarNames: () => [
+    "OPENAI_API_KEY",
+    "OPENAI_ADMIN_KEY",
+    "ANTHROPIC_ADMIN_KEY",
+    "ANTHROPIC_ADMIN_API_KEY",
+    "GITHUB_TOKEN",
+    "HF_TOKEN",
+  ],
   resolveProviderAuthLookupMaps: () => ({
     aliasMap: {},
     envCandidateMap: {},
@@ -256,6 +263,9 @@ describe("buildAcpClientStripKeys", () => {
 
     expect(stripKeys.has("SKILL_SECRET")).toBe(true);
     expect(stripKeys.has("OPENAI_API_KEY")).toBe(true);
+    expect(stripKeys.has("OPENAI_ADMIN_KEY")).toBe(true);
+    expect(stripKeys.has("ANTHROPIC_ADMIN_KEY")).toBe(true);
+    expect(stripKeys.has("ANTHROPIC_ADMIN_API_KEY")).toBe(true);
     expect(stripKeys.has("GITHUB_TOKEN")).toBe(true);
     expect(stripKeys.has("HF_TOKEN")).toBe(true);
     expect(stripKeys.has("OPENCLAW_API_KEY")).toBe(false);

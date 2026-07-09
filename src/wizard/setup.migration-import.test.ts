@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   inspectSetupMigrationFreshness,
   listSetupMigrationOptions,
@@ -93,13 +93,17 @@ describe("setup migration import freshness", () => {
 });
 
 describe("setup migration import options", () => {
-  it("offers bundled manifest migration providers before plugin activation", async () => {
-    const options = await listSetupMigrationOptions({
+  let initialOptions: Awaited<ReturnType<typeof listSetupMigrationOptions>>;
+
+  beforeAll(async () => {
+    initialOptions = await listSetupMigrationOptions({
       baseConfig: {},
       detections: [],
     });
+  });
 
-    expect(options).toEqual(
+  it("offers bundled manifest migration providers before plugin activation", () => {
+    expect(initialOptions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ providerId: "codex", label: "Codex" }),
         expect.objectContaining({ providerId: "claude", label: "Claude" }),

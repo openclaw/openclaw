@@ -501,7 +501,16 @@ describe("gateway server cron", () => {
         lastRunStatus: null,
       });
       expect(Object.keys(compactJobs?.[0] ?? {}).toSorted()).toEqual(
-        ["enabled", "id", "lastRunStatus", "name", "nextRunAtMs", "scheduleKind"].toSorted(),
+        [
+          "enabled",
+          "id",
+          "lastRunAtMs",
+          "lastRunError",
+          "lastRunStatus",
+          "name",
+          "nextRunAtMs",
+          "scheduleKind",
+        ].toSorted(),
       );
       expect(
         (compactListRes.payload as { deliveryPreviews?: unknown } | null)?.deliveryPreviews,
@@ -563,6 +572,32 @@ describe("gateway server cron", () => {
         prevSkipCron,
         clearSessionConfig: true,
       });
+    }
+  });
+
+  test("returns INVALID_REQUEST when cron trigger authoring is disabled", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-trigger-gate-",
+      cronEnabled: false,
+    });
+    const cronState = await createDirectCronState();
+
+    try {
+      const response = await directCronReq(cronState, "cron.add", {
+        name: "disabled watcher",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 30_000 },
+        trigger: { script: "json({ fire: true })" },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "changed" },
+      });
+
+      expect(response.ok).toBe(false);
+      expect(response.error?.code).toBe("INVALID_REQUEST");
+      expect(response.error?.message).toContain("cron triggers are disabled");
+    } finally {
+      await cleanupCronTestRun({ cronState, prevSkipCron });
     }
   });
 

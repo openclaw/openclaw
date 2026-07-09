@@ -19,9 +19,20 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  canonicalProviderName,
+  isProviderAdvertised,
+  parseProvidersFromHelp,
+} from "./crabbox-wrapper-providers.mjs";
 import { resolvePathEnvKey, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const CRABBOX_METADATA_PROBE_TIMEOUT_MS = 5_000;
+// A cold Crabbox (first call after an upgrade, or one on a loaded machine) can
+// exceed the snappy default probe timeout while it renders `run --help` or does
+// first-run init. Retry the metadata probes once with this generous timeout so a
+// single slow probe does not hard-fail the wrapper and block all remote validation.
+const CRABBOX_METADATA_PROBE_RETRY_TIMEOUT_MS = 20_000;
 const ignoreRepoBinary = process.env.OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY === "1";
 const repoLocal = ignoreRepoBinary ? null : resolveCrabboxBinary(process.env, process.platform);
 const pathLocal = resolvePathBinary("crabbox", process.env, process.platform);
@@ -354,14 +365,14 @@ function buildBatchCommandLine(command, commandArgs) {
   return `"${[escapedCommand, ...escapedArgs].join(" ")}"`;
 }
 
-function checkedOutput(command, commandArgs) {
+function checkedOutput(command, commandArgs, timeoutMs = resolveMetadataProbeTimeoutMs(process.env)) {
   const invocation = spawnInvocation(command, commandArgs, process.env, process.platform);
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: repoRoot,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-    timeout: 5_000,
+    timeout: timeoutMs,
     killSignal: "SIGKILL",
   });
   const timedOut = result.error?.name === "Error" && result.signal === "SIGKILL";
@@ -370,6 +381,19 @@ function checkedOutput(command, commandArgs) {
     text: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim(),
     stdout: (result.stdout ?? "").trim(),
   };
+}
+
+// Probe Crabbox metadata (`--version` / `run --help`) with one generous retry.
+// A cold Crabbox can be SIGKILLed by the snappy default timeout or emit nothing
+// on the first call, then be instant and clean on the next. Retrying keeps the
+// warm path fast (one ~instant probe) while stopping a single slow probe from
+// tripping the sanity/provider-list guards and blocking all remote validation.
+function probeCrabboxMetadata(command, commandArgs) {
+  const first = checkedOutput(command, commandArgs);
+  if (first.status === 0 && first.text.length > 0) {
+    return first;
+  }
+  return checkedOutput(command, commandArgs, CRABBOX_METADATA_PROBE_RETRY_TIMEOUT_MS);
 }
 
 function parseCrabboxVersion(value) {
@@ -659,7 +683,7 @@ function shouldRequireBrokeredAws(commandArgs, providerName) {
   if (process.env.OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS === "1") {
     return false;
   }
-  const canonicalProvider = providerAliases.get(providerName) ?? providerName;
+  const canonicalProvider = canonicalProviderName(providerName);
   if (canonicalProvider !== "aws") {
     return false;
   }
@@ -2056,7 +2080,7 @@ function isAwsMacosRemoteTarget(commandArgs, providerName) {
 }
 
 function isBrokeredWsl2RemoteTarget(commandArgs, providerName) {
-  const canonicalProvider = providerAliases.get(providerName) ?? providerName;
+  const canonicalProvider = canonicalProviderName(providerName);
   return (
     commandArgs[0] === "run" &&
     (canonicalProvider === "aws" || canonicalProvider === "azure") &&
@@ -3149,101 +3173,12 @@ function injectFullCheckoutLeaseReclaim(commandArgs) {
   return normalizedArgs;
 }
 
-const version = checkedOutput(binary, ["--version"]);
-const help = checkedOutput(binary, ["run", "--help"]);
-const providerAliases = new Map([
-  ["blacksmith", "blacksmith-testbox"],
-  ["cf", "cloudflare"],
-  ["container", "local-container"],
-  ["docker", "local-container"],
-  ["exe", "exe-dev"],
-  ["exedev", "exe-dev"],
-  ["google", "gcp"],
-  ["google-cloud", "gcp"],
-  ["local-docker", "local-container"],
-  ["namespace", "namespace-devbox"],
-  ["namespace-devboxes", "namespace-devbox"],
-  ["rail", "railway"],
-  ["railwayapp", "railway"],
-  ["run-pod", "runpod"],
-  ["runpodio", "runpod"],
-  ["sem", "semaphore"],
-  ["static", "ssh"],
-  ["static-ssh", "ssh"],
-  ["tensorlake-sbx", "tensorlake"],
-  ["tl", "tensorlake"],
-]);
-// Crabbox providerHelpAll can omit Tensorlake even when the binary accepts it.
-const providerHelpOmissions = new Set(["tensorlake"]);
-
-function addProviderNames(names, text) {
-  for (const name of text
-    .replace(/\s+\(default\b.*$/u, "")
-    .split(/\s*(?:,|\||\bor\b)\s*/u)
-    .map((s) => s.trim())
-    .filter(Boolean)) {
-    if (/^[a-z0-9][a-z0-9-]*$/u.test(name)) {
-      names.add(name);
-    }
-  }
-}
-
-function providerListContinuation(line, previousText) {
-  const match = line.match(
-    /^\s*((?:or\s+)?[a-z0-9][a-z0-9-]*(?:\s*(?:,|\||\bor\b)\s*(?:or\s+)?[a-z0-9][a-z0-9-]*)*\s*(?:,|\|)?)(?:\s+\(default\b.*)?\s*$/u,
-  );
-  if (!match) {
-    return "";
-  }
-  if (/[,|]\s*$/u.test(previousText) || /[,|]|\bor\b|\(default\b/u.test(line)) {
-    return match[1];
-  }
-  return "";
-}
-
-function parseProvidersFromHelp(text) {
-  const names = new Set();
-  const lines = text.split(/\r?\n/u);
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    const providerMatch = line.match(/provider:\s*([a-z0-9][a-z0-9, -]*)(?:\s*\(default\b|$)/u);
-    if (providerMatch) {
-      let providerText = providerMatch[1];
-      while (!/\(default\b/u.test(lines[index]) && index + 1 < lines.length) {
-        const continuation = providerListContinuation(lines[index + 1], providerText);
-        if (!continuation) {
-          break;
-        }
-        index += 1;
-        providerText = `${providerText} ${continuation}`;
-      }
-      addProviderNames(names, providerText);
-      continue;
-    }
-
-    const flagMatch = line.match(
-      /^\s+-{1,2}provider(?:[=\s]+)([a-z0-9][a-z0-9|, -]*)(?:\s{2,}|\s+\(|$)/u,
-    );
-    if (flagMatch && /[,|]|\bor\b/u.test(flagMatch[1])) {
-      addProviderNames(names, flagMatch[1]);
-    }
-  }
-  return [...names];
-}
-
-function isProviderAdvertised(provider, advertisedProviders) {
-  const canonicalProvider = providerAliases.get(provider) ?? provider;
-  return (
-    advertisedProviders.includes(provider) ||
-    advertisedProviders.includes(canonicalProvider) ||
-    providerHelpOmissions.has(canonicalProvider)
-  );
-}
-
+const version = probeCrabboxMetadata(binary, ["--version"]);
+const help = probeCrabboxMetadata(binary, ["run", "--help"]);
 const providers = parseProvidersFromHelp(help.text);
 const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
 const provider = selectedProvider(args, providers);
-const canonicalProvider = providerAliases.get(provider) ?? provider;
+const canonicalProvider = canonicalProviderName(provider);
 const commandProviderValue = commandProvider(args);
 let normalizedArgs = ensureAwsMacOnDemandMarket(
   ensureNativeWindowsHydrateJob(ensureAzureWindowsProvider(args, provider, providers)),
@@ -3467,7 +3402,7 @@ const child = spawn(childInvocation.command, childInvocation.args, {
   env: childEnv,
   windowsVerbatimArguments: childInvocation.windowsVerbatimArguments,
 });
-const childKillGraceMs = 5_000;
+const childKillGraceMs = resolveChildKillGraceMs(process.env);
 let childForceKillTimer;
 let childTreeShutdownStarted = false;
 if (fullCheckout) {
@@ -3603,4 +3538,20 @@ async function waitForChildTreeExit(childProcess, timeoutMs) {
     });
   }
   return !childProcessTreeIsAlive(childProcess);
+}
+
+function resolveChildKillGraceMs(env) {
+  if (!env.VITEST || !env.OPENCLAW_TEST_CRABBOX_CHILD_KILL_GRACE_MS) {
+    return 5_000;
+  }
+  const value = Number.parseInt(env.OPENCLAW_TEST_CRABBOX_CHILD_KILL_GRACE_MS, 10);
+  return Number.isFinite(value) && value >= 0 ? value : 5_000;
+}
+
+function resolveMetadataProbeTimeoutMs(env) {
+  if (!env.VITEST || !env.OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS) {
+    return CRABBOX_METADATA_PROBE_TIMEOUT_MS;
+  }
+  const value = Number.parseInt(env.OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS, 10);
+  return Number.isFinite(value) && value > 0 ? value : CRABBOX_METADATA_PROBE_TIMEOUT_MS;
 }

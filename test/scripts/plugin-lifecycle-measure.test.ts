@@ -314,8 +314,8 @@ describe("plugin lifecycle resource sampler", () => {
             encoding: "utf8",
             env: {
               ...process.env,
-              OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "1000",
-              OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "200",
+              OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "250",
+              OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "50",
               PID_FILE: pidFile,
             },
             timeout: 5000,

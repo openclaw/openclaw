@@ -20,7 +20,9 @@ class ChatTimelineTest {
       )
 
     assertEquals(listOf("thinking", "message:user-1"), timeline.items.map(::chatTimelineItemKey))
-    assertEquals(1, timeline.scrollTargetIndex)
+    assertEquals(1, timeline.readAnchorIndex)
+    assertEquals(0, timeline.latestContentIndex)
+    assertEquals("user-1", timeline.latestUserMessageId)
   }
 
   @Test
@@ -46,11 +48,13 @@ class ChatTimelineTest {
       listOf("stream", "tools", "thinking", "message:user-1", "message:assistant-1"),
       timeline.items.map(::chatTimelineItemKey),
     )
-    assertEquals(3, timeline.scrollTargetIndex)
+    assertEquals(3, timeline.readAnchorIndex)
+    assertEquals(0, timeline.latestContentIndex)
+    assertEquals("user-1", timeline.latestUserMessageId)
   }
 
   @Test
-  fun finishedRunAnchorsNewestPersistedMessage() {
+  fun finishedRunKeepsLatestUserPromptAsReaderAnchor() {
     val user = textMessage(id = "user-1", role = "user", text = "hello")
     val assistant = textMessage(id = "assistant-1", role = "assistant", text = "done")
 
@@ -63,7 +67,9 @@ class ChatTimelineTest {
       )
 
     assertEquals(listOf("message:assistant-1", "message:user-1"), timeline.items.map(::chatTimelineItemKey))
-    assertEquals(0, timeline.scrollTargetIndex)
+    assertEquals(1, timeline.readAnchorIndex)
+    assertEquals(0, timeline.latestContentIndex)
+    assertEquals("user-1", timeline.latestUserMessageId)
   }
 
   @Test
@@ -77,7 +83,9 @@ class ChatTimelineTest {
       )
 
     assertEquals(emptyList<String>(), timeline.items.map(::chatTimelineItemKey))
-    assertEquals(null, timeline.scrollTargetIndex)
+    assertEquals(null, timeline.readAnchorIndex)
+    assertEquals(null, timeline.latestContentIndex)
+    assertEquals(null, timeline.latestUserMessageId)
   }
 
   private fun textMessage(

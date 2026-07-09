@@ -1330,6 +1330,11 @@ function resolveConfiguredFallbackModel(params: {
     compat: fallbackCompat,
     reasoning: metadataModel?.reasoning,
   });
+  const resolvedFallbackMaxTokens =
+    configuredModel?.maxTokens ??
+    providerConfig?.maxTokens ??
+    providerConfig?.models?.[0]?.maxTokens ??
+    staticCatalogModel?.maxTokens;
   return normalizeResolvedModel({
     provider,
     cfg,
@@ -1365,12 +1370,11 @@ function resolveConfiguredFallbackModel(params: {
             providerConfig?.contextTokens ??
             providerConfig?.models?.[0]?.contextTokens ??
             staticCatalogModel?.contextTokens,
-          maxTokens:
-            configuredModel?.maxTokens ??
-            providerConfig?.maxTokens ??
-            providerConfig?.models?.[0]?.maxTokens ??
-            staticCatalogModel?.maxTokens ??
-            DEFAULT_CONTEXT_TOKENS,
+          // maxTokens is a wire-level output cap, not a context-budget fallback.
+          // Omit an unknown cap so strict providers can apply their own limit.
+          ...(resolvedFallbackMaxTokens !== undefined
+            ? { maxTokens: resolvedFallbackMaxTokens }
+            : {}),
           ...(resolvedParams ? { params: resolvedParams } : {}),
           ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
           headers: requestConfig.headers,
@@ -1908,6 +1912,12 @@ function buildMissingProviderModelRegistrationHint(params: {
   modelId: string;
   cfg?: OpenClawConfig;
 }): string | undefined {
+  // Legacy openai-codex refs can come from model selections, provider config,
+  // or persisted routes. All of them should be repaired by doctor rather than
+  // turned into a new models.providers[] registration.
+  if (normalizeProviderId(params.provider) === "openai-codex") {
+    return `"openai-codex" is a legacy provider ID. Run \`openclaw doctor --fix\` to migrate legacy model and provider config to the current OpenAI format. If the provider has no authenticated profile, run \`openclaw models status\` to check provider auth and re-authenticate if needed. See https://docs.openclaw.ai/concepts/model-providers.`;
+  }
   const configuredModels = params.cfg?.agents?.defaults?.models;
   if (!configuredModels) {
     return undefined;

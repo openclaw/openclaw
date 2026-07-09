@@ -39,7 +39,7 @@ export interface SessionLike {
   sessionId?: string;
 }
 
-export interface EventBridgeOptions {
+interface EventBridgeOptions {
   onAssistantDelta?: (payload: OnAssistantDeltaPayload) => void | Promise<void>;
   onAgentEvent?: (event: {
     stream: "item" | "plan";
@@ -60,7 +60,7 @@ export interface EventBridgeOptions {
   isAborted: () => boolean;
 }
 
-export interface EventBridgeSnapshot {
+interface EventBridgeSnapshot {
   readonly assistantTexts: readonly string[];
   readonly completedCount: number;
   readonly lastAssistantEvent: Extract<SessionEvent, { type: "assistant.message" }> | undefined;
@@ -70,12 +70,12 @@ export interface EventBridgeSnapshot {
   readonly usage: AssistantUsageSnapshot | undefined;
 }
 
-export interface BuildAssistantMessageArgs {
+interface BuildAssistantMessageArgs {
   modelRef: { api?: string; id: string; provider: string };
   now: () => number;
 }
 
-export interface EventBridgeController {
+interface EventBridgeController {
   recordSendResult(result: SessionEvent | undefined): boolean;
   awaitCompactionChain(): Promise<void>;
   awaitCompactionCompletion(): Promise<void>;

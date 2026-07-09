@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   ErrorCodes,
   errorShape,
@@ -43,13 +44,22 @@ import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.j
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import { normalizePollInput } from "../../polls.js";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+  INTERNAL_MESSAGE_CHANNEL,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
+import { ADMIN_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -65,6 +75,26 @@ const inflightByContext = new WeakMap<
   GatewayRequestContext,
   Map<string, Promise<InflightResult>>
 >();
+
+const TRUSTED_MESSAGE_ACTION_BRIDGE_SCOPES = [WRITE_SCOPE];
+
+async function withMessageActionGatewayClientScopes<T>(
+  scopes: readonly string[],
+  run: () => Promise<T>,
+): Promise<T> {
+  const current = getPluginRuntimeGatewayRequestScope();
+  if (!current?.client?.connect) {
+    return await run();
+  }
+  const client = {
+    ...current.client,
+    connect: {
+      ...current.client.connect,
+      scopes: [...scopes],
+    },
+  };
+  return await withPluginRuntimeGatewayRequestScope({ ...current, client }, run);
+}
 
 const getInflightMap = (context: GatewayRequestContext) => {
   let inflight = inflightByContext.get(context);
@@ -410,7 +440,7 @@ async function mirrorDeliveredSourceReplyToTranscriptBestEffort(params: {
   }
 }
 
-const sourceReplyTranscriptMirrorQueues = new Map<string, Promise<void>>();
+const sourceReplyTranscriptMirrorQueue = new KeyedAsyncQueue();
 
 function resolveSourceReplyTranscriptMirrorQueueKey(
   mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0],
@@ -424,22 +454,11 @@ function scheduleDeliveredSourceReplyTranscriptMirror(params: {
   mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0];
 }): Promise<void> {
   const queueKey = resolveSourceReplyTranscriptMirrorQueueKey(params.mirror);
-  const previous = sourceReplyTranscriptMirrorQueues.get(queueKey);
   // Queue per session so current-conversation source replies are visible before
   // a following turn can read the transcript.
-  const queued = (async () => {
-    await previous?.catch(() => undefined);
-    await mirrorDeliveredSourceReplyToTranscriptBestEffort(params);
-  })();
-  sourceReplyTranscriptMirrorQueues.set(queueKey, queued);
-  void queued
-    .finally(() => {
-      if (sourceReplyTranscriptMirrorQueues.get(queueKey) === queued) {
-        sourceReplyTranscriptMirrorQueues.delete(queueKey);
-      }
-    })
-    .catch(() => undefined);
-  return queued;
+  return sourceReplyTranscriptMirrorQueue.enqueue(queueKey, () =>
+    mirrorDeliveredSourceReplyToTranscriptBestEffort(params),
+  );
 }
 
 export const sendHandlers: GatewayRequestHandlers = {
@@ -535,26 +554,50 @@ export const sendHandlers: GatewayRequestHandlers = {
           });
         }
         const gatewayClientScopes = client?.connect?.scopes ?? [];
-        const handled = await dispatchChannelMessageAction({
-          channel,
-          action: request.action as never,
-          cfg,
-          params: request.params,
-          accountId,
-          requesterAccountId: normalizeOptionalString(request.requesterAccountId) ?? undefined,
-          requesterSenderId: normalizeOptionalString(request.requesterSenderId) ?? undefined,
-          senderIsOwner: gatewayClientScopes.includes(ADMIN_SCOPE)
-            ? request.senderIsOwner === true
-            : false,
-          sessionKey,
-          sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
-          inboundEventKind: request.inboundTurnKind,
-          agentId,
-          mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
-          toolContext: request.toolContext,
-          dryRun: false,
-          gatewayClientScopes,
-        });
+        // Requester provenance is trusted channel context, not public RPC input.
+        // Only full-scope callers may bridge server-injected sender identity.
+        const canSupplyTrustedRequester = gatewayClientScopes.includes(ADMIN_SCOPE);
+        const requesterAccountId = canSupplyTrustedRequester
+          ? (normalizeOptionalString(request.requesterAccountId) ?? undefined)
+          : undefined;
+        const requesterSenderId = canSupplyTrustedRequester
+          ? (normalizeOptionalString(request.requesterSenderId) ?? undefined)
+          : undefined;
+        const senderIsOwner = canSupplyTrustedRequester ? request.senderIsOwner === true : false;
+        const hasTrustedRequesterProvenance =
+          requesterAccountId !== undefined ||
+          requesterSenderId !== undefined ||
+          (canSupplyTrustedRequester && request.senderIsOwner !== undefined);
+        const isTrustedBackendBridge =
+          canSupplyTrustedRequester &&
+          client?.connect?.client?.id === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
+          client.connect.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
+          hasTrustedRequesterProvenance;
+        const dispatchGatewayClientScopes = isTrustedBackendBridge
+          ? TRUSTED_MESSAGE_ACTION_BRIDGE_SCOPES
+          : gatewayClientScopes;
+        const handled = await withMessageActionGatewayClientScopes(
+          dispatchGatewayClientScopes,
+          async () =>
+            await dispatchChannelMessageAction({
+              channel,
+              action: request.action as never,
+              cfg,
+              params: request.params,
+              accountId,
+              requesterAccountId,
+              requesterSenderId,
+              senderIsOwner,
+              sessionKey,
+              sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
+              inboundEventKind: request.inboundTurnKind,
+              agentId,
+              mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
+              toolContext: request.toolContext,
+              dryRun: false,
+              gatewayClientScopes: dispatchGatewayClientScopes,
+            }),
+        );
         if (!handled) {
           const error = errorShape(
             ErrorCodes.INVALID_REQUEST,

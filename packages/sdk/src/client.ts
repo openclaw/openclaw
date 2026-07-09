@@ -723,7 +723,12 @@ export class Session {
   }
 
   async compact(params?: { maxLines?: number }): Promise<unknown> {
-    return await this.client.request("sessions.compact", { key: this.key, ...params });
+    return await this.client.request(
+      "sessions.compact",
+      { key: this.key, ...params },
+      // The server owns the configurable terminal compaction deadline.
+      { timeoutMs: null },
+    );
   }
 }
 

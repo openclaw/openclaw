@@ -1,7 +1,7 @@
 // Doctor security tests cover security audit checks, config findings, and repair output.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
@@ -28,6 +28,11 @@ describe("noteSecurityWarnings gateway exposure", () => {
   let prevPassword: string | undefined;
   let prevHome: string | undefined;
   let prevServiceKind: string | undefined;
+
+  beforeAll(async () => {
+    listReadOnlyChannelPluginsForConfigMock.mockReturnValue([]);
+    await noteSecurityWarnings({ gateway: { bind: "loopback" } } as OpenClawConfig);
+  });
 
   beforeEach(() => {
     note.mockClear();

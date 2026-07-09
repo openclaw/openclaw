@@ -3,6 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
 import path from "node:path";
+import { sleep as delay } from "../../lib/sleep.mjs";
 import { die, run, say, sh, warn } from "./host-command.ts";
 import type { HostServer } from "./types.ts";
 
@@ -22,7 +23,7 @@ export function resolveHostIp(explicit = ""): string {
   return output;
 }
 
-export function allocateHostPort(): number {
+function allocateHostPort(): number {
   return Number(
     run(
       "python3",
@@ -35,7 +36,7 @@ export function allocateHostPort(): number {
   );
 }
 
-export async function isHostPortFree(port: number): Promise<boolean> {
+async function isHostPortFree(port: number): Promise<boolean> {
   return await new Promise((resolve) => {
     const server = createServer();
     server.once("error", () => resolve(false));
@@ -192,12 +193,6 @@ async function canConnect(port: number): Promise<boolean> {
       socket.destroy();
       resolve(false);
     });
-  });
-}
-
-async function delay(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
   });
 }
 

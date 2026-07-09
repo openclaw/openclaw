@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material3.HorizontalDivider
@@ -28,6 +29,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 
 /** Settings screen for gateway nodes, paired devices, and pending pairing requests. */
@@ -102,6 +104,25 @@ private fun NodesDevicesPanel(summary: GatewayNodesDevicesSummary) {
         Text(text = devicePairingAdminUnavailableText(), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
       }
     }
+    val approvalCommands = summary.nodes.mapNotNull(::nodeApprovalCommandRow)
+    if (approvalCommands.isNotEmpty()) {
+      ClawPanel {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Text(text = "Node approval required", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+          Text(text = "Run on the Gateway host:", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+          approvalCommands.forEach { (label, command) ->
+            Text(text = label, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+            SelectionContainer {
+              Text(
+                text = command,
+                style = ClawTheme.type.body.copy(fontFamily = FontFamily.Monospace),
+                color = ClawTheme.colors.text,
+              )
+            }
+          }
+        }
+      }
+    }
     if (summary.pendingDevices.isNotEmpty()) {
       NodesSection(title = "Pending Requests") {
         summary.pendingDevices.forEachIndexed { index, device ->
@@ -133,6 +154,11 @@ private fun NodesDevicesPanel(summary: GatewayNodesDevicesSummary) {
       }
     }
   }
+}
+
+private fun nodeApprovalCommandRow(node: GatewayNodeSummary): Pair<String, String>? {
+  val command = gatewayNodeApprovalCommand(node.approvalState, node.pendingRequestId) ?: return null
+  return (node.displayName ?: node.id) to command
 }
 
 @Composable

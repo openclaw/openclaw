@@ -130,6 +130,83 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listGroupsLive).toHaveBeenCalledTimes(1);
   });
 
+  it("does not reuse query-filtered directory misses for later target queries", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      directory: {
+        listPeers: mocks.listPeers,
+        listPeersLive: mocks.listPeersLive,
+      },
+      messaging: {
+        inferTargetChatType: () => "direct",
+        targetResolver: {
+          resolveTarget: mocks.resolveTarget,
+        },
+      },
+    });
+    const listMatchingPeers = vi.fn(({ query }: { query?: string }) =>
+      query === "dm" ? [{ kind: "user", id: "+15551234567", name: "ops-dm" }] : [],
+    );
+    mocks.listPeers.mockImplementation(listMatchingPeers);
+    mocks.listPeersLive.mockImplementation(listMatchingPeers);
+    mocks.resolveTarget.mockResolvedValue(null);
+
+    const miss = await resolveMessagingTarget({
+      cfg,
+      channel: "richchat",
+      input: "alpha",
+    });
+    expect(miss.ok).toBe(false);
+
+    const hit = await expectOkResolution({
+      cfg,
+      channel: "richchat",
+      input: "dm",
+    });
+
+    expect(hit.target).toEqual({
+      to: "+15551234567",
+      kind: "user",
+      display: "ops-dm",
+      source: "directory",
+      resolutionSource: "directory",
+    });
+    expect(mocks.listPeers).toHaveBeenCalledTimes(2);
+    expect(listMatchingPeers).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ query: "alpha" }),
+    );
+    expect(listMatchingPeers).toHaveBeenNthCalledWith(3, expect.objectContaining({ query: "dm" }));
+  });
+
+  it("does not fall back to plugin target resolution after directory errors", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      directory: {
+        listPeers: mocks.listPeers,
+      },
+      messaging: {
+        inferTargetChatType: () => "direct",
+        targetResolver: {
+          resolveTarget: mocks.resolveTarget,
+        },
+      },
+    });
+    mocks.listPeers.mockRejectedValue(new Error("Alias ops is invalid."));
+    mocks.resolveTarget.mockResolvedValue({
+      to: "+15551234567",
+      kind: "user",
+      source: "directory",
+    });
+
+    await expect(
+      resolveMessagingTarget({
+        cfg,
+        channel: "richchat",
+        input: "ops",
+      }),
+    ).rejects.toThrow("Alias ops is invalid.");
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
+  });
+
   it("preserves configured directory entries before rejecting reserved literal targets", async () => {
     mocks.getChannelPlugin.mockReturnValue({
       ...createChannelTestPluginBase({
