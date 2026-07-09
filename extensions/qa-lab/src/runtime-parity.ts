@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements runtime parity behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asFiniteNumber as readFiniteNumber,
@@ -136,6 +137,7 @@ const HEARTBEAT_RESPONSE_TOOL_NAME = "heartbeat_respond";
 const HEARTBEAT_TRANSCRIPT_PROMPT = "[OpenClaw heartbeat poll]";
 const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
+const RUNTIME_PARITY_MOCK_REQUESTS_MAX_BYTES = 1024 * 1024;
 const TOOL_RESULT_MISSING_ERROR_CLASS = "tool-result-missing";
 const BOOT_STATE_LINE_RE =
   /\b(?:FailoverError|No API key found|Codex app-server|auth profile|runtime policy|restart mode:|plugin|doctor)\b/i;
@@ -992,7 +994,11 @@ async function loadRuntimeParityMockToolCalls(
       if (!response.ok) {
         return null;
       }
-      payload = await response.json();
+      const bytes = await readResponseWithLimit(response, RUNTIME_PARITY_MOCK_REQUESTS_MAX_BYTES, {
+        onOverflow: ({ maxBytes }) =>
+          new Error(`QA runtime parity mock debug requests exceeded ${maxBytes} bytes`),
+      });
+      payload = JSON.parse(bytes.toString("utf8")) as unknown;
     } finally {
       await release();
     }
@@ -1084,6 +1090,7 @@ export async function runRuntimeParityScenario(params: {
 export const testing = {
   classifyRuntimeParityCells,
   filterMockRequestsForParentPrompt,
+  loadRuntimeParityMockToolCalls,
   resolveRuntimeParityToolCalls,
   resolveToolCallOrderFromMockRequests,
 };

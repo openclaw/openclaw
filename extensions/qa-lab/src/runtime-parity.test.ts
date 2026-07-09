@@ -1,5 +1,12 @@
 // Qa Lab tests cover runtime parity classification behavior.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
+
 import {
   __testing,
   isRuntimeParityResultPass,
@@ -29,6 +36,10 @@ function makeRuntimeParityCell(
 }
 
 describe("runtime parity", () => {
+  beforeEach(() => {
+    fetchWithSsrFGuardMock.mockReset();
+  });
+
   it("marks planned mock tool calls without outputs as missing tool results", () => {
     const toolCalls = __testing.resolveToolCallOrderFromMockRequests([
       {
@@ -162,6 +173,48 @@ describe("runtime parity", () => {
         resultHash: "async-started",
       },
     ]);
+  });
+
+  it("bounds oversized mock debug request snapshots and falls back to transcripts", async () => {
+    const chunkSize = 512 * 1024;
+    const chunkCount = 4;
+    let reads = 0;
+    let canceled = false;
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (reads >= chunkCount) {
+              controller.close();
+              return;
+            }
+            reads += 1;
+            controller.enqueue(new Uint8Array(chunkSize));
+          },
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+      release,
+    });
+
+    const mockToolCalls = await __testing.loadRuntimeParityMockToolCalls(
+      "http://127.0.0.1:49152",
+      "parent prompt",
+      ["parent prompt"],
+    );
+
+    expect(mockToolCalls).toBeNull();
+    expect(canceled).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+      url: "http://127.0.0.1:49152/debug/requests",
+      policy: { allowPrivateNetwork: true },
+      auditContext: "qa-lab-runtime-parity-mock-tool-calls",
+    });
   });
 
   it("scopes process-global mock requests to the parent session prompt", () => {
