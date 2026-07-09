@@ -53,6 +53,16 @@ const GOOGLE_LIVE_WEBSOCKET_HOST = "generativelanguage.googleapis.com";
 const GOOGLE_LIVE_WEBSOCKET_PATH =
   /^\/ws\/google\.ai\.generativelanguage\.v[0-9a-z]+\.GenerativeService\.BidiGenerateContent(?:Constrained)?$/;
 
+// Browser sessions can still pin a 2.5 model, whose text and tool-response wire
+// contract differs from the 3.1 default carried in new session metadata.
+function isGemini31LiveModel(model: string | undefined): boolean {
+  if (!model) {
+    return true;
+  }
+  const modelId = model.startsWith("models/") ? model.slice("models/".length) : model;
+  return modelId.startsWith("gemini-3.1-") && modelId.includes("-live");
+}
+
 export function buildGoogleLiveUrl(session: RealtimeTalkJsonPcmWebSocketSessionResult): string {
   let url: URL;
   try {
@@ -392,7 +402,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
           {
             id: callId,
             name: pending.name,
-            scheduling: "WHEN_IDLE",
+            ...(!isGemini31LiveModel(this.session.model) ? { scheduling: "WHEN_IDLE" } : {}),
             response:
               result && typeof result === "object" && !Array.isArray(result)
                 ? result
@@ -405,15 +415,18 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
 
   private sendControlSpeechMessage(message: string): void {
     this.stopOutput();
+    if (!isGemini31LiveModel(this.session.model)) {
+      this.send({
+        clientContent: {
+          turns: [{ role: "user", parts: [{ text: message }] }],
+          turnComplete: true,
+        },
+      });
+      return;
+    }
     this.send({
-      clientContent: {
-        turns: [
-          {
-            role: "user",
-            parts: [{ text: message }],
-          },
-        ],
-        turnComplete: true,
+      realtimeInput: {
+        text: message,
       },
     });
   }
