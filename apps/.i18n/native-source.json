@@ -6091,7 +6091,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 156,
+      "line": 160,
       "path": "apps/ios/Sources/Camera/CameraController.swift",
       "source": "Camera",
       "surface": "apple",
@@ -6099,7 +6099,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 156,
+      "line": 160,
       "path": "apps/ios/Sources/Camera/CameraController.swift",
       "source": "Microphone",
       "surface": "apple",
