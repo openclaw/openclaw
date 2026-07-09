@@ -80,8 +80,7 @@ async function collectChromeMcpSnapshotUrls(
         if (!href || seen.has(href)) continue;
         const text = (anchor.innerText || anchor.textContent || anchor.getAttribute("aria-label") || "")
           .replace(/\\s+/g, " ")
-          .trim()
-          .slice(0, 121) || href;
+          .trim() || href;
         seen.add(href);
         out.push({ text, url: href });
         if (out.length >= 100) break;
