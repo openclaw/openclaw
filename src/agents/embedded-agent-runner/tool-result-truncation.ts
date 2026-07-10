@@ -10,6 +10,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { TextContent } from "../../llm/types.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveAgentContextLimits } from "../agent-scope.js";
+import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
   acquireSessionWriteLock,
@@ -921,6 +922,18 @@ function buildAggregateToolResultReplacements(params: {
   return { replacements, pressureExceeded: true };
 }
 
+function isRuntimeContextCarrier(message: AgentMessage): boolean {
+  const candidate = message as {
+    role?: unknown;
+    customType?: unknown;
+    runtimeContextCarrier?: unknown;
+  };
+  return (
+    candidate.runtimeContextCarrier === true ||
+    (candidate.role === "custom" && candidate.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE)
+  );
+}
+
 function getTrailingToolResultEntryIds(branch: ToolResultBranchEntry[]): Set<string> {
   const ids = new Set<string>();
   let sawMessage = false;
@@ -931,6 +944,11 @@ function getTrailingToolResultEntryIds(branch: ToolResultBranchEntry[]): Set<str
         continue;
       }
       break;
+    }
+    // Runtime context is prompt-local transport metadata appended after the tool loop.
+    // Treat only a contiguous tail run as transparent when locating fresh results.
+    if (!sawMessage && isRuntimeContextCarrier(entry.message)) {
+      continue;
     }
     sawMessage = true;
     if ((entry.message as { role?: string }).role !== "toolResult") {

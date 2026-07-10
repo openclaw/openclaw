@@ -7,9 +7,11 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { buildRuntimeContextCustomMessage } from "./run/runtime-context-prompt.js";
 import {
   getEmbeddedSessionPromptState,
   testing as sessionPromptStateTesting,
@@ -721,6 +723,70 @@ describe("truncateOversizedToolResultsInMessages", () => {
     );
     expect(freshResult?.role).toBe("toolResult");
     expect(freshResult && getFirstToolResultText(freshResult)).toBe(freshOutput);
+    expect(totalChars).toBeLessThanOrEqual(32_000);
+  });
+
+  it("preserves fresh tool results through a trailing runtime context carrier", () => {
+    const projectionState = createToolResultPromptProjectionState();
+    const history: AgentMessage[] = [];
+    for (let index = 0; index < 50; index++) {
+      history.push(makeAssistantMessage(`call ${index}`));
+      history.push(makeToolResult("x".repeat(4_000), `history_${index}`));
+    }
+    history.push(makeUserMessage("run echo with extra context"));
+
+    const first = truncateOversizedToolResultsInMessages(
+      history,
+      1_000_000,
+      8_000,
+      32_000,
+      projectionState,
+    );
+    expect(first.truncatedCount).toBeGreaterThan(0);
+
+    const freshOutput = "OC99756_EXEC_MARKER_".padEnd(4_000, "x");
+    const runtimeContextMessage = buildRuntimeContextCustomMessage("runtime context refresh");
+    if (!runtimeContextMessage) {
+      throw new Error("expected runtime context message");
+    }
+    const providerMessages = convertToLlm([
+      ...history,
+      makeAssistantMessage("running exec"),
+      makeToolResult(freshOutput, "fresh_exec"),
+      runtimeContextMessage,
+    ] as AgentMessage[]) as AgentMessage[];
+    const providerCarrier = providerMessages.at(-1) as
+      | (AgentMessage & { runtimeContextCarrier?: boolean })
+      | undefined;
+    expect(providerCarrier?.runtimeContextCarrier).toBe(true);
+
+    const second = truncateOversizedToolResultsInMessages(
+      providerMessages,
+      1_000_000,
+      8_000,
+      32_000,
+      projectionState,
+    );
+
+    const freshResult = second.messages.find(
+      (message): message is ToolResultMessage =>
+        message.role === "toolResult" && message.toolCallId === "fresh_exec",
+    );
+    const historicalResults = second.messages.filter(
+      (message): message is ToolResultMessage =>
+        message.role === "toolResult" && message.toolCallId.startsWith("history_"),
+    );
+    const totalChars = second.messages.reduce(
+      (sum, message) =>
+        sum + (message.role === "toolResult" ? getToolResultTextLength(message) : 0),
+      0,
+    );
+    expect(freshResult && getFirstToolResultText(freshResult)).toBe(freshOutput);
+    expect(historicalResults.some((message) => getToolResultTextLength(message) < 4_000)).toBe(
+      true,
+    );
+    expect(second.aggregateTruncatedCount).toBeGreaterThan(0);
+    expect(second.aggregatePressureEngaged).toBe(true);
     expect(totalChars).toBeLessThanOrEqual(32_000);
   });
 
