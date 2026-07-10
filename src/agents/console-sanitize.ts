@@ -1,6 +1,8 @@
 // Console text sanitizer for short diagnostic strings. It removes control
 // characters, flattens whitespace, and caps length before logging/display.
-/** Sanitize optional text for compact console output. */
+/** Sanitize optional text for compact console output. Strips C0/C1 control
+ *  characters (including ANSI escape introducers), flattens whitespace, and
+ *  caps length on code-point boundaries. */
 export function sanitizeForConsole(text: string | undefined, maxChars = 200): string | undefined {
   const trimmed = text?.trim();
   if (!trimmed) {
@@ -14,7 +16,8 @@ export function sanitizeForConsole(text: string | undefined, maxChars = 200): st
         code === 0x0b ||
         code === 0x0c ||
         (code >= 0x0e && code <= 0x1f) ||
-        code === 0x7f
+        code === 0x7f ||
+        (code >= 0x80 && code <= 0x9f)
       );
     })
     .join("");

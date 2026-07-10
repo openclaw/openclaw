@@ -17,4 +17,14 @@ describe("sanitizeForConsole", () => {
     expect(sanitizeForConsole("  hello\tworld  ")).toBe("hello world");
     expect(sanitizeForConsole(undefined)).toBeUndefined();
   });
+
+  it("filters C1 control characters (0x80-0x9f) including CSI introducer", () => {
+    const csi = String.fromCharCode(0x9b); // C1 CSI — alternative ANSI escape prefix
+    expect(sanitizeForConsole(`text${csi}[31mred`)).toBe("text[31mred");
+    // All C1 range bytes should be stripped
+    for (let code = 0x80; code <= 0x9f; code++) {
+      const cleaned = sanitizeForConsole(`a${String.fromCharCode(code)}b`);
+      expect(cleaned).toBe("ab");
+    }
+  });
 });
