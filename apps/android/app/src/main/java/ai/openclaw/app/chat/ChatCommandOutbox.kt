@@ -14,12 +14,6 @@ internal const val OUTBOX_MAX_QUEUED = 50
 /** Queued commands older than this are expired instead of sending stale instructions. */
 internal const val OUTBOX_EXPIRY_MS = 48L * 60L * 60L * 1000L
 
-/** Total send attempts per item before it is parked as failed. */
-internal const val OUTBOX_MAX_SEND_ATTEMPTS = 3
-
-/** Base backoff between retry attempts for one item; multiplied by the attempt count. */
-internal const val OUTBOX_RETRY_BACKOFF_MS = 2_000L
-
 /** lastError marker for items expired by [OUTBOX_EXPIRY_MS]; also shown in the UI row. */
 internal const val OUTBOX_EXPIRED_ERROR = "expired"
 

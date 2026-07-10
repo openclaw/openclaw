@@ -16,7 +16,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.UUID
@@ -374,39 +373,6 @@ class ChatControllerOutboxTest {
     }
 
   @Test
-  fun gatewayScopeSwitchDuringRetryBackoffStopsTheFlushWithoutReplaying() =
-    runTest {
-      val gateway = FakeGateway()
-      val outbox = FakeCommandOutbox()
-      var activeScope: ChatCacheScope? = ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = 1L)
-      val chat =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = gateway::request,
-          cacheScope = { activeScope },
-          commandOutbox = outbox,
-        )
-      chat.load("main")
-      advanceUntilIdle()
-      chat.sendMessageAwaitAcceptance(message = "old gateway text", thinkingLevel = "off", attachments = emptyList())
-
-      gateway.online = true
-      gateway.sendResponse = { key -> """{"runId":"$key","status":"error"}""" }
-      chat.handleGatewayEvent("health", null)
-      // Run up to the retry backoff delay, then switch the gateway scope while it is pending.
-      runCurrent()
-      activeScope = ChatCacheScope(gatewayId = "gateway-other", connectionGeneration = 2L)
-      advanceUntilIdle()
-
-      // Only the pre-switch attempt happened; the captured row was not replayed into the new scope.
-      assertEquals(1, gateway.sentIdempotencyKeys.size)
-      val row = outbox.rows.values.single()
-      assertEquals(ChatOutboxStatus.Queued, row.status)
-      assertEquals(1, row.retryCount)
-    }
-
-  @Test
   fun queuedRowsStayWithTheirGatewayAcrossSwitchAndFlushAfterSwitchBack() =
     runTest {
       val gateway = FakeGateway()
@@ -449,57 +415,44 @@ class ChatControllerOutboxTest {
     }
 
   @Test
-  fun rowDeletedDuringRetryBackoffIsNeverResent() =
+  fun terminalFailureAcksFailUnconfirmedWithoutReplay() =
     runTest {
-      val gateway = FakeGateway()
-      val outbox = FakeCommandOutbox()
-      val chat = controller(this, gateway, outbox)
-      chat.load("main")
-      advanceUntilIdle()
-      chat.sendMessageAwaitAcceptance(message = "deleted mid-retry", thinkingLevel = "off", attachments = emptyList())
-      val queuedRow = chat.outboxItems.value.single()
-      val id = queuedRow.id
+      val responses =
+        listOf<(String) -> String>(
+          { key -> """{"runId":"$key","status":"error"}""" },
+          { key -> """{"runId":"$key","status":"timeout"}""" },
+          { _ -> """{"status":"error"}""" },
+          { _ -> """{"status":"timeout"}""" },
+        )
 
-      gateway.online = true
-      gateway.sendResponse = { key -> """{"runId":"$key","status":"error"}""" }
-      chat.handleGatewayEvent("health", null)
-      // Run up to the retry backoff delay; a definitive rejection remains safe to retry later.
-      runCurrent()
-      assertEquals(ChatOutboxStatus.Queued, outbox.rows.getValue(id).status)
-      // Simulate the row disappearing through a non-UI path (e.g. session purge) mid-backoff.
-      outbox.rows.remove(id)
-      advanceUntilIdle()
+      for ((index, response) in responses.withIndex()) {
+        val gateway = FakeGateway()
+        val outbox = FakeCommandOutbox()
+        val chat = controller(this, gateway, outbox)
+        chat.load("main")
+        advanceUntilIdle()
+        chat.sendMessageAwaitAcceptance(message = "terminal-$index", thinkingLevel = "off", attachments = emptyList())
 
-      // The post-delay re-claim found no row, so the captured text was not sent again.
-      assertEquals(1, gateway.sentIdempotencyKeys.size)
-      assertTrue(outbox.rows.isEmpty())
-      assertTrue(chat.outboxItems.value.isEmpty())
+        gateway.online = true
+        gateway.sendResponse = response
+        chat.handleGatewayEvent("health", null)
+        advanceUntilIdle()
+
+        val failed = chat.outboxItems.value.single()
+        assertEquals(ChatOutboxStatus.Failed, failed.status)
+        assertEquals(0, failed.retryCount)
+        assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, failed.lastError)
+        assertEquals(1, gateway.sentMessages.size)
+        assertFalse(chat.healthOk.value)
+
+        chat.handleGatewayEvent("health", null)
+        advanceUntilIdle()
+        assertEquals(1, gateway.sentMessages.size)
+      }
     }
 
   @Test
-  fun sendFailuresBackOffThenParkAsFailedAfterMaxAttempts() =
-    runTest {
-      val gateway = FakeGateway()
-      val outbox = FakeCommandOutbox()
-      val chat = controller(this, gateway, outbox)
-      chat.load("main")
-      advanceUntilIdle()
-      chat.sendMessageAwaitAcceptance(message = "doomed", thinkingLevel = "off", attachments = emptyList())
-
-      gateway.online = true
-      gateway.sendResponse = { key -> """{"runId":"$key","status":"error"}""" }
-      chat.handleGatewayEvent("health", null)
-      advanceUntilIdle()
-
-      assertEquals(OUTBOX_MAX_SEND_ATTEMPTS, gateway.sentIdempotencyKeys.size)
-      val failed = chat.outboxItems.value.single()
-      assertEquals(ChatOutboxStatus.Failed, failed.status)
-      assertEquals(OUTBOX_MAX_SEND_ATTEMPTS, failed.retryCount)
-      assertNotNull(failed.lastError)
-    }
-
-  @Test
-  fun definitiveRejectionBackoffSurvivesControllerRestart() =
+  fun transmittedGatewayRejectionNeverReplaysUntilExplicitRetryAcrossRestart() =
     runTest {
       val gateway = FakeGateway()
       val outbox = FakeCommandOutbox()
@@ -508,28 +461,33 @@ class ChatControllerOutboxTest {
       val first = controller(processScope, gateway, outbox)
       first.load("main")
       advanceUntilIdle()
-      first.sendMessageAwaitAcceptance(message = "retry after restart", thinkingLevel = "off", attachments = emptyList())
+      first.sendMessageAwaitAcceptance(message = "manual retry only", thinkingLevel = "off", attachments = emptyList())
 
       gateway.online = true
-      gateway.sendResponse = { key -> """{"runId":"$key","status":"error"}""" }
+      gateway.sendFailureAfterDispatch =
+        GatewayRequestRejected(GatewaySession.ErrorShape(code = "UNAVAILABLE", message = "cached run failed"))
       first.handleGatewayEvent("health", null)
-      runCurrent()
+      advanceUntilIdle()
 
-      val retryable = outbox.rows.values.single()
-      assertEquals(ChatOutboxStatus.Queued, retryable.status)
-      assertEquals(1, retryable.retryCount)
+      val ambiguous = first.outboxItems.value.single()
+      assertEquals(ChatOutboxStatus.Failed, ambiguous.status)
+      assertEquals(0, ambiguous.retryCount)
+      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, ambiguous.lastError)
       assertEquals(1, gateway.sentMessages.size)
       processJob.cancel()
 
+      gateway.sendFailureAfterDispatch = null
       val restarted = controller(this, gateway, outbox)
       restarted.handleGatewayEvent("health", null)
       advanceUntilIdle()
 
-      assertEquals(OUTBOX_MAX_SEND_ATTEMPTS, gateway.sentMessages.size)
-      val failed = restarted.outboxItems.value.single()
-      assertEquals(ChatOutboxStatus.Failed, failed.status)
-      assertEquals(OUTBOX_MAX_SEND_ATTEMPTS, failed.retryCount)
-      assertEquals("Chat failed before the run started", failed.lastError)
+      assertEquals(1, gateway.sentMessages.size)
+      assertEquals(ChatOutboxStatus.Failed, restarted.outboxItems.value.single().status)
+
+      restarted.retryOutboxCommand(ambiguous.id)
+      advanceUntilIdle()
+      assertEquals(listOf(ambiguous.id, ambiguous.id), gateway.sentIdempotencyKeys)
+      assertTrue(restarted.outboxItems.value.isEmpty())
     }
 
   @Test
@@ -660,28 +618,6 @@ class ChatControllerOutboxTest {
     }
 
   @Test
-  fun terminalFailureAckWithoutRunIdUsesTheRetryBudget() =
-    runTest {
-      val gateway = FakeGateway()
-      val outbox = FakeCommandOutbox()
-      val chat = controller(this, gateway, outbox)
-      chat.load("main")
-      advanceUntilIdle()
-      chat.sendMessageAwaitAcceptance(message = "rejected ack", thinkingLevel = "off", attachments = emptyList())
-
-      gateway.online = true
-      gateway.sendResponse = { _ -> """{"status":"error"}""" }
-      chat.handleGatewayEvent("health", null)
-      advanceUntilIdle()
-
-      assertEquals(OUTBOX_MAX_SEND_ATTEMPTS, gateway.sentMessages.size)
-      val failed = chat.outboxItems.value.single()
-      assertEquals(ChatOutboxStatus.Failed, failed.status)
-      assertEquals(OUTBOX_MAX_SEND_ATTEMPTS, failed.retryCount)
-      assertEquals("Chat failed before the run started", failed.lastError)
-    }
-
-  @Test
   fun terminalSuccessAckWithoutRunIdRemovesTheRow() =
     runTest {
       val gateway = FakeGateway()
@@ -701,29 +637,6 @@ class ChatControllerOutboxTest {
     }
 
   @Test
-  fun definitiveGatewayRejectionUsesTheRetryBudget() =
-    runTest {
-      val gateway = FakeGateway()
-      val outbox = FakeCommandOutbox()
-      val chat = controller(this, gateway, outbox)
-      chat.load("main")
-      advanceUntilIdle()
-      chat.sendMessageAwaitAcceptance(message = "rejected", thinkingLevel = "off", attachments = emptyList())
-
-      gateway.online = true
-      gateway.sendFailureAfterDispatch =
-        GatewayRequestRejected(GatewaySession.ErrorShape(code = "INVALID_REQUEST", message = "rejected"))
-      chat.handleGatewayEvent("health", null)
-      advanceUntilIdle()
-
-      assertEquals(OUTBOX_MAX_SEND_ATTEMPTS, gateway.sentMessages.size)
-      val failed = chat.outboxItems.value.single()
-      assertEquals(ChatOutboxStatus.Failed, failed.status)
-      assertEquals(OUTBOX_MAX_SEND_ATTEMPTS, failed.retryCount)
-      assertTrue(failed.lastError.orEmpty().contains("INVALID_REQUEST"))
-    }
-
-  @Test
   fun retryResetsFailedRowAndFlushesImmediately() =
     runTest {
       val gateway = FakeGateway()
@@ -737,7 +650,7 @@ class ChatControllerOutboxTest {
           // Recent timestamp: the startup/flush expiry sweep must not expire this row.
           createdAtMs = System.currentTimeMillis(),
           status = ChatOutboxStatus.Failed,
-          retryCount = OUTBOX_MAX_SEND_ATTEMPTS,
+          retryCount = 2,
           lastError = "boom",
         ),
       )
