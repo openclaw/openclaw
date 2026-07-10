@@ -2126,12 +2126,11 @@ final class NodeAppModel {
                 }
                 throw error
             }
-            let payload: OpenClawTalkPTTStopPayload
-            switch start {
+            let payload: OpenClawTalkPTTStopPayload = switch start {
             case let .busy(busyPayload):
-                payload = busyPayload
+                busyPayload
             case .started:
-                payload = await self.talkMode.awaitPushToTalkOnce(start)
+                await self.talkMode.awaitPushToTalkOnce(start)
             }
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
