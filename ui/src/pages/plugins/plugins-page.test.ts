@@ -104,7 +104,7 @@ function createGateway(client: GatewayBrowserClient, connected = true): GatewayH
     get snapshot() {
       return snapshot;
     },
-    connection: { gatewayUrl: "ws://localhost", token: "", password: "" },
+    connection: { gatewayUrl: "ws://localhost", token: "", password: "", bootstrapToken: "" },
     eventLog: [],
     connect: () => undefined,
     setSessionKey: () => undefined,
