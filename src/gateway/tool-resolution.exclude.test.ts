@@ -11,6 +11,7 @@ type CreateOpenClawToolsArg = {
   inheritedToolDenylist?: string[];
   pluginToolDenylist?: string[];
   sandboxed?: boolean;
+  requesterAgentIdOverride?: string;
 };
 
 type LazyExecToolDefaults = {
@@ -43,6 +44,7 @@ const hoisted = vi.hoisted(() => {
   return {
     makeTool,
     createLazyExecToolMock,
+    getLoadedChannelPluginMock: vi.fn(),
     createOpenClawToolsMock: vi.fn((_args: CreateOpenClawToolsArg) => [
       makeTool("read"),
       makeTool("sessions_spawn"),
@@ -57,6 +59,10 @@ vi.mock("../agents/openclaw-tools.js", () => ({
   createOpenClawTools: (args: CreateOpenClawToolsArg) => hoisted.createOpenClawToolsMock(args),
 }));
 
+vi.mock("../channels/plugins/index.js", () => ({
+  getLoadedChannelPlugin: (channel: string) => hoisted.getLoadedChannelPluginMock(channel),
+}));
+
 vi.mock("../agents/lazy-exec-tool.js", () => ({
   createLazyExecTool: (defaults: LazyExecToolDefaults, presentation?: LazyExecToolPresentation) =>
     hoisted.createLazyExecToolMock(defaults, presentation),
@@ -69,28 +75,15 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
   beforeEach(() => {
     hoisted.createOpenClawToolsMock.mockClear();
     hoisted.createLazyExecToolMock.mockClear();
+    hoisted.getLoadedChannelPluginMock.mockReset();
   });
 
-  function readCreateToolsArgs(index = 0): {
-    clientCaps?: string[];
-    cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
-    inheritedToolAllowlist?: string[];
-    inheritedToolDenylist?: string[];
-    pluginToolDenylist?: string[];
-    sandboxed?: boolean;
-  } {
+  function readCreateToolsArgs(index = 0): CreateOpenClawToolsArg {
     const args = hoisted.createOpenClawToolsMock.mock.calls[index]?.[0];
     if (!args || typeof args !== "object") {
       throw new Error("expected createOpenClawTools args");
     }
-    return args as {
-      clientCaps?: string[];
-      cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
-      inheritedToolAllowlist?: string[];
-      inheritedToolDenylist?: string[];
-      pluginToolDenylist?: string[];
-      sandboxed?: boolean;
-    };
+    return args;
   }
 
   it("passes gateway client capabilities into tool construction", () => {
@@ -224,6 +217,20 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       hoisted.makeTool("exec"),
       hoisted.makeTool("nodes"),
     ]);
+    const turnOverrideGateway = resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+      senderIsOwner: true,
+      includeNodeExecTool: true,
+      execSession: { execHost: "node" },
+      execOverrides: { host: "gateway" },
+    });
+    hoisted.createOpenClawToolsMock.mockReturnValueOnce([
+      hoisted.makeTool("read"),
+      hoisted.makeTool("exec"),
+      hoisted.makeTool("nodes"),
+    ]);
     const sandboxAuto = resolveGatewayScopedTools({
       cfg: { agents: { defaults: { sandbox: { mode: "all" } } } } as OpenClawConfig,
       sessionKey: "agent:main:direct:test",
@@ -233,8 +240,53 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     });
 
     expect(gatewayOnly.tools.map((tool) => tool.name)).not.toContain("exec");
+    expect(turnOverrideGateway.tools.map((tool) => tool.name)).not.toContain("exec");
     expect(sandboxAuto.tools.map((tool) => tool.name)).not.toContain("exec");
     expect(hoisted.createLazyExecToolMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the runtime policy key for non-main sandbox classification", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "non-main" } } },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:main",
+      runtimePolicySessionKey: "agent:main:discord:default:direct:peer-42",
+      agentId: "main",
+      surface: "loopback",
+      senderIsOwner: true,
+      includeNodeExecTool: true,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
+    expect(hoisted.createLazyExecToolMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the explicit agent identity when a session key is an alias", () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "worker", tools: { deny: ["exec"] } }],
+      },
+    } as OpenClawConfig;
+    const defaultAgent = resolveGatewayScopedTools({
+      cfg,
+      sessionKey: "main",
+      surface: "loopback",
+      senderIsOwner: true,
+      includeNodeExecTool: true,
+    });
+    const worker = resolveGatewayScopedTools({
+      cfg,
+      sessionKey: "main",
+      agentId: "worker",
+      surface: "loopback",
+      senderIsOwner: true,
+      includeNodeExecTool: true,
+    });
+
+    expect(defaultAgent.tools.map((tool) => tool.name)).toContain("exec");
+    expect(worker.tools.map((tool) => tool.name)).not.toContain("exec");
+    expect(readCreateToolsArgs(1)).toMatchObject({ requesterAgentIdOverride: "worker" });
   });
 
   it("does not honor the internal node-exec flag on HTTP surfaces", () => {
@@ -267,6 +319,26 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
   });
 
+  it("applies the node-originated message provider policy before gateway policy", () => {
+    hoisted.createOpenClawToolsMock.mockReturnValueOnce([
+      hoisted.makeTool("read"),
+      hoisted.makeTool("canvas"),
+      hoisted.makeTool("web_search"),
+      hoisted.makeTool("exec"),
+    ]);
+    const result = resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:node:request:test",
+      surface: "loopback",
+      senderIsOwner: true,
+      messageProvider: "node",
+      includeNodeExecTool: true,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).toEqual(["canvas", "web_search"]);
+    expect(hoisted.createLazyExecToolMock).toHaveBeenCalledOnce();
+  });
+
   it("filters node exec through immutable sender-scoped policy", () => {
     const result = resolveGatewayScopedTools({
       cfg: {
@@ -286,6 +358,182 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
 
     expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
     expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
+  });
+
+  it("filters node exec through plugin group policy bound to group labels", () => {
+    const resolveToolPolicy = vi.fn(
+      (params: { groupChannel?: string | null; groupSpace?: string | null }) =>
+        params.groupChannel === "ops" && params.groupSpace === "guild-blocked"
+          ? { deny: ["exec"] }
+          : undefined,
+    );
+    hoisted.getLoadedChannelPluginMock.mockReturnValue({
+      groups: { resolveToolPolicy },
+    });
+
+    const result = resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:direct:child",
+      spawnedBy: "agent:main:discord:channel:bound",
+      groupId: "bound",
+      groupChannel: "ops",
+      groupSpace: "guild-blocked",
+      surface: "loopback",
+      senderIsOwner: false,
+      messageProvider: "discord",
+      includeNodeExecTool: true,
+    });
+
+    expect(resolveToolPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        groupId: "bound",
+        groupChannel: "ops",
+        groupSpace: "guild-blocked",
+      }),
+    );
+    expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
+    expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
+  });
+
+  it.each([
+    { policyKey: "name:Guest Name", field: "senderName", value: "Guest Name" },
+    { policyKey: "username:guest-user", field: "senderUsername", value: "guest-user" },
+    { policyKey: "e164:+15550001111", field: "senderE164", value: "+15550001111" },
+  ] as const)("filters node exec through $field sender policy", ({ policyKey, field, value }) => {
+    const result = resolveGatewayScopedTools({
+      cfg: {
+        tools: {
+          toolsBySender: {
+            [policyKey]: { deny: ["exec"] },
+            "*": {},
+          },
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:discord:channel:dev",
+      surface: "loopback",
+      senderIsOwner: false,
+      messageProvider: "discord",
+      includeNodeExecTool: true,
+      [field]: value,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
+    expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
+  });
+
+  it.each([
+    { label: "a non-owner external sender", messageProvider: "discord", senderIsOwner: false },
+    { label: "an owner on an external channel", messageProvider: "discord", senderIsOwner: true },
+  ])(
+    "filters node exec through wildcard sender policy for $label",
+    ({ messageProvider, senderIsOwner }) => {
+      const result = resolveGatewayScopedTools({
+        cfg: {
+          tools: {
+            toolsBySender: {
+              "*": { deny: ["exec"] },
+            },
+          },
+        } as OpenClawConfig,
+        sessionKey: "agent:main:discord:channel:dev",
+        surface: "loopback",
+        senderIsOwner,
+        messageProvider,
+        includeNodeExecTool: true,
+      });
+
+      expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
+      expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
+    },
+  );
+
+  it("preserves owner WebChat access from wildcard sender policy", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: {
+        tools: {
+          toolsBySender: {
+            "*": { deny: ["exec"] },
+          },
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:main",
+      surface: "loopback",
+      senderIsOwner: true,
+      messageProvider: "webchat",
+      includeNodeExecTool: true,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).toContain("exec");
+    expect(readCreateToolsArgs().pluginToolDenylist).not.toContain("exec");
+  });
+
+  it("filters node exec through global provider policy", () => {
+    const cfg = {
+      tools: {
+        byProvider: {
+          anthropic: { deny: ["exec"] },
+        },
+      },
+    } as OpenClawConfig;
+    const blocked = resolveGatewayScopedTools({
+      cfg,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+      senderIsOwner: true,
+      includeNodeExecTool: true,
+      modelProvider: "anthropic",
+      modelId: "claude-opus-4-7",
+    });
+    const allowed = resolveGatewayScopedTools({
+      cfg,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+      senderIsOwner: true,
+      includeNodeExecTool: true,
+      modelProvider: "openai",
+      modelId: "gpt-5.5",
+    });
+
+    expect(blocked.tools.map((tool) => tool.name)).not.toContain("exec");
+    expect(allowed.tools.map((tool) => tool.name)).toContain("exec");
+  });
+
+  it("filters node exec through agent model policy", () => {
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              byProvider: {
+                "anthropic/claude-opus-4-7": { deny: ["exec"] },
+              },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const blocked = resolveGatewayScopedTools({
+      cfg,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+      senderIsOwner: true,
+      includeNodeExecTool: true,
+      modelProvider: "anthropic",
+      modelId: "claude-opus-4-7",
+    });
+    const allowed = resolveGatewayScopedTools({
+      cfg,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+      senderIsOwner: true,
+      includeNodeExecTool: true,
+      modelProvider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+    });
+
+    expect(blocked.tools.map((tool) => tool.name)).not.toContain("exec");
+    expect(allowed.tools.map((tool) => tool.name)).toContain("exec");
   });
 
   it("filters node exec through group sender-scoped policy", () => {

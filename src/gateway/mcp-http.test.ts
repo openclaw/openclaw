@@ -11,7 +11,7 @@ type MockGatewayTool = {
   label: string;
   description: string;
   parameters: Record<string, unknown>;
-  prepareBeforeToolCallParams?: (...args: unknown[]) => unknown | Promise<unknown>;
+  prepareBeforeToolCallParams?: (...args: unknown[]) => unknown;
   finalizeBeforeToolCallParams?: (...args: unknown[]) => unknown;
   execute: (...args: unknown[]) => Promise<{
     content: unknown[];
@@ -42,7 +42,11 @@ type MockBeforeToolCallHookResult =
 
 type ScopedToolsCall = {
   sessionKey?: string;
+  runtimePolicySessionKey?: string;
+  agentId?: string;
   sessionId?: string;
+  modelProvider?: string;
+  modelId?: string;
   yieldContextCacheKey?: string;
   onYield?: (message: string) => Promise<void> | void;
   accountId?: string;
@@ -67,9 +71,22 @@ type ScopedToolsCall = {
     execAsk?: string;
     execNode?: string;
   };
+  execOverrides?: {
+    host?: string;
+    security?: string;
+    ask?: string;
+    node?: string;
+  };
   trigger?: string;
   approvalReviewerDeviceId?: string;
   channelContext?: { sender?: { id?: string }; chat?: { id?: string } };
+  senderName?: string;
+  senderUsername?: string;
+  senderE164?: string;
+  groupId?: string;
+  groupChannel?: string;
+  groupSpace?: string;
+  spawnedBy?: string;
 };
 
 type BeforeToolCallHookInput = {
@@ -947,8 +964,12 @@ describe("mcp loopback server", () => {
     const grant = mintMcpLoopbackClientGrant({
       context: {
         sessionKey: "agent:main:discord:channel:bound",
+        runtimePolicySessionKey: "agent:worker:discord:default:direct:bound-user",
+        agentId: "worker",
         sessionId: "session-bound",
         runId: "run-bound",
+        modelProvider: "anthropic",
+        modelId: "claude-opus-4-7",
         messageProvider: "discord",
         clientCaps: ["tool-events"],
         currentChannelId: "discord:bound",
@@ -962,7 +983,20 @@ describe("mcp loopback server", () => {
         requireExplicitMessageTarget: true,
         senderIsOwner: false,
         nodeExecAllowed: true,
+        execOverrides: {
+          host: "node",
+          security: "allowlist",
+          ask: "always",
+          node: "mac-b",
+        },
         approvalReviewerDeviceId: "bound-reviewer",
+        senderName: "Bound Name",
+        senderUsername: "bound-user",
+        senderE164: "+15557654321",
+        groupId: "bound",
+        groupChannel: "ops",
+        groupSpace: "guild-bound",
+        spawnedBy: "agent:main:discord:channel:parent",
       },
       runtimeOwnerToken: runtime.ownerToken,
     });
@@ -1005,7 +1039,11 @@ describe("mcp loopback server", () => {
     expect((await sendWithCapture("capture-bound", "call")).status).toBe(200);
     const expectedBoundContext = {
       sessionKey: "agent:main:discord:channel:bound",
+      runtimePolicySessionKey: "agent:worker:discord:default:direct:bound-user",
+      agentId: "worker",
       sessionId: "session-bound",
+      modelProvider: "anthropic",
+      modelId: "claude-opus-4-7",
       messageProvider: "discord",
       clientCaps: ["tool-events"],
       currentChannelId: "discord:bound",
@@ -1019,7 +1057,20 @@ describe("mcp loopback server", () => {
       requireExplicitMessageTarget: true,
       senderIsOwner: false,
       nodeExecAllowed: true,
+      execOverrides: {
+        host: "node",
+        security: "allowlist",
+        ask: "always",
+        node: "mac-b",
+      },
       approvalReviewerDeviceId: "bound-reviewer",
+      senderName: "Bound Name",
+      senderUsername: "bound-user",
+      senderE164: "+15557654321",
+      groupId: "bound",
+      groupChannel: "ops",
+      groupSpace: "guild-bound",
+      spawnedBy: "agent:main:discord:channel:parent",
       surface: "loopback",
     };
     expect(getScopedToolsCall(0)).toMatchObject(expectedBoundContext);
@@ -1039,6 +1090,72 @@ describe("mcp loopback server", () => {
       turnSourceThreadId: "bound-thread",
     });
     expect(getBeforeToolCallHookInput(0).ctx).toHaveProperty("loopDetection");
+  });
+
+  it("revalidates a CLI grant after async preparation before tool execution", async () => {
+    let releasePreparation: (() => void) | undefined;
+    let markPreparationStarted: (() => void) | undefined;
+    const preparationGate = new Promise<void>((resolve) => {
+      releasePreparation = resolve;
+    });
+    const preparationStarted = new Promise<void>((resolve) => {
+      markPreparationStarted = resolve;
+    });
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text", text: "should not execute" }],
+    }));
+    mockScopedTools([
+      makeMockTool({
+        name: "exec",
+        prepareBeforeToolCallParams: async (args) => {
+          markPreparationStarted?.();
+          await preparationGate;
+          return args;
+        },
+        execute,
+      }),
+    ]);
+    const { runtime } = await startLoopbackServerForTest();
+    const grant = mintMcpLoopbackClientGrant({
+      context: {
+        sessionKey: "agent:main:main",
+        senderIsOwner: true,
+        nodeExecAllowed: true,
+      },
+      runtimeOwnerToken: runtime.ownerToken,
+    });
+    const captureKey = "capture-revoked-during-prepare";
+    expect(
+      activateMcpLoopbackClientGrantCapture({
+        token: grant.token,
+        runtimeOwnerToken: runtime.ownerToken,
+        captureKey,
+      }),
+    ).toBe(true);
+
+    const responsePromise = sendLoopbackToolCall({
+      token: grant.token,
+      name: "exec",
+      headers: { "x-openclaw-cli-capture-key": captureKey },
+    });
+    await preparationStarted;
+    expect(
+      deactivateMcpLoopbackClientGrantCapture({
+        token: grant.token,
+        runtimeOwnerToken: runtime.ownerToken,
+        captureKey,
+      }),
+    ).toBe(true);
+    releasePreparation?.();
+
+    const response = await responsePromise;
+    const payload = await readMcpPayload(response);
+    expect(response.status).toBe(200);
+    expect(payload.result?.isError).toBe(true);
+    expect(payload.result?.content).toEqual([
+      { type: "text", text: "Tool call authorization expired" },
+    ]);
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("rejects revoked and prior-runtime CLI grants", async () => {
@@ -1306,6 +1423,90 @@ describe("mcp loopback server", () => {
     expect(withoutExec.toolSchema.map((tool) => tool.name)).not.toContain("exec");
     expect(withExec.toolSchema.map((tool) => tool.name)).toContain("exec");
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps model policy identity cache-bound", () => {
+    const cache = new McpLoopbackToolCache();
+    const baseParams = {
+      cfg: {} as never,
+      sessionKey: "agent:main:direct:test",
+      messageProvider: undefined,
+      currentChannelId: undefined,
+      currentThreadTs: undefined,
+      currentMessageId: undefined,
+      currentInboundAudio: undefined,
+      accountId: undefined,
+      inboundEventKind: undefined,
+      sourceReplyDeliveryMode: undefined,
+      senderIsOwner: true,
+      nodeExecAllowed: true,
+    } satisfies Parameters<McpLoopbackToolCache["resolve"]>[0];
+    resolveGatewayScopedToolsMock.mockImplementation((input: unknown) => {
+      const params = input as ScopedToolsCall;
+      const blocked = params.modelProvider === "anthropic" && params.modelId === "claude-opus-4-7";
+      return {
+        agentId: "main",
+        tools: blocked ? [makeMessageTool()] : [makeMessageTool(), makeMockTool({ name: "exec" })],
+      };
+    });
+
+    const openAi = cache.resolve({
+      ...baseParams,
+      modelProvider: "openai",
+      modelId: "gpt-5.5",
+    });
+    const blockedAnthropic = cache.resolve({
+      ...baseParams,
+      modelProvider: "anthropic",
+      modelId: "claude-opus-4-7",
+    });
+    const allowedAnthropic = cache.resolve({
+      ...baseParams,
+      modelProvider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+    });
+    cache.resolve({ ...baseParams, modelProvider: "openai", modelId: "gpt-5.5" });
+
+    expect(openAi.toolSchema.map((tool) => tool.name)).toContain("exec");
+    expect(blockedAnthropic.toolSchema.map((tool) => tool.name)).not.toContain("exec");
+    expect(allowedAnthropic.toolSchema.map((tool) => tool.name)).toContain("exec");
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps exec overrides and sender identities cache-bound", () => {
+    const cache = new McpLoopbackToolCache();
+    const baseParams = {
+      cfg: {} as never,
+      sessionKey: "agent:main:direct:test",
+      messageProvider: "discord",
+      currentChannelId: undefined,
+      currentThreadTs: undefined,
+      currentMessageId: undefined,
+      currentInboundAudio: undefined,
+      accountId: undefined,
+      inboundEventKind: undefined,
+      sourceReplyDeliveryMode: undefined,
+      senderIsOwner: false,
+      nodeExecAllowed: true,
+    } satisfies Parameters<McpLoopbackToolCache["resolve"]>[0];
+
+    cache.resolve(baseParams);
+    cache.resolve({ ...baseParams, execOverrides: { host: "gateway" } });
+    cache.resolve({ ...baseParams, senderName: "Guest Name" });
+    cache.resolve({ ...baseParams, senderUsername: "guest-user" });
+    cache.resolve({ ...baseParams, senderE164: "+15550001111" });
+    cache.resolve({ ...baseParams, groupId: "group-a" });
+    cache.resolve({ ...baseParams, groupChannel: "ops" });
+    cache.resolve({ ...baseParams, groupSpace: "guild-a" });
+    cache.resolve({ ...baseParams, spawnedBy: "agent:main:discord:channel:parent" });
+    cache.resolve({
+      ...baseParams,
+      runtimePolicySessionKey: "agent:main:discord:default:direct:guest",
+    });
+    cache.resolve({ ...baseParams, agentId: "worker" });
+    cache.resolve(baseParams);
+
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(11);
   });
 
   it("caps loopback tool cache cardinality by evicting oldest contexts", () => {

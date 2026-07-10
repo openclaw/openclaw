@@ -40,7 +40,7 @@ type ResolvedExecConfig = {
   node?: string;
 };
 
-type ExecOverridesConfig = Omit<ResolvedExecConfig, "mode">;
+export type ExecPolicyOverrides = Omit<ResolvedExecConfig, "mode">;
 
 // Layering keeps the most specific mode/security/ask while preserving policy
 // bounds from approvals and sandbox availability later in resolution.
@@ -70,7 +70,7 @@ function applySessionLegacyExecPolicyLayer(
 function resolveExecConfigState(params: {
   cfg?: OpenClawConfig;
   sessionEntry?: ExecSessionDefaults;
-  execOverrides?: ExecOverridesConfig;
+  execOverrides?: ExecPolicyOverrides;
   agentId?: string;
   sessionKey?: string;
 }): {
@@ -126,7 +126,7 @@ function resolveExecSandboxAvailability(params: {
 export function canExecRequestNode(params: {
   cfg?: OpenClawConfig;
   sessionEntry?: ExecSessionDefaults;
-  execOverrides?: ExecOverridesConfig;
+  execOverrides?: ExecPolicyOverrides;
   agentId?: string;
   sessionKey?: string;
   sandboxAvailable?: boolean;
@@ -147,7 +147,7 @@ export function canExecRequestNode(params: {
 export function resolveExecDefaults(params: {
   cfg?: OpenClawConfig;
   sessionEntry?: ExecSessionDefaults;
-  execOverrides?: ExecOverridesConfig;
+  execOverrides?: ExecPolicyOverrides;
   agentId?: string;
   sessionKey?: string;
   sandboxAvailable?: boolean;

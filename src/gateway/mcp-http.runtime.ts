@@ -1,4 +1,4 @@
-import type { ExecSessionDefaults } from "../agents/exec-defaults.js";
+import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import type {
@@ -33,7 +33,11 @@ type CachedScopedTools = {
 type McpLoopbackScopeParams = {
   cfg: OpenClawConfig;
   sessionKey: string;
+  runtimePolicySessionKey?: string;
+  agentId?: string;
   sessionId?: string;
+  modelProvider?: string;
+  modelId?: string;
   yieldContextCacheKey?: string;
   onYield?: (message: string) => Promise<void> | void;
   messageProvider: string | undefined;
@@ -50,9 +54,17 @@ type McpLoopbackScopeParams = {
   senderIsOwner: boolean | undefined;
   nodeExecAllowed?: boolean;
   execSession?: ExecSessionDefaults;
+  execOverrides?: ExecPolicyOverrides;
   trigger?: string;
   approvalReviewerDeviceId?: string;
   channelContext?: PluginHookChannelContext;
+  senderName?: string;
+  senderUsername?: string;
+  senderE164?: string;
+  groupId?: string;
+  groupChannel?: string;
+  groupSpace?: string;
+  spawnedBy?: string;
 };
 
 /** Resolves loopback-visible tools after applying gateway scope and native-tool exclusions. */
@@ -85,7 +97,11 @@ export class McpLoopbackToolCache {
     const clientCapsCacheKey = [...new Set(params.clientCaps ?? [])].toSorted().join(",");
     const cacheKey = [
       params.sessionKey,
+      params.runtimePolicySessionKey ?? "",
+      params.agentId ?? "",
       params.sessionId ?? "",
+      params.modelProvider ?? "",
+      params.modelId ?? "",
       params.yieldContextCacheKey ?? "",
       params.messageProvider ?? "",
       clientCapsCacheKey,
@@ -103,10 +119,21 @@ export class McpLoopbackToolCache {
       params.execSession?.execSecurity ?? "",
       params.execSession?.execAsk ?? "",
       params.execSession?.execNode ?? "",
+      params.execOverrides?.host ?? "",
+      params.execOverrides?.security ?? "",
+      params.execOverrides?.ask ?? "",
+      params.execOverrides?.node ?? "",
       params.trigger ?? "",
       params.approvalReviewerDeviceId ?? "",
       params.channelContext?.sender?.id ?? "",
       params.channelContext?.chat?.id ?? "",
+      params.senderName ?? "",
+      params.senderUsername ?? "",
+      params.senderE164 ?? "",
+      params.groupId ?? "",
+      params.groupChannel ?? "",
+      params.groupSpace ?? "",
+      params.spawnedBy ?? "",
       params.senderIsOwner === true
         ? "owner"
         : params.senderIsOwner === false

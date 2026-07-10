@@ -62,6 +62,8 @@ export async function handleMcpJsonRpc(params: {
   toolSchema: McpToolSchemaEntry[];
   hookContext?: HookContext;
   signal?: AbortSignal;
+  /** Revalidate short-lived client authority immediately before side effects. */
+  authorizeToolCall?: () => boolean;
   onToolCallResult?: (
     call: {
       toolName: string;
@@ -177,6 +179,13 @@ export async function handleMcpJsonRpc(params: {
           params.onToolCallPrepared?.({ toolName, args: executedToolArgs });
         } catch {
           // Observability callbacks must never alter the tool result returned to the MCP client.
+        }
+        if (params.authorizeToolCall && !params.authorizeToolCall()) {
+          reportToolCallResult({ outcome: "blocked", deniedReason: "client-grant-revoked" });
+          return jsonRpcResult(id, {
+            content: [{ type: "text", text: "Tool call authorization expired" }],
+            isError: true,
+          });
         }
         const result = await tool.execute(toolCallId, finalizedToolArgs, params.signal);
         const failureKind = resolveToolResultFailureKind(result);

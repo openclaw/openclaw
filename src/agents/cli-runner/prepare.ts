@@ -5,7 +5,7 @@ import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveMainSessionKey } from "../../config/sessions.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import type { CliBackendConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -171,6 +171,21 @@ function buildCliMcpExecSession(
   return Object.values(execSession).some(Boolean) ? execSession : undefined;
 }
 
+function buildCliMcpExecOverrides(
+  execOverrides: RunCliAgentParams["execOverrides"],
+): McpLoopbackRequestContext["execOverrides"] {
+  if (!execOverrides) {
+    return undefined;
+  }
+  const scopedOverrides = {
+    ...(execOverrides.host !== undefined ? { host: execOverrides.host } : {}),
+    ...(execOverrides.security !== undefined ? { security: execOverrides.security } : {}),
+    ...(execOverrides.ask !== undefined ? { ask: execOverrides.ask } : {}),
+    ...(execOverrides.node !== undefined ? { node: execOverrides.node } : {}),
+  };
+  return Object.keys(scopedOverrides).length > 0 ? scopedOverrides : undefined;
+}
+
 function buildCliMcpChannelContext(
   channelContext: RunCliAgentParams["channelContext"],
   senderId?: string | null,
@@ -188,27 +203,55 @@ function buildCliMcpChannelContext(
   };
 }
 
+function resolveCliMcpMessageProvider(
+  run: Pick<RunCliAgentParams, "messageProvider" | "messageChannel">,
+): string | undefined {
+  return normalizeMessageChannel(run.messageProvider ?? run.messageChannel) ?? undefined;
+}
+
+function resolveCliMcpSessionKey(
+  run: Pick<RunCliAgentParams, "sessionKey">,
+  config: OpenClawConfig,
+  agentId: string,
+): string {
+  return canonicalizeMainSessionAlias({
+    cfg: config,
+    agentId,
+    sessionKey: run.sessionKey?.trim() || "main",
+  });
+}
+
 function buildCliMcpGrantContext(params: {
   run: RunCliAgentParams;
   config: OpenClawConfig;
   requireExplicitMessageTarget: boolean;
+  agentId: string;
+  modelProvider: string;
+  modelId: string;
 }): McpLoopbackRequestContext {
-  const rawSessionKey = params.run.sessionKey?.trim() ?? "";
-  const sessionKey =
-    !rawSessionKey || rawSessionKey === "main"
-      ? resolveMainSessionKey(params.config)
-      : rawSessionKey;
+  const sessionKey = resolveCliMcpSessionKey(params.run, params.config, params.agentId);
   const clientCaps = uniqueStrings(
     (params.run.clientCaps ?? []).map((cap) => cap.trim()).filter(Boolean),
   );
   const execSession = buildCliMcpExecSession(params.run.sessionEntry);
+  const execOverrides = buildCliMcpExecOverrides(params.run.execOverrides);
   const channelContext = buildCliMcpChannelContext(params.run.channelContext, params.run.senderId);
+  const senderName = normalizeOptionalMcpContextValue(params.run.senderName);
+  const senderUsername = normalizeOptionalMcpContextValue(params.run.senderUsername);
+  const senderE164 = normalizeOptionalMcpContextValue(params.run.senderE164);
+  const groupId = normalizeOptionalMcpContextValue(params.run.groupId ?? undefined);
+  const groupChannel = normalizeOptionalMcpContextValue(params.run.groupChannel ?? undefined);
+  const groupSpace = normalizeOptionalMcpContextValue(params.run.groupSpace ?? undefined);
+  const spawnedBy = normalizeOptionalMcpContextValue(params.run.spawnedBy ?? undefined);
   return {
     sessionKey,
+    runtimePolicySessionKey: normalizeOptionalMcpContextValue(params.run.runtimePolicySessionKey),
+    agentId: params.agentId,
     sessionId: normalizeOptionalMcpContextValue(params.run.sessionId),
     runId: normalizeOptionalMcpContextValue(params.run.runId),
-    messageProvider:
-      normalizeMessageChannel(params.run.messageChannel ?? params.run.messageProvider) ?? undefined,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+    messageProvider: resolveCliMcpMessageProvider(params.run),
     clientCaps: clientCaps.length > 0 ? clientCaps : undefined,
     currentChannelId: normalizeOptionalMcpContextValue(params.run.currentChannelId),
     currentThreadTs: normalizeOptionalMcpContextValue(params.run.currentThreadTs),
@@ -225,11 +268,19 @@ function buildCliMcpGrantContext(params: {
     senderIsOwner: params.run.senderIsOwner === true,
     nodeExecAllowed: true,
     ...(execSession ? { execSession } : {}),
+    ...(execOverrides ? { execOverrides } : {}),
     ...(params.run.trigger ? { trigger: params.run.trigger } : {}),
     ...(normalizeOptionalMcpContextValue(params.run.approvalReviewerDeviceId)
       ? { approvalReviewerDeviceId: params.run.approvalReviewerDeviceId?.trim() }
       : {}),
     ...(channelContext ? { channelContext } : {}),
+    ...(senderName ? { senderName } : {}),
+    ...(senderUsername ? { senderUsername } : {}),
+    ...(senderE164 ? { senderE164 } : {}),
+    ...(groupId ? { groupId } : {}),
+    ...(groupChannel ? { groupChannel } : {}),
+    ...(groupSpace ? { groupSpace } : {}),
+    ...(spawnedBy ? { spawnedBy } : {}),
   };
 }
 
@@ -529,6 +580,10 @@ export async function prepareCliRunContext(
     : undefined;
 
   const modelId = (params.model ?? "default").trim() || "default";
+  const modelProvider =
+    normalizeOptionalMcpContextValue(params.modelProvider) ??
+    normalizeOptionalMcpContextValue(params.provider) ??
+    params.provider;
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
   const modelDisplay = `${params.provider}/${modelId}`;
   const isClaudeCli = isClaudeCliProvider(params.provider);
@@ -664,6 +719,9 @@ export async function prepareCliRunContext(
             run: params,
             config: params.config ?? getRuntimeConfig(),
             requireExplicitMessageTarget,
+            agentId: sessionAgentId,
+            modelProvider,
+            modelId,
           }),
           runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
         })
@@ -835,12 +893,20 @@ export async function prepareCliRunContext(
       bundleMcpEnabled && mcpLoopbackRuntime
         ? prepareDeps.resolveMcpLoopbackScopedTools({
             cfg: params.config ?? getRuntimeConfig(),
-            sessionKey: params.sessionKey ?? "",
-            messageProvider: params.messageChannel ?? params.messageProvider,
+            sessionKey: resolveCliMcpSessionKey(
+              params,
+              params.config ?? getRuntimeConfig(),
+              sessionAgentId,
+            ),
+            runtimePolicySessionKey: normalizeOptionalMcpContextValue(
+              params.runtimePolicySessionKey,
+            ),
+            agentId: sessionAgentId,
+            messageProvider: resolveCliMcpMessageProvider(params),
             clientCaps: params.clientCaps,
             currentChannelId: params.currentChannelId,
-            // CLI binding hashes must use session-stable prompt facts. Per-sender
-            // and per-message scope stays in the runtime MCP env/list-call path.
+            // CLI binding hashes omit per-message facts, but identity, owner, and
+            // model policy must match the runtime MCP grant's advertised tools.
             currentThreadTs: undefined,
             currentMessageId: undefined,
             currentInboundAudio: undefined,
@@ -849,14 +915,24 @@ export async function prepareCliRunContext(
             sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
             taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
             requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
-            senderIsOwner: undefined,
+            senderIsOwner: params.senderIsOwner === true,
             nodeExecAllowed: true,
+            modelProvider,
+            modelId,
             execSession: buildCliMcpExecSession(params.sessionEntry),
+            execOverrides: buildCliMcpExecOverrides(params.execOverrides),
             trigger: params.trigger,
             approvalReviewerDeviceId: normalizeOptionalMcpContextValue(
               params.approvalReviewerDeviceId,
             ),
             channelContext: buildCliMcpChannelContext(params.channelContext, params.senderId),
+            senderName: normalizeOptionalMcpContextValue(params.senderName),
+            senderUsername: normalizeOptionalMcpContextValue(params.senderUsername),
+            senderE164: normalizeOptionalMcpContextValue(params.senderE164),
+            groupId: normalizeOptionalMcpContextValue(params.groupId ?? undefined),
+            groupChannel: normalizeOptionalMcpContextValue(params.groupChannel ?? undefined),
+            groupSpace: normalizeOptionalMcpContextValue(params.groupSpace ?? undefined),
+            spawnedBy: normalizeOptionalMcpContextValue(params.spawnedBy ?? undefined),
           }).tools
         : [];
     const promptToolNamesHash =

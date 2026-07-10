@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { ExecSessionDefaults } from "../agents/exec-defaults.js";
+import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
@@ -9,8 +9,12 @@ import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 
 export type McpLoopbackRequestContext = {
   sessionKey: string;
+  runtimePolicySessionKey?: string;
+  agentId?: string;
   sessionId?: string;
   runId?: string;
+  modelProvider?: string;
+  modelId?: string;
   messageProvider?: string;
   clientCaps?: string[];
   currentChannelId?: string;
@@ -26,9 +30,17 @@ export type McpLoopbackRequestContext = {
   /** Capability minted only for Gateway-launched CLI backends. */
   nodeExecAllowed?: boolean;
   execSession?: ExecSessionDefaults;
+  execOverrides?: ExecPolicyOverrides;
   trigger?: string;
   approvalReviewerDeviceId?: string;
   channelContext?: PluginHookChannelContext;
+  senderName?: string;
+  senderUsername?: string;
+  senderE164?: string;
+  groupId?: string;
+  groupChannel?: string;
+  groupSpace?: string;
+  spawnedBy?: string;
 };
 
 export interface McpAttachGrant {
