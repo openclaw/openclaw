@@ -123,13 +123,19 @@ const ComputerToolSchema = Type.Object({
         "Paired node id or display name. Omit when exactly one connected computer-capable node exists.",
     }),
   ),
+  // Codex accepts a single schema in array `items`, not tuple item arrays.
+  // Fixed bounds preserve the coordinate-pair contract across runtimes.
   coordinate: Type.Optional(
-    Type.Tuple([Type.Number(), Type.Number()], {
+    Type.Array(Type.Number(), {
+      minItems: 2,
+      maxItems: 2,
       description: "[x, y] target in pixels of the most recent screenshot.",
     }),
   ),
   startCoordinate: Type.Optional(
-    Type.Tuple([Type.Number(), Type.Number()], {
+    Type.Array(Type.Number(), {
+      minItems: 2,
+      maxItems: 2,
       description: "left_click_drag: [x, y] drag origin in screenshot pixels.",
     }),
   ),

@@ -9,13 +9,13 @@ title: "OpenClaw"
 
 <p align="center">
     <img
-        src="/assets/openclaw-logo-text-dark.png"
+        src="/assets/openclaw-hero-light.png"
         alt="OpenClaw"
         width="500"
         class="dark:hidden"
     />
     <img
-        src="/assets/openclaw-logo-text.png"
+        src="/assets/openclaw-hero-dark.png"
         alt="OpenClaw"
         width="500"
         class="hidden dark:block"
@@ -33,8 +33,11 @@ title: "OpenClaw"
   <Card title="Get Started" href="/start/getting-started" icon="rocket">
     Install OpenClaw and bring up the Gateway in minutes.
   </Card>
-  <Card title="Run Onboarding" href="/start/wizard" icon="sparkles">
+  <Card title="Run Onboarding" href="/start/wizard" icon="list-checks">
     Guided setup with `openclaw onboard` and pairing flows.
+  </Card>
+  <Card title="Connect a Channel" href="/channels" icon="message-circle">
+    Link Discord, Signal, Telegram, WhatsApp, and more to chat from anywhere.
   </Card>
   <Card title="Open the Control UI" href="/web/control-ui" icon="layout-dashboard">
     Launch the browser dashboard for chat, config, and sessions.

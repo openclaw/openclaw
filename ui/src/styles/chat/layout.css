@@ -2476,8 +2476,8 @@ openclaw-chat-page {
     left: auto;
     right: max(12px, var(--safe-area-right));
     bottom: calc(96px + var(--safe-area-bottom));
-    width: min(420px, calc(100vw - 24px));
-    max-height: min(460px, calc(100vh - 116px - var(--safe-area-bottom)));
+    width: min(392px, calc(100vw - 24px));
+    max-height: min(440px, calc(100vh - 116px - var(--safe-area-bottom)));
   }
 
   .chat-settings-popover-wrapper {
@@ -3167,18 +3167,18 @@ openclaw-chat-page {
   display: flex;
   flex-direction: column;
   gap: 0;
-  width: min(420px, calc(100vw - 24px));
-  max-height: min(460px, calc(100vh - 96px));
+  width: min(392px, calc(100vw - 24px));
+  max-height: min(440px, calc(100vh - 96px));
   padding: 0;
   overflow: hidden;
 }
 
 .chat-controls__model-browser {
   display: grid;
-  grid-template-columns: 136px minmax(0, 1fr);
+  grid-template-columns: 120px minmax(0, 1fr);
   min-height: 132px;
-  max-height: 236px;
-  flex: 1 1 236px;
+  max-height: 220px;
+  flex: 1 1 220px;
   overflow: hidden;
 }
 
@@ -3311,8 +3311,8 @@ openclaw-chat-page {
 .chat-controls__combined-model-option {
   justify-content: flex-start;
   gap: 8px;
-  min-height: 44px;
-  padding: 6px 8px;
+  min-height: 40px;
+  padding: 5px 8px;
 }
 
 .chat-controls__model-option-copy {
@@ -3348,7 +3348,7 @@ openclaw-chat-page {
   flex: 0 0 auto;
   width: auto;
   max-height: none;
-  padding: 9px 10px 10px;
+  padding: 8px 10px 9px;
   border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   background: color-mix(in srgb, var(--card) 78%, transparent);
   overflow: visible;
@@ -3362,45 +3362,63 @@ openclaw-chat-page {
   min-width: 0;
 }
 
-.chat-controls__reasoning-heading {
-  display: flex;
-  align-items: baseline;
+.chat-controls__reasoning-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   min-width: 0;
-}
-
-.chat-controls__reasoning-default {
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--muted);
-  font: inherit;
-  font-size: 11px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.chat-controls__reasoning-default:hover:not(:disabled),
-.chat-controls__reasoning-default:focus-visible {
-  color: var(--text);
-  text-decoration: underline;
-}
-
-.chat-controls__reasoning-default:focus-visible {
-  outline: none;
-}
-
-.chat-controls__reasoning-default:disabled {
-  cursor: default;
+  padding-right: 6px;
 }
 
 .chat-controls__reasoning-value {
-  padding-right: 8px;
   overflow: hidden;
   color: var(--text-strong);
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* Muted value = inherited model default; no reset shows because there is no
+   override to clear. */
+.chat-controls__reasoning-value--inherit {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.chat-controls__reasoning-reset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.chat-controls__reasoning-reset:hover:not(:disabled),
+.chat-controls__reasoning-reset:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text);
+  outline: none;
+}
+
+.chat-controls__reasoning-reset:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.chat-controls__reasoning-reset svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
 }
 
 /* Discrete effort slider: native range input for keyboard/a11y, decorative
@@ -3518,18 +3536,71 @@ openclaw-chat-page {
   opacity: 0.35;
 }
 
-.chat-controls__reasoning-scale {
+/* Speed is a single fast-mode toggle: bolt icon plus the current state word.
+   Explicit off/auto overrides stay reachable through the /fast command. */
+.chat-controls__speed-row {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  margin: 0 6px;
-  color: var(--muted);
-  font-size: 11px;
+  gap: 8px;
+  min-width: 0;
 }
 
-.chat-controls__reasoning-options {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(58px, 1fr));
-  gap: 8px;
+.chat-controls__speed-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 92%, var(--text));
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 4%, var(--card));
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chat-controls__speed-toggle:hover:not(:disabled),
+.chat-controls__speed-toggle:focus-visible {
+  border-color: color-mix(in srgb, var(--text) 20%, var(--border));
+  background: color-mix(in srgb, var(--text) 6%, var(--card));
+  color: var(--text);
+  outline: none;
+}
+
+.chat-controls__speed-toggle--active {
+  border-color: color-mix(in srgb, var(--accent) 76%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
+  color: var(--text-strong);
+}
+
+.chat-controls__speed-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.chat-controls__speed-toggle-icon {
+  display: inline-flex;
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
+.chat-controls__speed-toggle-icon svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+
+/* Filled bolt telegraphs the active fast tier without relying on color alone. */
+.chat-controls__speed-toggle--active .chat-controls__speed-toggle-icon svg {
+  fill: currentColor;
 }
 
 .chat-controls__reasoning-option {

@@ -49,6 +49,8 @@ import ai.openclaw.app.ui.design.ClawTextBadge
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
+import ai.openclaw.app.ui.design.TalkWaveform
+import ai.openclaw.app.ui.design.TalkWaveformPhase
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -628,16 +630,12 @@ private fun SettingsWaveformPanel(
       horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
       Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(24.dp), tint = ClawTheme.colors.text)
-      Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-        listOf(6, 12, 18, 11, 28, 34, 18, 10, 8, 24, 38, 31, 12, 8, 18, 30, 40, 22, 12, 8, 20, 29, 16, 8).forEachIndexed { index, height ->
-          Box(
-            modifier =
-              Modifier
-                .size(width = 2.dp, height = (if (active) height else 7 + index % 4 * 4).dp)
-                .background(if (active) ClawTheme.colors.text else ClawTheme.colors.textSubtle, RoundedCornerShape(999.dp)),
-          )
-        }
-      }
+      // Thinking is the preview phase: no capture runs on this screen, so the
+      // synthetic swell demonstrates the animation without touching the mic.
+      TalkWaveform(
+        phase = if (active) TalkWaveformPhase.Thinking else TalkWaveformPhase.Idle,
+        modifier = Modifier.weight(1f).height(48.dp),
+      )
     }
   }
 }

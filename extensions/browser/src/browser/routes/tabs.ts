@@ -21,7 +21,7 @@ import { resolveTargetIdFromTabs } from "../target-id.js";
 import { browserNavigationPolicyForProfile, resolveProfileContext } from "./agent.shared.js";
 import { readRouteNonNegativeInteger } from "./route-numeric.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, jsonError, toStringOrEmpty } from "./utils.js";
+import { asyncBrowserRoute, jsonBrowserError, jsonError, toStringOrEmpty } from "./utils.js";
 
 const DEFAULT_TAB_REACHABILITY_TIMEOUT_MS = 300;
 const TAB_REACHABILITY_RETRY_DELAY_MS = 250;
@@ -35,7 +35,7 @@ function handleTabsRouteError(
   if (opts?.mapTabError) {
     const mapped = ctx.mapTabError(err);
     if (mapped) {
-      return jsonError(res, mapped.status, mapped.message);
+      return jsonBrowserError(res, mapped);
     }
   }
   return jsonError(res, 500, String(err));
@@ -292,7 +292,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
               ...ssrfPolicyOpts,
             });
           }
-          await profileCtx.focusTab(resolved.targetId);
+          await profileCtx.focusTab(resolved.targetId, { exactTargetId: true });
         },
       });
     }),
@@ -305,13 +305,20 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       if (!targetId) {
         return;
       }
+      const targetIdMode = toStringOrEmpty(req.query.targetIdMode);
+      if (targetIdMode && targetIdMode !== "raw") {
+        return jsonError(res, 400, 'targetIdMode must be "raw"');
+      }
       await runTabTargetMutation({
         req,
         res,
         ctx,
         targetId,
         mutate: async (profileCtx, id) => {
-          await profileCtx.closeTab(id);
+          await profileCtx.closeTab(
+            id,
+            targetIdMode === "raw" ? { exactTargetId: true } : undefined,
+          );
         },
       });
     }),
@@ -380,7 +387,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
             if (!target) {
               throw new BrowserTabNotFoundError();
             }
-            await profileCtx.closeTab(target.targetId);
+            await profileCtx.closeTab(target.targetId, { exactTargetId: true });
             return res.json({ ok: true, targetId: target.targetId });
           }
 
@@ -404,7 +411,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
                 ...ssrfPolicyOpts,
               });
             }
-            await profileCtx.focusTab(target.targetId);
+            await profileCtx.focusTab(target.targetId, { exactTargetId: true });
             return res.json({ ok: true, targetId: target.targetId });
           }
 
