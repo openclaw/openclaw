@@ -1767,7 +1767,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             }
           },
         });
-        const enterBlockPreviewToolActivity = async () => {
+        const enterBlockPreviewToolActivity = () => {
           if (account.streamingMode !== "block" || blockPreviewInToolActivity) {
             return;
           }
@@ -1776,7 +1776,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           // for an earlier tool into the newest tool's post.
           blockPreviewInToolActivity = true;
           progressDraft.reset();
-          await boundarySettled;
+          return boundarySettled;
         };
         const previewState: MattermostDraftPreviewState = {
           finalizedViaPreviewPost: false,
@@ -2064,11 +2064,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                             }
                           },
                           onToolStart: async (payloadValue) => {
-                            await enterBlockPreviewToolActivity();
+                            const boundarySettled = enterBlockPreviewToolActivity();
                             if (!draftToolProgressEnabled) {
+                              await boundarySettled;
                               return;
                             }
-                            await progressDraft.pushToolProgress(
+                            // Boundary detach and progress staging both happen synchronously before
+                            // their first await; agent callbacks may be dispatched fire-and-forget.
+                            const progressSettled = progressDraft.pushToolProgress(
                               buildChannelProgressDraftLineForEntry(
                                 account.config,
                                 {
@@ -2086,13 +2089,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                               { startImmediately: true },
                             );
                             previewBoundaryController.noteUpdate();
+                            await Promise.all([boundarySettled, progressSettled]);
                           },
                           onItemEvent: async (payloadLocal) => {
                             if (!draftToolProgressEnabled) {
                               return;
                             }
-                            await enterBlockPreviewToolActivity();
-                            await progressDraft.pushToolProgress(
+                            const boundarySettled = enterBlockPreviewToolActivity();
+                            const progressSettled = progressDraft.pushToolProgress(
                               buildChannelProgressDraftLineForEntry(account.config, {
                                 event: "item",
                                 itemId: payloadLocal.itemId,
@@ -2108,6 +2112,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                               { startImmediately: true },
                             );
                             previewBoundaryController.noteUpdate();
+                            await Promise.all([boundarySettled, progressSettled]);
                           },
                         },
                       }),

@@ -1256,15 +1256,23 @@ describe("mattermost inbound user posts", () => {
     mockState.runtimeCore = createRuntimeCore(blockConfig);
     const draftUpdate = vi.fn();
     const forceNewMessage = vi.fn(async () => {});
+    let releaseToolBoundary: (() => void) | undefined;
     let releaseAssistantBoundary: (() => void) | undefined;
     let assistantBoundarySettled = false;
+    const toolBoundaryPending = new Promise<void>((resolve) => {
+      releaseToolBoundary = resolve;
+    });
     const assistantBoundaryPending = new Promise<void>((resolve) => {
       releaseAssistantBoundary = resolve;
     });
-    forceNewMessage.mockResolvedValueOnce(undefined).mockImplementationOnce(async () => {
-      await assistantBoundaryPending;
-      assistantBoundarySettled = true;
-    });
+    forceNewMessage
+      .mockImplementationOnce(async () => {
+        await toolBoundaryPending;
+      })
+      .mockImplementationOnce(async () => {
+        await assistantBoundaryPending;
+        assistantBoundarySettled = true;
+      });
     mockState.createMattermostDraftStream.mockReturnValue({
       update: draftUpdate,
       forceNewMessage,
@@ -1280,50 +1288,37 @@ describe("mattermost inbound user posts", () => {
     mockState.dispatchReplyFromConfig.mockImplementation(async (params) => {
       await params.replyOptions?.onAssistantMessageStart?.();
       params.replyOptions?.onPartialReply?.({ text: "A much longer first block" });
-      await params.replyOptions?.onToolStart?.({
+      const firstToolStart = params.replyOptions?.onToolStart?.({
         toolCallId: "bash-1",
         name: "bash",
         phase: "start",
         detailMode: "raw",
         args: { command: "ls" },
       });
-      await params.replyOptions?.onToolStart?.({
-        toolCallId: "bash-1",
-        name: "bash",
-        phase: "update",
-        detailMode: "raw",
-        args: { command: "ls -a" },
-      });
-      await params.replyOptions?.onToolStart?.({
-        toolCallId: "bash-1",
-        name: "bash",
-        phase: "update",
-        detailMode: "raw",
-        args: { command: "ls -al" },
-      });
-      sameToolUpdateBoundaryCount = forceNewMessage.mock.calls.length;
-      await params.replyOptions?.onToolStart?.({
+      const secondToolStart = params.replyOptions?.onToolStart?.({
         toolCallId: "bash-2",
         name: "bash",
         phase: "start",
         detailMode: "raw",
         args: { command: "pwd" },
       });
-      await params.replyOptions?.onToolStart?.({
+      const firstToolUpdate = params.replyOptions?.onToolStart?.({
         toolCallId: "bash-1",
         name: "bash",
         phase: "update",
         detailMode: "raw",
         args: { command: "ls -alh" },
       });
+      sameToolUpdateBoundaryCount = forceNewMessage.mock.calls.length;
       interleavedToolDraft = String(draftUpdate.mock.calls.at(-1)?.[0] ?? "");
 
       const assistantBoundary = params.replyOptions?.onAssistantMessageStart?.();
       params.replyOptions?.onPartialReply?.({ text: "Done." });
       secondPartialArrivedBeforeBoundarySettled =
         !assistantBoundarySettled && draftUpdate.mock.calls.at(-1)?.[0] === "Done.";
+      releaseToolBoundary?.();
       releaseAssistantBoundary?.();
-      await assistantBoundary;
+      await Promise.all([firstToolStart, secondToolStart, firstToolUpdate, assistantBoundary]);
       abortController.abort();
     });
 
