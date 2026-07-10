@@ -1236,20 +1236,24 @@ describe("signal outbound", () => {
     );
 
     try {
-      await registerSignalReplyContext({
+      const replyContext = {
         accountId: "default",
         to: "signal:group:group-1",
         replyToId: "1700000000007",
+      };
+      await registerSignalReplyContext({
+        ...replyContext,
         author: "uuid:sender-1",
       });
 
-      await expect(
-        resolveSignalReplyContextWithPersistence({
-          accountId: "default",
-          to: "signal:group:group-1",
-          replyToId: "1700000000007",
-        }),
-      ).resolves.toEqual({ author: "uuid:sender-1" });
+      await expect(resolveSignalReplyContextWithPersistence(replyContext)).resolves.toEqual({
+        author: "uuid:sender-1",
+      });
+      await registerSignalReplyContext({
+        ...replyContext,
+        author: "uuid:sender-2",
+      });
+      await expect(resolveSignalReplyContextWithPersistence(replyContext)).resolves.toBeUndefined();
     } finally {
       clearSignalRuntime();
       await clearSignalReplyAuthorsForTest();
@@ -1300,6 +1304,7 @@ describe("signal outbound", () => {
         author: "uuid:sender-1",
       };
       persistedRecords.set("account=default|to=group:group-1|id=1700000000000", {
+        kind: "resolved",
         author: shared.author,
         body: "edited body",
         accountId: shared.accountId,
@@ -1324,6 +1329,8 @@ describe("signal outbound", () => {
           sourceTimestamp: 1_700_000_000_999,
         }),
       ]);
+      await registerSignalReplyContext({ ...shared, author: "uuid:sender-2" });
+      await expect(resolveSignalReplyContextWithPersistence(shared)).resolves.toBeUndefined();
     } finally {
       clearSignalRuntime();
       await clearSignalReplyAuthorsForTest();

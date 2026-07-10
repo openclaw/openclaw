@@ -11,21 +11,21 @@ const PERSISTENT_NAMESPACE = "signal.reply-authors.v1";
 const PERSISTENT_MAX_ENTRIES = 5000;
 const DEFAULT_REPLY_AUTHOR_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-type SignalReplyContextRecord = {
-  author: string;
-  body?: string;
+type SignalReplyContextRecordBase = {
   accountId: string;
   conversationKey: string;
   replyToId: string;
   sourceTimestamp: number;
   registeredAt: number;
 };
+type SignalReplyContextRecord = SignalReplyContextRecordBase &
+  ({ kind: "resolved"; author: string; body?: string } | { kind: "ambiguous" });
 
 type MemoryReplyContextRecord = SignalReplyContextRecord & {
   expiresAt: number;
 };
 
-export type SignalPersistedReplyContext = Pick<SignalReplyContextRecord, "author" | "body">;
+export type SignalPersistedReplyContext = { author: string; body?: string };
 
 const memoryReplyContexts = new Map<string, MemoryReplyContextRecord>();
 let persistentStoreDisabled = false;
@@ -84,11 +84,14 @@ function pruneMemoryReplyContexts(now = Date.now()): void {
 function resolveReplyContext(
   record: SignalReplyContextRecord | undefined,
 ): SignalPersistedReplyContext | undefined {
-  const author = normalizeOptionalString(record?.author);
+  if (record?.kind !== "resolved") {
+    return undefined;
+  }
+  const author = normalizeOptionalString(record.author);
   if (!author) {
     return undefined;
   }
-  const body = normalizeOptionalString(record?.body);
+  const body = normalizeOptionalString(record.body);
   return {
     author,
     ...(body ? { body } : {}),
@@ -99,11 +102,21 @@ function resolveSourceTimestamp(value: number | null | undefined): number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : Date.now();
 }
 
-function shouldReplaceReplyContext(
+function mergeReplyContext(
   current: SignalReplyContextRecord | undefined,
-  sourceTimestamp: number,
-): boolean {
-  return sourceTimestamp >= (current?.sourceTimestamp ?? 0);
+  next: SignalReplyContextRecord & { kind: "resolved" },
+): SignalReplyContextRecord | undefined {
+  if (!current) {
+    return next;
+  }
+  if (current.kind === "ambiguous") {
+    return undefined;
+  }
+  if (current.author !== next.author) {
+    const { author: _author, body: _body, ...identity } = next;
+    return { ...identity, kind: "ambiguous" };
+  }
+  return next.sourceTimestamp >= current.sourceTimestamp ? next : undefined;
 }
 
 export async function registerSignalReplyContext(params: {
@@ -124,28 +137,12 @@ export async function registerSignalReplyContext(params: {
     normalizeOptionalString(params.accountId) ?? DEFAULT_ACCOUNT_ID,
   );
   const sourceTimestamp = resolveSourceTimestamp(params.sourceTimestamp);
-  if (!store || !key || !author || !conversationKey || !replyToId) {
-    if (key && author && conversationKey && replyToId) {
-      const registeredAt = Date.now();
-      const record = {
-        author,
-        ...(body ? { body } : {}),
-        accountId: accountKey,
-        conversationKey,
-        replyToId,
-        sourceTimestamp,
-        registeredAt,
-        expiresAt: registeredAt + DEFAULT_REPLY_AUTHOR_TTL_MS,
-      };
-      if (shouldReplaceReplyContext(memoryReplyContexts.get(key), sourceTimestamp)) {
-        memoryReplyContexts.set(key, record);
-      }
-      pruneMemoryReplyContexts(registeredAt);
-    }
+  if (!key || !author || !conversationKey || !replyToId) {
     return;
   }
   const registeredAt = Date.now();
   const record = {
+    kind: "resolved" as const,
     author,
     ...(body ? { body } : {}),
     accountId: accountKey,
@@ -153,11 +150,20 @@ export async function registerSignalReplyContext(params: {
     replyToId,
     sourceTimestamp,
     registeredAt,
-    expiresAt: registeredAt + DEFAULT_REPLY_AUTHOR_TTL_MS,
   };
+  const expiresAt = registeredAt + DEFAULT_REPLY_AUTHOR_TTL_MS;
+  if (!store) {
+    const next = mergeReplyContext(memoryReplyContexts.get(key), record);
+    if (next) {
+      memoryReplyContexts.set(key, { ...next, expiresAt });
+    }
+    pruneMemoryReplyContexts(registeredAt);
+    return;
+  }
   if (!store.update) {
-    if (shouldReplaceReplyContext(memoryReplyContexts.get(key), sourceTimestamp)) {
-      memoryReplyContexts.set(key, record);
+    const next = mergeReplyContext(memoryReplyContexts.get(key), record);
+    if (next) {
+      memoryReplyContexts.set(key, { ...next, expiresAt });
     }
     pruneMemoryReplyContexts(registeredAt);
     persistentStoreDisabled = true;
@@ -166,31 +172,28 @@ export async function registerSignalReplyContext(params: {
       .warn("Signal persistent reply author state lacks atomic updates");
     return;
   }
+  let updateEvaluated = false;
+  let nextRecord: SignalReplyContextRecord | undefined;
   try {
-    const updated = await store.update(key, (current) =>
-      shouldReplaceReplyContext(current, sourceTimestamp)
-        ? {
-            author,
-            ...(body ? { body } : {}),
-            accountId: accountKey,
-            conversationKey,
-            replyToId,
-            sourceTimestamp,
-            registeredAt,
-          }
-        : undefined,
-    );
-    if (updated) {
-      if (shouldReplaceReplyContext(memoryReplyContexts.get(key), sourceTimestamp)) {
-        memoryReplyContexts.set(key, record);
-      }
+    const updated = await store.update(key, (current) => {
+      updateEvaluated = true;
+      nextRecord = mergeReplyContext(current, record);
+      return nextRecord;
+    });
+    if (updated && nextRecord) {
+      memoryReplyContexts.set(key, { ...nextRecord, expiresAt });
     } else {
       memoryReplyContexts.delete(key);
     }
     pruneMemoryReplyContexts(registeredAt);
   } catch (error) {
-    if (shouldReplaceReplyContext(memoryReplyContexts.get(key), sourceTimestamp)) {
-      memoryReplyContexts.set(key, record);
+    const next = updateEvaluated
+      ? nextRecord
+      : mergeReplyContext(memoryReplyContexts.get(key), record);
+    if (next) {
+      memoryReplyContexts.set(key, { ...next, expiresAt });
+    } else if (updateEvaluated) {
+      memoryReplyContexts.delete(key);
     }
     pruneMemoryReplyContexts(registeredAt);
     getOptionalSignalRuntime()
