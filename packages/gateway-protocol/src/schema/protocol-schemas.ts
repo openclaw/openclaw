@@ -263,8 +263,10 @@ import {
   PluginApprovalResolveParamsSchema,
 } from "./plugin-approvals.js";
 import {
+  PluginCatalogClawHubInstallSchema,
   PluginCatalogEntrySchema,
   PluginCatalogInstallActionSchema,
+  PluginCatalogOfficialInstallSchema,
   PluginControlUiDescriptorSchema,
   PluginSearchPackageSchema,
   PluginSearchResultEntrySchema,
@@ -712,8 +714,10 @@ export const ProtocolSchemas = {
   ExecApprovalResolveParams: ExecApprovalResolveParamsSchema,
   PluginApprovalRequestParams: PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParams: PluginApprovalResolveParamsSchema,
+  PluginCatalogClawHubInstall: PluginCatalogClawHubInstallSchema,
   PluginCatalogEntry: PluginCatalogEntrySchema,
   PluginCatalogInstallAction: PluginCatalogInstallActionSchema,
+  PluginCatalogOfficialInstall: PluginCatalogOfficialInstallSchema,
   PluginControlUiDescriptor: PluginControlUiDescriptorSchema,
   PluginSearchPackage: PluginSearchPackageSchema,
   PluginSearchResultEntry: PluginSearchResultEntrySchema,

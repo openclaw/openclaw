@@ -8343,6 +8343,24 @@ public struct PluginApprovalResolveParams: Codable, Sendable {
     }
 }
 
+public struct PluginCatalogClawHubInstall: Codable, Sendable {
+    public let source: String
+    public let packagename: String
+
+    public init(
+        source: String,
+        packagename: String)
+    {
+        self.source = source
+        self.packagename = packagename
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case packagename = "packageName"
+    }
+}
+
 public struct PluginCatalogEntry: Codable, Sendable {
     public let id: String
     public let name: String
@@ -8364,20 +8382,20 @@ public struct PluginCatalogEntry: Codable, Sendable {
     public init(
         id: String,
         name: String,
-        packagename: String?,
-        description: String?,
-        version: String?,
-        kind: [String]?,
-        origin: String?,
+        packagename: String? = nil,
+        description: String? = nil,
+        version: String? = nil,
+        kind: [String]? = nil,
+        origin: String? = nil,
         installed: Bool,
         enabled: Bool,
         state: AnyCodable,
-        featured: Bool?,
-        order: Double?,
-        install: PluginCatalogInstallAction?,
-        error: String?,
-        category: String?,
-        removable: Bool?)
+        featured: Bool? = nil,
+        order: Double? = nil,
+        install: PluginCatalogInstallAction? = nil,
+        error: String? = nil,
+        category: String? = nil,
+        removable: Bool? = nil)
     {
         self.id = id
         self.name = name
@@ -8414,6 +8432,24 @@ public struct PluginCatalogEntry: Codable, Sendable {
         case error
         case category
         case removable
+    }
+}
+
+public struct PluginCatalogOfficialInstall: Codable, Sendable {
+    public let source: String
+    public let pluginid: String
+
+    public init(
+        source: String,
+        pluginid: String)
+    {
+        self.source = source
+        self.pluginid = pluginid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case pluginid = "pluginId"
     }
 }
 
@@ -8481,11 +8517,11 @@ public struct PluginSearchPackage: Codable, Sendable {
         family: AnyCodable,
         channel: AnyCodable,
         isofficial: Bool,
-        summary: String?,
-        latestversion: String?,
-        runtimeid: String?,
-        downloads: Double?,
-        verificationtier: String?)
+        summary: String? = nil,
+        latestversion: String? = nil,
+        runtimeid: String? = nil,
+        downloads: Double? = nil,
+        verificationtier: String? = nil)
     {
         self.name = name
         self.displayname = displayname
@@ -8541,7 +8577,7 @@ public struct PluginsInstallResult: Codable, Sendable {
         ok: Bool,
         plugin: PluginCatalogEntry,
         restartrequired: Bool,
-        warnings: [String]?)
+        warnings: [String]? = nil)
     {
         self.ok = ok
         self.plugin = plugin
@@ -8587,7 +8623,7 @@ public struct PluginsSearchParams: Codable, Sendable {
 
     public init(
         query: String,
-        limit: Int?)
+        limit: Int? = nil)
     {
         self.query = query
         self.limit = limit
@@ -8791,7 +8827,7 @@ public struct PluginsSetEnabledResult: Codable, Sendable {
         ok: Bool,
         plugin: PluginCatalogEntry,
         restartrequired: Bool,
-        warnings: [String]?)
+        warnings: [String]? = nil)
     {
         self.ok = ok
         self.plugin = plugin
@@ -8853,7 +8889,7 @@ public struct PluginsUninstallResult: Codable, Sendable {
         pluginid: String,
         restartrequired: Bool,
         removed: [String],
-        warnings: [String]?)
+        warnings: [String]? = nil)
     {
         self.ok = ok
         self.pluginid = pluginid
@@ -9663,6 +9699,37 @@ public struct ShutdownEvent: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case reason
         case restartexpectedms = "restartExpectedMs"
+    }
+}
+
+public enum PluginCatalogInstallAction: Codable, Sendable {
+    case clawhub(PluginCatalogClawHubInstall)
+    case official(PluginCatalogOfficialInstall)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "source"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "clawhub": self = try .clawhub(PluginCatalogClawHubInstall(from: decoder))
+        case "official": self = try .official(PluginCatalogOfficialInstall(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown PluginCatalogInstallAction discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .clawhub(let value): try value.encode(to: encoder)
+        case .official(let value): try value.encode(to: encoder)
+        }
     }
 }
 

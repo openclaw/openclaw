@@ -83,22 +83,29 @@ export const PluginsSessionActionResultSchema = Type.Union([
   PluginsSessionActionFailureResultSchema,
 ]);
 
-/** Install action advertised for one catalog entry. */
+/** ClawHub-backed install action for one catalog entry. */
+export const PluginCatalogClawHubInstallSchema = Type.Object(
+  {
+    source: Type.Literal("clawhub"),
+    packageName: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+/** Official-catalog install action for one catalog entry. */
+export const PluginCatalogOfficialInstallSchema = Type.Object(
+  {
+    source: Type.Literal("official"),
+    pluginId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+// Branches stay named schemas: the Swift generator only emits discriminated
+// unions whose branches resolve to registered types (see PluginsSessionActionResult).
 export const PluginCatalogInstallActionSchema = Type.Union([
-  Type.Object(
-    {
-      source: Type.Literal("clawhub"),
-      packageName: NonEmptyString,
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      source: Type.Literal("official"),
-      pluginId: NonEmptyString,
-    },
-    { additionalProperties: false },
-  ),
+  PluginCatalogClawHubInstallSchema,
+  PluginCatalogOfficialInstallSchema,
 ]);
 
 /** Cold control-plane representation of an installed or available plugin. */
