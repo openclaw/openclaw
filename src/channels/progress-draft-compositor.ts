@@ -294,7 +294,16 @@ export function createChannelProgressDraftCompositor(params: {
         // Narrator stopped (failures/cap): fall back to the raw tool lines
         // instead of pinning stale narration for the rest of the turn.
         narrationText = "";
-        return await render();
+        const text = formatDraftText();
+        if (text) {
+          return await render();
+        }
+        if (!lastRenderedText) {
+          return false;
+        }
+        lastRenderedText = "";
+        await params.deleteCurrent?.();
+        return true;
       }
       narrationText = normalized;
       await gate.startNow();

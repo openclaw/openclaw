@@ -315,6 +315,27 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n🛠️ Wc", expect.anything());
   });
 
+  it("deletes a narration-only draft when narration stops with no fallback lines", async () => {
+    const update = vi.fn();
+    const deleteCurrent = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: false } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+      deleteCurrent,
+    });
+
+    await progress.pushNarrationProgress("Looking at the repository.");
+    expect(update).toHaveBeenLastCalledWith("Looking at the repository.", expect.anything());
+
+    await progress.pushNarrationProgress("");
+
+    expect(deleteCurrent).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
   it("ignores narration once the final reply started and resets it per turn", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
