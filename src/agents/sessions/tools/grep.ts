@@ -179,6 +179,10 @@ export function createGrepToolDefinition(
         void (async () => {
           try {
             const rgPath = await ensureTool("rg", true);
+            if (signal?.aborted) {
+              settle(() => reject(new Error("Operation aborted")));
+              return;
+            }
             if (!rgPath) {
               settle(() =>
                 reject(new Error("ripgrep (rg) is not available and could not be downloaded")),

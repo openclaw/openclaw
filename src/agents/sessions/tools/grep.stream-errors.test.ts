@@ -37,6 +37,33 @@ function createChild(): MockChild {
 }
 
 describe("grep tool stream errors", () => {
+  it("does not start ripgrep when aborted while resolving rg", async () => {
+    let resolveEnsureTool: ((value: string) => void) | undefined;
+    vi.mocked(ensureTool).mockImplementationOnce(
+      async () =>
+        await new Promise<string>((resolve) => {
+          resolveEnsureTool = resolve;
+        }),
+    );
+
+    const controller = new AbortController();
+    const tool = createGrepToolDefinition(process.cwd());
+    const result = tool.execute(
+      "call-1",
+      { pattern: "foo" },
+      controller.signal,
+      undefined,
+      {} as never,
+    );
+
+    await vi.waitFor(() => expect(ensureTool).toHaveBeenCalledOnce());
+    controller.abort();
+    resolveEnsureTool?.("rg");
+
+    await expect(result).rejects.toThrow("Operation aborted");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it.each(["stdout", "stderr"] as const)(
     "rejects and terminates ripgrep when %s fails",
     async (stream) => {
