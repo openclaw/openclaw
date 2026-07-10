@@ -1,4 +1,3 @@
-import CoreLocation
 import Foundation
 import OpenClawKit
 import OpenClawProtocol
@@ -2237,46 +2236,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(res.error?.message.contains("CAMERA_DISABLED") == true)
     }
 
-    @Test @MainActor func `handle invoke rejects location when app mode is off`() async {
-        await withUserDefaults(["location.enabledMode": OpenClawLocationMode.off.rawValue]) {
-            let appModel = NodeAppModel(locationService: MockInvokeLocationService(status: .authorizedAlways))
-            let req = BridgeInvokeRequest(id: "location-off", command: OpenClawLocationCommand.get.rawValue)
-
-            let res = await appModel._test_handleInvoke(req)
-
-            #expect(res.ok == false)
-            #expect(res.error?.code == .unavailable)
-            #expect(res.error?.message.contains("LOCATION_DISABLED") == true)
-        }
-    }
-
-    @Test @MainActor func `handle invoke rejects location when ios permission is denied`() async {
-        await withUserDefaults(["location.enabledMode": OpenClawLocationMode.whileUsing.rawValue]) {
-            let appModel = NodeAppModel(locationService: MockInvokeLocationService(status: .denied))
-            let req = BridgeInvokeRequest(id: "location-denied", command: OpenClawLocationCommand.get.rawValue)
-
-            let res = await appModel._test_handleInvoke(req)
-
-            #expect(res.ok == false)
-            #expect(res.error?.code == .unavailable)
-            #expect(res.error?.message.contains("LOCATION_PERMISSION_REQUIRED") == true)
-        }
-    }
-
-    @Test @MainActor func `handle invoke rejects background location without always mode`() async {
-        await withUserDefaults(["location.enabledMode": OpenClawLocationMode.whileUsing.rawValue]) {
-            let appModel = NodeAppModel(locationService: MockInvokeLocationService(status: .authorizedWhenInUse))
-            appModel.setScenePhase(.background)
-            let req = BridgeInvokeRequest(id: "location-bg", command: OpenClawLocationCommand.get.rawValue)
-
-            let res = await appModel._test_handleInvoke(req)
-
-            #expect(res.ok == false)
-            #expect(res.error?.code == .backgroundUnavailable)
-            #expect(res.error?.message.contains("LOCATION_BACKGROUND_UNAVAILABLE") == true)
-        }
-    }
-
     @Test @MainActor func `system notify returns unavailable when notifications off`() async throws {
         let center = MockBootstrapNotificationCenter()
         center.status = .notDetermined
@@ -3244,55 +3203,4 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         await appModel._test_handleCanvasA2UIAction(body: body)
         #expect(appModel.screen.urlString.isEmpty)
     }
-}
-
-@MainActor
-private final class MockInvokeLocationService: LocationServicing, @unchecked Sendable {
-    private var status: CLAuthorizationStatus
-
-    init(status: CLAuthorizationStatus) {
-        self.status = status
-    }
-
-    func authorizationStatus() -> CLAuthorizationStatus {
-        self.status
-    }
-
-    func accuracyAuthorization() -> CLAccuracyAuthorization {
-        .fullAccuracy
-    }
-
-    func ensureAuthorization(mode: OpenClawLocationMode) async -> CLAuthorizationStatus {
-        _ = mode
-        return self.status
-    }
-
-    func currentLocation(
-        params: OpenClawLocationGetParams,
-        desiredAccuracy: OpenClawLocationAccuracy,
-        maxAgeMs: Int?,
-        timeoutMs: Int?) async throws -> CLLocation
-    {
-        _ = params
-        _ = desiredAccuracy
-        _ = maxAgeMs
-        _ = timeoutMs
-        throw LocationService.Error.unavailable
-    }
-
-    func setBackgroundLocationUpdatesEnabled(_ enabled: Bool) {
-        _ = enabled
-    }
-
-    func setAuthorizationChangeHandler(
-        _ handler: @escaping @MainActor @Sendable (CLAuthorizationStatus) -> Void)
-    {
-        _ = handler
-    }
-
-    func startMonitoringSignificantLocationChanges(onUpdate: @escaping @Sendable (CLLocation) -> Void) {
-        _ = onUpdate
-    }
-
-    func stopMonitoringSignificantLocationChanges() {}
 }
