@@ -51,7 +51,7 @@ export function isOpenAIGpt55Model(model: OpenAIReasoningModel): boolean {
 
 /** Normalize user-facing reasoning effort names to API effort names. */
 export function normalizeOpenAIReasoningEffort(effort: string): string {
-  return effort === "minimal" ? "minimal" : effort;
+  return normalizeLowercaseStringOrEmpty(effort);
 }
 
 function readCompatReasoningEfforts(compat: unknown): OpenAIApiReasoningEffort[] | undefined {

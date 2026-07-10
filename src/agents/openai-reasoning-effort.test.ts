@@ -1,6 +1,7 @@
 // Verifies model-specific OpenAI reasoning-effort normalization and disablement.
 import { describe, expect, it } from "vitest";
 import {
+  normalizeOpenAIReasoningEffort,
   resolveOpenAIReasoningEffortForModel,
   resolveOpenAISupportedReasoningEfforts,
 } from "./openai-reasoning-effort.js";
@@ -100,5 +101,41 @@ describe("OpenAI reasoning effort support", () => {
 
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "none" })).toBeUndefined();
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "high" })).toBe("high");
+  });
+
+  describe("normalizeOpenAIReasoningEffort", () => {
+    it("preserves lowercase effort values", () => {
+      expect(normalizeOpenAIReasoningEffort("low")).toBe("low");
+      expect(normalizeOpenAIReasoningEffort("medium")).toBe("medium");
+      expect(normalizeOpenAIReasoningEffort("high")).toBe("high");
+      expect(normalizeOpenAIReasoningEffort("xhigh")).toBe("xhigh");
+      expect(normalizeOpenAIReasoningEffort("none")).toBe("none");
+      expect(normalizeOpenAIReasoningEffort("minimal")).toBe("minimal");
+    });
+
+    it("lowercases mixed-case effort values", () => {
+      expect(normalizeOpenAIReasoningEffort("HIGH")).toBe("high");
+      expect(normalizeOpenAIReasoningEffort("High")).toBe("high");
+      expect(normalizeOpenAIReasoningEffort("Medium")).toBe("medium");
+      expect(normalizeOpenAIReasoningEffort("XHigh")).toBe("xhigh");
+      expect(normalizeOpenAIReasoningEffort("Minimal")).toBe("minimal");
+    });
+
+    it("trims whitespace from effort values", () => {
+      expect(normalizeOpenAIReasoningEffort("  high  ")).toBe("high");
+      expect(normalizeOpenAIReasoningEffort("\tmedium\n")).toBe("medium");
+    });
+
+    it("resolves mixed-case efforts through the model pipeline", () => {
+      const model = { provider: "openai", id: "gpt-5.1" };
+      expect(resolveOpenAIReasoningEffortForModel({ model, effort: "HIGH" })).toBe("high");
+      expect(resolveOpenAIReasoningEffortForModel({ model, effort: "LOW" })).toBe("low");
+    });
+
+    it("resolves uppercase none/off as disabled", () => {
+      const model = { provider: "openai", id: "gpt-5.1" };
+      expect(resolveOpenAIReasoningEffortForModel({ model, effort: "NONE" })).toBe("none");
+      expect(resolveOpenAIReasoningEffortForModel({ model, effort: "OFF" })).toBeUndefined();
+    });
   });
 });
