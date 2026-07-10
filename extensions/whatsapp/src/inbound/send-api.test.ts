@@ -657,12 +657,44 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
     await api.sendMessage("+16666660000", "hello");
 
     expect(executeUSyncQuery).toHaveBeenCalledTimes(1);
+    const query = requireRecord(
+      requireMockArg(executeUSyncQuery, 0, 0, "USync query"),
+      "USync query",
+    );
+    const users = query.users as Array<{ id?: string; phone?: string }>;
+    expect(users[0]).toMatchObject({ id: "16666660000@s.whatsapp.net" });
+    expect(users[0]?.phone).toBeUndefined();
     expect(sendMessage).toHaveBeenCalledWith("777888@lid", { text: "hello" });
     expect(fs.readFileSync(path.join(authDir, "lid-mapping-16666660000.json"), "utf8")).toBe(
       '"777888"\n',
     );
     expect(fs.readFileSync(path.join(authDir, "lid-mapping-777888_reverse.json"), "utf8")).toBe(
       '"16666660000"\n',
+    );
+  });
+
+  it("uses Baileys LID lookup before direct USync", async () => {
+    const executeUSyncQuery = vi.fn(async () => ({
+      list: [{ id: "17777770000@s.whatsapp.net", lid: "111222@lid" }],
+      sideList: [],
+    }));
+    const getLIDForPN = vi.fn(async () => "999000@lid");
+    const api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate, executeUSyncQuery, getLIDForPN },
+      defaultAccountId: "main",
+      authDir,
+    });
+
+    await api.sendMessage("+17777770000", "hello");
+
+    expect(getLIDForPN).toHaveBeenCalledWith("17777770000@s.whatsapp.net");
+    expect(executeUSyncQuery).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith("999000@lid", { text: "hello" });
+    expect(fs.readFileSync(path.join(authDir, "lid-mapping-17777770000.json"), "utf8")).toBe(
+      '"999000"\n',
+    );
+    expect(fs.readFileSync(path.join(authDir, "lid-mapping-999000_reverse.json"), "utf8")).toBe(
+      '"17777770000"\n',
     );
   });
 

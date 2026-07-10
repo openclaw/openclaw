@@ -112,6 +112,9 @@ function normalizeDirectLidJid(raw: unknown): string | null {
   if (match) {
     return `${match[1]}@lid`;
   }
+  if (value.includes("@")) {
+    return null;
+  }
   const digits = value.replace(/\D/g, "");
   return digits ? `${digits}@lid` : null;
 }
@@ -166,6 +169,33 @@ async function persistOutboundLidMapping(params: {
   ]);
 }
 
+async function persistAndResolveOutboundLidMapping(params: {
+  authDir: string;
+  recipient: string;
+  localJid: string;
+  phoneDigits: string;
+  lidJid: string;
+  source: "Baileys LID mapping" | "USync";
+}): Promise<string> {
+  await persistOutboundLidMapping({
+    authDir: params.authDir,
+    phoneDigits: params.phoneDigits,
+    lidJid: params.lidJid,
+  });
+  const resolved = toWhatsappJidWithLid(params.recipient, { authDir: params.authDir });
+  if (resolved !== params.localJid) {
+    outboundTokenLogger.info(
+      {
+        to: redactIdentifier(params.recipient),
+        pnJid: redactIdentifier(params.localJid),
+        lidJid: redactIdentifier(resolved),
+      },
+      `resolved outbound WhatsApp PN target to LID via ${params.source}`,
+    );
+  }
+  return resolved;
+}
+
 async function resolveOutboundJidWithUsync(params: {
   sock: WebSendSocket;
   authDir?: string;
@@ -175,7 +205,25 @@ async function resolveOutboundJidWithUsync(params: {
     ? toWhatsappJidWithLid(params.recipient, { authDir: params.authDir })
     : toWhatsappJid(params.recipient);
   const phoneDigits = localJid.match(DIRECT_PN_SEND_JID_RE)?.[1];
-  if (!params.authDir || !phoneDigits || !params.sock.executeUSyncQuery) {
+  if (!params.authDir || !phoneDigits) {
+    return localJid;
+  }
+  try {
+    const lidJid = normalizeDirectLidJid(await params.sock.getLIDForPN?.(localJid));
+    if (lidJid) {
+      return await persistAndResolveOutboundLidMapping({
+        authDir: params.authDir,
+        recipient: params.recipient,
+        localJid,
+        phoneDigits,
+        lidJid,
+        source: "Baileys LID mapping",
+      });
+    }
+  } catch (err) {
+    logVerbose(`WhatsApp outbound Baileys LID lookup failed: ${String(err)}`);
+  }
+  if (!params.sock.executeUSyncQuery) {
     return localJid;
   }
   try {
@@ -184,25 +232,20 @@ async function resolveOutboundJidWithUsync(params: {
       .withMode("query")
       .withContactProtocol()
       .withLIDProtocol()
-      .withUser(new USyncUser().withPhone(phoneDigits));
+      .withUser(new USyncUser().withId(localJid));
     const result = await params.sock.executeUSyncQuery(query);
     const lidJid = findUsyncLidJid(result, phoneDigits);
     if (!lidJid) {
       return localJid;
     }
-    await persistOutboundLidMapping({ authDir: params.authDir, phoneDigits, lidJid });
-    const resolved = toWhatsappJidWithLid(params.recipient, { authDir: params.authDir });
-    if (resolved !== localJid) {
-      outboundTokenLogger.info(
-        {
-          to: redactIdentifier(params.recipient),
-          pnJid: redactIdentifier(localJid),
-          lidJid: redactIdentifier(resolved),
-        },
-        "resolved outbound WhatsApp PN target to LID via USync",
-      );
-    }
-    return resolved;
+    return await persistAndResolveOutboundLidMapping({
+      authDir: params.authDir,
+      recipient: params.recipient,
+      localJid,
+      phoneDigits,
+      lidJid,
+      source: "USync",
+    });
   } catch (err) {
     logVerbose(`WhatsApp outbound USync LID lookup failed: ${String(err)}`);
     return localJid;
