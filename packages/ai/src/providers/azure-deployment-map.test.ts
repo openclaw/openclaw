@@ -19,6 +19,18 @@ describe("Azure deployment name map", () => {
     ).toBe("deployment=blue");
   });
 
+  it("matches model ids case-insensitively while preserving deployment names", () => {
+    const map = parseAzureDeploymentNameMap("GPT-4o = Deployment-GPT-4o");
+
+    expect(map.get("gpt-4o")).toBe("Deployment-GPT-4o");
+    expect(
+      resolveAzureDeploymentNameFromMap({
+        modelId: "gpt-4O",
+        deploymentMap: "GPT-4o = Deployment-GPT-4o",
+      }),
+    ).toBe("Deployment-GPT-4o");
+  });
+
   it("falls back to the model id when the map has no usable entry", () => {
     expect(
       resolveAzureDeploymentNameFromMap({
