@@ -346,6 +346,36 @@ afterEach(async () => {
 });
 
 describe("session MCP runtime", () => {
+  it("ignores unknown non-draft schema formats without suppressing known format validation", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const validator = createBundleMcpJsonSchemaValidator().getValidator<{
+        duration: string;
+        email: string;
+      }>({
+        type: "object",
+        properties: {
+          duration: { type: "string", format: "google-duration" },
+          email: { type: "string", format: "email" },
+        },
+        required: ["duration", "email"],
+        additionalProperties: false,
+      });
+
+      expect(warnSpy).not.toHaveBeenCalled();
+      expect(validator({ duration: "not parsed by OpenClaw", email: "bad" }).valid).toBe(false);
+      expect(
+        validator({
+          duration: "not parsed by OpenClaw",
+          email: "ops@example.com",
+        }).valid,
+      ).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("accepts draft-2020-12 tool output schemas from external MCP catalogs", () => {
     const validator = createBundleMcpJsonSchemaValidator().getValidator<{
       format: string;

@@ -133,13 +133,48 @@ const schemaValueKeywords = new Set([
   "unevaluatedProperties",
 ]);
 const schemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
+const ajvKnownFormats = new Set([
+  "binary",
+  "byte",
+  "date",
+  "date-time",
+  "double",
+  "duration",
+  "email",
+  "float",
+  "hostname",
+  "idn-email",
+  "idn-hostname",
+  "int32",
+  "int64",
+  "ipv4",
+  "ipv6",
+  "iri",
+  "iri-reference",
+  "json-pointer",
+  "password",
+  "regex",
+  "relative-json-pointer",
+  "time",
+  "uri",
+  "uri-reference",
+  "uri-template",
+  "url",
+  "uuid",
+]);
 
-function stripSchemaMapFormats(value: unknown): unknown {
+function stripSchemaMapFormats(
+  value: unknown,
+  shouldStripFormat: (format: string) => boolean,
+): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return value;
   }
   return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, stripJsonSchemaFormats(entry)]),
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      stripJsonSchemaFormats(entry, shouldStripFormat),
+    ]),
   );
 }
 
@@ -153,9 +188,12 @@ function expandJsonSchemaTypeArray(schema: Record<string, unknown>): Record<stri
   };
 }
 
-function stripJsonSchemaFormats(schema: unknown): unknown {
+function stripJsonSchemaFormats(
+  schema: unknown,
+  shouldStripFormat: (format: string) => boolean = () => true,
+): unknown {
   if (Array.isArray(schema)) {
-    return schema.map((entry) => stripJsonSchemaFormats(entry));
+    return schema.map((entry) => stripJsonSchemaFormats(entry, shouldStripFormat));
   }
   if (!schema || typeof schema !== "object") {
     return schema;
@@ -163,20 +201,27 @@ function stripJsonSchemaFormats(schema: unknown): unknown {
   const normalizedSchema = expandJsonSchemaTypeArray(schema as Record<string, unknown>);
   return Object.fromEntries(
     Object.entries(normalizedSchema)
-      .filter(([key]) => key !== "format")
+      .filter(
+        ([key, value]) =>
+          key !== "format" || typeof value !== "string" || !shouldStripFormat(value),
+      )
       .map(([key, value]) => {
         if (schemaMapKeywords.has(key)) {
-          return [key, stripSchemaMapFormats(value)];
+          return [key, stripSchemaMapFormats(value, shouldStripFormat)];
         }
         if (key === "dependencies") {
-          return [key, stripSchemaMapFormats(value)];
+          return [key, stripSchemaMapFormats(value, shouldStripFormat)];
         }
         if (schemaValueKeywords.has(key) || schemaArrayKeywords.has(key)) {
-          return [key, stripJsonSchemaFormats(value)];
+          return [key, stripJsonSchemaFormats(value, shouldStripFormat)];
         }
         return [key, value];
       }),
   );
+}
+
+function stripUnknownJsonSchemaFormats(schema: unknown): unknown {
+  return stripJsonSchemaFormats(schema, (format) => !ajvKnownFormats.has(format));
 }
 
 export function createBundleMcpJsonSchemaValidator(): jsonSchemaValidator {
@@ -185,7 +230,9 @@ export function createBundleMcpJsonSchemaValidator(): jsonSchemaValidator {
   return {
     getValidator<T>(schema: JsonSchemaType): JsonSchemaValidator<T> {
       if (!isDraft202012Schema(schema)) {
-        return defaultValidator.getValidator<T>(schema);
+        return defaultValidator.getValidator<T>(
+          stripUnknownJsonSchemaFormats(schema) as JsonSchemaType,
+        );
       }
       let validator: ReturnType<typeof Compile>;
       try {
