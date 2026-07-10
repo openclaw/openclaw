@@ -34,7 +34,7 @@ Pending pairing requests expire 5 minutes after the device's last retry — a de
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
 - The device pairing record is the durable approved-role contract. Token rotation stays inside that contract; it cannot upgrade a paired node into a role that pairing approval never granted.
 - `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) is a separate, gateway-owned node pairing store that tracks the node's approved command/capability surface across reconnects. It does **not** gate transport authentication — device pairing does that.
-- `openclaw nodes remove --node <id|name|ip>` removes a node pairing. For a device-backed node it revokes the device's `node` role in `devices/paired.json` and disconnects that device's node-role sessions: a mixed-role device keeps its row and only loses the `node` role, while a node-only device row is deleted. It also clears any matching entry from the separate node pairing store. `operator.pairing` may remove non-operator node rows on other devices; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
+- `openclaw nodes remove --node <id|name|ip>` removes a node pairing. For a device-backed node it revokes the device's `node` role in the paired-device store and disconnects that device's node-role sessions: a mixed-role device keeps its row and only loses the `node` role, while a node-only device row is deleted. It also clears any matching entry from the separate node pairing store. `operator.pairing` may remove non-operator node rows on other devices; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
 - Approval scope follows the pending request's declared commands:
   - commandless request: `operator.pairing`
   - non-exec node commands: `operator.pairing` + `operator.write`
@@ -220,13 +220,15 @@ Default allowlists by platform (before plugin defaults and `allowCommands`/`deny
 | Windows  | `camera.list`, `location.get`, `device.info`, `device.status`, `system.notify`                                                                                                                                                                                                                                        |
 | Linux    | `system.notify` (node host commands like `system.run` are approval-gated, see below)                                                                                                                                                                                                                                  |
 
+These rows describe the Gateway policy ceiling, not the commands implemented by every node app. A command is usable only when the connected node also declares it. In particular, the current macOS app does not declare the device and personal-data families listed in the macOS policy row.
+
 `canvas.*` commands (`canvas.present`, `canvas.hide`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`) are a plugin default on iOS, Android, macOS, Windows, and unknown platforms (not Linux); all of them are foreground-restricted on iOS.
 
 `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once` are allowed by default for any node that advertises the `talk` capability or declares `talk.*` commands, independent of platform label.
 
 Desktop host commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `screen.snapshot` on macOS/Windows) are not part of the static platform-default table above. They become available once the operator approves a pairing request that declares them, after which the node's approved command set carries them forward on reconnect.
 
-Dangerous or privacy-heavy commands still require explicit opt-in with `gateway.nodes.allowCommands`, even if a node declares them: `camera.snap`, `camera.clip`, `screen.record`, `contacts.add`, `calendar.add`, `reminders.add`, `sms.send`, `sms.search`. `gateway.nodes.denyCommands` always wins over defaults and extra allowlist entries.
+Dangerous or privacy-heavy commands still require explicit opt-in with `gateway.nodes.allowCommands`, even if a node declares them: `camera.snap`, `camera.clip`, `screen.record`, `computer.act`, `contacts.add`, `calendar.add`, `reminders.add`, `sms.send`, `sms.search`. `gateway.nodes.denyCommands` always wins over defaults and extra allowlist entries. See [Computer use](/nodes/computer-use) for the additional macOS, tool-policy, and arming gates around desktop input.
 
 Plugin-owned node commands can add a Gateway node-invoke policy. That policy runs after the allowlist check and before forwarding to the node, so raw `node.invoke`, CLI helpers, and dedicated agent tools share the same plugin permission boundary. Dangerous plugin node commands still require explicit `gateway.nodes.allowCommands` opt-in.
 
@@ -411,19 +413,19 @@ Notes:
 
 ## Device and personal data commands
 
-iOS, Android, and macOS nodes advertise several read-only data commands by default (see the [Command policy](#command-policy) table); Android additionally exposes a larger family gated by its own in-app settings.
+iOS and Android nodes advertise several read-only data commands by default (see the [Command policy](#command-policy) table); Android additionally exposes a larger family gated by its own in-app settings.
 
 Available families:
 
-- `device.status`, `device.info` — iOS, Android, macOS, Windows.
+- `device.status`, `device.info` — iOS, Android, Windows.
 - `device.permissions`, `device.health`, `device.apps` — Android only; `device.apps` requires Installed Apps sharing enabled in Android Settings and returns launcher-visible apps by default.
 - `notifications.list`, `notifications.actions` — Android only.
-- `photos.latest` — iOS, Android, macOS.
-- `contacts.search` — iOS, Android, macOS (read-only default); `contacts.add` is dangerous and needs `gateway.nodes.allowCommands`.
-- `calendar.events` — iOS, Android, macOS (read-only default); `calendar.add` is dangerous and needs `gateway.nodes.allowCommands`.
-- `reminders.list` — iOS, Android, macOS (read-only default); `reminders.add` is dangerous and needs `gateway.nodes.allowCommands`.
+- `photos.latest` — iOS, Android.
+- `contacts.search` — iOS, Android (read-only default); `contacts.add` is dangerous and needs `gateway.nodes.allowCommands`.
+- `calendar.events` — iOS, Android (read-only default); `calendar.add` is dangerous and needs `gateway.nodes.allowCommands`.
+- `reminders.list` — iOS, Android (read-only default); `reminders.add` is dangerous and needs `gateway.nodes.allowCommands`.
 - `callLog.search` — Android only.
-- `motion.activity`, `motion.pedometer` — iOS, Android, macOS; capability-gated by available sensors.
+- `motion.activity`, `motion.pedometer` — iOS, Android; capability-gated by available sensors.
 
 Example invokes:
 
@@ -436,7 +438,7 @@ openclaw nodes invoke --node <idOrNameOrIp> --command photos.latest --params '{"
 
 ## System commands (node host / mac node)
 
-The macOS node exposes `system.run`, `system.notify`, and `system.execApprovals.get/set`. The headless node host exposes `system.run`, `system.which`, and `system.execApprovals.get/set`.
+The macOS node exposes `system.run`, `system.which`, `system.notify`, and `system.execApprovals.get/set`. The headless node host exposes `system.run.prepare`, `system.run`, `system.which`, and `system.execApprovals.get/set`.
 
 Examples:
 

@@ -7,6 +7,11 @@ import {
 } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  getGatewaySuspendAdmissionPhase,
+  isGatewayRestartDraining,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
 import {
@@ -178,6 +183,10 @@ const loadPluginHostHookHandlers = lazyHandlerModule(
   () => import("./server-methods/plugin-host-hooks.js"),
   (module) => module.pluginHostHookHandlers,
 );
+const loadPluginsHandlers = lazyHandlerModule(
+  () => import("./server-methods/plugins.js"),
+  (module) => module.pluginsHandlers,
+);
 const loadPushHandlers = lazyHandlerModule(
   () => import("./server-methods/push.js"),
   (module) => module.pushHandlers,
@@ -185,6 +194,10 @@ const loadPushHandlers = lazyHandlerModule(
 const loadRestartHandlers = lazyHandlerModule(
   () => import("./server-methods/restart.js"),
   (module) => module.restartHandlers,
+);
+const loadSuspendHandlers = lazyHandlerModule(
+  () => import("./server-methods/suspend.js"),
+  (module) => module.suspendHandlers,
 );
 const loadSendHandlers = lazyHandlerModule(
   () => import("./server-methods/send.js"),
@@ -302,6 +315,16 @@ function authorizeGatewayMethod(
   return null;
 }
 
+const SUSPEND_CONTROL_METHODS = new Set([
+  "gateway.suspend.prepare",
+  "gateway.suspend.status",
+  "gateway.suspend.resume",
+]);
+
+function isGatewayMethodAllowedDuringSuspension(method: string): boolean {
+  return SUSPEND_CONTROL_METHODS.has(method);
+}
+
 export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["connect"],
@@ -379,6 +402,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "device.pair.approve",
       "device.pair.reject",
       "device.pair.remove",
+      "device.pair.rename",
       "device.token.rotate",
       "device.token.revoke",
     ],
@@ -393,7 +417,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadDiagnosticsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["controlUi.githubPreview"],
+    methods: ["controlUi.githubPreview", "controlUi.sessionPullRequests"],
     loadHandlers: loadControlUiHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -416,6 +440,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: [
       "worktrees.list",
+      "worktrees.branches",
       "worktrees.create",
       "worktrees.remove",
       "worktrees.restore",
@@ -451,6 +476,16 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["plugins.uiDescriptors", "plugins.sessionAction"],
     loadHandlers: loadPluginHostHookHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "plugins.list",
+      "plugins.search",
+      "plugins.install",
+      "plugins.setEnabled",
+      "plugins.uninstall",
+    ],
+    loadHandlers: loadPluginsHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -591,6 +626,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.delete",
       "sessions.get",
       "sessions.compact",
+      "sessions.groups.list",
+      "sessions.groups.put",
+      "sessions.groups.rename",
+      "sessions.groups.delete",
     ],
     loadHandlers: loadSessionsHandlers,
   }),
@@ -644,6 +683,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["gateway.restart.request", "gateway.restart.preflight"],
     loadHandlers: loadRestartHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["gateway.suspend.prepare", "gateway.suspend.status", "gateway.suspend.resume"],
+    loadHandlers: loadSuspendHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["message.action", "send", "poll"],
@@ -761,33 +804,40 @@ export async function handleGatewayRequest(
     );
     return;
   }
-  if (methodRegistry.isControlPlaneWrite(req.method)) {
-    const budget = consumeControlPlaneWriteBudget({ client });
-    if (!budget.allowed) {
-      // Control-plane writes mutate gateway-wide state; rate limit before handler lookup so
-      // plugin and aux write methods share the same protection.
-      const actor = resolveControlPlaneActor(client);
-      context.logGateway.warn(
-        `control-plane write rate-limited method=${req.method} ${formatControlPlaneActor(actor)} retryAfterMs=${budget.retryAfterMs} key=${budget.key}`,
-      );
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `rate limit exceeded for ${req.method}; retry after ${Math.ceil(budget.retryAfterMs / 1000)}s`,
-          {
-            retryable: true,
-            retryAfterMs: budget.retryAfterMs,
-            details: {
-              method: req.method,
-              limit: "3 per 60s",
-            },
-          },
-        ),
-      );
-      return;
+  const rejectRateLimitedControlPlaneWrite = (): boolean => {
+    if (!methodRegistry.isControlPlaneWrite(req.method)) {
+      return false;
     }
+    const budget = consumeControlPlaneWriteBudget({ client });
+    if (budget.allowed) {
+      return false;
+    }
+    const actor = resolveControlPlaneActor(client);
+    context.logGateway.warn(
+      `control-plane write rate-limited method=${req.method} ${formatControlPlaneActor(actor)} retryAfterMs=${budget.retryAfterMs} key=${budget.key}`,
+    );
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `rate limit exceeded for ${req.method}; retry after ${Math.ceil(budget.retryAfterMs / 1000)}s`,
+        {
+          retryable: true,
+          retryAfterMs: budget.retryAfterMs,
+          details: {
+            method: req.method,
+            limit: "3 per 60s",
+          },
+        },
+      ),
+    );
+    return true;
+  };
+  const isSuspendPrepare = req.method === "gateway.suspend.prepare";
+  if (isSuspendPrepare && rejectRateLimitedControlPlaneWrite()) {
+    // Preparation must stay protected even before it owns the root admission that it closes.
+    return;
   }
   const handler = methodRegistry.getHandler(req.method) as GatewayRequestHandler | undefined;
   if (!handler) {
@@ -796,6 +846,50 @@ export async function handleGatewayRequest(
       undefined,
       errorShape(ErrorCodes.INVALID_REQUEST, `unknown method: ${req.method}`),
     );
+    return;
+  }
+  const rootWorkAdmission = tryBeginGatewayRootWorkAdmission();
+  if (
+    req.method === "gateway.suspend.prepare" &&
+    rootWorkAdmission &&
+    !rootWorkAdmission.ownsRoot
+  ) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, "gateway suspension cannot begin from a nested request", {
+        retryable: true,
+        retryAfterMs: 1_000,
+        details: { method: req.method, reason: "nested-gateway-request" },
+      }),
+    );
+    return;
+  }
+  if (!rootWorkAdmission && !isGatewayMethodAllowedDuringSuspension(req.method)) {
+    const restartDraining = isGatewayRestartDraining();
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `${req.method} unavailable during gateway ${restartDraining ? "restart" : "suspension"}`,
+        {
+          retryable: true,
+          retryAfterMs: 1_000,
+          details: {
+            method: req.method,
+            reason: restartDraining ? "gateway-restarting" : "gateway-suspending",
+            phase: getGatewaySuspendAdmissionPhase(),
+          },
+        },
+      ),
+    );
+    return;
+  }
+  if (!isSuspendPrepare && rejectRateLimitedControlPlaneWrite()) {
+    // A closed admission must reject first so refused writes do not exhaust the controller's
+    // budget and strand it behind rate limiting after suspension resumes.
+    rootWorkAdmission?.release();
     return;
   }
   const invokeHandler = () =>
@@ -811,5 +905,18 @@ export async function handleGatewayRequest(
   // subagent methods (e.g. context engine tools spawning sub-agents
   // during tool execution) can dispatch back into the gateway.
   // The scope also carries caller identity into plugin-owned gateway methods.
-  await withPluginRuntimeGatewayRequestScope({ context, client, isWebchatConnect }, invokeHandler);
+  const invokeWithRequestScope = async () =>
+    await withPluginRuntimeGatewayRequestScope(
+      { context, client, isWebchatConnect },
+      invokeHandler,
+    );
+  if (!rootWorkAdmission) {
+    await invokeWithRequestScope();
+    return;
+  }
+  try {
+    await rootWorkAdmission.run(invokeWithRequestScope);
+  } finally {
+    rootWorkAdmission.release();
+  }
 }

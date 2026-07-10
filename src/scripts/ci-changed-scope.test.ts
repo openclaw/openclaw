@@ -223,9 +223,16 @@ describe("detectChangedScope", () => {
     });
   });
 
-  it("runs both Apple lanes for shared Swift lint configuration", () => {
-    for (const configPath of ["config/swiftformat", "config/swiftlint.yml"]) {
-      expect(detectChangedScope([configPath])).toEqual({
+  it("runs both Apple lanes for shared Swift tooling changes", () => {
+    for (const toolingPath of [
+      "config/swiftformat",
+      "config/swiftlint.yml",
+      "scripts/check-swift-tools.sh",
+      "scripts/format-swift.sh",
+      "scripts/install-swift-tools.sh",
+      "scripts/lint-swift.sh",
+    ]) {
+      expect(detectChangedScope([toolingPath])).toEqual({
         runNode: true,
         runMacos: true,
         runIosBuild: true,
@@ -241,6 +248,7 @@ describe("detectChangedScope", () => {
   it("enables the iOS build lane for iOS build helper changes", () => {
     for (const helperPath of [
       "scripts/ios-team-id.sh",
+      "scripts/ios-write-swift-filelist.mjs",
       "scripts/ios-version.ts",
       "scripts/lib/ios-version.ts",
       "scripts/lib/npm-publish-plan.mjs",
@@ -503,6 +511,23 @@ describe("detectChangedScope", () => {
       runChangedSmoke: false,
       runControlUiI18n: false,
     });
+    for (const releaseCheckPath of [
+      ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
+      "scripts/github/run-openclaw-cross-os-release-checks.sh",
+      "scripts/openclaw-cross-os-release-checks.ts",
+      "test/scripts/openclaw-cross-os-release-workflow.test.ts",
+    ]) {
+      expect(detectChangedScope([releaseCheckPath]), releaseCheckPath).toEqual({
+        runNode: true,
+        runMacos: false,
+        runIosBuild: false,
+        runAndroid: false,
+        runWindows: true,
+        runSkillsPython: false,
+        runChangedSmoke: false,
+        runControlUiI18n: false,
+      });
+    }
     expect(detectChangedScope(["scripts/install.ps1"])).toEqual({
       runNode: true,
       runMacos: false,

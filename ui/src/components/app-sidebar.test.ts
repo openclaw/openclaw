@@ -37,6 +37,11 @@ type SidebarLifecycleState = HTMLElement & {
   sessionsAgentId: string | null;
   sessionsResult: SessionsListResult | null;
   updateComplete: Promise<boolean>;
+  variant: "panel" | "drawer";
+};
+
+type LobsterPetElement = HTMLElement & {
+  runOutcome: "ok" | "error" | "aborted";
 };
 
 function createGatewayHarness(client: GatewayBrowserClient) {
@@ -94,6 +99,7 @@ function createSessionState(agentId: string, keys: string[]): SessionState {
     loading: false,
     error: null,
     deletedSessions: [],
+    groups: [],
   };
 }
 
@@ -113,6 +119,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
       return () => listeners.delete(listener);
     },
     subscribeCreated: () => () => undefined,
+    groupsLoad: () => Promise.resolve(),
   } as unknown as SessionCapability;
   const publish = (patch: Partial<SessionState>) => {
     state = { ...state, ...patch };
@@ -157,11 +164,16 @@ function createContext(
   } as unknown as ApplicationContext<RouteId>;
 }
 
-async function mountSidebar(gateway: ApplicationGateway, sessions: SessionCapability) {
+async function mountSidebar(
+  gateway: ApplicationGateway,
+  sessions: SessionCapability,
+  variant: SidebarLifecycleState["variant"] = "panel",
+) {
   const provider = document.createElement(PROVIDER_ELEMENT_NAME) as AppSidebarContextProvider;
   const sidebar = document.createElement(
     "openclaw-app-sidebar",
   ) as unknown as SidebarLifecycleState;
+  sidebar.variant = variant;
   provider.setContext(createContext(gateway, sessions));
   provider.append(sidebar);
   document.body.append(provider);
@@ -171,6 +183,50 @@ async function mountSidebar(gateway: ApplicationGateway, sessions: SessionCapabi
 
 afterEach(() => {
   document.body.replaceChildren();
+});
+
+describe("AppSidebar lobster outcome wiring", () => {
+  it.each([
+    ["panel", "failed", "error"],
+    ["panel", "killed", "aborted"],
+    ["drawer", "failed", "error"],
+    ["drawer", "killed", "aborted"],
+  ] as const)(
+    "passes the %s variant's latest %s session outcome",
+    async (variant, status, expectedOutcome) => {
+      const client = {} as GatewayBrowserClient;
+      const gateway = createGateway(client);
+      const sessions = createSessionsHarness("main", ["agent:main:main"]);
+      const { sidebar } = await mountSidebar(gateway, sessions.sessions, variant);
+      const terminalState = createSessionState("main", ["agent:main:main"]);
+      const result = terminalState.result;
+      if (!result) {
+        throw new Error("expected terminal session result");
+      }
+      const row = result.sessions[0];
+      if (!row) {
+        throw new Error("expected terminal session row");
+      }
+
+      sessions.publishList({
+        result: {
+          ...result,
+          sessions: [
+            {
+              ...row,
+              status,
+              endedAt: 100,
+            },
+          ],
+        },
+        agentId: terminalState.agentId,
+      });
+      await sidebar.updateComplete;
+
+      const pet = sidebar.querySelector<LobsterPetElement>("openclaw-lobster-pet");
+      expect(pet?.runOutcome).toBe(expectedOutcome);
+    },
+  );
 });
 
 describe("AppSidebar session source lifecycle", () => {

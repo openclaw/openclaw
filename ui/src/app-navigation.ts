@@ -23,6 +23,7 @@ export const SIDEBAR_NAV_ROUTES = [
   "tasks",
   "agents",
   "skills",
+  "plugins",
   "skill-workshop",
   "nodes",
   "dreams",
@@ -75,7 +76,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   { labelKey: "nav.settingsGroupAgents", routes: ["ai-agents", "automation", "mcp"] },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: ["infrastructure", "worktrees", "debug", "logs"],
+    routes: ["infrastructure", "worktrees", "debug", "logs", "about"],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
@@ -95,6 +96,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   cron: "calendarClock",
   tasks: "listChecks",
   skills: "zap",
+  plugins: "puzzle",
   "skill-workshop": "wrench",
   nodes: "monitor",
   chat: "messageSquare",
@@ -105,6 +107,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   automation: "terminal",
   mcp: "wrench",
   infrastructure: "globe",
+  about: "fileText",
   "ai-agents": "brain",
   debug: "bug",
   logs: "scrollText",
@@ -181,6 +184,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   cron: { titleKey: "tabs.cron", subtitleKey: "subtitles.cron" },
   tasks: { titleKey: "tabs.tasks", subtitleKey: "subtitles.tasks" },
   skills: { titleKey: "tabs.skills", subtitleKey: "subtitles.skills" },
+  plugins: { titleKey: "tabs.plugins", subtitleKey: "subtitles.plugins" },
   "skill-workshop": {
     titleKey: "tabs.skillWorkshop",
     subtitleKey: "subtitles.skillWorkshop",
@@ -197,6 +201,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   automation: { titleKey: "tabs.automation", subtitleKey: "subtitles.automation" },
   mcp: { titleKey: "tabs.mcp", subtitleKey: "subtitles.mcp" },
   infrastructure: { titleKey: "tabs.infrastructure", subtitleKey: "subtitles.infrastructure" },
+  about: { titleKey: "tabs.about", subtitleKey: "subtitles.about" },
   "ai-agents": { titleKey: "tabs.aiAgents", subtitleKey: "subtitles.aiAgents" },
   debug: { titleKey: "tabs.debug", subtitleKey: "subtitles.debug" },
   logs: { titleKey: "tabs.logs", subtitleKey: "subtitles.logs" },

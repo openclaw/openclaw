@@ -1,28 +1,30 @@
 /**
  * Static TypeScript types derived from the canonical gateway protocol schemas.
  *
- * Keep aliases wired through `ProtocolSchemas` so validators, runtime schemas,
- * and exported compile-time types cannot drift apart.
+ * Owner-local schema modules export hot public types directly. The remaining
+ * aliases stay wired through `ProtocolSchemas` so validators, runtime schemas,
+ * and compile-time types cannot drift apart.
  */
 import type { Static } from "typebox";
-import { ProtocolSchemas } from "./protocol-schemas.js";
+import type { ProtocolSchemas } from "./protocol-schemas.js";
 
 /** Stable schema names registered in the protocol schema registry. */
 type ProtocolSchemaName = keyof typeof ProtocolSchemas;
 /** Inferred TypeScript type for a named TypeBox protocol schema. */
 type SchemaType<TName extends ProtocolSchemaName> = Static<(typeof ProtocolSchemas)[TName]>;
 
-/** Connection handshake, envelope, snapshot, and shared error wire types. */
-export type ConnectParams = SchemaType<"ConnectParams">;
-export type HelloOk = SchemaType<"HelloOk">;
-export type RequestFrame = SchemaType<"RequestFrame">;
-export type ResponseFrame = SchemaType<"ResponseFrame">;
-export type EventFrame = SchemaType<"EventFrame">;
-export type GatewayFrame = SchemaType<"GatewayFrame">;
+/** Snapshot and shared state wire types. */
 export type Snapshot = SchemaType<"Snapshot">;
 export type PresenceEntry = SchemaType<"PresenceEntry">;
-export type ErrorShape = SchemaType<"ErrorShape">;
 export type StateVersion = SchemaType<"StateVersion">;
+export type GatewaySuspendTaskBlocker = SchemaType<"GatewaySuspendTaskBlocker">;
+export type GatewaySuspendBlocker = SchemaType<"GatewaySuspendBlocker">;
+export type GatewaySuspendPrepareParams = SchemaType<"GatewaySuspendPrepareParams">;
+export type GatewaySuspendPrepareResult = SchemaType<"GatewaySuspendPrepareResult">;
+export type GatewaySuspendStatusParams = SchemaType<"GatewaySuspendStatusParams">;
+export type GatewaySuspendStatusResult = SchemaType<"GatewaySuspendStatusResult">;
+export type GatewaySuspendResumeParams = SchemaType<"GatewaySuspendResumeParams">;
+export type GatewaySuspendResumeResult = SchemaType<"GatewaySuspendResumeResult">;
 
 /** Environment status RPC payloads used by CLI and Control UI surfaces. */
 export type EnvironmentStatus = SchemaType<"EnvironmentStatus">;
@@ -53,6 +55,9 @@ export type WorktreesRemoveResult = SchemaType<"WorktreesRemoveResult">;
 export type WorktreesRestoreParams = SchemaType<"WorktreesRestoreParams">;
 export type WorktreesGcParams = SchemaType<"WorktreesGcParams">;
 export type WorktreesGcResult = SchemaType<"WorktreesGcResult">;
+export type WorktreeBranch = SchemaType<"WorktreeBranch">;
+export type WorktreesBranchesParams = SchemaType<"WorktreesBranchesParams">;
+export type WorktreesBranchesResult = SchemaType<"WorktreesBranchesResult">;
 
 /** Agent activity, identity, send, poll, wait, and wake protocol payloads. */
 export type AgentEvent = SchemaType<"AgentEvent">;
@@ -110,11 +115,17 @@ export type SessionsSendParams = SchemaType<"SessionsSendParams">;
 export type SessionsMessagesSubscribeParams = SchemaType<"SessionsMessagesSubscribeParams">;
 export type SessionsMessagesUnsubscribeParams = SchemaType<"SessionsMessagesUnsubscribeParams">;
 export type SessionsAbortParams = SchemaType<"SessionsAbortParams">;
-export type SessionsPatchParams = SchemaType<"SessionsPatchParams">;
 export type SessionsPluginPatchParams = SchemaType<"SessionsPluginPatchParams">;
 export type SessionsPluginPatchResult = SchemaType<"SessionsPluginPatchResult">;
 export type SessionsResetParams = SchemaType<"SessionsResetParams">;
 export type SessionsDeleteParams = SchemaType<"SessionsDeleteParams">;
+export type SessionGroup = SchemaType<"SessionGroup">;
+export type SessionsGroupsListParams = SchemaType<"SessionsGroupsListParams">;
+export type SessionsGroupsListResult = SchemaType<"SessionsGroupsListResult">;
+export type SessionsGroupsPutParams = SchemaType<"SessionsGroupsPutParams">;
+export type SessionsGroupsRenameParams = SchemaType<"SessionsGroupsRenameParams">;
+export type SessionsGroupsDeleteParams = SchemaType<"SessionsGroupsDeleteParams">;
+export type SessionsGroupsMutationResult = SchemaType<"SessionsGroupsMutationResult">;
 export type SessionsCompactParams = SchemaType<"SessionsCompactParams">;
 export type SessionsUsageParams = SchemaType<"SessionsUsageParams">;
 
@@ -333,6 +344,7 @@ export type DevicePairRejectParams = SchemaType<"DevicePairRejectParams">;
 export type DevicePairRemoveParams = SchemaType<"DevicePairRemoveParams">;
 export type DevicePairSetupCodeParams = SchemaType<"DevicePairSetupCodeParams">;
 export type DevicePairSetupCodeResult = SchemaType<"DevicePairSetupCodeResult">;
+export type DevicePairRenameParams = SchemaType<"DevicePairRenameParams">;
 export type DeviceTokenRotateParams = SchemaType<"DeviceTokenRotateParams">;
 export type DeviceTokenRevokeParams = SchemaType<"DeviceTokenRevokeParams">;
 export type ChatAbortParams = SchemaType<"ChatAbortParams">;

@@ -21,6 +21,8 @@ import {
   type CommandPalette,
   type CommandPaletteTargetDetail,
 } from "../components/command-palette.ts";
+import { icons } from "../components/icons.ts";
+import "../components/new-session-dialog.ts";
 import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
@@ -46,6 +48,10 @@ import { NAV_WIDTH_MAX, NAV_WIDTH_MIN, loadSettings } from "./settings.ts";
 type ShellRouteState = {
   routeId?: RouteId;
   location?: RouteLocation;
+};
+
+type AppSidebarElement = HTMLElement & {
+  dismissTransientMenus: () => boolean;
 };
 
 // Stable references so the sidebar's enabledRouteIds property does not churn
@@ -359,6 +365,7 @@ class OpenClawShell extends OpenClawLightDomElement {
   @property({ attribute: false }) onboarding = false;
 
   @state() private navDrawerOpen = false;
+  @state() private newSessionDraft: { agentId: string } | null = null;
   @state() private activeSessionKey = "";
   @state() private settingsSearchQuery = "";
   @state() private routeState: ShellRouteState = {};
@@ -529,23 +536,34 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
     if (isMobileNavLayout()) {
       if (this.navDrawerOpen) {
-        this.closeNavDrawer({ restoreFocus: Boolean(trigger) });
+        this.closeNavDrawer({ restoreFocus: true });
         return;
       }
-      this.navDrawerTrigger = trigger ?? null;
+      this.navDrawerTrigger = trigger ?? this.querySelector<HTMLElement>(".topbar-nav-toggle");
       this.navDrawerOpen = true;
       return;
     }
     // A drawer that survived a breakpoint change is visually expanded even
     // when the persisted desktop preference says collapsed.
     const nextNavCollapsed = this.navDrawerOpen || !context.navigation.snapshot.navCollapsed;
+    if (nextNavCollapsed) {
+      this.dismissSidebarTransientMenus();
+    }
     this.closeNavDrawer();
     context.navigation.update({
       navCollapsed: nextNavCollapsed,
     });
+    if (nextNavCollapsed) {
+      void this.updateComplete.then(() => {
+        this.querySelector<HTMLElement>(".shell-nav-expand")?.focus();
+      });
+    }
   }
 
   private closeNavDrawer(options: { restoreFocus?: boolean } = {}) {
+    if (this.navDrawerOpen) {
+      this.dismissSidebarTransientMenus();
+    }
     const focusTarget = options.restoreFocus ? this.navDrawerTrigger : null;
     this.navDrawerOpen = false;
     this.navDrawerTrigger = null;
@@ -572,8 +590,22 @@ class OpenClawShell extends OpenClawLightDomElement {
   }
 
   private readonly handleWindowResize = () => {
+    const dismissedHiddenMenus =
+      isMobileNavLayout() && !this.navDrawerOpen && this.dismissSidebarTransientMenus();
     this.requestUpdate();
+    if (dismissedHiddenMenus) {
+      void this.updateComplete.then(() => {
+        this.querySelector<HTMLElement>(".topbar-nav-toggle")?.focus();
+      });
+    }
   };
+
+  private dismissSidebarTransientMenus(): boolean {
+    return (
+      this.querySelector<AppSidebarElement>("openclaw-app-sidebar")?.dismissTransientMenus() ??
+      false
+    );
+  }
 
   private readonly handleShellKeydown = (event: KeyboardEvent) => {
     if (event.defaultPrevented || event.key !== "Escape" || !this.navDrawerOpen) {
@@ -601,13 +633,13 @@ class OpenClawShell extends OpenClawLightDomElement {
       this.exitSettings();
       return;
     }
-    if (
-      event.altKey ||
-      event.shiftKey ||
-      !event.metaKey ||
-      event.ctrlKey ||
-      event.key.toLowerCase() !== "b"
-    ) {
+    const commandKey = event.metaKey && !event.ctrlKey && !event.altKey;
+    if (commandKey && event.shiftKey && event.code === "Comma") {
+      event.preventDefault();
+      this.navigate("config");
+      return;
+    }
+    if (!commandKey || event.shiftKey || event.key.toLowerCase() !== "b") {
       return;
     }
     event.preventDefault();
@@ -786,6 +818,8 @@ class OpenClawShell extends OpenClawLightDomElement {
     // The settings sidebar has a fixed width, so the collapse state pauses too.
     const navCollapsed = navigationSnapshot.navCollapsed && !navDrawerOpen && !settingsTakeover;
     const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
+    // One storage read per render; theme.refresh() re-renders on pref changes.
+    const uiSettings = loadSettings();
     return html`
       <openclaw-command-palette
         .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
@@ -795,6 +829,18 @@ class OpenClawShell extends OpenClawLightDomElement {
         }}
         .onSlashCommand=${this.handleCommandPaletteSlashCommand}
       ></openclaw-command-palette>
+      <openclaw-new-session-dialog
+        .open=${this.newSessionDraft !== null}
+        .initialAgentId=${this.newSessionDraft?.agentId ?? ""}
+        .onClose=${() => {
+          this.newSessionDraft = null;
+        }}
+        .onCreated=${(sessionKey: string) => {
+          this.newSessionDraft = null;
+          context.gateway.setSessionKey(sessionKey);
+          this.navigate("chat", { search: searchForSession(sessionKey) });
+        }}
+      ></openclaw-new-session-dialog>
       <div
         class="shell ${activeRoute === "chat" ? "shell--chat" : ""} ${navCollapsed
           ? "shell--nav-collapsed"
@@ -819,6 +865,21 @@ class OpenClawShell extends OpenClawLightDomElement {
           .onOpenPalette=${this.openPalette}
           .onToggleDrawer=${(trigger: HTMLElement) => this.toggleNavigationSurface(trigger)}
         ></openclaw-app-topbar>
+        ${navCollapsed && !this.onboarding
+          ? html`
+              <openclaw-tooltip .content=${`${t("nav.expand")} (⌘B)`}>
+                <button
+                  type="button"
+                  class="shell-nav-expand"
+                  aria-label=${t("nav.expand")}
+                  aria-expanded="false"
+                  @click=${() => this.toggleNavigationSurface()}
+                >
+                  ${icons.panelLeftOpen}
+                </button>
+              </openclaw-tooltip>
+            `
+          : nothing}
         <div class="shell-nav">
           ${settingsTakeover
             ? renderSettingsSidebar({
@@ -844,16 +905,23 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .activePluginTabId=${activePluginTabId}
                 .enabledRouteIds=${this.enabledRouteIds()}
                 .sessionKey=${this.activeSessionKey}
-                .collapsed=${navCollapsed}
                 .connected=${gatewaySnapshot.connected}
                 .canPairDevice=${gatewaySnapshot.connected &&
                 hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
                 .sidebarPinnedRoutes=${navigationSnapshot.sidebarPinnedRoutes}
                 .sidebarMoreExpanded=${navigationSnapshot.sidebarMoreExpanded}
                 .themeMode=${context.theme.mode}
-                .lobsterPetVisits=${loadSettings().lobsterPetVisits !== false}
+                .lobsterPetVisits=${uiSettings.lobsterPetVisits !== false}
+                .lobsterPetSounds=${uiSettings.lobsterPetSounds === true}
+                .gatewayVersion=${context.config.current.serverVersion ??
+                gatewaySnapshot.hello?.server?.version ??
+                null}
                 .onOpenPalette=${this.openPalette}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
+                .onOpenNewSession=${(agentId: string) => {
+                  this.newSessionDraft = { agentId };
+                }}
+                .draftSessionAgentId=${this.newSessionDraft?.agentId ?? ""}
                 .onToggleMore=${() =>
                   context.navigation.update({
                     sidebarMoreExpanded: !context.navigation.snapshot.sidebarMoreExpanded,
