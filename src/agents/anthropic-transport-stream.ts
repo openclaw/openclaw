@@ -816,7 +816,10 @@ async function* parseAnthropicSseBody(
 
 function approxJsonByteLength(value: unknown): number | undefined {
   try {
-    return JSON.stringify(value)?.length;
+    const json = JSON.stringify(value);
+    // Measure UTF-8 bytes, not UTF-16 code units: multibyte payload content
+    // (CJK, emoji) would otherwise under-report the wire size.
+    return json === undefined ? undefined : Buffer.byteLength(json, "utf8");
   } catch {
     return undefined;
   }

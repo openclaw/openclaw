@@ -1001,6 +1001,46 @@ describe("anthropic transport stream", () => {
     expect(result.errorMessage).toBe(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
   });
 
+  it("reports approxPayloadBytes as UTF-8 bytes for multibyte request payloads", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          type: "error",
+          error: { type: "invalid_request_error", message: "bad tool schema" },
+        }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    const result = await withIsolatedAnthropicTransport(async (streamFn, logger) => {
+      const stream = await Promise.resolve(
+        streamFn(
+          makeAnthropicTransportModel(),
+          {
+            messages: [{ role: "user", content: "日本語のプロンプト 🐙🦞 こんにちは" }],
+          } as AnthropicStreamContext,
+          { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+        ),
+      );
+      const streamResult = await stream.result();
+
+      const [, init] = guardedFetchMock.mock.calls.at(-1) ?? [];
+      const sentJson = (init as { body?: unknown } | undefined)?.body;
+      if (typeof sentJson !== "string") {
+        throw new Error("expected string Anthropic request body");
+      }
+      const [, rejectionMeta] = logger.warn.mock.calls[0] as [string, Record<string, unknown>];
+      // Bytes on the wire, not UTF-16 code units: CJK/emoji content must count
+      // strictly larger than the JSON string's .length.
+      expect(rejectionMeta.approxPayloadBytes).toBe(Buffer.byteLength(sentJson, "utf8"));
+      expect(rejectionMeta.approxPayloadBytes as number).toBeGreaterThan(sentJson.length);
+
+      return streamResult;
+    });
+
+    expect(result.stopReason).toBe("error");
+  });
+
   it("aborts stalled streamed Anthropic error responses", async () => {
     vi.useFakeTimers();
     const encoder = new TextEncoder();
