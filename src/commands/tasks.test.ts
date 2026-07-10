@@ -201,6 +201,29 @@ describe("tasks commands", () => {
     });
   });
 
+  it("reports blank list filters as absent in command JSON output", async () => {
+    await withTaskCommandStateDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-cli",
+        status: "running",
+        task: "Inspect issue backlog",
+      });
+
+      const runtime = createRuntime();
+      await tasksListCommand({ json: true, runtime: "   ", status: "\t" }, runtime);
+
+      expect(readFirstJsonLog(runtime)).toStrictEqual({
+        count: 1,
+        runtime: null,
+        status: null,
+        tasks: [jsonRoundTrip(task)],
+      });
+    });
+  });
+
   it("routes cron task cancellation through the live gateway before local fallback", async () => {
     await withTaskCommandStateDir(async () => {
       const task = createTaskRecord({

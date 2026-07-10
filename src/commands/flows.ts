@@ -24,6 +24,11 @@ const MODE_PAD = 14;
 const REV_PAD = 6;
 const CTRL_PAD = 20;
 
+function normalizeFilter(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 function formatFlowLookupMiss(lookup: string): string {
   return `TaskFlow not found: ${lookup}. Run ${formatCliCommand("openclaw tasks flow list")} to see recent flow ids.`;
 }
@@ -154,7 +159,7 @@ export async function flowsListCommand(
   opts: { json?: boolean; status?: string },
   runtime: RuntimeEnv,
 ) {
-  const statusFilter = opts.status?.trim();
+  const statusFilter = normalizeFilter(opts.status);
   const flows = listTaskFlowRecords().filter((flow) => {
     if (statusFilter && flow.status !== statusFilter) {
       return false;

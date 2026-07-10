@@ -34,6 +34,11 @@ type TasksAuditJsonArgs = {
   limit?: number;
 };
 
+function normalizeFilter(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 function toSystemAuditFindings(params: {
   severityFilter?: TaskSystemAuditSeverity;
   codeFilter?: TaskSystemAuditCode;
@@ -52,8 +57,8 @@ function toSystemAuditFindings(params: {
 }
 
 function buildTasksListJsonPayload(opts: TasksListJsonArgs) {
-  const runtimeFilter = opts.runtime?.trim();
-  const statusFilter = opts.status?.trim();
+  const runtimeFilter = normalizeFilter(opts.runtime);
+  const statusFilter = normalizeFilter(opts.status);
   const tasks = listTaskJsonRecords().filter((task) => {
     if (runtimeFilter && task.runtime !== runtimeFilter) {
       return false;
@@ -72,8 +77,8 @@ function buildTasksListJsonPayload(opts: TasksListJsonArgs) {
 }
 
 function buildTasksAuditJsonPayload(opts: TasksAuditJsonArgs) {
-  const severityFilter = opts.severity?.trim() as TaskSystemAuditSeverity | undefined;
-  const codeFilter = opts.code?.trim() as TaskSystemAuditCode | undefined;
+  const severityFilter = normalizeFilter(opts.severity) as TaskSystemAuditSeverity | undefined;
+  const codeFilter = normalizeFilter(opts.code) as TaskSystemAuditCode | undefined;
   const result = toSystemAuditFindings({
     severityFilter,
     codeFilter,
