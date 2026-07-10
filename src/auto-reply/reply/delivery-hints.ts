@@ -1,0 +1,8 @@
+import {
+  MESSAGE_TOOL_DELIVERY_HINTS,
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+} from "../../plugin-sdk/message-tool-delivery-hints.js";
+
+export { MESSAGE_TOOL_DELIVERY_HINTS, MESSAGE_TOOL_ONLY_DELIVERY_HINT };
+
+export const ROOM_EVENT_DELIVERY_HINT = MESSAGE_TOOL_DELIVERY_HINTS[3];
