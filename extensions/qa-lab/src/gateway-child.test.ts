@@ -441,6 +441,7 @@ describe("buildQaRuntimeEnv", () => {
       ...createParams({
         OPENCLAW_QA_CONVEX_SECRET_CI: "convex-ci-secret",
         OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "convex-maintainer-secret",
+        OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: "trusted-parent-only",
         OPENCLAW_QA_TELEGRAM_GROUP_ID: "-1001234567890",
         OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver-token",
         OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut-token",
@@ -450,6 +451,7 @@ describe("buildQaRuntimeEnv", () => {
 
     expect(env.OPENCLAW_QA_CONVEX_SECRET_CI).toBeUndefined();
     expect(env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER).toBeUndefined();
+    expect(env.OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL).toBeUndefined();
     expect(env.OPENCLAW_QA_TELEGRAM_GROUP_ID).toBeUndefined();
     expect(env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN).toBeUndefined();
     expect(env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN).toBeUndefined();
@@ -463,6 +465,7 @@ describe("buildQaRuntimeEnv", () => {
         OPENCLAW_LIVE_SETUP_TOKEN_VALUE: "setup-token",
         OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN: "anthropic-setup-token",
         OPENCLAW_QA_CONVEX_SECRET_CI: "convex-ci-secret",
+        OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: "trusted-parent-only",
         OPENCLAW_QA_TELEGRAM_GROUP_ID: "-1001234567890",
         OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver-token",
         OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut-token",
@@ -473,6 +476,7 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE).toBeUndefined();
     expect(env.OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN).toBeUndefined();
     expect(env.OPENCLAW_QA_CONVEX_SECRET_CI).toBeUndefined();
+    expect(env.OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL).toBeUndefined();
     expect(env.OPENCLAW_QA_TELEGRAM_GROUP_ID).toBeUndefined();
     expect(env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN).toBeUndefined();
     expect(env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN).toBeUndefined();
@@ -492,6 +496,7 @@ describe("buildQaRuntimeEnv", () => {
       "OPENCLAW_LIVE_SETUP_TOKEN_VALUE: process.env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE,",
       "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN: process.env.OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN,",
       "OPENCLAW_QA_CONVEX_SECRET_CI: process.env.OPENCLAW_QA_CONVEX_SECRET_CI,",
+      "OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: process.env.OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL,",
       "OPENCLAW_QA_TELEGRAM_GROUP_ID: process.env.OPENCLAW_QA_TELEGRAM_GROUP_ID,",
       "OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: process.env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN,",
       "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: process.env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN,",
@@ -512,6 +517,7 @@ describe("buildQaRuntimeEnv", () => {
           OPENCLAW_LIVE_SETUP_TOKEN_VALUE: "setup-token",
           OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN: "anthropic-setup-token",
           OPENCLAW_QA_CONVEX_SECRET_CI: "convex-ci-secret",
+          OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: "trusted-parent-only",
           OPENCLAW_QA_TELEGRAM_GROUP_ID: "-1001234567890",
           OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver-token",
           OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut-token",

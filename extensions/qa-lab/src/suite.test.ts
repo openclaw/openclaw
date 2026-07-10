@@ -573,6 +573,10 @@ describe("qa suite", () => {
         },
       },
     });
+    const sutOpenClawCommand = {
+      executablePath: "/usr/local/bin/openclaw-telegram-sut-launcher",
+      usePackagedPlugins: true,
+    };
 
     expect(
       qaSuiteProgressTesting.buildQaIsolatedScenarioWorkerParams({
@@ -589,7 +593,7 @@ describe("qa suite", () => {
           adapterFactories: [adapterFactory],
           channelId: "telegram",
           adapterOptions: { repoRoot: "/repo" },
-          sutOpenClawCommand: "/usr/local/bin/openclaw-telegram-sut-launcher",
+          sutOpenClawCommand,
           thinkingDefault: "minimal",
           claudeCliAuthMode: "subscription",
           enabledPluginIds: ["acpx"],
@@ -603,7 +607,7 @@ describe("qa suite", () => {
       adapterFactories: [adapterFactory],
       channelId: "telegram",
       adapterOptions: { repoRoot: "/repo" },
-      sutOpenClawCommand: "/usr/local/bin/openclaw-telegram-sut-launcher",
+      sutOpenClawCommand,
       concurrency: 1,
       startLab,
       controlUiEnabled: true,

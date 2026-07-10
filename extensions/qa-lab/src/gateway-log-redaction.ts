@@ -100,7 +100,9 @@ export function redactQaGatewayDebugText(text: string) {
         "gi",
       ),
       "$1<redacted>",
-    );
+    )
+    .replace(/(^|[\r\n])([ \t]*)::/gu, "$1$2: :")
+    .replaceAll("##[", "# #[");
 }
 
 export function formatQaGatewayLogsForError(logs: string) {
