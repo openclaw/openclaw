@@ -15,6 +15,7 @@ on:
       - scripts/control-ui-i18n.ts
       - scripts/native-app-i18n.ts
       - ui/src/i18n/.i18n/glossary.*.json
+      - .github/actions/publish-generated-pr/action.yml
       - .github/workflows/native-app-locale-refresh.yml
   workflow_dispatch:
 
@@ -23,7 +24,9 @@ permissions:
 
 concurrency:
   group: native-app-locale-refresh
-  cancel-in-progress: "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'chore(i18n): refresh native locales') }}"
+  # Finish the active full refresh; GitHub retains only the newest pending run for this group.
+  # Publisher overlap checks defer stale generated paths to that queued reconciliation run.
+  cancel-in-progress: false
 
 jobs:
   resolve-base:
@@ -242,6 +245,8 @@ jobs:
         with:
           primary-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           fallback-private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          pull-request-app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
           base-branch: ${{ github.event.repository.default_branch }}
           head-branch: automation/native-app-locale-refresh
           commit-message: "chore(i18n): refresh native locales"
@@ -249,6 +254,17 @@ jobs:
           generated-paths: |
             apps/.i18n/native
             apps/.i18n/native-source.json
+          invalidation-paths: |
+            apps/android/app/src/main
+            apps/ios
+            apps/macos/Sources
+            apps/macos/Package.swift
+            apps/shared/OpenClawKit/Sources
+            scripts/control-ui-i18n.ts
+            scripts/native-app-i18n.ts
+            ui/src/i18n/.i18n/glossary.*.json
+            .github/actions/publish-generated-pr/action.yml
+            .github/workflows/native-app-locale-refresh.yml
           pr-body: |
             ## What Problem This Solves
 
