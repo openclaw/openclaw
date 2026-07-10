@@ -355,11 +355,15 @@ class ChatControllerOutboxTest {
       assertFalse(chat.healthOk.value)
       assertEquals(
         ChatOutboxStatus.Sending,
-        outbox.rows.values.first { it.text == "accepted" }.status,
+        outbox.rows.values
+          .first { it.text == "accepted" }
+          .status,
       )
       assertEquals(
         ChatOutboxStatus.Queued,
-        outbox.rows.values.first { it.text == "younger" }.status,
+        outbox.rows.values
+          .first { it.text == "younger" }
+          .status,
       )
 
       outbox.deleteFailure = null
@@ -627,11 +631,15 @@ class ChatControllerOutboxTest {
       assertFalse(chat.healthOk.value)
       assertEquals(
         ChatOutboxStatus.Sending,
-        outbox.rows.values.first { it.text == "ambiguous" }.status,
+        outbox.rows.values
+          .first { it.text == "ambiguous" }
+          .status,
       )
       assertEquals(
         ChatOutboxStatus.Queued,
-        outbox.rows.values.first { it.text == "younger" }.status,
+        outbox.rows.values
+          .first { it.text == "younger" }
+          .status,
       )
 
       outbox.failedStatusUpdateFailure = null
@@ -649,7 +657,12 @@ class ChatControllerOutboxTest {
       restarted.handleGatewayEvent("health", null)
       advanceUntilIdle()
       assertEquals(listOf("ambiguous", "younger"), gateway.sentMessages)
-      assertEquals(ChatOutboxStatus.Failed, restarted.outboxItems.value.single().status)
+      assertEquals(
+        ChatOutboxStatus.Failed,
+        restarted.outboxItems.value
+          .single()
+          .status,
+      )
     }
 
   @Test
@@ -720,11 +733,15 @@ class ChatControllerOutboxTest {
       assertFalse(chat.healthOk.value)
       assertEquals(
         ChatOutboxStatus.Sending,
-        outbox.rows.values.first { it.text == "older" }.status,
+        outbox.rows.values
+          .first { it.text == "older" }
+          .status,
       )
       assertEquals(
         ChatOutboxStatus.Queued,
-        outbox.rows.values.first { it.text == "younger" }.status,
+        outbox.rows.values
+          .first { it.text == "younger" }
+          .status,
       )
 
       outbox.queuedStatusUpdateFailure = null
@@ -807,7 +824,12 @@ class ChatControllerOutboxTest {
       advanceUntilIdle()
 
       assertTrue(gateway.sentMessages.isEmpty())
-      assertEquals(ChatOutboxStatus.Failed, chat.outboxItems.value.single().status)
+      assertEquals(
+        ChatOutboxStatus.Failed,
+        chat.outboxItems.value
+          .single()
+          .status,
+      )
 
       chat.retryOutboxCommand("migrated-ambiguous")
       advanceUntilIdle()
