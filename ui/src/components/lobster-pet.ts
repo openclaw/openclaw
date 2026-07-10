@@ -6,7 +6,14 @@
 // every new session hatches a slightly different lobster.
 import { html, LitElement, nothing, svg, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
-import { recordLobsterVisit } from "./lobster-dex.ts";
+import {
+  LOBSTER_FAMILIARITY_TUNING,
+  getLobsterFamiliarity,
+  recordLobsterArrivalStats,
+  recordLobsterShoo,
+  recordLobsterVisit,
+  type LobsterFamiliarity,
+} from "./lobster-dex.ts";
 
 export type LobsterPetAct =
   | "wave"
@@ -823,6 +830,8 @@ export class LobsterPet extends LitElement {
   private shellTimer: number | null = null;
   private passerTimer: number | null = null;
   private passerEndTimer: number | null = null;
+  private familiarity: LobsterFamiliarity = { tier: "regular", wary: false, visits: 0, shoos: 0 };
+  private greetedThisLoad = false;
 
   private look: LobsterPetLook | null = null;
   private rng: () => number = mulberry32(0);
@@ -902,6 +911,8 @@ export class LobsterPet extends LitElement {
       }
       this.moltPlanned = isLobsterMoltLoad(this.seed);
       this.twinPlanned = isLobsterTwinLoad(this.seed);
+      this.familiarity = getLobsterFamiliarity();
+      this.greetedThisLoad = false;
       this.scheduleVisits();
       this.schedulePasser();
       // The first update takes this branch, so the mode-change branch below
@@ -944,8 +955,12 @@ export class LobsterPet extends LitElement {
       if (this.presence === "out") {
         this.rollPerch();
         if (this.look) {
-          // Every genuine arrival (visit or offline summon) logs the palette.
-          recordLobsterVisit(this.look.palette.id);
+          // Every genuine arrival (visit or offline summon) logs the palette
+          // with the first visitor's name, and bumps the familiarity count.
+          recordLobsterVisit(this.look.palette.id, {
+            name: lobsterPetName(this.look, this.seed),
+          });
+          recordLobsterArrivalStats();
         }
       }
       this.presence = "in";
@@ -973,6 +988,16 @@ export class LobsterPet extends LitElement {
     this.enterTimer = window.setTimeout(() => {
       this.enterTimer = null;
       this.entering = false;
+      // Old friends get a hello: the first arrival of the load waves at you.
+      if (
+        !this.greetedThisLoad &&
+        this.familiarity.tier === "friend" &&
+        this.presence === "in" &&
+        !prefersReducedMotion()
+      ) {
+        this.greetedThisLoad = true;
+        this.performAct("wave");
+      }
     }, ENTER_MS);
     this.scheduleNextAct();
   }
@@ -1105,6 +1130,7 @@ export class LobsterPet extends LitElement {
   private readonly handleShoo = (event: Event) => {
     event.preventDefault();
     this.dismissed = true;
+    recordLobsterShoo();
   };
 
   private clearActTimers() {
@@ -1137,7 +1163,11 @@ export class LobsterPet extends LitElement {
     if (this.visitRng() < VISIT_SHY_CHANCE) {
       return;
     }
-    this.armArrival(randomBetween(this.visitRng, VISIT_FIRST_DELAY_MS[0], VISIT_FIRST_DELAY_MS[1]));
+    const tuning = LOBSTER_FAMILIARITY_TUNING[this.familiarity.tier];
+    this.armArrival(
+      randomBetween(this.visitRng, VISIT_FIRST_DELAY_MS[0], VISIT_FIRST_DELAY_MS[1]) *
+        tuning.firstDelayMul,
+    );
   }
 
   private armArrival(delayMs: number) {
@@ -1145,7 +1175,10 @@ export class LobsterPet extends LitElement {
       this.visitTimer = null;
       this.rollPerch();
       this.scheduledVisiting = true;
-      this.armDeparture(randomBetween(this.visitRng, VISIT_STAY_MS[0], VISIT_STAY_MS[1]));
+      this.armDeparture(
+        randomBetween(this.visitRng, VISIT_STAY_MS[0], VISIT_STAY_MS[1]) *
+          LOBSTER_FAMILIARITY_TUNING[this.familiarity.tier].stayMul,
+      );
     }, delayMs);
   }
 
@@ -1153,7 +1186,11 @@ export class LobsterPet extends LitElement {
     this.visitTimer = window.setTimeout(() => {
       this.visitTimer = null;
       this.scheduledVisiting = false;
-      this.armArrival(randomBetween(this.visitRng, VISIT_GAP_MS[0], VISIT_GAP_MS[1]));
+      const tuning = LOBSTER_FAMILIARITY_TUNING[this.familiarity.tier];
+      const waryMul = this.familiarity.wary ? LOBSTER_FAMILIARITY_TUNING.waryGapMul : 1;
+      this.armArrival(
+        randomBetween(this.visitRng, VISIT_GAP_MS[0], VISIT_GAP_MS[1]) * tuning.gapMul * waryMul,
+      );
     }, stayMs);
   }
 

@@ -446,6 +446,7 @@ export const ar: TranslationMap = {
       lobsterVisitsOff: "لا يزور أبدًا",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "تمت زيارة {seen}/{total}",
+      lobsterdexFirstVisited: "{name} · أول زيارة في {date}",
     },
     security: {
       browserEnabled: "Browser enabled",

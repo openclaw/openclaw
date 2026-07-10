@@ -447,6 +447,7 @@ export const vi: TranslationMap = {
       lobsterVisitsOff: "Không bao giờ ghé thăm",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "Đã ghé thăm {seen}/{total}",
+      lobsterdexFirstVisited: "{name} · truy cập lần đầu {date}",
     },
     security: {
       browserEnabled: "Browser enabled",

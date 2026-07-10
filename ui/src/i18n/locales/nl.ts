@@ -451,6 +451,7 @@ export const nl: TranslationMap = {
       lobsterVisitsOff: "Komt nooit langs",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "{seen}/{total} bezocht",
+      lobsterdexFirstVisited: "{name} · voor het eerst bezocht op {date}",
     },
     security: {
       browserEnabled: "Browser enabled",

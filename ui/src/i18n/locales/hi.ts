@@ -447,6 +447,7 @@ export const hi: TranslationMap = {
       lobsterVisitsOff: "कभी नहीं आता",
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "{seen}/{total} देखे गए",
+      lobsterdexFirstVisited: "{name} · पहली बार {date} को देखा गया",
     },
     security: {
       browserEnabled: "ब्राउज़र सक्षम",
