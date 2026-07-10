@@ -63,6 +63,7 @@ import {
 const plan = resolveNpmPublishPlan(
   process.env.PACKAGE_VERSION ?? "",
   process.env.CURRENT_BETA_VERSION,
+  process.env.OPENCLAW_PLUGIN_NPM_PUBLISH_TAG,
 );
 const auth = resolveNpmDistTagMirrorAuth({
   nodeAuthToken: process.env.NODE_AUTH_TOKEN,
