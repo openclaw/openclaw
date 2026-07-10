@@ -122,7 +122,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -2347,15 +2346,11 @@ private fun PermissionRow(row: PermissionRowModel) {
           text = row.title,
           style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp),
           color = ClawTheme.colors.text,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
         )
         Text(
           text = row.subtitle,
           style = ClawTheme.type.body,
           color = ClawTheme.colors.textMuted,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
         )
       }
       Icon(
