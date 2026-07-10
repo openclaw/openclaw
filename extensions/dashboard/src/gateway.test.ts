@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
+import { dashboardBroadcast, resetDashboardBroadcastForTest } from "./broadcast.js";
 import { registerDashboardGatewayMethods } from "./gateway.js";
 import { DashboardStore } from "./store.js";
 
@@ -265,6 +266,25 @@ describe("dashboard gateway methods", () => {
       ).toBe(true);
       // create + add + update + move + setLayout + scaffold + approve + replace + undo
       expect(broadcast).toHaveBeenCalledTimes(9);
+    });
+  });
+});
+
+describe("dashboard broadcast handle", () => {
+  it("remembers the server broadcast so agent tools can announce changes off-request", async () => {
+    resetDashboardBroadcastForTest();
+    expect(dashboardBroadcast()).toBeUndefined();
+
+    await withTempStateDir(async (stateDir) => {
+      const { api, methods } = createApi();
+      registerDashboardGatewayMethods({ api, store: new DashboardStore({ stateDir }) });
+      const broadcast = vi.fn();
+
+      // A read populates the slot; agent turns started from a channel or cron have
+      // no gateway request scope and rely on it.
+      await callMethod(methods.get("dashboard.workspace.get")!, {}, broadcast);
+
+      expect(dashboardBroadcast()).toBe(broadcast);
     });
   });
 });

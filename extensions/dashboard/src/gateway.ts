@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { rememberDashboardBroadcast } from "./broadcast.js";
 import { resolveBinding, type ResolveBindingOptions } from "./data-read.js";
 import { scaffoldDashboardWidget } from "./scaffold.js";
 import {
@@ -332,6 +333,8 @@ function broadcastChange(
   broadcast: GatewayBroadcast,
   params: { doc: WorkspaceDoc; actor: DashboardActor; changedTabSlug?: string },
 ) {
+  // Agent tool calls outside a gateway request reuse this handle; see broadcast.ts.
+  rememberDashboardBroadcast(broadcast);
   broadcast("plugin.dashboard.changed", {
     workspaceVersion: params.doc.workspaceVersion,
     ...(params.changedTabSlug ? { changedTabSlug: params.changedTabSlug } : {}),
@@ -356,8 +359,9 @@ export function registerDashboardGatewayMethods(options: DashboardGatewayMethodO
 
   api.registerGatewayMethod(
     "dashboard.workspace.get",
-    async ({ respond }) => {
+    async ({ respond, context }) => {
       try {
+        rememberDashboardBroadcast(context.broadcast);
         const doc = store.read();
         respond(true, { doc, workspaceVersion: doc.workspaceVersion });
       } catch (error) {

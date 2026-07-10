@@ -6,6 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { Type } from "typebox";
+import { dashboardBroadcast, type DashboardBroadcast } from "./broadcast.js";
 import { resolveBinding, type ResolveBindingOptions } from "./data-read.js";
 import { scaffoldDashboardWidget } from "./scaffold.js";
 import {
@@ -20,8 +21,6 @@ import {
   type WorkspaceDoc,
 } from "./schema.js";
 import { DashboardStore } from "./store.js";
-
-export type DashboardBroadcast = (event: string, payload: unknown) => void;
 
 type DashboardToolParams = {
   api: OpenClawPluginApi;
@@ -414,7 +413,12 @@ function broadcastChange(
 function resolveDashboardBroadcast(
   broadcast: DashboardBroadcast | undefined,
 ): DashboardBroadcast | undefined {
-  return broadcast ?? getPluginRuntimeGatewayRequestScope()?.context?.broadcast;
+  // The request scope only exists when the turn originated from a gateway RPC.
+  // A channel/cron/heartbeat turn falls back to the remembered server handle, so
+  // an agent edit still reaches every open Control UI.
+  return (
+    broadcast ?? getPluginRuntimeGatewayRequestScope()?.context?.broadcast ?? dashboardBroadcast()
+  );
 }
 
 async function runMutation(params: MutationParams) {

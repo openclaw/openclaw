@@ -4,7 +4,10 @@
   "description": "Composable dashboard workspace document and control-plane RPC backend.",
   "enabledByDefault": true,
   "activation": {
-    "onStartup": true
+    "onStartup": true,
+    "onCommands": [
+      "workspaces"
+    ]
   },
   "configSchema": {
     "type": "object",

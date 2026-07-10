@@ -122,14 +122,14 @@ describe("dashboard CLI", () => {
 
       await captureStdout(async () => {
         await program.parseAsync(
-          ["dashboard", "tabs", "create", "--title", "Finance Ops", "--slug", "finance"],
+          ["workspaces", "tabs", "create", "--title", "Finance Ops", "--slug", "finance"],
           { from: "user" },
         );
       });
       await captureStdout(async () => {
         await program.parseAsync(
           [
-            "dashboard",
+            "workspaces",
             "widgets",
             "add",
             "--tab",
@@ -148,7 +148,7 @@ describe("dashboard CLI", () => {
       });
 
       const output = await captureStdout(async () => {
-        await program.parseAsync(["dashboard", "widgets", "list", "--tab", "finance", "--json"], {
+        await program.parseAsync(["workspaces", "widgets", "list", "--tab", "finance", "--json"], {
           from: "user",
         });
       });
@@ -188,7 +188,7 @@ describe("dashboard CLI", () => {
       await fs.writeFile(filePath, JSON.stringify(replacement), "utf8");
 
       await captureStdout(async () => {
-        await program.parseAsync(["dashboard", "layout", "set", "--file", filePath], {
+        await program.parseAsync(["workspaces", "layout", "set", "--file", filePath], {
           from: "user",
         });
       });
@@ -196,7 +196,7 @@ describe("dashboard CLI", () => {
 
       await fs.writeFile(filePath, JSON.stringify({ schemaVersion: 1 }), "utf8");
       await expect(
-        program.parseAsync(["dashboard", "layout", "set", "--file", filePath], {
+        program.parseAsync(["workspaces", "layout", "set", "--file", filePath], {
           from: "user",
         }),
       ).rejects.toThrow("workspaceVersion");
@@ -215,12 +215,12 @@ describe("dashboard CLI", () => {
         });
       };
 
-      await run(["dashboard", "tabs", "create", "--title", "Ops", "--slug", "ops"]);
-      await run(["dashboard", "tabs", "hide", "ops"]);
-      await run(["dashboard", "tabs", "show", "ops"]);
-      await run(["dashboard", "tabs", "reorder", "ops", "main"]);
+      await run(["workspaces", "tabs", "create", "--title", "Ops", "--slug", "ops"]);
+      await run(["workspaces", "tabs", "hide", "ops"]);
+      await run(["workspaces", "tabs", "show", "ops"]);
+      await run(["workspaces", "tabs", "reorder", "ops", "main"]);
       await run([
-        "dashboard",
+        "workspaces",
         "widgets",
         "add",
         "--tab",
@@ -235,7 +235,7 @@ describe("dashboard CLI", () => {
         "0,0,4,2",
       ]);
       await run([
-        "dashboard",
+        "workspaces",
         "widgets",
         "update",
         "--tab",
@@ -250,7 +250,7 @@ describe("dashboard CLI", () => {
         "false",
       ]);
       await run([
-        "dashboard",
+        "workspaces",
         "widgets",
         "move",
         "--tab",
@@ -260,15 +260,15 @@ describe("dashboard CLI", () => {
         "--grid",
         "4,0,4,2",
       ]);
-      await run(["dashboard", "tabs", "create", "--title", "Other", "--slug", "other"]);
-      await run(["dashboard", "widgets", "move", "--id", "notes", "--to-tab", "other"]);
-      await run(["dashboard", "widgets", "remove", "--tab", "other", "--id", "notes"]);
+      await run(["workspaces", "tabs", "create", "--title", "Other", "--slug", "other"]);
+      await run(["workspaces", "widgets", "move", "--id", "notes", "--to-tab", "other"]);
+      await run(["workspaces", "widgets", "remove", "--tab", "other", "--id", "notes"]);
       const layout = await captureStdout(async () => {
-        await program.parseAsync(["dashboard", "layout", "get", "--json"], { from: "user" });
+        await program.parseAsync(["workspaces", "layout", "get", "--json"], { from: "user" });
       });
       expect(JSON.parse(layout)).toMatchObject({ doc: { tabs: expect.any(Array) } });
-      await run(["dashboard", "layout", "undo"]);
-      await run(["dashboard", "tabs", "delete", "other"]);
+      await run(["workspaces", "layout", "undo"]);
+      await run(["workspaces", "tabs", "delete", "other"]);
 
       const doc = store.read();
       expect(doc.prefs.tabOrder).toContain("ops");
@@ -284,7 +284,7 @@ describe("dashboard CLI", () => {
 
       await captureStdout(async () => {
         await program.parseAsync(
-          ["dashboard", "tabs", "create", "--title", "Ops", "--slug", "ops"],
+          ["workspaces", "tabs", "create", "--title", "Ops", "--slug", "ops"],
           {
             from: "user",
           },
@@ -292,12 +292,12 @@ describe("dashboard CLI", () => {
       });
 
       await expect(
-        program.parseAsync(["dashboard", "tabs", "reorder", "Bad"], { from: "user" }),
+        program.parseAsync(["workspaces", "tabs", "reorder", "Bad"], { from: "user" }),
       ).rejects.toThrow("order[0] is invalid");
       await expect(
         program.parseAsync(
           [
-            "dashboard",
+            "workspaces",
             "widgets",
             "add",
             "--tab",
@@ -311,14 +311,14 @@ describe("dashboard CLI", () => {
         ),
       ).rejects.toThrow("grid must be x,y,w,h");
       await expect(
-        program.parseAsync(["dashboard", "widgets", "update", "--tab", "ops", "--id", "missing"], {
+        program.parseAsync(["workspaces", "widgets", "update", "--tab", "ops", "--id", "missing"], {
           from: "user",
         }),
       ).rejects.toThrow("at least one patch option is required");
       await expect(
         program.parseAsync(
           [
-            "dashboard",
+            "workspaces",
             "widgets",
             "move",
             "--tab",
@@ -334,10 +334,10 @@ describe("dashboard CLI", () => {
         ),
       ).rejects.toThrow("not both");
       await expect(
-        program.parseAsync(["dashboard", "widget-scaffold", "bad/name"], { from: "user" }),
+        program.parseAsync(["workspaces", "widget-scaffold", "bad/name"], { from: "user" }),
       ).rejects.toThrow("widget name is invalid");
       await expect(
-        program.parseAsync(["dashboard", "widget-scaffold", "."], { from: "user" }),
+        program.parseAsync(["workspaces", "widget-scaffold", "."], { from: "user" }),
       ).rejects.toThrow("widget name is invalid");
     });
   });
@@ -350,7 +350,7 @@ describe("dashboard CLI", () => {
 
       await captureStdout(async () => {
         await program.parseAsync(
-          ["dashboard", "widget-scaffold", "revenue-chart", "--title", "Revenue Chart"],
+          ["workspaces", "widget-scaffold", "revenue-chart", "--title", "Revenue Chart"],
           { from: "user" },
         );
       });
@@ -376,7 +376,7 @@ describe("dashboard CLI", () => {
       });
 
       await captureStdout(async () => {
-        await program.parseAsync(["dashboard", "widget-approve", "revenue-chart"], {
+        await program.parseAsync(["workspaces", "widget-approve", "revenue-chart"], {
           from: "user",
         });
       });

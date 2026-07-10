@@ -123,10 +123,17 @@ async function callDashboardGateway(
   options: GatewayOptions,
   params?: unknown,
 ): Promise<unknown> {
-  return await callGatewayFromCli(method, options, params, {
-    mode: "cli",
-    scopes: ["operator.write", "operator.read"],
-  });
+  // `dashboard.widget.approve` is the only approvals-scoped method here: approving
+  // agent-authored widget code is a separate decision from editing a layout, so the
+  // connection asks for that scope only when it is about to make it.
+  // Match `src/gateway/operator-approvals-client.ts`: ask for the approvals scope
+  // alone. A paired device approves scope sets, so requesting a superset here is
+  // rejected as "asking for more scopes than currently approved".
+  const scopes =
+    method === "dashboard.widget.approve"
+      ? (["operator.approvals"] as const)
+      : (["operator.write", "operator.read"] as const);
+  return await callGatewayFromCli(method, options, params, { mode: "cli", scopes: [...scopes] });
 }
 
 function readWorkspaceResult(value: unknown): { doc: WorkspaceDoc; workspaceVersion: number } {
@@ -212,7 +219,9 @@ function addGatewayOptions(command: Command): Command {
 }
 
 export function registerDashboardCli(options: RegisterDashboardCliOptions): void {
-  const dashboard = options.program.command("dashboard").description("Manage dashboard workspaces");
+  const dashboard = options.program
+    .command("workspaces")
+    .description("Manage dashboard workspaces");
   const tabs = dashboard.command("tabs").description("Manage dashboard tabs");
   const widgets = dashboard.command("widgets").description("Manage dashboard widgets");
   const layout = dashboard.command("layout").description("Manage dashboard layout documents");
@@ -458,7 +467,7 @@ export function registerDashboardCli(options: RegisterDashboardCliOptions): void
     }
     const dir = isRecord(result) && typeof result.dir === "string" ? result.dir : name;
     writeLine(`created ${dir}`);
-    writeLine(`pending approval; run: openclaw dashboard widget-approve ${name}`);
+    writeLine(`pending approval; run: openclaw workspaces widget-approve ${name}`);
   });
 
   addGatewayOptions(

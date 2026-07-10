@@ -20,7 +20,10 @@ export default definePluginEntry({
       {
         descriptors: [
           {
-            name: "dashboard",
+            // NOT "dashboard": core already owns that command (it opens the
+            // Control UI), and a plugin CLI group that overlaps a core command is
+            // silently skipped at registration. Named for the tab it drives.
+            name: "workspaces",
             description: "Manage dashboard workspace tabs and widgets",
             hasSubcommands: true,
           },

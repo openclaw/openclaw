@@ -378,7 +378,7 @@ describe("dashboard tools", () => {
         return true;
       });
       try {
-        await program.parseAsync(["dashboard", "tabs", "list", "--json"], { from: "user" });
+        await program.parseAsync(["workspaces", "tabs", "list", "--json"], { from: "user" });
       } finally {
         write.mockRestore();
       }
