@@ -50,6 +50,12 @@ interface BackgroundRefreshOptions {
   randomOffsetMs?: number;
   minRefreshIntervalMs?: number;
   retryDelayMs?: number;
+  /** Maximum delay between retries after exponential backoff (default: 120s). */
+  maxRetryDelayMs?: number;
+  /** Consecutive failures before circuit breaker pauses retries (default: 6). */
+  circuitBreakerThreshold?: number;
+  /** Duration to pause retry loop after circuit breaker trips (default: 5min). */
+  circuitBreakerCooldownMs?: number;
 }
 
 function resolveTokenExpiresInSeconds(value: unknown): number {
@@ -61,6 +67,47 @@ function resolveTokenExpiresInSeconds(value: unknown): number {
     return DEFAULT_TOKEN_EXPIRES_IN_SECONDS;
   }
   return 0;
+}
+
+/**
+ * Calculate retry delay with exponential backoff, jitter, and circuit breaker.
+ *
+ * - Exponential backoff: `baseDelayMs * 2^(retry-1)`, capped at `maxRetryDelayMs`.
+ * - Jitter: ±30% (random 70%-130%) to avoid thundering herd.
+ * - Circuit breaker: after `circuitBreakerThreshold` consecutive failures, pause
+ *   for `circuitBreakerCooldownMs` to reduce server load and log noise.
+ *
+ * Exported for testing.
+ */
+export function resolveRetryDelayMs(params: {
+  retryDelayMs: number;
+  maxRetryDelayMs: number;
+  circuitBreakerThreshold: number;
+  circuitBreakerCooldownMs: number;
+  consecutiveRetries: number;
+}): number {
+  const {
+    retryDelayMs,
+    maxRetryDelayMs,
+    circuitBreakerThreshold,
+    circuitBreakerCooldownMs,
+    consecutiveRetries,
+  } = params;
+
+  // Circuit breaker: after threshold, pause for cooldown (no jitter)
+  if (consecutiveRetries > circuitBreakerThreshold) {
+    return circuitBreakerCooldownMs;
+  }
+
+  // Exponential backoff: baseDelay * 2^(retry-1), capped at max
+  const exponentialDelay = Math.min(
+    retryDelayMs * Math.pow(2, consecutiveRetries - 1),
+    maxRetryDelayMs,
+  );
+
+  // Jitter: ±30% (random 70%-130%)
+  const jitter = 0.7 + Math.random() * 0.6;
+  return Math.round(exponentialDelay * jitter);
 }
 
 /**
@@ -167,6 +214,9 @@ export class TokenManager {
       randomOffsetMs = 30 * 1000,
       minRefreshIntervalMs = 60 * 1000,
       retryDelayMs = 5 * 1000,
+      maxRetryDelayMs = 120 * 1000,
+      circuitBreakerThreshold = 6,
+      circuitBreakerCooldownMs = 5 * 60 * 1000,
     } = options ?? {};
 
     const controller = new AbortController();
@@ -174,11 +224,13 @@ export class TokenManager {
     const { signal } = controller;
 
     const loop = async () => {
+      let consecutiveRetries = 0;
       this.logger?.info?.(`[qqbot:token:${appId}] Background refresh started`);
 
       while (!signal.aborted) {
         try {
           await this.getAccessToken(appId, clientSecret);
+          consecutiveRetries = 0;
           const cached = this.cache.get(appId);
 
           if (cached) {
@@ -199,10 +251,18 @@ export class TokenManager {
           if (signal.aborted) {
             break;
           }
+          consecutiveRetries++;
+          const delayMs = resolveRetryDelayMs({
+            retryDelayMs,
+            maxRetryDelayMs,
+            circuitBreakerThreshold,
+            circuitBreakerCooldownMs,
+            consecutiveRetries,
+          });
           this.logger?.error?.(
-            `[qqbot:token:${appId}] Background refresh failed: ${formatErrorMessage(err)}`,
+            `[qqbot:token:${appId}] Background refresh failed (retry ${consecutiveRetries} in ${Math.round(delayMs / 1000)}s): ${formatErrorMessage(err)}`,
           );
-          await this.abortableSleep(retryDelayMs, signal);
+          await this.abortableSleep(delayMs, signal);
         }
       }
 
