@@ -365,7 +365,8 @@ describe("Slack live QA runtime helpers", () => {
               },
             },
           ],
-          text: accessibleText,
+          // Slack history flattens the top-level accessibility newlines on readback.
+          text: accessibleText.replace(/\s+/gu, " "),
           ts: "2.000000",
           user: "U999999999",
         },
@@ -405,7 +406,7 @@ describe("Slack live QA runtime helpers", () => {
     const history = vi.fn(async () => ({
       messages: [
         {
-          text: accessibleText,
+          text: accessibleText.replace(/\s+/gu, " "),
           ts: "2.000000",
           user: "U999999999",
         },

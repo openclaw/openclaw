@@ -1005,8 +1005,17 @@ function isSutSlackMessage(message: SlackMessage, sutIdentity: SlackAuthIdentity
   );
 }
 
+// Slack history can flatten top-level accessibility newlines on readback.
+// Normalize only whitespace; the native chart structure stays byte-for-byte strict below.
+function normalizeSlackAccessibleText(value: string) {
+  return value.trim().replace(/\s+/gu, " ");
+}
+
 function isExpectedSlackNativeChartMessage(message: SlackMessage, expectedAccessibleText: string) {
-  if (message.text !== expectedAccessibleText) {
+  if (
+    normalizeSlackAccessibleText(message.text ?? "") !==
+    normalizeSlackAccessibleText(expectedAccessibleText)
+  ) {
     return false;
   }
   return (message.blocks ?? []).some((value) => {
