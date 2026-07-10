@@ -394,7 +394,6 @@ describe("createTelegramBot", () => {
       expect.objectContaining({
         body: "Bot just replied",
         sender: "OpenClaw (you)",
-        sender_id: "0",
       }),
     ]);
   });
@@ -412,6 +411,8 @@ describe("createTelegramBot", () => {
       expectedSender: "Configured Agent (you)",
       omitMe: false,
       senderBusinessBot: undefined,
+      chatId: 42,
+      replyMessageId: 800,
     },
     {
       caseName: "does not trust a user-controlled self suffix",
@@ -424,6 +425,8 @@ describe("createTelegramBot", () => {
       expectedSender: "Alex (you) (Telegram sender)",
       omitMe: false,
       senderBusinessBot: undefined,
+      chatId: 43,
+      replyMessageId: 810,
     },
     {
       caseName: "authenticates the sender bot for a Telegram Business reply",
@@ -441,6 +444,8 @@ describe("createTelegramBot", () => {
         first_name: "Telegram Bot Name",
         username: "openclaw_bot",
       },
+      chatId: 44,
+      replyMessageId: 820,
     },
     {
       caseName: "falls back to startup bot metadata when context metadata is missing",
@@ -454,116 +459,123 @@ describe("createTelegramBot", () => {
       expectedSender: "Configured Agent (you)",
       omitMe: true,
       senderBusinessBot: undefined,
+      chatId: 45,
+      replyMessageId: 830,
     },
-  ])("$caseName", async ({ replyFrom, expectedSender, omitMe, senderBusinessBot }) => {
-    onSpy.mockClear();
-    replySpy.mockClear();
-    const storePath = `/tmp/openclaw-telegram-self-projection-${process.pid}-${Date.now()}.json`;
-    const cfg = {
-      channels: {
-        telegram: {
-          name: "  Configured Agent  ",
-          dmPolicy: "open",
-          allowFrom: ["*"],
-        },
-      },
-      session: { store: storePath },
-    } satisfies OpenClawConfig;
-    loadConfig.mockReturnValue(cfg);
-    createTelegramBot({
-      token: "tok",
-      config: cfg,
-      botInfo: {
-        id: 999,
-        is_bot: true,
-        first_name: "Telegram Bot Name",
-        username: "openclaw_bot",
-        can_join_groups: true,
-        can_read_all_group_messages: false,
-        can_manage_bots: false,
-        supports_inline_queries: false,
-        supports_join_request_queries: false,
-        can_connect_to_business: false,
-        has_main_web_app: false,
-        has_topics_enabled: false,
-        allows_users_to_create_topics: false,
-      },
-    });
-
-    try {
-      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-      await handler({
-        ...(omitMe
-          ? {}
-          : {
-              me: {
-                id: 999,
-                is_bot: true,
-                first_name: "Telegram Bot Name",
-                username: "openclaw_bot",
-              },
-            }),
-        getFile: async () => ({ download: async () => new Uint8Array() }),
-        message: {
-          chat: { id: 42, type: "private", first_name: "Pat" },
-          text: "Following up",
-          date: 1_736_380_800,
-          message_id: 801,
-          from: { id: 123, is_bot: false, first_name: "Pat" },
-          reply_to_message: {
-            chat: { id: 42, type: "private", first_name: "Pat" },
-            date: 1_736_380_700,
-            from: replyFrom,
-            ...(senderBusinessBot ? { sender_business_bot: senderBusinessBot } : {}),
-            message_id: 800,
-            text: "Earlier reply",
+  ])(
+    "$caseName",
+    async ({ replyFrom, expectedSender, omitMe, senderBusinessBot, chatId, replyMessageId }) => {
+      onSpy.mockClear();
+      replySpy.mockClear();
+      const storePath = `/tmp/openclaw-telegram-self-projection-${process.pid}-${chatId}.json`;
+      const cfg = {
+        channels: {
+          telegram: {
+            name: "  Configured Agent  ",
+            dmPolicy: "open",
+            allowFrom: ["*"],
           },
         },
+        session: { store: storePath },
+      } satisfies OpenClawConfig;
+      loadConfig.mockReturnValue(cfg);
+      createTelegramBot({
+        token: "tok",
+        config: cfg,
+        botInfo: {
+          id: 999,
+          is_bot: true,
+          first_name: "Telegram Bot Name",
+          username: "openclaw_bot",
+          can_join_groups: true,
+          can_read_all_group_messages: false,
+          can_manage_bots: false,
+          supports_inline_queries: false,
+          supports_join_request_queries: false,
+          can_connect_to_business: false,
+          has_main_web_app: false,
+          has_topics_enabled: false,
+          allows_users_to_create_topics: false,
+        },
       });
 
-      expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = mockMsgContextArg(
-        replySpy as unknown as MockCallSource,
-        0,
-        0,
-        "replySpy call",
-      );
-      expect(payload.ReplyChain).toEqual([
-        expect.objectContaining({
-          messageId: "800",
+      try {
+        const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+        await handler({
+          ...(omitMe
+            ? {}
+            : {
+                me: {
+                  id: 999,
+                  is_bot: true,
+                  first_name: "Telegram Bot Name",
+                  username: "openclaw_bot",
+                },
+              }),
+          getFile: async () => ({ download: async () => new Uint8Array() }),
+          message: {
+            chat: { id: chatId, type: "private", first_name: "Pat" },
+            text: "Following up",
+            date: 1_736_380_800,
+            message_id: replyMessageId + 1,
+            from: { id: 123, is_bot: false, first_name: "Pat" },
+            reply_to_message: {
+              chat: { id: chatId, type: "private", first_name: "Pat" },
+              date: 1_736_380_700,
+              from: replyFrom,
+              ...(senderBusinessBot ? { sender_business_bot: senderBusinessBot } : {}),
+              message_id: replyMessageId,
+              text: "Earlier reply",
+            },
+          },
+        });
+
+        expect(replySpy).toHaveBeenCalledTimes(1);
+        const payload = mockMsgContextArg(
+          replySpy as unknown as MockCallSource,
+          0,
+          0,
+          "replySpy call",
+        );
+        expect(payload.ReplyChain).toEqual([
+          expect.objectContaining({
+            messageId: String(replyMessageId),
+            sender: expectedSender,
+            senderId: String(replyFrom.id),
+            senderUsername: replyFrom.username,
+          }),
+        ]);
+        const [conversationContext] = requireArray(
+          payload.UntrustedStructuredContext,
+          "structured context",
+        );
+        const messages = requireArray(
+          requireRecord(
+            requireRecord(conversationContext, "conversation context").payload,
+            "conversation context payload",
+          ).messages,
+          "conversation context messages",
+        ).map((message, index) =>
+          requireRecord(message, `conversation context message ${index + 1}`),
+        );
+        expect(
+          messages.find((message) => message.message_id === String(replyMessageId)),
+        ).toMatchObject({
           sender: expectedSender,
-          senderId: String(replyFrom.id),
-          senderUsername: replyFrom.username,
-        }),
-      ]);
-      const [conversationContext] = requireArray(
-        payload.UntrustedStructuredContext,
-        "structured context",
-      );
-      const messages = requireArray(
-        requireRecord(
-          requireRecord(conversationContext, "conversation context").payload,
-          "conversation context payload",
-        ).messages,
-        "conversation context messages",
-      ).map((message, index) =>
-        requireRecord(message, `conversation context message ${index + 1}`),
-      );
-      expect(messages.find((message) => message.message_id === "800")).toMatchObject({
-        sender: expectedSender,
-        sender_id: String(replyFrom.id),
-        sender_username: replyFrom.username,
-      });
-      if (replyFrom.id === 999 || senderBusinessBot?.id === 999) {
-        const promptJson = JSON.stringify({ replyChain: payload.ReplyChain, messages });
-        expect(promptJson).not.toContain("Provisioning");
-        expect(promptJson).not.toContain("Placeholder");
+          sender_id: String(replyFrom.id),
+          sender_username: replyFrom.username,
+        });
+        if (replyFrom.id === 999 || senderBusinessBot?.id === 999) {
+          const promptJson = JSON.stringify({ replyChain: payload.ReplyChain, messages });
+          expect(promptJson).not.toContain("Provisioning");
+          expect(promptJson).not.toContain("Placeholder");
+        }
+      } finally {
+        await rm(storePath, { force: true });
+        await rm(`${storePath}.telegram-messages.json`, { force: true });
       }
-    } finally {
-      await rm(storePath, { force: true });
-      await rm(`${storePath}.telegram-messages.json`, { force: true });
-    }
-  });
+    },
+  );
 
   it("uses the live allowlist when authorizing callbacks", async () => {
     onSpy.mockClear();
