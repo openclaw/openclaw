@@ -1225,7 +1225,6 @@ export function scheduleFollowupDrain(
             const aggregateOwner = resolveAggregateOwner(activeGroupItems);
             const cancellation = createAggregateCancellation(activeGroupItems);
             let admitted = false;
-            removeQueuedItemsByRef(queue.items, activeGroupItems);
             const restoreGroupItems = (groupItemsToRestore: FollowupRun[]) => {
               const missingItems = groupItemsToRestore.filter(
                 (item) => !queue.items.includes(item),
@@ -1312,6 +1311,7 @@ export function scheduleFollowupDrain(
             if (!admitted) {
               const canceledSources = activeGroupItems.filter(isFollowupRunAborted);
               if (canceledSources.length > 0) {
+                removeQueuedItemsByRef(queue.items, canceledSources);
                 for (const item of canceledSources) {
                   completeFollowupRunLifecycle(item);
                 }

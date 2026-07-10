@@ -1709,7 +1709,8 @@ export const registerTelegramHandlers = ({
           },
           spooledReplayAbortSignal: params.spooledReplayAbortSignal,
           spooledReplayParticipant: processingParticipant,
-          finalizeSpooledReplayResult: async (result) => await finalizeSpooledReplayResult(result),
+          finalizeSpooledReplayResult: async (processingResult) =>
+            await finalizeSpooledReplayResult(processingResult),
           completeSpooledReplayAfterIrrevocableAdoption: async () => {
             const completed = { kind: "completed" } satisfies TelegramMessageProcessingResult;
             return await finalizeSpooledReplayResult(completed);
