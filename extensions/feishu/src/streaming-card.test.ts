@@ -581,6 +581,115 @@ describe("FeishuStreamingSession", () => {
     expect(JSON.parse(payload.element ?? "{}")).toMatchObject({ content: next });
   });
 
+  it("retains prior visible content when CardKit rejects a divergent close replacement", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(2_900);
+    const replaceBodies: string[] = [];
+    const previous = "> Thinking one\n\n---\n\nanswer";
+    const next = "> Thinking two\n\n---\n\nanswer more";
+    let sentTextWhenSettingsClosed: string | undefined;
+    let session!: FeishuStreamingSession;
+    const deps = createMemoryFetch((url, body) => {
+      if (url.pathname.includes("/auth/")) {
+        return jsonResponse({
+          code: 0,
+          msg: "ok",
+          tenant_access_token: "token",
+          expire: 7200,
+        });
+      }
+      if (url.pathname.endsWith("/elements/content")) {
+        replaceBodies.push(body);
+        return jsonResponse({ code: 19_002, msg: "replacement rejected" });
+      }
+      if (url.pathname.includes("/settings")) {
+        sentTextWhenSettingsClosed = (session as unknown as { state: StreamingSessionState }).state
+          .sentText;
+      }
+      return jsonResponse({ code: 0, msg: "ok" });
+    });
+    const log = vi.fn();
+    session = new FeishuStreamingSession(
+      {} as never,
+      { appId: "app_rejected_pending_reasoning_close", appSecret: "secret" },
+      log,
+      deps,
+    );
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_rejected_pending_reasoning_close",
+        messageId: "om_rejected_pending_reasoning_close",
+        sequence: 1,
+        currentText: previous,
+        sentText: previous,
+        hasNote: false,
+      },
+      lastUpdateTime: 2_900,
+    });
+
+    await session.update(next);
+    // close() reports whether any accepted content remains visible, even when the final rewrite fails.
+    await expect(session.close()).resolves.toBe(true);
+
+    expect(replaceBodies).toHaveLength(1);
+    expect(sentTextWhenSettingsClosed).toBe(previous);
+    expect(log).toHaveBeenCalledWith(
+      "Final replace failed: Error: Replace card content failed: replacement rejected (code=19002)",
+    );
+  });
+
+  it("logs CardKit body errors for note updates and streaming close settings", async () => {
+    const noteBodies: string[] = [];
+    const settingsBodies: string[] = [];
+    const deps = createMemoryFetch((url, body) => {
+      if (url.pathname.includes("/auth/")) {
+        return jsonResponse({
+          code: 0,
+          msg: "ok",
+          tenant_access_token: "token",
+          expire: 7200,
+        });
+      }
+      if (url.pathname.includes("/elements/note/content")) {
+        noteBodies.push(body);
+        return jsonResponse({ code: 19_003, msg: "note rejected" });
+      }
+      if (url.pathname.includes("/settings")) {
+        settingsBodies.push(body);
+        return jsonResponse({ code: 19_004, msg: "settings rejected" });
+      }
+      return jsonResponse({ code: 0, msg: "ok" });
+    });
+    const log = vi.fn();
+    const session = new FeishuStreamingSession(
+      {} as never,
+      { appId: "app_rejected_note_and_close", appSecret: "secret" },
+      log,
+      deps,
+    );
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_rejected_note_and_close",
+        messageId: "om_rejected_note_and_close",
+        sequence: 1,
+        currentText: "visible answer",
+        sentText: "visible answer",
+        hasNote: true,
+      },
+    });
+
+    await expect(session.close(undefined, { note: "model note" })).resolves.toBe(true);
+
+    expect(noteBodies).toHaveLength(1);
+    expect(settingsBodies).toHaveLength(1);
+    expect(log).toHaveBeenCalledWith(
+      "Note update failed: Error: Update card note failed: note rejected (code=19003)",
+    );
+    expect(log).toHaveBeenCalledWith(
+      "Close failed: Error: Close streaming card failed: settings rejected (code=19004)",
+    );
+  });
+
   it("retries cumulative content after a failed streaming update", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(3_000);

@@ -35,6 +35,8 @@ type FeishuStreamingDeps = {
   lookupFn?: LookupFn;
 };
 
+type CardKitResponse = { code?: number; msg?: string };
+
 /** Options for customising the initial streaming card appearance. */
 type StreamingCardOptions = {
   /** Optional header with title and color template. */
@@ -100,6 +102,20 @@ function resolveAllowedHostnames(domain?: FeishuDomain): string[] {
     }
   }
   return ["open.feishu.cn"];
+}
+
+async function assertSuccessfulCardKitResponse(
+  response: Response,
+  auditContext: string,
+  action: string,
+): Promise<void> {
+  if (!response.ok) {
+    throw new Error(`${action} failed with HTTP ${response.status}`);
+  }
+  const data = await readFeishuJsonResponse<CardKitResponse>(response, auditContext);
+  if (data.code !== 0) {
+    throw new Error(`${action} failed: ${data.msg ?? "unknown error"} (code=${String(data.code)})`);
+  }
 }
 
 async function getToken(creds: Credentials, deps?: FeishuStreamingDeps): Promise<string> {
@@ -420,18 +436,11 @@ export class FeishuStreamingSession {
         auditContext: "feishu.streaming-card.update",
       });
       try {
-        if (!response.ok) {
-          throw new Error(`Update card content failed with HTTP ${response.status}`);
-        }
-        const data = await readFeishuJsonResponse<{ code?: number; msg?: string }>(
+        await assertSuccessfulCardKitResponse(
           response,
           "feishu.streaming-card.update",
+          "Update card content",
         );
-        if (data.code !== 0) {
-          throw new Error(
-            `Update card content failed: ${data.msg ?? "unknown error"} (code=${String(data.code)})`,
-          );
-        }
       } finally {
         await release();
       }
@@ -475,10 +484,14 @@ export class FeishuStreamingSession {
         policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
         auditContext: "feishu.streaming-card.replace",
       });
-      await release();
-      if (!response.ok) {
-        onError?.(new Error(`Replace card content failed with HTTP ${response.status}`));
-        return false;
+      try {
+        await assertSuccessfulCardKitResponse(
+          response,
+          "feishu.streaming-card.replace",
+          "Replace card content",
+        );
+      } finally {
+        await release();
       }
       return true;
     } catch (error) {
@@ -583,8 +596,16 @@ export class FeishuStreamingSession {
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.note-update",
     })
-      .then(async ({ release }) => {
-        await release();
+      .then(async ({ response, release }) => {
+        try {
+          await assertSuccessfulCardKitResponse(
+            response,
+            "feishu.streaming-card.note-update",
+            "Update card note",
+          );
+        } finally {
+          await release();
+        }
       })
       .catch((e: unknown) => this.log?.(`Note update failed: ${String(e)}`));
   }
@@ -599,6 +620,8 @@ export class FeishuStreamingSession {
 
     const text = finalText ?? this.pendingText ?? this.state.currentText;
     const apiBase = resolveApiBase(this.creds.domain);
+    // A failed final rewrite does not erase previously accepted visible content.
+    // sentText advances only for an accepted write; the return value reports any visible content.
     let visibleContentSent = Boolean(this.state.sentText.trim());
 
     // Only send final update if content differs from what's already displayed.
@@ -648,8 +671,16 @@ export class FeishuStreamingSession {
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.close",
     })
-      .then(async ({ release }) => {
-        await release();
+      .then(async ({ response, release }) => {
+        try {
+          await assertSuccessfulCardKitResponse(
+            response,
+            "feishu.streaming-card.close",
+            "Close streaming card",
+          );
+        } finally {
+          await release();
+        }
       })
       .catch((e: unknown) => this.log?.(`Close failed: ${String(e)}`));
     const finalState = this.state;
