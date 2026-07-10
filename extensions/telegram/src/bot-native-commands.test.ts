@@ -15,6 +15,10 @@ import {
 } from "./bot-native-commands.menu-test-support.js";
 import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
 import { TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
+import {
+  buildTelegramModelsListChannelData,
+  buildTelegramModelsMenuButtons,
+} from "./command-ui.js";
 import { pluginCommandMocks, resetPluginCommandMocks } from "./test-support/plugin-command.js";
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
@@ -431,6 +435,67 @@ describe("registerTelegramNativeCommands", () => {
     expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast auto")).toBe("/fast auto");
     expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast default")).toBe("/fast default");
     expect(parseTelegramNativeCommandCallbackData("tgcmd:fast status")).toBeNull();
+  });
+
+  it("falls back to model browse controls when configured model callbacks exceed Telegram limits", async () => {
+    const { bot, commandHandlers, sendMessage } = createCommandBot();
+    const longModel = "hermes-3-llama-3.1-405b-extended-build-v1";
+    const params = createNativeCommandTestParams(
+      {
+        models: {
+          providers: {
+            openrouter: {
+              models: [
+                { id: "short-model", name: "Short Model" },
+                { id: longModel, name: "Hermes 405B Extended" },
+              ],
+            },
+          },
+        },
+      } as never,
+      { bot, allowFrom: [200] },
+    );
+
+    registerTelegramNativeCommands(params);
+
+    const handler = commandHandlers.get("model");
+    if (!handler) {
+      throw new Error("expected model command handler to be registered");
+    }
+    await handler(createPrivateCommandContext());
+
+    const dispatch = params.telegramDeps?.dispatchReplyWithBufferedBlockDispatcher as
+      | { mock: { calls: Array<Array<{ ctx?: Record<string, unknown> }>> } }
+      | undefined;
+    const replyMarkup = (firstCall(sendMessage)[2] as { reply_markup?: unknown } | undefined)
+      ?.reply_markup as TelegramInlineKeyboardReplyMarkup | undefined;
+    const callbackData = collectCallbackData(replyMarkup);
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(firstCall(sendMessage)[1]).toBe("Choose a model for /model.");
+    expect(callbackData).toEqual(["mdl_prov"]);
+    expect(buildTelegramModelsMenuButtons({ providers: [{ id: "openrouter", count: 2 }] })).toEqual(
+      [[{ text: "openrouter (2)", callback_data: "mdl_list_openrouter_1" }]],
+    );
+    expect(parseTelegramNativeCommandCallbackData("tgcmd:/model openrouter/short-model")).toBe(
+      "/model openrouter/short-model",
+    );
+    const modelListChannelData = buildTelegramModelsListChannelData({
+      provider: "openrouter",
+      models: ["short-model", longModel],
+      currentPage: 1,
+      totalPages: 1,
+      modelNames: new Map([[`openrouter/${longModel}`, "Hermes 405B Extended"]]),
+    });
+    const modelListButtons = (
+      modelListChannelData?.telegram as
+        | { buttons?: Array<Array<{ text: string; callback_data: string }>> }
+        | undefined
+    )?.buttons;
+    expect(modelListButtons).toContainEqual([
+      { text: "Hermes 405B Extended", callback_data: `mdl_sel_openrouter/${longModel}` },
+    ]);
+    expect(dispatch?.mock.calls).toHaveLength(0);
   });
 
   it("passes agent-scoped media roots for plugin command replies with media", async () => {
