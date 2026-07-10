@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { applyManagerRuntimeControls } from "./manager.runtime-controls.js";
 
 function createParams(overrides: { configOptionKeys: string[] }) {
-  const setConfigOption = vi.fn(async () => {});
+  const setConfigOption = vi.fn(async (_input: { key: string; value: string }) => {});
   const params = {
     sessionKey: "agent:main:acp:test",
     runtime: {
@@ -37,7 +37,7 @@ describe("applyManagerRuntimeControls", () => {
 
   it("still rejects unadvertised non-tuning config keys", async () => {
     const { params } = createParams({ configOptionKeys: ["thinking"] });
-    (params.meta as { runtimeOptions: Record<string, string> }).runtimeOptions = {
+    (params.meta as unknown as { runtimeOptions: Record<string, string> }).runtimeOptions = {
       thinking: "medium",
       model: "gpt-5.5",
     };
