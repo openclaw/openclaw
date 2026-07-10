@@ -9,6 +9,7 @@ import {
   cumulativeShippedPullRequests,
   highlightCountError,
   releaseNoteReferences,
+  standardRevertedHash,
   subtractShippedPullRequests,
   withoutExcludedContributionRecords,
 } from "../../.agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs";
@@ -32,6 +33,34 @@ function git(cwd: string, args: string[]): string {
 }
 
 describe("release-note verification", () => {
+  it("ignores nested revert markers in squash-merge bodies", () => {
+    const nestedRevert = [
+      "feat(android): render display math (#101435)",
+      "",
+      "* feat(android): render display math",
+      "",
+      ' * Revert "docs(changelog): note display math"',
+      "",
+      `This reverts commit ${"a".repeat(40)}.`,
+    ].join("\n");
+    const topLevelRevert = [
+      'Revert "fix(qa): keep smoke profile on one channel (#101173)" (#101184)',
+      "",
+      `This reverts commit ${"b".repeat(40)}.`,
+    ].join("\n");
+    const explainedTopLevelRevert = [
+      "revert: restore a provider default",
+      "",
+      "The replacement broke non-native endpoints.",
+      "",
+      `This reverts commit ${"c".repeat(40)}.`,
+    ].join("\n");
+
+    expect(standardRevertedHash(nestedRevert)).toBeUndefined();
+    expect(standardRevertedHash(topLevelRevert)).toBe("b".repeat(40));
+    expect(standardRevertedHash(explainedTopLevelRevert)).toBe("c".repeat(40));
+  });
+
   it("counts only top-level Highlights bullets and enforces the 5-8 policy input", () => {
     const highlights = [
       "### Highlights",
