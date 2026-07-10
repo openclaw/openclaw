@@ -2132,7 +2132,9 @@ describe("TelegramPollingSession", () => {
       expect(await failedUpdateIds(tempDir)).toEqual([]);
 
       // Past the handler/adoption timeout after adoption: no dead-letter.
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 150);
+      });
       expect(await failedUpdateIds(tempDir)).toEqual([]);
       expectLogExcludes(log, "timed out");
       expectLogExcludes(log, "handler-timeout");
