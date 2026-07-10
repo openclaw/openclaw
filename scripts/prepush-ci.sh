@@ -37,6 +37,7 @@ run_protocol_ci_mirror() {
 has_native_swift_changes() {
   local native_paths=(
     apps/macos
+    apps/macos-mlx-tts
     apps/ios
     apps/shared/OpenClawKit
     apps/swabble
