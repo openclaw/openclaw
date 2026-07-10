@@ -64,6 +64,7 @@ stop_existing_local_app() {
 }
 
 printf "\n▶️  Building $PRODUCT (debug, build path: $BUILD_PATH)\n"
+"${ROOT_DIR}/scripts/prepare-mobile-core.sh"
 swift build -c debug --product "$PRODUCT" --build-path "$BUILD_PATH"
 
 printf "\n⏹  Stopping existing $PRODUCT...\n"

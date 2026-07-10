@@ -46,6 +46,7 @@ jobs:
             const isScanPath = (filename) =>
               typeof filename === "string" && (
                 filename.startsWith("apps/ios/") ||
+                filename.startsWith("apps/android/mobile-core/") ||
                 filename.startsWith("apps/shared/OpenClawKit/Sources/") ||
                 filename.startsWith("apps/swabble/Sources/SwabbleKit/") ||
                 filename === ".github/workflows/ios-periphery.yml" ||
@@ -55,6 +56,7 @@ jobs:
                 filename === "scripts/check-swift-tools.sh" ||
                 filename === "scripts/format-swift.sh" ||
                 filename === "scripts/install-swift-tools.sh" ||
+                filename === "scripts/prepare-mobile-core.sh" ||
                 filename === "scripts/ios-write-swift-filelist.mjs" ||
                 filename === "scripts/lint-swift.sh"
               );
@@ -115,6 +117,7 @@ jobs:
         run: |
           set -euo pipefail
           ./scripts/ios-configure-signing.sh
+          ./scripts/prepare-mobile-core.sh
           ./scripts/ios-write-version-xcconfig.sh
           node scripts/ios-write-swift-filelist.mjs
           cd apps/ios

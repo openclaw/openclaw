@@ -295,6 +295,7 @@ ktlint {
 }
 
 dependencies {
+  implementation(project(":mobile-core"))
   val composeBom = platform(libs.androidx.compose.bom)
   implementation(composeBom)
   androidTestImplementation(composeBom)
