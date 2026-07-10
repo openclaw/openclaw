@@ -138,8 +138,8 @@ export function createBlockReplyPipeline(params: {
     void coalescer?.flush({ force: true });
   };
 
-  const sendPayload = (payload: ReplyPayload, bypassSeenCheck = false) => {
-    if (aborted) {
+  const sendPayload = (payload: ReplyPayload, bypassSeenCheck = false, bypassAbort = false) => {
+    if (aborted && !bypassAbort) {
       return;
     }
     const payloadKey = createBlockReplyPayloadKey(payload);
@@ -160,7 +160,7 @@ export function createBlockReplyPipeline(params: {
     const abortController = new AbortController();
     sendChain = sendChain
       .then(async () => {
-        if (aborted) {
+        if (aborted && !bypassAbort) {
           return false;
         }
         await withTimeout(
@@ -231,7 +231,10 @@ export function createBlockReplyPipeline(params: {
         onFlush: (payload) => {
           bufferedAssistantMessageIndex = undefined;
           bufferedKeys.clear();
-          sendPayload(payload, /* bypassSeenCheck */ true);
+          // Coalescer independently gates abort via shouldAbort;
+          // force-flush during finalization must reach onBlockReply
+          // even after the pipeline is marked aborted.
+          sendPayload(payload, /* bypassSeenCheck */ true, /* bypassAbort */ true);
         },
       })
     : null;

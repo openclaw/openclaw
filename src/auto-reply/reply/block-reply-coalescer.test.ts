@@ -1,4 +1,4 @@
-/** Tests block reply coalescer edge cases: abort race, stop flush, and logging. */
+/** Tests block reply coalescer edge cases: abort race, force-flush, pipeline-level finalization. */
 import { describe, expect, it, vi } from "vitest";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 
@@ -7,7 +7,7 @@ describe("createBlockReplyCoalescer", () => {
     const onFlush = vi.fn();
     let aborted = false;
     const coalescer = createBlockReplyCoalescer({
-      config: { minChars: 800, maxChars: 2000, idleMs: 1000, joiner: "", },
+      config: { minChars: 800, maxChars: 2000, idleMs: 1000, joiner: "" },
       shouldAbort: () => aborted,
       onFlush,
     });
@@ -29,35 +29,30 @@ describe("createBlockReplyCoalescer", () => {
     );
   });
 
-  it("stop() flushes buffered text before clearing the idle timer", async () => {
+  it("stop() does not flush buffered text; only clears the idle timer", async () => {
     const onFlush = vi.fn();
     const coalescer = createBlockReplyCoalescer({
-      config: { minChars: 800, maxChars: 2000, idleMs: 1000, joiner: "", },
+      config: { minChars: 800, maxChars: 2000, idleMs: 1000, joiner: "" },
       shouldAbort: () => false,
       onFlush,
     });
 
     // Enqueue a small tail (under minChars)
-    coalescer.enqueue({ text: "Buffered tail to be flushed on stop" });
+    coalescer.enqueue({ text: "Buffered tail preserved after stop" });
 
-    // stop should flush the buffered text before clearing
+    // stop should NOT flush; it only clears the idle timer.
+    // The pipeline is responsible for flushing before calling stop().
     coalescer.stop();
 
-    // Wait for the flush promise to resolve
-    await new Promise((resolve) => { setImmediate(resolve); });
-
-    expect(onFlush).toHaveBeenCalledTimes(1);
-    expect(onFlush).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "Buffered tail to be flushed on stop",
-      }),
-    );
+    // No flush should have happened
+    expect(onFlush).not.toHaveBeenCalled();
+    expect(coalescer.hasBuffered()).toBe(true);
   });
 
   it("flush({force:false}) with buffer under minChars reschedules idle flush (default behavior preserved)", async () => {
     const onFlush = vi.fn();
     const coalescer = createBlockReplyCoalescer({
-      config: { minChars: 800, maxChars: 2000, idleMs: 50, joiner: "", },
+      config: { minChars: 800, maxChars: 2000, idleMs: 50, joiner: "" },
       shouldAbort: () => false,
       onFlush,
     });
@@ -72,7 +67,9 @@ describe("createBlockReplyCoalescer", () => {
 
     // After idleMs, the idle timer should fire and try again
     // but since buffer is still under minChars and not force, it won't send
-    await new Promise((resolve) => { setTimeout(resolve, 60); });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 60);
+    });
 
     // Still not sent because sub-minChars non-force flush reschedules
     expect(onFlush).not.toHaveBeenCalled();
@@ -81,7 +78,7 @@ describe("createBlockReplyCoalescer", () => {
   it("flush({force:true}) sends buffer even when under minChars", async () => {
     const onFlush = vi.fn();
     const coalescer = createBlockReplyCoalescer({
-      config: { minChars: 800, maxChars: 2000, idleMs: 1000, joiner: "", },
+      config: { minChars: 800, maxChars: 2000, idleMs: 1000, joiner: "" },
       shouldAbort: () => false,
       onFlush,
     });
@@ -101,7 +98,7 @@ describe("createBlockReplyCoalescer", () => {
 
   it("hasBuffered returns true after enqueue with text under minChars", () => {
     const coalescer = createBlockReplyCoalescer({
-      config: { minChars: 800, maxChars: 2000, idleMs: 1000, joiner: "", },
+      config: { minChars: 800, maxChars: 2000, idleMs: 1000, joiner: "" },
       shouldAbort: () => false,
       onFlush: vi.fn(),
     });
@@ -110,9 +107,9 @@ describe("createBlockReplyCoalescer", () => {
     expect(coalescer.hasBuffered()).toBe(true);
   });
 
-  it("hasBuffered returns false after stop flushes the buffer", async () => {
+  it("hasBuffered returns true after stop when buffer has text", async () => {
     const coalescer = createBlockReplyCoalescer({
-      config: { minChars: 800, maxChars: 2000, idleMs: 1000, joiner: "", },
+      config: { minChars: 800, maxChars: 2000, idleMs: 1000, joiner: "" },
       shouldAbort: () => false,
       onFlush: vi.fn(),
     });
@@ -120,28 +117,26 @@ describe("createBlockReplyCoalescer", () => {
     coalescer.enqueue({ text: "Small tail" });
     expect(coalescer.hasBuffered()).toBe(true);
 
+    // stop() does not flush the buffer; only clears the idle timer
     coalescer.stop();
 
-    // Wait for flush promise (fire-and-forget from stop)
-    await new Promise((resolve) => { setImmediate(resolve); });
-
-    expect(coalescer.hasBuffered()).toBe(false);
+    expect(coalescer.hasBuffered()).toBe(true);
   });
 
   it("multiple enqueues with accumulated text >= maxChars triggers immediate flush", async () => {
     const onFlush = vi.fn();
     const coalescer = createBlockReplyCoalescer({
-      config: { minChars: 10, maxChars: 50, idleMs: 1000, joiner: "", },
+      config: { minChars: 10, maxChars: 50, idleMs: 1000, joiner: "" },
       shouldAbort: () => false,
       onFlush,
     });
 
     // Each enqueue accumulates; the 6th one should push over maxChars=50
-    coalescer.enqueue({ text: "Hello " });   // 6 chars → buffer
-    coalescer.enqueue({ text: "world " });    // 13 chars → buffer
-    coalescer.enqueue({ text: "this " });     // 19 chars → buffer
-    coalescer.enqueue({ text: "is " });       // 23 chars → buffer
-    coalescer.enqueue({ text: "a test" });    // 30 chars → buffer
+    coalescer.enqueue({ text: "Hello " }); // 6 chars → buffer
+    coalescer.enqueue({ text: "world " }); // 13 chars → buffer
+    coalescer.enqueue({ text: "this " }); // 19 chars → buffer
+    coalescer.enqueue({ text: "is " }); // 23 chars → buffer
+    coalescer.enqueue({ text: "a test" }); // 30 chars → buffer
 
     // Not flushed yet since 30 < 50
     expect(onFlush).not.toHaveBeenCalled();
@@ -150,7 +145,9 @@ describe("createBlockReplyCoalescer", () => {
     coalescer.enqueue({ text: " and more text to push over the limit!" });
 
     // Should have flushed the first batch and buffered the new text
-    await new Promise((resolve) => { setImmediate(resolve); });
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(onFlush).toHaveBeenCalled();
     const firstCall = onFlush.mock.calls[0]?.[0]?.text ?? "";
     expect(firstCall).toContain("Hello");
@@ -161,7 +158,7 @@ describe("createBlockReplyCoalescer", () => {
     const onFlush = vi.fn();
     let aborted = false;
     const coalescer = createBlockReplyCoalescer({
-      config: { minChars: 10, maxChars: 2000, idleMs: 1000, joiner: "", },
+      config: { minChars: 10, maxChars: 2000, idleMs: 1000, joiner: "" },
       shouldAbort: () => aborted,
       onFlush,
     });
@@ -185,7 +182,7 @@ describe("createBlockReplyCoalescer", () => {
 
     // Recreate the pipeline behavior: create coalescer with typical Telegram block config
     const coalescer = createBlockReplyCoalescer({
-      config: { minChars: 800, maxChars: 2000, idleMs: 1000, joiner: "", },
+      config: { minChars: 800, maxChars: 2000, idleMs: 1000, joiner: "" },
       shouldAbort: () => false,
       onFlush: (payload) => {
         onBlockReply(payload);
@@ -202,12 +199,15 @@ describe("createBlockReplyCoalescer", () => {
     // The buffer now has 1000 + len("The critical tail text") = 1021 chars
     // Still under maxChars=2000, so no auto-flush
 
-    // 3. Simulate finalization: flush({force:true}) then stop()
+    // 3. Simulate finalization: flush({force:true}) then stop().
+    //    The flush delivers buffered text; stop() just clears the timer.
     await coalescer.flush({ force: true });
     coalescer.stop();
 
     // The accumulated text should have been sent in one or more flushes
-    await new Promise((resolve) => { setImmediate(resolve); });
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     const allText = sentPayloads.map((p) => p.text).join("");
     expect(allText).toContain("The critical tail text");
     expect(allText).toContain("A".repeat(1000));

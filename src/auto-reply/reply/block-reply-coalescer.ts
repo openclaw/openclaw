@@ -1,7 +1,7 @@
 // Coalesces buffered block-streaming payloads into sendable reply parts.
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { copyReplyPayloadMetadata, isReplyPayloadStatusNotice } from "../reply-payload.js";
 import { logVerbose } from "../../globals.js";
+import { copyReplyPayloadMetadata, isReplyPayloadStatusNotice } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
 
@@ -86,7 +86,7 @@ export function createBlockReplyCoalescer(params: {
         logVerbose(
           `block reply coalescer: abort discards ${bufferText.length} buffered char(s) — ` +
             (isForceFlush
-              ? "force-flush attempted but pipeline is aborted"
+              ? "force-flush delivered during pipeline abort"
               : "non-force flush cancelled"),
         );
       }
@@ -94,8 +94,8 @@ export function createBlockReplyCoalescer(params: {
         resetBuffer();
         return;
       }
-      // force=true: still attempt to flush; the pipeline's own abort
-      // guard will reject the data if the pipeline is truly closed.
+      // force=true: still attempt to flush; the pipeline accepts
+      // coalescer-sourced payloads even when aborted.
     }
     if (!bufferText) {
       return;
@@ -243,9 +243,6 @@ export function createBlockReplyCoalescer(params: {
     flush,
     hasBuffered: () => Boolean(bufferText),
     stop: () => {
-      if (bufferText) {
-        void flush({ force: true });
-      }
       clearIdleTimer();
     },
   };
