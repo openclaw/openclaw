@@ -37,6 +37,7 @@ import {
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingNativeTransport,
   resolveChannelStreamingPreviewToolProgress,
+  resolveChannelStreamingProgressCommentary,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
   type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -1511,6 +1512,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const previewToolProgressEnabled =
     (Boolean(draftStream) || useNativeProgressStreaming) &&
     resolveChannelStreamingPreviewToolProgress(account.config);
+  const commentaryProgressEnabled =
+    (Boolean(draftStream) || useNativeProgressStreaming) &&
+    resolveChannelStreamingProgressCommentary(account.config);
+  let shouldYieldDraftProgress: () => boolean = () => false;
   const suppressDefaultToolProgressMessages =
     resolveChannelStreamingSuppressDefaultToolProgressMessages(account.config, {
       draftStreamActive: Boolean(draftStream) || useNativeProgressStreaming,
@@ -1707,11 +1712,16 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   };
 
-  const pushPreviewToolProgress = async (
+  const pushPreviewProgress = async (
     line?: ChannelProgressDraftLine,
-    options?: { toolName?: string },
+    options?: { toolName?: string; lane?: "tool" | "commentary" },
   ) => {
+    const progressEnabled =
+      options?.lane === "commentary" ? commentaryProgressEnabled : previewToolProgressEnabled;
     if (!draftStream && !useNativeProgressStreaming) {
+      return;
+    }
+    if (shouldYieldDraftProgress()) {
       return;
     }
     if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
@@ -1730,7 +1740,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       return;
     }
     if (streamMode !== "status_final") {
-      if (!previewToolProgressEnabled || previewToolProgressSuppressed) {
+      if (!progressEnabled || previewToolProgressSuppressed) {
         return;
       }
       const nextLines = mergeChannelProgressDraftLine(previewToolProgressLines, line, {
@@ -1751,7 +1761,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       hasStreamedMessage = true;
       return;
     }
-    if (previewToolProgressEnabled && !previewToolProgressSuppressed) {
+    if (progressEnabled && !previewToolProgressSuppressed) {
       previewToolProgressLines = mergeChannelProgressDraftLine(previewToolProgressLines, line, {
         maxLines: resolveChannelProgressDraftMaxLines(account.config),
       });
@@ -1834,7 +1844,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     if (!normalized) {
       return;
     }
-    await pushPreviewToolProgress({
+    await pushPreviewProgress({
       id: "reasoning",
       kind: "item",
       text: normalized,
@@ -1891,6 +1901,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         disableBlockStreaming,
         onModelSelected,
         suppressDefaultToolProgressMessages: suppressDefaultToolProgressMessages ? true : undefined,
+        commentaryProgressEnabled: commentaryProgressEnabled ? true : undefined,
+        onVerboseProgressVisibility: (isActive) => {
+          shouldYieldDraftProgress = isActive;
+        },
         allowProgressCallbacksWhenSourceDeliverySuppressed:
           sourceReplyDeliveryMode === "message_tool_only" && statusReactionsEnabled
             ? true
@@ -1919,7 +1933,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           if (statusReactionsEnabled) {
             await statusReactions.setTool(payload.name);
           }
-          await pushPreviewToolProgress(
+          await pushPreviewProgress(
             buildChannelProgressDraftLineForEntry(
               account.config,
               {
@@ -1936,7 +1950,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           );
         },
         onItemEvent: async (payload) => {
-          await pushPreviewToolProgress(
+          await pushPreviewProgress(
             buildChannelProgressDraftLineForEntry(account.config, {
               event: "item",
               itemId: payload.itemId,
@@ -1950,13 +1964,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
               progressText: payload.progressText,
               meta: payload.meta,
             }),
+            payload.kind === "preamble" ? { lane: "commentary" } : undefined,
           );
         },
         onPlanUpdate: async (payload) => {
           if (payload.phase !== "update") {
             return;
           }
-          await pushPreviewToolProgress(
+          await pushPreviewProgress(
             buildChannelProgressDraftLine({
               event: "plan",
               phase: payload.phase,
@@ -1970,7 +1985,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           if (payload.phase !== "requested") {
             return;
           }
-          await pushPreviewToolProgress(
+          await pushPreviewProgress(
             buildChannelProgressDraftLine({
               event: "approval",
               phase: payload.phase,
@@ -1985,7 +2000,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           if (payload.phase !== "end") {
             return;
           }
-          await pushPreviewToolProgress(
+          await pushPreviewProgress(
             buildChannelProgressDraftLine({
               event: "command-output",
               itemId: payload.itemId,
@@ -2002,7 +2017,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           if (payload.phase !== "end") {
             return;
           }
-          await pushPreviewToolProgress(
+          await pushPreviewProgress(
             buildChannelProgressDraftLine({
               event: "patch",
               itemId: payload.itemId,
