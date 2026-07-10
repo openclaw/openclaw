@@ -154,6 +154,24 @@ describe("ClickClack HTTP client", () => {
     expect(legacyEvents).toEqual([]);
   });
 
+  it("ignores non-string tail cursors for old or malformed event pages", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        events: [{ id: "evt-1", cursor: "cursor-1" }],
+        tail_cursor: 123,
+      }),
+    );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      fetch: fetchMock,
+    });
+
+    await expect(client.eventPage("workspace-1", { includeTail: true })).resolves.toEqual({
+      events: [{ id: "evt-1", cursor: "cursor-1" }],
+    });
+  });
+
   it("sends only safe bounded request correlation", async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
       Response.json({ user: { id: "usr_1" } }),

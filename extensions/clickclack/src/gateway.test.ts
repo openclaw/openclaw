@@ -153,6 +153,26 @@ describe("ClickClack gateway", () => {
     await run;
   });
 
+  it("falls back to the last startup page cursor when the server omits the tail cursor", async () => {
+    mocks.client.eventPage.mockResolvedValueOnce({
+      events: [createBacklogEvent(1, "message.created"), createBacklogEvent(2)],
+    });
+    const socket = new FakeSocket();
+    mocks.client.websocket.mockReturnValue(socket);
+    const abort = new AbortController();
+    const ctx = createGatewayContext(abort.signal);
+    const run = startClickClackGatewayAccount(ctx);
+
+    await vi.waitFor(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+
+    expect(mocks.client.eventPage).toHaveBeenCalledWith("workspace-1", { includeTail: true });
+    expect(mocks.client.websocket).toHaveBeenCalledWith("workspace-1", "cursor-2");
+    expect(mocks.handleClickClackInbound).not.toHaveBeenCalled();
+
+    abort.abort();
+    await run;
+  });
+
   it("drains and processes every reconnect page before reopening realtime", async () => {
     const firstSocket = new FakeSocket();
     const secondSocket = new FakeSocket();
