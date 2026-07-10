@@ -353,7 +353,6 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "chat.startup",
       "chat.metadata",
       "chat.message.get",
-      "chat.toolTitles",
       "chat.abort",
       "chat.send",
       "chat.inject",

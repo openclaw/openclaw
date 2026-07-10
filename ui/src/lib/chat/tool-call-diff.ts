@@ -7,7 +7,7 @@
  *    harness does not ship diff details.
  */
 
-export type DiffLineKind = "add" | "del" | "ctx" | "skip";
+export type DiffLineKind = "add" | "del" | "ctx" | "file" | "skip";
 
 export type DiffLine = {
   kind: DiffLineKind;
@@ -49,7 +49,7 @@ export function parseDiffDetailsString(diff: string): DiffLine[] | null {
     if (!raw) {
       continue;
     }
-    const skipMatch = raw.match(/^\s*\.\.\.\s*$/);
+    const skipMatch = raw.match(/^\s*\.\.\.(?:\(truncated\)\.\.\.)?\s*$/);
     if (skipMatch) {
       lines.push({ kind: "skip", text: "" });
       continue;
@@ -89,13 +89,61 @@ function splitDiffLines(text: string): string[] {
   return lines;
 }
 
+function compactLineDiff(lines: DiffLine[], inputTruncated: boolean): DiffLine[] {
+  if (lines.length <= MAX_DIFF_RENDER_LINES && !inputTruncated) {
+    return lines;
+  }
+  const hasChange = lines.some((line) => line.kind === "add" || line.kind === "del");
+  if (!hasChange) {
+    return inputTruncated
+      ? [{ kind: "skip", text: "" }]
+      : [...lines.slice(0, MAX_DIFF_RENDER_LINES), { kind: "skip", text: "" }];
+  }
+  const keep = new Uint8Array(lines.length);
+  for (let index = 0; index < lines.length; index++) {
+    if (lines[index].kind !== "add" && lines[index].kind !== "del") {
+      continue;
+    }
+    const start = Math.max(0, index - 3);
+    const end = Math.min(lines.length, index + 4);
+    keep.fill(1, start, end);
+  }
+  const preview: DiffLine[] = [];
+  let gap = false;
+  let clipped = inputTruncated;
+  for (let index = 0; index < lines.length; index++) {
+    if (keep[index] === 0) {
+      gap = true;
+      clipped = true;
+      continue;
+    }
+    if (gap && preview.at(-1)?.kind !== "skip") {
+      preview.push({ kind: "skip", text: "" });
+    }
+    gap = false;
+    if (preview.length >= MAX_DIFF_RENDER_LINES) {
+      clipped = true;
+      break;
+    }
+    preview.push(lines[index]);
+  }
+  if (clipped && preview.at(-1)?.kind !== "skip") {
+    preview.push({ kind: "skip", text: "" });
+  }
+  return preview;
+}
+
 /**
  * Compute a line diff between two snippets (no file line numbers available).
  * Standard LCS table; inputs are bounded so the quadratic cost stays small.
  */
 export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
-  const oldLines = splitDiffLines(oldText).slice(0, MAX_DIFF_INPUT_LINES);
-  const newLines = splitDiffLines(newText).slice(0, MAX_DIFF_INPUT_LINES);
+  const allOldLines = splitDiffLines(oldText);
+  const allNewLines = splitDiffLines(newText);
+  const inputTruncated =
+    allOldLines.length > MAX_DIFF_INPUT_LINES || allNewLines.length > MAX_DIFF_INPUT_LINES;
+  const oldLines = allOldLines.slice(0, MAX_DIFF_INPUT_LINES);
+  const newLines = allNewLines.slice(0, MAX_DIFF_INPUT_LINES);
   const n = oldLines.length;
   const m = newLines.length;
   // lcs[i][j] = LCS length of oldLines[i..] vs newLines[j..]
@@ -134,12 +182,7 @@ export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
     lines.push({ kind: "add", text: newLines[j] });
     j++;
   }
-  if (lines.length > MAX_DIFF_RENDER_LINES) {
-    const kept = lines.slice(0, MAX_DIFF_RENDER_LINES);
-    kept.push({ kind: "skip", text: "" });
-    return kept;
-  }
-  return lines;
+  return compactLineDiff(lines, inputTruncated);
 }
 
 /** All-added preview for freshly written files, numbered from line 1. */
@@ -163,16 +206,34 @@ export function countTextLines(content: string): number {
  * Concatenate per-edit diffs with skip separators, e.g. for multi-edit calls
  * where each `edits[i]` produced its own local diff.
  */
-export function joinDiffSections(sections: ReadonlyArray<DiffLine[]>): DiffLine[] {
+export function joinDiffSections(
+  sections: ReadonlyArray<DiffLine[]>,
+  options?: { truncated?: boolean; maxLines?: number },
+): DiffLine[] {
+  const maxLines = options?.maxLines ?? MAX_DIFF_RENDER_LINES;
   const joined: DiffLine[] = [];
+  let truncated = options?.truncated === true;
   for (const section of sections) {
     if (section.length === 0) {
       continue;
     }
     if (joined.length > 0) {
+      if (joined.length >= maxLines) {
+        truncated = true;
+        break;
+      }
       joined.push({ kind: "skip", text: "" });
     }
+    const remaining = maxLines - joined.length;
+    if (section.length > remaining) {
+      joined.push(...section.slice(0, remaining));
+      truncated = true;
+      break;
+    }
     joined.push(...section);
+  }
+  if (truncated && joined.at(-1)?.kind !== "skip") {
+    joined.push({ kind: "skip", text: "" });
   }
   return joined;
 }

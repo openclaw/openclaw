@@ -17,6 +17,7 @@ import {
   type DiffLine,
   type DiffStat,
 } from "./tool-call-diff.ts";
+import { parsePatchView } from "./tool-call-patch.ts";
 
 export type ToolCallKind = "command" | "read" | "edit" | "write" | "search" | "fetch" | "generic";
 
@@ -46,10 +47,10 @@ const EDIT_TOOL_NAMES = new Set([
   "edit_file",
   "multiedit",
   "multi_edit",
-  "str_replace_editor",
   "notebookedit",
   "notebook_edit",
 ]);
+const TEXT_EDITOR_TOOL_NAMES = new Set(["str_replace_editor", "str_replace_based_edit_tool"]);
 const WRITE_TOOL_NAMES = new Set(["write", "write_file", "create_file"]);
 const SEARCH_TOOL_NAMES = new Set(["grep", "find", "glob", "ls", "list", "codebase_search"]);
 const FETCH_TOOL_NAMES = new Set(["web_fetch", "webfetch", "fetch"]);
@@ -73,6 +74,8 @@ function resolvePathArg(args: Record<string, unknown> | null): string | undefine
     readString(args.path) ??
     readString(args.file_path) ??
     readString(args.filePath) ??
+    readString(args.file) ??
+    readString(args.filepath) ??
     readString(args.filename) ??
     readString(args.notebook_path)
   );
@@ -89,42 +92,77 @@ export function splitPathForDisplay(path: string): { base: string; dir?: string 
 
 type EditPair = { oldText: string; newText: string };
 
-function readEditPairs(args: Record<string, unknown>): EditPair[] {
+type ResolvedEditDiff = { lines: DiffLine[]; stat?: DiffStat };
+
+const MAX_LOCAL_DIFF_PAIRS = 8;
+const MAX_LOCAL_DIFF_INPUT_CHARS = 120_000;
+
+function readEditPairs(args: Record<string, unknown>): { pairs: EditPair[]; truncated: boolean } {
   const pairs: EditPair[] = [];
+  let inputChars = 0;
+  let truncated = false;
   const push = (oldText: unknown, newText: unknown) => {
     if (typeof oldText === "string" && typeof newText === "string") {
+      const pairChars = oldText.length + newText.length;
+      if (inputChars + pairChars > MAX_LOCAL_DIFF_INPUT_CHARS) {
+        truncated = true;
+        return;
+      }
+      inputChars += pairChars;
       pairs.push({ oldText, newText });
     }
   };
   if (Array.isArray(args.edits)) {
-    for (const entry of args.edits) {
+    for (let index = 0; index < args.edits.length; index++) {
+      if (index >= MAX_LOCAL_DIFF_PAIRS) {
+        truncated = true;
+        break;
+      }
+      const entry = args.edits[index];
       const record = asRecord(entry);
       if (record) {
         push(
-          record.oldText ?? record.old_string ?? record.oldString,
-          record.newText ?? record.new_string ?? record.newString,
+          record.oldText ?? record.old_string ?? record.oldString ?? record.old_str,
+          record.newText ?? record.new_string ?? record.newString ?? record.new_str,
         );
+        if (truncated) {
+          break;
+        }
       }
     }
   } else {
     push(
-      args.oldText ?? args.old_string ?? args.oldString,
-      args.newText ?? args.new_string ?? args.newString,
+      args.oldText ?? args.old_string ?? args.oldString ?? args.old_str,
+      args.newText ?? args.new_string ?? args.newString ?? args.new_str,
     );
   }
-  return pairs;
+  return { pairs, truncated };
 }
 
-function readDetailsDiff(details: unknown): DiffLine[] | null {
+function readDetailsDiff(details: unknown): ResolvedEditDiff | null {
   const record = asRecord(details);
   const diffText = record ? readString(record.diff) : undefined;
   if (!diffText) {
     return null;
   }
-  return parseDiffDetailsString(diffText);
+  const lines = parseDiffDetailsString(diffText);
+  if (!lines) {
+    return null;
+  }
+  const stat = { added: 0, removed: 0 };
+  for (const match of diffText.matchAll(/^([+-])\s*\d+/gm)) {
+    if (match[1] === "+") {
+      stat.added += 1;
+    } else {
+      stat.removed += 1;
+    }
+  }
+  const truncated =
+    /^\s*\.\.\.\(truncated\)\.\.\.\s*$/m.test(diffText) || lines.length > MAX_DIFF_RENDER_LINES + 1;
+  return { lines, ...(truncated ? {} : { stat }) };
 }
 
-function resolveEditDiff(source: ToolCallViewSource): DiffLine[] | null {
+function resolveEditDiff(source: ToolCallViewSource): ResolvedEditDiff | null {
   const fromDetails = readDetailsDiff(source.details);
   if (fromDetails) {
     return fromDetails;
@@ -133,69 +171,86 @@ function resolveEditDiff(source: ToolCallViewSource): DiffLine[] | null {
   if (!args) {
     return null;
   }
-  const pairs = readEditPairs(args);
+  const { pairs, truncated } = readEditPairs(args);
   if (pairs.length === 0) {
-    return null;
+    return truncated ? { lines: [{ kind: "skip", text: "" }] } : null;
   }
   const sections = pairs.map((pair) => computeLineDiff(pair.oldText, pair.newText));
-  const joined = joinDiffSections(sections);
-  return joined.length > 0 ? joined : null;
+  const sectionTruncated = sections.some((section) => section.at(-1)?.kind === "skip");
+  const lines = joinDiffSections(sections, { truncated });
+  if (lines.length === 0) {
+    return null;
+  }
+  const stat =
+    truncated || sectionTruncated
+      ? undefined
+      : sections.reduce(
+          (sum, section) => {
+            const sectionStat = diffStat(section);
+            return {
+              added: sum.added + sectionStat.added,
+              removed: sum.removed + sectionStat.removed,
+            };
+          },
+          { added: 0, removed: 0 },
+        );
+  return { lines, ...(stat ? { stat } : {}) };
 }
 
-/**
- * Minimal Codex-style patch reader: extracts the target path plus add/del
- * rows so patch calls render like edits. Anything unrecognized stays generic.
- */
+function resolveInsertionDiff(
+  source: ToolCallViewSource,
+  args: Record<string, unknown> | null,
+): ResolvedEditDiff | null {
+  const fromDetails = readDetailsDiff(source.details);
+  if (fromDetails) {
+    return fromDetails;
+  }
+  const insertText = args ? readString(args.insert_text) : undefined;
+  if (!insertText) {
+    return null;
+  }
+  const lines = computeLineDiff("", insertText);
+  // The text is known, but its surrounding file context is not. Omit an exact
+  // stat rather than implying this preview represents the final placement.
+  return lines.length > 0 ? { lines } : null;
+}
+
+function resolvePatchData(args: Record<string, unknown> | null) {
+  return parsePatchView(args);
+}
+
 function resolvePatchView(args: Record<string, unknown> | null): ToolCallView | null {
-  const patchText = args
-    ? (readString(args.patch) ?? readString(args.input) ?? readString(args.diff))
-    : undefined;
-  if (!patchText) {
+  const patch = resolvePatchData(args);
+  if (!patch) {
     return null;
   }
-  let target: string | undefined;
-  const lines: DiffLine[] = [];
-  const stat = { added: 0, removed: 0 };
-  let truncated = false;
-  // Rows render on every paint, so cap them like the other diff producers;
-  // the diffstat still counts the whole patch (cheap string scans only).
-  const pushLine = (line: DiffLine) => {
-    if (lines.length < MAX_DIFF_RENDER_LINES) {
-      lines.push(line);
-    } else if (!truncated) {
-      truncated = true;
-      lines.push({ kind: "skip", text: "" });
-    }
-  };
-  for (const raw of patchText.split("\n")) {
-    const fileMatch = raw.match(/^\*\*\* (?:Update|Add|Delete) File: (.+)$|^\+\+\+ (?:b\/)?(.+)$/);
-    if (fileMatch) {
-      target ??= (fileMatch[1] ?? fileMatch[2])?.trim();
-      continue;
-    }
-    if (/^\*\*\*|^---|^@@|^index |^diff /.test(raw)) {
-      continue;
-    }
-    if (raw.startsWith("+")) {
-      stat.added += 1;
-      pushLine({ kind: "add", text: raw.slice(1) });
-    } else if (raw.startsWith("-")) {
-      stat.removed += 1;
-      pushLine({ kind: "del", text: raw.slice(1) });
-    } else {
-      pushLine({ kind: "ctx", text: raw.startsWith(" ") ? raw.slice(1) : raw });
-    }
+  if (patch.paths.length > 1) {
+    return {
+      kind: "edit",
+      target: `${patch.paths.length} files`,
+      diff: patch.lines,
+      stat: patch.stat,
+    };
   }
-  if (!target && stat.added === 0 && stat.removed === 0) {
-    return null;
+  if (patch.move) {
+    const from = splitPathForDisplay(patch.move.from);
+    const to = splitPathForDisplay(patch.move.to);
+    const commonDir = from.dir === to.dir ? from.dir : undefined;
+    return {
+      kind: "edit",
+      target: commonDir ? `${from.base} → ${to.base}` : `${patch.move.from} → ${patch.move.to}`,
+      targetDetail: commonDir,
+      diff: patch.lines,
+      stat: patch.stat,
+    };
   }
-  const pathParts = target ? splitPathForDisplay(target) : null;
+  const pathParts = patch.paths[0] ? splitPathForDisplay(patch.paths[0]) : null;
   return {
     kind: "edit",
     target: pathParts?.base,
     targetDetail: pathParts?.dir,
-    diff: lines,
-    stat,
+    diff: patch.lines,
+    stat: patch.stat,
   };
 }
 
@@ -203,8 +258,47 @@ function normalizeKey(name: string): string {
   return name.trim().toLowerCase();
 }
 
+type TextEditorCommand = "view" | "str_replace" | "create" | "insert" | "undo_edit";
+
+function resolveTextEditorCommand(args: unknown): TextEditorCommand | undefined {
+  const command = readString(asRecord(args)?.command)?.trim().toLowerCase();
+  switch (command) {
+    case "view":
+    case "str_replace":
+    case "create":
+    case "insert":
+    case "undo_edit":
+      return command;
+    default:
+      return undefined;
+  }
+}
+
+export function resolveToolCallTargetPaths(name: string, args?: unknown): string[] {
+  const record = asRecord(args);
+  if (PATCH_TOOL_NAMES.has(normalizeKey(name))) {
+    return resolvePatchData(record)?.paths ?? [];
+  }
+  const path = resolvePathArg(record);
+  return path ? [path] : [];
+}
+
 export function resolveToolCallKind(name: string, args?: unknown): ToolCallKind {
   const key = normalizeKey(name);
+  if (TEXT_EDITOR_TOOL_NAMES.has(key)) {
+    switch (resolveTextEditorCommand(args)) {
+      case "view":
+        return "read";
+      case "str_replace":
+      case "insert":
+      case "undo_edit":
+        return "edit";
+      case "create":
+        return "write";
+      default:
+        return "generic";
+    }
+  }
   if (COMMAND_TOOL_NAMES.has(key)) {
     return "command";
   }
@@ -269,6 +363,9 @@ function buildToolCallView(
 ): ToolCallView {
   const kind = resolveToolCallKind(source.name, source.args);
   const key = normalizeKey(source.name);
+  const editorCommand = TEXT_EDITOR_TOOL_NAMES.has(key)
+    ? resolveTextEditorCommand(source.args)
+    : undefined;
 
   if (kind === "command") {
     const command = args ? readString(args.command) : undefined;
@@ -293,12 +390,17 @@ function buildToolCallView(
       return { kind: "generic" };
     }
     const { base, dir } = splitPathForDisplay(path);
-    const diff = resolveEditDiff(source);
+    const diff =
+      editorCommand === "insert"
+        ? resolveInsertionDiff(source, args)
+        : editorCommand === "undo_edit"
+          ? readDetailsDiff(source.details)
+          : resolveEditDiff(source);
     return {
       kind,
       target: base,
       targetDetail: dir,
-      ...(diff ? { diff, stat: diffStat(diff) } : {}),
+      ...(diff ? { diff: diff.lines, ...(diff.stat ? { stat: diff.stat } : {}) } : {}),
     };
   }
 
@@ -308,7 +410,11 @@ function buildToolCallView(
       return { kind: "generic" };
     }
     const { base, dir } = splitPathForDisplay(path);
-    const content = args ? readString(args.content) : undefined;
+    const content = args
+      ? editorCommand === "create"
+        ? readString(args.file_text)
+        : readString(args.content)
+      : undefined;
     if (!content) {
       return { kind, target: base, targetDetail: dir };
     }

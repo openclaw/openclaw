@@ -29,7 +29,6 @@ import { DeletedMessages } from "../deleted-messages.ts";
 import { PinnedMessages } from "../pinned-messages.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import { getOrCreateSessionCacheValue } from "../session-cache.ts";
-import { getToolTitlesVersion } from "../tool-titles.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
@@ -725,7 +724,6 @@ export function renderChatThread(props: ChatThreadProps) {
             deletedChatItemsSignature(deleted, chatItems),
             stableBooleanMapSignature(expandedToolCards),
             getAssistantAttachmentAvailabilityRenderVersion(),
-            getToolTitlesVersion(),
             props.sessionKey,
             props.fullMessageAgentId,
             showReasoning,

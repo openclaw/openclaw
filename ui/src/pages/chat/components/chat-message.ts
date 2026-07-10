@@ -692,8 +692,13 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     return nothing;
   }
 
-  if (normalizedRole === "tool" && group.messages.length > 1) {
-    const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key));
+  const groupedToolCards =
+    normalizedRole === "tool"
+      ? group.messages.flatMap((item) => extractToolCardsCached(item.message, item.key))
+      : [];
+
+  if (normalizedRole === "tool" && (group.messages.length > 1 || groupedToolCards.length > 1)) {
+    const cards = groupedToolCards;
     const toolCount = cards.length || group.messages.length;
     const hasError = cards.some(isToolCardError) && group.turnSucceeded !== true;
     // While a run is live, the newest still-running call names the group so
@@ -702,12 +707,12 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       ? cards.findLast((card) => isRunningToolCard(card, opts.runActive))
       : undefined;
     const groupSummaryLabel = runningCard
-      ? `${resolveToolRowText(runningCard)}…`
+      ? `${resolveToolRowText(runningCard, opts.runActive)}…`
       : summarizeToolGroup(
           cards.map((card) => ({
             name: card.name,
             args: card.args,
-            isError: isToolCardError(card) && group.turnSucceeded !== true,
+            isError: isToolCardError(card),
           })),
         );
     const activityDisclosureId = `activity:${group.key}`;
@@ -737,7 +742,12 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               type="button"
               aria-expanded=${String(activityExpanded)}
               aria-label=${hasError
-                ? `Activity: ${toolCount} tool${toolCount === 1 ? "" : "s"}, includes errors.`
+                ? t(
+                    toolCount === 1
+                      ? "chat.toolCards.group.activityErrorOne"
+                      : "chat.toolCards.group.activityErrorMany",
+                    { count: String(toolCount) },
+                  )
                 : nothing}
               @click=${(event: MouseEvent) => {
                 if (shouldToggleSelectableDisclosure(event)) {
@@ -746,9 +756,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               }}
             >
               <span class="chat-activity-group__icon">${hasError ? icons.x : icons.activity}</span>
-              <span
-                class="chat-activity-group__label"
-                title=${`${toolCount} tool call${toolCount === 1 ? "" : "s"}`}
+              <span class="chat-activity-group__label" title=${groupSummaryLabel}
                 >${groupSummaryLabel}</span
               >
               <span
@@ -1786,7 +1794,6 @@ function renderInlineToolCards(
     onOpenSidebar?: (content: SidebarContent) => void;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
-    turnSucceeded?: boolean;
     runActive?: boolean;
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
@@ -1798,7 +1805,6 @@ function renderInlineToolCards(
       ${toolCards.map((card, index) =>
         renderToolCard(card, {
           expanded: opts.isToolExpanded?.(`${opts.messageKey}:toolcard:${index}`) ?? false,
-          turnSucceeded: opts.turnSucceeded,
           runActive: opts.runActive,
           onToggleExpanded: opts.onToggleToolExpanded
             ? () => opts.onToggleToolExpanded?.(`${opts.messageKey}:toolcard:${index}`)
@@ -2155,7 +2161,6 @@ function renderGroupedMessage(
           onOpenSidebar,
           isToolExpanded: opts.isToolExpanded,
           onToggleToolExpanded: opts.onToggleToolExpanded,
-          turnSucceeded: opts.turnSucceeded,
           runActive: opts.runActive,
           canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
           embedSandboxMode: opts.embedSandboxMode ?? "scripts",
@@ -2251,6 +2256,7 @@ function renderGroupedMessage(
                               opts.canvasPluginSurfaceUrl,
                               opts.embedSandboxMode ?? "scripts",
                               opts.allowExternalEmbedUrls ?? false,
+                              opts.runActive,
                             )
                           : renderInlineToolCards(toolCards, {
                               messageKey,
@@ -2259,7 +2265,6 @@ function renderGroupedMessage(
                               onOpenSidebar,
                               isToolExpanded: opts.isToolExpanded,
                               onToggleToolExpanded: opts.onToggleToolExpanded,
-                              turnSucceeded: opts.turnSucceeded,
                               runActive: opts.runActive,
                               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                               embedSandboxMode: opts.embedSandboxMode ?? "scripts",
@@ -2307,7 +2312,6 @@ function renderGroupedMessage(
                   onOpenSidebar,
                   isToolExpanded: opts.isToolExpanded,
                   onToggleToolExpanded: opts.onToggleToolExpanded,
-                  turnSucceeded: opts.turnSucceeded,
                   runActive: opts.runActive,
                   canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                   embedSandboxMode: opts.embedSandboxMode ?? "scripts",

@@ -125,6 +125,188 @@ describe("tool-cards", () => {
     expect(blocks[0]?.querySelector("code")?.textContent).toBe("Opened page");
   });
 
+  it("renders multi-file patch headers, changed rows, and raw output together", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:patch:multi",
+          name: "apply_patch",
+          args: {
+            changes: [
+              {
+                path: "src/a.ts",
+                kind: { type: "update" },
+                diff: [
+                  "--- a/src/a.ts",
+                  "+++ b/src/a.ts",
+                  "@@ -1 +1 @@",
+                  "-old a",
+                  "+new a",
+                  "",
+                ].join("\n"),
+              },
+              {
+                path: "src/b.ts",
+                kind: { type: "add" },
+                diff: "new b\n",
+              },
+            ],
+          },
+          outputText: "Applied patch",
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    const diff = container.querySelector(".chat-diff");
+    expect(diff?.getAttribute("aria-label")).toBe("File changes");
+    const fileRows = Array.from(diff?.querySelectorAll(".chat-diff__row--file") ?? []);
+    expect(fileRows.map((row) => row.querySelector(".chat-diff__text")?.textContent)).toEqual([
+      "Update src/a.ts",
+      "Add src/b.ts",
+    ]);
+    expect(fileRows.every((row) => row.querySelector(".chat-diff__gutter") !== null)).toBe(true);
+    expect(diff?.querySelector(".chat-diff__row--del .chat-diff__text")?.textContent).toBe("old a");
+    expect(
+      Array.from(diff?.querySelectorAll(".chat-diff__row--add .chat-diff__text") ?? []).map(
+        (row) => row.textContent,
+      ),
+    ).toEqual(["new a", "new b"]);
+
+    const rawToggle = container.querySelector<HTMLButtonElement>(".chat-tool-card__raw-toggle");
+    expect(rawToggle?.textContent?.trim()).toBe("Raw details");
+    rawToggle?.click();
+    expect(container.querySelector(".chat-tool-card__raw-body code")?.textContent).toBe(
+      "Applied patch",
+    );
+  });
+
+  it("renders edit and write rows from their result outcome", () => {
+    const mutations = [
+      {
+        name: "edit",
+        args: { path: "/repo/src/a.ts", oldText: "old", newText: "new" },
+        verbs: { running: "Editing", succeeded: "Edited", neutral: "Edit" },
+      },
+      {
+        name: "write",
+        args: { path: "/repo/src/b.ts", content: "new file\n" },
+        verbs: { running: "Writing", succeeded: "Wrote", neutral: "Write" },
+      },
+    ] as const;
+    const states = [
+      {
+        name: "running",
+        card: { live: true },
+        runActive: true,
+        verb: "running",
+        label: "Attempted changes",
+        hasStat: false,
+        failed: false,
+      },
+      {
+        name: "succeeded",
+        card: { completed: true },
+        runActive: false,
+        verb: "succeeded",
+        label: "File changes",
+        hasStat: true,
+        failed: false,
+      },
+      {
+        name: "failed after recovery",
+        card: { completed: true, isError: true },
+        runActive: false,
+        verb: "neutral",
+        label: "Attempted changes",
+        hasStat: false,
+        failed: true,
+      },
+      {
+        name: "call only",
+        card: {},
+        runActive: false,
+        verb: "neutral",
+        label: "Attempted changes",
+        hasStat: false,
+        failed: false,
+      },
+      {
+        name: "empty successful result",
+        card: { completed: true, outputText: "" },
+        runActive: false,
+        verb: "succeeded",
+        label: "File changes",
+        hasStat: true,
+        failed: false,
+      },
+    ] as const;
+
+    for (const mutation of mutations) {
+      for (const state of states) {
+        const container = document.createElement("div");
+        render(
+          renderToolCard(
+            {
+              id: `${mutation.name}:${state.name}`,
+              name: mutation.name,
+              args: mutation.args,
+              ...state.card,
+            },
+            {
+              expanded: true,
+              onToggleExpanded: vi.fn(),
+              runActive: state.runActive,
+            },
+          ),
+          container,
+        );
+
+        expect(container.querySelector(".chat-tool-row__verb")?.textContent).toBe(
+          mutation.verbs[state.verb],
+        );
+        expect(container.querySelector(".chat-diff")?.getAttribute("aria-label")).toBe(state.label);
+        expect(container.querySelector(".chat-diffstat") !== null).toBe(state.hasStat);
+        expect(container.querySelector(".chat-tool-row__badge")?.textContent === "failed").toBe(
+          state.failed,
+        );
+        expect(container.querySelector(".chat-tool-msg-summary--error") !== null).toBe(
+          state.failed,
+        );
+      }
+    }
+  });
+
+  it("keeps read offsets and limits visible in expanded args", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:read:range",
+          name: "read",
+          args: { path: "/repo/src/a.ts", offset: 40, limit: 20 },
+          inputText: JSON.stringify({ path: "/repo/src/a.ts", offset: 40, limit: 20 }),
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-row__verb")?.textContent).toBe("Read");
+    const rows = Array.from(container.querySelectorAll(".chat-tool-kv__row"));
+    expect(
+      rows.map((row) => [
+        row.querySelector(".chat-tool-kv__key")?.textContent,
+        row.querySelector(".chat-tool-kv__value")?.textContent,
+      ]),
+    ).toEqual([
+      ["offset:", "40"],
+      ["limit:", "20"],
+    ]);
+  });
+
   it("does not repeat the tool identity in expanded details", () => {
     const container = document.createElement("div");
     render(
