@@ -120,6 +120,7 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import {
@@ -133,6 +134,10 @@ import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
+import {
+  buildStrandedReplyDeliveryFailurePayload,
+  buildStrandedReplyRetryFollowupRun,
+} from "./stranded-reply-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
@@ -1042,6 +1047,15 @@ function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
     .filter((textLocal): textLocal is string => Boolean(textLocal))
     .join("\n\n");
   return sanitizePendingFinalDeliveryText(text);
+}
+
+function normalizeAssistantFinalDeliveryText(text: string): string {
+  const parsed = normalizeReplyPayloadDirectives({
+    payload: { text },
+    trimLeadingWhitespace: true,
+    parseMode: "auto",
+  });
+  return sanitizePendingFinalDeliveryText(parsed.payload.text ?? "");
 }
 
 function enqueueCommitmentExtractionForTurn(params: {
@@ -1969,6 +1983,10 @@ export async function runReplyAgent(params: {
     });
     const committedMessagingToolSourceReplyDelivery =
       hasCommittedSourceReplyDeliveryEvidence(runResult);
+    // #85714: the stranded-retry diagnostic gates on committed source-reply
+    // evidence. `committedMessagingToolSourceReplyDelivery` is that exact signal
+    // after the delivery-evidence refactor extracted it into a shared helper.
+    const committedSourceReplyDelivery = committedMessagingToolSourceReplyDelivery;
     const successfulSideEffectDelivery =
       successfulSourceReplyDelivery ||
       committedMessagingToolSourceReplyDelivery ||
@@ -2010,10 +2028,30 @@ export async function runReplyAgent(params: {
           sessionCtx,
           cfg,
         });
-    if (
-      opts?.sourceReplyDeliveryMode === "message_tool_only" &&
-      committedMessagingToolSourceReplyDelivery
-    ) {
+    const buildStrandedRetryMissingDeliveryDiagnostic = (): ReplyPayload | undefined => {
+      if (!sessionKey || !storePath || followupRun.strandedReplyRetry !== true) {
+        return undefined;
+      }
+      if (sessionCtx.InboundEventKind === "room_event" || committedSourceReplyDelivery) {
+        return undefined;
+      }
+      const sourceReplyPolicy = resolveSourceReplyPolicy({
+        cfg,
+        sessionCtx,
+        sessionEntry: activeSessionEntry,
+        sessionKey,
+        runtimePolicySessionKey,
+        opts,
+      });
+      if (
+        sourceReplyPolicy.sourceReplyDeliveryMode !== "message_tool_only" ||
+        sourceReplyPolicy.sendPolicyDenied
+      ) {
+        return undefined;
+      }
+      return buildStrandedReplyDeliveryFailurePayload();
+    };
+    if (opts?.sourceReplyDeliveryMode === "message_tool_only" && committedSourceReplyDelivery) {
       await opts.onObservedReplyDelivery?.();
     }
     const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
@@ -2178,6 +2216,10 @@ export async function runReplyAgent(params: {
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
       }
+      const strandedRetryDiagnostic = buildStrandedRetryMissingDeliveryDiagnostic();
+      if (strandedRetryDiagnostic) {
+        return returnWithQueuedFollowupDrain(strandedRetryDiagnostic);
+      }
       return returnWithQueuedFollowupDrain(undefined);
     }
 
@@ -2241,6 +2283,10 @@ export async function runReplyAgent(params: {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
+      }
+      const strandedRetryDiagnostic = buildStrandedRetryMissingDeliveryDiagnostic();
+      if (strandedRetryDiagnostic) {
+        return returnWithQueuedFollowupDrain(strandedRetryDiagnostic);
       }
       return returnWithQueuedFollowupDrain(undefined);
     }
@@ -2565,7 +2611,8 @@ export async function runReplyAgent(params: {
     // Capture only policy-visible final payloads in session store to support
     // durable delivery retries. Hidden reasoning, message-tool-only replies,
     // and sendPolicy-denied replies must not become heartbeat-replayable text.
-    if (sessionKey && storePath && finalPayloads.length > 0) {
+    const isStrandedReplyRetryRun = followupRun.strandedReplyRetry === true;
+    if (sessionKey && storePath && (finalPayloads.length > 0 || isStrandedReplyRetryRun)) {
       const sourceReplyPolicy = resolveSourceReplyPolicy({
         cfg,
         sessionCtx,
@@ -2578,15 +2625,31 @@ export async function runReplyAgent(params: {
       // #85714: warn only for unusually substantive private final text. In
       // message_tool_only, no tool call can be intentional silence, and
       // finalDeliveryText also includes verbose/status/usage metadata.
-      const assistantFinalText = rawAssistantText ?? "";
-      if (
+      const assistantFinalText = normalizeAssistantFinalDeliveryText(
+        typeof runResult.meta?.finalAssistantVisibleText === "string"
+          ? runResult.meta.finalAssistantVisibleText
+          : (rawAssistantText ?? ""),
+      );
+      const isRoomEvent = sessionCtx.InboundEventKind === "room_event";
+      // Heartbeats already deliver fallback finals via sendDurableMessageBatch;
+      // recovering here would duplicate that message.
+      const isStrandedReply =
+        !isHeartbeat &&
+        !isRoomEvent &&
         shouldWarnAboutPrivateMessageToolFinal({
           sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
           sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
-          successfulSourceReplyDelivery,
+          successfulSourceReplyDelivery: committedSourceReplyDelivery,
           finalText: assistantFinalText,
-        })
-      ) {
+        });
+      const retryMissingSourceDelivery =
+        isStrandedReplyRetryRun &&
+        !isHeartbeat &&
+        !isRoomEvent &&
+        sourceReplyPolicy.sourceReplyDeliveryMode === "message_tool_only" &&
+        !sourceReplyPolicy.sendPolicyDenied &&
+        !committedSourceReplyDelivery;
+      if (isStrandedReply) {
         warnPrivateMessageToolFinal({
           sessionKey,
           channel:
@@ -2596,6 +2659,27 @@ export async function runReplyAgent(params: {
             activeSessionEntry?.channel,
           finalTextLength: assistantFinalText.trim().length,
         });
+      }
+      if (isStrandedReply || retryMissingSourceDelivery) {
+        if (isStrandedReplyRetryRun) {
+          finalPayloads = [...finalPayloads, buildStrandedReplyDeliveryFailurePayload()];
+        } else {
+          const retryEnqueued = enqueueFollowupRun(
+            queueKey,
+            buildStrandedReplyRetryFollowupRun(followupRun, {
+              finalText: assistantFinalText,
+              sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+            }),
+            resolvedQueue,
+            "none",
+            runFollowupTurn,
+            false,
+            { position: "front" },
+          );
+          if (!retryEnqueued) {
+            finalPayloads = [...finalPayloads, buildStrandedReplyDeliveryFailurePayload()];
+          }
+        }
       }
       const pendingText = sourceReplyPolicy.suppressDelivery ? "" : finalDeliveryText;
       const agentId = followupRun.run.agentId;
