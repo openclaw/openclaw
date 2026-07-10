@@ -83,28 +83,12 @@ const ANTHROPIC_SONNET_5_STANDARD_COST = {
 };
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
-const ANTHROPIC_OPUS_48_TEMPLATE_MODEL_IDS = [
-  ANTHROPIC_OPUS_47_MODEL_ID,
-  ANTHROPIC_OPUS_47_DOT_MODEL_ID,
-] as const;
 const ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS = [
   ANTHROPIC_OPUS_46_MODEL_ID,
   ANTHROPIC_OPUS_46_DOT_MODEL_ID,
 ] as const;
 const ANTHROPIC_SONNET_46_MODEL_ID = "claude-sonnet-4-6";
 const ANTHROPIC_SONNET_46_DOT_MODEL_ID = "claude-sonnet-4.6";
-const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
-  ANTHROPIC_OPUS_48_MODEL_ID,
-  ANTHROPIC_OPUS_48_DOT_MODEL_ID,
-  ANTHROPIC_OPUS_46_MODEL_ID,
-  ANTHROPIC_OPUS_46_DOT_MODEL_ID,
-  ANTHROPIC_OPUS_47_MODEL_ID,
-  ANTHROPIC_OPUS_47_DOT_MODEL_ID,
-  ANTHROPIC_OPUS_48_MODEL_ID,
-  ANTHROPIC_OPUS_48_DOT_MODEL_ID,
-  ANTHROPIC_SONNET_46_MODEL_ID,
-  ANTHROPIC_SONNET_46_DOT_MODEL_ID,
-] as const;
 const ANTHROPIC_SETUP_TOKEN_NOTE_LINES = [
   "Anthropic setup-token auth is supported in OpenClaw.",
   "OpenClaw prefers Claude CLI reuse when it is available on the host.",
@@ -358,7 +342,7 @@ function resolveAnthropicForwardCompatModel(
       dotModelId: ANTHROPIC_OPUS_48_DOT_MODEL_ID,
       dashTemplateId: ANTHROPIC_OPUS_47_MODEL_ID,
       dotTemplateId: ANTHROPIC_OPUS_47_DOT_MODEL_ID,
-      fallbackTemplateIds: ANTHROPIC_OPUS_48_TEMPLATE_MODEL_IDS,
+      fallbackTemplateIds: ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS,
     }) ??
     resolveAnthropic46ForwardCompatModel({
       ctx,
@@ -389,8 +373,7 @@ function resolveAnthropicForwardCompatModel(
 }
 
 function isAnthropicGa1MModel(modelId: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  return ANTHROPIC_GA_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+  return supportsClaudeAdaptiveThinking({ id: modelId });
 }
 
 function isAnthropicFable5Model(modelId: string): boolean {
@@ -551,9 +534,8 @@ function applyAnthropicThinkingLevelMap(params: {
   return {
     ...params.model,
     thinkingLevelMap: {
-      ...params.model.thinkingLevelMap,
-      xhigh: "xhigh",
-      max: "max",
+      ...nativeDefaults,
+      ...current,
     },
   };
 }
@@ -890,28 +872,13 @@ export function buildAnthropicProvider(): ProviderPlugin {
       if (!model) {
         return undefined;
       }
-      const imageCapableModel =
-        applyAnthropicImageInputCapability({
-          modelId: ctx.modelId,
-          model,
-        }) ?? model;
-      const outputModel =
-        applyAnthropicOpus48MaxTokens({
-          modelId: ctx.modelId,
-          model: imageCapableModel,
-        }) ?? imageCapableModel;
-      const thinkingLevelModel =
-        applyAnthropicOpusThinkingLevelMap({
-          modelId: ctx.modelId,
-          model: outputModel,
-        }) ?? outputModel;
       return (
-        applyAnthropicGa1MContextWindow({
+        normalizeAnthropicResolvedModel({
           config: ctx.config,
           provider: ctx.provider,
           modelId: ctx.modelId,
-          model: thinkingLevelModel,
-        }) ?? thinkingLevelModel
+          model,
+        }) ?? model
       );
     },
     normalizeResolvedModel: (ctx) => normalizeAnthropicResolvedModel(ctx),
