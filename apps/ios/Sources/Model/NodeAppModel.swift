@@ -311,6 +311,7 @@ final class NodeAppModel {
     @ObservationIgnored private var testAgentRequestHandler: ((AgentDeepLink) async throws -> Void)?
     @ObservationIgnored private var testTalkCapturePreparationHandler: (() async -> Void)?
     @ObservationIgnored private var testTalkCaptureStartedHandler: (() async -> Void)?
+    @ObservationIgnored private var testChatSessionRoutingRestoreHandler: (() async -> Void)?
     #endif
     private var pttVoiceWakeLeaseCaptureId: String?
     private var talkPttCommandEpoch: UInt64 = 0
@@ -461,8 +462,16 @@ final class NodeAppModel {
     func restoreChatSessionRoutingIdentityIfNeeded() async {
         guard !self.isLocalGatewayFixtureEnabled,
               self.chatSessionRoutingContract == nil,
-              let store = self.makeChatOfflineStore(),
-              let identity = await store.loadSessionRoutingIdentity(),
+              let store = self.makeChatOfflineStore()
+        else { return }
+        let identity = await store.loadSessionRoutingIdentity()
+        #if DEBUG
+        if let testChatSessionRoutingRestoreHandler {
+            await testChatSessionRoutingRestoreHandler()
+        }
+        #endif
+        guard !Task.isCancelled,
+              let identity,
               self.chatTranscriptCacheGatewayID == store.gatewayID,
               self.chatSessionRoutingContract == nil
         else { return }
@@ -3805,8 +3814,8 @@ extension NodeAppModel {
 
     private func invalidateOperatorTalkRoute() {
         self.operatorTalkConnectionGeneration &+= 1
-        self.chatSessionRoutingRestoreTask?.cancel()
-        self.chatSessionRoutingRestoreTask = nil
+        // A socket replacement invalidates Talk, not gateway identity hydration. The
+        // replacement connection must await the same restore before admitting capture.
         self.setOperatorConnected(false)
         self.talkMode.updateGatewayConnected(false)
         self.invalidateNodePushToTalkRoute()
@@ -7588,6 +7597,14 @@ extension NodeAppModel {
 
     func _test_setTalkCaptureStartedHandler(_ handler: (() async -> Void)?) {
         self.testTalkCaptureStartedHandler = handler
+    }
+
+    func _test_setChatSessionRoutingRestoreHandler(_ handler: (() async -> Void)?) {
+        self.testChatSessionRoutingRestoreHandler = handler
+    }
+
+    func _test_hasChatSessionRoutingRestoreTask() -> Bool {
+        self.chatSessionRoutingRestoreTask != nil
     }
 
     func _test_talkPreparationWaiterCount() -> Int {

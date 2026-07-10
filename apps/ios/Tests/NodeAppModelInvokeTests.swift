@@ -1161,6 +1161,45 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
     }
 
+    @Test @MainActor func `same-route reconnect preserves routing restore before Talk admission`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let barrier = TalkPreparationBarrier()
+        let stableID = "talk-routing-restore-\(UUID().uuidString)"
+        let databaseURL = try #require(NodeAppModel.chatTranscriptCacheDatabaseURL(gatewayID: stableID))
+        let identity = try #require(OpenClawChatSessionRoutingIdentity(
+            scope: "per-sender",
+            mainSessionKey: "restored-main",
+            defaultAgentID: "main"))
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: stableID)
+        await store.storeSessionRoutingIdentity(identity)
+        await store.retire()
+        appModel._test_setChatSessionRoutingRestoreHandler {
+            await barrier.suspendFirstPreparation()
+        }
+        defer {
+            barrier.release()
+            appModel._test_setChatSessionRoutingRestoreHandler(nil)
+            OpenClawChatSQLiteTranscriptCache.removeDatabaseFiles(at: databaseURL)
+            appModel.voiceWake.stop()
+        }
+
+        appModel._test_prepareForGatewayConnect(stableID: stableID)
+        await barrier.waitUntilEntered()
+        appModel._test_invalidateOperatorTalkRoute()
+
+        #expect(appModel._test_hasChatSessionRoutingRestoreTask())
+        #expect(!talkMode.isGatewayConnected)
+        #expect(appModel.chatSessionRoutingContract == nil)
+
+        barrier.release()
+        await appModel._test_admitTalkAfterSessionHydration()
+
+        #expect(talkMode.isGatewayConnected)
+        #expect(appModel.chatSessionRoutingContract == identity.contract)
+        #expect(talkMode.isUsingMainSessionKey(appModel.chatSessionKey))
+    }
+
     @Test @MainActor func `gateway main key refresh preserves focused Talk session`() {
         let talkMode = TalkModeManager(allowSimulatorCapture: true)
         let appModel = NodeAppModel(talkMode: talkMode)
