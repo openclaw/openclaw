@@ -1,6 +1,7 @@
 // Skill update tests protect API-key normalization so redacted config sentinels
 // do not overwrite existing secret values.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { OPENCLAW_CONFIG_MANAGED_ENV } from "../../config/config-ownership.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
 
@@ -52,6 +53,10 @@ vi.mock("../../config/config.js", () => {
 
 const { skillsHandlers } = await import("./skills.js");
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 function expectWrittenSkillEntry(skillKey: string, entry: unknown) {
   if (!writtenConfig) {
     throw new Error("Expected written config");
@@ -67,6 +72,34 @@ function expectWrittenSkillEntry(skillKey: string, entry: unknown) {
 }
 
 describe("skills.update", () => {
+  it("rejects config-backed updates when config is externally managed", async () => {
+    vi.stubEnv(OPENCLAW_CONFIG_MANAGED_ENV, "1");
+    writtenConfig = null;
+
+    let response: { ok: boolean; error?: unknown } | null = null;
+    await skillsHandlers["skills.update"]({
+      params: {
+        skillKey: "brave-search",
+        enabled: false,
+      },
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: { getRuntimeConfig: () => ({ skills: { entries: {} } }) } as never,
+      respond: (ok, _result, error) => {
+        response = { ok, error };
+      },
+    });
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: {
+        details: { code: "OPENCLAW_CONFIG_MANAGED" },
+      },
+    });
+    expect(writtenConfig).toBeNull();
+  });
+
   it("strips embedded CR/LF from apiKey", async () => {
     writtenConfig = null;
     loadedConfig = {

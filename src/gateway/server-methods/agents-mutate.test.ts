@@ -1,7 +1,9 @@
 // Agent mutation tests cover create/update/delete handlers, safe workspace file
 // access, config preconditions, trash cleanup, and attestation handling.
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { OPENCLAW_CONFIG_MANAGED_ENV } from "../../config/config-ownership.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 /* ------------------------------------------------------------------ */
 /* Mocks                                                              */
 /* ------------------------------------------------------------------ */
@@ -318,6 +320,11 @@ function expectRespondErrorContaining(respond: ReturnType<typeof vi.fn>, text: s
   return error;
 }
 
+function expectManagedConfigError(respond: ReturnType<typeof vi.fn>) {
+  const error = expectRespondErrorContaining(respond, "externally managed");
+  expect(error.details).toEqual({ code: "OPENCLAW_CONFIG_MANAGED" });
+}
+
 function firstRespondResult(respond: ReturnType<typeof vi.fn>): unknown {
   return mockCallArg(respond, 0, 1);
 }
@@ -534,6 +541,27 @@ describe("agents.create", () => {
     });
     expect(mocks.ensureAgentWorkspace).toHaveBeenCalled();
     expect(mocks.writeConfigFile).toHaveBeenCalled();
+  });
+
+  it("rejects managed config before creating workspace files", async () => {
+    await withEnvAsync(
+      { [OPENCLAW_CONFIG_MANAGED_ENV]: "1", OPENCLAW_NIX_MODE: undefined },
+      async () => {
+        const { respond, promise } = makeCall("agents.create", {
+          name: "Managed Agent",
+          workspace: "/tmp/managed-agent",
+        });
+        await promise;
+
+        expectManagedConfigError(respond);
+      },
+    );
+
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(mocks.fsMkdir).not.toHaveBeenCalled();
+    expect(mocks.rootRead).not.toHaveBeenCalled();
+    expect(mocks.rootWrite).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("ensures workspace is set up before writing config", async () => {
@@ -771,6 +799,27 @@ describe("agents.update", () => {
 
     expect(respond).toHaveBeenCalledWith(true, { ok: true, agentId: "test-agent" }, undefined);
     expect(mocks.writeConfigFile).toHaveBeenCalled();
+  });
+
+  it("rejects managed config before updating workspace files", async () => {
+    await withEnvAsync(
+      { [OPENCLAW_CONFIG_MANAGED_ENV]: "1", OPENCLAW_NIX_MODE: undefined },
+      async () => {
+        const { respond, promise } = makeCall("agents.update", {
+          agentId: "test-agent",
+          workspace: "/new/workspace",
+          avatar: "https://example.com/managed.png",
+        });
+        await promise;
+
+        expectManagedConfigError(respond);
+      },
+    );
+
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(mocks.rootRead).not.toHaveBeenCalled();
+    expect(mocks.rootWrite).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("rejects updating a nonexistent agent", async () => {
@@ -1125,6 +1174,24 @@ describe("agents.delete", () => {
     expect(mocks.writeConfigFile).toHaveBeenCalled();
     // moveToTrashBestEffort calls fs.access then movePathToTrash for each dir
     expect(mocks.movePathToTrash).toHaveBeenCalled();
+  });
+
+  it("rejects managed config before deleting config or agent files", async () => {
+    await withEnvAsync(
+      { [OPENCLAW_CONFIG_MANAGED_ENV]: "1", OPENCLAW_NIX_MODE: undefined },
+      async () => {
+        const { respond, promise } = makeCall("agents.delete", {
+          agentId: "test-agent",
+        });
+        await promise;
+
+        expectManagedConfigError(respond);
+      },
+    );
+
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.fsAccess).not.toHaveBeenCalled();
+    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
   });
 
   it("trashes workspace attestations when deleting the last workspace owner", async () => {

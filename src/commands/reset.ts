@@ -12,6 +12,7 @@ import {
 } from "../../packages/terminal-core/src/prompt-style.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isNixMode } from "../config/config.js";
+import { assertConfigWriteAllowedInCurrentMode } from "../config/nix-mode-write-guard.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveCleanupPlanFromDisk } from "./cleanup-plan.js";
@@ -126,6 +127,9 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   const dryRun = Boolean(opts.dryRun);
   const { stateDir, configPath, oauthDir, configInsideState, oauthInsideState, workspaceDirs } =
     resolveCleanupPlanFromDisk();
+  if (!dryRun) {
+    assertConfigWriteAllowedInCurrentMode({ configPath });
+  }
 
   if (scope !== "config") {
     logBackupRecommendation(runtime);

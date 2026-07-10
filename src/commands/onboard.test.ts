@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { onboardCommand, setupWizardCommand } from "./onboard.js";
 
 const mocks = vi.hoisted(() => ({
@@ -100,6 +101,22 @@ describe("setupWizardCommand", () => {
     } finally {
       platformSpy.mockRestore();
     }
+  });
+
+  it("rejects externally managed config before setup dispatch", async () => {
+    const runtime = makeRuntime();
+
+    await withEnvAsync({ OPENCLAW_CONFIG_MANAGED: "1", OPENCLAW_NIX_MODE: undefined }, async () => {
+      await expect(setupWizardCommand({}, runtime)).rejects.toMatchObject({
+        code: "OPENCLAW_CONFIG_MANAGED",
+      });
+    });
+
+    expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
   it("defaults --reset to config+creds+sessions scope", async () => {

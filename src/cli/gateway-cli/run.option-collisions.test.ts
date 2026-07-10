@@ -1131,6 +1131,7 @@ describe("gateway run option collisions", () => {
 
   it.each([
     "OPENCLAW_AGENT_DIR",
+    "OPENCLAW_CONFIG_MANAGED",
     "OPENCLAW_INCLUDE_ROOTS",
     "OPENCLAW_NIX_MODE",
     "OPENCLAW_OAUTH_DIR",

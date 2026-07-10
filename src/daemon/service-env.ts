@@ -489,6 +489,7 @@ function buildCommonServiceEnvironment(
     TMPDIR: sharedEnv.tmpDir,
     NODE_EXTRA_CA_CERTS: sharedEnv.nodeCaCerts,
     NODE_USE_SYSTEM_CA: sharedEnv.nodeUseSystemCa,
+    OPENCLAW_CONFIG_MANAGED: env.OPENCLAW_CONFIG_MANAGED === "1" ? "1" : undefined,
     OPENCLAW_STATE_DIR: sharedEnv.stateDir,
     OPENCLAW_CONFIG_PATH: sharedEnv.configPath,
     ...sharedEnv.proxyEnv,

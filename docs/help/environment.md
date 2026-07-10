@@ -158,14 +158,15 @@ Both resolve from process env at activation time. SecretRef details are document
 The config `env` block itself does not resolve SecretRefs or `file:...`
 shorthand values.
 
-## Path-related env vars
+## Config and path env vars
 
-| Variable                 | Purpose                                                                                                                                                                                                                                 |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OPENCLAW_HOME`          | Override the home directory used for internal OpenClaw path defaults (`~/.openclaw/`, agent dirs, sessions, credentials, installer onboarding, and the default dev checkout). Useful when running OpenClaw as a dedicated service user. |
-| `OPENCLAW_STATE_DIR`     | Override the state directory (default `~/.openclaw`).                                                                                                                                                                                   |
-| `OPENCLAW_CONFIG_PATH`   | Override the config file path (default `~/.openclaw/openclaw.json`).                                                                                                                                                                    |
-| `OPENCLAW_INCLUDE_ROOTS` | Path-list of directories where `$include` directives may resolve files outside the config directory (default: none - `$include` is confined to the config dir). Tilde-expanded.                                                         |
+| Variable                  | Purpose                                                                                                                                                                                                                                                                                       |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENCLAW_CONFIG_MANAGED` | Set to the exact value `1` when an external controller owns the config file. OpenClaw keeps reads and reloads enabled but refuses config writes. Set this in the host or service environment, not inside `openclaw.json`. See [Managed config](/gateway/configuration#managed-config-gitops). |
+| `OPENCLAW_HOME`           | Override the home directory used for internal OpenClaw path defaults (`~/.openclaw/`, agent dirs, sessions, credentials, installer onboarding, and the default dev checkout). Useful when running OpenClaw as a dedicated service user.                                                       |
+| `OPENCLAW_STATE_DIR`      | Override the state directory (default `~/.openclaw`).                                                                                                                                                                                                                                         |
+| `OPENCLAW_CONFIG_PATH`    | Override the config file path (default `~/.openclaw/openclaw.json`).                                                                                                                                                                                                                          |
+| `OPENCLAW_INCLUDE_ROOTS`  | Path-list of directories where `$include` directives may resolve files outside the config directory (default: none - `$include` is confined to the config dir). Tilde-expanded.                                                                                                               |
 
 ## Logging
 

@@ -14,9 +14,12 @@ import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "./future-version-gua
 import type { OpenClawConfig } from "./types.js";
 
 function isBlockedConfigEnvVar(key: string): boolean {
+  const upperKey = key.toUpperCase();
   return (
-    key.toUpperCase() === ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV ||
-    key.toUpperCase() === "OPENCLAW_INCLUDE_ROOTS" ||
+    upperKey === ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV ||
+    upperKey === "OPENCLAW_CONFIG_MANAGED" ||
+    upperKey === "OPENCLAW_INCLUDE_ROOTS" ||
+    upperKey === "OPENCLAW_NIX_MODE" ||
     isDangerousHostEnvVarName(key) ||
     isDangerousHostEnvOverrideVarName(key)
   );

@@ -20,6 +20,7 @@ import {
   shouldRemoveWorkspaceAttestation,
 } from "../agents/workspace.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { assertConfigWriteAllowedInCurrentMode } from "../config/nix-mode-write-guard.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
@@ -315,7 +316,9 @@ async function resolveMoveToTrashAllowedRoots(targetPath: string): Promise<strin
 
 /** Deletes onboarding-managed state according to the selected reset scope. */
 export async function handleReset(scope: ResetScope, workspaceDir: string, runtime: RuntimeEnv) {
-  await moveToTrash(resolveConfigPath(), runtime);
+  const configPath = resolveConfigPath();
+  assertConfigWriteAllowedInCurrentMode({ configPath });
+  await moveToTrash(configPath, runtime);
   if (scope === "config") {
     return;
   }

@@ -72,6 +72,13 @@ export {
   assertConfigWriteAllowedInCurrentMode,
   NixModeConfigMutationError,
 } from "./nix-mode-write-guard.js";
+export {
+  ManagedConfigMutationError,
+  OPENCLAW_CONFIG_MANAGED_ENV,
+  resolveConfigOwnership,
+  resolveIsConfigManaged,
+} from "./config-ownership.js";
+export type { ConfigOwnership } from "./config-ownership.js";
 export * from "./paths.js";
 export * from "./recovery-policy.js";
 export * from "./runtime-overrides.js";

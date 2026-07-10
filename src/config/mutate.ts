@@ -868,7 +868,7 @@ async function replaceConfigFileUnlocked(params: {
   };
   mergedWriteOptions.assertConfigPathForWrite?.();
   assertExpectedConfigPathMatches(snapshot, mergedWriteOptions.expectedConfigPath);
-  assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path });
+  assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path, env: params.io?.env });
   markActiveConfigMutationPath(snapshot.path);
   const previousHash = assertBaseHashMatches(snapshot, params.baseHash);
   const afterWrite = resolveConfigWriteAfterWrite(
@@ -984,7 +984,7 @@ async function transformConfigFileAttempt<T>(
   }
   mergedWriteOptions.assertConfigPathForWrite?.();
   assertExpectedConfigPathMatches(snapshot, mergedWriteOptions.expectedConfigPath);
-  assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path });
+  assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path, env: params.io?.env });
   markActiveConfigMutationPath(snapshot.path);
   const previousHash = assertBaseHashMatches(snapshot, params.baseHash);
   const baseConfig = params.base === "runtime" ? snapshot.runtimeConfig : snapshot.sourceConfig;

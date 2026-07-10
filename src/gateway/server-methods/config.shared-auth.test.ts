@@ -2,6 +2,10 @@
  * Tests shared gateway auth behavior across config method updates.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  ManagedConfigMutationError,
+  OPENCLAW_CONFIG_MANAGED_ENV,
+} from "../../config/config-ownership.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -13,6 +17,7 @@ import {
 } from "./config.test-helpers.js";
 
 const readConfigFileSnapshotForWriteMock = vi.fn();
+const readConfigFileSnapshotMock = vi.fn();
 const writeConfigFileMock = vi.fn();
 const persistedConfigResultMock = vi.fn((config: OpenClawConfig) => config);
 const validateConfigObjectWithPluginsMock = vi.fn();
@@ -54,6 +59,7 @@ vi.mock("../../config/io.js", async () => {
   return {
     ...actual,
     createConfigIO: () => ({ configPath: "/tmp/openclaw.json" }),
+    readConfigFileSnapshot: readConfigFileSnapshotMock,
     readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
   };
 });
@@ -101,6 +107,7 @@ const GATEWAY_CONFIG_WRITE_OPTIONS = {
     includeAuthStoreRefs: false,
   },
 };
+const originalConfigManagedEnv = process.env[OPENCLAW_CONFIG_MANAGED_ENV];
 
 function tokenAuthConfig(token: string): OpenClawConfig {
   return {
@@ -187,9 +194,15 @@ function expectNoDirectRestart(): void {
 afterEach(() => {
   vi.clearAllMocks();
   resetPluginRuntimeStateForTest();
+  if (originalConfigManagedEnv === undefined) {
+    delete process.env[OPENCLAW_CONFIG_MANAGED_ENV];
+  } else {
+    process.env[OPENCLAW_CONFIG_MANAGED_ENV] = originalConfigManagedEnv;
+  }
 });
 
 beforeEach(() => {
+  delete process.env[OPENCLAW_CONFIG_MANAGED_ENV];
   validateConfigObjectWithPluginsMock.mockImplementation((config: OpenClawConfig) => ({
     ok: true,
     config,
@@ -201,6 +214,62 @@ beforeEach(() => {
   );
   restartSentinelMocks.writeRestartSentinel.mockClear();
   persistedConfigResultMock.mockImplementation((config: OpenClawConfig) => config);
+});
+
+describe("externally managed config gateway methods", () => {
+  it.each(["config.set", "config.patch", "config.apply"] as const)(
+    "rejects %s before write or restart side effects",
+    async (method) => {
+      process.env[OPENCLAW_CONFIG_MANAGED_ENV] = "1";
+      const { options, respond, logGateway, disconnectClientsUsingSharedGatewayAuth } =
+        createConfigHandlerHarness({
+          method,
+          params: {
+            baseHash: "base-hash",
+            raw: JSON.stringify({ gateway: { port: 19001 } }),
+          },
+        });
+
+      await configHandlers[method](options);
+      await flushConfigHandlerMicrotasks();
+
+      const managedError = new ManagedConfigMutationError();
+      expect(respond).toHaveBeenCalledWith(false, undefined, {
+        code: "INVALID_REQUEST",
+        message: managedError.message,
+        retryable: false,
+        details: { code: managedError.code },
+      });
+      expect(readConfigFileSnapshotForWriteMock).not.toHaveBeenCalled();
+      expect(validateConfigObjectWithPluginsMock).not.toHaveBeenCalled();
+      expect(prepareSecretsRuntimeSnapshotMock).not.toHaveBeenCalled();
+      expect(writeConfigFileMock).not.toHaveBeenCalled();
+      expect(restartSentinelMocks.writeRestartSentinel).not.toHaveBeenCalled();
+      expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+      expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
+      expect(logGateway.info).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps config.get available", async () => {
+    process.env[OPENCLAW_CONFIG_MANAGED_ENV] = "1";
+    const snapshot = createConfigWriteSnapshot({ gateway: { port: 19000 } }).snapshot;
+    readConfigFileSnapshotMock.mockResolvedValueOnce(snapshot);
+    const { options, respond } = createConfigHandlerHarness({
+      method: "config.get",
+      params: {},
+    });
+
+    await configHandlers["config.get"](options);
+
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(readConfigFileSnapshotForWriteMock).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ path: "/tmp/openclaw.json", valid: true }),
+      undefined,
+    );
+  });
 });
 
 describe("config shared auth disconnects", () => {

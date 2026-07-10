@@ -1,5 +1,6 @@
 // Plugin management Gateway handler tests cover DTO mapping, trust errors, and reload planning.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OPENCLAW_CONFIG_MANAGED_ENV } from "../../config/config-ownership.js";
 
 const managementMocks = vi.hoisted(() => {
   class ManagedPluginLifecycleError extends Error {
@@ -92,6 +93,10 @@ describe("plugin management Gateway handlers", () => {
     searchMock.mockReset();
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("returns cold Workboard inventory without claiming runtime loaded state", async () => {
     managementMocks.list.mockResolvedValue({
       plugins: [workboard],
@@ -106,6 +111,34 @@ describe("plugin management Gateway handlers", () => {
       response: { plugins: [workboard], diagnostics: [], mutationAllowed: true },
       error: undefined,
     });
+  });
+
+  it.each([
+    {
+      method: "plugins.install",
+      params: { source: "clawhub", packageName: "community/plugin" },
+    },
+    { method: "plugins.uninstall", params: { pluginId: "diffs" } },
+    {
+      method: "plugins.setEnabled",
+      params: { pluginId: "workboard", enabled: true },
+    },
+  ])("rejects $method when config is externally managed", async ({ method, params }) => {
+    vi.stubEnv(OPENCLAW_CONFIG_MANAGED_ENV, "1");
+
+    const result = await callHandler(method, params);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        retryable: false,
+        details: { code: "OPENCLAW_CONFIG_MANAGED" },
+      },
+    });
+    expect(managementMocks.install).not.toHaveBeenCalled();
+    expect(managementMocks.uninstall).not.toHaveBeenCalled();
+    expect(managementMocks.setEnabled).not.toHaveBeenCalled();
   });
 
   it("maps plugin-only ClawHub search results to the public DTO", async () => {

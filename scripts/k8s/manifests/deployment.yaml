@@ -22,16 +22,15 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       initContainers:
-        - name: init-config
+        - name: init-workspace
           image: busybox:1.37
           imagePullPolicy: IfNotPresent
           command:
             - sh
             - -c
             - |
-              cp /config/openclaw.json /home/node/.openclaw/openclaw.json
               mkdir -p /home/node/.openclaw/workspace
-              cp /config/AGENTS.md /home/node/.openclaw/workspace/AGENTS.md
+              cp /etc/openclaw-config/AGENTS.md /home/node/.openclaw/workspace/AGENTS.md
           securityContext:
             runAsUser: 1000
             runAsGroup: 1000
@@ -46,7 +45,8 @@ spec:
             - name: openclaw-home
               mountPath: /home/node/.openclaw
             - name: config
-              mountPath: /config
+              mountPath: /etc/openclaw-config
+              readOnly: true
       containers:
         - name: gateway
           image: ghcr.io/openclaw/openclaw:slim
@@ -63,7 +63,11 @@ spec:
           env:
             - name: HOME
               value: /home/node
-            - name: OPENCLAW_CONFIG_DIR
+            - name: OPENCLAW_CONFIG_PATH
+              value: /etc/openclaw-config/openclaw.json
+            - name: OPENCLAW_CONFIG_MANAGED
+              value: "1"
+            - name: OPENCLAW_STATE_DIR
               value: /home/node/.openclaw
             - name: NODE_ENV
               value: production
@@ -122,6 +126,9 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
           volumeMounts:
+            - name: config
+              mountPath: /etc/openclaw-config
+              readOnly: true
             - name: openclaw-home
               mountPath: /home/node/.openclaw
             - name: tmp-volume

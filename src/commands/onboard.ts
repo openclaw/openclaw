@@ -6,6 +6,7 @@
  */
 import { formatCliCommand } from "../cli/command-format.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { assertConfigWriteAllowedInCurrentMode } from "../config/nix-mode-write-guard.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -125,6 +126,8 @@ export async function setupWizardCommand(
     runtime.exit(1);
     return;
   }
+
+  assertConfigWriteAllowedInCurrentMode();
 
   if (normalizedOpts.reset) {
     // Reset runs before setup mode dispatch so both interactive and

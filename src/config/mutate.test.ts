@@ -97,6 +97,7 @@ const allowConfigPathWrite = () => {};
 
 describe("config mutate helpers", () => {
   const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-config-mutate-" });
+  const originalManagedMode = process.env.OPENCLAW_CONFIG_MANAGED;
   const originalNixMode = process.env.OPENCLAW_NIX_MODE;
 
   beforeAll(async () => {
@@ -104,6 +105,11 @@ describe("config mutate helpers", () => {
   });
 
   afterAll(async () => {
+    if (originalManagedMode === undefined) {
+      delete process.env.OPENCLAW_CONFIG_MANAGED;
+    } else {
+      process.env.OPENCLAW_CONFIG_MANAGED = originalManagedMode;
+    }
     if (originalNixMode === undefined) {
       delete process.env.OPENCLAW_NIX_MODE;
     } else {
@@ -125,6 +131,7 @@ describe("config mutate helpers", () => {
     ioMocks.resolveConfigSnapshotHash.mockImplementation(
       (snapshot: { hash?: string }) => snapshot.hash ?? null,
     );
+    delete process.env.OPENCLAW_CONFIG_MANAGED;
     delete process.env.OPENCLAW_NIX_MODE;
   });
 
@@ -499,6 +506,50 @@ describe("config mutate helpers", () => {
     expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
+  it("uses an injected managed environment for replace guards", async () => {
+    const snapshot = createSnapshot({
+      hash: "hash-managed-replace",
+      sourceConfig: { gateway: { port: 18789 } },
+    });
+
+    await expect(
+      replaceConfigFile({
+        snapshot,
+        nextConfig: { gateway: { port: 19001 } },
+        io: {
+          env: { OPENCLAW_CONFIG_MANAGED: "1" },
+          readConfigFileSnapshotForWrite: ioMocks.readConfigFileSnapshotForWrite,
+          writeConfigFile: ioMocks.writeConfigFile,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "OPENCLAW_CONFIG_MANAGED" });
+
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("uses an injected Nix environment for mutation guards", async () => {
+    const snapshot = createSnapshot({
+      hash: "hash-nix-mutate",
+      sourceConfig: { gateway: { port: 18789 } },
+    });
+    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({ snapshot, writeOptions: {} });
+
+    await expect(
+      mutateConfigFile({
+        io: {
+          env: { OPENCLAW_NIX_MODE: "1" },
+          readConfigFileSnapshotForWrite: ioMocks.readConfigFileSnapshotForWrite,
+          writeConfigFile: ioMocks.writeConfigFile,
+        },
+        mutate(draft) {
+          draft.gateway = { ...draft.gateway, port: 19001 };
+        },
+      }),
+    ).rejects.toMatchObject({ code: "OPENCLAW_NIX_MODE_CONFIG_IMMUTABLE" });
+
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("reuses a provided snapshot and write options for replace", async () => {
     const snapshot = createSnapshot({
       hash: "hash-1",
@@ -607,6 +658,47 @@ describe("config mutate helpers", () => {
       gateway: { auth: { mode: "token", token: "minted" } },
       meta: { lastTouchedVersion: "test" },
     });
+  });
+
+  it("blocks optimized include writes with an injected managed environment", async () => {
+    const home = await suiteRootTracker.make("managed-include");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const pluginsPath = path.join(home, ".openclaw", "config", "plugins.json5");
+    const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
+    await fs.mkdir(path.dirname(pluginsPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({ plugins: { $include: "./config/plugins.json5" } }, null, 2)}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
+    const snapshot = createSnapshot({
+      hash: "hash-managed-include",
+      path: configPath,
+      parsed: { plugins: { $include: "./config/plugins.json5" } },
+      sourceConfig: { plugins: { entries: {} } },
+    });
+
+    await expect(
+      replaceConfigFile({
+        snapshot,
+        writeOptions: {
+          expectedConfigPath: configPath,
+          assertConfigPathForWrite: allowConfigPathWrite,
+          includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+        },
+        nextConfig: { plugins: { entries: { demo: { enabled: true } } } },
+        io: {
+          env: { OPENCLAW_CONFIG_MANAGED: "1" },
+          readConfigFileSnapshotForWrite: ioMocks.readConfigFileSnapshotForWrite,
+          writeConfigFile: ioMocks.writeConfigFile,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "OPENCLAW_CONFIG_MANAGED" });
+
+    expect(backupMocks.maintainConfigBackups).not.toHaveBeenCalled();
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+    await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
   });
 
   it("repairs invalid config through a single-file top-level plugins include", async () => {

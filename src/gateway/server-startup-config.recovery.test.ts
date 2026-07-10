@@ -14,6 +14,7 @@ const applyPluginAutoEnable = vi.hoisted(() =>
 );
 const configMocks = vi.hoisted(() => ({
   isNixMode: { value: false },
+  isConfigManaged: { value: false },
 }));
 const pluginManifestRegistry = vi.hoisted(() => ({ plugins: [], diagnostics: [] }));
 const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
@@ -62,6 +63,10 @@ vi.mock("../config/io.js", () => ({
   readConfigFileSnapshot: vi.fn(),
   readConfigFileSnapshotWithPluginMetadata: vi.fn(),
   writeConfigFile: vi.fn(),
+}));
+
+vi.mock("../config/config-ownership.js", () => ({
+  resolveIsConfigManaged: () => configMocks.isConfigManaged.value || configMocks.isNixMode.value,
 }));
 
 vi.mock("../config/paths.js", () => ({
@@ -318,6 +323,7 @@ describe("gateway startup config validation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     configMocks.isNixMode.value = false;
+    configMocks.isConfigManaged.value = false;
     installConfigIoMockDefaults();
   });
 
@@ -482,6 +488,29 @@ describe("gateway startup config validation", () => {
     await expectStartupRejects(
       `Invalid config at ${configPath}:\ngateway.mode: Expected 'local' or 'remote'\nRun "openclaw doctor --fix" to repair, then retry.\nIf startup is still blocked, inspect the adjacent .bak backup before restoring it manually.`,
     );
+  });
+
+  it("directs externally managed config repairs back to the deployment source", async () => {
+    const invalidSnapshot = buildSnapshot({ valid: false, raw: "{ invalid json" });
+    vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
+    configMocks.isConfigManaged.value = true;
+
+    const start = loadTestStartup({});
+    await expect(start).rejects.toThrow(
+      "Config is externally managed. Fix and republish the external deployment source, then retry.",
+    );
+    await start.catch((error: unknown) => {
+      expect(String(error)).not.toContain("openclaw doctor --fix");
+      expect(String(error)).not.toContain(".bak");
+    });
+  });
+
+  it("preserves Nix-specific repair guidance for managed config", async () => {
+    const invalidSnapshot = buildSnapshot({ valid: false, raw: "{ invalid json" });
+    vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
+    configMocks.isNixMode.value = true;
+
+    await expectStartupRejects("Update your Nix-managed OpenClaw config and rebuild, then retry.");
   });
 
   it("does not suggest doctor repair for plugin packaging compiled-output failures", async () => {

@@ -67,8 +67,17 @@ The script creates a Kubernetes Secret with the API key and an auto-generated ga
 ```bash
 export <PROVIDER>_API_KEY="..."
 ./scripts/k8s/deploy.sh --create-secret
+```
+
+For a first deployment, continue with:
+
+```bash
 ./scripts/k8s/deploy.sh
 ```
+
+For an existing deployment, `--create-secret` instead prints the explicit
+`kubectl rollout restart` and `kubectl rollout status` commands needed to load
+the new environment values.
 
 Add `--show-token` to either command to print the token to stdout for local testing.
 
@@ -83,10 +92,10 @@ open http://localhost:18789
 
 ```text
 Namespace: openclaw (configurable via OPENCLAW_NAMESPACE)
-├── Deployment/openclaw        # Single pod, init container + gateway
+├── Deployment/openclaw        # Single pod, workspace init + gateway
 ├── Service/openclaw           # ClusterIP on port 18789
-├── PersistentVolumeClaim      # 10Gi for agent state and config
-├── ConfigMap/openclaw-config  # openclaw.json + AGENTS.md
+├── PersistentVolumeClaim      # 10Gi for mutable agent state + workspace
+├── ConfigMap/openclaw-config  # Read-only openclaw.json + AGENTS.md source
 └── Secret/openclaw-secrets    # Gateway token + API keys
 ```
 
@@ -98,11 +107,31 @@ Edit the `AGENTS.md` in `scripts/k8s/manifests/configmap.yaml` and redeploy:
 
 ```bash
 ./scripts/k8s/deploy.sh
+kubectl rollout restart deployment/openclaw -n openclaw
+kubectl rollout status deployment/openclaw -n openclaw --timeout=300s
 ```
+
+The workspace init container copies `AGENTS.md` into the mutable workspace on each pod start. It is a workspace seed, not part of the live config projection, so changing it requires the explicit restart above.
 
 ### Gateway config
 
-Edit `openclaw.json` in `scripts/k8s/manifests/configmap.yaml`. See [Gateway configuration](/gateway/configuration) for the full reference.
+Edit `openclaw.json` in `scripts/k8s/manifests/configmap.yaml`, then apply it:
+
+```bash
+./scripts/k8s/deploy.sh
+```
+
+The gateway mounts the whole ConfigMap read-only at `/etc/openclaw-config` and keeps mutable state on the PVC at `/home/node/.openclaw`. `OPENCLAW_CONFIG_MANAGED=1` makes the projected file authoritative: config writes through the CLI, Control UI, or gateway API are rejected, so make changes in the manifest or your GitOps source instead.
+
+Kubernetes projects ConfigMap volume updates into the existing pod, and OpenClaw watches the projected config in process. Hot-safe settings apply without replacing the pod. Settings classified as restart-required can still perform a gateway lifecycle restart and disconnect clients. ConfigMap projection is eventual and can take up to the kubelet sync period plus its cache propagation delay. Mount the whole directory as these manifests do; [`subPath` ConfigMap mounts do not receive updates](https://kubernetes.io/docs/concepts/configuration/configmap/#mounted-configmaps-are-updated-automatically).
+
+Keep the ConfigMap name and Deployment volume reference stable, and do not add
+a config checksum annotation to the Pod template. If you use Kustomize's
+`configMapGenerator`, set `generatorOptions.disableNameSuffixHash: true`;
+otherwise each generated name changes the Pod template and Kubernetes rolls the
+pod instead of projecting the update into the existing process.
+
+See [Gateway configuration](/gateway/configuration) for the full reference.
 
 ### Add providers
 
@@ -112,10 +141,11 @@ Re-run with additional keys exported:
 export ANTHROPIC_API_KEY="..."
 export OPENAI_API_KEY="..."
 ./scripts/k8s/deploy.sh --create-secret
-./scripts/k8s/deploy.sh
+kubectl rollout restart deployment/openclaw -n openclaw
+kubectl rollout status deployment/openclaw -n openclaw --timeout=300s
 ```
 
-Existing provider keys stay in the Secret unless you overwrite them.
+Existing provider keys stay in the Secret unless you overwrite them. Secret values are exposed to the gateway as environment variables, so an existing pod needs the explicit restart above. On an initial deployment, create the Secret first and then run `./scripts/k8s/deploy.sh`; no extra restart is needed.
 
 Or patch the Secret directly:
 
@@ -155,7 +185,12 @@ To expose the gateway through an Ingress or load balancer:
 ./scripts/k8s/deploy.sh
 ```
 
-This applies all manifests and restarts the pod to pick up any config or secret changes.
+This applies all manifests without forcing a pod restart. ConfigMap updates are projected into the running pod and reconciled by the gateway. Restart explicitly after changing Secret-backed environment variables or the ConfigMap-provided `AGENTS.md` workspace seed. A changed Deployment image reference already creates a Kubernetes rollout.
+
+```bash
+kubectl rollout restart deployment/openclaw -n openclaw
+kubectl rollout status deployment/openclaw -n openclaw --timeout=300s
+```
 
 ## Teardown
 
@@ -170,6 +205,8 @@ This deletes the namespace and all resources in it, including the PVC.
 - The gateway binds to loopback inside the pod by default, so the included setup is for `kubectl port-forward`.
 - No cluster-scoped resources; everything lives in a single namespace.
 - Security hardening: `readOnlyRootFilesystem`, `drop: ALL` capabilities, non-root user (UID 1000).
+- Desired config is a read-only ConfigMap projection; mutable sessions, databases, caches, plugins, and workspace data stay on the PVC.
+- The ConfigMap is mounted as a directory, not with `subPath`, so Kubernetes can atomically project updates without replacing the pod.
 - The default config keeps the Control UI on the safer local-access path: loopback bind plus `kubectl port-forward` to `http://127.0.0.1:18789`.
 - If you move beyond localhost access, use the supported remote model: HTTPS/Tailscale plus the appropriate gateway bind and Control UI origin settings.
 - Secrets are generated in a temp directory and applied directly to the cluster; no secret material is written to the repo checkout.

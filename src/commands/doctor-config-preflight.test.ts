@@ -1,8 +1,9 @@
 // Doctor config preflight tests cover last-known-good snapshots and config snapshot promotion.
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "../config/config.js";
-import { withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
+import { withEnvOverride, withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -45,6 +46,28 @@ describe("runDoctorConfigPreflight", () => {
       });
 
       expect(readConfigHealthRow({ ...process.env, HOME: home }, configPath)).toBeUndefined();
+    });
+  });
+
+  it.each([
+    ["external", { OPENCLAW_CONFIG_MANAGED: "1", OPENCLAW_NIX_MODE: undefined }],
+    ["Nix", { OPENCLAW_CONFIG_MANAGED: undefined, OPENCLAW_NIX_MODE: "1" }],
+  ] as const)("does not migrate legacy config in %s managed mode", async (_label, env) => {
+    await withTempHome(async (home) => {
+      const legacyPath = path.join(home, ".clawdbot", "clawdbot.json");
+      const targetPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(legacyPath, '{ gateway: { mode: "local" } }\n', "utf-8");
+
+      await withEnvOverride(env, async () => {
+        await runDoctorConfigPreflight({
+          migrateState: false,
+          invalidConfigNote: false,
+          observe: false,
+        });
+      });
+
+      await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 

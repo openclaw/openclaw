@@ -27,6 +27,9 @@ vi.mock("../config/config.js", () => ({
     if (params?.env?.OPENCLAW_NIX_MODE === "1") {
       throw new Error("Config is managed by Nix");
     }
+    if (params?.env?.OPENCLAW_CONFIG_MANAGED === "1") {
+      throw new Error("Config is externally managed");
+    }
   },
   readConfigFileSnapshotForWrite: () => mocks.readConfig(),
   replaceConfigFile: (params: unknown) => mocks.replaceConfig(params),
@@ -372,17 +375,46 @@ describe("plugin management service", () => {
     expect(catalog.mutationAllowed).toBe(true);
   });
 
-  it("refuses mutation in Nix mode before reading or writing config", async () => {
-    await expect(
-      setManagedPluginEnabled({
-        pluginId: "workboard",
-        enabled: true,
-        env: { OPENCLAW_NIX_MODE: "1" },
-      }),
-    ).rejects.toThrow("managed by Nix");
-    expect(mocks.readConfig).not.toHaveBeenCalled();
-    expect(mocks.replaceConfig).not.toHaveBeenCalled();
+  it.each([
+    { env: { OPENCLAW_NIX_MODE: "1" }, message: "managed by Nix", mode: "Nix" },
+    {
+      env: { OPENCLAW_CONFIG_MANAGED: "1" },
+      message: "externally managed",
+      mode: "external",
+    },
+  ])("reports mutation unavailable in $mode managed mode", async ({ env }) => {
+    mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: false }));
+
+    const catalog = await listManagedPlugins({
+      config: {},
+      env,
+      officialCatalog: { entries: [] },
+    });
+
+    expect(catalog.mutationAllowed).toBe(false);
   });
+
+  it.each([
+    { env: { OPENCLAW_NIX_MODE: "1" }, message: "managed by Nix", mode: "Nix" },
+    {
+      env: { OPENCLAW_CONFIG_MANAGED: "1" },
+      message: "externally managed",
+      mode: "external",
+    },
+  ])(
+    "refuses mutation in $mode managed mode before reading or writing config",
+    async ({ env, message }) => {
+      await expect(
+        setManagedPluginEnabled({
+          pluginId: "workboard",
+          enabled: true,
+          env,
+        }),
+      ).rejects.toThrow(message);
+      expect(mocks.readConfig).not.toHaveBeenCalled();
+      expect(mocks.replaceConfig).not.toHaveBeenCalled();
+    },
+  );
 
   it("blocks unsupported plugin includes before config mutation", async () => {
     mocks.readConfig.mockResolvedValue(configSnapshot());

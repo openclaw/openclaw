@@ -339,6 +339,27 @@ describe("config observe recovery", () => {
     });
   });
 
+  it("does not restore or snapshot suspicious externally managed config", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, warn } = makeDeps(home);
+      deps.env.OPENCLAW_CONFIG_MANAGED = "1";
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await writeClobberedUpdateChannel(configPath);
+
+      const asyncResult = await recoverClobberedUpdateChannel({ deps, configPath });
+      const syncResult = recoverClobberedUpdateChannelSync({ deps, configPath });
+
+      expect(asyncResult).toEqual({
+        raw: clobberedUpdateChannelRaw,
+        parsed: clobberedUpdateChannelConfig,
+      });
+      expect(syncResult).toEqual(asyncResult);
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobberedUpdateChannelRaw);
+      await expect(listClobberFiles(configPath)).resolves.toHaveLength(0);
+      expectWarnNotContaining(warn, "Config auto-restored from backup:");
+    });
+  });
+
   it("auto-restores when metadata disappears from an otherwise valid config", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath } = makeDeps(home);
@@ -1109,6 +1130,50 @@ describe("config observe recovery", () => {
       const observe = await readLastObserveEvent(auditPath);
       expect(observe?.restoredFromBackup).toBe(true);
       expect(observe?.restoredBackupPath).toBe(resolveLastKnownGoodConfigPath(configPath));
+    });
+  });
+
+  it("does not promote externally managed config to an adjacent last-known-good file", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath } = makeDeps(home);
+      deps.env.OPENCLAW_CONFIG_MANAGED = "1";
+      const snapshot = await makeSnapshot(configPath, recoverableTelegramConfig);
+
+      await expect(
+        promoteConfigSnapshotToLastKnownGood({ deps, snapshot, logger: deps.logger }),
+      ).resolves.toBe(false);
+
+      await expectPathMissing(resolveLastKnownGoodConfigPath(configPath));
+      expect(readConfigHealthRow(home, configPath)).toBeUndefined();
+    });
+  });
+
+  it("does not restore externally managed config from an existing last-known-good file", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath } = makeDeps(home);
+      const snapshot = await makeSnapshot(configPath, recoverableTelegramConfig);
+      await expect(
+        promoteConfigSnapshotToLastKnownGood({ deps, snapshot, logger: deps.logger }),
+      ).resolves.toBe(true);
+
+      deps.env.OPENCLAW_CONFIG_MANAGED = "1";
+      const brokenRaw = "{ gateway: { mode: 123 } }\n";
+      await fsp.writeFile(configPath, brokenRaw, "utf-8");
+      const restored = await recoverConfigFromLastKnownGood({
+        deps,
+        snapshot: {
+          ...snapshot,
+          raw: brokenRaw,
+          parsed: { gateway: { mode: 123 } },
+          valid: false,
+          issues: [{ path: "gateway.mode", message: "Expected string" }],
+        },
+        reason: "test-managed-invalid-config",
+      });
+
+      expect(restored).toBe(false);
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(brokenRaw);
+      await expect(listClobberFiles(configPath)).resolves.toHaveLength(0);
     });
   });
 

@@ -89,17 +89,43 @@ describe("k8s manifests", () => {
     const spec = asRecord(deployment.spec, "deployment spec");
     const template = asRecord(spec.template, "deployment template");
     const podSpec = asRecord(template.spec, "pod spec");
+    const initContainers = asRecords(podSpec.initContainers, "init containers");
+    const initWorkspace = findNamed(initContainers, "init-workspace");
+    const initCommand = asStrings(initWorkspace.command, "init workspace command").join("\n");
+    const initMounts = asRecords(initWorkspace.volumeMounts, "init workspace volume mounts");
     const containers = asRecords(podSpec.containers, "containers");
     const gateway = findNamed(containers, "gateway");
     const env = asRecords(gateway.env, "gateway env");
+    const gatewayMounts = asRecords(gateway.volumeMounts, "gateway volume mounts");
     const volumes = asRecords(podSpec.volumes, "pod volumes");
     const securityContext = asRecord(gateway.securityContext, "gateway security context");
 
     expect(gateway.command).toEqual(["node", "/app/dist/index.js", "gateway", "run"]);
     expect(findNamed(env, "HOME")).toMatchObject({ value: "/home/node" });
-    expect(findNamed(env, "OPENCLAW_CONFIG_DIR")).toMatchObject({ value: "/home/node/.openclaw" });
+    expect(findNamed(env, "OPENCLAW_CONFIG_PATH")).toMatchObject({
+      value: "/etc/openclaw-config/openclaw.json",
+    });
+    expect(findNamed(env, "OPENCLAW_CONFIG_MANAGED")).toMatchObject({ value: "1" });
+    expect(findNamed(env, "OPENCLAW_STATE_DIR")).toMatchObject({ value: "/home/node/.openclaw" });
+    expect(env.some((entry) => entry.name === "OPENCLAW_CONFIG_DIR")).toBe(false);
     expect(findNamed(env, "OPENCLAW_GATEWAY_TOKEN")).toMatchObject({
       valueFrom: { secretKeyRef: { key: "OPENCLAW_GATEWAY_TOKEN", name: "openclaw-secrets" } },
+    });
+    expect(findNamed(gatewayMounts, "config")).toMatchObject({
+      mountPath: "/etc/openclaw-config",
+      readOnly: true,
+    });
+    expect(findNamed(gatewayMounts, "config")).not.toHaveProperty("subPath");
+    expect(findNamed(gatewayMounts, "openclaw-home")).toMatchObject({
+      mountPath: "/home/node/.openclaw",
+    });
+    expect(initCommand).toContain(
+      "cp /etc/openclaw-config/AGENTS.md /home/node/.openclaw/workspace/AGENTS.md",
+    );
+    expect(initCommand).not.toContain("openclaw.json");
+    expect(findNamed(initMounts, "config")).toMatchObject({
+      mountPath: "/etc/openclaw-config",
+      readOnly: true,
     });
     expect(findNamed(volumes, "openclaw-home")).toMatchObject({
       persistentVolumeClaim: { claimName: "openclaw-home-pvc" },
@@ -110,6 +136,22 @@ describe("k8s manifests", () => {
       readOnlyRootFilesystem: true,
       runAsNonRoot: true,
     });
+  });
+
+  it("applies Kubernetes config without an unconditional pod restart", () => {
+    const deployScript = readFileSync("scripts/k8s/deploy.sh", "utf8");
+    const secretRestartBlock = deployScript.match(
+      /if \$RESTART_AFTER_SECRET_CREATE; then(?<body>[\s\S]*?)\nfi/u,
+    )?.groups?.body;
+    const executableRestarts = deployScript
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("kubectl rollout restart "));
+
+    expect(deployScript).toContain('kubectl apply -k "$MANIFESTS" -n "$NS"');
+    expect(executableRestarts).toEqual(['kubectl rollout restart deployment/openclaw -n "$NS"']);
+    expect(secretRestartBlock).toContain(executableRestarts[0]);
+    expect(deployScript).toContain('echo "  kubectl rollout restart deployment/openclaw -n $NS"');
   });
 
   it("keeps config and persistence manifests aligned with the gateway", () => {

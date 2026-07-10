@@ -93,6 +93,25 @@ function expectedTrashSourcePath(targetPath: string): string {
 }
 
 describe("handleReset", () => {
+  it("rejects externally managed config before moving any reset target", async () => {
+    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+
+    await withEnvAsync(
+      {
+        OPENCLAW_CONFIG_MANAGED: "1",
+        OPENCLAW_CONFIG_PATH: "/etc/openclaw/openclaw.json",
+        OPENCLAW_NIX_MODE: undefined,
+      },
+      async () => {
+        await expect(handleReset("full", "/tmp/workspace", runtime)).rejects.toMatchObject({
+          code: "OPENCLAW_CONFIG_MANAGED",
+        });
+      },
+    );
+
+    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
+  });
+
   it("uses active profile paths for destructive reset targets", async () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-profile-"));
     const profileStateDir = path.join(homeDir, ".openclaw-work");

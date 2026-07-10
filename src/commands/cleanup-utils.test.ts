@@ -136,6 +136,67 @@ describe("cleanup path removals", () => {
     }
   });
 
+  it.each([
+    ["external", { OPENCLAW_CONFIG_MANAGED: "1" }],
+    ["Nix", { OPENCLAW_NIX_MODE: "1" }],
+  ] as const)(
+    "preserves config nested inside removed state in %s managed mode",
+    async (_label, env) => {
+      const runtime = createRuntimeMock();
+      const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-managed-cleanup-"));
+      const stateDir = path.join(tmpRoot, ".openclaw");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const cachePath = path.join(stateDir, "cache.json");
+
+      try {
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.writeFile(configPath, "{}\n");
+        await fs.writeFile(cachePath, "remove me\n");
+
+        await removeStateAndLinkedPaths(
+          {
+            stateDir,
+            configPath,
+            oauthDir: path.join(stateDir, "credentials"),
+            configInsideState: true,
+            oauthInsideState: true,
+          },
+          runtime,
+          { env },
+        );
+
+        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe("{}\n");
+        await expect(fs.stat(cachePath)).rejects.toThrow();
+      } finally {
+        await fs.rm(tmpRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("shows preservation of externally managed config outside state in dry-run output", async () => {
+    const runtime = createRuntimeMock();
+    const tmpRoot = path.join(path.parse(process.cwd()).root, "tmp", "openclaw-managed-cleanup");
+    const configPath = path.join(tmpRoot, "config", "openclaw.json");
+
+    await removeStateAndLinkedPaths(
+      {
+        stateDir: path.join(tmpRoot, "state"),
+        configPath,
+        oauthDir: path.join(tmpRoot, "oauth"),
+        configInsideState: false,
+        oauthInsideState: false,
+      },
+      runtime,
+      { dryRun: true, env: { OPENCLAW_CONFIG_MANAGED: "1" } },
+    );
+
+    expect(runtime.log.mock.calls.map(([line]) => line.replaceAll("\\", "/"))).toEqual([
+      "[dry-run] remove /tmp/openclaw-managed-cleanup/state",
+      "[dry-run] preserve /tmp/openclaw-managed-cleanup/config/openclaw.json",
+      "[dry-run] remove /tmp/openclaw-managed-cleanup/oauth",
+    ]);
+  });
+
   it("removes every workspace directory", async () => {
     const runtime = createRuntimeMock();
     const workspaces = ["/tmp/openclaw-workspace-1", "/tmp/openclaw-workspace-2"];

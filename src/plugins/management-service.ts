@@ -2,13 +2,13 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
+import { resolveIsConfigManaged } from "../config/config-ownership.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshotForWrite,
   replaceConfigFile,
 } from "../config/config.js";
 import { collectChangedPaths } from "../config/io.write-prepare.js";
-import { resolveIsNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
@@ -410,7 +410,7 @@ export async function listManagedPlugins(params: {
   return {
     plugins: plugins.toSorted(compareCatalogEntries),
     diagnostics,
-    mutationAllowed: !resolveIsNixMode(env),
+    mutationAllowed: !resolveIsConfigManaged(env),
   };
 }
 

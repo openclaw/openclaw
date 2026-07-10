@@ -22,6 +22,7 @@ import {
 } from "../../plugins/management-service.js";
 import { buildGatewayReloadPlan } from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
+import { rejectExternallyManagedConfigMutation } from "./config-mutation-guard.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -109,6 +110,9 @@ export const pluginsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validatePluginsInstallParams, "plugins.install", respond)) {
       return;
     }
+    if (rejectExternallyManagedConfigMutation(respond)) {
+      return;
+    }
     try {
       const result = await installManagedPlugin({ request: params });
       respond(
@@ -151,6 +155,9 @@ export const pluginsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validatePluginsUninstallParams, "plugins.uninstall", respond)) {
       return;
     }
+    if (rejectExternallyManagedConfigMutation(respond)) {
+      return;
+    }
     try {
       const result = await uninstallManagedPlugin({ pluginId: params.pluginId });
       respond(
@@ -182,6 +189,9 @@ export const pluginsHandlers: GatewayRequestHandlers = {
     if (
       !assertValidParams(params, validatePluginsSetEnabledParams, "plugins.setEnabled", respond)
     ) {
+      return;
+    }
+    if (rejectExternallyManagedConfigMutation(respond)) {
       return;
     }
     try {

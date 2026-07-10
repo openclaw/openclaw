@@ -9,7 +9,13 @@ sidebarTitle: "Config"
 Non-interactive helpers for `openclaw.json`: get/set/patch/unset a value by path, print the schema, validate, or print the active file path. Run `openclaw config` with no subcommand to open the same guided wizard as `openclaw configure`.
 
 <Note>
-When `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-only commands (`config get`, `config file`, `config schema`, `config validate`) still work; config writers refuse. Edit the Nix source for the install instead; for the first-party nix-openclaw distribution, use the [nix-openclaw Quick Start](https://github.com/openclaw/nix-openclaw#quick-start) and set values under `programs.openclaw.config` or `instances.<name>.config`.
+When `OPENCLAW_CONFIG_MANAGED=1`, OpenClaw treats the active config as an
+immutable, externally managed source. Read-only commands (`config get`, `config
+file`, `config schema`, `config validate`) still work; config writers refuse.
+Edit the GitOps/controller source instead. Nix deployments continue to use
+`OPENCLAW_NIX_MODE=1`; for the first-party nix-openclaw distribution, use the
+[nix-openclaw Quick Start](https://github.com/openclaw/nix-openclaw#quick-start)
+and set values under `programs.openclaw.config` or `instances.<name>.config`.
 </Note>
 
 ## Root options
@@ -64,7 +70,9 @@ openclaw config get agents.defaults.model --json
 
 ### `config file`
 
-Prints the active config file path, resolved from `OPENCLAW_CONFIG_PATH` or the default location. The path names a regular file, not a symlink; see [Write safety](#write-safety).
+Prints the active config file path, resolved from `OPENCLAW_CONFIG_PATH` or the
+default location. Mutable config must name a regular file. A managed, read-only
+source may be a symlink or projected-volume entry; see [Write safety](#write-safety).
 
 ### `config schema`
 
@@ -436,11 +444,46 @@ Writes to `plugins.entries` (or any subpath) always require a restart, since the
 
 ## Write safety
 
-`openclaw config set` and other OpenClaw-owned config writers validate the full post-change config before committing it to disk. If the new payload fails schema validation or looks like a destructive clobber, the active config is left alone and the rejected payload is saved beside it as `openclaw.json.rejected.*`.
+In mutable mode, `openclaw config set` and other OpenClaw-owned config writers
+validate the full post-change config before committing it to disk. If the new
+payload fails schema validation or looks like a destructive clobber, the active
+config is left alone and the rejected payload is saved beside it as
+`openclaw.json.rejected.*`.
 
 <Warning>
-The active config path must be a regular file. Symlinked `openclaw.json` layouts are unsupported for writes; use `OPENCLAW_CONFIG_PATH` to point directly at the real file instead.
+Mutable config must be a regular file. Symlinked `openclaw.json` layouts are
+unsupported for writes; use `OPENCLAW_CONFIG_PATH` to point directly at the real
+file instead.
 </Warning>
+
+### Managed config
+
+Use managed mode when another system owns the desired config:
+
+```bash
+OPENCLAW_CONFIG_MANAGED=1
+OPENCLAW_CONFIG_PATH=/etc/openclaw-config/openclaw.json
+OPENCLAW_STATE_DIR=/var/lib/openclaw
+```
+
+Set `OPENCLAW_CONFIG_MANAGED=1` in the host, container, or service environment;
+an `env` entry inside `openclaw.json` cannot enable it. OpenClaw refuses every
+operation that would write the active config with error code
+`OPENCLAW_CONFIG_MANAGED`. It also skips source-adjacent backup,
+last-known-good, and automatic recovery writes. Apply changes or rollbacks to
+the external source, then use `openclaw config validate` and read-only commands
+to inspect the projected result. Keep `OPENCLAW_STATE_DIR` on separate, writable
+storage; it contains runtime state and is not part of the desired config.
+
+The managed source may be a read-only symlink or projected-volume entry. The
+Gateway watches its parent directory to detect Kubernetes AtomicWriter symlink
+generation swaps. This exception is read-only: it does not make symlinked config
+safe for OpenClaw-owned writes. Managed mode also does not change which fields
+need a Gateway restart or add general `$include` dependency watching. See
+[Managed config (GitOps)](/gateway/configuration#managed-config-gitops) for the
+reload and multi-file-source limits.
+
+### Mutable config
 
 Prefer CLI writes for small edits:
 

@@ -195,9 +195,10 @@ applicable. The managed install directory is removed unless you pass
 `--keep-files`. A running managed Gateway restarts automatically when the
 uninstall changes plugin source.
 
-In Nix mode (`OPENCLAW_NIX_MODE=1`), plugin install, update, uninstall,
-enable, and disable are all disabled; manage those choices in the Nix source
-for the install instead.
+When config is externally managed (`OPENCLAW_CONFIG_MANAGED=1`), plugin install,
+update, uninstall, enable, and disable are all disabled; manage those choices in
+the external deployment source instead. Nix mode (`OPENCLAW_NIX_MODE=1`) has the
+same restriction; manage plugin choices in the Nix source for the install.
 
 ## Choose a source
 

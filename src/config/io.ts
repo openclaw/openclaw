@@ -37,6 +37,7 @@ import { isRecord } from "../utils.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
+import { resolveIsConfigManaged } from "./config-ownership.js";
 import { EnvRefArrayMutationError, restoreEnvVarRefs } from "./env-preserve.js";
 import {
   type EnvSubstitutionWarning,
@@ -1161,6 +1162,10 @@ async function recoverConfigFromJsonRootSuffixWithDeps(params: {
   configPath: string;
   snapshot: ConfigFileSnapshot;
 }): Promise<boolean> {
+  // Prefix repair would replace externally owned bytes and create sibling artifacts.
+  if (resolveIsConfigManaged(params.deps.env)) {
+    return false;
+  }
   if (!params.snapshot.exists || params.snapshot.valid || typeof params.snapshot.raw !== "string") {
     return false;
   }

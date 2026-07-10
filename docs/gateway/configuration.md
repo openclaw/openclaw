@@ -9,7 +9,12 @@ title: "Configuration"
 
 OpenClaw reads an optional <Tooltip tip="JSON5 supports comments and trailing commas">**JSON5**</Tooltip> config from `~/.openclaw/openclaw.json`. If the file is missing, OpenClaw uses safe defaults.
 
-The active config path must be a regular file. OpenClaw-owned writes replace it atomically (rename onto the path), so a symlinked `openclaw.json` gets its target replaced rather than written through - avoid symlinked config layouts. If you keep config outside the default state directory, point `OPENCLAW_CONFIG_PATH` directly at the real file.
+In the default mutable mode, the active config path must be a regular file.
+OpenClaw-owned writes replace it atomically (rename onto the path), so a
+symlinked `openclaw.json` gets its target replaced rather than written through.
+If you keep mutable config outside the default state directory, point
+`OPENCLAW_CONFIG_PATH` directly at the real file. Read-only symlink and projected
+volume sources are supported in [managed config mode](#managed-config-gitops).
 
 Common reasons to add a config:
 
@@ -527,23 +532,86 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
       and re-checked, so a path that lexically lives in a config dir but whose
       real target escapes every allowed root is still rejected.
     - **Error handling**: clear errors for missing files, parse errors, circular includes, invalid path format, and excessive length
+    - **Reload boundary**: managed config mode does not add general per-include
+      watching. See [managed sources and `$include`](#managed-sources-and-include)
+      before projecting a multi-file bundle.
 
   </Accordion>
 </AccordionGroup>
 
+## Managed config (GitOps)
+
+Set `OPENCLAW_CONFIG_MANAGED=1` when GitOps or another external controller owns
+the desired config. Set it in the host, container, or service environment;
+config-authored `env` entries cannot enable managed ownership. Managed mode is a
+source-ownership contract, not a second merge layer: OpenClaw reads and validates
+the complete config normally, but refuses operations that would write it. Make
+deletions in the external source and publish the replacement; keep runtime state
+out of that source. Nix mode keeps its existing `OPENCLAW_NIX_MODE=1` contract
+and is treated as managed ownership automatically.
+
+Separate the read-only config from writable state:
+
+```bash
+OPENCLAW_CONFIG_MANAGED=1
+OPENCLAW_CONFIG_PATH=/etc/openclaw-config/openclaw.json
+OPENCLAW_STATE_DIR=/var/lib/openclaw
+```
+
+- `OPENCLAW_CONFIG_PATH` names the externally managed desired config.
+- `OPENCLAW_STATE_DIR` owns sessions, databases, credentials, caches, and other
+  mutable runtime state. It must remain writable and should use persistent
+  storage when the runtime state must survive pod replacement.
+- Read-only commands such as `openclaw config get`, `config file`, `config
+schema`, and `config validate` continue to work. Config writers, mutating RPCs,
+  setup flows, and repair operations that would edit the active config refuse
+  the change. Edit the Git/Nix/controller source instead.
+- OpenClaw does not create source-adjacent backup or last-known-good files, and
+  it does not automatically repair or restore the managed source. The external
+  owner is responsible for rollback.
+
+In managed mode only, `OPENCLAW_CONFIG_PATH` may be a read-only symlink or
+projected-volume entry. Because OpenClaw cannot write the source, the regular-file
+write-safety rule does not apply. The Gateway watches the configured path's
+parent directory as well as the path itself. This detects Kubernetes AtomicWriter
+updates, which replace the projection's symlink generation instead of modifying
+the visible file in place. Mount the full ConfigMap volume; a `subPath` mount does
+not receive ConfigMap updates.
+
+An observed candidate still passes the normal schema and safety checks before it
+is applied. Invalid candidates leave the last accepted runtime config active.
+Hot-applicable changes use the regular in-process reload path. Managed mode does
+not make structural changes hot-applicable: fields classified as Gateway-restart
+required still follow `gateway.reload.mode`. In the default `hybrid` mode that can
+close active clients and rebuild Gateway-owned runtime state; use `hot` mode when
+an operator must schedule those restarts explicitly.
+
+### Managed sources and `$include`
+
+The managed parent-directory watch exists to detect replacement of the configured
+root path. It is not a recursive directory watcher and does not add general
+dependency watching for arbitrary `$include` files. Publish the root and its
+fragments as one projected generation, or ensure the root path changes when an
+included file changes; otherwise an include-only edit may require a root edit or
+Gateway restart. `$include` is re-resolved whenever the root candidate is read,
+and [reload planning](#reload-planning) still uses the source-authored layout.
+
 ## Config hot reload
 
-The Gateway watches `~/.openclaw/openclaw.json` and applies changes automatically - no manual restart needed for most settings.
+The Gateway watches the active config path and applies changes automatically - no manual restart needed for most settings. In [managed config mode](#managed-config-gitops), it also watches the parent directory so projected-volume generation swaps trigger a reread.
 
 Direct file edits are treated as untrusted until they validate. The watcher waits
 for editor temp-write/rename churn to settle, reads the final file, and rejects
-invalid external edits without rewriting `openclaw.json`. OpenClaw-owned config
-writes use the same schema gate before writing (see [Strict validation](#strict-validation)
-for the clobber/rollback rules that apply to every write).
+invalid external edits without rewriting `openclaw.json`. In mutable mode,
+OpenClaw-owned config writes use the same schema gate before writing (see
+[Strict validation](#strict-validation) for the clobber/rollback rules that
+apply to every write). Managed mode refuses those writes.
 
 If you see `config reload skipped (invalid config)` or startup reports `Invalid
-config`, inspect the config, run `openclaw config validate`, then run `openclaw
-doctor --fix` for repair. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config)
+config`, inspect the config and run `openclaw config validate`. For mutable
+config, run `openclaw doctor --fix` for repair. For managed config, fix and
+republish the external source instead; repair commands cannot write it. See
+[Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config)
 for the checklist.
 
 ### Reload modes

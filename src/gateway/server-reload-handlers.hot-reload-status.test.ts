@@ -13,16 +13,20 @@ import { startManagedGatewayConfigReloader } from "./server-reload-handlers.js";
 const hoisted = vi.hoisted(() => ({
   hotReloadStatus: { current: "active" as "active" | "disabled" },
   stop: vi.fn(async () => {}),
+  startParams: { current: null as Record<string, unknown> | null },
 }));
 
 vi.mock("./config-reload.js", async () => {
   const actual = await vi.importActual<typeof import("./config-reload.js")>("./config-reload.js");
   return {
     ...actual,
-    startGatewayConfigReloader: vi.fn(() => ({
-      stop: hoisted.stop,
-      hotReloadStatus: () => hoisted.hotReloadStatus.current,
-    })),
+    startGatewayConfigReloader: vi.fn((params: Record<string, unknown>) => {
+      hoisted.startParams.current = params;
+      return {
+        stop: hoisted.stop,
+        hotReloadStatus: () => hoisted.hotReloadStatus.current,
+      };
+    }),
   };
 });
 
@@ -35,8 +39,8 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       initialCompareConfig: initialConfig,
       initialInternalWriteHash: null,
       watchPath: "/tmp/openclaw.json",
+      watchParentDirectory: true,
       readSnapshot: vi.fn() as never,
-      promoteSnapshot: vi.fn(async () => true) as never,
       subscribeToWrites: vi.fn(() => () => {}) as never,
       deps: {} as never,
       broadcast: vi.fn(),
@@ -81,6 +85,11 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
 
     expect(reloader.hotReloadStatus).toBeTypeOf("function");
     expect(reloader.hotReloadStatus?.()).toBe("active");
+    expect(hoisted.startParams.current).toMatchObject({
+      watchPath: "/tmp/openclaw.json",
+      watchParentDirectory: true,
+    });
+    expect(hoisted.startParams.current).not.toHaveProperty("promoteSnapshot");
 
     // Flip the underlying watcher's live state without recreating the managed
     // handle — a copied/snapshotted value would stay stuck on "active".

@@ -211,8 +211,9 @@ type ManagedGatewayConfigReloaderParams = Omit<
   initialCompareConfig?: OpenClawConfig;
   initialInternalWriteHash: string | null;
   watchPath: string;
+  watchParentDirectory?: boolean;
   readSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
-  promoteSnapshot: typeof import("../config/config.js").promoteConfigSnapshotToLastKnownGood;
+  promoteSnapshot?: typeof import("../config/config.js").promoteConfigSnapshotToLastKnownGood;
   subscribeToWrites: typeof import("../config/config.js").registerConfigWriteListener;
   logReload: GatewayReloadLog & {
     error: (msg: string) => void;
@@ -773,13 +774,18 @@ export function startManagedGatewayConfigReloader(
         channelManager: params.channelManager,
       }),
   });
+  const promoteSnapshot = params.promoteSnapshot;
 
   const configReloader = startGatewayConfigReloader({
     initialConfig: params.initialConfig,
     initialCompareConfig: params.initialCompareConfig,
     initialInternalWriteHash: params.initialInternalWriteHash,
     readSnapshot: params.readSnapshot,
-    promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
+    ...(promoteSnapshot
+      ? {
+          promoteSnapshot: async (snapshot, _reason) => await promoteSnapshot(snapshot),
+        }
+      : {}),
     subscribeToWrites: params.subscribeToWrites,
     onConfigChange: (plan, nextConfig) => params.reconcileTerminalSessions(plan, nextConfig),
     onConfigApplied: () => params.commitTerminalConfig(),
@@ -884,6 +890,9 @@ export function startManagedGatewayConfigReloader(
       error: (msg) => params.logReload.error(msg),
     },
     watchPath: params.watchPath,
+    ...(params.watchParentDirectory === undefined
+      ? {}
+      : { watchParentDirectory: params.watchParentDirectory }),
   });
   return {
     stop: async () => {

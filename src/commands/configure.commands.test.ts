@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { configureCommandFromSectionsArg } from "./configure.commands.js";
 
 // Hoisted mock so the wizard never actually runs; the tests assert whether the
@@ -81,6 +82,18 @@ describe("configureCommandFromSectionsArg", () => {
       { command: "configure", sections: ["channels", "plugins"] },
       runtime,
     );
+  });
+
+  it("rejects externally managed config before either wizard dispatch", async () => {
+    const runtime = makeRuntime();
+
+    await withEnvAsync({ OPENCLAW_CONFIG_MANAGED: "1", OPENCLAW_NIX_MODE: undefined }, async () => {
+      await expect(
+        configureCommandFromSectionsArg(["channels"], runtime, { interactive: true }),
+      ).rejects.toMatchObject({ code: "OPENCLAW_CONFIG_MANAGED" });
+    });
+
+    expect(runConfigureWizardMock).not.toHaveBeenCalled();
   });
 
   it("fails closed for a mixed valid/invalid section list on a non-interactive terminal", async () => {
