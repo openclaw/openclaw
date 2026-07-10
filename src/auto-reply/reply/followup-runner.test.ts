@@ -5547,6 +5547,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
   it("enqueues a one-shot recovery retry for substantive message-tool-only queued followup finals", async () => {
     const finalText =
       "Here is the answer the queued user asked for. It includes enough detail to be a visible response, and it has another sentence so the substantive-final detector treats it as a real reply.";
+    const parentOnComplete = vi.fn();
+    const parentLifecycle = { onComplete: parentOnComplete };
     const queued = baseQueuedRun("discord");
     const { onBlockReply } = await runMessagingCase({
       agentResult: {
@@ -5557,6 +5559,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
         ...queued,
         originatingChannel: "discord",
         originatingTo: "channel:C1",
+        queuedLifecycle: parentLifecycle,
         run: {
           ...queued.run,
           sourceReplyDeliveryMode: "message_tool_only",
@@ -5578,6 +5581,9 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(retry?.run.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(retry?.prompt).toContain("message(action=send)");
     expect(retry?.prompt).toContain(finalText);
+    // System retry detaches from the client turn lifecycle; parent completion owns onComplete once.
+    expect(retry?.queuedLifecycle).toBeUndefined();
+    expect(parentOnComplete).toHaveBeenCalledTimes(1);
   });
 
   it("excludes raw trace and status payloads from queued stranded recovery prompts", async () => {

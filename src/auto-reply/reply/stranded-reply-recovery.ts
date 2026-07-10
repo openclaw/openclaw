@@ -42,6 +42,10 @@ export function buildStrandedReplyRetryFollowupRun(
     transcriptPrompt: undefined,
     userTurnTranscriptRecorder: undefined,
     currentInboundContext: undefined,
+    // Internally generated system turn: the client turn's lifecycle (gateway cancel
+    // identity) completes with the parent run. queuedLifecycle is one-shot WeakSet-tracked,
+    // so a shared object would be double-owned and free cancel while the retry still runs.
+    queuedLifecycle: undefined,
     run: {
       ...base.run,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

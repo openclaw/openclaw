@@ -3487,6 +3487,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     sendPolicyDenied?: boolean;
     isHeartbeat?: boolean;
     replyOperation?: ReturnType<typeof createReplyOperation>;
+    queuedLifecycle?: FollowupRun["queuedLifecycle"];
   }) {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stranded-"));
     const storePath = path.join(tmp, "sessions.json");
@@ -3543,6 +3544,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       ...(params.strandedReplyRetry ? { strandedReplyRetry: true } : {}),
       enqueuedAt: Date.now(),
       ...(params.transcriptPrompt ? { transcriptPrompt: params.transcriptPrompt } : {}),
+      ...(params.queuedLifecycle ? { queuedLifecycle: params.queuedLifecycle } : {}),
       run: {
         agentId: "main",
         agentDir: "/tmp/agent",
@@ -3603,7 +3605,11 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
   });
 
   it("enqueues a one-shot recovery retry by default for substantive stranded finals", async () => {
-    const { finalAssistantText } = await runPrivateFinalCase({});
+    const parentOnComplete = vi.fn();
+    const parentLifecycle = { onComplete: parentOnComplete };
+    const { finalAssistantText } = await runPrivateFinalCase({
+      queuedLifecycle: parentLifecycle,
+    });
 
     expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
@@ -3614,6 +3620,10 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     expect(retryRun?.strandedReplyRetry).toBe(true);
     expect(retryRun?.prompt).toContain("message(action=send)");
     expect(retryRun?.prompt).toContain(finalAssistantText);
+    // System retry must not inherit the client turn's one-shot lifecycle identity.
+    expect(retryRun?.queuedLifecycle).toBeUndefined();
+    expect(parentLifecycle.onComplete).toBe(parentOnComplete);
+    expect(parentOnComplete).not.toHaveBeenCalled();
   });
 
   it("uses visible final text, not raw assistant text, in the recovery retry prompt", async () => {
