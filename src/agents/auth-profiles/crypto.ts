@@ -70,7 +70,7 @@ export function encryptAuthProfilePayload(payload: unknown): EncryptedEnvelope |
  * Decrypts an encrypted envelope. Returns null on failure or when no key is
  * configured.
  */
-export function decryptAuthProfilePayload(envelope: EncryptedEnvelope): unknown | null {
+export function decryptAuthProfilePayload(envelope: EncryptedEnvelope): unknown {
   const key = resolveEncryptionKey();
   if (!key) {
     return null;
