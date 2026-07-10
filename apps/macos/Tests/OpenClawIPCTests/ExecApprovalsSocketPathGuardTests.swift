@@ -256,11 +256,15 @@ struct ExecApprovalsSocketPathGuardTests {
 
     @Test
     func `socket lease blocks replacement until current owner releases`() async throws {
-        let root = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-socket-takeover-\(UUID().uuidString)", isDirectory: true)
+        let root = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("ocsl-\(UUID().uuidString.prefix(12))", isDirectory: true)
         defer { try? FileManager().removeItem(at: root) }
-        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager().createDirectory(
+            at: root,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700])
         let socketPath = root.appendingPathComponent("exec-approvals.sock").path
+        #expect(socketPath.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path))
 
         let result = await ExecApprovalsPromptServer._testSocketLeaseHandoff(socketPath: socketPath)
 

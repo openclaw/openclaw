@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 @testable import OpenClaw
@@ -5,6 +6,20 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct ExecApprovalsPromptServerTests {
+    private func makeShortSocketRoot() throws -> URL {
+        let root = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("ocps-\(UUID().uuidString.prefix(12))", isDirectory: true)
+        try FileManager().createDirectory(
+            at: root,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700])
+        let socketPath = root.appendingPathComponent("exec-approvals.sock").path
+        guard socketPath.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path) else {
+            throw POSIXError(.ENAMETOOLONG)
+        }
+        return root
+    }
+
     private final class SequenceCredentialsProbe: @unchecked Sendable {
         private let lock = NSLock()
         private let socketPath: String
@@ -65,9 +80,8 @@ struct ExecApprovalsPromptServerTests {
     }
 
     @Test
-    func `prompt server reloads credentials after an unavailable approvals read`() async {
-        let root = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-prompt-server-\(UUID().uuidString)", isDirectory: true)
+    func `prompt server reloads credentials after an unavailable approvals read`() async throws {
+        let root = try self.makeShortSocketRoot()
         let socketPath = root.appendingPathComponent("exec-approvals.sock").path
         defer { try? FileManager().removeItem(at: root) }
 
@@ -91,9 +105,8 @@ struct ExecApprovalsPromptServerTests {
     }
 
     @Test
-    func `stopping prompt server prevents a blocked resolver from installing a socket`() async {
-        let root = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-prompt-server-stop-\(UUID().uuidString)", isDirectory: true)
+    func `stopping prompt server prevents a blocked resolver from installing a socket`() async throws {
+        let root = try self.makeShortSocketRoot()
         let socketPath = root.appendingPathComponent("exec-approvals.sock").path
         defer { try? FileManager().removeItem(at: root) }
 
@@ -124,9 +137,8 @@ struct ExecApprovalsPromptServerTests {
     }
 
     @Test
-    func `pre-cancelled socket startup does not listen`() async {
-        let root = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-prompt-server-cancelled-\(UUID().uuidString)", isDirectory: true)
+    func `pre-cancelled socket startup does not listen`() async throws {
+        let root = try self.makeShortSocketRoot()
         let socketPath = root.appendingPathComponent("exec-approvals.sock").path
         defer { try? FileManager().removeItem(at: root) }
 
@@ -140,9 +152,7 @@ struct ExecApprovalsPromptServerTests {
 
     @Test
     func `prompt server retries after a transient socket startup failure`() async throws {
-        let root = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-prompt-server-bind-\(UUID().uuidString)", isDirectory: true)
-        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
+        let root = try self.makeShortSocketRoot()
         let socketURL = root.appendingPathComponent("exec-approvals.sock")
         _ = FileManager().createFile(atPath: socketURL.path, contents: Data("occupied".utf8))
         defer { try? FileManager().removeItem(at: root) }
@@ -169,9 +179,8 @@ struct ExecApprovalsPromptServerTests {
     }
 
     @Test
-    func `prompt server restarts after its active listener stops unexpectedly`() async {
-        let root = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-prompt-server-restart-\(UUID().uuidString)", isDirectory: true)
+    func `prompt server restarts after its active listener stops unexpectedly`() async throws {
+        let root = try self.makeShortSocketRoot()
         let socketPath = root.appendingPathComponent("exec-approvals.sock").path
         defer { try? FileManager().removeItem(at: root) }
 

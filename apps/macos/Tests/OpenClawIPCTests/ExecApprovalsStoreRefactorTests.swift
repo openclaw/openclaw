@@ -1681,12 +1681,9 @@ extension ExecApprovalsStoreRefactorTests {
             let expectedFileURL = stateDir
                 .appendingPathComponent("exec-approvals.json")
                 .standardizedFileURL
-            let expectedSocketURL = stateDir
-                .appendingPathComponent("exec-approvals.sock")
-                .standardizedFileURL
             #expect(targetURL.path == expectedFileURL.path)
             #expect(FileManager().fileExists(atPath: targetURL.path))
-            #expect(file.socket?.path == expectedSocketURL.path)
+            #expect(file.socket?.path == ExecApprovalsStore.socketPath())
             #expect(file.socket?.token == "legacy-token")
             #expect(file.defaults?.security == .deny)
             #expect(file.defaults?.ask == .always)

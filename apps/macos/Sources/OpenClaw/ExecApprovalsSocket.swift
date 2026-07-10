@@ -170,14 +170,38 @@ private struct ExecHostResponse: Codable {
     var error: ExecHostError?
 }
 
-private func readLineFromHandle(_ handle: FileHandle, maxBytes: Int) throws -> String? {
+private func configureSocketTimeouts(_ fd: Int32, timeoutMs: Int) throws {
+    guard timeoutMs > 0 else { return }
+    var timeout = timeval(
+        tv_sec: timeoutMs / 1000,
+        tv_usec: Int32((timeoutMs % 1000) * 1000))
+    let timeoutSize = socklen_t(MemoryLayout.size(ofValue: timeout))
+    guard setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, timeoutSize) == 0,
+          setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, timeoutSize) == 0
+    else {
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+}
+
+private func readLineFromSocket(_ fd: Int32, maxBytes: Int) throws -> String? {
+    // Foundation can wait for the full requested byte count on sockets. POSIX
+    // recv returns short JSONL frames; the socket timeout bounds idle peers.
     var buffer = Data()
     while buffer.count < maxBytes {
-        let chunk = try handle.read(upToCount: 4096) ?? Data()
-        if chunk.isEmpty {
+        var chunk = [UInt8](repeating: 0, count: min(4096, maxBytes - buffer.count))
+        let count = chunk.withUnsafeMutableBytes { bytes in
+            recv(fd, bytes.baseAddress, bytes.count, 0)
+        }
+        if count == 0 {
             break
         }
-        buffer.append(chunk)
+        if count < 0 {
+            if errno == EINTR {
+                continue
+            }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        buffer.append(contentsOf: chunk.prefix(count))
         if buffer.contains(0x0A) {
             break
         }
@@ -249,7 +273,8 @@ enum ExecApprovalsSocketClient {
                         try self.requestDecisionSync(
                             socketPath: trimmedPath,
                             token: trimmedToken,
-                            request: request)
+                            request: request,
+                            timeoutMs: timeoutMs)
                     }.value
                 })
         } catch {
@@ -260,7 +285,8 @@ enum ExecApprovalsSocketClient {
     private static func requestDecisionSync(
         socketPath: String,
         token: String,
-        request: ExecApprovalPromptRequest) throws -> ExecApprovalDecision?
+        request: ExecApprovalPromptRequest,
+        timeoutMs: Int) throws -> ExecApprovalDecision?
     {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
@@ -269,6 +295,7 @@ enum ExecApprovalsSocketClient {
             ])
         }
         defer { close(fd) }
+        try configureSocketTimeouts(fd, timeoutMs: timeoutMs)
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
@@ -308,7 +335,7 @@ enum ExecApprovalsSocketClient {
         payload.append(0x0A)
         try handle.write(contentsOf: payload)
 
-        guard let line = try readLineFromHandle(handle, maxBytes: 256_000),
+        guard let line = try readLineFromSocket(fd, maxBytes: 256_000),
               let lineData = line.data(using: .utf8)
         else { return nil }
         let response = try JSONDecoder().decode(ExecApprovalSocketDecision.self, from: lineData)
@@ -1351,7 +1378,8 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
                 try self.sendApprovalResponse(handle: handle, id: UUID().uuidString, decision: .deny)
                 return
             }
-            guard let line = try readLineFromHandle(handle, maxBytes: 256_000),
+            try configureSocketTimeouts(fd, timeoutMs: 15000)
+            guard let line = try readLineFromSocket(fd, maxBytes: 256_000),
                   let data = line.data(using: .utf8)
             else {
                 return
