@@ -2655,6 +2655,57 @@ function assertOpenAICompletionsPayloadHasConversationTurn(
   );
 }
 
+const SSE_DONE_LINE_RE = /^data:[ \t]*\[DONE\][ \t]*$/i;
+const SSE_DONE_MAX_LINE_CHARS = 1_024;
+
+function createSseDoneDetector() {
+  const decoder = new TextDecoder();
+  let line = "";
+  let lineOverflowed = false;
+  let sawDone = false;
+
+  const finishLine = () => {
+    if (!lineOverflowed && SSE_DONE_LINE_RE.test(line)) {
+      sawDone = true;
+    }
+    line = "";
+    lineOverflowed = false;
+  };
+  const observeText = (text: string) => {
+    for (const char of text) {
+      if (char === "\n" || char === "\r") {
+        finishLine();
+        continue;
+      }
+      if (!lineOverflowed && line.length < SSE_DONE_MAX_LINE_CHARS) {
+        line += char;
+      } else {
+        // Never let truncation turn a suffix of a large data line into a
+        // standalone terminal marker.
+        lineOverflowed = true;
+      }
+    }
+  };
+
+  return {
+    observe(chunk: Uint8Array) {
+      if (!sawDone) {
+        observeText(decoder.decode(chunk, { stream: true }));
+      }
+    },
+    finish() {
+      if (sawDone) {
+        return;
+      }
+      observeText(decoder.decode());
+      if (line || lineOverflowed) {
+        finishLine();
+      }
+    },
+    sawDone: () => sawDone,
+  };
+}
+
 function createOpenAICompletionsClient(
   model: Model,
   context: Context,
@@ -2770,29 +2821,9 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
       let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-        // Wrap fetch to detect SSE [DONE] (consumed by the OpenAI SDK internally).
-        // Providers that omit finish_reason but terminate the stream cleanly with
-        // data: [DONE] should still trigger tool execution. The flag distinguishes
-        // Scan raw SSE body for an exact `data: [DONE]` terminal event.
-        // Only a real SSE-level DONE advances the flag; provider content or
-        // tool-argument strings containing "[DONE]" do not match.
-        let sawStreamDONE = false;
-        const decoder = new TextDecoder();
-        let buffer = "";
-        const SSE_DONE_RE = /^data:\s*\[DONE\]\s*$/i;
-        const processText = (text: string) => {
-          buffer += text;
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-          for (const line of lines) {
-            if (!sawStreamDONE && SSE_DONE_RE.test(line)) {
-              sawStreamDONE = true;
-            }
-          }
-          if (buffer.length > 10000) {
-            buffer = buffer.slice(-1000);
-          }
-        };
+        // The OpenAI SDK consumes the SSE terminal without yielding it. Observe
+        // the raw body so native tool calls can distinguish clean DONE from EOF.
+        const doneDetector = createSseDoneDetector();
         const baseFetch = buildGuardedModelFetch(model);
         const doneDetectingFetch: typeof globalThis.fetch = async (url, init) => {
           const response = await baseFetch(url as never, init);
@@ -2803,13 +2834,13 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
             return response;
           }
           const transformed = response.body.pipeThrough(
-            new TransformStream({
+            new TransformStream<Uint8Array, Uint8Array>({
               transform(chunk, controller) {
-                processText(decoder.decode(chunk, { stream: true }));
+                doneDetector.observe(chunk);
                 controller.enqueue(chunk);
               },
               flush() {
-                processText(decoder.decode());
+                doneDetector.finish();
               },
             }),
           );
@@ -2858,7 +2889,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
           abortFirstEventStream: firstEventAbort.abort,
           onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
-          sawStreamDONE: () => sawStreamDONE,
+          sawStreamDONE: doneDetector.sawDone,
         });
         finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error) {
@@ -4590,6 +4621,7 @@ export const testing = {
   buildOpenAISdkClientOptions,
   buildOpenAISdkRequestOptions,
   createAzureOpenAIClient,
+  createSseDoneDetector,
   createOpenAICompletionsClient,
   createOpenAIResponsesClient,
   enforceCodeModeResponsesToolSurface,

@@ -10353,6 +10353,25 @@ describe("openai transport stream", () => {
     expect(toolCalls).toHaveLength(1);
   });
 
+  it.each([
+    { chunks: ["data: [DO", "NE]\r\n\r\n"], expected: true },
+    { chunks: ["data:[DONE]"], expected: true },
+    { chunks: ['data: {"value":"[DONE]"}\n\n'], expected: false },
+    { chunks: [`data: ${"x".repeat(1_024)}data: [DONE]\n\n`], expected: false },
+  ])(
+    "detects only an exact bounded SSE terminal line: $chunks",
+    ({ chunks, expected }) => {
+      const detector = testing.createSseDoneDetector();
+      const encoder = new TextEncoder();
+      for (const chunk of chunks) {
+        detector.observe(encoder.encode(chunk));
+      }
+      detector.finish();
+
+      expect(detector.sawDone()).toBe(expected);
+    },
+  );
+
   it("does not promote native tool calls when stream ends without [DONE] and without finish_reason", async () => {
     const model = {
       id: "qwen3.6-27b",
@@ -10607,8 +10626,10 @@ describe("openai transport stream", () => {
             ],
           })}\n\n`,
         );
-        // Clean SSE termination — this is what the fetch wrapper detects
-        res.write("data: [DONE]\n\n");
+        // Split CRLF-formatted terminal proof across chunks. The SDK accepts this
+        // framing, so the raw terminal observer must preserve the same contract.
+        res.write("data: [DO");
+        res.write("NE]\r\n\r\n");
         res.end();
       });
     });
