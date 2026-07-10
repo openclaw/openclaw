@@ -3636,7 +3636,9 @@ describe("gateway agent handler", () => {
         reqId: "cron-media-release-fails",
         client: cronContinuationGatewayClient(),
         context,
+        flushDispatch: false,
       });
+      await vi.advanceTimersByTimeAsync(10);
 
       expect(releaseAttempts).toBe(3);
       expect(store[sessionKey].cronRunContinuation).toMatchObject({
@@ -3699,8 +3701,13 @@ describe("gateway agent handler", () => {
           internalEvents: [cronMediaCompletionEvent()],
           idempotencyKey: "cron-media-release-rotates",
         },
-        { reqId: "cron-media-release-rotates", client: cronContinuationGatewayClient() },
+        {
+          reqId: "cron-media-release-rotates",
+          client: cronContinuationGatewayClient(),
+          flushDispatch: false,
+        },
       );
+      await vi.advanceTimersByTimeAsync(10);
       expect(releaseAttempts).toBe(3);
 
       mocks.lifecycleGeneration = "post-restart-generation";
