@@ -11,6 +11,7 @@ import {
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { isLikelyContextOverflowError } from "../../agents/embedded-agent-helpers/errors.js";
+import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasVisibleCommittedMessagingToolDeliveryEvidence,
@@ -104,7 +105,11 @@ import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
-import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
+import {
+  resolveOriginAccountId,
+  resolveOriginMessageProvider,
+  resolveOriginMessageTo,
+} from "./origin-routing.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
@@ -123,6 +128,7 @@ import {
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
+import { shouldDedupeMessagingToolRepliesForRoute } from "./reply-payloads-dedupe.js";
 import {
   replyRunRegistry,
   runAfterReplyOperationClear,
@@ -251,6 +257,9 @@ function resolveReplyRunDeliveryContext(params: {
 }
 
 function hasSuccessfulSourceReplyDelivery(params: {
+  cfg: OpenClawConfig;
+  sessionCtx: TemplateContext;
+  sessionKey: string;
   blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
   directlySentBlockKeys?: Set<string>;
   messagingToolSentTexts?: string[];
@@ -260,7 +269,28 @@ function hasSuccessfulSourceReplyDelivery(params: {
   return (
     (params.blockReplyPipeline?.didStream() && !params.blockReplyPipeline.isAborted()) ||
     (params.directlySentBlockKeys?.size ?? 0) > 0 ||
-    hasVisibleCommittedMessagingToolDeliveryEvidence(params)
+    (hasVisibleCommittedMessagingToolDeliveryEvidence(params) &&
+      shouldDedupeMessagingToolRepliesForRoute({
+        config: params.cfg,
+        messageProvider: resolveOriginMessageProvider({
+          originatingChannel: params.sessionCtx.OriginatingChannel,
+          provider: params.sessionCtx.Provider,
+        }),
+        messagingToolSentTargets: params.messagingToolSentTargets as MessagingToolSend[],
+        originatingTo: resolveOriginMessageTo({
+          originatingTo: params.sessionCtx.OriginatingTo,
+          to: params.sessionCtx.To,
+        }),
+        originatingThreadId:
+          normalizeOptionalString(params.sessionCtx.MessageThreadId) ??
+          normalizeOptionalString(params.sessionCtx.TransportThreadId) ??
+          normalizeOptionalString(
+            parseSessionThreadInfoFast(params.sessionCtx.SessionKey ?? params.sessionKey).threadId,
+          ),
+        accountId: resolveOriginAccountId({
+          accountId: params.sessionCtx.AccountId,
+        }),
+      }))
   );
 }
 
@@ -1991,6 +2021,9 @@ export async function runReplyAgent(params: {
     });
 
     const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
+      cfg,
+      sessionCtx,
+      sessionKey: sessionKey ?? "",
       blockReplyPipeline,
       directlySentBlockKeys,
       messagingToolSentTexts: runResult.messagingToolSentTexts,
@@ -1999,10 +2032,11 @@ export async function runReplyAgent(params: {
     });
     const committedMessagingToolSourceReplyDelivery =
       hasCommittedSourceReplyDeliveryEvidence(runResult);
-    // #85714: the stranded-retry diagnostic gates on committed source-reply
-    // evidence. `committedMessagingToolSourceReplyDelivery` is that exact signal
-    // after the delivery-evidence refactor extracted it into a shared helper.
+    // #85714: source-delivery satisfaction includes newer explicit source-reply
+    // evidence plus legacy message-tool sends that match the source route.
     const committedSourceReplyDelivery = committedMessagingToolSourceReplyDelivery;
+    const sourceReplyDeliverySatisfied =
+      committedSourceReplyDelivery || successfulSourceReplyDelivery;
     const successfulSideEffectDelivery =
       successfulSourceReplyDelivery ||
       committedMessagingToolSourceReplyDelivery ||
@@ -2048,7 +2082,7 @@ export async function runReplyAgent(params: {
       if (!sessionKey || !storePath || followupRun.strandedReplyRetry !== true) {
         return undefined;
       }
-      if (sessionCtx.InboundEventKind === "room_event" || committedSourceReplyDelivery) {
+      if (sessionCtx.InboundEventKind === "room_event" || sourceReplyDeliverySatisfied) {
         return undefined;
       }
       const sourceReplyPolicy = resolveSourceReplyPolicy({
@@ -2067,7 +2101,7 @@ export async function runReplyAgent(params: {
       }
       return buildStrandedReplyDeliveryFailurePayload();
     };
-    if (opts?.sourceReplyDeliveryMode === "message_tool_only" && committedSourceReplyDelivery) {
+    if (opts?.sourceReplyDeliveryMode === "message_tool_only" && sourceReplyDeliverySatisfied) {
       await opts.onObservedReplyDelivery?.();
     }
     const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
@@ -2655,7 +2689,7 @@ export async function runReplyAgent(params: {
         shouldWarnAboutPrivateMessageToolFinal({
           sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
           sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
-          successfulSourceReplyDelivery: committedSourceReplyDelivery,
+          successfulSourceReplyDelivery: sourceReplyDeliverySatisfied,
           finalText: assistantFinalText,
         });
       const retryMissingSourceDelivery =
@@ -2664,7 +2698,7 @@ export async function runReplyAgent(params: {
         !isRoomEvent &&
         sourceReplyPolicy.sourceReplyDeliveryMode === "message_tool_only" &&
         !sourceReplyPolicy.sendPolicyDenied &&
-        !committedSourceReplyDelivery;
+        !sourceReplyDeliverySatisfied;
       if (isStrandedReply) {
         warnPrivateMessageToolFinal({
           sessionKey,

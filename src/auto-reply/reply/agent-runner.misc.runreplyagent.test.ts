@@ -3700,7 +3700,15 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
 
   it("does not warn or enqueue retry when the message tool delivered this turn", async () => {
     await runPrivateFinalCase({
-      didDeliverSourceReplyViaMessageTool: true,
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "whatsapp",
+          accountId: "primary",
+          to: "+15550001111",
+          text: "Visible reply",
+        },
+      ],
     });
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();

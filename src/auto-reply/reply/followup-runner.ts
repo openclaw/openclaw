@@ -11,9 +11,11 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasVisibleAgentPayload,
+  hasVisibleCommittedMessagingToolDeliveryEvidence,
   hasVisibleOutboundDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
@@ -99,7 +101,11 @@ import {
 } from "./compaction-notice.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
-import { resolveOriginMessageProvider } from "./origin-routing.js";
+import {
+  resolveOriginAccountId,
+  resolveOriginMessageProvider,
+  resolveOriginMessageTo,
+} from "./origin-routing.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import {
   shouldWarnAboutPrivateMessageToolFinal,
@@ -117,6 +123,7 @@ import {
 } from "./queue.js";
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
+import { shouldDedupeMessagingToolRepliesForRoute } from "./reply-payloads-dedupe.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { buildReplyUsageState } from "./reply-usage-state.js";
@@ -179,12 +186,40 @@ function isStrandedReplyRetryFollowup(queued: FollowupRun): boolean {
 }
 
 function hasSuccessfulFollowupSourceReplyDelivery(params: {
+  cfg: FollowupRun["run"]["config"];
+  queued: Pick<
+    FollowupRun,
+    "originatingAccountId" | "originatingChannel" | "originatingThreadId" | "originatingTo"
+  >;
+  run: Pick<FollowupRun["run"], "agentAccountId" | "messageProvider">;
   didDeliverSourceReplyViaMessageTool?: boolean;
   messagingToolSourceReplyPayloads?: EmbeddedAgentRunResult["messagingToolSourceReplyPayloads"];
+  messagingToolSentMediaUrls?: EmbeddedAgentRunResult["messagingToolSentMediaUrls"];
+  messagingToolSentTargets?: EmbeddedAgentRunResult["messagingToolSentTargets"];
+  messagingToolSentTexts?: EmbeddedAgentRunResult["messagingToolSentTexts"];
 }): boolean {
-  return (
+  if (
     params.didDeliverSourceReplyViaMessageTool === true ||
     hasVisibleAgentPayload({ payloads: params.messagingToolSourceReplyPayloads })
+  ) {
+    return true;
+  }
+  return (
+    hasVisibleCommittedMessagingToolDeliveryEvidence(params) &&
+    shouldDedupeMessagingToolRepliesForRoute({
+      config: params.cfg,
+      messageProvider: resolveOriginMessageProvider({
+        originatingChannel: params.queued.originatingChannel,
+        provider: params.run.messageProvider,
+      }),
+      messagingToolSentTargets: params.messagingToolSentTargets as MessagingToolSend[],
+      originatingTo: resolveOriginMessageTo({ originatingTo: params.queued.originatingTo }),
+      originatingThreadId: params.queued.originatingThreadId,
+      accountId: resolveOriginAccountId({
+        originatingAccountId: params.queued.originatingAccountId,
+        accountId: params.run.agentAccountId,
+      }),
+    })
   );
 }
 
@@ -1593,6 +1628,16 @@ export function createFollowupRunner(params: {
           fallbackContextTokens: activeSessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
           allowAsyncLoad: false,
         }) ?? DEFAULT_CONTEXT_TOKENS;
+      const successfulSourceReplyDelivery = hasSuccessfulFollowupSourceReplyDelivery({
+        cfg: runtimeConfig,
+        queued,
+        run,
+        didDeliverSourceReplyViaMessageTool: runResult.didDeliverSourceReplyViaMessageTool,
+        messagingToolSourceReplyPayloads: runResult.messagingToolSourceReplyPayloads,
+        messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+        messagingToolSentTargets: runResult.messagingToolSentTargets,
+        messagingToolSentTexts: runResult.messagingToolSentTexts,
+      });
       const deliverStrandedReplyRetryFailureDiagnostic = async () => {
         if (!isStrandedReplyRetryFollowup(effectiveQueued)) {
           return false;
@@ -1618,12 +1663,7 @@ export function createFollowupRunner(params: {
         if (sourceReplyPolicy.sendPolicyDenied) {
           return false;
         }
-        if (
-          hasSuccessfulFollowupSourceReplyDelivery({
-            didDeliverSourceReplyViaMessageTool: runResult.didDeliverSourceReplyViaMessageTool,
-            messagingToolSourceReplyPayloads: runResult.messagingToolSourceReplyPayloads,
-          })
-        ) {
+        if (successfulSourceReplyDelivery) {
           await opts?.onObservedReplyDelivery?.();
           return false;
         }
@@ -1676,10 +1716,7 @@ export function createFollowupRunner(params: {
           shouldWarnAboutPrivateMessageToolFinal({
             sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
             sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
-            successfulSourceReplyDelivery: hasSuccessfulFollowupSourceReplyDelivery({
-              didDeliverSourceReplyViaMessageTool: runResult.didDeliverSourceReplyViaMessageTool,
-              messagingToolSourceReplyPayloads: runResult.messagingToolSourceReplyPayloads,
-            }),
+            successfulSourceReplyDelivery,
             finalText: assistantFinalText,
           });
         if (!isStrandedReply) {

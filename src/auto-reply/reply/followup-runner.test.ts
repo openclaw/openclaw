@@ -5921,7 +5921,6 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const { onBlockReply } = await runMessagingCase({
       agentResult: {
         payloads: [],
-        didDeliverSourceReplyViaMessageTool: true,
         messagingToolSentTexts: ["visible recovered reply"],
         messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
       },
