@@ -153,6 +153,16 @@ export async function runSessionsSendA2AFlow(params: {
     });
     const targetChannel = announceTarget?.channel ?? "unknown";
 
+    // Resolve a requester-side target for pre-ping-pong delivery so the first
+    // round-trip reply reaches the requester's channel even in cross-channel
+    // A2A (e.g., Discord requester → Telegram target).
+    let requesterTarget: AnnounceTarget | null = null;
+    if (params.requesterSessionKey) {
+      requesterTarget = await resolveAnnounceTarget({
+        sessionKey: params.requesterSessionKey,
+        displayKey: params.requesterSessionKey,
+      }).catch(() => null);
+    }
     // A same-session send is a human-facing source-channel reply, not a true
     // agent-to-agent announcement. Asking the same session to decide whether to
     // announce can learn stale ANNOUNCE_SKIP patterns from its own history and
@@ -174,15 +184,32 @@ export async function runSessionsSendA2AFlow(params: {
       return;
     }
 
+    // Deliver the first reply before entering ping-pong. Uses requester-derived
+    // target (when available) so cross-channel A2A delivers to the correct chat,
+    // falling back to the target-derived announce target if the requester session
+    // is not resolvable (e.g., cron job keys). In cross-agent scenarios this is
+    // the only reliable delivery point: the ping-pong loop consumes messages
+    // within agent sessions, and the final announce step depends on the target
+    // agent choosing to announce.
+    if (requesterTarget && primaryReply) {
+      await deliverAnnounceReply({
+        announceTarget: requesterTarget,
+        message: primaryReply,
+        runContextId,
+      });
+      return;
+    }
+
     if (
       params.maxPingPongTurns > 0 &&
       params.requesterSessionKey &&
       params.requesterSessionKey !== params.targetSessionKey
     ) {
-      let currentSessionKey = params.requesterSessionKey;
-      let nextSessionKey = params.targetSessionKey;
+      let currentSessionKey = params.targetSessionKey;
+      let nextSessionKey = params.requesterSessionKey;
       let incomingMessage = latestReply;
       for (let turn = 1; turn <= params.maxPingPongTurns; turn += 1) {
+        if (currentSessionKey === params.requesterSessionKey) break;
         const currentRole =
           currentSessionKey === params.requesterSessionKey ? "requester" : "target";
         const replyPrompt = buildAgentToAgentReplyContext({
@@ -216,38 +243,40 @@ export async function runSessionsSendA2AFlow(params: {
       }
     }
 
-    const announcePrompt = buildAgentToAgentAnnounceContext({
-      requesterSessionKey: params.requesterSessionKey,
-      requesterChannel: params.requesterChannel,
-      targetSessionKey: params.displayKey,
-      targetChannel,
-      originalMessage: params.message,
-      roundOneReply: primaryReply,
-      latestReply,
-    });
-    const announceReply = await runAgentStep({
-      sessionKey: params.targetSessionKey,
-      message: "Agent-to-agent announce step.",
-      extraSystemPrompt: announcePrompt,
-      timeoutMs: params.announceTimeoutMs,
-      lane: resolveNestedAgentLaneForSession(params.targetSessionKey),
-      transcriptMessage: "",
-      sourceSessionKey: params.requesterSessionKey,
-      sourceChannel: params.requesterChannel,
-      sourceTool: "sessions_send",
-    });
-    if (
-      announceTarget &&
-      announceReply &&
-      announceReply.trim() &&
-      !isAnnounceSkip(announceReply) &&
-      !isNonDeliverableSessionsReply(announceReply)
-    ) {
-      await deliverAnnounceReply({
-        announceTarget,
-        message: announceReply,
-        runContextId,
+    if (!(requesterTarget && primaryReply)) {
+      const announcePrompt = buildAgentToAgentAnnounceContext({
+        requesterSessionKey: params.requesterSessionKey,
+        requesterChannel: params.requesterChannel,
+        targetSessionKey: params.displayKey,
+        targetChannel,
+        originalMessage: params.message,
+        roundOneReply: primaryReply,
+        latestReply,
       });
+      const announceReply = await runAgentStep({
+        sessionKey: params.targetSessionKey,
+        message: "Agent-to-agent announce step.",
+        extraSystemPrompt: announcePrompt,
+        timeoutMs: params.announceTimeoutMs,
+        lane: resolveNestedAgentLaneForSession(params.targetSessionKey),
+        transcriptMessage: "",
+        sourceSessionKey: params.requesterSessionKey,
+        sourceChannel: params.requesterChannel,
+        sourceTool: "sessions_send",
+      });
+      if (
+        announceTarget &&
+        announceReply &&
+        announceReply.trim() &&
+        !isAnnounceSkip(announceReply) &&
+        !isNonDeliverableSessionsReply(announceReply)
+      ) {
+        await deliverAnnounceReply({
+          announceTarget,
+          message: announceReply,
+          runContextId,
+        });
+      }
     }
   } catch (err) {
     log.warn("sessions_send announce flow failed", {

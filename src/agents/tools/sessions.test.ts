@@ -51,7 +51,11 @@ vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
 });
 
 type SessionsToolTestConfig = {
-  session: { scope: "per-sender"; mainKey: string; agentToAgent?: { maxPingPongTurns: number } };
+  session: {
+    scope: "per-sender";
+    mainKey: string;
+    agentToAgent?: { maxPingPongTurns: number };
+  };
   tools: {
     agentToAgent: { enabled: boolean };
     sessions?: { visibility: "self" | "tree" | "agent" | "all" };
@@ -200,6 +204,30 @@ const installRegistry = async () => {
         },
       },
       {
+        pluginId: "bncr",
+        source: "test",
+        plugin: {
+          id: "bncr",
+          meta: {
+            id: "bncr",
+            label: "Bncr",
+            selectionLabel: "Bncr",
+            docsPath: "/channels/bncr",
+            blurb: "Bncr test stub.",
+            preferSessionLookupForAnnounceTarget: true,
+          },
+          capabilities: { chatTypes: ["direct", "group"] },
+          messaging: {
+            resolveSessionConversation: resolveSessionConversationStub,
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        },
+      },
+      {
         pluginId: "slack",
         source: "test",
         plugin: {
@@ -247,7 +275,11 @@ async function executeFireAndForgetA2AFrom(requesterSessionKey: string) {
   vi.mocked(runSessionsSendA2AFlow).mockClear();
   const targetSessionKey = "agent:other:discord:group:ops";
   loadConfigMock.mockReturnValue({
-    session: { scope: "per-sender", mainKey: "main", agentToAgent: { maxPingPongTurns: 5 } },
+    session: {
+      scope: "per-sender",
+      mainKey: "main",
+      agentToAgent: { maxPingPongTurns: 5 },
+    },
     tools: {
       agentToAgent: { enabled: true },
       sessions: { visibility: "all" },
@@ -408,12 +440,20 @@ describe("extractAssistantText", () => {
         {
           type: "text",
           text: "internal reasoning",
-          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+          textSignature: JSON.stringify({
+            v: 1,
+            id: "item_commentary",
+            phase: "commentary",
+          }),
         },
         {
           type: "text",
           text: "Done.",
-          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+          textSignature: JSON.stringify({
+            v: 1,
+            id: "item_final",
+            phase: "final_answer",
+          }),
         },
       ],
     };
@@ -581,6 +621,58 @@ describe("resolveAnnounceTarget", () => {
       threadId: "1710000000.000100",
     });
   });
+
+  it("uses sessions.resolve canonical keys before falling back for plugin channels", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        sessions: [
+          {
+            key: "agent:orion:bncr:group:7467426f743a2d35303433383132383631",
+            deliveryContext: {
+              channel: "bncr",
+              to: "Bncr:tgBot:-5043812861:0",
+              accountId: "Primary",
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        key: "agent:orion:bncr:group:7467426f743a2d35303433383132383631",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        key: "agent:orion:bncr:group:7467426f743a2d35303433383132383631",
+      });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:orion:bncr:group:-5043812861",
+      displayKey: "agent:orion:bncr:group:-5043812861",
+    });
+
+    expect(target).toEqual({
+      channel: "bncr",
+      to: "Bncr:tgBot:-5043812861:0",
+      accountId: "primary",
+      threadId: undefined,
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "sessions.list",
+      }),
+    );
+    expect(callGatewayMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "sessions.resolve",
+        params: {
+          key: "agent:orion:bncr:group:-5043812861",
+          allowMissing: true,
+        },
+      }),
+    );
+  });
 });
 
 describe("sessions_list gating", () => {
@@ -697,7 +789,9 @@ describe("sessions_list gating", () => {
         path: "/tmp/sessions.json",
         sessions: [{ key: "current", kind: "direct" }],
       })
-      .mockResolvedValueOnce({ messages: [{ role: "assistant", content: [] }] });
+      .mockResolvedValueOnce({
+        messages: [{ role: "assistant", content: [] }],
+      });
 
     await createMainSessionsListTool().execute("call1", { messageLimit: 1 });
 
@@ -919,7 +1013,9 @@ describe("sessions_send gating", () => {
       status: "accepted",
       sessionKey: MAIN_AGENT_SESSION_KEY,
     });
-    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.list" });
+    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({
+      method: "sessions.list",
+    });
     expect(callGatewayMock.mock.calls).toContainEqual([
       expect.objectContaining({
         method: "agent",
@@ -947,7 +1043,10 @@ describe("sessions_send gating", () => {
       } as never,
     });
     callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: Record<string, unknown> };
+      const request = opts as {
+        method?: string;
+        params?: Record<string, unknown>;
+      };
       if (request.method === "sessions.resolve") {
         if (request.params?.key === "session-id-only") {
           throw new Error("not a session key");
@@ -1036,7 +1135,9 @@ describe("sessions_send gating", () => {
       const [id, threadId] = rawId.split(":topic:");
       return threadId ? { id, threadId, baseConversationId: id } : null;
     });
-    setRuntimeConfigSnapshot({ plugins: { entries: { telegram: { enabled: true } } } });
+    setRuntimeConfigSnapshot({
+      plugins: { entries: { telegram: { enabled: true } } },
+    });
     expect(parseSessionThreadInfo(topicSessionKey).threadId).toBe("77");
     const tool = createMainSessionsSendTool();
 
@@ -1121,7 +1222,10 @@ describe("sessions_send gating", () => {
     };
 
     callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: Record<string, unknown> };
+      const request = opts as {
+        method?: string;
+        params?: Record<string, unknown>;
+      };
       if (request.method === "sessions.list") {
         return {
           path: "/tmp/sessions.json",
