@@ -385,6 +385,7 @@ describe("runMessageAction plugin dispatch", () => {
           clientName: "gateway-client",
           mode: "backend",
         },
+        conversationReadOrigin: "direct-operator",
         dryRun: false,
       });
 
@@ -401,13 +402,14 @@ describe("runMessageAction plugin dispatch", () => {
           channel: "actionhub",
           chatId: "oc_123",
         },
+        conversationReadOrigin: "direct-operator",
         dryRun: false,
       });
 
       const pinCall = readPluginCall(handleAction, 0);
       expectRecordFields(
         pinCall,
-        { action: "pin", conversationReadOrigin: "delegated" },
+        { action: "pin", conversationReadOrigin: "direct-operator" },
         "pin call",
       );
       expectRecordFields(
@@ -500,35 +502,36 @@ describe("runMessageAction plugin dispatch", () => {
         },
       } as OpenClawConfig;
 
+      await expect(
+        runMessageAction({
+          cfg,
+          action: "pin",
+          params: {
+            channel: "actionhub",
+            messageId: "om_123",
+            target: "forged-current",
+          },
+          requesterAccountId: "forged-account",
+          requesterSenderId: "forged-sender",
+          toolContext: {
+            currentChannelId: "forged-current",
+            currentChannelProvider: "actionhub",
+          },
+          messageActionAuthorization: {},
+          dryRun: false,
+        }),
+      ).rejects.toThrow("requires the exact current conversation and account");
+      expect(handleAction).not.toHaveBeenCalled();
+
       await runMessageAction({
         cfg,
         action: "pin",
         params: {
           channel: "actionhub",
           messageId: "om_123",
+          target: "trusted-current",
         },
-        requesterAccountId: "forged-account",
-        requesterSenderId: "forged-sender",
-        toolContext: {
-          currentChannelId: "forged-current",
-          currentChannelProvider: "actionhub",
-        },
-        messageActionAuthorization: {},
-        dryRun: false,
-      });
-
-      const untrustedCall = readPluginCall(handleAction, 0);
-      expect(untrustedCall.requesterAccountId).toBeUndefined();
-      expect(untrustedCall.requesterSenderId).toBeUndefined();
-      expect(untrustedCall.toolContext).toBeUndefined();
-
-      await runMessageAction({
-        cfg,
-        action: "pin",
-        params: {
-          channel: "actionhub",
-          messageId: "om_123",
-        },
+        defaultAccountId: "trusted-account",
         requesterAccountId: "forged-account",
         requesterSenderId: "forged-sender",
         toolContext: {
@@ -546,7 +549,7 @@ describe("runMessageAction plugin dispatch", () => {
         dryRun: false,
       });
 
-      const trustedCall = readPluginCall(handleAction, 1);
+      const trustedCall = readPluginCall(handleAction, 0);
       expectRecordFields(
         trustedCall,
         {
@@ -609,7 +612,14 @@ describe("runMessageAction plugin dispatch", () => {
       } as OpenClawConfig;
 
       setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "discord", source: "test", plugin: discordPlugin }]),
+        createTestRegistry([
+          {
+            pluginId: "discord",
+            source: "test",
+            origin: "bundled",
+            plugin: discordPlugin,
+          },
+        ]),
       );
 
       await runMessageAction({

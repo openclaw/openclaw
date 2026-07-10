@@ -222,14 +222,14 @@ function isExactCurrentConversation(params: {
     }
     addHostConversationTarget(requestedTargets, normalizedTarget);
   }
-  const nonAliasRequestedTargets = Array.from(requestedTargets.values());
   let hasDeliveryAliasInput = false;
+  let normalizedAliasTarget: HostConversationTarget | undefined;
   if (params.pluginOrigin === "bundled") {
     hasDeliveryAliasInput = (aliasSpec?.deliveryTargetAliases ?? []).some((alias) =>
       hasTargetInput(params.ctx.params[alias]),
     );
     const resolvedAliasTarget = aliasSpec?.resolveDeliveryTarget?.({ args: params.ctx.params });
-    const normalizedAliasTarget = normalizeHostConversationTarget({
+    normalizedAliasTarget = normalizeHostConversationTarget({
       value: resolvedAliasTarget,
       channel: params.ctx.channel,
       normalizeTarget,
@@ -242,6 +242,14 @@ function isExactCurrentConversation(params: {
     }
     addHostConversationTarget(requestedTargets, normalizedAliasTarget);
   }
+  const normalizedAliasTargetKey = normalizedAliasTarget
+    ? targetKey(normalizedAliasTarget)
+    : undefined;
+  // Normalization mirrors a delivery alias into target/to. Treat that exact
+  // canonical value as the alias itself; distinct sibling targets still block.
+  const nonAliasRequestedTargets = Array.from(requestedTargets.values()).filter(
+    (target) => targetKey(target) !== normalizedAliasTargetKey,
+  );
   const requestedTargetList = Array.from(requestedTargets.values());
   if (hasConflictingTargetKinds(requestedTargetList)) {
     return false;

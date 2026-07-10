@@ -645,6 +645,46 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     expect(handleAction).toHaveBeenCalledOnce();
   });
 
+  it("does not mistake a normalized delivery alias target for a conflicting target", async () => {
+    const matchesCurrentConversation = vi.fn(() => true);
+    setReadPlugin({
+      channel: "imessage",
+      origin: "bundled",
+      messageActionTargetAliases: {
+        react: {
+          aliases: ["chatId", "messageId"],
+          deliveryTargetAliases: ["chatId"],
+          resolveDeliveryTarget: ({ args }) => `chat_id:${String(args.chatId)}`,
+          matchesCurrentConversation,
+        },
+      },
+    });
+
+    const normalizedAliasTarget = "chat_id:42";
+    await dispatchChannelMessageAction({
+      channel: "imessage",
+      action: "react",
+      cfg: {} as OpenClawConfig,
+      params: {
+        target: normalizedAliasTarget,
+        to: normalizedAliasTarget,
+        chatId: 42,
+        messageId: "current-message",
+      },
+      accountId: "default",
+      requesterAccountId: "default",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "imessage",
+        currentChannelId: "current-handle",
+        currentMessageId: "current-message",
+      },
+    });
+
+    expect(matchesCurrentConversation).toHaveBeenCalledOnce();
+    expect(handleAction).toHaveBeenCalledOnce();
+  });
+
   it("fails closed when a bundled owner matcher cannot prove alias equivalence", async () => {
     const matchesCurrentConversation = vi.fn(() => false);
     setReadPlugin({
