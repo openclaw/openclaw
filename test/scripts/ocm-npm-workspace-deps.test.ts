@@ -1,0 +1,162 @@
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import {
+  buildInstallManifest,
+  parseWorkspaceDependencyDirs,
+  resolveWorkspaceInstallPlan,
+  rewriteWorkspaceDependencyVersions,
+} from "../../scripts/ocm-npm-workspace-deps.mjs";
+
+const adapterPath = fileURLToPath(
+  new URL("../../scripts/ocm-npm-workspace-deps.mjs", import.meta.url),
+);
+
+describe("OCM npm workspace dependency adapter", () => {
+  it("resolves workspace package directories", () => {
+    expect(
+      parseWorkspaceDependencyDirs(["packages/ai", "extensions/example"].join(delimiter), "/repo"),
+    ).toEqual(["/repo/packages/ai", "/repo/extensions/example"]);
+  });
+
+  it("replaces the root archive argument with a prepared install manifest", () => {
+    expect(
+      resolveWorkspaceInstallPlan(
+        [
+          "install",
+          "--prefix",
+          "runtime",
+          "--omit=dev",
+          "--no-save",
+          "--package-lock=false",
+          "openclaw.tgz",
+        ],
+        ["/repo/packages/ai"],
+        "/repo",
+      ),
+    ).toEqual({
+      installArgs: [
+        "install",
+        "--prefix",
+        "runtime",
+        "--omit=dev",
+        "--no-save",
+        "--package-lock=false",
+      ],
+      prefixDir: "/repo/runtime",
+      rootArchive: "/repo/openclaw.tgz",
+    });
+  });
+
+  it("keeps normal npm commands unchanged", () => {
+    expect(resolveWorkspaceInstallPlan(["pack", "--silent"], ["/repo/packages/ai"])).toBeNull();
+    expect(resolveWorkspaceInstallPlan(["install", "openclaw.tgz"], [])).toBeNull();
+  });
+
+  it("builds a manifest with the root and local workspace tarballs", () => {
+    expect(
+      buildInstallManifest("/tmp/openclaw.tgz", [
+        { name: "@openclaw/ai", tarball: "/tmp/openclaw-ai.tgz" },
+      ]),
+    ).toEqual({
+      private: true,
+      dependencies: {
+        "@openclaw/ai": "file:///tmp/openclaw-ai.tgz",
+        openclaw: "file:///tmp/openclaw.tgz",
+      },
+    });
+  });
+
+  it("rewrites packed workspace protocols to the local package version", () => {
+    const packageJson = {
+      dependencies: {
+        "@openclaw/ai": "workspace:*",
+        chalk: "5.6.2",
+      },
+    };
+
+    expect(
+      rewriteWorkspaceDependencyVersions(packageJson, [
+        {
+          name: "@openclaw/ai",
+          version: "2026.7.1-beta.3",
+          tarball: "/tmp/openclaw-ai.tgz",
+        },
+      ]),
+    ).toBe(1);
+    expect(packageJson.dependencies).toEqual({
+      "@openclaw/ai": "2026.7.1-beta.3",
+      chalk: "5.6.2",
+    });
+  });
+
+  it("installs a packed root with a local workspace dependency", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-ocm-adapter-test-"));
+    try {
+      const archiveRoot = join(root, "archive");
+      const packagedRoot = join(archiveRoot, "package");
+      const workspaceDir = join(root, "ai");
+      const installDir = join(root, "install");
+      const rootArchive = join(root, "openclaw.tgz");
+      mkdirSync(packagedRoot, { recursive: true });
+      mkdirSync(workspaceDir, { recursive: true });
+      writeFileSync(
+        join(packagedRoot, "package.json"),
+        `${JSON.stringify({
+          name: "openclaw",
+          version: "1.0.0",
+          dependencies: { "@openclaw/ai": "workspace:*" },
+        })}\n`,
+      );
+      writeFileSync(
+        join(workspaceDir, "package.json"),
+        `${JSON.stringify({
+          name: "@openclaw/ai",
+          version: "1.0.0",
+          main: "index.js",
+        })}\n`,
+      );
+      writeFileSync(join(workspaceDir, "index.js"), "export const ready = true;\n");
+      execFileSync("tar", ["-czf", rootArchive, "-C", archiveRoot, "package"]);
+
+      execFileSync(
+        process.execPath,
+        [
+          adapterPath,
+          "install",
+          "--prefix",
+          installDir,
+          "--omit=dev",
+          "--no-save",
+          "--package-lock=false",
+          rootArchive,
+        ],
+        {
+          env: {
+            ...process.env,
+            OPENCLAW_OCM_REAL_NPM_BIN: process.platform === "win32" ? "npm.cmd" : "npm",
+            OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS: workspaceDir,
+            npm_config_audit: "false",
+            npm_config_cache: join(root, "npm-cache"),
+            npm_config_fund: "false",
+          },
+          stdio: "pipe",
+        },
+      );
+
+      expect(
+        JSON.parse(readFileSync(join(installDir, "node_modules/openclaw/package.json"), "utf8"))
+          .version,
+      ).toBe("1.0.0");
+      expect(
+        JSON.parse(readFileSync(join(installDir, "node_modules/@openclaw/ai/package.json"), "utf8"))
+          .version,
+      ).toBe("1.0.0");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+});

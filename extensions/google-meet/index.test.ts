@@ -46,6 +46,7 @@ import {
   noopLogger,
   setupGoogleMeetPlugin,
 } from "./src/test-support/plugin-harness.js";
+import * as chromeTransport from "./src/transports/chrome.js";
 import { testing as chromeTransportTesting } from "./src/transports/chrome.js";
 import {
   buildMeetDtmfSequence,
@@ -1487,6 +1488,70 @@ describe("google-meet plugin", () => {
         sessionKey: `agent:support:google-meet:${result.details.session.id}`,
       }),
     );
+  });
+
+  it("keeps Twilio calls on the configured realtime agent when no tool override exists", async () => {
+    const { tools } = setup({
+      defaultTransport: "twilio",
+      realtime: { agentId: "support" },
+    });
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<{ details: { session: { id: string } } }>;
+    };
+
+    const result = await tool.execute("id", {
+      action: "join",
+      url: "https://meet.google.com/abc-defg-hij",
+      dialInNumber: "+15551234567",
+    });
+
+    expect(voiceCallMocks.joinMeetViaVoiceCallGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "support",
+        sessionKey: `agent:support:google-meet:${result.details.session.id}`,
+      }),
+    );
+  });
+
+  it("keeps test-listen probes on the agent that invoked the tool", async () => {
+    const { tools, gatewayRequest } = setup(
+      { defaultTransport: "chrome-node" },
+      {
+        gatewayAvailable: true,
+        toolContext: { agentId: "Support", sessionKey: "agent:support:main" },
+        browserActResult: {
+          inCall: true,
+          captioning: true,
+          transcriptLines: 1,
+          lastCaptionText: "hello from the meeting",
+          title: "Meet call",
+          url: "https://meet.google.com/abc-defg-hij",
+        },
+      },
+    );
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { session: { agentId: string }; listenVerified: boolean } }>;
+    };
+
+    const result = await tool.execute("id", {
+      action: "test_listen",
+      url: "https://meet.google.com/abc-defg-hij",
+      timeoutMs: "100",
+    });
+
+    expect(gatewayRequest).toHaveBeenCalledWith(
+      "googlemeet.testListen",
+      expect.objectContaining({
+        agentId: "support",
+        requesterSessionKey: "agent:support:main",
+      }),
+      { timeoutMs: 60_000 },
+    );
+    expect(result.details.session.agentId).toBe("support");
+    expect(result.details.listenVerified).toBe(true);
   });
 
   it("fails closed for standalone non-default agent routing", async () => {
@@ -3788,6 +3853,7 @@ describe("google-meet plugin", () => {
       url: "https://meet.google.com/abc-defg-hij",
       transport: "chrome",
       mode: "agent",
+      agentId: "main",
       state: "active",
       createdAt: "2026-04-27T00:00:00.000Z",
       updatedAt: "2026-04-27T00:00:00.000Z",
@@ -3836,6 +3902,7 @@ describe("google-meet plugin", () => {
       url: "https://meet.google.com/abc-defg-hij",
       transport: "chrome",
       mode: "bidi",
+      agentId: "main",
       state: "active",
       createdAt: "2026-04-27T00:00:00.000Z",
       updatedAt: "2026-04-27T00:00:00.000Z",
@@ -3866,6 +3933,104 @@ describe("google-meet plugin", () => {
     const joinArgs = requireRecord(mockCallArg(join, 0), "test speech join args");
     expect(joinArgs.message).toBe("Say exactly: hello.");
     expect(joinArgs.mode).toBe("bidi");
+  });
+
+  it("resets test speech output baselines when another agent owns the old session", async () => {
+    const runtime = new GoogleMeetRuntime({
+      config: resolveGoogleMeetConfig({}),
+      fullConfig: {} as never,
+      runtime: {} as never,
+      logger: noopLogger,
+    });
+    const oldSession: GoogleMeetSession = {
+      id: "meet_old",
+      url: "https://meet.google.com/abc-defg-hij",
+      transport: "chrome",
+      mode: "agent",
+      agentId: "support",
+      state: "active",
+      createdAt: "2026-04-27T00:00:00.000Z",
+      updatedAt: "2026-04-27T00:00:00.000Z",
+      participantIdentity: "signed-in Google Chrome profile",
+      realtime: {
+        enabled: true,
+        strategy: "agent",
+        transcriptionProvider: "openai",
+        toolPolicy: "safe-read-only",
+      },
+      chrome: {
+        audioBackend: "blackhole-2ch",
+        launched: true,
+        health: { audioOutputActive: true, lastOutputBytes: 100 },
+      },
+      notes: [],
+    };
+    const newSession: GoogleMeetSession = {
+      ...oldSession,
+      id: "meet_new",
+      agentId: "main",
+      chrome: {
+        audioBackend: "blackhole-2ch",
+        launched: true,
+        health: { audioOutputActive: true, lastOutputBytes: 1 },
+      },
+    };
+    vi.spyOn(runtime, "list").mockReturnValue([oldSession]);
+    vi.spyOn(runtime, "join").mockResolvedValue({ session: newSession, spoken: true });
+
+    const result = await runtime.testSpeech({
+      url: "https://meet.google.com/abc-defg-hij",
+      agentId: "main",
+      message: "Say exactly: hello.",
+    });
+
+    expect(result.speechOutputVerified).toBe(true);
+    expect(result.speechOutputTimedOut).toBe(false);
+  });
+
+  it("keeps the pre-join test speech baseline when reusing the same session", async () => {
+    const runtime = new GoogleMeetRuntime({
+      config: resolveGoogleMeetConfig({}),
+      fullConfig: {} as never,
+      runtime: {} as never,
+      logger: noopLogger,
+    });
+    const session: GoogleMeetSession = {
+      id: "meet_1",
+      url: "https://meet.google.com/abc-defg-hij",
+      transport: "chrome",
+      mode: "agent",
+      agentId: "main",
+      state: "active",
+      createdAt: "2026-04-27T00:00:00.000Z",
+      updatedAt: "2026-04-27T00:00:00.000Z",
+      participantIdentity: "signed-in Google Chrome profile",
+      realtime: {
+        enabled: true,
+        strategy: "agent",
+        transcriptionProvider: "openai",
+        toolPolicy: "safe-read-only",
+      },
+      chrome: {
+        audioBackend: "blackhole-2ch",
+        launched: true,
+        health: { audioOutputActive: true, lastOutputBytes: 10 },
+      },
+      notes: [],
+    };
+    vi.spyOn(runtime, "list").mockReturnValue([session]);
+    vi.spyOn(runtime, "join").mockImplementation(async () => {
+      session.chrome!.health!.lastOutputBytes = 11;
+      return { session, spoken: true };
+    });
+
+    const result = await runtime.testSpeech({
+      url: "https://meet.google.com/abc-defg-hij",
+      message: "Say exactly: hello.",
+    });
+
+    expect(result.speechOutputVerified).toBe(true);
+    expect(result.speechOutputTimedOut).toBe(false);
   });
 
   it("rejects observe-only mode for test speech", async () => {
@@ -3905,6 +4070,213 @@ describe("google-meet plugin", () => {
         transport: "twilio",
       }),
     ).rejects.toThrow("test_listen supports chrome or chrome-node");
+  });
+
+  it("resets test listen transcript baselines when another agent owns the old session", async () => {
+    const runtime = new GoogleMeetRuntime({
+      config: resolveGoogleMeetConfig({}),
+      fullConfig: {} as never,
+      runtime: {} as never,
+      logger: noopLogger,
+    });
+    const oldSession: GoogleMeetSession = {
+      id: "meet_old",
+      url: "https://meet.google.com/abc-defg-hij",
+      transport: "chrome",
+      mode: "transcribe",
+      agentId: "support",
+      state: "active",
+      createdAt: "2026-04-27T00:00:00.000Z",
+      updatedAt: "2026-04-27T00:00:00.000Z",
+      participantIdentity: "signed-in Google Chrome profile",
+      realtime: {
+        enabled: false,
+        strategy: "agent",
+        toolPolicy: "safe-read-only",
+      },
+      chrome: {
+        audioBackend: "blackhole-2ch",
+        launched: true,
+        health: { transcriptLines: 10, lastCaptionText: "old caption" },
+      },
+      notes: [],
+    };
+    const newSession: GoogleMeetSession = {
+      ...oldSession,
+      id: "meet_new",
+      agentId: "main",
+      chrome: {
+        audioBackend: "blackhole-2ch",
+        launched: true,
+        health: { transcriptLines: 1, lastCaptionText: "fresh caption" },
+      },
+    };
+    vi.spyOn(runtime, "list").mockReturnValue([oldSession]);
+    vi.spyOn(runtime, "join").mockResolvedValue({ session: newSession, spoken: false });
+
+    const result = await runtime.testListen({
+      url: "https://meet.google.com/abc-defg-hij",
+      agentId: "main",
+    });
+
+    expect(result.listenVerified).toBe(true);
+    expect(result.listenTimedOut).toBe(false);
+  });
+
+  it("keeps the pre-join test listen baseline when reusing the same session", async () => {
+    const runtime = new GoogleMeetRuntime({
+      config: resolveGoogleMeetConfig({}),
+      fullConfig: {} as never,
+      runtime: {} as never,
+      logger: noopLogger,
+    });
+    const session: GoogleMeetSession = {
+      id: "meet_1",
+      url: "https://meet.google.com/abc-defg-hij",
+      transport: "chrome",
+      mode: "transcribe",
+      agentId: "main",
+      state: "active",
+      createdAt: "2026-04-27T00:00:00.000Z",
+      updatedAt: "2026-04-27T00:00:00.000Z",
+      participantIdentity: "signed-in Google Chrome profile",
+      realtime: {
+        enabled: false,
+        strategy: "agent",
+        toolPolicy: "safe-read-only",
+      },
+      chrome: {
+        audioBackend: "blackhole-2ch",
+        launched: true,
+        health: { transcriptLines: 1, lastCaptionText: "old caption" },
+      },
+      notes: [],
+    };
+    vi.spyOn(runtime, "list").mockReturnValue([session]);
+    vi.spyOn(runtime, "join").mockImplementation(async () => {
+      session.chrome!.health = { transcriptLines: 2, lastCaptionText: "fresh caption" };
+      return { session, spoken: false };
+    });
+
+    const result = await runtime.testListen({
+      url: "https://meet.google.com/abc-defg-hij",
+    });
+
+    expect(result.listenVerified).toBe(true);
+    expect(result.listenTimedOut).toBe(false);
+  });
+
+  it("stops the old Chrome bridge before reassigning a Meet tab to another agent", async () => {
+    const stop = vi.fn(async () => {});
+    const launchChromeMeet = vi
+      .spyOn(chromeTransport, "launchChromeMeet")
+      .mockResolvedValueOnce({
+        launched: true,
+        browser: { inCall: true, micMuted: false },
+        audioBridge: {
+          type: "command-pair",
+          providerId: "openai",
+          inputCommand: ["capture-meet"],
+          outputCommand: ["play-meet"],
+          speak: vi.fn(),
+          getHealth: vi.fn(() => ({})),
+          stop,
+        },
+      })
+      .mockResolvedValueOnce({
+        launched: true,
+        browser: { inCall: true, micMuted: false },
+      });
+    try {
+      const runtime = new GoogleMeetRuntime({
+        config: resolveGoogleMeetConfig({
+          defaultTransport: "chrome",
+          defaultMode: "agent",
+          realtime: { introMessage: "" },
+        }),
+        fullConfig: {} as never,
+        runtime: {} as never,
+        logger: noopLogger,
+      });
+
+      const first = await runtime.join({
+        url: "https://meet.google.com/abc-defg-hij",
+        agentId: "support",
+      });
+      const second = await runtime.join({
+        url: "https://meet.google.com/abc-defg-hij",
+        agentId: "main",
+      });
+
+      expect(first.session.agentId).toBe("support");
+      expect(second.session.agentId).toBe("main");
+      expect(first.session.state).toBe("ended");
+      expect(first.session.notes).toContain(
+        "Ended before the same Meet tab was reassigned to another agent.",
+      );
+      expect(second.session.id).not.toBe(first.session.id);
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(launchChromeMeet).toHaveBeenCalledTimes(2);
+    } finally {
+      launchChromeMeet.mockRestore();
+    }
+  });
+
+  it("reuses the stored session agent when a later Chrome bridge starts", async () => {
+    const launchChromeMeet = vi
+      .spyOn(chromeTransport, "launchChromeMeet")
+      .mockResolvedValueOnce({
+        launched: true,
+        browser: { inCall: false, micMuted: false },
+      })
+      .mockResolvedValueOnce({
+        launched: false,
+        audioBridge: { type: "external-command" },
+      });
+    const recoverCurrentMeetTab = vi
+      .spyOn(chromeTransport, "recoverCurrentMeetTab")
+      .mockResolvedValue({
+        transport: "chrome",
+        found: true,
+        message: "Existing Meet tab is in-call.",
+        browser: { inCall: true, micMuted: false },
+      });
+    try {
+      const runtime = new GoogleMeetRuntime({
+        config: resolveGoogleMeetConfig({
+          defaultTransport: "chrome",
+          defaultMode: "agent",
+          realtime: { introMessage: "" },
+        }),
+        fullConfig: {} as never,
+        runtime: {} as never,
+        logger: noopLogger,
+      });
+
+      const joined = await runtime.join({
+        url: "https://meet.google.com/abc-defg-hij",
+        agentId: "support",
+      });
+      await runtime.speak(joined.session.id, "Say exactly: hello.");
+
+      const delayedBridgeParams = requireRecord(
+        mockCallArg(launchChromeMeet, 0, 1),
+        "delayed bridge launch params",
+      );
+      const delayedBridgeConfig = requireRecord(
+        delayedBridgeParams.config,
+        "delayed bridge config",
+      );
+      const delayedRealtime = requireRecord(
+        delayedBridgeConfig.realtime,
+        "delayed bridge realtime config",
+      );
+      expect(joined.session.agentId).toBe("support");
+      expect(delayedRealtime.agentId).toBe("support");
+    } finally {
+      recoverCurrentMeetTab.mockRestore();
+      launchChromeMeet.mockRestore();
+    }
   });
 
   it("reports manual action when the browser profile needs Google login", async () => {

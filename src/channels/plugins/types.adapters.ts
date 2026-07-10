@@ -772,6 +772,7 @@ export type ChannelConfiguredBindingProvider = {
 
 export type ChannelConversationBindingSupport = {
   supportsCurrentConversationBinding?: boolean;
+  isCurrentConversationBindingSupported?: (params: { accountId: string }) => boolean;
   /**
    * Preferred placement when a command is started from a top-level conversation
    * without an existing native thread id.

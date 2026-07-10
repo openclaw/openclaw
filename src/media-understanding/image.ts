@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import {
+  applySecretRefHeaderSentinels,
   getApiKeyForModel,
   requireApiKey,
   resolveApiKeyForProvider,
@@ -12,6 +13,10 @@ import {
 import { normalizeModelRef } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
+import {
+  protectPreparedProviderRuntimeAuth,
+  unwrapSecretSentinelsForProviderEgress,
+} from "../agents/provider-secret-egress.js";
 import { registerProviderStreamForModel } from "../agents/provider-stream.js";
 import {
   coerceImageAssistantText,
@@ -234,6 +239,7 @@ async function prepareResolvedImageRuntime(
     profileId: params.profile,
     preferredProfile: params.preferredProfile,
     store: params.authStore,
+    secretSentinels: true,
   });
   // Bedrock's runtime client owns AWS credential-chain resolution. Keep the
   // empty sentinel out of auth storage and pass it through to the stream.
@@ -242,7 +248,7 @@ async function prepareResolvedImageRuntime(
     apiKeyInfo.mode === "aws-sdk" &&
     model.api === "bedrock-converse-stream"
   ) {
-    return { apiKey: "", model };
+    return { apiKey: "", model: applySecretRefHeaderSentinels(model, params.cfg) };
   }
   let apiKey = requireApiKey(apiKeyInfo, model.provider);
   // Image tool bypasses prepareRuntimeAuth — exchange OAuth token for
@@ -250,16 +256,25 @@ async function prepareResolvedImageRuntime(
   // matches what runtime chat requests send.
   if (model.provider === "github-copilot") {
     const copilotToken = await resolveCopilotApiToken({
-      githubToken: apiKey,
+      githubToken: unwrapSecretSentinelsForProviderEgress(
+        apiKey,
+        "GitHub Copilot image-auth exchange",
+      ),
+      config: params.cfg,
     });
-    apiKey = copilotToken.token;
-    const runtimeBaseUrl = copilotToken.baseUrl?.trim();
+    const protectedAuth = protectPreparedProviderRuntimeAuth({
+      sourceApiKey: apiKey,
+      provider: model.provider,
+      preparedAuth: { apiKey: copilotToken.token, baseUrl: copilotToken.baseUrl },
+    });
+    apiKey = protectedAuth?.apiKey ?? copilotToken.token;
+    const runtimeBaseUrl = protectedAuth?.baseUrl?.trim();
     if (runtimeBaseUrl) {
       model = { ...model, baseUrl: runtimeBaseUrl };
     }
   }
   authStorage.setRuntimeApiKey(model.provider, apiKey);
-  return { apiKey, model };
+  return { apiKey, model: applySecretRefHeaderSentinels(model, params.cfg) };
 }
 
 function buildImageContext(
@@ -333,13 +348,15 @@ async function describeImagesWithMinimax(params: {
   images: Array<{ buffer: Buffer; mime?: string }>;
 }): Promise<ImagesDescriptionResult> {
   const responses: string[] = [];
+  // MiniMax VLM owns a direct fetch path, so unwrap only at this final handoff.
+  const apiKey = unwrapSecretSentinelsForProviderEgress(params.apiKey, "MiniMax VLM request");
   for (const [index, image] of params.images.entries()) {
     const prompt =
       params.images.length > 1
         ? `${params.prompt}\n\nDescribe image ${index + 1} of ${params.images.length} independently.`
         : params.prompt;
     const text = await minimaxUnderstandImage({
-      apiKey: params.apiKey,
+      apiKey,
       provider: params.provider,
       prompt,
       imageDataUrl: `data:${image.mime ?? "image/jpeg"};base64,${image.buffer.toString("base64")}`,
@@ -425,6 +442,7 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
   const auth = await resolveApiKeyForProvider({
     provider: authProvider,
     cfg: params.cfg,
+    secretSentinels: true,
     profileId: params.profile,
     preferredProfile: params.preferredProfile,
     agentDir: params.agentDir,

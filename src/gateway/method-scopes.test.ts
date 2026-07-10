@@ -44,6 +44,10 @@ describe("method scope resolution", () => {
     ["tasks.list", ["operator.read"]],
     ["audit.list", ["operator.read"]],
     ["tasks.get", ["operator.read"]],
+    ["taskSuggestions.list", ["operator.read"]],
+    ["taskSuggestions.create", ["operator.write"]],
+    ["taskSuggestions.accept", ["operator.admin"]],
+    ["taskSuggestions.dismiss", ["operator.write"]],
     ["config.schema.lookup", ["operator.read"]],
     ["sessions.create", ["operator.write"]],
     ["sessions.send", ["operator.write"]],
@@ -54,7 +58,12 @@ describe("method scope resolution", () => {
     ["sessions.messages.unsubscribe", ["operator.read"]],
     ["environments.list", ["operator.read"]],
     ["worktrees.list", ["operator.read"]],
+    ["worktrees.branches", ["operator.write"]],
     ["worktrees.create", ["operator.admin"]],
+    ["sessions.groups.list", ["operator.read"]],
+    ["sessions.groups.put", ["operator.write"]],
+    ["sessions.groups.rename", ["operator.write"]],
+    ["sessions.groups.delete", ["operator.write"]],
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
     ["skills.curator.status", ["operator.read"]],
@@ -203,6 +212,44 @@ describe("method scope resolution", () => {
       }),
     ).toEqual(["operator.write"]);
     expect(isGatewayMethodClassified("sessions.patch")).toBe(true);
+  });
+
+  it("requires admin only when sessions.create targets an explicit cwd", () => {
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", { worktree: true }),
+    ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        worktree: true,
+        cwd: "/other/repo",
+      }),
+    ).toEqual(["operator.admin"]);
+    expect(
+      authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], {
+        worktree: true,
+        cwd: "/other/repo",
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
+  });
+
+  it("keeps worktree target params at write scope but execNode at admin", () => {
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        worktree: true,
+        worktreeBaseRef: "origin/main",
+        worktreeName: "my-task",
+      }),
+    ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        execNode: "macbook",
+      }),
+    ).toEqual(["operator.admin"]);
+    expect(
+      authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], {
+        execNode: "macbook",
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
   });
 
   it.each([

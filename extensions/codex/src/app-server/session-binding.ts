@@ -143,8 +143,10 @@ const threadBindingSchema = z.object({
     .optional()
     .catch(undefined),
   approvalPolicy: z
-    .enum(["never", "on-request", "on-failure", "untrusted"])
-    .optional()
+    .preprocess(
+      (value) => (value === "on-failure" ? "on-request" : value),
+      z.enum(["never", "on-request", "untrusted"]).optional(),
+    )
     .catch(undefined),
   sandbox: z
     .enum(["read-only", "workspace-write", "danger-full-access"])
@@ -377,7 +379,7 @@ export function createCodexAppServerBindingStore(
     try {
       let renewed = false;
       const stored = update(key, (raw) => {
-        const current = readStoredBinding(raw);
+        const current = readStoredCodexAppServerBinding(raw);
         if (raw !== undefined && !current) {
           throw new Error(`Invalid Codex app-server binding row: ${key}`);
         }
@@ -424,7 +426,7 @@ export function createCodexAppServerBindingStore(
       update(
         key,
         (raw) => {
-          const current = readStoredBinding(raw);
+          const current = readStoredCodexAppServerBinding(raw);
           if (raw !== undefined && !current) {
             throw new Error(`Invalid Codex app-server binding row: ${key}`);
           }
@@ -468,7 +470,7 @@ export function createCodexAppServerBindingStore(
     async read(identity) {
       const key = bindingStoreKey(identity);
       const raw = state.lookup(key);
-      const stored = readStoredBinding(raw);
+      const stored = readStoredCodexAppServerBinding(raw);
       if (raw !== undefined && !stored) {
         throw new Error(`Invalid Codex app-server binding row: ${key}`);
       }
@@ -480,7 +482,7 @@ export function createCodexAppServerBindingStore(
     async prepareSessionGenerationReclaim(identity) {
       const key = bindingStoreKey(identity);
       const raw = state.lookup(key);
-      const current = readStoredBinding(raw);
+      const current = readStoredCodexAppServerBinding(raw);
       if (raw !== undefined && !current) {
         throw new Error(`Invalid Codex app-server binding row: ${key}`);
       }
@@ -721,7 +723,7 @@ export function createCodexAppServerBindingStore(
             raw: unknown,
             matches: (current: StoredCodexAppServerBinding) => boolean,
           ) => {
-            const current = readStoredBinding(raw);
+            const current = readStoredCodexAppServerBinding(raw);
             if (!current || !matches(current) || current.lease?.token !== token) {
               return undefined;
             }
@@ -787,7 +789,9 @@ export function bindingStoreKey(identity: CodexAppServerBindingIdentity): string
   return `conversation:${bindingId}`;
 }
 
-function readStoredBinding(value: unknown): StoredCodexAppServerBinding | undefined {
+export function readStoredCodexAppServerBinding(
+  value: unknown,
+): StoredCodexAppServerBinding | undefined {
   const result = storedBindingSchema.safeParse(value);
   return result.success
     ? (stripUndefinedValue(result.data) as StoredCodexAppServerBinding)

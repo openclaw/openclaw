@@ -2,6 +2,7 @@
 import {
   isToolCallContentType,
   isToolResultContentType,
+  resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import type {
   ChatItem,
@@ -341,14 +342,32 @@ function mergeToolCallResultPair(callItem: ChatItem, resultItem: ChatItem): Chat
   const preservedResultContent = resultOnlyContent.filter(
     (block) => asRecord(block)?.type !== "text",
   );
+  // Raw transcript result blocks usually carry the call id and tool name on the
+  // message, not the block. Stamp both onto the merged blocks (plus message-level
+  // details) so card extraction pairs them with the call instead of rendering a
+  // second bare "Tool" card.
   const resultContent = hasToolResultBlock
-    ? resultOnlyContent
+    ? resultOnlyContent.map((block) => {
+        const record = asRecord(block);
+        if (!record || !isToolResultContentType(record.type)) {
+          return block;
+        }
+        const stamped: Record<string, unknown> = Object.assign({}, record);
+        stamped.id = resolveToolUseId(record) ?? resultCard.callId;
+        stamped.name =
+          typeof record.name === "string" && record.name.trim() ? record.name : resultName;
+        if (record.details === undefined && resultMessage.details !== undefined) {
+          stamped.details = resultMessage.details;
+        }
+        return stamped;
+      })
     : [
         {
           type: "tool_result",
           id: resultCard.callId,
           name: resultName,
           text: resultCard.outputText ?? "",
+          ...(resultCard.details !== undefined ? { details: resultCard.details } : {}),
           ...(resultCard.isError !== undefined ? { isError: resultCard.isError } : {}),
         },
         ...preservedResultContent,
@@ -364,18 +383,72 @@ function mergeToolCallResultPair(callItem: ChatItem, resultItem: ChatItem): Chat
   };
 }
 
+// Parallel tool calls interleave in transcripts (call, call, result, result),
+// so a result must pair with any still-open call in the current tool run, not
+// only the immediately previous item. Non-tool items end the window.
+const TOOL_CALL_MERGE_WINDOW = 16;
+
+function isToolTimelineItem(item: ChatItem): boolean {
+  if (item.kind !== "message") {
+    return false;
+  }
+  const normalized = safeNormalizeMessage(item.message);
+  return normalized ? normalizeRoleForGrouping(normalized.role) === "tool" : false;
+}
+
 function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
   const coalesced: ChatItem[] = [];
+  // Indexes into `coalesced` of assistant tool-call items that have no result yet.
+  let openCallIndexes: number[] = [];
   for (const item of items) {
-    const previous = coalesced[coalesced.length - 1];
-    const merged = previous ? mergeToolCallResultPair(previous, item) : null;
-    if (merged) {
-      coalesced[coalesced.length - 1] = merged;
-    } else {
-      coalesced.push(item);
+    let merged: ChatItem | null = null;
+    let mergedAt = -1;
+    for (let i = openCallIndexes.length - 1; i >= 0; i--) {
+      const callIndex = openCallIndexes[i];
+      const candidate = mergeToolCallResultPair(coalesced[callIndex], item);
+      if (candidate) {
+        merged = candidate;
+        mergedAt = i;
+        break;
+      }
     }
+    if (merged && mergedAt >= 0) {
+      coalesced[openCallIndexes[mergedAt]] = merged;
+      openCallIndexes.splice(mergedAt, 1);
+      continue;
+    }
+    coalesced.push(item);
+    if (isOpenToolCallItem(item)) {
+      openCallIndexes.push(coalesced.length - 1);
+      if (openCallIndexes.length > TOOL_CALL_MERGE_WINDOW) {
+        openCallIndexes.shift();
+      }
+      continue;
+    }
+    if (isToolTimelineItem(item)) {
+      // Orphan results keep the window open for later siblings.
+      continue;
+    }
+    // Any other content (user text, assistant reply, dividers) closes the run.
+    openCallIndexes = [];
   }
   return coalesced;
+}
+
+function isOpenToolCallItem(item: ChatItem): boolean {
+  if (item.kind !== "message") {
+    return false;
+  }
+  const message = asRecord(item.message);
+  if (!message || typeof message.role !== "string" || message.role.toLowerCase() !== "assistant") {
+    return false;
+  }
+  if (!Array.isArray(message.content)) {
+    return false;
+  }
+  const hasCall = message.content.some((block) => isToolCallContentType(asRecord(block)?.type));
+  const hasResult = message.content.some((block) => isToolResultContentType(asRecord(block)?.type));
+  return hasCall && !hasResult;
 }
 
 function assistantGroupHasReplyText(group: MessageGroup): boolean {

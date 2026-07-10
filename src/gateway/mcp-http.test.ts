@@ -45,12 +45,14 @@ type ScopedToolsCall = {
   onYield?: (message: string) => Promise<void> | void;
   accountId?: string;
   messageProvider?: string;
+  clientCaps?: string[];
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;
   inboundEventKind?: string;
   sourceReplyDeliveryMode?: string;
+  taskSuggestionDeliveryMode?: string;
   requireExplicitMessageTarget?: boolean;
   senderIsOwner?: boolean;
   surface?: string;
@@ -130,7 +132,15 @@ vi.mock("./tool-resolution.js", () => ({
     resolveGatewayScopedToolsMock(...args),
 }));
 
-import { resetAttachGrantsForTest, mintAttachGrant } from "./mcp-grant-store.js";
+import {
+  activateMcpLoopbackClientGrantCapture,
+  deactivateMcpLoopbackClientGrantCapture,
+  mintAttachGrant,
+  mintMcpLoopbackClientGrant,
+  resetAttachGrantsForTest,
+  resetMcpLoopbackClientGrantsForTest,
+  revokeMcpLoopbackClientGrant,
+} from "./mcp-grant-store.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
   createMcpAttachGrantServerConfig,
@@ -598,6 +608,8 @@ function buildMockMcpToolSchema(tools: MockGatewayTool[]) {
 }
 
 beforeEach(() => {
+  resetAttachGrantsForTest();
+  resetMcpLoopbackClientGrantsForTest();
   clearMcpToolSchemaWarningsForTest();
   logWarnMock.mockClear();
   clearMcpLoopbackToolCallCapturesForTest();
@@ -807,12 +819,14 @@ describe("mcp loopback server", () => {
         "x-openclaw-session-id": "session-123",
         "x-openclaw-account-id": "work",
         "x-openclaw-message-channel": "telegram",
+        "x-openclaw-client-caps": "tool-events,inline-widgets",
         "x-openclaw-current-channel-id": "telegram:chat123",
         "x-openclaw-current-thread-ts": "42",
         "x-openclaw-current-message-id": "reply-message-1",
         "x-openclaw-current-inbound-audio": "true",
         "x-openclaw-inbound-event-kind": "room_event",
         "x-openclaw-source-reply-delivery-mode": "message_tool_only",
+        "x-openclaw-task-suggestion-delivery-mode": "gateway",
         "x-openclaw-require-explicit-message-target": "true",
       }),
       body: mcpToolsListBody(),
@@ -824,12 +838,14 @@ describe("mcp loopback server", () => {
     expect(call.sessionId).toBe("session-123");
     expect(call.accountId).toBe("work");
     expect(call.messageProvider).toBe("telegram");
+    expect(call.clientCaps).toEqual(["tool-events", "inline-widgets"]);
     expect(call.currentChannelId).toBe("telegram:chat123");
     expect(call.currentThreadTs).toBe("42");
     expect(call.currentMessageId).toBe("reply-message-1");
     expect(call.currentInboundAudio).toBe(true);
     expect(call.inboundEventKind).toBe("room_event");
     expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(call.taskSuggestionDeliveryMode).toBe("gateway");
     expect(call.requireExplicitMessageTarget).toBe(true);
     expect(call.surface).toBe("loopback");
     expect(Array.from(call.excludeToolNames ?? [])).toEqual([
@@ -842,8 +858,28 @@ describe("mcp loopback server", () => {
     ]);
   });
 
+  it("normalizes whitespace, duplicate, and empty client capability headers", async () => {
+    const { runtime } = await startLoopbackServerForTest();
+    const sendWithCaps = async (clientCaps: string, currentMessageId: string) =>
+      await sendLoopbackToolsList({
+        token: runtime.ownerToken,
+        headers: {
+          "x-session-key": "agent:main:main",
+          "x-openclaw-current-message-id": currentMessageId,
+          "x-openclaw-client-caps": clientCaps,
+        },
+      });
+
+    expect(
+      (await sendWithCaps(" tool-events, inline-widgets,tool-events, , ", "message-capped")).status,
+    ).toBe(200);
+    expect((await sendWithCaps("", "message-capless")).status).toBe(200);
+
+    expect(getScopedToolsCall(0).clientCaps).toEqual(["tool-events", "inline-widgets"]);
+    expect(getScopedToolsCall(1).clientCaps).toBeUndefined();
+  });
+
   it("binds an attach grant's session and ignores ALL spoofed context headers (no scope-shop)", async () => {
-    resetAttachGrantsForTest();
     const grant = mintAttachGrant({ sessionKey: "agent:main:attach-host" });
     const port = await getFreePortBlockWithPermissionFallback({
       offsets: [0],
@@ -857,6 +893,7 @@ describe("mcp loopback server", () => {
       headers: jsonHeaders({
         "x-session-key": "agent:main:SPOOFED-other-session",
         "x-openclaw-message-channel": "telegram",
+        "x-openclaw-client-caps": "inline-widgets",
         "x-openclaw-account-id": "victim-account",
         "x-openclaw-current-channel-id": "telegram:victim-chat",
         "x-openclaw-current-thread-ts": "999",
@@ -872,11 +909,139 @@ describe("mcp loopback server", () => {
     expect(call.senderIsOwner).toBe(false);
     expect(call.surface).toBe("loopback");
     expect(call.messageProvider).toBeUndefined();
+    expect(call.clientCaps).toBeUndefined();
     expect(call.accountId).toBeUndefined();
     expect(call.currentChannelId).toBeUndefined();
     expect(call.currentThreadTs).toBeUndefined();
     expect(call.sourceReplyDeliveryMode).toBeUndefined();
     expect(call.inboundEventKind).toBeUndefined();
+  });
+
+  it("binds a CLI grant's complete context and ignores spoofed scope headers", async () => {
+    const { port, runtime } = await startLoopbackServerForTest();
+    const grant = mintMcpLoopbackClientGrant({
+      context: {
+        sessionKey: "agent:main:discord:channel:bound",
+        sessionId: "session-bound",
+        messageProvider: "discord",
+        clientCaps: ["tool-events"],
+        currentChannelId: "discord:bound",
+        currentThreadTs: "bound-thread",
+        currentMessageId: "bound-message",
+        currentInboundAudio: true,
+        accountId: "bound-account",
+        inboundEventKind: "user_request",
+        sourceReplyDeliveryMode: "message_tool_only",
+        taskSuggestionDeliveryMode: "gateway",
+        requireExplicitMessageTarget: true,
+        senderIsOwner: false,
+      },
+      runtimeOwnerToken: runtime.ownerToken,
+    });
+    expect(
+      activateMcpLoopbackClientGrantCapture({
+        token: grant.token,
+        runtimeOwnerToken: runtime.ownerToken,
+        captureKey: "capture-bound",
+      }),
+    ).toBe(true);
+
+    const sendWithCapture = async (captureKey?: string, method: "list" | "call" = "list") =>
+      await sendRaw({
+        port,
+        token: grant.token,
+        headers: jsonHeaders({
+          ...(captureKey ? { "x-openclaw-cli-capture-key": captureKey } : {}),
+          "x-session-key": "agent:main:main",
+          "x-openclaw-session-id": "session-spoofed",
+          "x-openclaw-message-channel": "telegram",
+          "x-openclaw-client-caps": "inline-widgets,admin",
+          "x-openclaw-account-id": "spoofed-account",
+          "x-openclaw-current-channel-id": "telegram:spoofed",
+          "x-openclaw-current-thread-ts": "spoofed-thread",
+          "x-openclaw-current-message-id": "spoofed-message",
+          "x-openclaw-current-inbound-audio": "false",
+          "x-openclaw-inbound-event-kind": "room_event",
+          "x-openclaw-source-reply-delivery-mode": "automatic",
+          "x-openclaw-task-suggestion-delivery-mode": "direct",
+          "x-openclaw-require-explicit-message-target": "false",
+        }),
+        body: method === "call" ? mcpToolCallBody("message") : mcpToolsListBody(),
+      });
+
+    expect((await sendWithCapture()).status).toBe(401);
+    expect((await sendWithCapture("capture-forged")).status).toBe(401);
+    expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
+
+    expect((await sendWithCapture("capture-bound")).status).toBe(200);
+    expect((await sendWithCapture("capture-bound", "call")).status).toBe(200);
+    const expectedBoundContext = {
+      sessionKey: "agent:main:discord:channel:bound",
+      sessionId: "session-bound",
+      messageProvider: "discord",
+      clientCaps: ["tool-events"],
+      currentChannelId: "discord:bound",
+      currentThreadTs: "bound-thread",
+      currentMessageId: "bound-message",
+      currentInboundAudio: true,
+      accountId: "bound-account",
+      inboundEventKind: "user_request",
+      sourceReplyDeliveryMode: "message_tool_only",
+      taskSuggestionDeliveryMode: "gateway",
+      requireExplicitMessageTarget: true,
+      senderIsOwner: false,
+      surface: "loopback",
+    };
+    expect(getScopedToolsCall(0)).toMatchObject(expectedBoundContext);
+    expect(getScopedToolsCall(1)).toMatchObject(expectedBoundContext);
+  });
+
+  it("rejects revoked and prior-runtime CLI grants", async () => {
+    const firstServer = await startLoopbackServerForTest();
+    const staleGrant = mintMcpLoopbackClientGrant({
+      context: { sessionKey: "agent:main:stale", senderIsOwner: false },
+      runtimeOwnerToken: firstServer.runtime.ownerToken,
+    });
+    activateMcpLoopbackClientGrantCapture({
+      token: staleGrant.token,
+      runtimeOwnerToken: firstServer.runtime.ownerToken,
+      captureKey: "capture-stale",
+    });
+    await server?.close();
+    server = undefined;
+
+    const successor = await startLoopbackServerForTest();
+    expect(
+      (
+        await sendRaw({
+          port: successor.port,
+          token: staleGrant.token,
+          headers: jsonHeaders({ "x-openclaw-cli-capture-key": "capture-stale" }),
+          body: mcpToolsListBody(),
+        })
+      ).status,
+    ).toBe(401);
+
+    const revokedGrant = mintMcpLoopbackClientGrant({
+      context: { sessionKey: "agent:main:revoked", senderIsOwner: false },
+      runtimeOwnerToken: successor.runtime.ownerToken,
+    });
+    activateMcpLoopbackClientGrantCapture({
+      token: revokedGrant.token,
+      runtimeOwnerToken: successor.runtime.ownerToken,
+      captureKey: "capture-revoked",
+    });
+    expect(revokeMcpLoopbackClientGrant(revokedGrant.token)).toBe(true);
+    expect(
+      (
+        await sendRaw({
+          port: successor.port,
+          token: revokedGrant.token,
+          headers: jsonHeaders({ "x-openclaw-cli-capture-key": "capture-revoked" }),
+          body: mcpToolsListBody(),
+        })
+      ).status,
+    ).toBe(401);
   });
 
   it("routes sessions_yield to the current CLI capture", async () => {
@@ -945,6 +1110,7 @@ describe("mcp loopback server", () => {
       sourceReplyDeliveryMode?: string,
       currentInboundAudio?: boolean,
       requireExplicitMessageTarget?: boolean,
+      taskSuggestionDeliveryMode?: string,
     ) =>
       await sendLoopbackToolsList({
         token: runtime?.ownerToken,
@@ -959,6 +1125,9 @@ describe("mcp loopback server", () => {
           ...(requireExplicitMessageTarget
             ? { "x-openclaw-require-explicit-message-target": "true" }
             : {}),
+          ...(taskSuggestionDeliveryMode
+            ? { "x-openclaw-task-suggestion-delivery-mode": taskSuggestionDeliveryMode }
+            : {}),
         },
       });
 
@@ -967,13 +1136,50 @@ describe("mcp loopback server", () => {
     expect((await sendToolsList("room_event", "message_tool_only")).status).toBe(200);
     expect((await sendToolsList("room_event", "message_tool_only", true)).status).toBe(200);
     expect((await sendToolsList("room_event", "message_tool_only", true, true)).status).toBe(200);
+    expect(
+      (await sendToolsList("room_event", "message_tool_only", true, true, "gateway")).status,
+    ).toBe(200);
 
-    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(5);
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(6);
     expect(getScopedToolsCall(0).inboundEventKind).toBe("user_request");
     expect(getScopedToolsCall(1).inboundEventKind).toBe("room_event");
     expect(getScopedToolsCall(2).sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(getScopedToolsCall(3).currentInboundAudio).toBe(true);
     expect(getScopedToolsCall(4).requireExplicitMessageTarget).toBe(true);
+    expect(getScopedToolsCall(5).taskSuggestionDeliveryMode).toBe("gateway");
+  });
+
+  it("keeps capless and capability-scoped tool cache entries separate", async () => {
+    resolveGatewayScopedToolsMock.mockImplementation((input): MockGatewayScopedTools => {
+      const call = input as ScopedToolsCall;
+      return {
+        agentId: "main",
+        tools: [
+          makeMessageTool(),
+          ...(call.clientCaps?.includes("inline-widgets")
+            ? [makeMockTool({ name: "show_widget" })]
+            : []),
+        ],
+      };
+    });
+    const { runtime } = await startLoopbackServerForTest();
+    const listTools = async (clientCaps?: string) =>
+      await readMcpPayload(
+        await sendLoopbackToolsList({
+          token: runtime.ownerToken,
+          headers: {
+            "x-session-key": "agent:main:main",
+            ...(clientCaps ? { "x-openclaw-client-caps": clientCaps } : {}),
+          },
+        }),
+      );
+
+    const capless = await listTools();
+    const capped = await listTools("inline-widgets");
+
+    expect(capless.result?.tools?.map((tool) => tool.name)).not.toContain("show_widget");
+    expect(capped.result?.tools?.map((tool) => tool.name)).toContain("show_widget");
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
   });
 
   it("keeps explicit non-owner and unknown-owner loopback cache entries separate", () => {
@@ -2170,37 +2376,10 @@ describe("createMcpLoopbackServerConfig", () => {
     };
     expect(config.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
     expect(config.mcpServers?.openclaw?.alwaysLoad).toBe(true);
-    expect(config.mcpServers?.openclaw?.headers?.Authorization).toBe(
-      "Bearer ${OPENCLAW_MCP_TOKEN}",
-    );
-    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-session-id"]).toBe(
-      "${OPENCLAW_MCP_SESSION_ID}",
-    );
-    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-message-channel"]).toBe(
-      "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
-    );
-    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-channel-id"]).toBe(
-      "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
-    );
-    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-thread-ts"]).toBe(
-      "${OPENCLAW_MCP_CURRENT_THREAD_TS}",
-    );
-    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-message-id"]).toBe(
-      "${OPENCLAW_MCP_CURRENT_MESSAGE_ID}",
-    );
-    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-inbound-audio"]).toBe(
-      "${OPENCLAW_MCP_CURRENT_INBOUND_AUDIO}",
-    );
-    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-source-reply-delivery-mode"]).toBe(
-      "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
-    );
-    expect(
-      config.mcpServers?.openclaw?.headers?.["x-openclaw-require-explicit-message-target"],
-    ).toBe("${OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET}");
-    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-cli-capture-key"]).toBe(
-      "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
-    );
-    expect(config.mcpServers?.openclaw?.headers).not.toHaveProperty("x-openclaw-sender-is-owner");
+    expect(config.mcpServers?.openclaw?.headers).toEqual({
+      Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+      "x-openclaw-cli-capture-key": "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
+    });
   });
 
   it("builds an attach grant config with only token-backed headers", () => {
@@ -2222,6 +2401,52 @@ describe("createMcpLoopbackServerConfig", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/event-stream");
     await expectInitialSseCommentFrame(res);
+  });
+
+  it("requires an active matching CLI capture on GET and DELETE", async () => {
+    const { port, runtime } = await startLoopbackServerForTest();
+    const grant = mintMcpLoopbackClientGrant({
+      context: { sessionKey: "agent:main:transport", senderIsOwner: false },
+      runtimeOwnerToken: runtime.ownerToken,
+    });
+    const captureKey = "capture-transport";
+    activateMcpLoopbackClientGrantCapture({
+      token: grant.token,
+      runtimeOwnerToken: runtime.ownerToken,
+      captureKey,
+    });
+    const send = async (method: "GET" | "DELETE", requestCaptureKey?: string) =>
+      await fetch(`http://127.0.0.1:${port}/mcp`, {
+        method,
+        headers: {
+          authorization: `Bearer ${grant.token}`,
+          ...(requestCaptureKey ? { "x-openclaw-cli-capture-key": requestCaptureKey } : {}),
+        },
+      });
+
+    for (const method of ["GET", "DELETE"] as const) {
+      for (const requestCaptureKey of [undefined, "capture-forged"]) {
+        const response = await send(method, requestCaptureKey);
+        expect(response.status).toBe(401);
+        await response.body?.cancel();
+      }
+    }
+
+    const getResponse = await send("GET", captureKey);
+    expect(getResponse.status).toBe(200);
+    await expectInitialSseCommentFrame(getResponse);
+    expect((await send("DELETE", captureKey)).status).toBe(200);
+
+    deactivateMcpLoopbackClientGrantCapture({
+      token: grant.token,
+      runtimeOwnerToken: runtime.ownerToken,
+      captureKey,
+    });
+    for (const method of ["GET", "DELETE"] as const) {
+      const response = await send(method, captureKey);
+      expect(response.status).toBe(401);
+      await response.body?.cancel();
+    }
   });
 
   it("closes active GET notification streams during loopback shutdown", async () => {
@@ -2247,6 +2472,108 @@ describe("createMcpLoopbackServerConfig", () => {
     } finally {
       await reader.cancel().catch(() => undefined);
       reader.releaseLock();
+    }
+  });
+
+  it("withdraws a closing runtime before drain without fencing its successor", async () => {
+    const oldServer = await startMcpLoopbackServer(0);
+    const oldRuntime = getActiveMcpLoopbackRuntime();
+    if (!oldRuntime) {
+      throw new Error("expected old MCP loopback runtime");
+    }
+    let stalledRequest: ReturnType<typeof request> | undefined;
+    let resolveSocketReady: () => void = () => {};
+    let rejectSocketReady: (error: Error) => void = () => {};
+    const socketReady = new Promise<void>((resolve, reject) => {
+      resolveSocketReady = resolve;
+      rejectSocketReady = reject;
+    });
+    const responsePromise = new Promise<void>((resolve, reject) => {
+      const req = request(
+        {
+          hostname: "127.0.0.1",
+          port: oldServer.port,
+          path: "/mcp",
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${oldRuntime.ownerToken}`,
+            connection: "close",
+            "content-type": "application/json",
+          },
+        },
+        (res) => {
+          res.resume();
+          res.once("end", resolve);
+        },
+      );
+      req.once("socket", (socket) => {
+        if (!socket.connecting) {
+          resolveSocketReady();
+          return;
+        }
+        socket.once("connect", resolveSocketReady);
+      });
+      req.once("error", (error) => {
+        rejectSocketReady(error);
+        reject(error);
+      });
+      req.write("{");
+      stalledRequest = req;
+    });
+    let stalledRequestEnded = false;
+    const finishStalledRequest = () => {
+      if (stalledRequestEnded) {
+        return;
+      }
+      stalledRequestEnded = true;
+      stalledRequest?.end("}");
+    };
+    let oldClose: Promise<void> | undefined;
+    try {
+      await socketReady;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      let closeSettled = false;
+      oldClose = oldServer.close().finally(() => {
+        closeSettled = true;
+      });
+      expect(getActiveMcpLoopbackRuntime()).toBeUndefined();
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
+      expect(closeSettled).toBe(false);
+
+      const successor = await startLoopbackServerForTest();
+      const successorGrant = mintMcpLoopbackClientGrant({
+        context: { sessionKey: "agent:main:successor", senderIsOwner: false },
+        runtimeOwnerToken: successor.runtime.ownerToken,
+      });
+      activateMcpLoopbackClientGrantCapture({
+        token: successorGrant.token,
+        runtimeOwnerToken: successor.runtime.ownerToken,
+        captureKey: "capture-successor",
+      });
+
+      finishStalledRequest();
+      await responsePromise;
+      await oldClose;
+      expect(getActiveMcpLoopbackRuntime()?.ownerToken).toBe(successor.runtime.ownerToken);
+      expect(
+        (
+          await sendRaw({
+            port: successor.port,
+            token: successorGrant.token,
+            headers: jsonHeaders({ "x-openclaw-cli-capture-key": "capture-successor" }),
+            body: mcpToolsListBody(),
+          })
+        ).status,
+      ).toBe(200);
+    } finally {
+      finishStalledRequest();
+      await responsePromise.catch(() => undefined);
+      await (oldClose ?? oldServer.close()).catch(() => undefined);
     }
   });
 

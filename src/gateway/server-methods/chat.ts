@@ -31,6 +31,7 @@ import {
   validateChatMetadataParams,
   validateChatMessageGetParams,
   validateChatSendParams,
+  validateChatToolTitlesParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
 import {
@@ -3333,6 +3334,52 @@ export const chatHandlers: GatewayRequestHandlers = {
     });
   },
   "chat.metadata": handleChatMetadataRequest,
+  "chat.toolTitles": async ({ params, respond, context }) => {
+    if (!validateChatToolTitlesParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid chat.toolTitles params: ${formatValidationErrors(validateChatToolTitlesParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    const agentIdOverride = normalizeOptionalText(params.agentId);
+    const requestedAgentId = resolveRequestedChatAgentId({
+      cfg,
+      requestedSessionKey: params.sessionKey,
+      agentId: agentIdOverride,
+    });
+    const selectedAgent = validateChatSelectedAgent({
+      cfg,
+      requestedSessionKey: params.sessionKey,
+      agentId: requestedAgentId,
+    });
+    if (!selectedAgent.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
+      return;
+    }
+    try {
+      // Title generation pulls in the simple-completion runtime; load it lazily
+      // so gateways that never render the Control UI skip that cost.
+      const { generateToolCallTitles } = await import("../chat-tool-titles.js");
+      const titles = await generateToolCallTitles({
+        cfg,
+        agentId: resolveSessionAgentId({
+          sessionKey: params.sessionKey,
+          config: cfg,
+          agentId: selectedAgent.agentId,
+        }),
+        items: params.items,
+      });
+      respond(true, { titles });
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+    }
+  },
   "chat.message.get": async ({ params, respond, context }) => {
     if (!validateChatMessageGetParams(params)) {
       respond(
@@ -3699,6 +3746,10 @@ export const chatHandlers: GatewayRequestHandlers = {
   "chat.send": async ({ params, respond, context, client }) => {
     const chatSendReceivedAtMs = performance.now();
     const clientInfo = client?.connect?.client;
+    const supportsTaskSuggestions =
+      isOperatorUiClient(clientInfo) &&
+      client?.connect?.scopes?.includes("operator.admin") === true &&
+      hasGatewayClientCap(client?.connect?.caps, GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS);
     const controlUiReconnectResume = resolveControlUiReconnectResumeParams(params, clientInfo);
     if (!validateChatSendParams(controlUiReconnectResume.params)) {
       respond(
@@ -4542,6 +4593,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             }
           : {}),
         GatewayClientScopes: client?.connect?.scopes ?? [],
+        GatewayClientCaps: client?.connect?.caps ?? [],
       };
       const isInternalTextSlashCommandTurn =
         ctx.Provider === INTERNAL_MESSAGE_CHANNEL && ctx.CommandSource === "text";
@@ -4812,6 +4864,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                         }),
                       }
                     : {}),
+                  ...(supportsTaskSuggestions
+                    ? { taskSuggestionDeliveryMode: "gateway" as const }
+                    : {}),
                   requestedSessionId,
                   resumeRequestedSession: controlUiReconnectResume.resumeRequested,
                   abortSignal: activeRunAbort.controller.signal,
@@ -4833,10 +4888,18 @@ export const chatHandlers: GatewayRequestHandlers = {
                       return queuedFollowupEnqueued;
                     },
                     onCancellationRetired: () => {
-                      retireQueuedChatTurnCancellation(ensureChatQueuedTurns(context), clientRunId);
+                      retireQueuedChatTurnCancellation(
+                        ensureChatQueuedTurns(context),
+                        clientRunId,
+                        activeRunAbort.controller,
+                      );
                     },
                     onComplete: () => {
-                      completeQueuedChatTurn(ensureChatQueuedTurns(context), clientRunId);
+                      completeQueuedChatTurn(
+                        ensureChatQueuedTurns(context),
+                        clientRunId,
+                        activeRunAbort.controller,
+                      );
                     },
                   },
                   images: replyOptionImages,

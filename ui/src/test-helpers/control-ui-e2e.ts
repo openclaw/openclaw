@@ -144,7 +144,12 @@ export async function startControlUiE2eServer(): Promise<ControlUiE2eServer> {
     clearScreen: false,
     configFile: false,
     define: {
-      OPENCLAW_CONTROL_UI_BUILD_ID: JSON.stringify("e2e"),
+      "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify({
+        version: "2026.7.10",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+        builtAt: "2026-07-10T12:34:56.000Z",
+        buildId: "e2e",
+      }),
     },
     logLevel: "error",
     optimizeDeps: {
@@ -379,7 +384,7 @@ function installControlUiMockGateway(input: {
       return;
     }
     const patch = { ...sessionPatches.get(params.key) };
-    for (const key of ["model", "thinkingLevel", "fastMode"] as const) {
+    for (const key of ["model", "thinkingLevel", "fastMode", "category", "pinned"] as const) {
       if (hasOwn(params, key)) {
         patch[key] = params[key];
       }

@@ -3,11 +3,11 @@ import { resolveUserPath } from "../utils.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
   resolveTrustedSourceLinkedOfficialClawHubInstall,
-  resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogEntryForPackage,
   resolveOfficialExternalPluginId,
+  resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
 
@@ -16,6 +16,7 @@ export function matchesInstalledPluginRecord(params: {
   candidate: PluginCandidate;
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
+  installPathOnly?: boolean;
 }): boolean {
   if (params.candidate.origin !== "global" && params.candidate.origin !== "config") {
     return false;
@@ -24,34 +25,46 @@ export function matchesInstalledPluginRecord(params: {
   if (!record) {
     return false;
   }
-  const resolveCanonicalPath = (entry: string): string => {
-    const resolved = resolveUserPath(entry, params.env);
-    return safeRealpathSync(resolved) ?? resolved;
-  };
-  const candidateRoots = [params.candidate.rootDir, params.candidate.packageDir]
+  const candidatePaths = [
+    params.candidate.rootDir,
+    params.candidate.packageDir,
+    params.candidate.source,
+    params.candidate.setupSource,
+  ]
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .map(resolveCanonicalPath);
-  const candidateSources = [params.candidate.source, params.candidate.setupSource]
+    .map((entry) => {
+      const resolved = resolveUserPath(entry, params.env);
+      return safeRealpathSync(resolved) ?? resolved;
+    });
+  // Security decisions must bind to the current install output. sourcePath can
+  // legitimately identify path installs, but it can also survive a source switch.
+  const trackedPaths = (
+    params.installPathOnly ? [record.installPath] : [record.installPath, record.sourcePath]
+  )
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .map(resolveCanonicalPath);
-  const installPath =
-    typeof record.installPath === "string" && record.installPath.trim()
-      ? resolveCanonicalPath(record.installPath)
-      : undefined;
-  const sourcePath =
-    typeof record.sourcePath === "string" && record.sourcePath.trim()
-      ? resolveCanonicalPath(record.sourcePath)
-      : undefined;
-  const sourceMatchesRoot = (rootPath: string): boolean =>
-    candidateSources.some(
-      (candidateSource) => candidateSource === rootPath || isPathInside(rootPath, candidateSource),
-    );
-  return Boolean(
-    (installPath &&
-      (candidateRoots.some((candidateRoot) => candidateRoot === installPath) ||
-        sourceMatchesRoot(installPath))) ||
-    (sourcePath && sourceMatchesRoot(sourcePath)),
+    .map((entry) => {
+      const resolved = resolveUserPath(entry, params.env);
+      return safeRealpathSync(resolved) ?? resolved;
+    });
+  if (candidatePaths.length === 0 || trackedPaths.length === 0) {
+    return false;
+  }
+  return trackedPaths.some((trackedPath) =>
+    candidatePaths.some(
+      (candidatePath) =>
+        candidatePath === trackedPath ||
+        isPathInside(trackedPath, candidatePath) ||
+        isPathInside(candidatePath, trackedPath),
+    ),
   );
+}
+
+function npmSpecMatchesPackage(value: string | undefined, packageName: string): boolean {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return false;
+  }
+  return normalized === packageName || normalized.startsWith(`${packageName}@`);
 }
 
 export function isTrustedOfficialPluginInstall(params: {
@@ -61,21 +74,44 @@ export function isTrustedOfficialPluginInstall(params: {
   installRecords: Record<string, PluginInstallRecord>;
 }): boolean {
   if (
-    !matchesInstalledPluginRecord(params) ||
-    !params.candidate.packageName ||
-    !params.installRecords[params.pluginId]
+    (params.candidate.origin !== "global" && params.candidate.origin !== "config") ||
+    !matchesInstalledPluginRecord({ ...params, installPathOnly: true })
   ) {
     return false;
   }
-  const catalogEntry = getOfficialExternalPluginCatalogEntryForPackage(
-    params.candidate.packageName,
-  );
+  const packageName = params.candidate.packageName?.trim();
+  if (!packageName) {
+    return false;
+  }
+  const catalogEntry = getOfficialExternalPluginCatalogEntryForPackage(packageName);
   if (!catalogEntry || resolveOfficialExternalPluginId(catalogEntry) !== params.pluginId) {
     return false;
   }
-  const record = params.installRecords[params.pluginId];
-  return Boolean(
-    resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId: params.pluginId, record }) ||
-    resolveTrustedSourceLinkedOfficialClawHubInstall({ pluginId: params.pluginId, record }),
-  );
+  const officialInstall = resolveOfficialExternalPluginInstall(catalogEntry);
+  const installRecord = params.installRecords[params.pluginId];
+  if (!installRecord) {
+    return false;
+  }
+  if (
+    installRecord.source === "npm" &&
+    officialInstall?.npmSpec === packageName &&
+    [
+      installRecord.resolvedName,
+      installRecord.spec,
+      installRecord.resolvedSpec,
+      params.candidate.packageName,
+    ].some((value) => npmSpecMatchesPackage(value, packageName))
+  ) {
+    return true;
+  }
+  if (
+    installRecord.source === "clawhub" &&
+    resolveTrustedSourceLinkedOfficialClawHubInstall({
+      pluginId: params.pluginId,
+      record: installRecord,
+    })
+  ) {
+    return true;
+  }
+  return false;
 }

@@ -214,6 +214,10 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/gateway-protocol/frame-guards",
+        replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "frame-guards.ts"),
+      },
+      {
         find: "@openclaw/gateway-protocol/schema",
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "schema.ts"),
       },
