@@ -123,6 +123,8 @@ export type RunEmbeddedAgentParams = {
   hasRepliedRef?: { value: boolean };
   /** Require explicit message tool targets (no implicit last-route sends). */
   requireExplicitMessageTarget?: boolean;
+  /** Controls whether this run may produce visible session effects or only internal runtime state. */
+  sessionEffects?: "visible" | "internal";
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
