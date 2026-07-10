@@ -11,10 +11,8 @@ import { buildOAuthRequestSignal } from "../llm/utils/oauth/abort.js";
 import {
   extractProviderErrorDetail,
   readProviderJsonResponse,
-  readResponseTextLimited,
 } from "./provider-http-errors.js";
 
-const CHUTES_OAUTH_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const CHUTES_OAUTH_REQUEST_TIMEOUT_MS = 30_000;
 
 const CHUTES_OAUTH_ISSUER = "https://api.chutes.ai";
