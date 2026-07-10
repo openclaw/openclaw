@@ -1769,7 +1769,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         });
         const enterBlockPreviewToolActivity = () => {
           if (account.streamingMode !== "block" || blockPreviewInToolActivity) {
-            return;
+            return undefined;
           }
           const boundarySettled = previewBoundaryController.noteBoundary();
           // Parallel tools share one activity post. Rotating per tool would route a late update
