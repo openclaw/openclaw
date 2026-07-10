@@ -2052,7 +2052,10 @@ function pruneCodexDiagnosticsCooldownMap(map: Map<string, number>, now: number)
 }
 
 function formatCodexErrorForDisplay(error: string): string {
-  const safe = formatCodexTextForDisplay(error).slice(0, CODEX_DIAGNOSTICS_ERROR_MAX_CHARS);
+  const safe = truncateUtf16Safe(
+    formatCodexTextForDisplay(error),
+    CODEX_DIAGNOSTICS_ERROR_MAX_CHARS,
+  );
   return escapeCodexChatText(safe) || "unknown error";
 }
 
