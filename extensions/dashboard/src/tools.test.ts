@@ -352,7 +352,8 @@ describe("dashboard tools", () => {
         .get("dashboard_data_read")
         ?.execute("call-1", { binding: { source: "rpc", method: "usage.cost" } });
 
-      expect(result?.content?.[0]?.text).toContain("binding_client_resolved");
+      const [entry] = result?.content ?? [];
+      expect(entry?.type === "text" && entry.text).toContain("binding_client_resolved");
     });
   });
 

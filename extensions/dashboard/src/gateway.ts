@@ -3,7 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { rememberDashboardBroadcast } from "./broadcast.js";
 import { resolveBinding, type ResolveBindingOptions } from "./data-read.js";
-import { loadWidgetManifest } from "./manifest.js";
+import { hashApprovedWidgetFiles, loadWidgetManifest } from "./manifest.js";
 import { scaffoldDashboardWidget } from "./scaffold.js";
 import {
   validateWorkspaceDoc,
@@ -679,14 +679,11 @@ export function registerDashboardGatewayMethods(options: DashboardGatewayMethodO
         if (decision !== "approved" && decision !== "rejected") {
           throw new Error("decision must be approved or rejected");
         }
-        if (
-          decision === "approved" &&
-          !(await loadWidgetManifest(name, { stateDir: store.stateDir }))
-        ) {
-          // Approving a name with no widget on disk would let the code appear after
-          // the operator said yes. The manifest is what they are approving.
-          throw new Error(`dashboard widget not found: ${name}`);
-        }
+        // What the operator approves is the code on disk, not the name. Freeze a
+        // digest of every servable file: the route re-hashes what it reads, so an
+        // agent cannot win approval on one tree and then write another.
+        const approvedFiles =
+          decision === "approved" ? await resolveApprovedFiles(name, store.stateDir) : undefined;
         const result = store.mutate(
           (draft) => {
             const existing = draft.widgetsRegistry[name];
@@ -696,8 +693,12 @@ export function registerDashboardGatewayMethods(options: DashboardGatewayMethodO
             draft.widgetsRegistry[name] = {
               status: decision,
               createdBy: existing.createdBy,
-              ...(decision === "approved"
-                ? { approvedBy: RPC_ACTOR, approvedAt: new Date().toISOString() }
+              ...(approvedFiles
+                ? {
+                    approvedBy: RPC_ACTOR,
+                    approvedAt: new Date().toISOString(),
+                    approvedFiles,
+                  }
                 : {}),
             };
           },
@@ -763,6 +764,27 @@ export function registerDashboardGatewayMethods(options: DashboardGatewayMethodO
     },
     { scope: READ_SCOPE },
   );
+}
+
+/**
+ * Loads the widget's manifest and hashes the files the route may serve. Throws
+ * unless the manifest is valid AND its declared entrypoint is one of those files
+ * — approving a widget whose entrypoint does not exist would let the code appear
+ * after the operator said yes.
+ */
+async function resolveApprovedFiles(
+  name: string,
+  stateDir: string,
+): Promise<Record<string, string>> {
+  const manifest = await loadWidgetManifest(name, { stateDir });
+  if (!manifest) {
+    throw new Error(`dashboard widget not found: ${name}`);
+  }
+  const approvedFiles = await hashApprovedWidgetFiles(name, { stateDir });
+  if (!approvedFiles[manifest.entrypoint]) {
+    throw new Error(`dashboard widget entrypoint is missing: ${manifest.entrypoint}`);
+  }
+  return approvedFiles;
 }
 
 function readSlugOrder(value: unknown): string[] {

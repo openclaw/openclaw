@@ -11,7 +11,12 @@ import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { CUSTOM_WIDGET_NAME_PATTERN, resolveWidgetDir } from "./manifest.js";
+import {
+  CUSTOM_WIDGET_NAME_PATTERN,
+  matchesApprovedFile,
+  resolveWidgetDir,
+  WIDGET_CONTENT_TYPES,
+} from "./manifest.js";
 import type { DashboardStore } from "./store.js";
 
 export const WIDGETS_ROUTE_PREFIX = "/plugins/dashboard/widgets";
@@ -23,25 +28,6 @@ export const WIDGETS_ROUTE_PREFIX = "/plugins/dashboard/widgets";
 export const WIDGET_CSP =
   "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
   "img-src 'self' data:; font-src 'self' data:; connect-src 'none'; frame-ancestors 'self'";
-
-// Content-Type allowlist keyed by lowercase extension (spec §Server side). Any
-// extension not in this map is not served (→ 404), so no widget can ship, e.g., an
-// `.mjs`/`.wasm`/`.map` or an extensionless file.
-const CONTENT_TYPES: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".webp": "image/webp",
-  ".woff2": "font/woff2",
-  ".txt": "text/plain; charset=utf-8",
-  ".md": "text/markdown; charset=utf-8",
-  ".csv": "text/csv; charset=utf-8",
-};
 
 export type WidgetServeDeps = {
   store: DashboardStore;
@@ -128,9 +114,13 @@ export function parseWidgetRequestPath(
   return { name, logicalPath };
 }
 
+/**
+ * Content type for a logical path, or null when the extension is not servable.
+ * The table lives in `manifest.ts` because approval hashes exactly this file set.
+ */
 function extensionContentType(logicalPath: string): string | null {
   const extension = path.extname(logicalPath).toLowerCase();
-  return CONTENT_TYPES[extension] ?? null;
+  return WIDGET_CONTENT_TYPES[extension] ?? null;
 }
 
 /**
@@ -192,10 +182,13 @@ export async function serveWidgetAsset(
   // Serving gate: only `status === "approved"` widgets are served AT ALL. This is
   // belt-and-braces with the UI render gate (the UI never builds an iframe for a
   // pending/rejected widget, and the server refuses its assets regardless).
+  let approvedFiles: Record<string, string> | undefined;
   try {
-    if (deps.store.widgetStatus(parsed.name) !== "approved") {
+    const entry = deps.store.widgetEntry(parsed.name);
+    if (entry?.status !== "approved") {
       return notFound(res);
     }
+    approvedFiles = entry.approvedFiles;
   } catch {
     return notFound(res);
   }
@@ -232,6 +225,12 @@ export async function serveWidgetAsset(
     }
     data = await fs.readFile(real);
   } catch {
+    return notFound(res);
+  }
+
+  // The operator approved these exact bytes. A file edited or added after
+  // approval has no matching digest and is indistinguishable from a miss.
+  if (!matchesApprovedFile(approvedFiles, parsed.logicalPath, data)) {
     return notFound(res);
   }
 

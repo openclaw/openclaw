@@ -3,6 +3,7 @@ import type { ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { hashApprovedWidgetFiles } from "./manifest.js";
 import {
   parseWidgetRequestPath,
   serveWidgetAsset,
@@ -52,6 +53,9 @@ async function withApprovedWidget<T>(
     await fs.writeFile(path.join(widgetDir, "index.html"), "<!doctype html><h1>ok</h1>");
     await fs.writeFile(path.join(widgetDir, "app.js"), "console.log(1)");
     await fs.writeFile(path.join(widgetDir, "secret.mjs"), "export const x = 1");
+    // Approval freezes a digest of every servable file, exactly as the gateway
+    // method does; serving compares against it.
+    const approvedFiles = await hashApprovedWidgetFiles("revenue-chart", { stateDir });
     store.mutate(
       (draft) => {
         draft.widgetsRegistry["revenue-chart"] = {
@@ -59,6 +63,7 @@ async function withApprovedWidget<T>(
           createdBy: "user",
           approvedBy: "user",
           approvedAt: new Date().toISOString(),
+          approvedFiles,
         };
       },
       { actor: "user" },
@@ -259,6 +264,37 @@ describe("serveWidgetAsset security jail", () => {
         res,
         { store, stateDir },
       );
+      expect(captured.statusCode).toBe(404);
+    });
+  });
+
+  it("404s a file whose bytes changed after approval", async () => {
+    await withApprovedWidget(async ({ store, stateDir, widgetDir }) => {
+      // The gate approves code, not a directory name. Rewriting the entrypoint
+      // after approval must not reach a browser.
+      await fs.writeFile(path.join(widgetDir, "index.html"), "<script>evil()</script>");
+
+      const { res, captured } = fakeResponse();
+      await serveWidgetAsset(
+        { method: "GET", pathname: urlFor("revenue-chart", "index.html") },
+        res,
+        { store, stateDir },
+      );
+
+      expect(captured.statusCode).toBe(404);
+    });
+  });
+
+  it("404s a file added after approval", async () => {
+    await withApprovedWidget(async ({ store, stateDir, widgetDir }) => {
+      await fs.writeFile(path.join(widgetDir, "late.js"), "evil()");
+
+      const { res, captured } = fakeResponse();
+      await serveWidgetAsset({ method: "GET", pathname: urlFor("revenue-chart", "late.js") }, res, {
+        store,
+        stateDir,
+      });
+
       expect(captured.statusCode).toBe(404);
     });
   });

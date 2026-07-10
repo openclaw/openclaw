@@ -39,6 +39,8 @@ export type DashboardWidgetRegistryEntry = {
   createdBy: DashboardActor;
   approvedBy?: DashboardActor;
   approvedAt?: string;
+  /** sha256 of every servable file, keyed by logical path, frozen at approval. */
+  approvedFiles?: Record<string, string>;
 };
 export type WorkspaceDoc = {
   schemaVersion: 1;
@@ -305,9 +307,31 @@ function validateTab(value: unknown, path: string): DashboardTab {
   };
 }
 
+const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
+const WIDGET_FILE_PATH_PATTERN = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
+
+function validateApprovedFiles(value: unknown, path: string): Record<string, string> {
+  const record = assertRecord(value, path);
+  const files: Record<string, string> = {};
+  for (const [logicalPath, digest] of Object.entries(record)) {
+    if (!WIDGET_FILE_PATH_PATTERN.test(logicalPath) || logicalPath.includes("..")) {
+      throw new Error(`${path}.${logicalPath} is not a valid widget file path`);
+    }
+    if (typeof digest !== "string" || !SHA256_HEX_PATTERN.test(digest)) {
+      throw new Error(`${path}.${logicalPath} must be a sha256 hex digest`);
+    }
+    files[logicalPath] = digest;
+  }
+  return files;
+}
+
 function validateRegistryEntry(value: unknown, path: string): DashboardWidgetRegistryEntry {
   const record = assertRecord(value, path);
-  assertKnownKeys(record, ["status", "createdBy", "approvedBy", "approvedAt"], path);
+  assertKnownKeys(
+    record,
+    ["status", "createdBy", "approvedBy", "approvedAt", "approvedFiles"],
+    path,
+  );
   const status = requireString(record, "status", path);
   if (status !== "pending" && status !== "approved" && status !== "rejected") {
     throw new Error(`${path}.status is invalid`);
@@ -317,11 +341,16 @@ function validateRegistryEntry(value: unknown, path: string): DashboardWidgetReg
       ? undefined
       : validateActor(record.approvedBy, `${path}.approvedBy`);
   const approvedAt = optionalString(record, "approvedAt", path);
+  const approvedFiles =
+    record.approvedFiles === undefined
+      ? undefined
+      : validateApprovedFiles(record.approvedFiles, `${path}.approvedFiles`);
   return {
     status,
     createdBy: validateActor(record.createdBy, `${path}.createdBy`),
     ...(approvedBy !== undefined ? { approvedBy } : {}),
     ...(approvedAt !== undefined ? { approvedAt } : {}),
+    ...(approvedFiles !== undefined ? { approvedFiles } : {}),
   };
 }
 

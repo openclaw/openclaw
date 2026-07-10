@@ -6,12 +6,86 @@
 // the manifest the operator approved, so validation here is a security boundary,
 // not a convenience. Hand-written guards mirror `schema.ts` (no zod).
 
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { DATA_READ_RPC_ALLOWLIST, normalizeDashboardDataLogicalPath } from "./binding-contract.js";
 
 export const CUSTOM_WIDGET_NAME_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+
+/**
+ * Content types the widget route will serve, keyed by lowercase extension. Owned
+ * here because approval hashes exactly the set of files the route can hand to a
+ * browser — the two must never drift.
+ */
+export const WIDGET_CONTENT_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".woff2": "font/woff2",
+  ".txt": "text/plain; charset=utf-8",
+  ".md": "text/markdown; charset=utf-8",
+  ".csv": "text/csv; charset=utf-8",
+};
+
+/** Max servable files one widget may have; keeps the approval digest bounded. */
+const MAX_WIDGET_FILES = 64;
+
+/** sha256 of one file's bytes, lowercase hex. */
+function hashBytes(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/**
+ * Hashes every servable file in a widget's directory, keyed by the logical path
+ * the route serves it under.
+ *
+ * This is what an operator approves. Without it, "approved" names a directory
+ * rather than the code inside it: an agent could scaffold a widget, get approval
+ * on an empty or innocuous tree, and then write the real payload afterwards. The
+ * serving route re-hashes each file it reads and refuses anything that does not
+ * match, so approved bytes are the only bytes that ever reach a browser.
+ */
+export async function hashApprovedWidgetFiles(
+  name: string,
+  options: { stateDir?: string } = {},
+): Promise<Record<string, string>> {
+  const widgetDir = resolveWidgetDir(name, options.stateDir);
+  const entries = await fs.readdir(widgetDir, { recursive: true, withFileTypes: true });
+  const files: Record<string, string> = {};
+  for (const entry of entries) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    const absolute = path.join(entry.parentPath, entry.name);
+    const logical = path.relative(widgetDir, absolute).split(path.sep).join("/");
+    if (!(path.extname(logical).toLowerCase() in WIDGET_CONTENT_TYPES)) {
+      continue;
+    }
+    if (Object.keys(files).length >= MAX_WIDGET_FILES) {
+      throw new Error(`widget has more than ${MAX_WIDGET_FILES} servable files`);
+    }
+    files[logical] = hashBytes(await fs.readFile(absolute));
+  }
+  return files;
+}
+
+/** True when `bytes` are exactly what was approved for `logicalPath`. */
+export function matchesApprovedFile(
+  approvedFiles: Record<string, string> | undefined,
+  logicalPath: string,
+  bytes: Buffer,
+): boolean {
+  const expected = approvedFiles?.[logicalPath];
+  return expected !== undefined && expected === hashBytes(bytes);
+}
 const BINDING_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
 export const WIDGET_CAPABILITIES = ["data:read", "prompt:send"] as const;
 

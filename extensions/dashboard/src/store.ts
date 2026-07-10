@@ -12,6 +12,12 @@
 // Every mutation is a single BEGIN IMMEDIATE transaction, so a read-modify-write
 // cycle cannot interleave with another writer. node:sqlite is synchronous, which
 // is why the mutator must be synchronous too: the transaction is the lock.
+//
+// There is deliberately no migration from the `workspace.json` this plugin used
+// while it was in review. The plugin has never been reachable from a release tag,
+// so no installation can hold that file, and compatibility here is opt-in per
+// AGENTS.md. Seeding the default workspace on an empty database is the only
+// first-read path.
 
 import { chmodSync, mkdirSync } from "node:fs";
 import path from "node:path";
@@ -155,9 +161,14 @@ export class DashboardStore {
     return structuredClone(doc);
   }
 
-  /** Approval status for one custom widget, without materializing the document. */
+  /** Registry entry for one custom widget, or null when it was never scaffolded. */
+  widgetEntry(name: string): DashboardWidgetRegistryEntry | null {
+    return this.read().widgetsRegistry[name] ?? null;
+  }
+
+  /** Approval status for one custom widget. */
   widgetStatus(name: string): DashboardWidgetRegistryEntry["status"] | null {
-    return this.read().widgetsRegistry[name]?.status ?? null;
+    return this.widgetEntry(name)?.status ?? null;
   }
 
   /**

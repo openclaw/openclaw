@@ -127,7 +127,13 @@ export async function loadWidgetManifestView(
     const capabilities = (Array.isArray(record.capabilities) ? record.capabilities : []).filter(
       (cap): cap is DashboardWidgetCapability => cap === "data:read" || cap === "prompt:send",
     );
-    return { name, bindingIds, capabilities };
+    // The approval gate hashes the manifest's declared entrypoint. Loading a
+    // different file would mount code the operator never approved.
+    const entrypoint = typeof record.entrypoint === "string" ? record.entrypoint : "";
+    if (!entrypoint) {
+      return null;
+    }
+    return { name, entrypoint, bindingIds, capabilities };
   } catch {
     return null;
   }
@@ -227,7 +233,7 @@ class CustomWidgetFrameDirective extends AsyncDirective {
     context: CustomWidgetHostContext;
   }): HTMLElement {
     const name = params.widget.kind.slice("custom:".length);
-    const src = widgetAssetUrl(params.context.basePath, name, "index.html");
+    const src = widgetAssetUrl(params.context.basePath, name, params.manifest.entrypoint);
     const nextKey = `${params.widget.id}::${src}`;
     if (this.iframe && this.key === nextKey) {
       return this.iframe;

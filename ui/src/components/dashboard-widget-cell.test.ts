@@ -199,7 +199,12 @@ describe("dashboard widget cell", () => {
 });
 
 function customManifest(): WidgetManifestView {
-  return { name: "chart", bindingIds: ["value"], capabilities: ["data:read"] };
+  return {
+    name: "chart",
+    entrypoint: "index.html",
+    bindingIds: ["value"],
+    capabilities: ["data:read"],
+  };
 }
 
 function customContext(

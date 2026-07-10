@@ -24,6 +24,7 @@ function widget(overrides: Partial<DashboardWidget> = {}): DashboardWidget {
 function manifest(overrides?: Partial<WidgetManifestView>): WidgetManifestView {
   return {
     name: "revenue-chart",
+    entrypoint: "index.html",
     bindingIds: ["value"],
     capabilities: ["data:read"],
     ...overrides,
@@ -64,6 +65,7 @@ describe("loadWidgetManifestView", () => {
       vi.fn(async () => ({
         ok: true,
         json: async () => ({
+          entrypoint: "index.html",
           bindings: [{ id: "value", source: "static", value: 1 }],
           capabilities: ["data:read", "prompt:send"],
         }),
@@ -72,6 +74,7 @@ describe("loadWidgetManifestView", () => {
     const view = await loadWidgetManifestView("", "revenue-chart");
     expect(view).toEqual({
       name: "revenue-chart",
+      entrypoint: "index.html",
       bindingIds: ["value"],
       capabilities: ["data:read", "prompt:send"],
     });
@@ -243,5 +246,19 @@ describe("attachWidgetBridge rpc allowlist re-check", () => {
     expect(posts[0]).toMatchObject({ type: "dashboard:data", requestId: "r1" });
     expect(request).toHaveBeenCalledWith("sessions.list", {});
     detach();
+  });
+
+  it("refuses a manifest with no entrypoint", async () => {
+    // The approval gate hashes the declared entrypoint; without one there is no
+    // approved file to load, so nothing should mount.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ bindings: [], capabilities: [] }),
+      })),
+    );
+
+    expect(await loadWidgetManifestView("", "revenue-chart")).toBeNull();
   });
 });

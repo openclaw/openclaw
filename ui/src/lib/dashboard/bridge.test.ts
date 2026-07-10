@@ -18,6 +18,7 @@ beforeEach(() => {
 function manifest(overrides?: Partial<WidgetManifestView>): WidgetManifestView {
   return {
     name: "revenue-chart",
+    entrypoint: "index.html",
     bindingIds: ["value"],
     capabilities: ["data:read"],
     ...overrides,

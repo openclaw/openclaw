@@ -89,6 +89,8 @@ export type DashboardWidgetCapability = "data:read" | "prompt:send";
  */
 export type WidgetManifestView = {
   name: string;
+  /** The file the sandboxed iframe loads; the manifest declares it. */
+  entrypoint: string;
   bindingIds: string[];
   capabilities: DashboardWidgetCapability[];
 };
