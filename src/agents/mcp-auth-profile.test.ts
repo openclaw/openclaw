@@ -62,6 +62,35 @@ describe("mcp auth profile bearer projection", () => {
     );
   });
 
+  it("omits unavailable OAuth servers when graceful degradation is requested", async () => {
+    authMocks.resolveMcpOAuthAccessToken.mockRejectedValueOnce(
+      new Error('MCP server "gbrain" requires OAuth authorization.'),
+    );
+    const onServerUnavailable = vi.fn();
+
+    const resolved = await resolveMcpBearerBundleConfig({
+      config: {
+        mcpServers: {
+          gbrain: {
+            url: "https://gbrain.example.com/mcp",
+            type: "http",
+            auth: "oauth",
+          },
+          localTools: {
+            command: "local-tools",
+          },
+        },
+      },
+      omitUnavailableOAuthServers: true,
+      onServerUnavailable,
+    });
+
+    expect(resolved.config.mcpServers).toStrictEqual({
+      localTools: { command: "local-tools" },
+    });
+    expect(onServerUnavailable).toHaveBeenCalledWith("gbrain", expect.any(Error));
+  });
+
   it("resolves refreshable OAuth profiles into env-backed CLI bearer headers", async () => {
     authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce({
       version: 1,

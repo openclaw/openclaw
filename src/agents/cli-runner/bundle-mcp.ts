@@ -8,6 +8,7 @@ import path from "node:path";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { extractMcpServerMap, type BundleMcpConfig } from "../../plugins/bundle-mcp.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
@@ -245,6 +246,11 @@ export async function prepareCliBundleMcpConfig(params: {
     cfg: params.config,
     agentDir: params.agentDir,
     env: params.env,
+    omitUnavailableOAuthServers: true,
+    onServerUnavailable: (serverName, error) =>
+      params.warn?.(
+        `bundle MCP skipped unavailable OAuth server ${serverName}: ${formatErrorMessage(error)}`,
+      ),
   });
 
   return await prepareModeSpecificBundleMcpConfig({

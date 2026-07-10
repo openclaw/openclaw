@@ -28,6 +28,7 @@ type CodexUserMcpServersProjectionOptions = {
   agentId?: string;
   agentDir?: string;
   allowLiteralOAuthProjection?: boolean;
+  onServerUnavailable?: (serverName: string, error: unknown) => void;
 };
 
 function normalizeAgentIds(value: unknown): string[] {
@@ -116,7 +117,7 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRuntime(
   if (entries.length === 0) {
     return undefined;
   }
-  const allowedServers = Object.fromEntries(
+  let allowedServers = Object.fromEntries(
     entries.filter(
       ([, server]) =>
         server.enabled !== false &&
@@ -127,20 +128,31 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRuntime(
     return undefined;
   }
   if (options?.allowLiteralOAuthProjection === false) {
-    const oauthServerName = Object.entries(allowedServers).find(([, server]) =>
-      requiresMcpBearerProjection(server),
-    )?.[0];
-    if (oauthServerName) {
-      throw new Error(
-        `Cannot project mcp.servers.${oauthServerName} OAuth credentials into Codex app-server: MCP OAuth bearer projection is only supported for local app-server connections.`,
-      );
+    const remoteSafeServers: BundleMcpConfig["mcpServers"] = {};
+    for (const [serverName, server] of Object.entries(allowedServers)) {
+      if (requiresMcpBearerProjection(server)) {
+        options.onServerUnavailable?.(
+          serverName,
+          new Error(
+            `MCP OAuth bearer projection is only supported for local app-server connections.`,
+          ),
+        );
+        continue;
+      }
+      remoteSafeServers[serverName] = server;
     }
+    allowedServers = remoteSafeServers;
+  }
+  if (Object.keys(allowedServers).length === 0) {
+    return undefined;
   }
   const resolvedConfig = await resolveMcpBearerBundleConfig({
     config: { mcpServers: allowedServers },
     cfg,
     agentDir: options?.agentDir,
     tokenProjection: "literal",
+    omitUnavailableOAuthServers: true,
+    onServerUnavailable: options?.onServerUnavailable,
   });
   const mcp_servers: CodexThreadConfigObject = {};
   for (const [name, server] of Object.entries(resolvedConfig.config.mcpServers)) {

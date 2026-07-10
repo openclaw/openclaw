@@ -199,6 +199,8 @@ export async function resolveMcpBearerBundleConfig(
     config: BundleMcpConfig;
     env?: Record<string, string>;
     tokenProjection?: "env" | "literal";
+    omitUnavailableOAuthServers?: boolean;
+    onServerUnavailable?: (serverName: string, error: unknown) => void;
   } & McpAuthProfileOptions,
 ): Promise<{ config: BundleMcpConfig; env?: Record<string, string> }> {
   let nextServers: Record<string, BundleMcpServerConfig> | undefined;
@@ -206,12 +208,23 @@ export async function resolveMcpBearerBundleConfig(
   const tokenProjection = params.tokenProjection ?? "env";
 
   for (const [serverName, server] of Object.entries(params.config.mcpServers)) {
-    const token = await resolveMcpBearerToken({
-      serverName,
-      server,
-      cfg: params.cfg,
-      agentDir: params.agentDir,
-    });
+    let token: string | undefined;
+    try {
+      token = await resolveMcpBearerToken({
+        serverName,
+        server,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+      });
+    } catch (error) {
+      if (!params.omitUnavailableOAuthServers || !requiresMcpBearerProjection(server)) {
+        throw error;
+      }
+      nextServers ??= { ...params.config.mcpServers };
+      delete nextServers[serverName];
+      params.onServerUnavailable?.(serverName, error);
+      continue;
+    }
     if (!token) {
       continue;
     }

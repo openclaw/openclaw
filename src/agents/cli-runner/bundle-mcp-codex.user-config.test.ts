@@ -439,7 +439,41 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
     });
   });
 
-  it("fails closed for MCP-native OAuth projection to a remote Codex app-server", async () => {
+  it("omits MCP-native OAuth servers that still need authorization", async () => {
+    authMocks.resolveMcpOAuthAccessToken.mockRejectedValueOnce(
+      new Error('MCP server "gbrain" requires OAuth authorization.'),
+    );
+    const onServerUnavailable = vi.fn();
+
+    const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime(
+      {
+        mcp: {
+          servers: {
+            gbrain: {
+              transport: "streamable-http",
+              url: "https://gbrain.example.com/mcp",
+              auth: "oauth",
+            },
+            localTools: {
+              transport: "stdio",
+              command: "local-tools",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      { onServerUnavailable },
+    );
+
+    expect(patch).toStrictEqual({
+      mcp_servers: {
+        localTools: { command: "local-tools" },
+      },
+    });
+    expect(onServerUnavailable).toHaveBeenCalledWith("gbrain", expect.any(Error));
+  });
+
+  it("omits MCP-native OAuth projection from a remote Codex app-server", async () => {
+    const onServerUnavailable = vi.fn();
     await expect(
       buildCodexUserMcpServersThreadConfigPatchForRuntime(
         {
@@ -453,11 +487,10 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
             },
           },
         } as unknown as OpenClawConfig,
-        { allowLiteralOAuthProjection: false },
+        { allowLiteralOAuthProjection: false, onServerUnavailable },
       ),
-    ).rejects.toThrow(
-      "MCP OAuth bearer projection is only supported for local app-server connections",
-    );
+    ).resolves.toBeUndefined();
+    expect(onServerUnavailable).toHaveBeenCalledWith("docs", expect.any(Error));
     expect(authMocks.resolveMcpOAuthAccessToken).not.toHaveBeenCalled();
   });
 

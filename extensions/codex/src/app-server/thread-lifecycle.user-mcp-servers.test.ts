@@ -551,37 +551,42 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     );
   });
 
-  it("fails closed instead of sending MCP OAuth bearers to a remote app-server", async () => {
+  it("omits MCP OAuth servers instead of sending bearers to a remote app-server", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    const request = vi.fn(async (_method: string, _params: unknown) => {
-      throw new Error("remote app-server must not receive auth-profile MCP config");
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-without-oauth-mcp");
+      }
+      throw new Error(`unexpected method: ${method}`);
     });
 
-    await expect(
-      startOrResumeThread({
-        client: { request } as never,
-        params: createParams(sessionFile, workspaceDir, {
-          mcp: {
-            servers: {
-              ducktape: {
-                transport: "streamable-http",
-                url: "https://agents.ducktape.xyz/mcp",
-                auth: "oauth",
-                oauth: { authProfileId: "ducktape:mcp" },
-              },
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, {
+        mcp: {
+          servers: {
+            ducktape: {
+              transport: "streamable-http",
+              url: "https://agents.ducktape.xyz/mcp",
+              auth: "oauth",
+              oauth: { authProfileId: "ducktape:mcp" },
             },
           },
-        } as unknown as EmbeddedRunAttemptParams["config"]),
-        cwd: workspaceDir,
-        dynamicTools: [],
-        appServer: {
-          ...createAppServerOptions(),
-          connectionClass: "remote",
         },
-      }),
-    ).rejects.toThrow("MCP OAuth bearer projection is only supported for local app-server");
-    expect(request).not.toHaveBeenCalled();
+      } as unknown as EmbeddedRunAttemptParams["config"]),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: {
+        ...createAppServerOptions(),
+        connectionClass: "remote",
+      },
+    });
+
+    const startParams = request.mock.calls[0]?.[1] as {
+      config?: { mcp_servers?: Record<string, unknown> };
+    };
+    expect(startParams?.config?.mcp_servers).toBeUndefined();
   });
 
   it("resends user MCP config when resuming a thread with the matching fingerprint", async () => {

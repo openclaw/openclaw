@@ -378,6 +378,11 @@ export async function startOrResumeThread(params: {
             agentId: params.agentId ?? params.params.agentId,
             agentDir: params.params.agentDir,
             allowLiteralOAuthProjection: params.appServer.connectionClass !== "remote",
+            onServerUnavailable: (serverName, error) =>
+              embeddedAgentLog.warn("skipping unavailable MCP OAuth server", {
+                serverName,
+                error: formatErrorMessage(error),
+              }),
           });
     const userMcpServersFingerprint =
       fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
