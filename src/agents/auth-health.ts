@@ -390,7 +390,9 @@ export function buildAuthHealthSummary(params: {
     let hasExpired = false;
     let hasMissing = false;
     let hasExpiring = false;
+    let hasHealthyOAuth = false;
     let earliestExpiry: number | undefined;
+    let healthyExpiry: number | undefined;
     for (const profile of effectiveProfiles) {
       if (profile.type === "api_key") {
         if (profile.status === "static") {
@@ -409,6 +411,16 @@ export function buildAuthHealthSummary(params: {
           earliestExpiry === undefined
             ? profile.expiresAt
             : Math.min(earliestExpiry, profile.expiresAt);
+        // Track expiry from non-expired profiles separately so that when a
+        // healthy OAuth profile takes precedence over expired inventory, the
+        // provider expiry metadata reflects the healthy credential, not the
+        // stale expired one.
+        if (profile.status !== "expired" && profile.status !== "missing") {
+          healthyExpiry =
+            healthyExpiry === undefined
+              ? profile.expiresAt
+              : Math.min(healthyExpiry, profile.expiresAt);
+        }
       }
       if (profile.status === "expired") {
         hasExpired = true;
@@ -416,6 +428,8 @@ export function buildAuthHealthSummary(params: {
         hasMissing = true;
       } else if (profile.status === "expiring") {
         hasExpiring = true;
+      } else if (profile.type === "oauth" && profile.status === "ok") {
+        hasHealthyOAuth = true;
       }
     }
 
@@ -424,12 +438,21 @@ export function buildAuthHealthSummary(params: {
       continue;
     }
 
-    if (earliestExpiry !== undefined) {
-      provider.expiresAt = earliestExpiry;
-      provider.remainingMs = provider.expiresAt - now;
-    }
-
-    if (hasExpired) {
+    // When effective profiles include both expired inventory (e.g. a stale
+    // token credential) and a healthy OAuth profile that is currently used
+    // at runtime, prefer the healthy status over the expired one.  The
+    // aggregated provider status drives the Control UI badge; marking the
+    // provider as expired when a usable credential exists is misleading.
+    // Expiring still surfaces so users see approaching expiry.
+    if (hasHealthyOAuth) {
+      provider.status = hasExpiring ? "expiring" : "ok";
+      // Use expiry from the healthy/expiring subset so the UI shows the
+      // correct remaining time instead of a stale expired timestamp.
+      if (healthyExpiry !== undefined) {
+        provider.expiresAt = healthyExpiry;
+        provider.remainingMs = healthyExpiry - now;
+      }
+    } else if (hasExpired) {
       provider.status = "expired";
     } else if (hasMissing) {
       provider.status = "missing";
@@ -437,6 +460,13 @@ export function buildAuthHealthSummary(params: {
       provider.status = "expiring";
     } else {
       provider.status = "ok";
+    }
+
+    // Only set expiry from the full profile set when we haven't already
+    // set it from the healthy subset above.
+    if (provider.expiresAt === undefined && earliestExpiry !== undefined) {
+      provider.expiresAt = earliestExpiry;
+      provider.remainingMs = provider.expiresAt - now;
     }
   }
 

@@ -247,8 +247,17 @@ export function aggregateOAuthStatus(
   const statuses = new Set<AuthProfileHealthStatus>(oauth.map((p) => p.status));
   // Priority: expired/missing > expiring > ok > static. Exhaustive — if a
   // new AuthProfileHealthStatus variant is added, the `never` check fires.
+  // When expired profiles coexist with a healthy one (status=ok), prefer
+  // the healthy status so the Control UI badge does not falsely report
+  // expired when a usable OAuth credential exists alongside stale inventory.
   let status: AuthProviderHealthStatus;
-  if (statuses.has("expired")) {
+  const hasHealthy = oauth.some((p) => p.status === "ok");
+  // When a healthy OAuth profile coexists with expired inventory, prefer
+  // the healthy status so the UI does not falsely report expired.  But
+  // expiring profiles still surface so users see approaching expiry.
+  if (hasHealthy) {
+    status = statuses.has("expiring") ? "expiring" : "ok";
+  } else if (statuses.has("expired")) {
     status = "expired";
   } else if (statuses.has("missing")) {
     status = "missing";
@@ -266,7 +275,15 @@ export function aggregateOAuthStatus(
     void exhaustive;
     status = "static";
   }
-  const expirable = oauth
+  // When status was overridden to healthy, only use expiry from non-expired
+  // OAuth profiles so the UI shows the correct remaining time instead of a
+  // stale expired timestamp.  Otherwise use all OAuth profiles.
+  const healthyOAuth =
+    status === "ok" || status === "expiring"
+      ? oauth.filter((p) => p.status !== "expired" && p.status !== "missing")
+      : null;
+  const expirySource = healthyOAuth ?? oauth;
+  const expirable = expirySource
     .map((p) => p.expiresAt)
     .filter((v): v is number => asDateTimestampMs(v) !== undefined);
   const expiresAt = expirable.length > 0 ? Math.min(...expirable) : undefined;
