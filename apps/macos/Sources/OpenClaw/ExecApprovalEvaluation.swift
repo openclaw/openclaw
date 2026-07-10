@@ -67,6 +67,16 @@ struct ExecApprovalPolicySnapshot: Sendable, Equatable {
                 source: entry.source)
         })
     }
+
+    func isCurrent(_ current: Self) -> Bool {
+        self.security == current.security &&
+            self.ask == current.ask &&
+            self.askFallback == current.askFallback &&
+            self.autoAllowSkills == current.autoAllowSkills &&
+            // Concurrent operator-approved grants are additive. A revocation or
+            // source downgrade still removes an expected rule and fails closed.
+            self.allowlistRules.isSubset(of: current.allowlistRules)
+    }
 }
 
 enum ExecApprovalAuthorization: Sendable {

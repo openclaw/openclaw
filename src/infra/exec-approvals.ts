@@ -2047,17 +2047,19 @@ export function createExecApprovalPolicySnapshot(params: {
   };
 }
 
-function execApprovalPolicySnapshotsEqual(
-  left: ExecApprovalPolicySnapshot,
-  right: ExecApprovalPolicySnapshot,
+function execApprovalPolicySnapshotIsCurrent(
+  expected: ExecApprovalPolicySnapshot,
+  current: ExecApprovalPolicySnapshot,
 ): boolean {
+  const currentRuleKeys = new Set(current.allowlistRuleKeys);
   return (
-    left.security === right.security &&
-    left.ask === right.ask &&
-    left.askFallback === right.askFallback &&
-    left.autoAllowSkills === right.autoAllowSkills &&
-    left.allowlistRuleKeys.length === right.allowlistRuleKeys.length &&
-    left.allowlistRuleKeys.every((key, index) => key === right.allowlistRuleKeys[index])
+    expected.security === current.security &&
+    expected.ask === current.ask &&
+    expected.askFallback === current.askFallback &&
+    expected.autoAllowSkills === current.autoAllowSkills &&
+    // Concurrent operator-approved grants are additive. Preserve them while
+    // still rejecting any revoked or source-downgraded rule from the snapshot.
+    expected.allowlistRuleKeys.every((key) => currentRuleKeys.has(key))
   );
 }
 
@@ -2096,7 +2098,7 @@ function assertCurrentUsageAuthorization(params: {
     const expectedPolicy = params.authorization.policySnapshot;
     if (
       expectedPolicy &&
-      !execApprovalPolicySnapshotsEqual(
+      !execApprovalPolicySnapshotIsCurrent(
         expectedPolicy,
         createExecApprovalPolicySnapshot({ file: params.file, agentId: params.agentId }),
       )

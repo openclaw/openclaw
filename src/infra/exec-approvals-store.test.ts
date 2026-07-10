@@ -1879,6 +1879,48 @@ describe("exec approvals store helpers", () => {
     ]);
   });
 
+  it("preserves concurrent explicit allow-always grants from the same policy snapshot", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "always" },
+      agents: { researcher: { allowlist: [] } },
+    });
+    const policySnapshot = createExecApprovalPolicySnapshot({
+      file: readExecApprovalsSnapshot().file,
+      agentId: "researcher",
+    });
+    const commitGrant = (command: string, pattern: string) =>
+      commitExecAuthorization({
+        agentId: "researcher",
+        matches: [],
+        command,
+        authorization: {
+          source: "explicit-approval",
+          security: "allowlist",
+          ask: "always",
+          allowlistSatisfied: false,
+          policySnapshot,
+        },
+        allowAlwaysDecision: {
+          kind: "patterns",
+          patterns: [{ pattern }],
+        },
+      });
+
+    await Promise.all([
+      commitGrant("grep --version", "/usr/bin/grep"),
+      commitGrant("cat --version", "/usr/bin/cat"),
+    ]);
+
+    const allowlist = allowlistEntries(dir, "researcher");
+    expect(allowlist.map((entry) => entry.pattern).toSorted()).toEqual([
+      "/usr/bin/cat",
+      "/usr/bin/grep",
+    ]);
+    expect(allowlist.every((entry) => entry.source === "allow-always")).toBe(true);
+  });
+
   it("rejects a persistent explicit allow-always grant without a policy snapshot", async () => {
     const dir = createHomeDir();
     saveExecApprovals({

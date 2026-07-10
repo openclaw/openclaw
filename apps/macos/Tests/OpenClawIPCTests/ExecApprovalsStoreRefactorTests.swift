@@ -1478,6 +1478,43 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
+    func `stale concurrent allow always snapshots preserve every additive grant`() async throws {
+        try await self.withTempStateDir { _ in
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "researcher") { entry in
+                entry.security = .allowlist
+                entry.ask = .always
+            }.get()
+            let evaluated = ExecApprovalsStore.resolve(agentId: "researcher")
+            let policySnapshot = ExecApprovalPolicySnapshot(
+                security: evaluated.agent.security,
+                ask: evaluated.agent.ask,
+                askFallback: evaluated.agent.askFallback,
+                autoAllowSkills: evaluated.agent.autoAllowSkills,
+                allowlist: evaluated.allowlist)
+            let commitGrant: (String) throws -> Void = { pattern in
+                let grant = ExecAllowlistUse(
+                    match: ExecAllowlistEntry(pattern: pattern, source: "allow-always"),
+                    resolvedPath: pattern)
+                _ = try ExecApprovalsStore.commitExecution(ExecApprovalExecutionCommit(
+                    agentId: "researcher",
+                    command: "\(pattern) --version",
+                    authorization: .explicitAlways(
+                        evaluatedSecurity: .allowlist,
+                        policySnapshot: policySnapshot,
+                        grants: [grant]),
+                    uses: [])).get()
+            }
+
+            try commitGrant("/usr/bin/grep")
+            try commitGrant("/usr/bin/cat")
+
+            let allowlist = ExecApprovalsStore.resolve(agentId: "researcher").allowlist
+            #expect(Set(allowlist.map(\.pattern)) == ["/usr/bin/grep", "/usr/bin/cat"])
+            #expect(allowlist.allSatisfy { $0.source == "allow-always" })
+        }
+    }
+
+    @Test
     func `usage checkpoint rejects current deny policy`() async throws {
         try await self.withTempStateDir { _ in
             let stale = ExecAllowlistEntry(id: "stale", pattern: "/usr/bin/printf")

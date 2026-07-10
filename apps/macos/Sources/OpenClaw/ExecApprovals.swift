@@ -188,18 +188,16 @@ struct ExecAllowlistEntry: Codable, Hashable, Identifiable, Sendable {
         }
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let decodedID = try container.decodeIfPresent(String.self, forKey: .id)
-        if let decodedID, !decodedID.isEmpty {
-            self.id = decodedID
-        } else {
-            self.id = UUID().uuidString
-        }
-        self.pattern = try container.decode(String.self, forKey: .pattern)
-        self.source = try container.decodeIfPresent(String.self, forKey: .source)
-        self.commandText = try container.decodeIfPresent(String.self, forKey: .commandText)
-        self.argPattern = try container.decodeIfPresent(String.self, forKey: .argPattern)
-        self.lastUsedAt = try container.decodeIfPresent(Double.self, forKey: .lastUsedAt)
-        self.lastUsedCommand = try container.decodeIfPresent(String.self, forKey: .lastUsedCommand)
-        self.lastResolvedPath = try container.decodeIfPresent(String.self, forKey: .lastResolvedPath)
+        let id = decodedID.flatMap { $0.isEmpty ? nil : $0 } ?? UUID().uuidString
+        try self.init(
+            id: id,
+            pattern: container.decode(String.self, forKey: .pattern),
+            source: container.decodeIfPresent(String.self, forKey: .source),
+            commandText: container.decodeIfPresent(String.self, forKey: .commandText),
+            argPattern: container.decodeIfPresent(String.self, forKey: .argPattern),
+            lastUsedAt: container.decodeIfPresent(Double.self, forKey: .lastUsedAt),
+            lastUsedCommand: container.decodeIfPresent(String.self, forKey: .lastUsedCommand),
+            lastResolvedPath: container.decodeIfPresent(String.self, forKey: .lastResolvedPath))
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1269,7 +1267,7 @@ extension ExecApprovalsStore {
                 autoAllowSkills: current.agent.autoAllowSkills,
                 allowlist: current.allowlist)
             guard ExecSecurity.narrower(security, current.agent.security) != .deny,
-                  currentSnapshot == policySnapshot
+                  policySnapshot.isCurrent(currentSnapshot)
             else {
                 throw self.executionAuthorizationChangedError()
             }
