@@ -58,6 +58,18 @@ import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
 
 const PROVIDER_ID = "anthropic";
+
+// Anthropic-native error descriptors stay with the Anthropic provider hook.
+function classifyAnthropicFailoverDescriptor(value: string | undefined) {
+  switch (value?.trim().toUpperCase()) {
+    case "RATE_LIMIT_ERROR":
+      return "rate_limit" as const;
+    case "API_ERROR":
+      return "timeout" as const;
+    default:
+      return undefined;
+  }
+}
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-opus-4-8";
 const ANTHROPIC_OPUS_48_MODEL_ID = "claude-opus-4-8";
@@ -894,6 +906,11 @@ export function buildAnthropicProvider(): ProviderPlugin {
       (!isAnthropicMandatoryClaude5Model(modelId) ||
         normalizeLowercaseStringOrEmpty(provider) === PROVIDER_ID),
     resolveReasoningOutputMode: () => "native",
+    classifyFailoverReason: ({ provider, code, errorType }) =>
+      normalizeLowercaseStringOrEmpty(provider) === PROVIDER_ID
+        ? (classifyAnthropicFailoverDescriptor(errorType) ??
+          classifyAnthropicFailoverDescriptor(code))
+        : undefined,
     resolveThinkingProfile: ({ provider, modelId, params }) => {
       const contractModelId = resolveClaudeModelIdentity({ id: modelId, params });
       return isAnthropicMandatoryClaude5Model(contractModelId) &&

@@ -907,6 +907,8 @@ function classifyFailoverClassificationFromHttpStatus(
   return null;
 }
 
+// Only cross-provider structured codes classify in core; provider-native
+// mappings belong to provider hooks.
 function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason | null {
   const normalized = raw?.trim().toUpperCase();
   if (!normalized) {
@@ -917,14 +919,24 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
     case "RATE_LIMIT":
     case "RATE_LIMITED":
     case "RATE_LIMIT_EXCEEDED":
+    case "RATE_LIMIT_ERROR":
     case "TOO_MANY_REQUESTS":
     case "THROTTLED":
     case "THROTTLING":
     case "THROTTLINGEXCEPTION":
     case "THROTTLING_EXCEPTION":
       return "rate_limit";
+    case "INSUFFICIENT_QUOTA":
+      return "billing";
     case "DEACTIVATED_WORKSPACE":
       return "auth_permanent";
+    case "INTERNAL":
+    case "SERVER_ERROR":
+      return "server_error";
+    case "API_ERROR":
+    case "DEADLINE_EXCEEDED":
+      return "timeout";
+    case "UNAVAILABLE":
     case "OVERLOADED":
     case "OVERLOADED_ERROR":
       return "overloaded";
@@ -1247,8 +1259,9 @@ export function classifyProviderRuntimeFailureKind(
   const normalizedSignal = typeof signal === "string" ? { message: signal } : signal;
   const message = normalizedSignal.message?.trim() ?? "";
   const status = inferSignalStatus(normalizedSignal);
+  const hasStructuredErrorSignal = Boolean(normalizedSignal.code || normalizedSignal.errorType);
 
-  if (!message && typeof status !== "number") {
+  if (!message && typeof status !== "number" && !hasStructuredErrorSignal) {
     return "empty_response";
   }
   if (normalizedSignal.code === "refresh_contention") {
