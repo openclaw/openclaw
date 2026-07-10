@@ -432,14 +432,14 @@ describe("durable runtime recovery", () => {
       expect(store.listSteps(parent.runtimeRunId)).toContainEqual(
         expect.objectContaining({
           stepId: "subagents",
-          status: "succeeded",
-          recoveryState: "terminal",
-          completedAt: 200,
+          status: "waiting",
+          recoveryState: "waiting_child",
           metadata: expect.objectContaining({
             total: 1,
             succeeded: 0,
             failed: 1,
             terminal: 1,
+            ready: true,
           }),
         }),
       );

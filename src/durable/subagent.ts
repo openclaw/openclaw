@@ -728,6 +728,27 @@ export function recordDurableSubagentAnnounceDelivery(params: {
           deliveryAcknowledged &&
           isParentFanInComplete({ store, parentRuntimeRunId: parent.runtimeRunId })
         ) {
+          const parentStep = store
+            .listSteps(parent.runtimeRunId)
+            .find((step) => step.stepId === link.parentStepId);
+          const parentStepMetadata =
+            parentStep?.metadata &&
+            typeof parentStep.metadata === "object" &&
+            !Array.isArray(parentStep.metadata)
+              ? parentStep.metadata
+              : {};
+          store.updateStep({
+            runtimeRunId: parent.runtimeRunId,
+            stepId: link.parentStepId,
+            status: "succeeded",
+            recoveryState: "terminal",
+            completedAt: now,
+            metadata: {
+              ...parentStepMetadata,
+              lastSubagentAnnounceDelivery: payload,
+            },
+            now,
+          });
           store.updateRun({
             runtimeRunId: parent.runtimeRunId,
             status: "succeeded",

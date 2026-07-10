@@ -365,6 +365,66 @@ describe("durable runtime sqlite store", () => {
     }
   });
 
+  it("keeps terminal runs immutable except exact idempotent no-ops", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
+    const store = openDurableRuntimeSqliteStore({
+      path: path.join(dir, "openclaw.sqlite"),
+    });
+    try {
+      const terminal = store.createRun({
+        operationKind: "test.runtime",
+        status: "succeeded",
+        recoveryState: "terminal",
+        completedAt: 100,
+        metadata: { outcome: "ok" },
+        now: 100,
+      });
+
+      expect(
+        store.updateRun({
+          runtimeRunId: terminal.runtimeRunId,
+          status: "succeeded",
+          recoveryState: "terminal",
+          completedAt: 100,
+          metadata: { outcome: "ok" },
+          now: 200,
+        }),
+      ).toMatchObject({
+        runtimeRunId: terminal.runtimeRunId,
+        status: "succeeded",
+        recoveryState: "terminal",
+        completedAt: 100,
+        updatedAt: 100,
+      });
+      expect(
+        store.updateRun({
+          runtimeRunId: terminal.runtimeRunId,
+          status: "running",
+          recoveryState: "running",
+          completedAt: null,
+          now: 300,
+        }),
+      ).toBeUndefined();
+      expect(
+        store.updateRun({
+          runtimeRunId: terminal.runtimeRunId,
+          metadata: { outcome: "changed" },
+          now: 400,
+        }),
+      ).toBeUndefined();
+      expect(store.getRun(terminal.runtimeRunId)).toMatchObject({
+        status: "succeeded",
+        recoveryState: "terminal",
+        completedAt: 100,
+        updatedAt: 100,
+        metadata: { outcome: "ok" },
+      });
+    } finally {
+      store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("stores core runtime primitives for steps, refs, links, timers, signals, and claims", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
     const store = openDurableRuntimeSqliteStore({
@@ -551,6 +611,97 @@ describe("durable runtime sqlite store", () => {
       expect(store.listSignals(parent.runtimeRunId)).toHaveLength(1);
       expect(store.listPendingSignals()).toEqual([]);
       expect(store.getStats()).toMatchObject({ runs: 2, steps: 2 });
+    } finally {
+      store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps terminal steps immutable except exact idempotent no-ops", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
+    const store = openDurableRuntimeSqliteStore({
+      path: path.join(dir, "openclaw.sqlite"),
+    });
+    try {
+      const run = store.createRun({
+        operationKind: "test.runtime",
+        status: "running",
+        recoveryState: "running",
+        now: 100,
+      });
+      const step = store.createStep({
+        runtimeRunId: run.runtimeRunId,
+        stepId: "tool_1",
+        stepType: "tool",
+        status: "running",
+        recoveryState: "running",
+        metadata: { phase: "running" },
+        now: 110,
+      });
+      expect(
+        store.updateStep({
+          runtimeRunId: run.runtimeRunId,
+          stepId: step.stepId,
+          status: "succeeded",
+          recoveryState: "terminal",
+          outputRef: "output-ref",
+          completedAt: 120,
+          metadata: { phase: "done" },
+          now: 120,
+        }),
+      ).toMatchObject({
+        status: "succeeded",
+        recoveryState: "terminal",
+        outputRef: "output-ref",
+        completedAt: 120,
+        metadata: { phase: "done" },
+      });
+
+      expect(
+        store.updateStep({
+          runtimeRunId: run.runtimeRunId,
+          stepId: step.stepId,
+          status: "succeeded",
+          recoveryState: "terminal",
+          outputRef: "output-ref",
+          completedAt: 120,
+          metadata: { phase: "done" },
+          now: 130,
+        }),
+      ).toMatchObject({
+        status: "succeeded",
+        recoveryState: "terminal",
+        updatedAt: 120,
+      });
+      expect(
+        store.updateStep({
+          runtimeRunId: run.runtimeRunId,
+          stepId: step.stepId,
+          status: "waiting",
+          recoveryState: "waiting_child",
+          completedAt: null,
+          now: 140,
+        }),
+      ).toBeUndefined();
+      expect(
+        store.updateStep({
+          runtimeRunId: run.runtimeRunId,
+          stepId: step.stepId,
+          metadata: { phase: "changed" },
+          now: 150,
+        }),
+      ).toBeUndefined();
+      expect(store.listSteps(run.runtimeRunId)).toMatchObject([
+        {
+          stepId: step.stepId,
+          status: "succeeded",
+          recoveryState: "terminal",
+          outputRef: "output-ref",
+          completedAt: 120,
+          updatedAt: 120,
+          metadata: { phase: "done" },
+        },
+      ]);
     } finally {
       store.close();
       fs.rmSync(dir, { recursive: true, force: true });

@@ -4,7 +4,9 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveDurableRuntimeSqlitePath } from "../durable/config.js";
 import { buildDurableFanInGroupId } from "../durable/fan-in.js";
+import { DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION } from "../durable/sqlite-store.js";
 import { openDurableRuntimeStore } from "../durable/store-factory.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { durableCommand } from "./durable.js";
 
@@ -37,6 +39,103 @@ describe("durableCommand", () => {
       ]);
       for (const candidate of candidates) {
         expect(fs.existsSync(candidate)).toBe(false);
+      }
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not migrate an existing shared state database when the runtime is disabled", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-cli-disabled-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const sqlitePath = resolveDurableRuntimeSqlitePath(env);
+    fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(sqlitePath);
+    try {
+      db.exec(`
+        CREATE TABLE schema_meta (
+          key TEXT NOT NULL PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        INSERT INTO schema_meta (key, value) VALUES ('openclaw_state_schema_version', 'legacy');
+      `);
+    } finally {
+      db.close();
+    }
+    const { errors, logs, runtime } = createRuntimeCapture();
+
+    try {
+      await durableCommand({ action: "stats", env }, runtime);
+
+      expect(errors).toEqual([]);
+      expect(logs).toEqual([
+        "Durable runtime is disabled. Set OPENCLAW_DURABLE_RUNTIME=1 to inspect durable runtime state.",
+      ]);
+      const verifyDb = new DatabaseSync(sqlitePath);
+      try {
+        expect(
+          verifyDb
+            .prepare(
+              `SELECT name FROM sqlite_master
+                 WHERE type = 'table'
+                   AND (name = 'durable_schema_migrations' OR name LIKE 'durable_runtime_%')`,
+            )
+            .all(),
+        ).toEqual([]);
+      } finally {
+        verifyDb.close();
+      }
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a safe error for enabled inspection of a future durable schema", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-cli-future-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_DURABLE_RUNTIME: "1" };
+    const sqlitePath = resolveDurableRuntimeSqlitePath(env);
+    fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(sqlitePath);
+    try {
+      db.exec(`
+        CREATE TABLE durable_schema_migrations (
+          schema_name TEXT NOT NULL PRIMARY KEY,
+          version INTEGER NOT NULL,
+          applied_at INTEGER NOT NULL,
+          metadata_json TEXT
+        );
+      `);
+      db.prepare(
+        `INSERT INTO durable_schema_migrations (schema_name, version, applied_at, metadata_json)
+         VALUES (?, ?, ?, ?)`,
+      ).run("durable_runtime", DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION + 1, 100, null);
+    } finally {
+      db.close();
+    }
+    const { errors, runtime } = createRuntimeCapture();
+
+    try {
+      await durableCommand({ action: "stats", env }, runtime);
+
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(errors[0]).toContain("Durable runtime store unavailable");
+      expect(errors[0]).toContain("newer than supported version");
+      const verifyDb = new DatabaseSync(sqlitePath);
+      try {
+        expect(
+          verifyDb
+            .prepare(
+              `SELECT name FROM sqlite_master
+                 WHERE type = 'table'
+                   AND name LIKE 'durable_runtime_%'
+                 ORDER BY name`,
+            )
+            .all(),
+        ).toEqual([]);
+      } finally {
+        verifyDb.close();
       }
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });

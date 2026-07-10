@@ -556,13 +556,14 @@ describe("durable subagent bridge", () => {
       expect(assertStore.listSteps(parent!.runtimeRunId)).toContainEqual(
         expect.objectContaining({
           stepId: "subagents",
-          status: "succeeded",
-          recoveryState: "terminal",
+          status: "waiting",
+          recoveryState: "waiting_child",
           metadata: expect.objectContaining({
             total: 1,
             succeeded: 1,
             failed: 0,
             terminal: 1,
+            ready: true,
           }),
         }),
       );
@@ -701,6 +702,13 @@ describe("durable subagent bridge", () => {
       expect(assertStore.listSteps(parent!.runtimeRunId)).toContainEqual(
         expect.objectContaining({
           stepId: "agent_invocation",
+          status: "succeeded",
+          recoveryState: "terminal",
+        }),
+      );
+      expect(assertStore.listSteps(parent!.runtimeRunId)).toContainEqual(
+        expect.objectContaining({
+          stepId: "subagents",
           status: "succeeded",
           recoveryState: "terminal",
         }),

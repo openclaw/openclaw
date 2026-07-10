@@ -80,9 +80,11 @@ describe("durable runtime fan-in", () => {
       expect(store.listSteps(parent.runtimeRunId)).toMatchObject([
         {
           stepId: fanInStep.stepId,
-          status: "succeeded",
-          recoveryState: "terminal",
-          completedAt: 140,
+          status: "waiting",
+          recoveryState: "waiting_child",
+          metadata: {
+            ready: true,
+          },
         },
       ]);
       expect(store.listOpenRuns({ operationKind: "test.parent" })).toMatchObject([

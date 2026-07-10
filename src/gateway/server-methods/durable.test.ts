@@ -2,7 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { openDurableRuntimeSqliteStore } from "../../durable/sqlite-store.js";
+import { resolveDurableRuntimeSqlitePath } from "../../durable/config.js";
+import {
+  DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION,
+  openDurableRuntimeSqliteStore,
+} from "../../durable/sqlite-store.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { durableHandlers } from "./durable.js";
 
 describe("durable gateway methods", () => {
@@ -112,6 +117,76 @@ describe("durable gateway methods", () => {
       expect(calls).toHaveLength(1);
       expect(calls[0]?.[0]).toBe(false);
       expect(fs.existsSync(path.join(dir, "state", "openclaw.sqlite"))).toBe(false);
+    } finally {
+      if (previousEnabled === undefined) {
+        delete process.env.OPENCLAW_DURABLE_RUNTIME;
+      } else {
+        process.env.OPENCLAW_DURABLE_RUNTIME = previousEnabled;
+      }
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("responds with a safe error for a future durable schema", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-future-"));
+    const previousEnabled = process.env.OPENCLAW_DURABLE_RUNTIME;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_DURABLE_RUNTIME = "1";
+    process.env.OPENCLAW_STATE_DIR = dir;
+    const sqlitePath = resolveDurableRuntimeSqlitePath(process.env);
+    fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(sqlitePath);
+    try {
+      db.exec(`
+        CREATE TABLE durable_schema_migrations (
+          schema_name TEXT NOT NULL PRIMARY KEY,
+          version INTEGER NOT NULL,
+          applied_at INTEGER NOT NULL,
+          metadata_json TEXT
+        );
+      `);
+      db.prepare(
+        `INSERT INTO durable_schema_migrations (schema_name, version, applied_at, metadata_json)
+         VALUES (?, ?, ?, ?)`,
+      ).run("durable_runtime", DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION + 1, 100, null);
+    } finally {
+      db.close();
+    }
+
+    try {
+      const calls: unknown[][] = [];
+      durableHandlers["durable.coordination.get"]?.({
+        params: { runtimeRunId: "rt_future" },
+        respond: (...args: unknown[]) => calls.push(args),
+      } as never);
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.[0]).toBe(false);
+      expect(calls[0]?.[2]).toMatchObject({
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("newer than supported version"),
+      });
+      const verifyDb = new DatabaseSync(sqlitePath);
+      try {
+        expect(
+          verifyDb
+            .prepare(
+              `SELECT name FROM sqlite_master
+                 WHERE type = 'table'
+                   AND name LIKE 'durable_runtime_%'
+                 ORDER BY name`,
+            )
+            .all(),
+        ).toEqual([]);
+      } finally {
+        verifyDb.close();
+      }
     } finally {
       if (previousEnabled === undefined) {
         delete process.env.OPENCLAW_DURABLE_RUNTIME;
