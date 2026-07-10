@@ -698,6 +698,7 @@ export function createGatewayCloseHandler(
     clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
     configReloader: { stop: () => Promise<void> };
     wss: WebSocketServer;
+    closeGuestAccess?: () => void;
     httpServer: HttpServer;
     httpServers?: HttpServer[];
     drainActiveSessionsForShutdown?: (params: {
@@ -929,6 +930,7 @@ export function createGatewayCloseHandler(
         recordShutdownWarning(warnings, "ws-clients");
       }
       params.clients.clear();
+      params.closeGuestAccess?.();
       await measureCloseStep("websocket-server", async () => {
         const wsClients = params.wss.clients ?? new Set();
         const closePromise = new Promise<void>((resolve) => {

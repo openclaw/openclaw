@@ -622,6 +622,8 @@ export interface GuestJoins {
   guest_id: string;
   guest_number: number;
   last_seen_ms: number;
+  token_consumed_at_ms: number | null;
+  token_expires_at_ms: number;
   token_hash: string;
 }
 

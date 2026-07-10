@@ -3,6 +3,8 @@ import type { ErrorShape } from "./types.js";
 
 /** Gateway JSON-RPC style error codes shared by clients and server handlers. */
 export const ErrorCodes = {
+  /** Authenticated connection is not authorized for the requested surface. */
+  AUTH: "AUTH",
   /** Client has not completed account/device linking for this gateway. */
   NOT_LINKED: "NOT_LINKED",
   /** Device exists but still needs an explicit pairing approval. */

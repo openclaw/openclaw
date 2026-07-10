@@ -10,12 +10,14 @@ import { resolveControlPlaneActor } from "../control-plane-audit.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { assertValidParams } from "../server-methods/validation.js";
 import { loadSessionEntry } from "../session-utils.js";
+import type { GuestAccessController } from "./access-controller.js";
 import { GuestGrantStore, type GuestGrant, type GuestInvitedPrincipal } from "./grant-store.js";
 
 const DEFAULT_JOIN_URL_BASE = "https://genie.deva.me/join";
 
 type GuestShareHandlerOptions = {
   store?: GuestGrantStore;
+  access?: GuestAccessController;
   joinUrlBase?: string;
   sessionExists?: (sessionKey: string, context: GatewayRequestContext) => boolean;
 };
@@ -102,7 +104,9 @@ function respondWithInvalidRequest(
 export function createGuestShareHandlers(
   options: GuestShareHandlerOptions = {},
 ): GatewayRequestHandlers {
-  const resolveStore = () => options.store ?? getDefaultStore();
+  const resolveAccess = (context: GatewayRequestContext) => options.access ?? context.guestAccess;
+  const resolveStore = (context: GatewayRequestContext) =>
+    options.store ?? resolveAccess(context)?.grantStore ?? getDefaultStore();
   return {
     "sessions.share.create": ({ params, client, context, respond }) => {
       if (
@@ -121,7 +125,7 @@ export function createGuestShareHandlers(
           throw new Error(`session not found: ${params.sessionKey}`);
         }
         const joinUrlBase = resolveJoinUrlBase(context, options.joinUrlBase);
-        const store = resolveStore();
+        const store = resolveStore(context);
         const invitedPrincipal = resolveInvitedPrincipal(params);
         const created = store.createGrant({
           sessionKey: params.sessionKey,
@@ -157,7 +161,7 @@ export function createGuestShareHandlers(
             throw new Error(`session not found: ${params.sessionKey}`);
           }
         }
-        const store = resolveStore();
+        const store = resolveStore(context);
         const grants = store
           .listGrants(params.sessionKey ? { sessionKey: params.sessionKey } : {})
           .map(grantSummary);
@@ -166,7 +170,7 @@ export function createGuestShareHandlers(
         respondWithInvalidRequest(respond, error);
       }
     },
-    "sessions.share.revoke": ({ params, respond }) => {
+    "sessions.share.revoke": ({ params, respond, context }) => {
       if (
         !assertValidParams(
           params,
@@ -178,8 +182,10 @@ export function createGuestShareHandlers(
         return;
       }
       try {
-        const store = resolveStore();
-        const revoked = store.revokeGrant(params.grantId);
+        const access = resolveAccess(context);
+        const revoked = access
+          ? access.revokeGrant(params.grantId)
+          : resolveStore(context).revokeGrant(params.grantId);
         if (revoked?.revokedAtMs === undefined) {
           throw new Error("guest grant not found");
         }

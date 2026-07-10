@@ -1,9 +1,8 @@
 import { once } from "node:events";
+import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { listGatewayMethods } from "../server-methods-list.js";
-import { chatHandlers } from "../server-methods/chat.js";
-import { terminalHandlers } from "../server-methods/terminal.js";
 import { GUEST_WS_SUBPROTOCOL } from "./access-controller.js";
 import {
   createGuestTestHarness,
@@ -21,6 +20,12 @@ function expectAuthError(response: Record<string, unknown>) {
     ok: false,
     error: { code: "AUTH" },
   });
+}
+
+function expectGuestControllerIsolatedFromInputHandlers() {
+  const source = fs.readFileSync(new URL("./access-controller.ts", import.meta.url), "utf8");
+  expect(source).not.toMatch(/server-methods\/(?:chat|terminal)/);
+  expect(source).not.toMatch(/coreGatewayHandlers|dispatchGatewayRequest/);
 }
 
 describe("Wave 1 guest WebSocket attach and lockdown", () => {
@@ -105,8 +110,6 @@ describe("Wave 1 guest WebSocket attach and lockdown", () => {
   });
 
   it("W1-T6 security: Guest terminal.input / chat.send frames dropped with auth error (I9)", async () => {
-    const terminalInput = vi.spyOn(terminalHandlers, "terminal.input");
-    const chatSend = vi.spyOn(chatHandlers, "chat.send");
     const harness = await makeHarness();
     const grant = harness.createGrant();
     const redeemed = await harness.redeemOk(grant.code);
@@ -127,8 +130,7 @@ describe("Wave 1 guest WebSocket attach and lockdown", () => {
 
     expectAuthError(terminalResponse);
     expectAuthError(chatResponse);
-    expect(terminalInput).not.toHaveBeenCalled();
-    expect(chatSend).not.toHaveBeenCalled();
+    expectGuestControllerIsolatedFromInputHandlers();
   });
 
   it("W1-T7 unit: Expired connection token rejected at handshake", async () => {
@@ -356,6 +358,15 @@ describe("Wave 1 guest WebSocket attach and lockdown", () => {
     const second = await harness.redeemOk(grant.code);
     expect(second.join.guestId).not.toBe(first.join.guestId);
     expect(second.join.displayName).toBe("Guest 2");
+
+    const cappedGrant = harness.createGrant({ maxConcurrentGuests: 1 });
+    const cappedFirst = await harness.redeemOk(cappedGrant.code);
+    const cappedSocket = await harness.connect(cappedFirst.connectionToken);
+    const cappedClosed = once(cappedSocket, "close");
+    cappedSocket.close();
+    await cappedClosed;
+    const cappedReplacement = await harness.redeemOk(cappedGrant.code);
+    expect(cappedReplacement.join.displayName).toBe("Guest 2");
   });
 
   it("W1-T19 security: RPC lockdown covers aliases, notifications/batches, malformed frames, pre-auth calls, newly registered methods (I3)", async () => {
@@ -396,8 +407,6 @@ describe("Wave 1 guest WebSocket attach and lockdown", () => {
   });
 
   it("W1-T20 security: Guest input via every transport/frame variant: AUTH error AND zero PTY/chat side effects (I9)", async () => {
-    const terminalInput = vi.spyOn(terminalHandlers, "terminal.input");
-    const chatSend = vi.spyOn(chatHandlers, "chat.send");
     const harness = await makeHarness();
     const grant = harness.createGrant();
     const redeemed = await harness.redeemOk(grant.code);
@@ -429,8 +438,7 @@ describe("Wave 1 guest WebSocket attach and lockdown", () => {
       const response = await waitForGuestResponse(ws, variant.id, variant.frame);
       expectAuthError(response);
     }
-    expect(terminalInput).not.toHaveBeenCalled();
-    expect(chatSend).not.toHaveBeenCalled();
+    expectGuestControllerIsolatedFromInputHandlers();
     expect(harness.store.listJoins(grant.grant.grantId)).toHaveLength(1);
   });
 });

@@ -10,6 +10,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-sta
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 
@@ -19,6 +20,7 @@ const SHARE_CODE_RANDOM_BYTES = 6;
 const SHARE_CODE_MINT_ATTEMPTS = 10;
 const DEFAULT_GRANT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_SWEEP_INTERVAL_MS = 60_000;
+const DEFAULT_JOIN_TOKEN_TTL_MS = 10 * 60_000;
 const log = createSubsystemLogger("gateway/guest-grants");
 
 type GuestGrantDatabase = Pick<OpenClawStateKyselyDatabase, "guest_grants" | "guest_joins">;
@@ -51,9 +53,27 @@ export type GuestJoin = {
   devaUserId?: string;
   displayName: string;
   tokenHash: string;
+  tokenExpiresAtMs: number;
+  tokenConsumedAtMs?: number;
   createdAtMs: number;
   lastSeenMs: number;
 };
+
+export type GuestConnectionTokenBinding = {
+  grant: GuestGrant;
+  join: GuestJoin;
+};
+
+export type GuestGrantStoreErrorCode = "not_redeemable" | "audience" | "guest_limit";
+
+export class GuestGrantStoreError extends Error {
+  constructor(
+    readonly code: GuestGrantStoreErrorCode,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 
 type GuestGrantStoreOptions = {
   stateDir?: string;
@@ -76,6 +96,13 @@ type CreateGuestJoinParams = {
   grantId: string;
   token: string;
   devaUserId?: string;
+  displayName?: string;
+  tokenExpiresAtMs?: number;
+};
+
+type RedeemGuestGrantParams = Omit<CreateGuestJoinParams, "grantId" | "tokenExpiresAtMs"> & {
+  code: string;
+  tokenExpiresAtMs: number;
 };
 
 function hashSecret(secret: string): string {
@@ -149,6 +176,8 @@ function joinFromRow(row: GuestJoinRow): GuestJoin {
     ...(row.deva_user_id === null ? {} : { devaUserId: row.deva_user_id }),
     displayName: row.display_name,
     tokenHash: row.token_hash,
+    tokenExpiresAtMs: row.token_expires_at_ms,
+    ...(row.token_consumed_at_ms === null ? {} : { tokenConsumedAtMs: row.token_consumed_at_ms }),
     createdAtMs: row.created_at_ms,
     lastSeenMs: row.last_seen_ms,
   };
@@ -160,6 +189,87 @@ function requireNonEmpty(value: string, name: string): string {
     throw new Error(`${name} is required`);
   }
   return normalized;
+}
+
+function insertGuestJoin(
+  database: OpenClawStateDatabase,
+  grant: GuestGrantRow,
+  params: Omit<CreateGuestJoinParams, "grantId"> & { tokenExpiresAtMs: number },
+  now: number,
+): GuestJoin {
+  if (grant.revoked_at_ms !== null || grant.expires_at_ms <= now) {
+    throw new GuestGrantStoreError("not_redeemable", "guest grant is not redeemable");
+  }
+  const db = getNodeSqliteKysely<GuestGrantDatabase>(database.db);
+  const guestGrant = grantFromRow(grant);
+  const devaUserId =
+    params.devaUserId === undefined ? undefined : requireNonEmpty(params.devaUserId, "devaUserId");
+  if (guestGrant.audience === "deva-user" && guestGrant.invitedPrincipal?.subject !== devaUserId) {
+    throw new GuestGrantStoreError("audience", "guest identity does not match invite");
+  }
+  if (!Number.isInteger(params.tokenExpiresAtMs) || params.tokenExpiresAtMs <= now) {
+    throw new Error("tokenExpiresAtMs must be an integer in the future");
+  }
+  const tokenExpiresAtMs = Math.min(params.tokenExpiresAtMs, grant.expires_at_ms);
+  executeSqliteQuerySync(
+    database.db,
+    db
+      .deleteFrom("guest_joins")
+      .where("grant_id", "=", grant.grant_id)
+      .where("token_expires_at_ms", "<=", now),
+  );
+  if (guestGrant.maxConcurrentGuests !== undefined) {
+    const joinCountRow = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("guest_joins")
+        .select((expression) => expression.fn.countAll<number | bigint>().as("count"))
+        .where("grant_id", "=", grant.grant_id),
+    );
+    const rawJoinCount = joinCountRow?.count ?? 0;
+    const joinCount = typeof rawJoinCount === "bigint" ? Number(rawJoinCount) : rawJoinCount;
+    if (joinCount >= guestGrant.maxConcurrentGuests) {
+      throw new GuestGrantStoreError("guest_limit", "guest grant has reached its guest limit");
+    }
+  }
+  const guestNumber = grant.next_guest_number;
+  const guestId = `guest:${grant.grant_id}:${guestNumber}`;
+  const displayName = params.displayName
+    ? requireNonEmpty(params.displayName, "displayName")
+    : `Guest ${guestNumber}`;
+  const tokenHash = hashSecret(requireNonEmpty(params.token, "token"));
+  executeSqliteQuerySync(
+    database.db,
+    db
+      .updateTable("guest_grants")
+      .set({ next_guest_number: guestNumber + 1 })
+      .where("grant_id", "=", grant.grant_id),
+  );
+  executeSqliteQuerySync(
+    database.db,
+    db.insertInto("guest_joins").values({
+      guest_id: guestId,
+      grant_id: grant.grant_id,
+      guest_number: guestNumber,
+      deva_user_id: devaUserId ?? null,
+      display_name: displayName,
+      token_hash: tokenHash,
+      token_expires_at_ms: tokenExpiresAtMs,
+      token_consumed_at_ms: null,
+      created_at_ms: now,
+      last_seen_ms: now,
+    }),
+  );
+  return {
+    guestId,
+    grantId: grant.grant_id,
+    ...(devaUserId ? { devaUserId } : {}),
+    displayName,
+    tokenHash,
+    tokenExpiresAtMs,
+    createdAtMs: now,
+    lastSeenMs: now,
+  };
 }
 
 export class GuestGrantStore {
@@ -323,25 +433,7 @@ export class GuestGrantStore {
   }
 
   revokeGrant(grantId: string): GuestGrant | undefined {
-    const now = this.now();
-    return runOpenClawStateWriteTransaction((database) => {
-      const db = getNodeSqliteKysely<GuestGrantDatabase>(database.db);
-      const current = executeSqliteQueryTakeFirstSync(
-        database.db,
-        db.selectFrom("guest_grants").selectAll().where("grant_id", "=", grantId),
-      );
-      if (!current) {
-        return undefined;
-      }
-      if (current.revoked_at_ms !== null) {
-        throw new Error("guest grant already revoked");
-      }
-      executeSqliteQuerySync(
-        database.db,
-        db.updateTable("guest_grants").set({ revoked_at_ms: now }).where("grant_id", "=", grantId),
-      );
-      return grantFromRow({ ...current, revoked_at_ms: now });
-    }, this.databaseOptions);
+    return this.revokeGrantInternal(grantId, false);
   }
 
   sweepExpired(): number {
@@ -362,11 +454,6 @@ export class GuestGrantStore {
 
   createJoin(params: CreateGuestJoinParams): GuestJoin {
     const grantId = requireNonEmpty(params.grantId, "grantId");
-    const tokenHash = hashSecret(requireNonEmpty(params.token, "token"));
-    const devaUserId =
-      params.devaUserId === undefined
-        ? undefined
-        : requireNonEmpty(params.devaUserId, "devaUserId");
     const now = this.now();
     return runOpenClawStateWriteTransaction((database) => {
       const db = getNodeSqliteKysely<GuestGrantDatabase>(database.db);
@@ -374,62 +461,154 @@ export class GuestGrantStore {
         database.db,
         db.selectFrom("guest_grants").selectAll().where("grant_id", "=", grantId),
       );
-      if (!grant || grant.revoked_at_ms !== null || grant.expires_at_ms <= now) {
-        throw new Error("guest grant is not redeemable");
+      if (!grant) {
+        throw new GuestGrantStoreError("not_redeemable", "guest grant is not redeemable");
       }
-      const guestGrant = grantFromRow(grant);
+      return insertGuestJoin(
+        database,
+        grant,
+        {
+          token: params.token,
+          ...(params.devaUserId === undefined ? {} : { devaUserId: params.devaUserId }),
+          ...(params.displayName === undefined ? {} : { displayName: params.displayName }),
+          tokenExpiresAtMs:
+            params.tokenExpiresAtMs ??
+            Math.min(now + DEFAULT_JOIN_TOKEN_TTL_MS, grant.expires_at_ms),
+        },
+        now,
+      );
+    }, this.databaseOptions);
+  }
+
+  redeemGrant(params: RedeemGuestGrantParams): GuestJoin {
+    const normalizedCode = normalizeShareCode(params.code);
+    if (!normalizedCode) {
+      throw new GuestGrantStoreError("not_redeemable", "guest grant is not redeemable");
+    }
+    const now = this.now();
+    return runOpenClawStateWriteTransaction((database) => {
+      const db = getNodeSqliteKysely<GuestGrantDatabase>(database.db);
+      const grant = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("guest_grants")
+          .selectAll()
+          .where("code_hash", "=", hashSecret(normalizedCode)),
+      );
+      if (!grant) {
+        throw new GuestGrantStoreError("not_redeemable", "guest grant is not redeemable");
+      }
+      return insertGuestJoin(
+        database,
+        grant,
+        {
+          token: params.token,
+          ...(params.devaUserId === undefined ? {} : { devaUserId: params.devaUserId }),
+          ...(params.displayName === undefined ? {} : { displayName: params.displayName }),
+          tokenExpiresAtMs: params.tokenExpiresAtMs,
+        },
+        now,
+      );
+    }, this.databaseOptions);
+  }
+
+  consumeConnectionToken(params: {
+    token: string;
+    expectedGrantId?: string;
+    expectedSessionKey?: string;
+  }): GuestConnectionTokenBinding | undefined {
+    const token = params.token.trim();
+    if (!token) {
+      return undefined;
+    }
+    const now = this.now();
+    return runOpenClawStateWriteTransaction((database) => {
+      const db = getNodeSqliteKysely<GuestGrantDatabase>(database.db);
+      const join = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db.selectFrom("guest_joins").selectAll().where("token_hash", "=", hashSecret(token)),
+      );
+      if (!join || join.token_consumed_at_ms !== null || join.token_expires_at_ms <= now) {
+        return undefined;
+      }
+      const grant = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db.selectFrom("guest_grants").selectAll().where("grant_id", "=", join.grant_id),
+      );
       if (
-        guestGrant.audience === "deva-user" &&
-        guestGrant.invitedPrincipal?.subject !== devaUserId
+        !grant ||
+        grant.revoked_at_ms !== null ||
+        grant.expires_at_ms <= now ||
+        (params.expectedGrantId !== undefined && params.expectedGrantId !== grant.grant_id) ||
+        (params.expectedSessionKey !== undefined && params.expectedSessionKey !== grant.session_key)
       ) {
-        throw new Error("guest identity does not match invite");
+        return undefined;
       }
-      if (guestGrant.maxConcurrentGuests !== undefined) {
-        const joinCountRow = executeSqliteQueryTakeFirstSync(
-          database.db,
-          db
-            .selectFrom("guest_joins")
-            .select((expression) => expression.fn.countAll<number | bigint>().as("count"))
-            .where("grant_id", "=", grantId),
-        );
-        const rawJoinCount = joinCountRow?.count ?? 0;
-        const joinCount = typeof rawJoinCount === "bigint" ? Number(rawJoinCount) : rawJoinCount;
-        if (joinCount >= guestGrant.maxConcurrentGuests) {
-          throw new Error("guest grant has reached its guest limit");
-        }
+      const consumed = executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("guest_joins")
+          .set({ token_consumed_at_ms: now, last_seen_ms: now })
+          .where("guest_id", "=", join.guest_id)
+          .where("token_consumed_at_ms", "is", null),
+      );
+      if (Number(consumed.numAffectedRows ?? 0) !== 1) {
+        return undefined;
       }
-      const guestNumber = grant.next_guest_number;
-      const guestId = `guest:${grantId}:${guestNumber}`;
-      const displayName = `Guest ${guestNumber}`;
+      return {
+        grant: grantFromRow(grant),
+        join: joinFromRow({ ...join, token_consumed_at_ms: now, last_seen_ms: now }),
+      };
+    }, this.databaseOptions);
+  }
+
+  rotateConnectionToken(params: {
+    guestId: string;
+    token: string;
+    expiresAtMs: number;
+  }): GuestJoin | undefined {
+    const guestId = requireNonEmpty(params.guestId, "guestId");
+    const tokenHash = hashSecret(requireNonEmpty(params.token, "token"));
+    const now = this.now();
+    if (!Number.isInteger(params.expiresAtMs) || params.expiresAtMs <= now) {
+      throw new Error("expiresAtMs must be an integer in the future");
+    }
+    return runOpenClawStateWriteTransaction((database) => {
+      const db = getNodeSqliteKysely<GuestGrantDatabase>(database.db);
+      const join = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db.selectFrom("guest_joins").selectAll().where("guest_id", "=", guestId),
+      );
+      if (!join) {
+        return undefined;
+      }
+      const grant = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db.selectFrom("guest_grants").selectAll().where("grant_id", "=", join.grant_id),
+      );
+      if (!grant || grant.revoked_at_ms !== null || grant.expires_at_ms <= now) {
+        return undefined;
+      }
+      const expiresAtMs = Math.min(params.expiresAtMs, grant.expires_at_ms);
       executeSqliteQuerySync(
         database.db,
         db
-          .updateTable("guest_grants")
-          .set({ next_guest_number: guestNumber + 1 })
-          .where("grant_id", "=", grantId),
+          .updateTable("guest_joins")
+          .set({
+            token_hash: tokenHash,
+            token_expires_at_ms: expiresAtMs,
+            token_consumed_at_ms: null,
+            last_seen_ms: now,
+          })
+          .where("guest_id", "=", guestId),
       );
-      executeSqliteQuerySync(
-        database.db,
-        db.insertInto("guest_joins").values({
-          guest_id: guestId,
-          grant_id: grantId,
-          guest_number: guestNumber,
-          deva_user_id: devaUserId ?? null,
-          display_name: displayName,
-          token_hash: tokenHash,
-          created_at_ms: now,
-          last_seen_ms: now,
-        }),
-      );
-      return {
-        guestId,
-        grantId,
-        ...(devaUserId ? { devaUserId } : {}),
-        displayName,
-        tokenHash,
-        createdAtMs: now,
-        lastSeenMs: now,
-      };
+      return joinFromRow({
+        ...join,
+        token_hash: tokenHash,
+        token_expires_at_ms: expiresAtMs,
+        token_consumed_at_ms: null,
+        last_seen_ms: now,
+      });
     }, this.databaseOptions);
   }
 
@@ -446,11 +625,112 @@ export class GuestGrantStore {
     ).rows.map(joinFromRow);
   }
 
+  deleteJoin(guestId: string): boolean {
+    return runOpenClawStateWriteTransaction((database) => {
+      const db = getNodeSqliteKysely<GuestGrantDatabase>(database.db);
+      const result = executeSqliteQuerySync(
+        database.db,
+        db.deleteFrom("guest_joins").where("guest_id", "=", requireNonEmpty(guestId, "guestId")),
+      );
+      return Number(result.numAffectedRows ?? 0) > 0;
+    }, this.databaseOptions);
+  }
+
+  deleteConsumedJoin(guestId: string): boolean {
+    return runOpenClawStateWriteTransaction((database) => {
+      const db = getNodeSqliteKysely<GuestGrantDatabase>(database.db);
+      const result = executeSqliteQuerySync(
+        database.db,
+        db
+          .deleteFrom("guest_joins")
+          .where("guest_id", "=", requireNonEmpty(guestId, "guestId"))
+          .where("token_consumed_at_ms", "is not", null),
+      );
+      return Number(result.numAffectedRows ?? 0) > 0;
+    }, this.databaseOptions);
+  }
+
+  purgeAllJoins(): number {
+    return runOpenClawStateWriteTransaction((database) => {
+      const db = getNodeSqliteKysely<GuestGrantDatabase>(database.db);
+      const result = executeSqliteQuerySync(database.db, db.deleteFrom("guest_joins"));
+      return Number(result.numAffectedRows ?? 0);
+    }, this.databaseOptions);
+  }
+
+  revokeGrantAndPurgeJoins(grantId: string): GuestGrant | undefined {
+    return this.revokeGrantInternal(grantId, true);
+  }
+
+  revokeSessionGrantsAndPurgeJoins(sessionKey: string): GuestGrant[] {
+    const normalizedSessionKey = requireNonEmpty(sessionKey, "sessionKey");
+    const now = this.now();
+    return runOpenClawStateWriteTransaction((database) => {
+      const db = getNodeSqliteKysely<GuestGrantDatabase>(database.db);
+      const rows = executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("guest_grants")
+          .selectAll()
+          .where("session_key", "=", normalizedSessionKey)
+          .where("revoked_at_ms", "is", null),
+      ).rows;
+      if (rows.length === 0) {
+        return [];
+      }
+      const grantIds = rows.map((row) => row.grant_id);
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("guest_grants")
+          .set({ revoked_at_ms: now })
+          .where("grant_id", "in", grantIds),
+      );
+      executeSqliteQuerySync(
+        database.db,
+        db.deleteFrom("guest_joins").where("grant_id", "in", grantIds),
+      );
+      return rows.map((row) => grantFromRow({ ...row, revoked_at_ms: now }));
+    }, this.databaseOptions);
+  }
+
   close(): void {
     if (this.closed) {
       return;
     }
     this.closed = true;
     clearInterval(this.sweepTimer);
+  }
+
+  private revokeGrantInternal(grantId: string, purgeJoins: boolean): GuestGrant | undefined {
+    const normalizedGrantId = requireNonEmpty(grantId, "grantId");
+    const now = this.now();
+    return runOpenClawStateWriteTransaction((database) => {
+      const db = getNodeSqliteKysely<GuestGrantDatabase>(database.db);
+      const current = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db.selectFrom("guest_grants").selectAll().where("grant_id", "=", normalizedGrantId),
+      );
+      if (!current) {
+        return undefined;
+      }
+      if (current.revoked_at_ms !== null) {
+        throw new Error("guest grant already revoked");
+      }
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("guest_grants")
+          .set({ revoked_at_ms: now })
+          .where("grant_id", "=", normalizedGrantId),
+      );
+      if (purgeJoins) {
+        executeSqliteQuerySync(
+          database.db,
+          db.deleteFrom("guest_joins").where("grant_id", "=", normalizedGrantId),
+        );
+      }
+      return grantFromRow({ ...current, revoked_at_ms: now });
+    }, this.databaseOptions);
   }
 }

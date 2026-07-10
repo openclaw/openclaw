@@ -1,6 +1,10 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+} from "../server-methods/types.js";
 import { emitGatewaySessionEnded } from "../session-end-events.js";
 import { GuestAccessController } from "./access-controller.js";
 import { GuestGrantStore } from "./grant-store.js";
@@ -10,6 +14,30 @@ import {
   RecordingGuestSocket,
   type GuestTestHarness,
 } from "./guest.test-helpers.js";
+import { createGuestShareHandlers } from "./share-rpc.js";
+
+async function revokeThroughRpc(harness: GuestTestHarness, grantId: string): Promise<void> {
+  const handler = createGuestShareHandlers({ access: harness.controller })["sessions.share.revoke"];
+  if (!handler) {
+    throw new Error("sessions.share.revoke handler missing");
+  }
+  let responseOk: boolean | undefined;
+  const params = { grantId };
+  await handler({
+    req: { type: "req", id: "w1-revoke", method: "sessions.share.revoke", params },
+    params,
+    client: null,
+    isWebchatConnect: () => false,
+    context: {
+      getRuntimeConfig: () => ({}),
+      guestAccess: harness.controller,
+    } as unknown as GatewayRequestContext,
+    respond: (ok) => {
+      responseOk = ok;
+    },
+  } as GatewayRequestHandlerOptions);
+  expect(responseOk).toBe(true);
+}
 
 async function attachRecordingSocket(
   harness: GuestTestHarness,
@@ -61,7 +89,7 @@ describe("Wave 1 guest live revocation", () => {
     const attached = await attachRecordingSocket(harness, grant.code, "198.51.100.60");
     const startedAt = Date.now();
 
-    harness.controller.revokeGrant(grant.grant.grantId);
+    await revokeThroughRpc(harness, grant.grant.grantId);
 
     expect(Date.now() - startedAt).toBeLessThan(1_000);
     expect(attached.socket.closes).toEqual([{ code: 4403, reason: "guest grant revoked" }]);

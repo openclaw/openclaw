@@ -18,6 +18,8 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
+import { GuestAccessController } from "./guest/access-controller.js";
+import { GuestGrantStore } from "./guest/grant-store.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
@@ -109,6 +111,7 @@ export async function createGatewayRuntimeState(params: {
   httpBindHosts: string[];
   startListening: () => Promise<void>;
   wss: WebSocketServer;
+  guestAccess: GuestAccessController;
   preauthConnectionBudget: PreauthConnectionBudget;
   clients: Set<GatewayWsClient>;
   broadcast: GatewayBroadcastFn;
@@ -136,11 +139,19 @@ export async function createGatewayRuntimeState(params: {
   } else {
     releasePinnedPluginChannelRegistry();
   }
+  let guestAccess: GuestAccessController | undefined;
   try {
     const resolvePluginRouteRegistry = () =>
       params.getPluginRouteRegistry?.() ?? params.pluginRegistry;
     const clients = new Set<GatewayWsClient>();
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
+    const currentGuestAccess = new GuestAccessController({
+      store: new GuestGrantStore(),
+      onLockout: (event) => {
+        broadcast("sessions.share.lockout", event, { dropIfSlow: true });
+      },
+    });
+    guestAccess = currentGuestAccess;
 
     let loadedHooksRequestHandler: HooksRequestHandler | null = null;
     const handleHooksRequest: HooksRequestHandler = async (req, res) => {
@@ -264,6 +275,8 @@ export async function createGatewayRuntimeState(params: {
         strictTransportSecurityHeader: params.strictTransportSecurityHeader,
         handleWatchNodeRequest: params.handleWatchNodeRequest,
         handleHooksRequest,
+        handleGuestRequest: (req, res, context) =>
+          currentGuestAccess.handleHttpRequest(req, res, context),
         handlePluginRequest,
         shouldEnforcePluginGatewayAuth,
         resolvePluginNodeCapabilityRoute,
@@ -278,6 +291,8 @@ export async function createGatewayRuntimeState(params: {
       attachGatewayUpgradeHandler({
         httpServer,
         wss,
+        handleGuestUpgrade: (req, socket, head) =>
+          currentGuestAccess.handleUpgrade(req, socket, head),
         handlePluginUpgrade,
         shouldEnforcePluginGatewayAuth,
         resolvePluginNodeCapabilityRoute,
@@ -365,6 +380,7 @@ export async function createGatewayRuntimeState(params: {
       httpBindHosts,
       startListening,
       wss,
+      guestAccess: currentGuestAccess,
       preauthConnectionBudget,
       clients,
       broadcast,
@@ -382,6 +398,7 @@ export async function createGatewayRuntimeState(params: {
       toolEventRecipients,
     };
   } catch (err) {
+    guestAccess?.close();
     // If state creation fails after pins are installed, release them immediately so later
     // in-process gateway starts do not inherit a half-created plugin runtime.
     releasePinnedPluginHttpRouteRegistry();

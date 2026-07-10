@@ -68,8 +68,12 @@ export async function createGuestTestHarness(
   } = {},
 ) {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-guest-w1-"));
-  const store = new GuestGrantStore({ stateDir, now: options.now });
-  const connections = options.connections ?? new GuestConnectionRegistry({ now: options.now });
+  const store = new GuestGrantStore({
+    stateDir,
+    ...(options.now ? { now: options.now } : {}),
+  });
+  const connections =
+    options.connections ?? new GuestConnectionRegistry(options.now ? { now: options.now } : {});
   const controller = new GuestAccessController({ ...options, store, connections });
   const sockets = new Set<WebSocket>();
   const server = createServer((req, res) => {

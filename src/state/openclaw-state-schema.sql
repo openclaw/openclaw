@@ -1252,6 +1252,8 @@ CREATE TABLE IF NOT EXISTS guest_joins (
   deva_user_id TEXT,
   display_name TEXT NOT NULL,
   token_hash TEXT NOT NULL UNIQUE,
+  token_expires_at_ms INTEGER NOT NULL,
+  token_consumed_at_ms INTEGER,
   created_at_ms INTEGER NOT NULL,
   last_seen_ms INTEGER NOT NULL,
   UNIQUE (grant_id, guest_number),

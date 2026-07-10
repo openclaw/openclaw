@@ -21,6 +21,7 @@ private struct GatewayAnyCodingKey: CodingKey, Hashable {
 }
 
 public enum ErrorCode: String, Codable, Sendable {
+    case auth = "AUTH"
     case notLinked = "NOT_LINKED"
     case notPaired = "NOT_PAIRED"
     case agentTimeout = "AGENT_TIMEOUT"

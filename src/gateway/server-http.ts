@@ -56,6 +56,12 @@ type PluginHttpRequestHandler = (
 
 type WatchNodeHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
+type GuestHttpRequestHandler = (
+  req: IncomingMessage,
+  res: ServerResponse,
+  context: { clientIp?: string },
+) => Promise<boolean>;
+
 type PluginHttpUpgradeHandler = (
   req: IncomingMessage,
   socket: import("node:stream").Duplex,
@@ -66,6 +72,12 @@ type PluginHttpUpgradeHandler = (
     gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
     gatewayRequestOperatorScopes?: readonly string[];
   },
+) => Promise<boolean>;
+
+type GuestHttpUpgradeHandler = (
+  req: IncomingMessage,
+  socket: import("node:stream").Duplex,
+  head: Buffer,
 ) => Promise<boolean>;
 
 type ResolvePluginNodeCapabilityRoute = (
@@ -445,6 +457,7 @@ export function createGatewayHttpServer(opts: {
   strictTransportSecurityHeader?: string;
   handleHooksRequest: HooksRequestHandler;
   handleWatchNodeRequest?: WatchNodeHttpRequestHandler;
+  handleGuestRequest?: GuestHttpRequestHandler;
   handlePluginRequest?: PluginHttpRequestHandler;
   handlePluginUpgrade?: PluginHttpUpgradeHandler;
   shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
@@ -554,6 +567,23 @@ export function createGatewayHttpServer(opts: {
               getReadiness,
             ),
         },
+        ...(opts.handleGuestRequest
+          ? [
+              {
+                name: "guest-redeem",
+                run: () => {
+                  const clientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
+                  return (
+                    opts.handleGuestRequest?.(
+                      req,
+                      res,
+                      clientIp === undefined ? {} : { clientIp },
+                    ) ?? false
+                  );
+                },
+              } satisfies GatewayHttpRequestStage,
+            ]
+          : []),
         {
           name: "hooks",
           run: () => handleHooksRequest(req, res),
@@ -792,6 +822,7 @@ export function attachGatewayUpgradeHandler(opts: {
   httpServer: HttpServer;
   wss: WebSocketServer;
   handlePluginUpgrade?: PluginHttpUpgradeHandler;
+  handleGuestUpgrade?: GuestHttpUpgradeHandler;
   shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
   resolvePluginNodeCapabilityRoute?: ResolvePluginNodeCapabilityRoute;
   clients: Set<GatewayWsClient>;
@@ -807,6 +838,7 @@ export function attachGatewayUpgradeHandler(opts: {
     httpServer,
     wss,
     handlePluginUpgrade,
+    handleGuestUpgrade,
     shouldEnforcePluginGatewayAuth,
     resolvePluginNodeCapabilityRoute,
     clients,
@@ -832,6 +864,9 @@ export function attachGatewayUpgradeHandler(opts: {
       }
       const resolvedAuthLocal = getResolvedAuth();
       const requestPath = scopedNodeCapability.pathname;
+      if (handleGuestUpgrade && (await handleGuestUpgrade(req, socket, head))) {
+        return;
+      }
       const pathContext = resolvePluginRoutePathContext(requestPath);
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pathContext);
       if (nodeCapability) {
