@@ -2568,7 +2568,7 @@ async function dispatchReplyFromConfigInner(
           `dispatch-from-config: route-reply (plugin binding notice) failed: ${result.error ?? "unknown error"}`,
         );
       }
-      return result.ok;
+      return isRoutedReplyDelivered(result);
     }
     markInboundDedupeReplayUnsafe();
     return mode === "additive"

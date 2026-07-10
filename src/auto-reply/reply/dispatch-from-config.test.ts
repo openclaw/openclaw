@@ -11726,6 +11726,98 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("does not count suppressed plugin-bound fallback notices as once delivered", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "no_handler",
+    });
+    installThreadingTestPlugin({ id: "imessage" });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-imessage-once-fallback",
+      targetSessionKey: "plugin-binding:codex:imessage",
+      targetKind: "session",
+      conversation: {
+        channel: "imessage",
+        accountId: "default",
+        conversationId: "chat:primary",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/tmp/plugin",
+      },
+    } satisfies SessionBindingRecord);
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s-once-plugin-fallback",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const cfg = {
+      messages: { operationalReplies: { policy: "once" } },
+    } satisfies OpenClawConfig;
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "imessage",
+      OriginatingTo: "imessage:chat:primary",
+      To: "slack:CHAN1",
+      AccountId: "default",
+      SessionKey: "agent:main:slack:channel:CHAN1",
+      ChatType: "group",
+      GroupSubject: "Friends",
+      GroupRequireMention: false,
+      Body: "observed message",
+      From: "slack:CHAN1",
+      WasMentioned: false,
+    });
+
+    mocks.routeReply.mockResolvedValueOnce({ ok: true, suppressed: true });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver: vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload),
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(mocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(
+      pluginConversationBindingMocks.shownFallbackNoticeBindingIds.has(
+        "binding-imessage-once-fallback",
+      ),
+    ).toBe(false);
+    expect(sessionStoreMocks.currentEntry?.operationalReplyOnceKeys).toBeUndefined();
+
+    mocks.routeReply.mockClear();
+    mocks.routeReply.mockResolvedValueOnce({ ok: true, messageId: "notice-2" });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver: vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload),
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(mocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(
+      pluginConversationBindingMocks.shownFallbackNoticeBindingIds.has(
+        "binding-imessage-once-fallback",
+      ),
+    ).toBe(true);
+    expect(sessionStoreMocks.currentEntry?.operationalReplyOnceKeys).toEqual([expect.any(String)]);
+  });
+
   it("lets authorized control commands without CommandSource escape plugin-bound fallback", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(
