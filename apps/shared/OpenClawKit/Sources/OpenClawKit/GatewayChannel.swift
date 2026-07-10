@@ -634,24 +634,7 @@ public actor GatewayChannelActor {
         if !options.permissions.isEmpty {
             params["permissions"] = ProtoAnyCodable(options.permissions)
         }
-        if self.pendingDeviceTokenRetry,
-           selectedAuth.authDeviceToken != nil || selectedAuth.suppressedDeviceTokenRetry
-        {
-            self.pendingDeviceTokenRetry = false
-        }
-        self.lastAuthSource = selectedAuth.authSource
-        self.logger.info("gateway connect auth=\(selectedAuth.authSource.rawValue, privacy: .public)")
-        if let authToken = selectedAuth.authToken {
-            var auth: [String: ProtoAnyCodable] = ["token": ProtoAnyCodable(authToken)]
-            if let authDeviceToken = selectedAuth.authDeviceToken {
-                auth["deviceToken"] = ProtoAnyCodable(authDeviceToken)
-            }
-            params["auth"] = ProtoAnyCodable(auth)
-        } else if let authBootstrapToken = selectedAuth.authBootstrapToken {
-            params["auth"] = ProtoAnyCodable(["bootstrapToken": ProtoAnyCodable(authBootstrapToken)])
-        } else if let password = selectedAuth.authPassword {
-            params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
-        }
+        self.applyConnectAuth(selectedAuth, to: &params)
         let signedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         let connectNonce = try await self.waitForConnectChallenge(task: task, attemptID: attemptID)
         try self.ensureCurrentConnectAttempt(attemptID, task: task)
@@ -744,6 +727,30 @@ private func requireCurrentConnection(_ connectionGeneration: UInt64) throws {
 // MARK: - Authentication
 
 extension GatewayChannelActor {
+    private func applyConnectAuth(
+        _ selectedAuth: SelectedConnectAuth,
+        to params: inout [String: ProtoAnyCodable])
+    {
+        if self.pendingDeviceTokenRetry,
+           selectedAuth.authDeviceToken != nil || selectedAuth.suppressedDeviceTokenRetry
+        {
+            self.pendingDeviceTokenRetry = false
+        }
+        self.lastAuthSource = selectedAuth.authSource
+        self.logger.info("gateway connect auth=\(selectedAuth.authSource.rawValue, privacy: .public)")
+        if let authToken = selectedAuth.authToken {
+            var auth: [String: ProtoAnyCodable] = ["token": ProtoAnyCodable(authToken)]
+            if let authDeviceToken = selectedAuth.authDeviceToken {
+                auth["deviceToken"] = ProtoAnyCodable(authDeviceToken)
+            }
+            params["auth"] = ProtoAnyCodable(auth)
+        } else if let authBootstrapToken = selectedAuth.authBootstrapToken {
+            params["auth"] = ProtoAnyCodable(["bootstrapToken": ProtoAnyCodable(authBootstrapToken)])
+        } else if let password = selectedAuth.authPassword {
+            params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
+        }
+    }
+
     private func selectConnectAuth(
         role: String,
         includeDeviceIdentity: Bool,
