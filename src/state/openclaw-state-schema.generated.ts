@@ -1478,6 +1478,114 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_durable_runtime_signals_idempotency
 CREATE INDEX IF NOT EXISTS idx_durable_runtime_signals_pending
   ON durable_runtime_signals(consumed_at, received_at, signal_id);
 
+CREATE TABLE IF NOT EXISTS durable_runtime_parent_wakes (
+  wake_id TEXT NOT NULL PRIMARY KEY,
+  parent_run_id TEXT,
+  parent_session_key TEXT,
+  target_agent TEXT,
+  target_session TEXT,
+  target_channel TEXT,
+  reason TEXT NOT NULL,
+  facts_ref TEXT,
+  source_run_id TEXT,
+  dedupe_key TEXT NOT NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at INTEGER,
+  acked_at INTEGER,
+  failed_reason TEXT,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  metadata_json TEXT,
+  CHECK (parent_run_id IS NOT NULL OR parent_session_key IS NOT NULL)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_durable_runtime_parent_wakes_dedupe
+  ON durable_runtime_parent_wakes(dedupe_key);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_parent_wakes_status
+  ON durable_runtime_parent_wakes(status, updated_at, wake_id);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_parent_wakes_parent_run
+  ON durable_runtime_parent_wakes(parent_run_id, status, updated_at)
+  WHERE parent_run_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_parent_wakes_parent_session
+  ON durable_runtime_parent_wakes(parent_session_key, status, updated_at)
+  WHERE parent_session_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS durable_runtime_uncertainty_facts (
+  fact_id TEXT NOT NULL PRIMARY KEY,
+  kind TEXT NOT NULL,
+  source_run_id TEXT,
+  step_id TEXT,
+  event_id TEXT,
+  ref_id TEXT,
+  facts_ref TEXT,
+  dedupe_key TEXT,
+  facts_json TEXT,
+  status TEXT NOT NULL,
+  resolution_kind TEXT,
+  resolution_ref TEXT,
+  resolved_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  metadata_json TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_durable_runtime_uncertainty_dedupe
+  ON durable_runtime_uncertainty_facts(dedupe_key)
+  WHERE dedupe_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_uncertainty_status
+  ON durable_runtime_uncertainty_facts(status, updated_at, fact_id);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_uncertainty_source
+  ON durable_runtime_uncertainty_facts(source_run_id, status, updated_at)
+  WHERE source_run_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS durable_runtime_continuation_cleanup (
+  cleanup_id TEXT NOT NULL PRIMARY KEY,
+  target_kind TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  runtime_run_id TEXT,
+  step_id TEXT,
+  superseded_by_ref TEXT,
+  reason TEXT,
+  requested_by TEXT,
+  dedupe_key TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  metadata_json TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_durable_runtime_cleanup_dedupe
+  ON durable_runtime_continuation_cleanup(dedupe_key);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_cleanup_target
+  ON durable_runtime_continuation_cleanup(target_kind, target_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_cleanup_run
+  ON durable_runtime_continuation_cleanup(runtime_run_id, created_at)
+  WHERE runtime_run_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS durable_runtime_dedupe_ledger (
+  ledger_id TEXT NOT NULL PRIMARY KEY,
+  scope TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  subject_ref TEXT,
+  operation_kind TEXT,
+  status TEXT NOT NULL,
+  first_seen_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  hit_count INTEGER NOT NULL DEFAULT 1,
+  metadata_json TEXT,
+  UNIQUE (scope, dedupe_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_dedupe_ledger_status
+  ON durable_runtime_dedupe_ledger(scope, status, last_seen_at);
+
 CREATE TABLE IF NOT EXISTS migration_runs (
   id TEXT NOT NULL PRIMARY KEY,
   started_at INTEGER NOT NULL,
