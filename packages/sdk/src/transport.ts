@@ -93,47 +93,55 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
     if (this.connectPromise) {
       return this.connectPromise;
     }
-    this.connectPromise = new Promise<void>((resolve, reject) => {
-      this.rejectPendingConnect = reject;
-      const client = new GatewayClient({
-        ...this.options,
-        onEvent: (event: unknown) => {
-          const normalized = toGatewayEvent(event);
-          this.eventsHub.publish(normalized);
-          this.options.onEvent?.(normalized);
-        },
-        onHelloOk: (_hello: unknown) => {
-          try {
-            this.options.onHelloOk?.(_hello);
-          } finally {
-            this.rejectPendingConnect = null;
-            resolve();
-          }
-        },
-        onConnectError: (error: Error) => {
-          try {
-            this.options.onConnectError?.(error);
-          } finally {
-            if (this.client === client) {
-              this.client = null;
-            }
-            if (this.connectPromise) {
-              this.connectPromise = null;
-            }
-            void client.stopAndWait().catch(() => {});
-            this.rejectPendingConnect = null;
-            reject(error);
-          }
-        },
-        onReconnectPaused: this.options.onReconnectPaused,
-        onClose: this.options.onClose,
-        onGap: this.options.onGap,
-      } as never);
-
-      this.client = client;
-      client.start();
+    let resolveConnect!: () => void;
+    let rejectConnect!: (error: Error) => void;
+    const connectPromise = new Promise<void>((resolve, reject) => {
+      resolveConnect = resolve;
+      rejectConnect = reject;
     });
-    return this.connectPromise;
+    this.connectPromise = connectPromise;
+    this.rejectPendingConnect = rejectConnect;
+
+    const client = new GatewayClient({
+      ...this.options,
+      onEvent: (event: unknown) => {
+        const normalized = toGatewayEvent(event);
+        this.eventsHub.publish(normalized);
+        this.options.onEvent?.(normalized);
+      },
+      onHelloOk: (_hello: unknown) => {
+        try {
+          this.options.onHelloOk?.(_hello);
+        } finally {
+          if (this.connectPromise === connectPromise) {
+            this.rejectPendingConnect = null;
+          }
+          resolveConnect();
+        }
+      },
+      onConnectError: (error: Error) => {
+        try {
+          this.options.onConnectError?.(error);
+        } finally {
+          if (this.client === client) {
+            this.client = null;
+          }
+          if (this.connectPromise === connectPromise) {
+            this.connectPromise = null;
+            this.rejectPendingConnect = null;
+          }
+          void client.stopAndWait().catch(() => {});
+          rejectConnect(error);
+        }
+      },
+      onReconnectPaused: this.options.onReconnectPaused,
+      onClose: this.options.onClose,
+      onGap: this.options.onGap,
+    } as never);
+
+    this.client = client;
+    client.start();
+    return connectPromise;
   }
 
   async request<T = unknown>(

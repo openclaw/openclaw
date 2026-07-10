@@ -14,13 +14,16 @@ type MockGatewayClientInstance = {
 
 const gatewayClientMocks = vi.hoisted(() => ({
   instances: [] as MockGatewayClientInstance[],
+  onStart: undefined as ((client: MockGatewayClientInstance) => void) | undefined,
 }));
 
 vi.mock("@openclaw/gateway-client", () => ({
   GatewayClient: class {
     readonly opts: MockGatewayClientInstance["opts"];
     readonly request = vi.fn();
-    readonly start = vi.fn();
+    readonly start = vi.fn(() => {
+      gatewayClientMocks.onStart?.(this);
+    });
     readonly stopAndWait = vi.fn(async () => {});
 
     constructor(opts: MockGatewayClientInstance["opts"]) {
@@ -33,6 +36,7 @@ vi.mock("@openclaw/gateway-client", () => ({
 describe("GatewayClientTransport", () => {
   beforeEach(() => {
     gatewayClientMocks.instances.length = 0;
+    gatewayClientMocks.onStart = undefined;
   });
 
   it("rejects a pending connect when the transport closes before hello-ok", async () => {
@@ -94,5 +98,21 @@ describe("GatewayClientTransport", () => {
     await connectExpectation;
     expect(onConnectError).toHaveBeenCalledOnce();
     expect(client?.stopAndWait).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries after a synchronous connection error", async () => {
+    gatewayClientMocks.onStart = (client) => {
+      client.opts.onConnectError?.(new Error("synchronous connection failure"));
+    };
+    const transport = new GatewayClientTransport();
+
+    await expect(transport.connect()).rejects.toThrow("synchronous connection failure");
+
+    gatewayClientMocks.onStart = (client) => {
+      client.opts.onHelloOk?.({ sessionId: "session-1" });
+    };
+
+    await expect(transport.connect()).resolves.toBeUndefined();
+    expect(gatewayClientMocks.instances).toHaveLength(2);
   });
 });
