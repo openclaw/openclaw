@@ -378,16 +378,29 @@ jobs:
           const fs = require("node:fs");
           const path = require("node:path");
           const root = process.env.KOVA_SRC;
+          const sourceModel = "gpt-5.5";
+          const targetModel = process.env.PERFORMANCE_MODEL_ID;
+          if (!targetModel || targetModel === sourceModel) {
+            throw new Error("Kova performance model pin must replace the source model");
+          }
           const files = [
             "support/configure-openclaw-mock-auth.mjs",
             "support/configure-openclaw-live-auth.mjs",
-            "support/mock-openai-server.mjs",
             "states/mock-openai-provider.json"
           ];
-          for (const rel of files) {
+          const rewrites = files.map((rel) => {
             const file = path.join(root, rel);
             const before = fs.readFileSync(file, "utf8");
-            const after = before.replaceAll("gpt-5.5", process.env.PERFORMANCE_MODEL_ID);
+            if (!before.includes(sourceModel)) {
+              throw new Error(`${rel} did not contain the Kova source model`);
+            }
+            const after = before.replaceAll(sourceModel, targetModel);
+            if (after.includes(sourceModel) || !after.includes(targetModel)) {
+              throw new Error(`${rel} did not pin the Kova performance model`);
+            }
+            return { file, after };
+          });
+          for (const { file, after } of rewrites) {
             fs.writeFileSync(file, after, "utf8");
           }
           NODE
