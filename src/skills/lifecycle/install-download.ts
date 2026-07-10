@@ -19,6 +19,9 @@ import type { SkillEntry, SkillInstallSpec } from "../types.js";
 import { formatInstallFailureMessage } from "./install-output.js";
 import type { SkillInstallResult } from "./install-types.js";
 
+/** Maximum bytes accepted for a single skill artifact download. */
+const SKILL_DOWNLOAD_MAX_BYTES = 100 * 1024 * 1024;
+
 const extractModuleLoader = createLazyImportLoader(() => import("./install-extract.js"));
 
 async function loadExtractModule() {
@@ -113,6 +116,12 @@ async function downloadFile(params: {
       ? body
       : Readable.fromWeb(body as NodeReadableStream);
     await pipeline(readable, file);
+    const tempStat = await fs.promises.stat(tempPath);
+    if (tempStat.size > SKILL_DOWNLOAD_MAX_BYTES) {
+      throw new Error(
+        `Skill download exceeds ${SKILL_DOWNLOAD_MAX_BYTES} bytes (${tempStat.size} bytes received)`,
+      );
+    }
     const root = await fsRoot(params.rootDir);
     await root.copyIn(params.relativePath, tempPath);
     const stat = await fs.promises.stat(destPath);
