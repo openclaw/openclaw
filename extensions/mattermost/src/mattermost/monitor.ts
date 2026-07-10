@@ -2049,7 +2049,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                           },
                           onToolStart: async (payloadValue) => {
                             if (payloadValue.phase !== "update") {
-                              await previewBoundaryController.noteBoundary();
+                              const boundarySettled = previewBoundaryController.noteBoundary();
+                              // Block previews rotate posts here, so the new post must not inherit
+                              // the previous block's accumulated progress lines.
+                              if (account.streamingMode === "block") {
+                                progressDraft.reset();
+                              }
+                              await boundarySettled;
                             }
                             if (!draftToolProgressEnabled) {
                               return;

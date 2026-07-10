@@ -1274,7 +1274,8 @@ describe("mattermost inbound user posts", () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
     mockState.abortController = abortController;
-    let toolUpdateBoundaryCount = -1;
+    let sameToolUpdateBoundaryCount = -1;
+    let secondToolDraft = "";
     let secondPartialArrivedBeforeBoundarySettled = false;
     mockState.dispatchReplyFromConfig.mockImplementation(async (params) => {
       await params.replyOptions?.onAssistantMessageStart?.();
@@ -1300,7 +1301,15 @@ describe("mattermost inbound user posts", () => {
         detailMode: "raw",
         args: { command: "ls -al" },
       });
-      toolUpdateBoundaryCount = forceNewMessage.mock.calls.length;
+      sameToolUpdateBoundaryCount = forceNewMessage.mock.calls.length;
+      await params.replyOptions?.onToolStart?.({
+        toolCallId: "bash-2",
+        name: "bash",
+        phase: "start",
+        detailMode: "raw",
+        args: { command: "pwd" },
+      });
+      secondToolDraft = String(draftUpdate.mock.calls.at(-1)?.[0] ?? "");
 
       const assistantBoundary = params.replyOptions?.onAssistantMessageStart?.();
       params.replyOptions?.onPartialReply?.({ text: "Done." });
@@ -1333,8 +1342,10 @@ describe("mattermost inbound user posts", () => {
     expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
     const replyOptions = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].replyOptions;
     expect(replyOptions?.disableBlockStreaming).toBe(true);
-    expect(toolUpdateBoundaryCount).toBe(1);
-    expect(forceNewMessage).toHaveBeenCalledTimes(2);
+    expect(sameToolUpdateBoundaryCount).toBe(1);
+    expect(secondToolDraft).toContain("pwd");
+    expect(secondToolDraft).not.toContain("ls -al");
+    expect(forceNewMessage).toHaveBeenCalledTimes(3);
     expect(secondPartialArrivedBeforeBoundarySettled).toBe(true);
     expect(draftUpdate).toHaveBeenNthCalledWith(1, "A much longer first block");
     expect(draftUpdate).toHaveBeenLastCalledWith("Done.");
