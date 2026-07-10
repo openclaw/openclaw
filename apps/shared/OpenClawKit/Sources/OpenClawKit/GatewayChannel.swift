@@ -1423,6 +1423,10 @@ extension GatewayChannelActor {
                         }
                         do {
                             try await task.send(.data(payload.data))
+                        } catch is CancellationError {
+                            // Cancellation owns only this request. Treating it as socket loss
+                            // starts disconnect cleanup and can reject an immediate safe retry.
+                            self.cancelRequest(id: payload.id)
                         } catch {
                             let wrapped = self.wrap(error, context: "gateway send \(method)")
                             await self.transitionToDisconnected(

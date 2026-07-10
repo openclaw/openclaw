@@ -627,7 +627,7 @@ struct OnboardingCrestodianChatTests {
 
         #expect(chat.errorMessage == nil)
         #expect(chat.messages.map(\.text) == ["ready"])
-        #expect(session.snapshotMakeCount() == 2)
-        #expect(session.latestTask()?.snapshotSendCount() == 2)
+        #expect(session.snapshotMakeCount() == 1)
+        #expect(session.latestTask()?.snapshotSendCount() == 3)
     }
 }
