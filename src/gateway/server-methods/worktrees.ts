@@ -1,3 +1,5 @@
+import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import {
   ErrorCodes,
   errorShape,
@@ -8,8 +10,10 @@ import {
   validateWorktreesRemoveParams,
   validateWorktreesRestoreParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeService } from "../../agents/worktrees/service.js";
+import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type WorktreeService = Pick<
@@ -89,10 +93,37 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
       }
     },
-    "worktrees.branches": async ({ params, respond }) => {
+    "worktrees.branches": async ({ params, respond, context, client }) => {
       if (!validateWorktreesBranchesParams(params)) {
         invalidParams(respond);
         return;
+      }
+      // Write scope may only enumerate configured agent workspaces; arbitrary
+      // host paths stay behind the same admin bar as sessions.create cwd.
+      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+      if (!scopes.includes(ADMIN_SCOPE)) {
+        const cfg = context.getRuntimeConfig();
+        const requested = await fs.realpath(params.repoRoot).catch(() => null);
+        const allowed =
+          requested !== null &&
+          listAgentIds(cfg).some((agentId) => {
+            try {
+              return fsSync.realpathSync(resolveAgentWorkspaceDir(cfg, agentId)) === requested;
+            } catch {
+              return false;
+            }
+          });
+        if (!allowed) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `worktrees.branches outside configured agent workspaces requires gateway scope: ${ADMIN_SCOPE}`,
+            ),
+          );
+          return;
+        }
       }
       try {
         respond(true, await service.listRepositoryBranches(params.repoRoot), undefined);

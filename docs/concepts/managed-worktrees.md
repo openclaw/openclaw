@@ -93,7 +93,7 @@ The Control UI **Worktrees** page under Settings provides the same list, delete,
 | `worktrees.restore`  | Restore a removed worktree from its snapshot.                           |
 | `worktrees.gc`       | Run idle, orphan, and retention cleanup now.                            |
 
-`worktrees.list` requires `operator.read`, `worktrees.branches` requires `operator.write`, and the remaining mutating methods require `operator.admin`. `worktrees.branches` reads existing refs only and never fetches.
+`worktrees.list` requires `operator.read`, and the mutating methods require `operator.admin`. `worktrees.branches` needs `operator.write` for configured agent workspaces, while any other host path requires `operator.admin` (matching the `sessions.create` cwd bar). It reads existing refs only and never fetches, and remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref.
 
 ## Workboard workspaces
 

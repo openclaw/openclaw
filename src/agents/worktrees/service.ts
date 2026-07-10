@@ -476,6 +476,9 @@ export class ManagedWorktreeService {
    */
   async listRepositoryBranches(repoRoot: string): Promise<ManagedWorktreeBranchesResult> {
     const repository = await resolveRepository(repoRoot);
+    // Keyed by short branch name; the stored name is always a resolvable base
+    // ref, so remote-only branches keep their remote-qualified form
+    // (origin/feature-a) instead of a bare name git cannot resolve.
     const branches = new Map<string, ManagedWorktreeBranch>();
     const remoteRaw = await runGit(repository.repoRoot, [
       "for-each-ref",
@@ -493,12 +496,12 @@ export class ManagedWorktreeService {
         if (slash <= 0) {
           continue;
         }
-        const name = withoutPrefix.slice(slash + 1);
+        const shortName = withoutPrefix.slice(slash + 1);
         // remote HEAD symrefs are pointers, not selectable branches.
-        if (!name || name === "HEAD") {
+        if (!shortName || shortName === "HEAD") {
           continue;
         }
-        branches.set(name, { name, kind: "remote" });
+        branches.set(shortName, { name: withoutPrefix, kind: "remote" });
       }
     }
     const localRaw = await runGit(repository.repoRoot, [
@@ -520,17 +523,23 @@ export class ManagedWorktreeService {
       "--short",
       "refs/remotes/origin/HEAD",
     ]);
-    const defaultBranch =
+    const defaultShort =
       remoteHead.code === 0
         ? remoteHead.stdout.trim().replace(/^origin\//, "") || undefined
         : undefined;
     const head = await runGit(repository.repoRoot, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
     const headBranch = head.code === 0 ? head.stdout.trim() || undefined : undefined;
+    const defaultBranch = defaultShort
+      ? (branches.get(defaultShort)?.name ?? defaultShort)
+      : undefined;
     // Deterministic picker ordering: default base first, current checkout next, rest alphabetical.
-    const rank = (name: string) => (name === defaultBranch ? 0 : name === headBranch ? 1 : 2);
-    const sorted = [...branches.values()].toSorted(
-      (a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name),
-    );
+    const rank = (shortName: string) =>
+      shortName === defaultShort ? 0 : shortName === headBranch ? 1 : 2;
+    const sorted = [...branches.entries()]
+      .toSorted(
+        ([aShort, a], [bShort, b]) => rank(aShort) - rank(bShort) || a.name.localeCompare(b.name),
+      )
+      .map(([, branch]) => branch);
     return {
       branches: sorted,
       ...(defaultBranch ? { defaultBranch } : {}),

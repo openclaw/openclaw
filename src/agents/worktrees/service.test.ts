@@ -95,14 +95,40 @@ describe("ManagedWorktreeService", () => {
     const result = await service.listRepositoryBranches(repo);
     expect(result.defaultBranch).toBe("main");
     expect(result.headBranch).toBe("current-work");
+    // Remote-only branches keep their remote-qualified form so the returned
+    // name always resolves as a git worktree base ref.
     expect(result.branches.map((branch) => branch.name)).toEqual([
       "main",
       "current-work",
-      "feature-a",
+      "origin/feature-a",
       "zeta-local",
     ]);
-    expect(result.branches.find((branch) => branch.name === "feature-a")?.kind).toBe("remote");
+    expect(result.branches.find((branch) => branch.name === "origin/feature-a")?.kind).toBe(
+      "remote",
+    );
     expect(result.branches.find((branch) => branch.name === "main")?.kind).toBe("local");
+  });
+
+  it("creates a worktree from a remote-only branch ref returned by the picker", async () => {
+    await addRemote(root, repo);
+    await git(repo, "checkout", "-b", "remote-only");
+    await fs.writeFile(path.join(repo, "remote-only.txt"), "remote\n");
+    await git(repo, "add", "remote-only.txt");
+    await git(repo, "commit", "-m", "remote only commit");
+    await git(repo, "push", "origin", "remote-only");
+    const remoteCommit = await git(repo, "rev-parse", "HEAD");
+    await git(repo, "checkout", "main");
+    await git(repo, "branch", "-D", "remote-only");
+
+    const listed = await service.listRepositoryBranches(repo);
+    const remoteRef = listed.branches.find((branch) => branch.kind === "remote")?.name;
+    expect(remoteRef).toBe("origin/remote-only");
+    const created = await service.create({
+      repoRoot: repo,
+      name: "from-remote",
+      baseRef: remoteRef,
+    });
+    expect(await git(created.path, "rev-parse", "HEAD")).toBe(remoteCommit);
   });
 
   it("lists local branches without a remote", async () => {
