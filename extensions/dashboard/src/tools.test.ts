@@ -152,7 +152,7 @@ describe("dashboard tools", () => {
         slug: "finance",
       });
 
-      expect((await store.read()).tabs.find((tab) => tab.slug === "finance")).toMatchObject({
+      expect(store.read().tabs.find((tab) => tab.slug === "finance")).toMatchObject({
         createdBy: "agent:main",
       });
       expect(broadcast).toHaveBeenCalledTimes(1);
@@ -203,7 +203,7 @@ describe("dashboard tools", () => {
       );
 
       const tools = toolsByName(store);
-      const replacement = structuredClone(await store.read());
+      const replacement = structuredClone(store.read());
       replacement.tabs[0]!.createdBy = "agent:forged";
       replacement.tabs.push({
         slug: "agent-tab",
@@ -226,7 +226,7 @@ describe("dashboard tools", () => {
 
       await tools.get("dashboard_workspace_replace")?.execute("call-1", { doc: replacement });
 
-      const next = await store.read();
+      const next = store.read();
       // Provenance is immutable once stamped: the agent cannot relabel the seeded
       // system tab as its own, nor claim its own new tab was authored by a human.
       expect(next.tabs.find((tab) => tab.slug === "main")?.createdBy).toBe("system");
@@ -305,7 +305,7 @@ describe("dashboard tools", () => {
       expect(html).toContain("dashboard:getData");
       expect(html).toContain("function onData");
       expect(html).not.toMatch(/https?:\/\//);
-      expect((await store.read()).widgetsRegistry["agent-chart"]).toMatchObject({
+      expect(store.read().widgetsRegistry["agent-chart"]).toMatchObject({
         status: "pending",
         createdBy: "agent:main",
       });
@@ -318,7 +318,7 @@ describe("dashboard tools", () => {
         }),
       ).rejects.toThrow("widget already exists");
       expect(await fs.readFile(htmlPath, "utf8")).toBe("custom implementation");
-      expect((await store.read()).widgetsRegistry["agent-chart"]).toMatchObject({
+      expect(store.read().widgetsRegistry["agent-chart"]).toMatchObject({
         status: "pending",
         createdBy: "agent:main",
       });

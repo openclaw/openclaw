@@ -11,6 +11,9 @@ import { DASHBOARD_GRID_COLUMNS, type DashboardGridRect, type DashboardWidget } 
 /** Fixed row height + gutter, in CSS pixels (spec-30 §Grid). */
 export const DASHBOARD_ROW_HEIGHT = 56;
 export const DASHBOARD_GRID_GAP = 12;
+/** Mirrors the store's grid bounds (`schema.ts` validateGrid). */
+export const DASHBOARD_GRID_MAX_Y = 499;
+export const DASHBOARD_GRID_MAX_HEIGHT = 20;
 
 export type DashboardDragMode = "move" | "resize";
 
@@ -51,12 +54,16 @@ export function snapCells(deltaPx: number, unitPx: number): number {
   return Math.round(deltaPx / (unitPx + DASHBOARD_GRID_GAP));
 }
 
-/** Clamp a rect so it stays inside the 12-column grid; height/y are unbounded below. */
+/**
+ * Clamp a rect into the grid the store will accept. The bounds mirror
+ * `extensions/dashboard/src/schema.ts` exactly: a rect the UI lets you build but
+ * the server rejects shows up as an optimistic move that snaps back.
+ */
 export function clampRect(rect: DashboardGridRect): DashboardGridRect {
   const w = clamp(rect.w, 1, DASHBOARD_GRID_COLUMNS);
-  const h = Math.max(1, rect.h);
+  const h = clamp(rect.h, 1, DASHBOARD_GRID_MAX_HEIGHT);
   const x = clamp(rect.x, 0, DASHBOARD_GRID_COLUMNS - w);
-  const y = Math.max(0, rect.y);
+  const y = clamp(rect.y, 0, DASHBOARD_GRID_MAX_Y);
   return { x, y, w, h };
 }
 
@@ -170,6 +177,14 @@ export function nearestFreeSlot(
   const maxY = Math.max(requested.y, occupiedRows) + h;
   let best: { rect: DashboardGridRect; distance: number } | null = null;
   for (let y = 0; y <= maxY; y += 1) {
+    // Past the requested row every further row is at least one unit farther away,
+    // and the closest slot on it is directly below the requested column. Stop only
+    // once even that ideal slot could not beat the best found — breaking on the
+    // first row that merely HAS a fit would return a far same-row slot over a
+    // near one a row down.
+    if (best && y >= requested.y && y - requested.y >= best.distance) {
+      break;
+    }
     for (let x = 0; x <= maxX; x += 1) {
       const candidate: DashboardGridRect = { x, y, w, h };
       if (collides(candidate, widgets, widgetId)) {
@@ -179,10 +194,6 @@ export function nearestFreeSlot(
       if (!best || distance < best.distance) {
         best = { rect: candidate, distance };
       }
-    }
-    // Once a fit is found on a row, no lower row can be closer.
-    if (best && y >= requested.y) {
-      break;
     }
   }
   return best?.rect ?? null;

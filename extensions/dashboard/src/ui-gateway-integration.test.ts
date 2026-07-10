@@ -63,6 +63,7 @@ const SEED_DOC: WorkspaceDoc = {
           grid: { x: 0, y: 0, w: 4, h: 2 },
           collapsed: false,
           hidden: false,
+          createdBy: "user",
         },
       ],
     },
@@ -146,7 +147,7 @@ describe("dashboard UI <-> gateway integration seam", () => {
   it("round-trips real UI client params through real handlers into the persisted store", async () => {
     await withTempStateDir(async (stateDir) => {
       const store = new DashboardStore({ stateDir });
-      await store.replace(SEED_DOC, { actor: "user" });
+      store.replace(SEED_DOC, { actor: "user" });
 
       // Real data file for the file binding: a NESTED value behind a JSON pointer.
       const dataDir = path.join(stateDir, "dashboard", "data");
@@ -195,21 +196,21 @@ describe("dashboard UI <-> gateway integration seam", () => {
         widgetId: "revenue-card",
         collapsed: true,
       });
-      expect(findWidget(await store.read(), "ops", "revenue-card").collapsed).toBe(true);
+      expect(findWidget(store.read(), "ops", "revenue-card").collapsed).toBe(true);
 
       await updateWidgetTitle(state, client, {
         slug: "ops",
         widgetId: "revenue-card",
         title: "Net Revenue",
       });
-      expect(findWidget(await store.read(), "ops", "revenue-card").title).toBe("Net Revenue");
+      expect(findWidget(store.read(), "ops", "revenue-card").title).toBe("Net Revenue");
 
       await moveWidget(state, client, {
         slug: "ops",
         widgetId: "revenue-card",
         grid: { x: 4, y: 1, w: 4, h: 3 },
       });
-      expect(findWidget(await store.read(), "ops", "revenue-card").grid).toEqual({
+      expect(findWidget(store.read(), "ops", "revenue-card").grid).toEqual({
         x: 4,
         y: 1,
         w: 4,
@@ -217,7 +218,7 @@ describe("dashboard UI <-> gateway integration seam", () => {
       });
 
       await removeWidgetFromTab(state, client, { slug: "ops", widgetId: "revenue-card" });
-      const afterRemove = await store.read();
+      const afterRemove = store.read();
       expect(afterRemove.tabs.find((tab) => tab.slug === "ops")?.widgets).toHaveLength(0);
 
       // No mutation surfaced an error through the whole round-trip.
@@ -228,7 +229,7 @@ describe("dashboard UI <-> gateway integration seam", () => {
   it("catches the shipped contract drift: the pre-fix `{ slug, widgetId }` mutation shape is rejected and never mutates the store", async () => {
     await withTempStateDir(async (stateDir) => {
       const store = new DashboardStore({ stateDir });
-      await store.replace(SEED_DOC, { actor: "user" });
+      store.replace(SEED_DOC, { actor: "user" });
       const methods = registerHandlers(store, stateDir);
       const client = createRoutingClient(methods);
 
@@ -245,7 +246,7 @@ describe("dashboard UI <-> gateway integration seam", () => {
       ).rejects.toThrow(/unexpected param: slug/);
 
       // The rejected call left the persisted widget untouched.
-      expect(findWidget(await store.read(), "ops", "revenue-card").collapsed).toBe(false);
+      expect(findWidget(store.read(), "ops", "revenue-card").collapsed).toBe(false);
     });
   });
 });

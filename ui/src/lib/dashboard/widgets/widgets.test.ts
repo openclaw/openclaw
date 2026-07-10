@@ -147,10 +147,9 @@ describe("sessions mapping", () => {
 
 describe("usage mapping", () => {
   it("reads today cost + tokens from usage.cost totals", () => {
-    const model = mapUsage(widget(), { totals: { totalCost: 3.2, totalTokens: 999 }, days: 1 });
+    const model = mapUsage(widget(), { totals: { totalCost: 3.2, totalTokens: 999 } });
     expect(model.cost).toBe(3.2);
     expect(model.tokens).toBe(999);
-    expect(model.days).toBe(1);
   });
 
   it("defaults to zero on an empty payload", () => {
@@ -294,6 +293,21 @@ describe("iframe-embed render × sandbox mode", () => {
       '[data-test-id="dashboard-embed-frame"]',
     );
     expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+  });
+
+  it("never grants allow-same-origin, even when the operator trusts chat embeds", () => {
+    // `props.url` is agent-authored and a builtin needs no approval, so a
+    // same-origin scripted frame would hand the widget the parent's origin.
+    const container = renderToContainer(
+      renderIframeEmbed(widget({ props: { url: "/preview" } }), null, {
+        embed: { embedSandboxMode: "trusted", allowExternalEmbedUrls: false },
+      }),
+    );
+    const frame = container.querySelector<HTMLIFrameElement>(
+      '[data-test-id="dashboard-embed-frame"]',
+    );
+    expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame?.getAttribute("sandbox")).not.toContain("allow-same-origin");
   });
 
   it("shows a blocked placeholder for an external URL under strict policy", () => {

@@ -1,8 +1,13 @@
 // builtin:iframe-embed — an embedded URL (dev-server preview, hosted report).
-// `props.url` supplies the src. The frame is sandboxed via
-// `resolveEmbedSandbox(config.embedSandboxMode)` and external http(s) URLs are
-// blocked unless `config.allowExternalEmbedUrls` — mirroring the chat embed
-// policy exactly (see ui/src/lib/chat/tool-display.ts + ui/src/app/config.ts).
+//
+// `props.url` is authored by whoever added the widget, which includes an agent —
+// and a builtin needs no approval. So this embed is capped at the `"scripts"`
+// sandbox ceiling: `embedSandboxMode: "trusted"` grants `allow-same-origin` for
+// chat embeds, and a same-origin scripted frame pointed at the Control UI could
+// read the parent's storage and script it. The chat path avoids this by allowing
+// same-origin only for canvas host paths (`sanitizeCanvasEntryUrl`); here the
+// ceiling does the same job without a path allowlist.
+// External http(s) URLs stay blocked unless `config.allowExternalEmbedUrls`.
 
 import { html, type TemplateResult } from "lit";
 import { t } from "../../../i18n/index.ts";
@@ -10,6 +15,12 @@ import { resolveEmbedSandbox } from "../../chat/tool-display.ts";
 import type { DashboardWidget } from "../types.ts";
 import type { BuiltinWidgetContext } from "./types.ts";
 import { widgetProps } from "./types.ts";
+
+/**
+ * Hard cap on the embed sandbox. `allow-same-origin` is never granted, whatever
+ * the operator configured for chat embeds — see the module comment.
+ */
+const EMBED_SANDBOX_CEILING = "scripts" as const;
 
 export type EmbedUrlDecision =
   | { status: "missing" }
@@ -77,7 +88,7 @@ export function renderIframeEmbed(
     data-test-id="dashboard-embed-frame"
     src=${decision.url}
     title=${widget.title}
-    sandbox=${resolveEmbedSandbox(ctx.embed.embedSandboxMode)}
+    sandbox=${resolveEmbedSandbox(ctx.embed.embedSandboxMode, EMBED_SANDBOX_CEILING)}
     referrerpolicy="no-referrer"
     loading="lazy"
   ></iframe>`;

@@ -38,21 +38,21 @@ function formatStatValue(value: unknown, format: unknown): string | null {
   }
   const numeric = toFiniteNumber(value);
   if (format === "usd" && numeric !== undefined) {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(numeric);
+    return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(numeric);
   }
   if (format === "percent" && numeric !== undefined) {
-    return new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 1 }).format(
+    return new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 1 }).format(
       numeric,
     );
   }
   if ((format === "int" || format === "integer") && numeric !== undefined) {
-    return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(numeric);
+    return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(numeric);
   }
   if (typeof value === "string") {
     return value;
   }
   if (numeric !== undefined) {
-    return new Intl.NumberFormat("en-US").format(numeric);
+    return new Intl.NumberFormat(undefined).format(numeric);
   }
   return JSON.stringify(value);
 }

@@ -181,7 +181,7 @@ describe("dashboard CLI", () => {
       const store = new DashboardStore({ stateDir });
       installGatewayMock(store);
       const program = createProgram(stateDir);
-      const before = await store.read();
+      const before = store.read();
       const replacement = structuredClone(before);
       replacement.tabs[0]!.title = "Renamed";
       const filePath = path.join(stateDir, "workspace.json");
@@ -192,7 +192,7 @@ describe("dashboard CLI", () => {
           from: "user",
         });
       });
-      expect((await store.read()).tabs[0]?.title).toBe("Renamed");
+      expect(store.read().tabs[0]?.title).toBe("Renamed");
 
       await fs.writeFile(filePath, JSON.stringify({ schemaVersion: 1 }), "utf8");
       await expect(
@@ -270,7 +270,7 @@ describe("dashboard CLI", () => {
       await run(["dashboard", "layout", "undo"]);
       await run(["dashboard", "tabs", "delete", "other"]);
 
-      const doc = await store.read();
+      const doc = store.read();
       expect(doc.prefs.tabOrder).toContain("ops");
       expect(doc.tabs.some((tab) => tab.slug === "other")).toBe(false);
     });

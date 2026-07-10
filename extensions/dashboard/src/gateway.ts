@@ -374,7 +374,7 @@ export function registerDashboardGatewayMethods(options: DashboardGatewayMethodO
         const params = readParams(opts.params, ["slug", "title", "icon"]);
         const title = readRequiredString(params, "title", "title");
         const icon = readOptionalString(params, "icon");
-        const result = await store.mutate(
+        const result = store.mutate(
           (draft) => {
             const slug =
               params.slug === undefined ? makeUniqueSlug(title, draft.tabs) : readSlug(params);

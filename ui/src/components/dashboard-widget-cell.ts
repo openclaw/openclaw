@@ -243,8 +243,9 @@ export function renderWidgetBody(
   custom?: DashboardCustomWidgetContext,
 ): TemplateResult {
   try {
-    // Custom widgets (L5) dispatch here, inside the same error boundary so a throw
-    // while building the host still isolates to this cell.
+    // Builtins render eagerly inside this try. Custom widgets mount through a Lit
+    // directive whose render runs at commit time — outside this catch — so it
+    // carries its own boundary (`CustomWidgetFrameDirective.render`).
     if (widget.kind.startsWith("custom:") && custom) {
       return renderCustomWidget(widget, custom);
     }

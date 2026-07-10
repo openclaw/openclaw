@@ -52,7 +52,7 @@ async function withApprovedWidget<T>(
     await fs.writeFile(path.join(widgetDir, "index.html"), "<!doctype html><h1>ok</h1>");
     await fs.writeFile(path.join(widgetDir, "app.js"), "console.log(1)");
     await fs.writeFile(path.join(widgetDir, "secret.mjs"), "export const x = 1");
-    await store.mutate(
+    store.mutate(
       (draft) => {
         draft.widgetsRegistry["revenue-chart"] = {
           status: "approved",
@@ -214,7 +214,7 @@ describe("serveWidgetAsset security jail", () => {
       const pendingDir = path.join(stateDir, "dashboard", "widgets", "pending-widget");
       await fs.mkdir(pendingDir, { recursive: true });
       await fs.writeFile(path.join(pendingDir, "index.html"), "<h1>pending</h1>");
-      await store.mutate(
+      store.mutate(
         (draft) => {
           draft.widgetsRegistry["pending-widget"] = { status: "pending", createdBy: "agent:x" };
         },
@@ -235,7 +235,7 @@ describe("serveWidgetAsset security jail", () => {
       const rejectedDir = path.join(stateDir, "dashboard", "widgets", "rejected-widget");
       await fs.mkdir(rejectedDir, { recursive: true });
       await fs.writeFile(path.join(rejectedDir, "index.html"), "<h1>rejected</h1>");
-      await store.mutate(
+      store.mutate(
         (draft) => {
           draft.widgetsRegistry["rejected-widget"] = { status: "rejected", createdBy: "agent:x" };
         },

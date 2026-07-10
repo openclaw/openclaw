@@ -76,6 +76,28 @@ describe("dashboard grid math", () => {
     expect(collides(slot!, widgets, "b")).toBe(false);
   });
 
+  it("prefers a slot directly below over a far slot on the requested row", () => {
+    // Row 0 is free only at x=10 (distance 10). Directly below the requested
+    // column is free at distance 1 — that is the slot a user expects on drop.
+    const widgets = [widget("a", 0, 0, 10, 1)];
+    expect(nearestFreeSlot({ x: 0, y: 0, w: 2, h: 1 }, widgets, "b")).toEqual({
+      x: 0,
+      y: 1,
+      w: 2,
+      h: 1,
+    });
+  });
+
+  it("clamps y and h to the bounds the store enforces", () => {
+    expect(clampRect({ x: 0, y: 900, w: 2, h: 40 })).toEqual({ x: 0, y: 499, w: 2, h: 20 });
+    expect(nudgeRect({ x: 0, y: 499, w: 2, h: 1 }, "move", "down")).toEqual({
+      x: 0,
+      y: 499,
+      w: 2,
+      h: 1,
+    });
+  });
+
   it("renders 1-based grid placement CSS", () => {
     expect(gridPlacementStyle({ x: 0, y: 0, w: 4, h: 2 })).toBe(
       "grid-column: 1 / span 4; grid-row: 1 / span 2",

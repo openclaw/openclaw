@@ -225,7 +225,7 @@ class CustomWidgetFrameDirective extends AsyncDirective {
     widget: DashboardWidget;
     manifest: WidgetManifestView;
     context: CustomWidgetHostContext;
-  }): HTMLIFrameElement {
+  }): HTMLElement {
     const name = params.widget.kind.slice("custom:".length);
     const src = widgetAssetUrl(params.context.basePath, name, "index.html");
     const nextKey = `${params.widget.id}::${src}`;
@@ -233,24 +233,39 @@ class CustomWidgetFrameDirective extends AsyncDirective {
       return this.iframe;
     }
     this.detach?.();
-    const iframe = document.createElement("iframe");
-    // CONSTANT sandbox — do not templatize. Only script execution is granted.
-    iframe.setAttribute("sandbox", "allow-scripts");
-    iframe.setAttribute("referrerpolicy", "no-referrer");
-    iframe.setAttribute("loading", "lazy");
-    iframe.className = "dashboard-widget__frame";
-    iframe.title = params.widget.title;
-    iframe.src = src;
-    iframe.setAttribute("data-test-id", "dashboard-custom-widget-frame");
-    this.detach = attachWidgetBridge({
-      iframe,
-      widget: params.widget,
-      manifest: params.manifest,
-      context: params.context,
-    });
-    this.iframe = iframe;
-    this.key = nextKey;
-    return iframe;
+    try {
+      const iframe = document.createElement("iframe");
+      // CONSTANT sandbox — do not templatize. Only script execution is granted.
+      iframe.setAttribute("sandbox", "allow-scripts");
+      iframe.setAttribute("referrerpolicy", "no-referrer");
+      iframe.setAttribute("loading", "lazy");
+      iframe.className = "dashboard-widget__frame";
+      iframe.title = params.widget.title;
+      iframe.src = src;
+      iframe.setAttribute("data-test-id", "dashboard-custom-widget-frame");
+      this.detach = attachWidgetBridge({
+        iframe,
+        widget: params.widget,
+        manifest: params.manifest,
+        context: params.context,
+      });
+      this.iframe = iframe;
+      this.key = nextKey;
+      return iframe;
+    } catch (error) {
+      // A directive's render runs at Lit COMMIT time, outside the try/catch in
+      // `renderWidgetBody`. A throw here would escape the per-cell error boundary
+      // and take down the whole tab, so the boundary has to exist here too.
+      this.detach = null;
+      this.iframe = null;
+      this.key = "";
+      const fallback = document.createElement("div");
+      fallback.className = "dashboard-widget__error";
+      fallback.setAttribute("role", "alert");
+      fallback.setAttribute("data-test-id", "dashboard-custom-widget-error");
+      fallback.textContent = error instanceof Error ? error.message : String(error);
+      return fallback;
+    }
   }
 
   override disconnected(): void {
