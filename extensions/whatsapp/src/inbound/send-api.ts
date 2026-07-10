@@ -182,7 +182,9 @@ async function persistAndResolveOutboundLidMapping(params: {
     phoneDigits: params.phoneDigits,
     lidJid: params.lidJid,
   });
-  const resolved = toWhatsappJidWithLid(params.recipient, { authDir: params.authDir });
+  const resolved =
+    normalizeDirectLidJid(params.lidJid) ??
+    toWhatsappJidWithLid(params.recipient, { authDir: params.authDir });
   if (resolved !== params.localJid) {
     outboundTokenLogger.info(
       {

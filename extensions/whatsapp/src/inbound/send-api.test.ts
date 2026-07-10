@@ -698,6 +698,23 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
     );
   });
 
+  it("returns the discovered LID when the recipient is already a PN JID", async () => {
+    const getLIDForPN = vi.fn(async () => "222333@lid");
+    const api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate, getLIDForPN },
+      defaultAccountId: "main",
+      authDir,
+    });
+
+    await api.sendMessage("18888880000@s.whatsapp.net", "hello");
+
+    expect(getLIDForPN).toHaveBeenCalledWith("18888880000@s.whatsapp.net");
+    expect(sendMessage).toHaveBeenCalledWith("222333@lid", { text: "hello" });
+    expect(fs.readFileSync(path.join(authDir, "lid-mapping-18888880000.json"), "utf8")).toBe(
+      '"222333"\n',
+    );
+  });
+
   it("fails before sendMessage when reachout timelock is active without a trusted-contact token", async () => {
     const keysGet = vi.fn(async () => ({}));
     const keys = {
