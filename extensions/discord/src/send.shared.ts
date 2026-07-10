@@ -14,7 +14,6 @@ import {
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
-import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { chunkDiscordTextWithMode } from "./chunk.js";
@@ -27,6 +26,7 @@ import {
 } from "./internal/discord.js";
 import { parseAndResolveRecipient } from "./recipient-resolution.js";
 import { resolveDiscordReplyMessageId, type DiscordReplyReference } from "./reply-reference.js";
+import type { DiscordRetryRunner } from "./retry.js";
 import { fetchChannelPermissionsDiscord, isThreadChannelType } from "./send.permissions.js";
 import { DiscordSendError } from "./send.types.js";
 
@@ -41,7 +41,7 @@ const DISCORD_UPLOAD_TOO_LARGE_STATUS = 413;
 const DISCORD_UPLOAD_TOO_LARGE_NOTICE =
   "Attachment skipped: Discord rejected the file as too large.";
 
-type DiscordRequest = RetryRunner;
+type DiscordRequest = DiscordRetryRunner;
 
 export {
   buildDiscordMessagePayload,
@@ -371,6 +371,7 @@ async function sendDiscordText(params: DiscordTextSendParams) {
     const result = (await request(
       () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
       "text",
+      { nonIdempotent: true },
     )) as { id: string; channel_id: string };
     return { result, replyToId: chunkReplyTo };
   };
@@ -470,6 +471,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
     res = (await request(
       () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
       "media",
+      { nonIdempotent: true },
     )) as { id: string; channel_id: string };
   } catch (err) {
     if (!isDiscordUploadTooLargeError(err)) {

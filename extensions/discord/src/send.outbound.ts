@@ -249,6 +249,7 @@ export async function sendMessageDiscord(
             },
           ),
         "forum-thread",
+        { nonIdempotent: true },
       )) as { id: string; message?: { id: string; channel_id: string } };
     } catch (err) {
       throw await buildDiscordSendError(err, {
@@ -444,6 +445,7 @@ export async function sendStickerDiscord(
         },
       }),
     "sticker",
+    { nonIdempotent: true },
   )) as { id: string; channel_id: string };
   return toDiscordSendResult(res, channelId, { kind: "card" });
 }
@@ -470,6 +472,7 @@ export async function sendPollDiscord(
         },
       }),
     "poll",
+    { nonIdempotent: true },
   )) as { id: string; channel_id: string };
   return toDiscordSendResult(res, channelId, { kind: "card" });
 }

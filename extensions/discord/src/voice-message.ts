@@ -26,7 +26,6 @@ import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
-import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -35,6 +34,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DiscordError, RateLimitError, type RequestClient } from "./internal/discord.js";
 import { readDiscordMessage, readRetryAfter } from "./internal/rest-errors.js";
 import { DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS } from "./monitor/timeouts.js";
+import type { DiscordRetryRunner } from "./retry.js";
 
 const DISCORD_VOICE_MESSAGE_FLAG = 1 << 13;
 const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
@@ -406,7 +406,7 @@ export async function sendDiscordVoiceMessage(
   audioBuffer: Buffer,
   metadata: VoiceMessageMetadata,
   replyTo: string | undefined,
-  request: RetryRunner,
+  request: DiscordRetryRunner,
   silent?: boolean,
   token?: string,
 ): Promise<{ id: string; channel_id: string }> {
@@ -482,6 +482,7 @@ export async function sendDiscordVoiceMessage(
         body: messagePayload,
       }) as Promise<{ id: string; channel_id: string }>,
     "voice-message",
+    { nonIdempotent: true },
   )) as { id: string; channel_id: string };
 
   return res;
