@@ -3199,6 +3199,16 @@ function appendToolOutputDeltaText(
   originalLengthByItem.set(itemId, originalLength);
   const normalizedLength = updateToolOutputTrimState(trimStateByItem, itemId, delta);
   normalizedLengthByItem.set(itemId, normalizedLength);
+  // Lengths keep growing after truncation for echo matching + the notice total;
+  // the stored raw prefix freezes so later deltas cannot fill UTF-16 capacity
+  // recovered by backing up over a split surrogate pair (see class field comment).
+  if (truncatedItemIds.has(itemId)) {
+    const frozenPrefix = outputPrefixByItem.get(itemId) ?? outputTextByItem.get(itemId) ?? "";
+    const next = appendBoundedToolTranscriptText(frozenPrefix, "", originalLength);
+    outputPrefixByItem.set(itemId, next.rawPrefix);
+    outputTextByItem.set(itemId, next.text);
+    return { text: next.text, originalLength, normalizedLength, rawPrefix: next.rawPrefix };
+  }
   const currentPrefix = outputPrefixByItem.get(itemId) ?? outputTextByItem.get(itemId) ?? "";
   const next = appendBoundedToolTranscriptText(currentPrefix, delta, originalLength);
   outputPrefixByItem.set(itemId, next.rawPrefix);

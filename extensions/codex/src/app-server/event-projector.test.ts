@@ -3580,6 +3580,77 @@ describe("CodexAppServerEventProjector", () => {
     expect(item.content).toContain("showing 10000");
   });
 
+  it("freezes streamed raw prefix after UTF-16-safe truncation so full-output echoes stay suppressed", async () => {
+    const projector = await createProjector();
+    // First over-cap delta ends mid-surrogate: truncateUtf16Safe backs up and
+    // leaves spare capacity under the notice budget. Later deltas must not fill it.
+    const prefix = "a".repeat(9_886);
+    const firstDelta = `${prefix}😀${"a".repeat(400)}`;
+    const moreDeltas = ["more-after-cap-1", "more-after-cap-2", "tail-chunk"];
+    const fullOutput = `${firstDelta}${moreDeltas.join("")}`;
+
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-freeze-prefix",
+        delta: firstDelta,
+      }),
+    );
+    for (const delta of moreDeltas) {
+      await projector.handleNotification(
+        forCurrentTurn("item/commandExecution/outputDelta", {
+          itemId: "cmd-freeze-prefix",
+          delta,
+        }),
+      );
+    }
+
+    const echoState = projector as unknown as {
+      toolProgressEchoesByItem: Map<
+        string,
+        {
+          streamedRawSignature?: { length: number; prefix: string };
+        }
+      >;
+    };
+    const state = echoState.toolProgressEchoesByItem.get("cmd-freeze-prefix");
+    expect(state?.streamedRawSignature).toBeDefined();
+    expect(fullOutput.startsWith(state!.streamedRawSignature!.prefix)).toBe(true);
+    expect(state!.streamedRawSignature!.length).toBe(fullOutput.length);
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "raw-freeze-full-output",
+          role: "assistant",
+          content: [{ type: "output_text", text: fullOutput }],
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-freeze-prefix",
+          command: "printf output",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastAssistant).toBeUndefined();
+    expect(result.currentAttemptAssistant).toBeUndefined();
+  });
+
   it("keeps streaming after output text includes the truncation notice prefix", async () => {
     const trajectoryRecorder = {
       filePath: "trajectory.jsonl",
