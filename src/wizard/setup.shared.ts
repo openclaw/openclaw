@@ -63,11 +63,15 @@ export async function writeWizardConfigFile(
   let config = configInput;
   const allowConfigSizeDrop = opts.allowConfigSizeDrop === true;
   if (!allowConfigSizeDrop && hasPendingPluginInstallRecords(config)) {
-    const migrationBaseConfig = opts.migrationBaseConfig;
-    if (!migrationBaseConfig) {
-      throw new Error("Wizard config writes with pending plugin installs require a migration base.");
+    // Explicit undefined means this writer already migrated its baseline; an omitted
+    // key cannot distinguish fresh pending records from stale authored metadata.
+    if (!Object.hasOwn(opts, "migrationBaseConfig")) {
+      throw new Error(
+        "Wizard config writes with pending plugin installs must declare migration ownership.",
+      );
     }
-    if (hasPendingPluginInstallRecords(migrationBaseConfig)) {
+    const migrationBaseConfig = opts.migrationBaseConfig;
+    if (migrationBaseConfig && hasPendingPluginInstallRecords(migrationBaseConfig)) {
       await commitConfigWriteWithPendingPluginInstalls({
         nextConfig: migrationBaseConfig,
         sourceConfig: migrationBaseConfig,

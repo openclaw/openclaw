@@ -34,7 +34,7 @@ describe("writeWizardConfigFile pending install ownership", () => {
 
     await expect(
       writeWizardConfigFile(config, { allowConfigSizeDrop: false }),
-    ).rejects.toThrow("require a migration base");
+    ).rejects.toThrow("declare migration ownership");
     expect(mocks.commitConfigWriteWithPendingPluginInstalls).not.toHaveBeenCalled();
   });
 
@@ -57,5 +57,21 @@ describe("writeWizardConfigFile pending install ownership", () => {
       }),
     );
     expect(mocks.commitConfigWriteWithPendingPluginInstalls).toHaveBeenCalledTimes(2);
+  });
+
+  it("commits fresh pending records after baseline migration is complete", async () => {
+    const config: OpenClawConfig = {
+      plugins: { installs: { fresh: { source: "npm", spec: "fresh@1.0.0" } } },
+    };
+
+    await writeWizardConfigFile(config, {
+      allowConfigSizeDrop: false,
+      migrationBaseConfig: undefined,
+    });
+
+    expect(mocks.commitConfigWriteWithPendingPluginInstalls).toHaveBeenCalledOnce();
+    expect(mocks.commitConfigWriteWithPendingPluginInstalls).toHaveBeenCalledWith(
+      expect.objectContaining({ nextConfig: config }),
+    );
   });
 });
