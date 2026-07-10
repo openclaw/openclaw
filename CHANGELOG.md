@@ -26,6 +26,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **OpenAI-compatible streamed tool calls:** execute complete native tool calls from streams that end with SSE `data: [DONE]` but omit `finish_reason`, while keeping transport EOF and visible-text cases fail-closed. (#98124, #97994) Thanks @SunnyShu0925.
+- **xAI provider aliases:** preserve Grok 4.3 and Grok 4.5 thinking profiles, fast-model routing, and encrypted reasoning replay when models use the shipped `x-ai` provider alias instead of clamping valid thinking requests to `minimal`. (#103315)
 - **Doctor state isolation:** prevent automated update and Gateway watch repair from importing and archiving default-home exec or plugin-binding approvals when `OPENCLAW_STATE_DIR` points elsewhere, keep implicit CLI preflight notice-only, and reserve cross-state imports for direct operator doctor runs. (#103247, #103317)
 - **Doctor clean-state guidance:** stop suggesting `openclaw doctor --fix` after a clean run with no config changes while preserving targeted repair hints. (#103233)
 - **Google music generation:** retry one unblocked Lyria response that omits its contractually required audio while keeping prompt blocks and terminal generation stops non-retryable. (#103318)
