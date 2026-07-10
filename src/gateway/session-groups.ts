@@ -3,7 +3,8 @@
 // which groups exist, their display order, and bulk member category updates.
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAllAgentSessionStoreTargetsSync, updateSessionStore } from "../config/sessions.js";
+import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions.js";
+import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -159,24 +160,24 @@ async function updateMemberCategories(
 ): Promise<number> {
   let updated = 0;
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg, { env })) {
-    updated += await updateSessionStore(
-      target.storePath,
-      (store) => {
-        let count = 0;
-        for (const entry of Object.values(store)) {
-          if (entry.category?.trim() === from) {
-            if (to === undefined) {
-              delete entry.category;
-            } else {
-              entry.category = to;
-            }
-            count += 1;
+    updated += await applySessionEntryReplacements<number>({
+      storePath: target.storePath,
+      update: (entries) => {
+        const replacements = entries.flatMap(({ sessionKey, entry }) => {
+          if (entry.category?.trim() !== from) {
+            return [];
           }
-        }
-        return count;
+          const next = { ...entry };
+          if (to === undefined) {
+            delete next.category;
+          } else {
+            next.category = to;
+          }
+          return [{ sessionKey, entry: next }];
+        });
+        return { replacements, result: replacements.length };
       },
-      { skipSaveWhenResult: (count) => count === 0 },
-    );
+    });
   }
   return updated;
 }
