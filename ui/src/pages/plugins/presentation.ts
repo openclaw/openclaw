@@ -153,7 +153,11 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
       kind: "mcp",
       mcp: {
         serverName: "github",
-        config: { url: "https://api.githubcopilot.com/mcp/", auth: "oauth" },
+        config: {
+          url: "https://api.githubcopilot.com/mcp/",
+          transport: "streamable-http",
+          auth: "oauth",
+        },
         followUp: "oauth",
         docsUrl:
           "https://docs.github.com/en/copilot/customizing-copilot/using-model-context-protocol/using-the-github-mcp-server",
@@ -168,7 +172,7 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
       kind: "mcp",
       mcp: {
         serverName: "notion",
-        config: { url: "https://mcp.notion.com/mcp", auth: "oauth" },
+        config: { url: "https://mcp.notion.com/mcp", transport: "streamable-http", auth: "oauth" },
         followUp: "oauth",
         docsUrl: "https://developers.notion.com/docs/mcp",
       },
@@ -196,7 +200,7 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
       kind: "mcp",
       mcp: {
         serverName: "sentry",
-        config: { url: "https://mcp.sentry.dev/mcp", auth: "oauth" },
+        config: { url: "https://mcp.sentry.dev/mcp", transport: "streamable-http", auth: "oauth" },
         followUp: "oauth",
         docsUrl: "https://docs.sentry.io/product/sentry-mcp/",
       },

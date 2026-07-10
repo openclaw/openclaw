@@ -116,7 +116,10 @@ const MCP_SERVER_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 
 function parseMcpTarget(target: string): Record<string, unknown> | null {
   if (/^https?:\/\//i.test(target)) {
-    return { url: target };
+    // The runtime defaults URL-only servers to SSE; modern MCP endpoints are
+    // streamable HTTP unless the /sse path convention says otherwise.
+    const transport = /\/sse\/?$/i.test(target.split("?")[0] ?? target) ? "sse" : "streamable-http";
+    return { url: target, transport };
   }
   const parts = target.split(/\s+/u).filter(Boolean);
   const [command, ...args] = parts;

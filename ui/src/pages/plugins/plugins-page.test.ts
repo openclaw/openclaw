@@ -684,7 +684,11 @@ describe("PluginsPage", () => {
     };
     expect(patchArgs.note).toContain("context7");
     expect(patchArgs.raw).toEqual({
-      mcp: { servers: { context7: { url: "https://mcp.context7.com/mcp" } } },
+      mcp: {
+        servers: {
+          context7: { url: "https://mcp.context7.com/mcp", transport: "streamable-http" },
+        },
+      },
     });
     await vi.waitFor(() =>
       expect(page.querySelector('[role="status"].plugins-row-message')?.textContent).toContain(
