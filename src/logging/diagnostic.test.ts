@@ -640,6 +640,19 @@ describe("stuck session diagnostics threshold", () => {
         queued: 0,
       }),
     );
+
+    // The forced warning above bypassed the normal cooldown gate, so it must
+    // also restart that gate's clock — otherwise the next cooldown-based
+    // sample (still counting from tick 1's earlier debug sample) fires only
+    // ~60s later at tick 5 (t=150s) instead of a full 120s after this
+    // warning (t=210s).
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(30_000); // tick 4, t=120s
+    vi.advanceTimersByTime(30_000); // tick 5, t=150s — old bug fired here
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(60_000); // tick 7, t=210s — full cooldown since t=90s
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    expect(warnSpy).toHaveBeenLastCalledWith(expect.stringContaining("sustainedIdleStallTicks=7"));
   });
 
   it("counts a single very-delayed heartbeat tick as multiple stall ticks (#34)", () => {

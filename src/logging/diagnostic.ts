@@ -829,6 +829,11 @@ export function startDiagnosticHeartbeat(
       emitDiagnosticLivenessWarning(livenessSample, work, consecutiveIdleLivenessStallTicks);
       if (idleStallJustSustained) {
         hasEmittedSustainedIdleStallWarning = true;
+        // This bypassed the normal cooldown gate above, so push its clock
+        // forward too — otherwise the next natural cooldown-gated sample
+        // (still counting from the earlier debug-level sample) can fire only
+        // ~60s later instead of the full cooldown window after this warning.
+        lastDiagnosticLivenessEventAt = now;
       }
     }
 
