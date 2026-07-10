@@ -6,6 +6,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { clearPluginCachesForInProcessRestart, loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
+  makeTempDir,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
   writePlugin,
@@ -127,5 +128,68 @@ describe("plugin loader in-process restart reload", () => {
     const reloaded = loadOpenClawPlugins({ config });
     expect(loadedToolNames(reloaded)).toContain("helper_tool_v2");
     expect(loadedToolNames(reloaded)).not.toContain("helper_tool_v1");
+  });
+
+  it("evicts package-root modules for nested entrypoints on restart (#103688 review)", () => {
+    useNoBundledPlugins();
+    // Layout: <root>/openclaw.plugin.json + package.json(main: dist/entry.cjs)
+    //         <root>/dist/entry.cjs  → requires ../lib/helper.cjs (OUTSIDE dist/)
+    const root = path.join(makeTempDir(), "nested-root-probe");
+    fs.mkdirSync(path.join(root, "dist"), { recursive: true });
+    fs.mkdirSync(path.join(root, "lib"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        name: "nested-root-probe",
+        main: "dist/entry.cjs",
+        openclaw: { extensions: ["dist/entry.cjs"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(root, "dist", "entry.cjs"),
+      `module.exports = {
+  id: "nested-root-probe",
+  register(api) {
+    const helper = require("../lib/helper.cjs");
+    api.registerTool({
+      name: helper.toolName,
+      description: "nested probe tool",
+      parameters: {},
+      execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+    });
+  },
+};`,
+      "utf-8",
+    );
+    const helperPath = path.join(root, "lib", "helper.cjs");
+    fs.writeFileSync(helperPath, 'module.exports = { toolName: "nested_tool_v1" };', "utf-8");
+    const writeNestedManifest = (toolName: string) => {
+      fs.writeFileSync(
+        path.join(root, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: "nested-root-probe",
+          configSchema: { type: "object", additionalProperties: false },
+          contracts: { tools: [toolName] },
+        }),
+        "utf-8",
+      );
+    };
+    writeNestedManifest("nested_tool_v1");
+    const config = {
+      plugins: { load: { paths: [root] }, allow: ["nested-root-probe"] },
+    };
+
+    expect(loadedToolNames(loadOpenClawPlugins({ config }))).toContain("nested_tool_v1");
+
+    // Edit only the module OUTSIDE the entrypoint directory: entry-dir-scoped
+    // eviction misses it, so the fresh entry pairs with a stale helper.
+    fs.writeFileSync(helperPath, 'module.exports = { toolName: "nested_tool_v2" };', "utf-8");
+    writeNestedManifest("nested_tool_v2");
+
+    clearPluginCachesForInProcessRestart();
+    const reloaded = loadOpenClawPlugins({ config });
+    expect(loadedToolNames(reloaded)).toContain("nested_tool_v2");
+    expect(loadedToolNames(reloaded)).not.toContain("nested_tool_v1");
   });
 });

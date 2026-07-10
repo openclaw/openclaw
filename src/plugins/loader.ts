@@ -343,7 +343,15 @@ const { scoped: pluginLoaderCacheState, fullWorkspace: fullWorkspacePluginLoader
 // Plugin entrypoints imported this process-lifetime; native-required JS lands in
 // Node's shared require.cache, which must be purged at the in-process restart
 // boundary or reloads re-serve stale module exports (#103571).
-const importedPluginModulePathsForRestart = new Set<string>();
+const importedPluginModulePathsForRestart = new Map<string, string | undefined>();
+
+// Records a plugin module import for restart-boundary eviction. rootDir, when known,
+// becomes the eviction dependencyRoot so nested entrypoints (e.g. dist/index.js)
+// still evict plugin-owned modules elsewhere under the package root.
+function recordPluginModuleImportForRestart(modulePath: string, rootDir?: string): void {
+  const existing = importedPluginModulePathsForRestart.get(modulePath);
+  importedPluginModulePathsForRestart.set(modulePath, rootDir ?? existing);
+}
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
   "gateway",
@@ -401,8 +409,8 @@ export function clearPluginCachesForInProcessRestart(): void {
   // helper.cjs beside the entry) through the existing native cache-clear owner, so a
   // fresh entrypoint is never paired with stale local exports while shared OpenClaw
   // and third-party singleton modules stay untouched.
-  for (const modulePath of importedPluginModulePathsForRestart) {
-    clearNativeRequireJavaScriptModuleCache(modulePath);
+  for (const [modulePath, rootDir] of importedPluginModulePathsForRestart) {
+    clearNativeRequireJavaScriptModuleCache(modulePath, rootDir ? { dependencyRoot: rootDir } : {});
   }
   importedPluginModulePathsForRestart.clear();
 }
@@ -513,7 +521,7 @@ function createPluginModuleLoader(options: {
     });
   };
   return (modulePath: string): unknown => {
-    importedPluginModulePathsForRestart.add(modulePath);
+    recordPluginModuleImportForRestart(modulePath);
     return createLoaderForModule(modulePath)(toSafeImportPath(modulePath));
   };
 }
@@ -2142,11 +2150,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         recordImportedPluginId(record.id);
         pluginLoadAttemptCount++;
         logger.debug?.(`[plugins] loading ${record.id} from ${safeSource}`);
-        mod = withProfile(
-          { pluginId: record.id, source: safeSource },
-          registrationMode,
-          () => loadPluginModule(safeSource) as OpenClawPluginModule,
-        );
+        mod = withProfile({ pluginId: record.id, source: safeSource }, registrationMode, () => {
+          recordPluginModuleImportForRestart(safeSource, record.rootDir);
+          return loadPluginModule(safeSource) as OpenClawPluginModule;
+        });
       } catch (err) {
         recordPluginError({
           logger,
