@@ -19,25 +19,19 @@ export function resetMemoryBatchFailureState(
   };
 }
 
-function normalizeFailureAttempts(value: number | undefined): number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 1;
-}
-
 export function recordMemoryBatchFailure(
   state: MemoryBatchFailureState,
   params: {
     provider: string;
     message: string;
-    attempts?: number;
+    attempts: 1 | 2;
     forceDisable?: boolean;
   },
 ): MemoryBatchFailureState {
   if (!state.enabled) {
     return state;
   }
-  const increment = params.forceDisable
-    ? MEMORY_BATCH_FAILURE_LIMIT
-    : normalizeFailureAttempts(params.attempts);
+  const increment = params.forceDisable ? MEMORY_BATCH_FAILURE_LIMIT : params.attempts;
   const count = state.count + increment;
   const enabled = !(params.forceDisable || count >= MEMORY_BATCH_FAILURE_LIMIT);
   return {
