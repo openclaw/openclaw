@@ -27,6 +27,9 @@ function writeFixture(params?: {
     recursive: true,
   });
   fs.mkdirSync(path.join(root, "apps", "android", "Config"), { recursive: true });
+  fs.mkdirSync(path.join(root, "apps", "android", "fastlane", "metadata", "android", "en-US"), {
+    recursive: true,
+  });
   fs.writeFileSync(
     path.join(root, "package.json"),
     `${JSON.stringify(
@@ -65,6 +68,34 @@ function writeFixture(params?: {
     )}\n`,
   );
   fs.writeFileSync(path.join(root, "apps", "android", "Config", "Version.properties"), "stale\n");
+  fs.writeFileSync(
+    path.join(root, "apps", "android", "CHANGELOG.md"),
+    [
+      "# Android Changelog",
+      "",
+      "## 2026.7.2",
+      "",
+      "- New release notes.",
+      "",
+      "## 2026.7.1",
+      "",
+      "- Previous release notes.",
+      "",
+    ].join("\n"),
+  );
+  fs.writeFileSync(
+    path.join(
+      root,
+      "apps",
+      "android",
+      "fastlane",
+      "metadata",
+      "android",
+      "en-US",
+      "release_notes.txt",
+    ),
+    "- Previous release notes.\n",
+  );
   return root;
 }
 
@@ -129,6 +160,21 @@ describe("release version planning", () => {
     expect(
       fs.readFileSync(path.join(root, "apps", "android", "Config", "Version.properties"), "utf8"),
     ).toContain("OPENCLAW_ANDROID_VERSION_CODE=2026070102");
+    expect(
+      fs.readFileSync(
+        path.join(
+          root,
+          "apps",
+          "android",
+          "fastlane",
+          "metadata",
+          "android",
+          "en-US",
+          "release_notes.txt",
+        ),
+        "utf8",
+      ),
+    ).toBe("- Previous release notes.\n");
   });
 
   it("starts a new Android train at its canonical build code", () => {
@@ -144,6 +190,21 @@ describe("release version planning", () => {
       version: "2026.7.2",
       versionCode: 2026070201,
     });
+    expect(
+      fs.readFileSync(
+        path.join(
+          root,
+          "apps",
+          "android",
+          "fastlane",
+          "metadata",
+          "android",
+          "en-US",
+          "release_notes.txt",
+        ),
+        "utf8",
+      ),
+    ).toBe("- New release notes.\n");
   });
 
   it("validates every selected file before writing any changes", () => {

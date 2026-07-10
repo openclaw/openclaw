@@ -5,11 +5,14 @@ import {
   canonicalAndroidVersionCode,
   normalizeAndroidVersionCode,
   normalizePinnedAndroidVersion,
+  renderAndroidReleaseNotes,
   renderAndroidVersionProperties,
 } from "./lib/android-version.ts";
 import { parseReleaseVersion } from "./lib/npm-publish-plan.mjs";
 
 const MACOS_INFO_PLIST = "apps/macos/Sources/OpenClaw/Resources/Info.plist";
+const ANDROID_CHANGELOG_FILE = "apps/android/CHANGELOG.md";
+const ANDROID_RELEASE_NOTES_FILE = "apps/android/fastlane/metadata/android/en-US/release_notes.txt";
 const ANDROID_VERSION_FILE = "apps/android/version.json";
 const ANDROID_VERSION_PROPERTIES_FILE = "apps/android/Config/Version.properties";
 
@@ -213,8 +216,12 @@ function planMacosInfoPlist(
 function planAndroidVersion(rootDir: string, baseVersion: string): ReleaseVersionChange[] {
   const versionPath = path.join(rootDir, ANDROID_VERSION_FILE);
   const propertiesPath = path.join(rootDir, ANDROID_VERSION_PROPERTIES_FILE);
+  const changelogPath = path.join(rootDir, ANDROID_CHANGELOG_FILE);
+  const releaseNotesPath = path.join(rootDir, ANDROID_RELEASE_NOTES_FILE);
   const versionContent = fs.readFileSync(versionPath, "utf8");
   const propertiesContent = fs.readFileSync(propertiesPath, "utf8");
+  const changelogContent = fs.readFileSync(changelogPath, "utf8");
+  const releaseNotesContent = fs.readFileSync(releaseNotesPath, "utf8");
   const manifest = JSON.parse(versionContent) as AndroidVersionManifest;
   const currentVersion =
     typeof manifest.version === "string" ? normalizePinnedAndroidVersion(manifest.version) : null;
@@ -229,6 +236,10 @@ function planAndroidVersion(rootDir: string, baseVersion: string): ReleaseVersio
     canonicalVersion: baseVersion,
     versionCode,
   });
+  const nextReleaseNotesContent = renderAndroidReleaseNotes(
+    { canonicalVersion: baseVersion },
+    changelogContent,
+  );
 
   return [
     {
@@ -240,6 +251,11 @@ function planAndroidVersion(rootDir: string, baseVersion: string): ReleaseVersio
       currentContent: propertiesContent,
       nextContent: nextPropertiesContent,
       path: propertiesPath,
+    },
+    {
+      currentContent: releaseNotesContent,
+      nextContent: nextReleaseNotesContent,
+      path: releaseNotesPath,
     },
   ];
 }
