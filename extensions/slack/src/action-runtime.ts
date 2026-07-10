@@ -223,6 +223,9 @@ export async function handleSlackAction(
   const accountId = readStringParam(params, "accountId");
   const { resolveSlackAccount } = await loadSlackAccountsRuntime();
   const account = resolveSlackAccount({ cfg, accountId });
+  if (account.config.enterpriseOrgInstall === true) {
+    throw new Error("Slack action tools are unavailable for Enterprise Grid org installs.");
+  }
   const actionConfig = account.actions ?? cfg.channels?.slack?.actions;
   const isActionEnabled = createActionGate(actionConfig);
   const userToken = account.userToken;

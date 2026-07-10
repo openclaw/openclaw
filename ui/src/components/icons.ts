@@ -136,6 +136,14 @@ export const icons = {
       <path d="M9 13v2" />
     </svg>
   `,
+  users: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  `,
 
   // UI icons
   menu: html`
@@ -217,6 +225,12 @@ export const icons = {
       <path d="m19 12-7 7-7-7" />
     </svg>
   `,
+  arrowLeft: html`
+    <svg viewBox="0 0 24 24">
+      <path d="m12 19-7-7 7-7" />
+      <path d="M19 12H5" />
+    </svg>
+  `,
   cornerDownRight: html`
     <svg viewBox="0 0 24 24">
       <polyline points="15 10 20 15 15 20" />
@@ -267,6 +281,25 @@ export const icons = {
       <path d="m4.9 19.1 2.9-2.9" />
       <path d="M2 12h4" />
       <path d="m4.9 4.9 2.9 2.9" />
+    </svg>
+  `,
+  calendarClock: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5" />
+      <path d="M16 2v4" />
+      <path d="M8 2v4" />
+      <path d="M3 10h5" />
+      <path d="M17.5 17.5 16 16.3V14" />
+      <circle cx="16" cy="16" r="6" />
+    </svg>
+  `,
+  listChecks: html`
+    <svg viewBox="0 0 24 24">
+      <path d="m3 17 2 2 4-4" />
+      <path d="m3 7 2 2 4-4" />
+      <path d="M13 6h8" />
+      <path d="M13 12h8" />
+      <path d="M13 18h8" />
     </svg>
   `,
 

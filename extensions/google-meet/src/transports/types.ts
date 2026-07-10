@@ -110,6 +110,8 @@ export type GoogleMeetSession = {
   url: string;
   transport: GoogleMeetTransport;
   mode: GoogleMeetMode;
+  /** Canonical agent owner for every later consult and bridge restart. */
+  agentId: string;
   state: GoogleMeetSessionState;
   createdAt: string;
   updatedAt: string;

@@ -26,6 +26,7 @@ import { generatedImageAssetFromBase64 } from "openclaw/plugin-sdk/image-generat
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import {
@@ -517,10 +518,10 @@ export class CodexAppServerEventProjector {
     { chars: number; messages: number; truncated: boolean }
   >();
   private readonly toolResultOutputTextByItem = new Map<string, string>();
-  private readonly toolMetas = new Map<
-    string,
-    { toolName: string; meta?: string; asyncStarted?: boolean }
-  >();
+  // Once an output delta crosses the transcript cap, later deltas must not fill
+  // UTF-16 capacity recovered by backing up over a split surrogate pair.
+  private readonly toolResultOutputTruncatedItemIds = new Set<string>();
+  private readonly toolMetas = new Map<string, EmbeddedRunAttemptResult["toolMetas"][number]>();
   private readonly terminalPresentationClearedItemIds = new Set<string>();
   private readonly nativeToolOutcomeOrdinals = new Map<string, number>();
   private readonly sideEffectingToolItemIds = new Set<string>();
@@ -878,14 +879,13 @@ export class CodexAppServerEventProjector {
     contentItems: CodexDynamicToolCallOutputContentItem[];
   }): void {
     const resultText = collectDynamicToolContentText(params.contentItems);
-    if (params.asyncStarted === true) {
-      const existing = this.toolMetas.get(params.callId);
-      this.toolMetas.set(params.callId, {
-        toolName: existing?.toolName ?? params.tool,
-        ...(existing?.meta ? { meta: existing.meta } : {}),
-        asyncStarted: true,
-      });
-    }
+    const existing = this.toolMetas.get(params.callId);
+    this.toolMetas.set(params.callId, {
+      toolName: existing?.toolName ?? params.tool,
+      ...(existing?.meta ? { meta: existing.meta } : {}),
+      ...(params.asyncStarted === true ? { asyncStarted: true } : {}),
+      ...(!params.success ? { isError: true } : {}),
+    });
     this.recordToolTranscriptResult({
       id: params.callId,
       name: params.tool,
@@ -1362,7 +1362,12 @@ export class CodexAppServerEventProjector {
     if (!itemId || !delta) {
       return;
     }
-    appendToolOutputDeltaText(this.toolResultOutputTextByItem, itemId, delta);
+    appendToolOutputDeltaText(
+      this.toolResultOutputTextByItem,
+      this.toolResultOutputTruncatedItemIds,
+      itemId,
+      delta,
+    );
     if (!this.shouldEmitToolOutput()) {
       return;
     }
@@ -2001,11 +2006,13 @@ export class CodexAppServerEventProjector {
       return;
     }
     const meta = itemMeta(item, this.toolProgressDetailMode());
+    const status = itemStatus(item);
     const existing = this.toolMetas.get(item.id);
     this.toolMetas.set(item.id, {
       toolName,
       ...(meta ? { meta } : {}),
       ...(existing?.asyncStarted ? { asyncStarted: true } : {}),
+      ...(status !== "running" && isNonSuccessItemStatus(status) ? { isError: true } : {}),
     });
   }
 
@@ -2538,7 +2545,6 @@ function readNonNegativeInteger(record: JsonObject, key: string): number | undef
   return value !== undefined && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
-
 function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
   const error = record.error;
   return isJsonObject(error) ? readString(error, "message") : undefined;
@@ -3028,16 +3034,25 @@ function itemTranscriptResultText(
 
 function appendToolOutputDeltaText(
   outputTextByItem: Map<string, string>,
+  truncatedItemIds: Set<string>,
   itemId: string,
   delta: string,
 ): void {
+  if (truncatedItemIds.has(itemId)) {
+    return;
+  }
   const current = outputTextByItem.get(itemId) ?? "";
   if (current.length >= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
+    truncatedItemIds.add(itemId);
     return;
   }
   const remaining = TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS - current.length;
-  const next = current + (delta.length > remaining ? delta.slice(0, remaining) : delta);
+  const didTruncate = delta.length > remaining;
+  const next = current + (didTruncate ? truncateUtf16Safe(delta, remaining) : delta);
   outputTextByItem.set(itemId, next);
+  if (didTruncate) {
+    truncatedItemIds.add(itemId);
+  }
 }
 
 function normalizeToolTranscriptArguments(value: unknown): Record<string, unknown> {
@@ -3066,7 +3081,7 @@ function truncateToolTranscriptText(text: string): string {
   if (text.length <= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
     return text;
   }
-  return `${text.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS)}\n...(truncated)...`;
+  return `${truncateUtf16Safe(text, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS)}\n...(truncated)...`;
 }
 
 function toolResultStatusText(params: ToolTranscriptResultInput): string {

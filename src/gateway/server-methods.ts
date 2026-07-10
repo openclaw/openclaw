@@ -214,6 +214,10 @@ const loadTasksHandlers = lazyHandlerModule(
   () => import("./server-methods/tasks.js"),
   (module) => module.tasksHandlers,
 );
+const loadTaskSuggestionsHandlers = lazyHandlerModule(
+  () => import("./server-methods/task-suggestions.js"),
+  (module) => module.taskSuggestionsHandlers,
+);
 const loadToolsCatalogHandlers = lazyHandlerModule(
   () => import("./server-methods/tools-catalog.js"),
   (module) => module.toolsCatalogHandlers,
@@ -499,6 +503,15 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadTasksHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: [
+      "taskSuggestions.list",
+      "taskSuggestions.create",
+      "taskSuggestions.accept",
+      "taskSuggestions.dismiss",
+    ],
+    loadHandlers: loadTaskSuggestionsHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["tools.catalog"],
     loadHandlers: loadToolsCatalogHandlers,
   }),
@@ -598,12 +611,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
   ...createLazyCoreHandlers({
     methods: [
-      "node.pair.request",
       "node.pair.list",
       "node.pair.approve",
       "node.pair.reject",
       "node.pair.remove",
-      "node.pair.verify",
       "node.rename",
       "node.list",
       "node.describe",

@@ -8,7 +8,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type {
+  SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+} from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
@@ -71,7 +74,7 @@ import {
 } from "./local-model-lean.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawTools, filterToolsByClientCaps } from "./openclaw-tools.js";
 import type { SandboxContext } from "./sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
@@ -388,6 +391,8 @@ export function createOpenClawCodingTools(options?: {
   messageProvider?: string;
   /** Canonical transport channel when tool-policy provider differs from delivery channel. */
   messageChannel?: string;
+  /** Capabilities declared by the gateway client that originated this run. */
+  clientCaps?: string[];
   /** Normalized conversation kind when the caller already has channel metadata. */
   chatType?: ChatType;
   /** Specific ingress provider used only for transport tool availability. */
@@ -503,6 +508,8 @@ export function createOpenClawCodingTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** Visible source replies must be sent through the message tool when set to message_tool_only. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Action sink available for model-proposed follow-up tasks. */
+  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   inboundEventKind?: InboundEventKind;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
@@ -903,7 +910,9 @@ export function createOpenClawCodingTools(options?: {
   const shouldCaptureCronCreatorToolAllowlist = toolPolicyInheritanceSources.some(
     (policy) => hasRestrictiveAllowPolicy(policy) || hasExplicitDenyPolicy(policy),
   );
-  const pluginToolsOnly =
+  // Plugin-only plans bypass createOpenClawTools, so the capability gate must
+  // apply here too or narrow allowlists leak gated tools onto capless surfaces.
+  const pluginToolsOnly = filterToolsByClientCaps(
     includeOpenClawTools || !includePluginTools
       ? []
       : resolveOpenClawPluginToolsForOptions({
@@ -940,7 +949,9 @@ export function createOpenClawCodingTools(options?: {
             authProfileStore: options?.authProfileStore,
           },
           resolvedConfig: options?.config,
-        });
+        }),
+    options?.clientCaps,
+  );
   const toolSearchTools = toolSearchControlsEnabled
     ? createToolSearchTools({
         config: options?.config,
@@ -1008,8 +1019,14 @@ export function createOpenClawCodingTools(options?: {
           fsPolicy,
           workspaceDir: workspaceRoot,
           spawnWorkspaceDir: capabilityProfile.workspace.spawnWorkspaceRoot,
+          // Sandboxes execute against copied roots, but accepted suggestions create host
+          // worktrees. Unsandboxed task-repo sessions must stay on their runtime cwd.
+          cwd: sandbox
+            ? (capabilityProfile.workspace.spawnWorkspaceRoot ?? runtimeRoot)
+            : runtimeRoot,
           sandboxed: Boolean(sandbox),
           config: options?.config,
+          clientCaps: options?.clientCaps,
           pluginToolAllowlist,
           pluginToolDenylist,
           cronCreatorToolAllowlist: shouldCaptureCronCreatorToolAllowlist
@@ -1028,6 +1045,7 @@ export function createOpenClawCodingTools(options?: {
           modelHasVision: options?.modelHasVision,
           requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
           sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+          taskSuggestionDeliveryMode: options?.taskSuggestionDeliveryMode,
           inboundEventKind: options?.inboundEventKind,
           disableMessageTool: options?.disableMessageTool,
           enableHeartbeatTool,

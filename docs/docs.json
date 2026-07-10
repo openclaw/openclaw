@@ -20,9 +20,9 @@
   },
   "favicon": "/assets/pixel-lobster.svg",
   "colors": {
-    "primary": "#FF5A36",
-    "dark": "#FF5A36",
-    "light": "#FF8A6B"
+    "primary": "#D84A31",
+    "dark": "#E05540",
+    "light": "#F5654A"
   },
   "styling": {
     "codeblocks": {
@@ -1280,6 +1280,7 @@
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
                   "plugins/voice-call",
+                  "plugins/vault",
                   "plugins/memory-wiki",
                   "plugins/llama-cpp",
                   "plugins/memory-lancedb",
@@ -1329,6 +1330,7 @@
                   "tools/btw",
                   "tools/code-execution",
                   "tools/diffs",
+                  "tools/show-widget",
                   "tools/elevated",
                   "tools/permission-modes",
                   "tools/exec-approvals",
@@ -1483,6 +1485,7 @@
                   "providers/litellm",
                   "providers/lmstudio",
                   "providers/longcat",
+                  "providers/meta",
                   "providers/minimax",
                   "providers/mistral",
                   "providers/moonshot",
@@ -1695,6 +1698,7 @@
                   {
                     "group": "Node features",
                     "pages": [
+                      "nodes/computer-use",
                       "nodes/talk",
                       "nodes/voicewake",
                       "nodes/location-command"
@@ -1919,7 +1923,6 @@
               {
                 "group": "Project",
                 "pages": [
-                  "reference/application-modernization-plan",
                   "reference/credits"
                 ]
               },

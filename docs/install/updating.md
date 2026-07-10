@@ -8,6 +8,11 @@ title: "Updating"
 
 Keep OpenClaw up to date.
 
+For Docker, Podman, and Kubernetes image replacements, see
+[Upgrading container images](/install/docker#upgrading-container-images). The
+gateway runs startup-safe upgrade work before readiness and exits if mounted
+state needs manual repair.
+
 ## Recommended: `openclaw update`
 
 Detects your install type (npm or git), fetches the latest version, runs `openclaw doctor`, and restarts the gateway.
