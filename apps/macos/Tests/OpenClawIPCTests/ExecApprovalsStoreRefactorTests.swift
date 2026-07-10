@@ -368,7 +368,8 @@ struct ExecApprovalsStoreRefactorTests {
                 Issue.record("expected symlink-parent mutation failure")
                 return
             }
-            #expect(try Data(contentsOf: target) == permissive)
+            let persisted = try Data(contentsOf: target)
+            #expect(persisted == permissive)
             #expect(!FileManager().fileExists(atPath: redirected.appendingPathComponent(
                 "exec-approvals.json.lock").path))
         }
@@ -406,7 +407,8 @@ struct ExecApprovalsStoreRefactorTests {
                 Issue.record("expected configured symlink state directory mutation failure")
                 return
             }
-            #expect(try Data(contentsOf: target) == permissive)
+            let persisted = try Data(contentsOf: target)
+            #expect(persisted == permissive)
             #expect(!FileManager().fileExists(atPath: redirected.appendingPathComponent(
                 "exec-approvals.json.lock").path))
         }
