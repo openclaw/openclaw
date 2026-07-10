@@ -1160,12 +1160,15 @@ describe("Code Mode", () => {
     });
   });
 
-  it("does not throw when catalog contains prototype-named tool identifiers", () => {
-    // Tool names matching Object.prototype properties (toString, __proto__, etc.)
-    // must not cause the catalog initialization to throw. The use of Object.hasOwn
-    // in the controller source ensures these names are safely skipped.
+  it("safely skips prototype-named tools during QuickJS worker initialization", async () => {
+    // The Object.hasOwn guard in CONTROLLER_SOURCE runs inside the QuickJS VM,
+    // not on the host. A host-side catalog-compaction smoke test would not
+    // exercise the changed expression. This test goes through the real worker
+    // lifecycle so the VM evaluates the guard for every catalog entry, including
+    // tools whose names collide with Object.prototype properties.
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    const protoTools = ["toString", "__proto__", "constructor", "hasOwnProperty"].map((name) =>
+    const protoNames = ["toString", "__proto__", "constructor", "hasOwnProperty"];
+    const protoTools = protoNames.map((name) =>
       mcpTool({
         name,
         serverName: "proto-test",
@@ -1178,16 +1181,37 @@ describe("Code Mode", () => {
       }),
     );
 
-    expect(() =>
-      applyCodeModeCatalog({
-        tools: [...codeModeTools, ...protoTools],
-        config,
-        sessionId: "session-code-mode",
-        sessionKey: "agent:main:main",
-        runId: "run-code-mode",
-        catalogRef,
-      }),
-    ).not.toThrow();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, ...protoTools],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    // Execute code inside the QuickJS worker — this is where CONTROLLER_SOURCE
+    // is evaluated, including the Object.hasOwn(baseTools, name) guard.
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: `
+        const builtins = ["search", "describe", "call"];
+        const missing = builtins.filter(function (b) { return typeof tools[b] !== "function"; });
+        return {
+          workerStarted: true,
+          allBuiltinsPresent: missing.length === 0,
+          missingBuiltins: missing,
+        };
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({
+      workerStarted: true,
+      allBuiltinsPresent: true,
+      missingBuiltins: [],
+    });
   });
 
   it("exposes registered namespace globals through the QuickJS bridge", async () => {
