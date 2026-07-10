@@ -5,7 +5,7 @@ import {
   type EventLoopReadyOptions,
   type EventLoopReadyResult,
 } from "./event-loop-ready.js";
-import { resolveConnectChallengeTimeoutMs } from "./timeouts.js";
+import { resolveConnectChallengeTimeoutMs, resolveFiniteTimeoutDelayMs } from "./timeouts.js";
 
 export type GatewayClientStartable = {
   start(): void;
@@ -30,7 +30,7 @@ function resolveGatewayClientStartReadinessTimeoutMs(
   options: GatewayClientStartReadinessOptions = {},
 ): number {
   if (typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs)) {
-    return options.timeoutMs;
+    return resolveFiniteTimeoutDelayMs(options.timeoutMs, 0, { minMs: 0 });
   }
   const clientOptions = options.clientOptions ?? {};
   return resolveConnectChallengeTimeoutMs(clientOptions.connectChallengeTimeoutMs, {

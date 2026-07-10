@@ -1,6 +1,7 @@
 // Gateway Client tests cover readiness behavior.
 import { describe, expect, it, vi } from "vitest";
 import { startGatewayClientWithReadinessWait } from "./readiness.js";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timeouts.js";
 
 describe("startGatewayClientWithReadinessWait", () => {
   it("uses the injected client env when resolving the readiness timeout", async () => {
@@ -21,6 +22,27 @@ describe("startGatewayClientWithReadinessWait", () => {
 
     expect(waitForReady).toHaveBeenCalledWith({
       maxWaitMs: 6_000,
+      signal: undefined,
+    });
+    expect(client.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("clamps explicit readiness timeouts before invoking the waiter", async () => {
+    const waitForReady = vi.fn(async () => ({
+      ready: true,
+      aborted: false,
+      elapsedMs: 0,
+      checks: 1,
+      maxDriftMs: 0,
+    }));
+    const client = { start: vi.fn() };
+
+    await startGatewayClientWithReadinessWait(waitForReady, client, {
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(waitForReady).toHaveBeenCalledWith({
+      maxWaitMs: MAX_SAFE_TIMEOUT_DELAY_MS,
       signal: undefined,
     });
     expect(client.start).toHaveBeenCalledTimes(1);
