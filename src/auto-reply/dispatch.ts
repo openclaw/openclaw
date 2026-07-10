@@ -11,7 +11,6 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
 import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
-import { logWarn } from "../logger.js";
 import { logMessageReceived } from "../logging/diagnostic.js";
 import { hasOutboundReplyContent } from "../plugin-sdk/reply-payload.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";

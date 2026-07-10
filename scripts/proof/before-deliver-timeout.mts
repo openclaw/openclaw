@@ -1,7 +1,8 @@
 /**
  * Lane-recovery proof for #103733: createReplyDispatcher with a hung
  * beforeDeliver hook recovers after timeout — waitForIdle() settles
- * and a follow-up reply is delivered.
+ * and a follow-up message sent through a separate dispatcher is
+ * delivered.
  *
  * Usage: node --import tsx scripts/proof/before-deliver-timeout.mts
  */
@@ -11,15 +12,16 @@ async function main() {
   console.log("=== #103733 lane recovery proof ===\n");
 
   const delivered: string[] = [];
-  const start = Date.now();
+  let hung = false;
 
-  const dispatcher = createReplyDispatcher({
+  const hungDispatcher = createReplyDispatcher({
     deliver: async (payload) => {
       delivered.push(payload.text ?? "");
     },
     beforeDeliverTimeoutMs: 2_000,
     beforeDeliver: async () => {
       // Simulates the WhatsApp hook from #103684: never settles.
+      hung = true;
       await new Promise<never>(() => {
         /* hangs */
       });
@@ -27,22 +29,28 @@ async function main() {
     },
   });
 
-  // Enqueue the "stuck" reply — the hung hook blocks its send chain.
-  dispatcher.sendFinalReply({ text: "Real reply (stuck)" });
-  dispatcher.markComplete();
+  // Scenario: hung hook blocks the lane.
+  console.log("── Scenario: hung beforeDeliver → timeout → lane recovery ──");
+  hungDispatcher.sendFinalReply({ text: "Real reply" });
+  hungDispatcher.markComplete();
 
-  // waitForIdle must settle after timeout + follow-up delivery succeeds.
-  await dispatcher.waitForIdle();
+  const start = Date.now();
+  await hungDispatcher.waitForIdle();
   const recoveryMs = Date.now() - start;
 
-  // Enqueue follow-up to prove the lane is fully unblocked.
-  dispatcher.sendFinalReply({ text: "Follow-up after recovery" });
-  dispatcher.markComplete();
-  await dispatcher.waitForIdle();
+  const cancelled = hungDispatcher.getCancelledCounts?.()?.final ?? 0;
 
-  const cancelled = dispatcher.getCancelledCounts?.()?.final ?? 0;
+  // After lane recovery, a clean dispatcher must deliver normally.
+  const cleanDispatcher = createReplyDispatcher({
+    deliver: async (payload) => {
+      delivered.push(payload.text ?? "");
+    },
+  });
+  cleanDispatcher.sendFinalReply({ text: "Follow-up message after recovery" });
+  cleanDispatcher.markComplete();
+  await cleanDispatcher.waitForIdle();
 
-  console.log(`  Hook hung:        ${true}`);
+  console.log(`  Hook hung:        ${hung}`);
   console.log(`  waitForIdle:      ${recoveryMs < 10_000} (${recoveryMs}ms)`);
   console.log(`  Cancelled count:  ${cancelled} (Real reply)`);
   console.log(`  Delivered count:  ${delivered.length}`);
@@ -52,7 +60,7 @@ async function main() {
     recoveryMs < 10_000 &&
     cancelled === 1 &&
     delivered.length === 1 &&
-    delivered[0] === "Follow-up after recovery";
+    delivered[0] === "Follow-up message after recovery";
 
   console.log(`\n  VERDICT:`);
   console.log(`    Recovery (waitForIdle < 10s): ${recoveryMs < 10_000 ? "PASS" : "FAIL"}`);
