@@ -102,6 +102,7 @@ export function buildEmbeddedRunBaseParams(params: {
     silentReplyPromptMode: params.run.silentReplyPromptMode,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
     clientCaps: params.run.clientCaps,
+    taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
     provider: params.provider,
     model: params.model,
     modelFallbacksOverride,

@@ -5,6 +5,7 @@
  * Each card answers a "what do I want to do?" question with status + actions.
  */
 
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
@@ -19,6 +20,12 @@ import {
   resolveLocalUserAvatarUrl,
 } from "../../app/user-identity.ts";
 import { icons } from "../../components/icons.ts";
+import { getLobsterdex, getLobsterdexEntries } from "../../components/lobster-dex.ts";
+import {
+  LOBSTER_PET_PALETTES,
+  canonicalLobsterLook,
+  renderLobsterSvg,
+} from "../../components/lobster-pet.ts";
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { resolveAssistantTextAvatar, resolveChatAvatarRenderUrl } from "../../lib/avatar.ts";
@@ -89,6 +96,10 @@ export type QuickSettingsProps = {
   onOpenCustomThemeImport?: () => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
   setTextScale: (value: number) => void;
+  lobsterPetVisits: boolean;
+  setLobsterPetVisits: (enabled: boolean) => void;
+  lobsterPetSounds: boolean;
+  setLobsterPetSounds: (enabled: boolean) => void;
   userAvatar?: string | null;
   onUserAvatarChange?: (next: string | null) => void;
 
@@ -199,10 +210,13 @@ function formatAssistantAvatarSource(value: string | null | undefined): string |
     return null;
   }
   if (/^data:image\//i.test(source)) {
-    const header = source.slice(0, source.indexOf(",") > 0 ? source.indexOf(",") : 32);
+    const commaIndex = source.indexOf(",");
+    const header = sliceUtf16Safe(source, 0, commaIndex > 0 ? commaIndex : 32);
     return `${header},...`;
   }
-  return source.length > 72 ? `${source.slice(0, 34)}...${source.slice(-24)}` : source;
+  return source.length > 72
+    ? `${sliceUtf16Safe(source, 0, 34)}...${sliceUtf16Safe(source, -24)}`
+    : source;
 }
 
 function formatAssistantAvatarIssue(
@@ -769,6 +783,76 @@ function renderAppearanceCard(props: QuickSettingsProps) {
             )}
           </div>
         </div>
+        <div class="qs-row">
+          <span class="qs-row__label">${t("quickSettings.appearance.lobsterVisits")}</span>
+          <label class="qs-toggle">
+            <input
+              type="checkbox"
+              .checked=${props.lobsterPetVisits}
+              @change=${(event: Event) =>
+                props.setLobsterPetVisits((event.currentTarget as HTMLInputElement).checked)}
+            />
+            <span class="qs-toggle__track"></span>
+            <span class="qs-toggle__hint muted">
+              ${props.lobsterPetVisits
+                ? t("quickSettings.appearance.lobsterVisitsOn")
+                : t("quickSettings.appearance.lobsterVisitsOff")}
+            </span>
+          </label>
+        </div>
+        <div class="qs-row">
+          <span class="qs-row__label">${t("quickSettings.appearance.lobsterSounds")}</span>
+          <label class="qs-toggle">
+            <input
+              type="checkbox"
+              .checked=${props.lobsterPetSounds}
+              @change=${(event: Event) =>
+                props.setLobsterPetSounds((event.currentTarget as HTMLInputElement).checked)}
+            />
+            <span class="qs-toggle__track"></span>
+            <span class="qs-toggle__hint muted">
+              ${props.lobsterPetSounds
+                ? t("quickSettings.appearance.lobsterSoundsOn")
+                : t("quickSettings.appearance.lobsterSoundsOff")}
+            </span>
+          </label>
+        </div>
+        <div class="qs-row qs-row--stacked">
+          <span class="qs-row__label">
+            ${t("quickSettings.appearance.lobsterdex")}
+            <span class="muted">
+              ${t("quickSettings.appearance.lobsterdexSeen", {
+                seen: String(LOBSTER_PET_PALETTES.filter((p) => getLobsterdex().has(p.id)).length),
+                total: String(LOBSTER_PET_PALETTES.length),
+              })}
+            </span>
+          </span>
+          <div class="lobsterdex">
+            ${LOBSTER_PET_PALETTES.map((palette) => {
+              const entry = getLobsterdexEntries().get(palette.id);
+              const seen = entry !== undefined;
+              const title = !seen
+                ? "?"
+                : entry.firstSeenAt !== null
+                  ? t("quickSettings.appearance.lobsterdexFirstVisited", {
+                      name: entry.name ?? palette.id,
+                      date: new Date(entry.firstSeenAt).toLocaleDateString(),
+                    })
+                  : (entry.name ?? palette.id);
+              return html`
+                <span
+                  class="lobsterdex__mini lobster-pet--palette-${palette.id} ${seen
+                    ? ""
+                    : "lobsterdex__mini--unseen"}"
+                  style="--lob-shell:${palette.shell};--lob-claw:${palette.claw}"
+                  title=${title}
+                >
+                  ${renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true })}
+                </span>
+              `;
+            })}
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -796,14 +880,14 @@ function renderPersonalCard(props: QuickSettingsProps) {
     assistantAvatarRendered,
     Boolean(assistantAvatarOverride),
   );
-  const assistantAvatarSourceLabel = assistantAvatarOverride ? "UI override" : "IDENTITY.md";
+  const assistantAvatarSourceLabel = assistantAvatarOverride ? "UI override" : "Configured avatar";
   const canOverrideAssistantAvatar = Boolean(props.onAssistantAvatarOverrideChange);
   const assistantAvatarSubtitle = assistantAvatarOverride
     ? "Override from settings"
     : assistantAvatarIssue
       ? "Fallback avatar"
       : assistantAvatarRendered
-        ? "From IDENTITY.md"
+        ? "Configured avatar"
         : "Fallback logo";
   return html`
     <div class="qs-card qs-card--personal">
@@ -912,7 +996,7 @@ function renderPersonalCard(props: QuickSettingsProps) {
                           : nothing}
                       </div>
                       <div class="muted">
-                        Stores a Control UI override. Clear it to return to IDENTITY.md.
+                        Stores a Control UI override. Clear it to return to the configured avatar.
                       </div>
                     </div>
                   `

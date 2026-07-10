@@ -3,10 +3,10 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import type { TaskSuggestion } from "../../../../packages/gateway-protocol/src/index.js";
+import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ChatSendShortcut } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
-import type { ProviderQuotaPillProps } from "../../components/provider-quota-pill.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import type {
@@ -16,21 +16,24 @@ import type {
 } from "../../lib/chat/chat-types.ts";
 import type { ChatSideResult } from "../../lib/chat/side-result.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
+import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import {
   handleChatAttachmentDrop,
   renderChatComposer,
   resetChatComposerState,
 } from "./components/chat-composer.ts";
+import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
 import {
   renderSessionWorkspaceRail,
+  renderSessionWorkspaceToggle,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
+import "./components/chat-sidebar.ts";
 import type {
   DetailFullMessageResult,
   SidebarContent,
   SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
-import "./components/chat-sidebar.ts";
 import { renderChatTaskSuggestions } from "./components/chat-task-suggestions.ts";
 import {
   isChatThreadSearchOpen,
@@ -80,7 +83,7 @@ export type ChatProps = {
   disabledReason: string | null;
   error: string | null;
   sessions: SessionsListResult | null;
-  providerQuota?: ProviderQuotaPillProps;
+  providerUsage?: ProviderUsageDisplayProps;
   focusMode?: boolean;
   onLoadSidebarFullMessage?: (
     request: SidebarFullMessageRequest,
@@ -147,12 +150,18 @@ export type ChatProps = {
   onClearReply?: () => void;
   onSetReply?: (target: { messageId: string; text: string; senderLabel?: string | null }) => void;
   sessionWorkspace?: SessionWorkspaceProps;
+  /** True when a split pane header hosts the workspace toggle; suppresses the
+   * single-pane floating opener so only one affordance renders. */
+  paneHeaderActive?: boolean;
   taskSuggestions?: TaskSuggestion[];
   taskSuggestionBusyIds?: ReadonlySet<string>;
   canAcceptTaskSuggestions?: boolean;
   canDismissTaskSuggestions?: boolean;
   onAcceptTaskSuggestion?: (suggestion: TaskSuggestion) => void;
   onDismissTaskSuggestion?: (suggestion: TaskSuggestion) => void;
+  pullRequests?: ControlUiSessionPullRequest[];
+  pullRequestsRateLimited?: boolean;
+  onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
 };
 
 export function resetChatViewState(paneId?: string) {
@@ -164,7 +173,7 @@ export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
-  const canCompose = props.connected && props.canSend;
+  const canCompose = props.canSend;
   let chatSection: HTMLElement | null = null;
 
   const thread = renderChatThread({
@@ -179,6 +188,7 @@ export function renderChat(props: ChatProps) {
     queue: props.queue,
     showThinking: props.showThinking,
     showToolCalls: props.showToolCalls,
+    runActive: Boolean(props.canAbort),
     sessions: props.sessions,
     assistantName: props.assistantName,
     assistantAvatar: props.assistantAvatar,
@@ -228,7 +238,7 @@ export function renderChat(props: ChatProps) {
     queue: props.queue,
     draft: props.draft,
     sessions: props.sessions,
-    providerQuota: props.providerQuota,
+    providerUsage: props.providerUsage,
     assistantName: props.assistantName,
     sendShortcut: props.sendShortcut,
     attachments: props.attachments,
@@ -345,9 +355,34 @@ export function renderChat(props: ChatProps) {
       <div
         class="chat-workbench ${props.sessionWorkspace?.collapsed
           ? "chat-workbench--workspace-collapsed"
-          : ""}"
+          : ""} ${props.sessionWorkspace?.dock === "bottom" ? "chat-workbench--dock-bottom" : ""}"
       >
         ${renderSessionWorkspaceRail(props.sessionWorkspace)}
+        ${props.sessionWorkspace?.collapsed && !props.paneHeaderActive
+          ? renderSessionWorkspaceToggle(props.sessionWorkspace, "floating")
+          : nothing}
+        ${props.sessionWorkspace?.dockDragging
+          ? html`
+              <div class="chat-workbench__dock-zones" aria-hidden="true">
+                <div
+                  class="chat-workbench__dock-zone chat-workbench__dock-zone--right ${props
+                    .sessionWorkspace.dockDragZone === "right"
+                    ? "chat-workbench__dock-zone--active"
+                    : ""}"
+                >
+                  <span>${t("chat.workspaceFiles.dockRight")}</span>
+                </div>
+                <div
+                  class="chat-workbench__dock-zone chat-workbench__dock-zone--bottom ${props
+                    .sessionWorkspace.dockDragZone === "bottom"
+                    ? "chat-workbench__dock-zone--active"
+                    : ""}"
+                >
+                  <span>${t("chat.workspaceFiles.dockBottom")}</span>
+                </div>
+              </div>
+            `
+          : nothing}
         <div class="chat-workbench__main">
           <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
             <div
@@ -362,6 +397,11 @@ export function renderChat(props: ChatProps) {
                 canDismiss: props.canDismissTaskSuggestions === true,
                 onAccept: (suggestion) => props.onAcceptTaskSuggestion?.(suggestion),
                 onDismiss: (suggestion) => props.onDismissTaskSuggestion?.(suggestion),
+              })}
+              ${renderChatPullRequests({
+                pullRequests: props.pullRequests ?? [],
+                rateLimited: props.pullRequestsRateLimited === true,
+                onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
               })}
               ${chatColumnFooter}
             </div>

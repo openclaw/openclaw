@@ -29,6 +29,7 @@ import type {
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
+import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import {
   loadSettings,
@@ -254,7 +255,11 @@ export function bootstrapApplication(): ApplicationRuntime {
   }
 
   const settings = startup.settings;
-  const gateway = createApplicationGateway(settings, startup.password ?? "");
+  const gateway = createApplicationGateway(
+    settings,
+    startup.password ?? "",
+    startup.pendingBootstrapToken ?? "",
+  );
   const agents = createAgentCapability(gateway);
   const agentIdentity = createAgentIdentityCapability(gateway);
   const agentSelection = createAgentSelectionCapability(gateway);
@@ -273,6 +278,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const navigation = createApplicationNavigationPreferences(settings);
   const theme = createApplicationTheme(settings);
   const nativeChatDrafts = createNativeChatDrafts();
+  const nativeLinkRouting = startNativeLinkRouting();
   const webPush = createWebPushCapability(gateway);
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
   applyStartupPresentation(settings);
@@ -282,6 +288,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       ? {
           gatewayUrl: startup.pendingGatewayUrl,
           token: startup.pendingGatewayToken ?? "",
+          bootstrapToken: startup.pendingBootstrapToken ?? "",
         }
       : null;
   let lastConfigRefreshClient: GatewayBrowserClient | null = null;
@@ -322,6 +329,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     gateway.connect({
       gatewayUrl: pending.gatewayUrl,
       token: pending.token,
+      bootstrapToken: pending.bootstrapToken,
     });
   };
   const cancelPendingGatewayConnection = () => {
@@ -386,6 +394,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       overlays.dispose();
       theme.dispose();
       nativeChatDrafts.dispose();
+      nativeLinkRouting.dispose();
       webPush.dispose();
       skillWorkshopRevision.clear();
     },

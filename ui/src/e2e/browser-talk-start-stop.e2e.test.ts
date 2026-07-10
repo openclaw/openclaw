@@ -1,4 +1,6 @@
 // Control UI E2E tests cover browser Talk start and stop through a real page.
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { chromium, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -90,6 +92,14 @@ async function installTalkBrowserFixtures(page: Page) {
       value: state,
     });
   });
+}
+
+async function captureComposerProof(page: Page, fileName: string) {
+  const artifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "voice-controls");
+  await mkdir(artifactDir, { recursive: true });
+  await page
+    .locator(".agent-chat__composer-shell")
+    .screenshot({ path: path.join(artifactDir, fileName) });
 }
 
 async function installBlockedMicrophoneFixture(page: Page) {
@@ -185,6 +195,17 @@ describeControlUiE2e("Control UI browser Talk", () => {
       await expect
         .poll(() => page.locator('.agent-chat__voice-activity[data-status="connecting"]').count())
         .toBe(1);
+      // The level meter renders inside the stop-voice pill button, not as a
+      // separate floating row above the composer.
+      await expect
+        .poll(() =>
+          page.locator('button[aria-label="Stop voice input"] .agent-chat__voice-activity').count(),
+        )
+        .toBe(1);
+      // Phone widths keep the pill wide enough for the 7-bar meter instead of
+      // collapsing it to the generic 44px square control size.
+      const pillBox = await page.getByRole("button", { name: "Stop voice input" }).boundingBox();
+      expect(pillBox?.width ?? 0).toBeGreaterThanOrEqual(60);
       await expect
         .poll(() =>
           page
@@ -206,7 +227,7 @@ describeControlUiE2e("Control UI browser Talk", () => {
         .toBe(1);
       await expect.poll(() => page.locator(".agent-chat__talk-status-text").count()).toBe(0);
       await expect
-        .poll(() => page.locator('[role="status"] .agent-chat__sr-only').textContent())
+        .poll(() => page.locator('[role="status"].agent-chat__voice-status').textContent())
         .toBe("Listening...");
       const reducedMotionTransform = await page
         .locator(".agent-chat__voice-activity-bar")
@@ -275,6 +296,126 @@ describeControlUiE2e("Control UI browser Talk", () => {
       await expect
         .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
         .toBe(true);
+    } finally {
+      await context.close();
+      await browser.close();
+    }
+  });
+
+  it("keeps stop-voice and stop-run controls visually distinct while both are active", async () => {
+    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    const context = await browser.newContext({ permissions: ["microphone"] });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["chat.send"],
+      methodResponses: {
+        "talk.client.create": {
+          provider: "google",
+          transport: "provider-websocket",
+          protocol: "google-live-bidi",
+          // Fake harness token, assembled so secret scanners do not flag it.
+          clientSecret: ["auth_tokens", "browser-talk-e2e"].join("/"),
+          websocketUrl:
+            "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
+          audio: {
+            inputEncoding: "pcm16",
+            inputSampleRateHz: 16_000,
+            outputEncoding: "pcm16",
+            outputSampleRateHz: 24_000,
+          },
+        },
+      },
+    });
+    await installTalkBrowserFixtures(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.setViewportSize({ width: 1366, height: 900 });
+
+      await page.getByRole("button", { name: "Start voice input" }).click();
+      await gateway.waitForRequest("talk.client.create");
+      await gateway.deliverLatest({ setupComplete: {} });
+      const stopVoice = page.getByRole("button", { name: "Stop voice input" });
+      await expect.poll(() => stopVoice.isVisible()).toBe(true);
+      await page.evaluate(() => {
+        const state = (
+          window as Window & {
+            openclawTalkE2eState?: {
+              inputProcessor?: {
+                onaudioprocess?: (event: {
+                  inputBuffer: { getChannelData: () => Float32Array };
+                }) => void;
+              };
+              meterLevel?: number;
+            };
+          }
+        ).openclawTalkE2eState;
+        if (state) {
+          state.meterLevel = 0.25;
+        }
+        state?.inputProcessor?.onaudioprocess?.({
+          inputBuffer: { getChannelData: () => new Float32Array(4096).fill(0.25) },
+        });
+      });
+      await expect
+        .poll(async () =>
+          Number(await page.locator(".agent-chat__voice-activity").getAttribute("data-level")),
+        )
+        .toBeGreaterThan(0);
+      await captureComposerProof(page, "01-voice-live-listening.png");
+
+      // Enter-sends while voice is active; the deferred chat.send keeps the
+      // run abortable so both stop controls render side by side.
+      const textarea = page.locator(".agent-chat__input textarea");
+      await textarea.fill("Keep working on the report");
+      await textarea.press("Enter");
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const runId =
+        typeof sendRequest.params === "object" &&
+        sendRequest.params !== null &&
+        "idempotencyKey" in sendRequest.params
+          ? String(sendRequest.params.idempotencyKey)
+          : "";
+      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: "Working on it.",
+        message: {
+          content: [{ text: "Working on it.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      const stopRun = page.getByRole("button", { name: "Stop generating" });
+      await expect.poll(() => stopRun.isVisible()).toBe(true);
+      await expect.poll(() => stopVoice.isVisible()).toBe(true);
+
+      expect(
+        await stopVoice.evaluate((node) => node.classList.contains("chat-send-btn--voice-live")),
+      ).toBe(true);
+      expect(
+        await stopVoice.evaluate((node) => node.classList.contains("chat-send-btn--stop")),
+      ).toBe(false);
+      expect(await stopVoice.locator(".agent-chat__voice-activity").count()).toBe(1);
+      expect(await page.locator(".chat-send-btn--stop").count()).toBe(1);
+      await captureComposerProof(page, "02-voice-plus-run-stop.png");
+
+      await page.emulateMedia({ colorScheme: "dark" });
+      await expect
+        .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
+        .toBe("dark");
+      await captureComposerProof(page, "03-voice-plus-run-stop-dark.png");
+
+      await stopVoice.hover();
+      await captureComposerProof(page, "04-voice-live-hover-stop-glyph.png");
+
+      // Stopping voice must leave the run (and its stop control) untouched.
+      await stopVoice.click();
+      await expect.poll(() => stopVoice.count()).toBe(0);
+      await expect.poll(() => stopRun.isVisible()).toBe(true);
+      expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
     } finally {
       await context.close();
       await browser.close();

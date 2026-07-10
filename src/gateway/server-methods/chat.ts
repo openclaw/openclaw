@@ -3699,6 +3699,10 @@ export const chatHandlers: GatewayRequestHandlers = {
   "chat.send": async ({ params, respond, context, client }) => {
     const chatSendReceivedAtMs = performance.now();
     const clientInfo = client?.connect?.client;
+    const supportsTaskSuggestions =
+      isOperatorUiClient(clientInfo) &&
+      client?.connect?.scopes?.includes("operator.admin") === true &&
+      hasGatewayClientCap(client?.connect?.caps, GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS);
     const controlUiReconnectResume = resolveControlUiReconnectResumeParams(params, clientInfo);
     if (!validateChatSendParams(controlUiReconnectResume.params)) {
       respond(
@@ -4813,6 +4817,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                         }),
                       }
                     : {}),
+                  ...(supportsTaskSuggestions
+                    ? { taskSuggestionDeliveryMode: "gateway" as const }
+                    : {}),
                   requestedSessionId,
                   resumeRequestedSession: controlUiReconnectResume.resumeRequested,
                   abortSignal: activeRunAbort.controller.signal,
@@ -4834,10 +4841,18 @@ export const chatHandlers: GatewayRequestHandlers = {
                       return queuedFollowupEnqueued;
                     },
                     onCancellationRetired: () => {
-                      retireQueuedChatTurnCancellation(ensureChatQueuedTurns(context), clientRunId);
+                      retireQueuedChatTurnCancellation(
+                        ensureChatQueuedTurns(context),
+                        clientRunId,
+                        activeRunAbort.controller,
+                      );
                     },
                     onComplete: () => {
-                      completeQueuedChatTurn(ensureChatQueuedTurns(context), clientRunId);
+                      completeQueuedChatTurn(
+                        ensureChatQueuedTurns(context),
+                        clientRunId,
+                        activeRunAbort.controller,
+                      );
                     },
                   },
                   images: replyOptionImages,

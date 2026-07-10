@@ -5,6 +5,7 @@ import type { StoredConversationReference } from "./conversation-store.js";
 import { resolveMSTeamsProactiveReplyStyle, resolveMSTeamsSendContext } from "./send-context.js";
 
 const sendContextMockState = vi.hoisted(() => {
+  const getAccessToken = vi.fn();
   const store = {
     upsert: vi.fn(),
     get: vi.fn(),
@@ -16,7 +17,8 @@ const sendContextMockState = vi.hoisted(() => {
   return {
     store,
     loadMSTeamsSdkWithAuth: vi.fn(async () => ({ app: { id: "mock-app" } })),
-    createMSTeamsTokenProvider: vi.fn(() => ({ getAccessToken: vi.fn() })),
+    createMSTeamsTokenProvider: vi.fn(() => ({ getAccessToken })),
+    getAccessToken,
     logWarn: vi.fn(),
   };
 });
@@ -77,6 +79,7 @@ beforeEach(() => {
   sendContextMockState.store.findByUserId.mockReset();
   sendContextMockState.loadMSTeamsSdkWithAuth.mockClear();
   sendContextMockState.createMSTeamsTokenProvider.mockClear();
+  sendContextMockState.getAccessToken.mockReset();
   sendContextMockState.logWarn.mockReset();
   vi.unstubAllEnvs();
 });
@@ -229,6 +232,32 @@ describe("resolveMSTeamsSendContext", () => {
       appId: "secondary-app-id",
       conversationId: "19:channel@thread.tacv2",
     });
+  });
+
+  it("does not query Graph while resolving an opaque Bot Framework conversation", async () => {
+    sendContextMockState.store.get.mockResolvedValue(
+      channelRef({
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+        conversation: { id: "a:personal", conversationType: "personal" },
+      }),
+    );
+
+    await resolveMSTeamsSendContext({
+      cfg: {
+        channels: {
+          msteams: {
+            enabled: true,
+            appId: "app-id",
+            appPassword: "app-password",
+            tenantId: "tenant-id",
+            sharePointSiteId: "site-id",
+          },
+        },
+      } as OpenClawConfig,
+      to: "conversation:a:personal",
+    });
+
+    expect(sendContextMockState.getAccessToken).not.toHaveBeenCalled();
   });
 });
 

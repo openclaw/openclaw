@@ -15,7 +15,10 @@ import { diagnosticLogger as diag } from "../../logging/diagnostic-runtime.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
-import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
+import type {
+  SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+} from "../get-reply-options.types.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
 
 export type ReplyRunKey = string;
@@ -30,12 +33,15 @@ export type ReplyBackendQueueMessageOptions = {
   deliveryTimeoutMs?: number;
   waitForTranscriptCommit?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Prepared channel turn to merge only at transcript persistence. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
 };
 
 export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
+  readonly sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  readonly taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   cancel(reason?: ReplyBackendCancelReason): void;
   isStreaming(): boolean;
   isStopped?: () => boolean;
@@ -47,6 +53,33 @@ export type ReplyBackendHandle = {
    */
   isCompacting?: () => boolean;
 };
+
+export type ReplyBackendQueueMessageMismatch =
+  | "source_reply_delivery_mode_mismatch"
+  | "task_suggestion_delivery_mode_mismatch";
+
+/** Prevents steering a turn into a run whose model-facing tool surface differs. */
+export function resolveReplyBackendQueueMessageMismatch(
+  backend: Pick<ReplyBackendHandle, "sourceReplyDeliveryMode" | "taskSuggestionDeliveryMode">,
+  options?: ReplyBackendQueueMessageOptions,
+): ReplyBackendQueueMessageMismatch | undefined {
+  if (
+    options?.sourceReplyDeliveryMode === "message_tool_only" &&
+    backend.sourceReplyDeliveryMode !== "message_tool_only"
+  ) {
+    return "source_reply_delivery_mode_mismatch";
+  }
+  // User turns carry this own property even when disabled; internal wakeups
+  // omit it so they inherit the active run's already-negotiated tool surface.
+  if (
+    options !== undefined &&
+    Object.hasOwn(options, "taskSuggestionDeliveryMode") &&
+    options?.taskSuggestionDeliveryMode !== backend.taskSuggestionDeliveryMode
+  ) {
+    return "task_suggestion_delivery_mode_mismatch";
+  }
+  return undefined;
+}
 
 export type ReplyOperationPhase =
   | "queued"
@@ -1012,6 +1045,9 @@ export function queueReplyRunMessage(
     return false;
   }
   if (!isReplyBackendMessageInjectable(backend)) {
+    return false;
+  }
+  if (resolveReplyBackendQueueMessageMismatch(backend, options)) {
     return false;
   }
   // Injection is user input, not run evidence: stamping activity here would let

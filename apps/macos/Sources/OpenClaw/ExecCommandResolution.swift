@@ -332,9 +332,7 @@ struct ExecCommandResolution {
             current.append(ch)
         }
 
-        if escaped {
-            current.append("\\")
-        }
+        if escaped { current.append("\\") }
         appendCurrent()
         return tokens
     }

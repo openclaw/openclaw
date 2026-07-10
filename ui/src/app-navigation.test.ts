@@ -26,6 +26,7 @@ const ALL_ROUTES: RouteId[] = Array.from(
 
 const SETTINGS_ROUTE_PATHS = [
   { routeId: "config", path: "/settings/general", alias: "/config" },
+  { routeId: "profile", path: "/settings/profile", alias: "/profile" },
   { routeId: "channels", path: "/settings/channels", alias: "/channels" },
   {
     routeId: "communications",
@@ -63,19 +64,22 @@ describe("navigationIconForRoute", () => {
       instances: "radio",
       sessions: "fileText",
       usage: "barChart",
-      cron: "loader",
-      tasks: "loader",
+      cron: "calendarClock",
+      tasks: "listChecks",
       agents: "bot",
       skills: "zap",
+      plugins: "puzzle",
       "skill-workshop": "wrench",
       nodes: "monitor",
       dreams: "moon",
       config: "settings",
+      profile: "lobster",
       communications: "send",
       appearance: "spark",
       automation: "terminal",
       mcp: "wrench",
       infrastructure: "globe",
+      about: "fileText",
       "ai-agents": "brain",
       debug: "bug",
       logs: "scrollText",
@@ -107,15 +111,18 @@ describe("titleForRoute", () => {
       tasks: "Tasks",
       agents: "Agents",
       skills: "Skills",
+      plugins: "Plugins",
       "skill-workshop": "Skill Workshop",
       nodes: "Nodes",
       dreams: "Dreaming",
       config: "Settings",
+      profile: "Profile",
       communications: "Communications",
       appearance: "Appearance",
       automation: "Automation",
       mcp: "MCP",
       infrastructure: "Infrastructure",
+      about: "About",
       "ai-agents": "AI & Agents",
       debug: "Debug",
       logs: "Logs",
@@ -141,15 +148,18 @@ describe("subtitleForRoute", () => {
       tasks: "Background tasks: subagents, cron runs, CLI.",
       agents: "Workspaces, tools, identities.",
       skills: "Skills and API keys.",
+      plugins: "Install and manage optional capabilities.",
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
       nodes: "Paired devices and commands.",
       dreams: "Memory dreaming, consolidation, and reflection.",
       config: "Edit openclaw.json.",
+      profile: "Your agent's stats, streaks, and life in the reef.",
       communications: "Channels, messages, and audio settings.",
       appearance: "Theme, UI, and setup wizard settings.",
       automation: "Commands, hooks, cron, and plugins.",
       mcp: "MCP servers, auth, tools, and diagnostics.",
       infrastructure: "Gateway, web, browser, and media settings.",
+      about: "Control UI and connected Gateway build identity.",
       "ai-agents": "Agents, models, skills, tools, memory, session.",
       debug: "Snapshots, events, RPC.",
       logs: "Live gateway logs.",
@@ -201,6 +211,7 @@ describe("pathForRoute", () => {
     expect(pathForRoute("overview")).toBe("/overview");
     expect(pathForRoute("debug")).toBe("/debug");
     expect(pathForRoute("logs")).toBe("/logs");
+    expect(pathForRoute("plugins")).toBe("/settings/plugins");
   });
 
   it("prepends base path", () => {
@@ -219,6 +230,10 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/logs")).toBe("logs");
     expect(routeIdFromPath("/dreaming")).toBe("dreams");
     expect(routeIdFromPath("/dreams")).toBe("dreams");
+    expect(routeIdFromPath("/settings/plugins")).toBe("plugins");
+    expect(routeIdFromPath("/plugins")).toBeNull();
+    expect(routeIdFromPath("/settings/about")).toBe("about");
+    expect(routeIdFromPath("/about")).toBeNull();
   });
 
   it("leaves root fallback to application startup", () => {
@@ -228,6 +243,7 @@ describe("routeIdFromPath", () => {
   it("handles base paths", () => {
     expect(routeIdFromPath("/ui/chat", "/ui")).toBe("chat");
     expect(routeIdFromPath("/apps/openclaw/sessions", "/apps/openclaw")).toBe("sessions");
+    expect(routeIdFromPath("/ui/settings/plugins", "/ui")).toBe("plugins");
   });
 
   it("rejects route-shaped paths outside the configured base path", () => {
@@ -286,6 +302,7 @@ describe("inferBasePathFromPathname", () => {
     expect(inferBasePathFromPathname("/appearance")).toBe("");
     expect(inferBasePathFromPathname("/dreaming")).toBe("");
     expect(inferBasePathFromPathname("/dreams")).toBe("");
+    expect(inferBasePathFromPathname("/settings/plugins")).toBe("");
   });
 
   it("infers base path from nested paths", () => {
@@ -293,11 +310,13 @@ describe("inferBasePathFromPathname", () => {
     expect(inferBasePathFromPathname("/apps/openclaw/sessions")).toBe("/apps/openclaw");
     expect(inferBasePathFromPathname("/ui/settings/general")).toBe("/ui");
     expect(inferBasePathFromPathname("/ui/appearance")).toBe("/ui");
+    expect(inferBasePathFromPathname("/ui/settings/plugins")).toBe("/ui");
   });
 
   it("preserves mount roots without a route suffix", () => {
     expect(inferBasePathFromPathname("/__openclaw__/")).toBe("/__openclaw__");
     expect(inferBasePathFromPathname("/apps/openclaw/")).toBe("/apps/openclaw");
+    expect(inferBasePathFromPathname("/about/")).toBe("/about");
     expect(inferBasePathFromPathname("/typo")).toBe("");
   });
 
@@ -325,6 +344,9 @@ describe("plugin tabs route", () => {
 
   it("stays out of the customizable static sidebar routes", () => {
     expect(SIDEBAR_NAV_ROUTES).not.toContain("plugin");
+    expect(SIDEBAR_NAV_ROUTES).toContain("plugins");
+    expect(routeIdFromPath("/settings/plugins")).toBe("plugins");
+    expect(routeIdFromPath("/plugins")).toBeNull();
   });
 });
 
@@ -336,6 +358,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
   it("keeps detailed settings slices routed but out of the customizable sidebar", () => {
     expect(SIDEBAR_NAV_ROUTES).not.toContain("config");
     expect(SETTINGS_NAVIGATION_ROUTES).toEqual([
+      "profile",
       "config",
       "appearance",
       "channels",
@@ -347,6 +370,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "worktrees",
       "debug",
       "logs",
+      "about",
     ]);
   });
 

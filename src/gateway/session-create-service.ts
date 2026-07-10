@@ -15,6 +15,7 @@ import {
 } from "../agents/agent-scope.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import {
   forkSessionFromParent,
   resolveParentForkDecision,
@@ -106,9 +107,7 @@ export function buildDashboardSessionKey(agentId: string): string {
   return `agent:${agentId}:dashboard:${randomUUID()}`;
 }
 
-function inheritSessionRuntimeSelection(
-  parentEntry: SessionEntry | undefined,
-): Partial<SessionEntry> {
+function inheritSessionSelection(parentEntry: SessionEntry | undefined): Partial<SessionEntry> {
   if (!parentEntry) {
     return {};
   }
@@ -121,8 +120,6 @@ function inheritSessionRuntimeSelection(
     ...(parentEntry.agentRuntimeOverride
       ? { agentRuntimeOverride: parentEntry.agentRuntimeOverride }
       : {}),
-    ...(parentEntry.modelProvider ? { modelProvider: parentEntry.modelProvider } : {}),
-    ...(parentEntry.model ? { model: parentEntry.model } : {}),
     ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
     ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
     ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),
@@ -151,6 +148,7 @@ type CreateGatewaySessionResult =
       key: string;
       agentId: string;
       entry: SessionEntry;
+      resolved: { modelProvider: string; model: string };
       resetExisting: boolean;
     }
   | { ok: false; error: ErrorShape };
@@ -163,6 +161,10 @@ export async function createGatewaySession(params: {
   model?: string;
   parentSessionKey?: string;
   spawnedCwd?: string;
+  /** Managed worktree bound to the new session; persisted alongside spawnedCwd. */
+  worktree?: { id: string; branch: string; repoRoot: string };
+  /** Bind session exec to host=node with this node id; caller scope-checks. */
+  execNode?: string;
   clearSpawnedCwd?: boolean;
   fork?: boolean;
   emitCommandHooks?: boolean;
@@ -292,6 +294,8 @@ export async function createGatewaySession(params: {
         reason: "new",
         commandSource: params.commandSource,
         ...(spawnedCwd ? { spawnedCwd } : {}),
+        ...(params.worktree ? { worktree: params.worktree } : {}),
+        ...(params.execNode ? { execNode: params.execNode } : {}),
         ...(params.clearSpawnedCwd && !spawnedCwd ? { clearSpawnedCwd: true } : {}),
       });
       if (!resetResult.ok) {
@@ -302,6 +306,7 @@ export async function createGatewaySession(params: {
         key: resetResult.key,
         agentId: resetResult.agentId,
         entry: resetResult.entry,
+        resolved: resetResult.resolved,
         resetExisting: true,
       };
     }
@@ -408,12 +413,21 @@ export async function createGatewaySession(params: {
           patched.entry.spawnedCwd = spawnedCwd;
           sessionEntries[target.canonicalKey] = patched.entry;
         }
+        if (patched.ok && params.worktree) {
+          patched.entry.worktree = params.worktree;
+          sessionEntries[target.canonicalKey] = patched.entry;
+        }
+        if (patched.ok && normalizeOptionalString(params.execNode)) {
+          patched.entry.execHost = "node";
+          patched.entry.execNode = normalizeOptionalString(params.execNode);
+          sessionEntries[target.canonicalKey] = patched.entry;
+        }
         if (!patched.ok || !canonicalParentSessionKey) {
           return patched;
         }
         const inheritedSelection = normalizeOptionalString(params.model)
           ? {}
-          : inheritSessionRuntimeSelection(currentParentSessionEntry);
+          : inheritSessionSelection(currentParentSessionEntry);
         const entry: SessionEntry = {
           ...patched.entry,
           ...inheritedSelection,
@@ -519,11 +533,17 @@ export async function createGatewaySession(params: {
       });
     }
 
+    const selectedModel = resolveSessionModelRef(params.cfg, created.entry, target.agentId);
+
     return {
       ok: true,
       key: target.canonicalKey,
       agentId: target.agentId,
       entry: created.entry,
+      resolved: {
+        modelProvider: selectedModel.provider,
+        model: selectedModel.model,
+      },
       resetExisting: false,
     };
   };

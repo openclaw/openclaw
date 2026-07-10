@@ -88,6 +88,7 @@ const mockState = vi.hoisted(() => ({
   lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
   lastDispatchImageOrder: undefined as string[] | undefined,
   lastDispatchThinkingLevelOverride: undefined as string | undefined,
+  lastTaskSuggestionDeliveryMode: undefined as "gateway" | undefined,
   lastDispatchUserTurnInput: undefined as unknown,
   modelCatalog: null as ModelCatalogEntry[] | null,
   emittedTranscriptUpdates: [] as Array<{
@@ -244,12 +245,14 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
         images?: Array<{ mimeType: string; data: string }>;
         imageOrder?: string[];
         thinkingLevelOverride?: string;
+        taskSuggestionDeliveryMode?: "gateway";
       };
     }) => {
       mockState.lastDispatchCtx = params.ctx;
       mockState.lastDispatchImages = params.replyOptions?.images;
       mockState.lastDispatchImageOrder = params.replyOptions?.imageOrder;
       mockState.lastDispatchThinkingLevelOverride = params.replyOptions?.thinkingLevelOverride;
+      mockState.lastTaskSuggestionDeliveryMode = params.replyOptions?.taskSuggestionDeliveryMode;
       const recorder = params.replyOptions?.userTurnTranscriptRecorder;
       mockState.lastDispatchUserTurnInput = recorder?.resolveMessage
         ? await recorder.resolveMessage()
@@ -441,7 +444,8 @@ vi.mock("../../media/store.js", async () => {
 
 const { chatHandlers } = await import("./chat.js");
 
-async function waitForAssertion(assertion: () => void, timeoutMs = 1000, stepMs = 2) {
+// Multi-media transcript mirroring can exceed 1s on loaded CI before the async broadcast lands.
+async function waitForAssertion(assertion: () => void, timeoutMs = 5_000, stepMs = 2) {
   await vi.waitFor(assertion, { interval: stepMs, timeout: timeoutMs });
 }
 
@@ -848,6 +852,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.lastDispatchImages = undefined;
     mockState.lastDispatchImageOrder = undefined;
     mockState.lastDispatchThinkingLevelOverride = undefined;
+    mockState.lastTaskSuggestionDeliveryMode = undefined;
     mockState.lastDispatchUserTurnInput = undefined;
     mockState.modelCatalog = null;
     mockState.emittedTranscriptUpdates = [];
@@ -4806,6 +4811,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.sessionEntry = {
       modelProvider: "test-provider",
       model: "vision-model",
+      providerOverride: "test-provider",
+      modelOverride: "vision-model",
     };
     mockState.modelCatalog = [
       {
@@ -5186,6 +5193,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.sessionEntry = {
       modelProvider: "modelscope",
       model: "Qwen/Qwen3.5-35B-A3B",
+      providerOverride: "modelscope",
+      modelOverride: "Qwen/Qwen3.5-35B-A3B",
     };
     mockState.modelCatalog = [
       {
@@ -6111,6 +6120,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.sessionEntry = {
       modelProvider: "test-provider",
       model: "vision-model",
+      providerOverride: "test-provider",
+      modelOverride: "vision-model",
     };
     mockState.modelCatalog = [
       {
@@ -6617,7 +6628,8 @@ describe("chat.send operator UI client sender context", () => {
             version: "dev",
             platform: "web",
           },
-          scopes: ["operator.write"],
+          caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS],
+          scopes: ["operator.admin"],
         },
       },
       expectBroadcast: false,
@@ -6626,5 +6638,113 @@ describe("chat.send operator UI client sender context", () => {
     expect(mockState.lastDispatchCtx?.SenderId).toBeUndefined();
     expect(mockState.lastDispatchCtx?.SenderName).toBeUndefined();
     expect(mockState.lastDispatchCtx?.SenderUsername).toBeUndefined();
+    expect(mockState.lastTaskSuggestionDeliveryMode).toBe("gateway");
+  });
+
+  it("enables task suggestions for TUI clients", async () => {
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-tui-task-suggestions",
+      message: "hello from tui",
+      client: {
+        connect: {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.TUI,
+            mode: GATEWAY_CLIENT_MODES.UI,
+            version: "dev",
+            platform: "terminal",
+          },
+          caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS],
+          scopes: ["operator.admin"],
+        },
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastTaskSuggestionDeliveryMode).toBe("gateway");
+  });
+
+  it("withholds task suggestions from operator UI clients that cannot accept them", async () => {
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-write-only-tui-task-suggestions",
+      message: "hello from a write-only tui",
+      client: {
+        connect: {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.TUI,
+            mode: GATEWAY_CLIENT_MODES.UI,
+            version: "dev",
+            platform: "terminal",
+          },
+          caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS],
+          scopes: ["operator.write"],
+        },
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastTaskSuggestionDeliveryMode).toBeUndefined();
+  });
+
+  it("withholds task suggestions from non-operator gateway clients", async () => {
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-channel-task-suggestions",
+      message: "hello from a channel bridge",
+      client: {
+        connect: {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+            mode: GATEWAY_CLIENT_MODES.BACKEND,
+            version: "dev",
+            platform: "server",
+          },
+          caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS],
+          scopes: ["operator.write"],
+        },
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastTaskSuggestionDeliveryMode).toBeUndefined();
+  });
+
+  it("withholds task suggestions from operator UI clients without action support", async () => {
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-old-tui-task-suggestions",
+      message: "hello from an older tui",
+      client: {
+        connect: {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.TUI,
+            mode: GATEWAY_CLIENT_MODES.UI,
+            version: "old",
+            platform: "terminal",
+          },
+          scopes: ["operator.write"],
+        },
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastTaskSuggestionDeliveryMode).toBeUndefined();
   });
 });

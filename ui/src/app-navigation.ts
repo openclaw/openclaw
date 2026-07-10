@@ -23,6 +23,7 @@ export const SIDEBAR_NAV_ROUTES = [
   "tasks",
   "agents",
   "skills",
+  "plugins",
   "skill-workshop",
   "nodes",
   "dreams",
@@ -62,7 +63,7 @@ export function sidebarMoreRoutes(pinned: readonly SidebarNavRoute[]): SidebarNa
   return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.includes(routeId));
 }
 
-export type SettingsNavigationGroup = {
+type SettingsNavigationGroup = {
   /** i18n key for the group heading; null renders the group without a label. */
   labelKey: string | null;
   routes: readonly NavigationRouteId[];
@@ -70,12 +71,12 @@ export type SettingsNavigationGroup = {
 
 // Grouping feeds the full-page settings sidebar (settings-sidebar.ts).
 export const SETTINGS_NAVIGATION_GROUPS = [
-  { labelKey: null, routes: ["config", "appearance"] },
+  { labelKey: null, routes: ["profile", "config", "appearance"] },
   { labelKey: "nav.settingsGroupConnections", routes: ["channels", "communications"] },
   { labelKey: "nav.settingsGroupAgents", routes: ["ai-agents", "automation", "mcp"] },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: ["infrastructure", "worktrees", "debug", "logs"],
+    routes: ["infrastructure", "worktrees", "debug", "logs", "about"],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
@@ -92,18 +93,21 @@ const NAVIGATION_ICONS: NavigationItem = {
   instances: "radio",
   sessions: "fileText",
   usage: "barChart",
-  cron: "loader",
-  tasks: "loader",
+  cron: "calendarClock",
+  tasks: "listChecks",
   skills: "zap",
+  plugins: "puzzle",
   "skill-workshop": "wrench",
   nodes: "monitor",
   chat: "messageSquare",
   config: "settings",
+  profile: "lobster",
   communications: "send",
   appearance: "spark",
   automation: "terminal",
   mcp: "wrench",
   infrastructure: "globe",
+  about: "fileText",
   "ai-agents": "brain",
   debug: "bug",
   logs: "scrollText",
@@ -180,6 +184,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   cron: { titleKey: "tabs.cron", subtitleKey: "subtitles.cron" },
   tasks: { titleKey: "tabs.tasks", subtitleKey: "subtitles.tasks" },
   skills: { titleKey: "tabs.skills", subtitleKey: "subtitles.skills" },
+  plugins: { titleKey: "tabs.plugins", subtitleKey: "subtitles.plugins" },
   "skill-workshop": {
     titleKey: "tabs.skillWorkshop",
     subtitleKey: "subtitles.skillWorkshop",
@@ -187,6 +192,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   nodes: { titleKey: "tabs.nodes", subtitleKey: "subtitles.nodes" },
   chat: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
   config: { titleKey: "nav.settings", subtitleKey: "subtitles.config" },
+  profile: { titleKey: "tabs.profile", subtitleKey: "subtitles.profile" },
   communications: {
     titleKey: "tabs.communications",
     subtitleKey: "subtitles.communications",
@@ -195,6 +201,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   automation: { titleKey: "tabs.automation", subtitleKey: "subtitles.automation" },
   mcp: { titleKey: "tabs.mcp", subtitleKey: "subtitles.mcp" },
   infrastructure: { titleKey: "tabs.infrastructure", subtitleKey: "subtitles.infrastructure" },
+  about: { titleKey: "tabs.about", subtitleKey: "subtitles.about" },
   "ai-agents": { titleKey: "tabs.aiAgents", subtitleKey: "subtitles.aiAgents" },
   debug: { titleKey: "tabs.debug", subtitleKey: "subtitles.debug" },
   logs: { titleKey: "tabs.logs", subtitleKey: "subtitles.logs" },

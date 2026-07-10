@@ -28,7 +28,6 @@ function makeNodeConnectParams(overrides?: Partial<ConnectParams>): ConnectParam
 function makePairedNode(overrides?: Partial<NodePairingPairedNode>): NodePairingPairedNode {
   return {
     nodeId: "openclaw-ios",
-    token: "token-1",
     createdAtMs: 1,
     approvedAtMs: 1,
     ...overrides,
@@ -165,6 +164,72 @@ describe("reconcileNodePairingOnConnect", () => {
 
     expect(approvedReconnect.effectiveCommands).toEqual(commands);
     expect(approvedPairingRequest).not.toHaveBeenCalled();
+  });
+
+  it("keeps an approved computer.act surface effective without re-pairing while unarmed", async () => {
+    const connectParams = makeNodeConnectParams({
+      client: {
+        id: GATEWAY_CLIENT_IDS.NODE_HOST,
+        version: "test",
+        platform: "macos",
+        deviceFamily: "Mac",
+        mode: GATEWAY_CLIENT_MODES.NODE,
+      },
+      caps: ["screen", "computer"],
+      commands: ["screen.snapshot", "computer.act"],
+    });
+    const requestPairing = vi.fn();
+
+    // No allowCommands entry (unarmed): the previously approved dangerous
+    // surface must reconcile cleanly instead of demanding a pairing upgrade
+    // on every reconnect.
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams,
+      pairedNode: makePairedNode({
+        caps: ["screen", "computer"],
+        commands: ["screen.snapshot", "computer.act"],
+      }),
+      requestPairing,
+    });
+
+    expect(requestPairing).not.toHaveBeenCalled();
+    expect(result.declaredCommands).toEqual(["screen.snapshot", "computer.act"]);
+    expect(result.effectiveCommands).toEqual(["screen.snapshot", "computer.act"]);
+    expect(result.shouldClearPendingPairings).toBe(true);
+  });
+
+  it("requests pairing when a macOS node first declares computer.act", async () => {
+    const requestPairing = makePendingPairingRequest("req-computer");
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        client: {
+          id: GATEWAY_CLIENT_IDS.NODE_HOST,
+          version: "test",
+          platform: "macos",
+          deviceFamily: "Mac",
+          mode: GATEWAY_CLIENT_MODES.NODE,
+        },
+        caps: ["screen", "computer"],
+        commands: ["screen.snapshot", "computer.act"],
+      }),
+      pairedNode: makePairedNode({
+        caps: ["screen"],
+        commands: ["screen.snapshot"],
+      }),
+      requestPairing,
+    });
+
+    expect(requestPairing).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caps: ["screen", "computer"],
+        commands: ["screen.snapshot", "computer.act"],
+      }),
+    );
+    expect(result.effectiveCommands).toEqual(["screen.snapshot"]);
+    expect(result.pendingPairing?.request.requestId).toBe("req-computer");
   });
 
   it.each([

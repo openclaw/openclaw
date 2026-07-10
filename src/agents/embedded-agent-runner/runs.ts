@@ -12,6 +12,7 @@ import {
   isReplyRunStreamingForSessionId,
   listActiveReplyRunSessionIds,
   queueReplyRunMessage,
+  resolveReplyBackendQueueMessageMismatch,
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
@@ -63,6 +64,7 @@ export type EmbeddedAgentQueueFailureReason =
   | "stale_run"
   | "compacting"
   | "source_reply_delivery_mode_mismatch"
+  | "task_suggestion_delivery_mode_mismatch"
   | "transcript_commit_wait_unsupported"
   | "runtime_rejected";
 
@@ -457,6 +459,15 @@ function prepareEmbeddedAgentQueueMessage(
       diag.debug(`queue message failed: sessionId=${sessionId} reason=stale_run`);
       return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "stale_run") };
     }
+    if (options?.waitForTranscriptCommit === true) {
+      diag.debug(
+        `queue message failed: sessionId=${sessionId} reason=transcript_commit_wait_unsupported`,
+      );
+      return {
+        kind: "complete",
+        outcome: createQueueFailureOutcome(sessionId, "transcript_commit_wait_unsupported"),
+      };
+    }
     const queuedReplyRunMessage = queueReplyRunMessage(sessionId, text, options);
     if (queuedReplyRunMessage) {
       logMessageQueued({ sessionId, source: "embedded-agent-runner" });
@@ -469,15 +480,6 @@ function prepareEmbeddedAgentQueueMessage(
           gatewayHealth: "live",
           enqueuedAtMs: Date.now(),
         },
-      };
-    }
-    if (options?.waitForTranscriptCommit === true) {
-      diag.debug(
-        `queue message failed: sessionId=${sessionId} reason=transcript_commit_wait_unsupported`,
-      );
-      return {
-        kind: "complete",
-        outcome: createQueueFailureOutcome(sessionId, "transcript_commit_wait_unsupported"),
       };
     }
     diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
@@ -515,16 +517,12 @@ function prepareEmbeddedAgentQueueMessage(
       outcome: createQueueFailureOutcome(sessionId, "transcript_commit_wait_unsupported"),
     };
   }
-  if (
-    options?.sourceReplyDeliveryMode === "message_tool_only" &&
-    handle.sourceReplyDeliveryMode !== "message_tool_only"
-  ) {
-    diag.debug(
-      `queue message failed: sessionId=${sessionId} reason=source_reply_delivery_mode_mismatch`,
-    );
+  const deliveryModeMismatch = resolveReplyBackendQueueMessageMismatch(handle, options);
+  if (deliveryModeMismatch) {
+    diag.debug(`queue message failed: sessionId=${sessionId} reason=${deliveryModeMismatch}`);
     return {
       kind: "complete",
-      outcome: createQueueFailureOutcome(sessionId, "source_reply_delivery_mode_mismatch"),
+      outcome: createQueueFailureOutcome(sessionId, deliveryModeMismatch),
     };
   }
   return { kind: "embedded_run", handle };

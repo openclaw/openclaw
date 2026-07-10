@@ -178,6 +178,10 @@ const loadPluginHostHookHandlers = lazyHandlerModule(
   () => import("./server-methods/plugin-host-hooks.js"),
   (module) => module.pluginHostHookHandlers,
 );
+const loadPluginsHandlers = lazyHandlerModule(
+  () => import("./server-methods/plugins.js"),
+  (module) => module.pluginsHandlers,
+);
 const loadPushHandlers = lazyHandlerModule(
   () => import("./server-methods/push.js"),
   (module) => module.pushHandlers,
@@ -379,6 +383,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "device.pair.approve",
       "device.pair.reject",
       "device.pair.remove",
+      "device.pair.rename",
       "device.token.rotate",
       "device.token.revoke",
     ],
@@ -393,7 +398,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadDiagnosticsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["controlUi.githubPreview"],
+    methods: ["controlUi.githubPreview", "controlUi.sessionPullRequests"],
     loadHandlers: loadControlUiHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -416,6 +421,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: [
       "worktrees.list",
+      "worktrees.branches",
       "worktrees.create",
       "worktrees.remove",
       "worktrees.restore",
@@ -451,6 +457,16 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["plugins.uiDescriptors", "plugins.sessionAction"],
     loadHandlers: loadPluginHostHookHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "plugins.list",
+      "plugins.search",
+      "plugins.install",
+      "plugins.setEnabled",
+      "plugins.uninstall",
+    ],
+    loadHandlers: loadPluginsHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -591,6 +607,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.delete",
       "sessions.get",
       "sessions.compact",
+      "sessions.groups.list",
+      "sessions.groups.put",
+      "sessions.groups.rename",
+      "sessions.groups.delete",
     ],
     loadHandlers: loadSessionsHandlers,
   }),
@@ -611,12 +631,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
   ...createLazyCoreHandlers({
     methods: [
-      "node.pair.request",
       "node.pair.list",
       "node.pair.approve",
       "node.pair.reject",
       "node.pair.remove",
-      "node.pair.verify",
       "node.rename",
       "node.list",
       "node.describe",

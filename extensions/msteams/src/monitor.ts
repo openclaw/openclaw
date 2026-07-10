@@ -784,7 +784,11 @@ function adaptSdkContext(ctx: unknown, app: MSTeamsApp): MSTeamsTurnContext {
     return ctx as MSTeamsTurnContext;
   }
   const conversationId = sdkCtx.activity?.conversation?.id ?? "";
-  const activityApi = sdkCtx.api ?? app.api;
+  const inboundApi = sdkCtx.api;
+  const activityApi = inboundApi ?? app.api;
+  const getTeamDetails = inboundApi
+    ? (teamId: string) => inboundApi.teams.getById(teamId)
+    : undefined;
   const conversationType = (sdkCtx.activity?.conversation?.conversationType ?? "").toLowerCase();
   const isThreadable = conversationType === "channel" || conversationType === "groupchat";
   // For Teams channels and group chats, use ctx.reply() so the SDK threads the
@@ -811,6 +815,7 @@ function adaptSdkContext(ctx: unknown, app: MSTeamsApp): MSTeamsTurnContext {
     deleteActivity: async (activityId: string) => {
       return activityApi.conversations.activities(conversationId).delete(activityId);
     },
+    getTeamDetails,
     stream: sdkCtx.stream,
   });
 }

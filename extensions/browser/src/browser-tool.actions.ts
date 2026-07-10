@@ -288,9 +288,12 @@ function isChromeStaleTargetError(profile: string | undefined, err: unknown): bo
   if (!profile) {
     return false;
   }
+  const status =
+    err && typeof err === "object" && "status" in err ? (err as { status?: unknown }).status : null;
+  const msg = String(err);
+  const isTabNotFound = (status === 404 || msg.includes("404:")) && msg.includes("tab not found");
   if (profile === "user") {
-    const msg = String(err);
-    return msg.includes("404:") && msg.includes("tab not found");
+    return isTabNotFound;
   }
   const cfg = browserToolActionDeps.getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
@@ -298,31 +301,31 @@ function isChromeStaleTargetError(profile: string | undefined, err: unknown): bo
   if (!browserProfile || !getBrowserProfileCapabilities(browserProfile).usesChromeMcp) {
     return false;
   }
-  const msg = String(err);
-  return msg.includes("404:") && msg.includes("tab not found");
+  return isTabNotFound;
 }
 
-function stripTargetIdFromActRequest(
-  request: Parameters<typeof browserAct>[1],
-): Parameters<typeof browserAct>[1] | null {
-  const targetId = normalizeOptionalString(request.targetId);
-  if (!targetId) {
+function replaceStaleTargetIdInActRequest(
+  request: BrowserActRequest,
+  targetId: string,
+): BrowserActRequest | null {
+  if (!normalizeOptionalString(request.targetId) || !targetId) {
     return null;
   }
-  const retryRequest = { ...request };
-  delete retryRequest.targetId;
-  return retryRequest as Parameters<typeof browserAct>[1];
+  return { ...request, targetId } as BrowserActRequest;
 }
 
-function canRetryChromeActWithoutTargetId(request: Parameters<typeof browserAct>[1]): boolean {
-  const typedRequest = request as Partial<Record<"kind" | "action", unknown>>;
-  const kind =
-    typeof typedRequest.kind === "string"
-      ? typedRequest.kind
-      : typeof typedRequest.action === "string"
-        ? typedRequest.action
-        : "";
-  return kind === "hover" || kind === "scrollIntoView" || kind === "wait";
+function canRetryChromeActAfterSoleTargetRefresh(request: BrowserActRequest): boolean {
+  if (request.kind !== "wait" || normalizeNonNegativeDurationMs(request.timeMs) === undefined) {
+    return false;
+  }
+  return [
+    request.fn,
+    request.text,
+    request.textGone,
+    request.selector,
+    request.url,
+    request.loadState,
+  ].every((value) => !normalizeOptionalString(value));
 }
 
 function isAriaRefsUnsupportedError(err: unknown): boolean {
@@ -683,7 +686,6 @@ export async function executeActAction(params: {
     return jsonResult(result);
   } catch (err) {
     if (isChromeStaleTargetError(profile, err)) {
-      const retryRequest = stripTargetIdFromActRequest(effectiveRequest);
       const tabs = proxyRequest
         ? ((
             (await proxyRequest({
@@ -693,29 +695,37 @@ export async function executeActAction(params: {
             })) as { tabs?: unknown[] }
           ).tabs ?? [])
         : await browserToolActionDeps.browserTabs(baseUrl, { profile }).catch(() => []);
-      // Some user-browser targetIds can go stale between snapshots and actions.
-      // Only retry safe read-only actions, and only when exactly one tab remains attached.
-      if (retryRequest && canRetryChromeActWithoutTargetId(effectiveRequest) && tabs.length === 1) {
-        try {
-          const retryResult = proxyRequest
-            ? await proxyRequest({
-                method: "POST",
-                path: "/act",
-                profile,
-                body: retryRequest,
-                timeoutMs: resolveActProxyTimeoutMs(retryRequest),
-              })
-            : await browserToolActionDeps.browserAct(baseUrl, retryRequest, {
-                profile,
-              });
-          params.onTabActivity?.(
-            readStringValue((retryResult as { targetId?: unknown }).targetId) ??
-              readStringValue(retryRequest.targetId),
-          );
-          return jsonResult(retryResult);
-        } catch {
-          // Fall through to explicit stale-target guidance.
-        }
+      const freshTargetId =
+        tabs.length === 1
+          ? readStringValue((tabs[0] as { targetId?: unknown } | undefined)?.targetId)
+          : undefined;
+      const retryRequest = freshTargetId
+        ? replaceStaleTargetIdInActRequest(effectiveRequest, freshTargetId)
+        : null;
+      // This is same-agent continuity, not identity recovery: only target-independent
+      // waits may retry, against the one freshly listed tab. Ref-scoped and scripted
+      // operations require explicit fresh selection (and a fresh snapshot for refs).
+      if (
+        retryRequest &&
+        canRetryChromeActAfterSoleTargetRefresh(effectiveRequest) &&
+        tabs.length === 1
+      ) {
+        const retryResult = proxyRequest
+          ? await proxyRequest({
+              method: "POST",
+              path: "/act",
+              profile,
+              body: retryRequest,
+              timeoutMs: resolveActProxyTimeoutMs(retryRequest),
+            })
+          : await browserToolActionDeps.browserAct(baseUrl, retryRequest, {
+              profile,
+            });
+        params.onTabActivity?.(
+          readStringValue((retryResult as { targetId?: unknown }).targetId) ??
+            readStringValue(retryRequest.targetId),
+        );
+        return jsonResult(retryResult);
       }
       if (!tabs.length) {
         throw new Error(

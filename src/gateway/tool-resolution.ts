@@ -7,6 +7,7 @@ import {
   resolveSubagentToolPolicyForSession,
 } from "../agents/agent-tools.policy.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
+import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -29,7 +30,10 @@ import {
   replaceWithEffectiveCronCreatorToolAllowlist,
   type CronCreatorToolAllowlistEntry,
 } from "../agents/tools/cron-tool.js";
-import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type {
+  SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
+} from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
@@ -56,6 +60,7 @@ export function resolveGatewayScopedTools(params: {
   accountId?: string;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   agentTo?: string;
   agentThreadId?: string;
@@ -104,6 +109,11 @@ export function resolveGatewayScopedTools(params: {
     messageProvider: params.messageProvider,
     accountId: params.accountId ?? null,
   });
+  const sandboxRuntime = resolveSandboxRuntimeStatus({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+  });
+  const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
   const subagentStore = resolveSubagentCapabilityStore(params.sessionKey, {
     cfg: params.cfg,
   });
@@ -142,6 +152,7 @@ export function resolveGatewayScopedTools(params: {
     agentPolicy,
     agentProviderPolicy,
     groupPolicy,
+    sandboxPolicy,
     subagentPolicy,
     inheritedToolPolicy,
     defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
@@ -161,6 +172,7 @@ export function resolveGatewayScopedTools(params: {
     agentPolicy,
     agentProviderPolicy,
     groupPolicy,
+    sandboxPolicy,
     subagentPolicy,
     inheritedToolPolicy,
     gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
@@ -176,6 +188,7 @@ export function resolveGatewayScopedTools(params: {
     agentAccountId: params.accountId,
     inboundEventKind: params.inboundEventKind,
     sourceReplyDeliveryMode,
+    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,
     currentChannelId: params.currentChannelId ?? params.agentTo,
@@ -193,6 +206,7 @@ export function resolveGatewayScopedTools(params: {
     config: params.cfg,
     clientCaps: params.clientCaps,
     workspaceDir,
+    sandboxed: sandboxRuntime.sandboxed,
     pluginToolAllowlist: collectExplicitAllowlist([
       profilePolicy,
       providerProfilePolicy,
@@ -201,6 +215,7 @@ export function resolveGatewayScopedTools(params: {
       agentPolicy,
       agentProviderPolicy,
       groupPolicy,
+      sandboxPolicy,
       subagentPolicy,
       inheritedToolPolicy,
       gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
@@ -232,6 +247,7 @@ export function resolveGatewayScopedTools(params: {
         groupPolicy,
         agentId,
       }),
+      { policy: sandboxPolicy, label: "sandbox tools.allow" },
       { policy: subagentPolicy, label: "subagent tools.allow" },
       { policy: inheritedToolPolicy, label: "inherited tools" },
     ],
