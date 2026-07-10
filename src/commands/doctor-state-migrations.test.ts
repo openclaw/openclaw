@@ -827,7 +827,7 @@ describe("doctor legacy state migrations", () => {
     expect(store["agent:main:+1666"]?.sessionFile).toBe(path.join(targetDir, "b.jsonl"));
     expect(store["+1555"]).toBeUndefined();
     expect(store["+1666"]).toBeUndefined();
-    expect(store["agent:main:slack:channel:c123"]?.sessionId).toBe("c");
+    expect(store["agent:main:slack:channel:C123"]?.sessionId).toBe("c");
     expect(store["agent:main:unknown:group:abc"]?.sessionId).toBe("d");
     expect(store["agent:main:subagent:xyz"]?.sessionId).toBe("e");
   });
@@ -3228,8 +3228,10 @@ describe("doctor legacy state migrations", () => {
       targetDir,
       now: () => 123,
     });
-    expect(store["agent:main:slack:channel:c123"]?.sessionId).toBe("legacy");
-    expect(store["agent:main:slack:channel:C123"]).toBeUndefined();
+    // Slack channel IDs are now case-preserving (#102800); the canonical key
+    // retains the original case, and the lowercased alias resolves to it.
+    expect(store["agent:main:slack:channel:C123"]?.sessionId).toBe("legacy");
+    expect(store["agent:main:slack:channel:c123"]).toBeUndefined();
   });
 
   it("preserves Matrix room and thread casing during canonicalization", async () => {

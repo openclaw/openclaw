@@ -1197,7 +1197,7 @@ describe("gateway send mirroring", () => {
       sessionKey: "agent:main:slack:channel:C123",
     });
 
-    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:main:slack:channel:c123");
+    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:main:slack:channel:C123");
   });
 
   it("derives a target session key when none is provided", async () => {
