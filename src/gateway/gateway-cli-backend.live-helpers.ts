@@ -306,7 +306,7 @@ export function resolveImportedClaudeCliSessionId(messages: unknown[]): string |
   for (const message of messages) {
     const metadata =
       typeof message === "object" && message !== null
-        ? (message as { __openclaw?: unknown }).__openclaw
+        ? (message as Record<string, unknown>)["__openclaw"]
         : undefined;
     if (typeof metadata !== "object" || metadata === null) {
       continue;
