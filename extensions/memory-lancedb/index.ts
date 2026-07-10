@@ -10,6 +10,7 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   optionalFiniteNumberSchema,
   optionalPositiveIntegerSchema,
@@ -25,7 +26,6 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import {
   asOptionalRecord as asRecord,
@@ -1432,24 +1432,15 @@ export default definePluginEntry({
     // Mirrors core resolveMemorySearchConfig gating: the per-agent entry wins
     // over agents.defaults, and unset means enabled. Without this gate, shared
     // LanceDB memories leak into agents that disabled memory search (#103590).
+    // Per-agent resolution goes through the canonical resolveAgentConfig so id
+    // normalization/default-agent policy cannot drift from core.
     const agentMemorySearchEnabled = (agentId: string | undefined): boolean => {
       const runtimeCfg = api.runtime.config?.current?.() as OpenClawConfig | undefined;
       if (!runtimeCfg) {
         return true;
       }
-      // Normalize both sides: configured ids like "XiaoHuo" or ids with stray
-      // whitespace must still hit their per-agent override, not the default.
-      const normalizedAgentId = agentId ? normalizeAgentId(agentId) : undefined;
-      const agentEntry = normalizedAgentId
-        ? runtimeCfg.agents?.list?.find(
-            (entry) => normalizeAgentId(entry.id ?? "") === normalizedAgentId,
-          )
-        : undefined;
-      return (
-        agentEntry?.memorySearch?.enabled ??
-        runtimeCfg.agents?.defaults?.memorySearch?.enabled ??
-        true
-      );
+      const overrides = agentId ? resolveAgentConfig(runtimeCfg, agentId)?.memorySearch : undefined;
+      return overrides?.enabled ?? runtimeCfg.agents?.defaults?.memorySearch?.enabled ?? true;
     };
     const resolveCurrentHookConfig = () => {
       const runtimePluginConfig = resolveLivePluginConfigObject(
