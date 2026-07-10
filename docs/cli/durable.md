@@ -67,21 +67,24 @@ queries.
 
 ## Environment Variables
 
-| Variable                                     | Default    | Purpose                                                                                                 |
-| -------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------- |
-| `OPENCLAW_DURABLE_RUNTIME`                   | disabled   | Enables the durable runtime when set to `1`, `true`, `yes`, or `on`.                                    |
-| `OPENCLAW_DURABLE_RUNTIME_STORE`             | `sqlite`   | Selects the durable store backend. Only `sqlite` is supported in this slice.                            |
-| `OPENCLAW_DURABLE_WORKER`                    | disabled   | Starts the recovery worker only when the durable runtime is also enabled.                               |
-| `OPENCLAW_DURABLE_WORKER_POLL_INTERVAL_MS`   | `1000`     | Worker poll interval.                                                                                   |
-| `OPENCLAW_DURABLE_WORKER_CLAIM_TTL_MS`       | `300000`   | Claim lease time for worker-owned runs or steps.                                                        |
-| `OPENCLAW_DURABLE_WORKER_MAX_CONCURRENCY`    | `1`        | Maximum worker concurrency for this local-first slice.                                                  |
-| `OPENCLAW_DURABLE_RECOVERY_INTERVAL_MS`      | `60000`    | Recovery reconciliation interval.                                                                       |
-| `OPENCLAW_DURABLE_STALE_AGENT_TURN_AFTER_MS` | `21600000` | Age after which an unfinished agent turn can be marked lost by recovery.                                |
-| `OPENCLAW_DURABLE_AGENT_TURN_HEARTBEAT_MS`   | `30000`    | Agent turn heartbeat interval. Set `0` to disable the heartbeat timer.                                  |
-| `OPENCLAW_DURABLE_ORCHESTRATION_POLICY`      | `auto`     | Prompt guidance for subagent orchestration: `auto`, `solo_first`, `parallel_first`, or `manual_fanout`. |
-| `OPENCLAW_DURABLE_INPUT_PREVIEW_CHARS`       | `600`      | Maximum input preview characters stored by default. Set `0` to store metadata only.                     |
-| `OPENCLAW_DURABLE_INPUT_TEXT`                | disabled   | Store full input text inline only when set to `full` or `inline`.                                       |
-| `OPENCLAW_DURABLE_INPUT_FULL_MAX_CHARS`      | `16384`    | Maximum full input text characters stored when full input retention is enabled.                         |
+| Variable                                     | Default    | Purpose                                                                                                        |
+| -------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------- |
+| `OPENCLAW_DURABLE_RUNTIME`                   | disabled   | Enables the durable runtime when set to `1`, `true`, `yes`, or `on`.                                           |
+| `OPENCLAW_DURABLE_RUNTIME_STORE`             | `sqlite`   | Selects the durable store backend. Only `sqlite` is supported in this slice.                                   |
+| `OPENCLAW_DURABLE_WORKER`                    | disabled   | Starts the recovery worker only when the durable runtime is also enabled.                                      |
+| `OPENCLAW_DURABLE_WORKER_POLL_INTERVAL_MS`   | `1000`     | Worker poll interval.                                                                                          |
+| `OPENCLAW_DURABLE_WORKER_CLAIM_TTL_MS`       | `300000`   | Claim lease time for worker-owned runs or steps.                                                               |
+| `OPENCLAW_DURABLE_WORKER_MAX_CONCURRENCY`    | `1`        | Maximum worker concurrency for this local-first slice.                                                         |
+| `OPENCLAW_DURABLE_RECOVERY_INTERVAL_MS`      | `60000`    | Recovery reconciliation interval.                                                                              |
+| `OPENCLAW_DURABLE_STALE_AGENT_TURN_AFTER_MS` | `21600000` | Age after which an unfinished agent turn can be marked lost by recovery.                                       |
+| `OPENCLAW_DURABLE_AGENT_TURN_HEARTBEAT_MS`   | `30000`    | Agent turn heartbeat interval. Set `0` to disable the heartbeat timer.                                         |
+| `OPENCLAW_DURABLE_ORCHESTRATION_POLICY`      | disabled   | Opt-in prompt guidance for subagent orchestration: `auto`, `solo_first`, `parallel_first`, or `manual_fanout`. |
+| `OPENCLAW_DURABLE_INPUT_PREVIEW_CHARS`       | `600`      | Maximum input preview characters stored by default. Set `0` to store metadata only.                            |
+| `OPENCLAW_DURABLE_INPUT_TEXT`                | disabled   | Store full input text inline only when set to `full` or `inline`.                                              |
+| `OPENCLAW_DURABLE_INPUT_FULL_MAX_CHARS`      | `16384`    | Maximum full input text characters stored when full input retention is enabled.                                |
+
+When `OPENCLAW_DURABLE_ORCHESTRATION_POLICY` is unset, durable orchestration
+prompt guidance is enabled only when `OPENCLAW_DURABLE_RUNTIME` is enabled.
 
 ## Retention And Privacy
 

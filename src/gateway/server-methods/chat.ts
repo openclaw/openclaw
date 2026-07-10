@@ -52,6 +52,7 @@ import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
+  readPairingQrReplyChannelData,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
@@ -861,11 +862,34 @@ function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
 
 function hasSensitiveMediaPayload(payloads: ReplyPayload[]): boolean {
   return payloads.some(
-    (payload) => payload.sensitiveMedia === true && isMediaBearingPayload(payload),
+    (payload) =>
+      payload.sensitiveMedia === true &&
+      (isMediaBearingPayload(payload) || Boolean(readPairingQrReplyChannelData(payload))),
   );
 }
 
 type AssistantDisplayContentBlock = Record<string, unknown>;
+
+async function buildPairingQrAssistantContentBlock(
+  payload: ReplyPayload,
+): Promise<AssistantDisplayContentBlock | undefined> {
+  const qr = readPairingQrReplyChannelData(payload);
+  if (!qr) {
+    return undefined;
+  }
+  const [imageUrl, terminalText] = await Promise.all([
+    renderQrPngDataUrl(qr.setupCode),
+    renderQrTerminal(qr.setupCode, { small: true }),
+  ]);
+  return {
+    type: "openclaw_pairing_qr",
+    image_url: imageUrl,
+    terminalText,
+    alt: "OpenClaw pairing QR code",
+    expiresAtMs: qr.expiresAtMs,
+    sensitive: true,
+  };
+}
 
 function sanitizeAssistantDisplayText(value?: string | null): string | undefined {
   if (!value) {
@@ -900,8 +924,10 @@ async function buildAssistantDisplayContentFromReplyPayloads(params: {
   payloads: ReplyPayload[];
   managedImageLocalRoots?: Parameters<typeof createManagedOutgoingImageBlocks>[0]["localRoots"];
   includeSensitiveMedia?: boolean;
+  includeSensitiveDisplay?: boolean;
   onLocalAudioAccessDenied?: (message: string) => void;
   onManagedImagePrepareError?: (message: string) => void;
+  onSensitiveDisplayPrepareError?: (message: string) => void;
 }): Promise<AssistantDisplayContentBlock[] | undefined> {
   const rawTextPayloadCount = params.payloads.filter(
     (payload) =>
@@ -922,6 +948,16 @@ async function buildAssistantDisplayContentFromReplyPayloads(params: {
       content.push({ type: "text", text });
     } else if (typeof payload.text === "string" && payload.text.trim().length > 0) {
       strippedTextPayloadCount += 1;
+    }
+    if (params.includeSensitiveDisplay === true) {
+      try {
+        const pairingQrBlock = await buildPairingQrAssistantContentBlock(payload);
+        if (pairingQrBlock) {
+          content.push(pairingQrBlock);
+        }
+      } catch (err) {
+        params.onSensitiveDisplayPrepareError?.(formatForLog(err));
+      }
     }
     if (params.includeSensitiveMedia === false && payload.sensitiveMedia === true) {
       continue;
@@ -1593,6 +1629,8 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
       : {};
   const metadataId = typeof metadata.id === "string" ? metadata.id : undefined;
   const metadataSeq = typeof metadata.seq === "number" ? metadata.seq : undefined;
+  const metadataIdempotencyKey =
+    typeof metadata.idempotencyKey === "string" ? metadata.idempotencyKey : undefined;
   return {
     role,
     timestamp,
@@ -1600,6 +1638,7 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
     __openclaw: {
       ...(metadataId ? { id: metadataId } : {}),
       ...(metadataSeq !== undefined ? { seq: metadataSeq } : {}),
+      ...(metadataIdempotencyKey ? { idempotencyKey: metadataIdempotencyKey } : {}),
       truncated: true,
       reason: "oversized",
     },
@@ -4681,11 +4720,15 @@ export const chatHandlers: GatewayRequestHandlers = {
           payloads: [transcriptPayload],
           managedImageLocalRoots: mediaLocalRoots,
           includeSensitiveMedia: transcriptPayload.sensitiveMedia !== true,
+          includeSensitiveDisplay: transcriptPayload.sensitiveMedia === true,
           onLocalAudioAccessDenied: (message) => {
             context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
           },
           onManagedImagePrepareError: (message) => {
             context.logGateway.warn(`webchat image embedding skipped attachment: ${message}`);
+          },
+          onSensitiveDisplayPrepareError: (message) => {
+            context.logGateway.warn(`webchat sensitive display skipped attachment: ${message}`);
           },
         });
         const mediaMessage = await buildWebchatAssistantMediaMessage([transcriptPayload], {
@@ -5291,6 +5334,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                     payloads: finalPayloads,
                     managedImageLocalRoots: mediaLocalRoots,
                     includeSensitiveMedia: false,
+                    includeSensitiveDisplay: true,
                     onLocalAudioAccessDenied: (message) => {
                       context.logGateway.warn(
                         `webchat audio embedding denied local path: ${message}`,
@@ -5299,6 +5343,11 @@ export const chatHandlers: GatewayRequestHandlers = {
                     onManagedImagePrepareError: (message) => {
                       context.logGateway.warn(
                         `webchat image embedding skipped attachment: ${message}`,
+                      );
+                    },
+                    onSensitiveDisplayPrepareError: (message) => {
+                      context.logGateway.warn(
+                        `webchat sensitive display skipped attachment: ${message}`,
                       );
                     },
                   });
