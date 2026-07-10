@@ -2,8 +2,6 @@
 // auth handling through the in-memory HTTP harness.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { markGatewayShuttingDown, resetGatewayShuttingDownForTest } from "./server-close.js";
-import { resetGatewayHealthzShuttingDownLogForTest } from "./server-http.js";
 import {
   prepareGatewaySuspend,
   resumeGatewaySuspend,
@@ -14,6 +12,8 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import type { ChannelManager } from "./server-channels.js";
+import { markGatewayShuttingDown, resetGatewayShuttingDownForTest } from "./server-close.js";
+import { resetGatewayHealthzShuttingDownLogForTest } from "./server-http.js";
 import {
   AUTH_TOKEN,
   AUTH_NONE,
