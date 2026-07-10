@@ -103,9 +103,7 @@ describe("JsonlSessionStorage timestamps", () => {
       ]);
     } finally {
       const removed = await rootEnv.remove(created.value, { recursive: true, force: true });
-      if (!removed.ok) {
-        throw removed.error;
-      }
+      expect(removed.ok).toBe(true);
     }
   });
 
