@@ -893,7 +893,11 @@ describe("subagent registry persistence", () => {
     });
 
     restartRegistry();
-    await waitForRegistryWork(() => vi.mocked(callGateway).mock.calls.length > 0);
+    await waitForRegistryWork(
+      () =>
+        vi.mocked(callGateway).mock.calls.length > 0 &&
+        vi.mocked(scheduleOrphanRecovery).mock.calls.length > 0,
+    );
 
     expect(callGateway).toHaveBeenCalledTimes(1);
     const [request] = vi.mocked(callGateway).mock.calls.at(0) ?? [];

@@ -1738,6 +1738,7 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   stopSweeper();
   sweepInProgress = false;
   restoreAttempted = false;
+  lastOrphanRecoveryScheduleAt = 0;
   if (listenerStop) {
     listenerStop();
     listenerStop = null;
