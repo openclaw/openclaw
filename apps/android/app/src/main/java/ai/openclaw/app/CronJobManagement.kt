@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import kotlinx.serialization.json.Json
@@ -70,6 +71,54 @@ sealed interface GatewayCronActionState {
   ) : GatewayCronActionState
 }
 
+/** Owns one queued manual run id per job so a stale tracker cannot clear a newer run. */
+internal class PendingCronRunRegistry {
+  private val lock = Any()
+  private val runIdsByJob = linkedMapOf<String, String>()
+
+  fun contains(rawJobId: String): Boolean {
+    val jobId = rawJobId.trim().takeIf { it.isNotEmpty() } ?: return false
+    return synchronized(lock) { runIdsByJob.containsKey(jobId) }
+  }
+
+  fun begin(
+    rawJobId: String,
+    rawRunId: String,
+    publish: (Set<String>) -> Unit,
+  ): Boolean {
+    val jobId = rawJobId.trim().takeIf { it.isNotEmpty() } ?: return false
+    val runId = rawRunId.trim().takeIf { it.isNotEmpty() } ?: return false
+    return synchronized(lock) {
+      if (runIdsByJob.containsKey(jobId)) return@synchronized false
+      runIdsByJob[jobId] = runId
+      publish(runIdsByJob.keys.toSet())
+      true
+    }
+  }
+
+  fun finish(
+    rawJobId: String,
+    rawRunId: String,
+    publish: (Set<String>) -> Unit,
+  ): Boolean {
+    val jobId = rawJobId.trim().takeIf { it.isNotEmpty() } ?: return false
+    val runId = rawRunId.trim().takeIf { it.isNotEmpty() } ?: return false
+    return synchronized(lock) {
+      if (runIdsByJob[jobId] != runId) return@synchronized false
+      runIdsByJob.remove(jobId)
+      publish(runIdsByJob.keys.toSet())
+      true
+    }
+  }
+
+  fun clear(publish: (Set<String>) -> Unit) {
+    synchronized(lock) {
+      runIdsByJob.clear()
+      publish(emptySet())
+    }
+  }
+}
+
 sealed interface GatewayCronScheduleEdit {
   data class At(
     val at: String,
@@ -127,7 +176,6 @@ data class GatewayCronJobEdit(
 }
 
 internal data class CronEditorDraftState(
-  val baselineRevision: Long,
   val baseline: GatewayCronJobEdit,
   val edit: GatewayCronJobEdit,
   val savePending: Boolean = false,
@@ -159,23 +207,18 @@ internal data class CronEditorDraftState(
     val incoming = job.toCronJobEdit()
     if (incoming == edit) {
       return CronEditorDraftState(
-        baselineRevision = job.updatedAtMs,
         baseline = incoming,
         edit = incoming,
       )
     }
     if (incoming == baseline) {
-      return copy(
-        baselineRevision = job.updatedAtMs,
-        hasIncomingConflict = false,
-      )
+      return copy(hasIncomingConflict = false)
     }
     val canAdopt = !isDirty || saveSucceeded
     if (!canAdopt) {
       return copy(hasIncomingConflict = true)
     }
     return CronEditorDraftState(
-      baselineRevision = job.updatedAtMs,
       baseline = incoming,
       edit = incoming,
     )
@@ -185,7 +228,6 @@ internal data class CronEditorDraftState(
     fun from(job: GatewayCronJobDetail): CronEditorDraftState {
       val edit = job.toCronJobEdit()
       return CronEditorDraftState(
-        baselineRevision = job.updatedAtMs,
         baseline = edit,
         edit = edit,
       )
@@ -232,6 +274,29 @@ internal sealed interface GatewayCronRunOutcome {
 
   data object Rejected : GatewayCronRunOutcome
 }
+
+internal fun cronRunShouldRefresh(outcome: GatewayCronRunOutcome): Boolean =
+  when (outcome) {
+    is GatewayCronRunOutcome.Started -> true
+    is GatewayCronRunOutcome.Skipped -> outcome.reason == GatewayCronRunSkipReason.InvalidSpec
+    GatewayCronRunOutcome.Rejected -> false
+  }
+
+internal fun cronRunCompletionNotice(
+  jobId: String,
+  status: String?,
+): GatewayCronActionState.Notice {
+  val (message, kind) =
+    when (status) {
+      "ok" -> "Cron run finished." to GatewayCronNoticeKind.Success
+      "skipped" -> "Cron run skipped." to GatewayCronNoticeKind.Warning
+      "error" -> "Cron run failed." to GatewayCronNoticeKind.Error
+      else -> "Cron run finished with an unknown status." to GatewayCronNoticeKind.Warning
+    }
+  return GatewayCronActionState.Notice(id = jobId, message = message, kind = kind)
+}
+
+internal fun isCronJobRevisionConflict(error: GatewaySession.ErrorShape): Boolean = error.details?.code == "CRON_JOB_CHANGED"
 
 internal fun GatewayCronJobDetail.toCronJobEdit(): GatewayCronJobEdit =
   GatewayCronJobEdit(
@@ -318,8 +383,13 @@ internal fun buildCronUpdateParams(
       payloadPatch?.let { put("payload", it) }
     }
   require(patch.isNotEmpty()) { "No cron changes to save." }
+  val configRevision =
+    requireNotNull(original.configRevision) {
+      "Update the gateway before saving cron changes from Android."
+    }
   return buildJsonObject {
     put("id", JsonPrimitive(original.id))
+    put("expectedConfigRevision", JsonPrimitive(configRevision))
     put("patch", patch)
   }.toString()
 }

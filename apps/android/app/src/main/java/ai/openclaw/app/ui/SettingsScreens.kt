@@ -346,6 +346,7 @@ private fun CronJobDetailSettingsScreen(
   val detailState by viewModel.cronJobDetailState.collectAsState()
   val historyState by viewModel.cronRunHistoryState.collectAsState()
   val actionState by viewModel.cronActionState.collectAsState()
+  val pendingCronRunJobIds by viewModel.pendingCronRunJobIds.collectAsState()
   val operatorAdminScopeAvailable by viewModel.operatorAdminScopeAvailable.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
   val activity = LocalActivity.current
@@ -459,6 +460,7 @@ private fun CronJobDetailSettingsScreen(
           onEditorDraftChange = ::updateEditorDraft,
           historyState = historyState,
           actionState = actionState,
+          runPending = jobId in pendingCronRunJobIds,
           operatorAdminScopeAvailable = operatorAdminScopeAvailable,
           onRun = { viewModel.runCronJob(current.id) },
           onToggleEnabled = {
@@ -2011,7 +2013,7 @@ private fun CronJobListRow(
   ClawDetailRow(
     title = job.name,
     subtitle = cronJobSubtitle(job),
-    modifier = Modifier.clickable(onClick = onClick),
+    modifier = Modifier.clickable(onClickLabel = "Open cron job detail", onClick = onClick),
     leading = { ClawIconBadge(icon = Icons.Default.Bolt) },
     trailing = {
       Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -2029,6 +2031,7 @@ private fun CronJobDetailPanel(
   onEditorDraftChange: (CronEditorDraftState) -> Unit,
   historyState: GatewayCronRunHistoryState,
   actionState: GatewayCronActionState,
+  runPending: Boolean,
   operatorAdminScopeAvailable: Boolean,
   onRun: () -> Unit,
   onToggleEnabled: () -> Unit,
@@ -2042,6 +2045,7 @@ private fun CronJobDetailPanel(
     onEditorDraftChange = onEditorDraftChange,
     historyState = historyState,
     actionState = actionState,
+    runPending = runPending,
     operatorAdminScopeAvailable = operatorAdminScopeAvailable,
     onRun = onRun,
     onToggleEnabled = onToggleEnabled,

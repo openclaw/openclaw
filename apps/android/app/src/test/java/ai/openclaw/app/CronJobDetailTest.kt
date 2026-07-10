@@ -18,6 +18,7 @@ class CronJobDetailTest {
     requireNotNull(detail)
     assertEquals("job-1", detail.id)
     assertEquals("Daily report", detail.name)
+    assertEquals("sha256:fixture", detail.configRevision)
     assertEquals("cron", detail.scheduleKind)
     assertEquals("0 9 * * *", detail.scheduleLabel)
     assertEquals("0 9 * * * · Europe/Vienna · Stagger Every 5m", detail.scheduleDetail)
@@ -115,6 +116,7 @@ class CronJobDetailTest {
           "deleteAfterRun": false,
           "createdAtMs": 1000,
           "updatedAtMs": 2000,
+          "configRevision": "sha256:fixture",
           "schedule": {"kind":"cron","expr":"0 9 * * *","tz":"Europe/Vienna","staggerMs":300000},
           "sessionTarget": "isolated",
           "wakeMode": "now",

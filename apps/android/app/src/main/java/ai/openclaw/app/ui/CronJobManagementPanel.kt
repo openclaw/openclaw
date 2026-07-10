@@ -62,6 +62,7 @@ internal fun CronJobManagementPanel(
   onEditorDraftChange: (CronEditorDraftState) -> Unit,
   historyState: GatewayCronRunHistoryState,
   actionState: GatewayCronActionState,
+  runPending: Boolean,
   operatorAdminScopeAvailable: Boolean,
   onRun: () -> Unit,
   onToggleEnabled: () -> Unit,
@@ -131,6 +132,7 @@ internal fun CronJobManagementPanel(
     job = job,
     enabled = operatorAdminScopeAvailable && !busy && !editorDraft.requiresResolution,
     busy = busy,
+    runPending = runPending,
     onRun = onRun,
     onToggleEnabled = onToggleEnabled,
     onDelete = { showDeleteConfirmation = true },
@@ -188,6 +190,7 @@ private fun CronActionPanel(
   job: GatewayCronJobDetail,
   enabled: Boolean,
   busy: Boolean,
+  runPending: Boolean,
   onRun: () -> Unit,
   onToggleEnabled: () -> Unit,
   onDelete: () -> Unit,
@@ -199,10 +202,15 @@ private fun CronActionPanel(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         ClawPrimaryButton(
-          text = if (busy) "Working" else "Run Now",
+          text =
+            when {
+              busy -> "Working"
+              runPending -> "Run Pending"
+              else -> "Run Now"
+            },
           onClick = onRun,
           modifier = Modifier.weight(1f),
-          enabled = enabled,
+          enabled = enabled && !runPending,
           icon = Icons.Default.PlayArrow,
         )
         ClawSecondaryButton(
@@ -554,7 +562,7 @@ private fun CronRunHistoryPanel(
       tint = ClawTheme.colors.text,
     )
     Text(
-      text = "Run History",
+      text = "Recent Runs",
       style = ClawTheme.type.section,
       color = ClawTheme.colors.text,
       modifier = Modifier.weight(1f),
@@ -574,7 +582,7 @@ private fun CronRunHistoryPanel(
     runs.isEmpty() ->
       ClawPanel {
         Text(
-          text = if (loading) "Loading run history…" else "No run history yet.",
+          text = if (loading) "Loading recent runs…" else "No recent runs yet.",
           style = ClawTheme.type.body,
           color = ClawTheme.colors.textMuted,
         )

@@ -67,7 +67,6 @@ class MainViewModelTest {
         payload = GatewayCronPayloadEdit.SystemEvent("Wake up"),
       )
     return CronEditorDraftState(
-      baselineRevision = 1,
       baseline = edit,
       edit = edit.copy(name = "$name draft"),
     )

@@ -118,6 +118,20 @@ class CronRuntimeGuardTest {
   }
 
   @Test
+  fun pendingCronRunSurvivesReconnectButClearsWhenGatewayScopeRetires() {
+    val runtime = createTestRuntime()
+    val registry = readField<PendingCronRunRegistry>(runtime, "pendingCronRunRegistry")
+    val pending = readField<MutableStateFlow<Set<String>>>(runtime, "_pendingCronRunJobIds")
+    assertEquals(true, registry.begin("job-1", "run-1") { pending.value = it })
+
+    invokeBooleanMethod(runtime, "clearOperatorGatewayState", false)
+    assertEquals(setOf("job-1"), pending.value)
+
+    invokeBooleanMethod(runtime, "clearOperatorGatewayState", true)
+    assertEquals(emptySet<String>(), pending.value)
+  }
+
+  @Test
   fun runningStateBlocksMutationAfterMutexRelease() =
     runBlocking {
       val runtime = createTestRuntime()
@@ -189,6 +203,17 @@ class CronRuntimeGuardTest {
   ) {
     target.javaClass
       .getDeclaredMethod(name, String::class.java)
+      .apply { isAccessible = true }
+      .invoke(target, value)
+  }
+
+  private fun invokeBooleanMethod(
+    target: Any,
+    name: String,
+    value: Boolean,
+  ) {
+    target.javaClass
+      .getDeclaredMethod(name, java.lang.Boolean.TYPE)
       .apply { isAccessible = true }
       .invoke(target, value)
   }

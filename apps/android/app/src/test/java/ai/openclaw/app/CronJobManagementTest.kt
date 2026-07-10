@@ -1,7 +1,10 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.GatewayConnectErrorDetails
+import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -54,6 +57,7 @@ class CronJobManagementTest {
     val patch = root.getValue("patch").jsonObject
     val payloadPatch = patch.getValue("payload").jsonObject
 
+    assertEquals("sha256:fixture", root.getValue("expectedConfigRevision").jsonPrimitive.content)
     assertEquals(setOf("payload"), patch.keys)
     assertEquals("agentTurn", payloadPatch.getValue("kind").jsonPrimitive.content)
     assertEquals(JsonNull, payloadPatch["model"])
@@ -188,6 +192,92 @@ class CronJobManagementTest {
   }
 
   @Test
+  fun invalidSpecSkipRefreshesPersistedDiagnosticsWithoutRefreshingOtherSkips() {
+    assertTrue(cronRunShouldRefresh(GatewayCronRunOutcome.Started(runId = "run-1")))
+    assertTrue(
+      cronRunShouldRefresh(
+        GatewayCronRunOutcome.Skipped(GatewayCronRunSkipReason.InvalidSpec),
+      ),
+    )
+    assertFalse(
+      cronRunShouldRefresh(
+        GatewayCronRunOutcome.Skipped(GatewayCronRunSkipReason.AlreadyRunning),
+      ),
+    )
+    assertFalse(cronRunShouldRefresh(GatewayCronRunOutcome.Rejected))
+  }
+
+  @Test
+  fun queuedRunCompletionNoticeMatchesTerminalHistoryStatus() {
+    listOf(
+      Triple("ok", "Cron run finished.", GatewayCronNoticeKind.Success),
+      Triple("skipped", "Cron run skipped.", GatewayCronNoticeKind.Warning),
+      Triple("error", "Cron run failed.", GatewayCronNoticeKind.Error),
+      Triple(null, "Cron run finished with an unknown status.", GatewayCronNoticeKind.Warning),
+    ).forEach { (status, message, kind) ->
+      assertEquals(
+        GatewayCronActionState.Notice(id = "job", message = message, kind = kind),
+        cronRunCompletionNotice("job", status),
+      )
+    }
+  }
+
+  @Test
+  fun pendingRunRegistryDedupesOnlyTheSameJobAndIgnoresStaleTrackers() {
+    val registry = PendingCronRunRegistry()
+    val snapshots = mutableListOf<Set<String>>()
+
+    assertTrue(registry.begin("job-a", "run-a") { snapshots += it })
+    assertFalse(registry.begin("job-a", "run-a-duplicate") { snapshots += it })
+    assertTrue(registry.begin("job-b", "run-b") { snapshots += it })
+    assertTrue(registry.contains("job-a"))
+    assertTrue(registry.contains("job-b"))
+    assertFalse(registry.finish("job-a", "stale-run") { snapshots += it })
+    assertTrue(registry.finish("job-a", "run-a") { snapshots += it })
+    assertFalse(registry.contains("job-a"))
+    assertTrue(registry.contains("job-b"))
+    registry.clear { snapshots += it }
+    assertFalse(registry.contains("job-b"))
+    assertEquals(
+      listOf(setOf("job-a"), setOf("job-a", "job-b"), setOf("job-b"), emptySet()),
+      snapshots,
+    )
+  }
+
+  @Test
+  fun mapsCronRevisionConflicts() {
+    val conflict =
+      GatewaySession.ErrorShape(
+        code = "INVALID_REQUEST",
+        message = "changed",
+        details =
+          GatewayConnectErrorDetails(
+            code = "CRON_JOB_CHANGED",
+            canRetryWithDeviceToken = false,
+            recommendedNextStep = null,
+          ),
+      )
+    val generic = conflict.copy(details = conflict.details?.copy(code = "OTHER"))
+
+    assertTrue(isCronJobRevisionConflict(conflict))
+    assertFalse(isCronJobRevisionConflict(generic))
+  }
+
+  @Test
+  fun updateFailsClosedWhenGatewayDoesNotProvideConfigRevision() {
+    val original = requireNotNull(parseGatewayCronJobDetail(jobJson(configRevision = null)))
+    val error =
+      runCatching {
+        buildCronUpdateParams(
+          original = original,
+          edit = original.toCronJobEdit().copy(name = "Renamed"),
+        )
+      }.exceptionOrNull()
+
+    assertEquals("Update the gateway before saving cron changes from Android.", error?.message)
+  }
+
+  @Test
   fun detailAndHistoryGenerationsAdvanceIndependently() {
     val detailGuard = CronJobDetailRequestGuard()
     val historyGuard = CronJobDetailRequestGuard()
@@ -248,7 +338,6 @@ class CronJobManagementTest {
     val observed = draft.observeJob(runtimeUpdate)
 
     assertEquals("Unsaved name", observed.edit.name)
-    assertEquals(3000, observed.baselineRevision)
     assertTrue(observed.isDirty)
     assertFalse(observed.hasIncomingConflict)
   }
@@ -270,7 +359,7 @@ class CronJobManagementTest {
     val saved =
       requireNotNull(
         parseGatewayCronJobDetail(
-          jobJson(name = "Saved name", updatedAtMs = 4000),
+          jobJson(name = "Saved name", updatedAtMs = 4000, configRevision = "sha256:saved"),
         ),
       )
     draft = draft.observeJob(saved)
@@ -352,26 +441,32 @@ class CronJobManagementTest {
   private fun jobJson(
     name: String = "Daily report",
     updatedAtMs: Long = 2000,
+    configRevision: String? = "sha256:fixture",
     deleteAfterRun: Boolean = false,
     schedule: String = """{"kind":"cron","expr":"0 9 * * *","tz":"UTC"}""",
     payload: String =
       """{"kind":"agentTurn","message":"Summarize the day","model":"openai/gpt-5.5","thinking":"high"}""",
-  ) = objectJson(
-    """
-    {
-      "id":"job-1",
-      "name":"$name",
-      "description":"Daily digest",
-      "enabled":true,
-      "deleteAfterRun":$deleteAfterRun,
-      "createdAtMs":1000,
-      "updatedAtMs":$updatedAtMs,
-      "schedule":$schedule,
-      "sessionTarget":"isolated",
-      "wakeMode":"next-heartbeat",
-      "payload":$payload,
-      "state":{}
-    }
-    """.trimIndent(),
-  )
+  ): JsonObject {
+    val configRevisionField =
+      configRevision?.let { """"configRevision":"$it",""" }.orEmpty()
+    return objectJson(
+      """
+      {
+        "id":"job-1",
+        "name":"$name",
+        "description":"Daily digest",
+        "enabled":true,
+        "deleteAfterRun":$deleteAfterRun,
+        "createdAtMs":1000,
+        "updatedAtMs":$updatedAtMs,
+        $configRevisionField
+        "schedule":$schedule,
+        "sessionTarget":"isolated",
+        "wakeMode":"next-heartbeat",
+        "payload":$payload,
+        "state":{}
+      }
+      """.trimIndent(),
+    )
+  }
 }
