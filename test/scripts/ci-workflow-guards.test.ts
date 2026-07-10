@@ -1559,6 +1559,7 @@ describe("ci workflow guards", () => {
     expect(legacy.outputs.run_ios_build).toBe("false");
     expect(legacy.outputs.run_native_i18n).toBe("false");
     expect(legacy.outputs.run_qa_smoke_ci).toBe("false");
+    expect(legacy.outputs.run_channel_contracts_shards).toBe("false");
     expect(JSON.parse(legacy.outputs.checks_node_core_nondist_matrix).include).toContainEqual(
       expect.objectContaining({
         check_name: "legacy-node-plan",
@@ -1578,6 +1579,9 @@ describe("ci workflow guards", () => {
     const workflow = readCiWorkflow();
     expect(workflow.jobs["qa-smoke-ci-profile"].if).toBe(
       "needs.preflight.outputs.run_qa_smoke_ci == 'true'",
+    );
+    expect(workflow.jobs["checks-fast-channel-contracts-shard"].if).toBe(
+      "needs.preflight.outputs.run_channel_contracts_shards == 'true'",
     );
     const swiftInstall = workflow.jobs["macos-swift"].steps.find(
       (step: { name?: string }) => step.name === "Install XcodeGen / SwiftLint / SwiftFormat",

@@ -92,6 +92,7 @@ jobs:
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
       run_plugin_contracts_shards: ${{ steps.manifest.outputs.run_plugin_contracts_shards }}
       plugin_contracts_matrix: ${{ steps.manifest.outputs.plugin_contracts_matrix }}
+      run_channel_contracts_shards: ${{ steps.manifest.outputs.run_channel_contracts_shards }}
       channel_contracts_matrix: ${{ steps.manifest.outputs.channel_contracts_matrix }}
       run_checks: ${{ steps.manifest.outputs.run_checks }}
       run_checks_node_core_nondist: ${{ steps.manifest.outputs.run_checks_node_core_nondist }}
@@ -396,6 +397,7 @@ jobs:
             : [];
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
           const nodeTestDistShards = nodeTestShards.filter((shard) => shard.requires_dist);
+          const channelContractShards = runNodeFull ? createChannelContractTestShards() : [];
 
           const manifest = {
             docs_only: docsOnly,
@@ -414,9 +416,8 @@ jobs:
             plugin_contracts_matrix: createMatrix(
               runPluginContractShards ? createPluginContractTestShards() : [],
             ),
-            channel_contracts_matrix: createMatrix(
-              runNodeFull ? createChannelContractTestShards() : [],
-            ),
+            run_channel_contracts_shards: channelContractShards.length > 0,
+            channel_contracts_matrix: createMatrix(channelContractShards),
             run_checks: runNodeFull,
             run_checks_node_core_nondist: nodeTestNonDistShards.length > 0,
             checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
@@ -1156,7 +1157,7 @@ jobs:
       contents: read
     name: ${{ matrix.checkName }}
     needs: [preflight]
-    if: needs.preflight.outputs.run_checks_fast == 'true'
+    if: needs.preflight.outputs.run_channel_contracts_shards == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
