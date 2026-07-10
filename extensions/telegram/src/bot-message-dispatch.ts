@@ -903,6 +903,12 @@ export const dispatchTelegramMessage = async ({
     );
     replyFenceGeneration = undefined;
   };
+  const adoptReplyTurn = async () => {
+    // Fence abort authority ends at adoption. Core (queue interrupt mode /
+    // reply-run registry abort) is the sole owner of killing adopted runs.
+    await onTurnAdopted?.();
+    releaseTelegramReplyFenceAbortController(activeReplyFenceKey, replyAbortController);
+  };
   // Block mode sizes preview rotation steps from streaming.preview.chunk (same
   // contract as Discord's block chunker). Other modes keep one growing rich
   // preview. The stream has no min-flush concept, so minChars/breakPreference
@@ -1521,7 +1527,9 @@ export const dispatchTelegramMessage = async ({
         activeKey: replyFenceKey.activeKey,
         laneKey: scopedReplyFenceLaneKey,
       });
-  if (!isRoomEvent && supersedeReplyFence) {
+  // Ambient room-event work uses a separate fence key. Any non-room-event
+  // inbound may cancel it without owning abort authority over adopted user turns.
+  if (!isRoomEvent) {
     supersedeTelegramReplyFence(replyFenceKey.roomEventKey);
   }
   replyFenceGeneration = beginTelegramReplyFence({
@@ -2629,7 +2637,7 @@ export const dispatchTelegramMessage = async ({
                   skillFilter,
                   disableBlockStreaming,
                   abortSignal: replyAbortSignal,
-                  ...(onTurnAdopted ? { onTurnAdopted } : {}),
+                  onTurnAdopted: adoptReplyTurn,
                   sourceReplyDeliveryMode: isRoomEvent ? "message_tool_only" : undefined,
                   queuedDeliveryCorrelations: isRoomEvent
                     ? [{ begin: beginDeliveryCorrelation }]
@@ -2638,23 +2646,19 @@ export const dispatchTelegramMessage = async ({
                     isRoomEvent || onTurnAdopted || onTurnDeferred || onTurnAbandoned
                       ? {
                           onEnqueued: () => {
-                            if (isRoomEvent) {
-                              replyAbortControllerQueued = true;
-                            }
+                            replyAbortControllerQueued = true;
                             onTurnDeferred?.();
                           },
                           onAdmitted: async () => {
-                            await onTurnAdopted?.();
+                            await adoptReplyTurn();
                             queuedTurnAdmitted = true;
                           },
                           onComplete: () => {
-                            if (isRoomEvent) {
-                              replyAbortControllerQueued = false;
-                              releaseTelegramReplyFenceAbortController(
-                                activeReplyFenceKey,
-                                replyAbortController,
-                              );
-                            }
+                            replyAbortControllerQueued = false;
+                            releaseTelegramReplyFenceAbortController(
+                              activeReplyFenceKey,
+                              replyAbortController,
+                            );
                             if (!queuedTurnAdmitted) {
                               onTurnAbandoned?.();
                             }
