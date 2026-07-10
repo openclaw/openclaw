@@ -156,6 +156,62 @@ describe("handleSigninTokenExchangeInvoke", () => {
     }
     expect(calls).toHaveLength(0);
   });
+
+  it("bounds an oversized User Token service success body and fails soft", async () => {
+    // A buggy or hostile Bot Framework 200 response with a huge body must not be
+    // fully buffered by response.json(); the bounded reader cancels the stream.
+    const state = { canceled: false, enqueued: 0 };
+    const chunkBytes = 1024 * 1024;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (state.enqueued >= 64) {
+          controller.close();
+          return;
+        }
+        state.enqueued += 1;
+        controller.enqueue(new Uint8Array(chunkBytes).fill(0x61));
+      },
+      cancel() {
+        state.canceled = true;
+      },
+    });
+    const jsonSpy = vi.spyOn(Response.prototype, "json").mockImplementation(async () => {
+      throw new Error("raw response.json() should not be used");
+    });
+    const fetchImpl: MSTeamsSsoFetch = async () =>
+      new Response(stream, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+
+    try {
+      const { sso, tokenStore } = createSsoDeps({ fetchImpl });
+
+      const result = await handleSigninTokenExchangeInvoke({
+        value: { id: "flow-1", connectionName: "GraphConnection", token: "exchangeable-token" },
+        user: { userId: "aad-user-guid", channelId: "msteams" },
+        deps: sso,
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.code).toBe("unexpected_response");
+        expect(result.message).toMatch(/invalid or oversized JSON from User Token service/);
+      }
+      expect(jsonSpy).not.toHaveBeenCalled();
+      // Enforced well before the 64 MiB test ceiling; an unbounded reader would keep pulling.
+      expect(state.enqueued).toBeLessThan(32);
+      expect(state.canceled).toBe(true);
+
+      const stored = await tokenStore.get({
+        connectionName: "GraphConnection",
+        userId: "aad-user-guid",
+      });
+      expect(stored).toBeNull();
+    } finally {
+      jsonSpy.mockRestore();
+    }
+  });
 });
 
 describe("handleSigninVerifyStateInvoke", () => {
