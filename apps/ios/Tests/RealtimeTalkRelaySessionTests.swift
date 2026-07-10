@@ -28,7 +28,9 @@ private actor RealtimeRelayStartupBarrier {
     }
 
     func waitUntilEntered() async {
-        if self.entered { return }
+        if self.entered {
+            return
+        }
         await withCheckedContinuation { self.enteredWaiter = $0 }
     }
 

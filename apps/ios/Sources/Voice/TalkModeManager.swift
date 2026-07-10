@@ -462,7 +462,9 @@ final class TalkModeManager: NSObject {
     func updateMainSessionKey(_ sessionKey: String?) -> Bool {
         let trimmed = (sessionKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
-        if trimmed == self.mainSessionKey { return false }
+        if trimmed == self.mainSessionKey {
+            return false
+        }
         let shouldRestartTalk = self.isEnabled &&
             (self.hasRealtimeOwnerOrStart || self.hasContinuousTalkOwner)
         if let captureId = self.activePTTCaptureId {
@@ -574,7 +576,9 @@ final class TalkModeManager: NSObject {
         // Realtime callbacks own Listening/Thinking/Speaking while their session
         // exists. An idempotent enable must not replace that owner or its phase.
         guard !self.hasRealtimeOwnerOrStart else { return }
-        if self.isListening { return }
+        if self.isListening {
+            return
+        }
         guard !self.isStarting else {
             GatewayDiagnostics.log("talk start ignored: already starting")
             return
@@ -816,7 +820,9 @@ final class TalkModeManager: NSObject {
     func resumeAfterBackground(wasKeptActive: Bool = false) {
         self.foregroundPushToTalkAllowed = true
         self.foregroundAudioCaptureAllowed = true
-        if wasKeptActive, self.hasContinuousTalkOwner { return }
+        if wasKeptActive, self.hasContinuousTalkOwner {
+            return
+        }
         guard self.isEnabled else { return }
         Task { @MainActor [weak self] in
             await self?.start()
@@ -2226,11 +2232,21 @@ final class TalkModeManager: NSObject {
         guard isTerminalPhase || status.map(terminalStatuses.contains) == true else { return nil }
         // An explicit timeout phase is authoritative. Without one, cancellation
         // metadata must win so providerStarted cannot turn a user stop into timeout fallback.
-        if hasHardTimeoutMetadata() { return .timeout }
-        if phase == "aborted" || isCancellation(status: status, stopReason: stopReason) { return .aborted }
-        if statusIsTimeout || stopReason == "timeout" || stopReason == "timed_out" { return .timeout }
-        if phase == "error" || status == "error" || status == "failed" { return .error }
-        if aborted { return .timeout }
+        if hasHardTimeoutMetadata() {
+            return .timeout
+        }
+        if phase == "aborted" || isCancellation(status: status, stopReason: stopReason) {
+            return .aborted
+        }
+        if statusIsTimeout || stopReason == "timeout" || stopReason == "timed_out" {
+            return .timeout
+        }
+        if phase == "error" || status == "error" || status == "failed" {
+            return .error
+        }
+        if aborted {
+            return .timeout
+        }
         return .final
     }
 

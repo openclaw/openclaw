@@ -391,7 +391,9 @@ final class RealtimeTalkRelaySession {
         self.eventTask?.cancel()
         self.eventTask = Task { [weak self] in
             for await event in stream {
-                if Task.isCancelled { return }
+                if Task.isCancelled {
+                    return
+                }
                 await self?.handleGatewayEvent(event, lifecycleGeneration: lifecycleGeneration)
             }
         }
@@ -480,9 +482,15 @@ final class RealtimeTalkRelaySession {
         timeoutSeconds: Int,
         lifecycleGeneration: UInt64) async -> StartupWaitResult
     {
-        if self.isClosed { return .cancelled }
-        if self.hasReceivedReady { return .ready }
-        if let startupIssue { return .failed(startupIssue) }
+        if self.isClosed {
+            return .cancelled
+        }
+        if self.hasReceivedReady {
+            return .ready
+        }
+        if let startupIssue {
+            return .failed(startupIssue)
+        }
         return await withCheckedContinuation { continuation in
             if self.isClosed {
                 continuation.resume(returning: .cancelled)

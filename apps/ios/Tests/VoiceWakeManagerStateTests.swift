@@ -22,7 +22,9 @@ private actor VoiceWakeCommandBarrier {
     }
 
     func waitUntilEntered() async {
-        if self.entered { return }
+        if self.entered {
+            return
+        }
         await withCheckedContinuation { continuation in
             self.enteredWaiters.append(continuation)
         }
@@ -116,7 +118,9 @@ private actor VoiceWakeCommandBarrier {
         manager.setSuppressedByPushToTalk(true)
         await barrier.release()
         for _ in 0..<100 {
-            if await barrier.observedCancellation != nil { break }
+            if await barrier.observedCancellation != nil {
+                break
+            }
             await Task.yield()
         }
 

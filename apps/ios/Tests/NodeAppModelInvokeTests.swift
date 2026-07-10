@@ -220,7 +220,9 @@ private final class TalkPreparationBarrier {
 @MainActor
 private func waitForTalkCondition(_ condition: @MainActor () -> Bool) async {
     for _ in 0..<2000 {
-        if condition() { return }
+        if condition() {
+            return
+        }
         try? await Task.sleep(nanoseconds: 1_000_000)
     }
     Issue.record("Timed out waiting for Talk state")
@@ -310,7 +312,9 @@ private func makeProjectedWatchChatRawMessage(
 @MainActor
 private func waitForMainActorWork(_ condition: () -> Bool) async {
     for _ in 0..<100 {
-        if condition() { return }
+        if condition() {
+            return
+        }
         await Task.yield()
     }
 }

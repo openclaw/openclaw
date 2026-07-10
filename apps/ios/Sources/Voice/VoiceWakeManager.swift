@@ -255,8 +255,12 @@ final class VoiceWakeManager: NSObject {
 
     func start() async {
         guard self.isEnabled else { return }
-        if self.isListening { return }
-        if self.isStarting { return }
+        if self.isListening {
+            return
+        }
+        if self.isStarting {
+            return
+        }
 
         self.isStarting = true
         defer { self.isStarting = false }

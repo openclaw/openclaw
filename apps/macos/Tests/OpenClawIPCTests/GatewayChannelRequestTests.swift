@@ -16,7 +16,9 @@ private actor GatewayRequestProbe {
     }
 
     func wait() async -> String {
-        if let value { return value }
+        if let value {
+            return value
+        }
         return await withCheckedContinuation { self.waiter = $0 }
     }
 }
@@ -34,7 +36,9 @@ private actor GatewayRequestStartGate {
     }
 
     func waitUntilEntered() async {
-        if self.entered { return }
+        if self.entered {
+            return
+        }
         await withCheckedContinuation { self.enteredWaiter = $0 }
     }
 
@@ -254,7 +258,9 @@ struct GatewayChannelRequestTests {
             try await channel.request(method: "cancel-during-connect", params: nil, timeoutMs: 5000)
         }
         for _ in 0..<1000 {
-            if await channel._test_connectWaiterCount() == 2 { break }
+            if await channel._test_connectWaiterCount() == 2 {
+                break
+            }
             try? await Task.sleep(nanoseconds: 1_000_000)
         }
         #expect(await channel._test_connectWaiterCount() == 2)
@@ -293,7 +299,9 @@ struct GatewayChannelRequestTests {
         await connectGate.waitUntilEntered()
         let peer = Task { try await channel.connect() }
         for _ in 0..<1000 {
-            if await channel._test_connectWaiterCount() == 2 { break }
+            if await channel._test_connectWaiterCount() == 2 {
+                break
+            }
             try? await Task.sleep(nanoseconds: 1_000_000)
         }
         #expect(await channel._test_connectWaiterCount() == 2)

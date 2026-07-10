@@ -478,7 +478,9 @@ public actor GatewayChannelActor {
                 code: 6,
                 userInfo: [NSLocalizedDescriptionKey: "gateway disconnect cleanup in progress"])
         }
-        if self.connected, self.task?.state == .running { return }
+        if self.connected, self.task?.state == .running {
+            return
+        }
         if self.connectAttemptTask == nil {
             self.connectAttemptTask = Task { [weak self] in
                 await self?.runConnectAttempt()
