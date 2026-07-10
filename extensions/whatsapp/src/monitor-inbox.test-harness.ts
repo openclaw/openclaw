@@ -34,6 +34,7 @@ export const readAllowFromStoreMock = pairingReadAllowFromStoreMock;
 export const upsertPairingRequestMock = pairingUpsertPairingRequestMock;
 
 export type MockSock = {
+  authState?: { keys: unknown };
   ev: EventEmitter;
   end: AnyMockFn;
   ws: { close: AnyMockFn };
@@ -47,6 +48,7 @@ export type MockSock = {
   logger: Record<string, unknown>;
   signalRepository: {
     lidMapping: {
+      getLIDForPN: AnyMockFn;
       getPNForLID: AnyMockFn;
     };
   };
@@ -231,6 +233,7 @@ function createMockSock(): MockSock {
     logger: {},
     signalRepository: {
       lidMapping: {
+        getLIDForPN: vi.fn().mockResolvedValue(null),
         getPNForLID: vi.fn().mockResolvedValue(null),
       },
     },

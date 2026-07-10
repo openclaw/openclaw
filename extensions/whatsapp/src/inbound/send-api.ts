@@ -274,6 +274,34 @@ async function readOutboundTcTokenEntry(params: {
   return entries[params.tcTokenJid] as WhatsAppTokenKeyEntry | undefined;
 }
 
+async function readOutboundTcTokenLookup(params: {
+  sock: Pick<WebSendSocket, "getAuthState" | "getLIDForPN">;
+  jid: string;
+}): Promise<{ tcTokenJid: string; entry?: WhatsAppTokenKeyEntry } | undefined> {
+  const authState = params.sock.getAuthState?.();
+  const getLIDForPN = params.sock.getLIDForPN;
+  if (!authState?.keys || !getLIDForPN) {
+    return undefined;
+  }
+  let tcTokenJid: string;
+  try {
+    tcTokenJid = await resolveTcTokenJid(params.jid, async (jid) => await getLIDForPN(jid));
+  } catch (err) {
+    logVerbose(`WhatsApp trusted-contact token JID lookup failed: ${String(err)}`);
+    return undefined;
+  }
+  const entry = await readOutboundTcTokenEntry({ keys: authState.keys, tcTokenJid });
+  return { tcTokenJid, entry };
+}
+
+export async function hasUsableOutboundTcToken(params: {
+  sock: Pick<WebSendSocket, "getAuthState" | "getLIDForPN">;
+  jid: string;
+}): Promise<boolean> {
+  const lookup = await readOutboundTcTokenLookup(params);
+  return hasUsableTcToken(lookup?.entry);
+}
+
 async function maybeFetchOutboundTokenDiagnostics(params: { sock: WebSendSocket }): Promise<{
   reachoutTimelock?: ReachoutTimelockState;
   newChatMessageCap?: NewChatMessageCapInfo;
@@ -327,25 +355,16 @@ async function ensureOutboundTcToken(params: { sock: WebSendSocket; jid: string 
   if (!DIRECT_PN_SEND_JID_RE.test(params.jid) && !DIRECT_LID_SEND_JID_RE.test(params.jid)) {
     return;
   }
-  const authState = params.sock.getAuthState?.();
-  const getLIDForPN = params.sock.getLIDForPN;
-  if (!authState?.keys || !getLIDForPN) {
+  const lookup = await readOutboundTcTokenLookup(params);
+  if (!lookup) {
     return;
   }
-  let tcTokenJid: string;
-  try {
-    tcTokenJid = await resolveTcTokenJid(params.jid, async (jid) => await getLIDForPN(jid));
-  } catch (err) {
-    logVerbose(`WhatsApp trusted-contact token JID lookup failed: ${String(err)}`);
-    return;
-  }
-  const entry = await readOutboundTcTokenEntry({ keys: authState.keys, tcTokenJid });
-  if (hasUsableTcToken(entry)) {
+  if (hasUsableTcToken(lookup.entry)) {
     outboundTokenLogger.debug(
       {
         jid: redactIdentifier(params.jid),
-        tcTokenJid: redactIdentifier(tcTokenJid),
-        token: describeTcTokenEntry(entry),
+        tcTokenJid: redactIdentifier(lookup.tcTokenJid),
+        token: describeTcTokenEntry(lookup.entry),
       },
       "using outbound WhatsApp trusted-contact token",
     );
@@ -358,8 +377,8 @@ async function ensureOutboundTcToken(params: { sock: WebSendSocket; jid: string 
   logMissingToken(
     {
       jid: redactIdentifier(params.jid),
-      tcTokenJid: redactIdentifier(tcTokenJid),
-      token: describeTcTokenEntry(entry),
+      tcTokenJid: redactIdentifier(lookup.tcTokenJid),
+      token: describeTcTokenEntry(lookup.entry),
       reachoutTimelock: diagnostics.reachoutTimelock,
       newChatMessageCap: diagnostics.newChatMessageCap,
     },
@@ -368,7 +387,7 @@ async function ensureOutboundTcToken(params: { sock: WebSendSocket; jid: string 
   if (diagnostics.reachoutTimelock?.isActive) {
     throw buildReachoutTimelockError({
       jid: params.jid,
-      tcTokenJid,
+      tcTokenJid: lookup.tcTokenJid,
       reachoutTimelock: diagnostics.reachoutTimelock,
       newChatMessageCap: diagnostics.newChatMessageCap,
     });

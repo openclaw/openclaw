@@ -1,7 +1,7 @@
 // Whatsapp plugin module implements monitor inbox.streams inbound messages support behavior.
 import fsSync from "node:fs";
 import path from "node:path";
-import type { GroupMetadata, WAMessageKey } from "baileys";
+import type { GroupMetadata, SignalKeyStoreWithTransaction, WAMessageKey } from "baileys";
 import "./monitor-inbox.test-harness.js";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -1136,6 +1136,41 @@ describe("web monitor inbox", () => {
 
       expect(sock.fetchAccountReachoutTimelock).toHaveBeenCalledTimes(1);
       expect(sock.sendMessage).not.toHaveBeenCalled();
+    } finally {
+      await listener.close();
+    }
+  });
+
+  it("allows direct sends with a usable trusted-contact token while timelocked", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const tokenJid = "1555@s.whatsapp.net";
+    const keysGet = vi.fn(async () => ({
+      [tokenJid]: {
+        token: Buffer.from("trusted-contact-token"),
+        timestamp: Math.floor(Date.now() / 1000),
+      },
+    }));
+    const keys = {
+      get: keysGet,
+      set: vi.fn(async () => undefined),
+      isInTransaction: () => false,
+      transaction: vi.fn(async (exec: () => Promise<unknown>) => await exec()),
+    } as unknown as SignalKeyStoreWithTransaction;
+    sock.authState = { keys };
+    sock.signalRepository.lidMapping.getLIDForPN.mockResolvedValue(null);
+    sock.fetchAccountReachoutTimelock.mockResolvedValueOnce({
+      isActive: true,
+      enforcementType: "WEB_COMPANION_ONLY",
+      timeEnforcementEnds: new Date(Date.now() + 60_000),
+    });
+
+    try {
+      await expect(listener.sendMessage("+1555", "hello")).resolves.toBeDefined();
+
+      expect(sock.fetchAccountReachoutTimelock).toHaveBeenCalledTimes(1);
+      expect(keysGet).toHaveBeenCalledWith("tctoken", [tokenJid]);
+      expect(sock.sendMessage).toHaveBeenCalledWith(tokenJid, { text: "hello" });
     } finally {
       await listener.close();
     }

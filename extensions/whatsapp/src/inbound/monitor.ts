@@ -97,7 +97,7 @@ import {
   type WhatsAppOutboundMentionParticipant,
 } from "./outbound-mentions.js";
 import { DisconnectReason, isJidGroup } from "./runtime-api.js";
-import { createWebSendApi } from "./send-api.js";
+import { createWebSendApi, hasUsableOutboundTcToken } from "./send-api.js";
 import { normalizeWhatsAppSendResult } from "./send-result.js";
 import type {
   AdmittedWebInboundMessage,
@@ -761,6 +761,21 @@ export async function attachWebInboxToSocket(
       getActiveReachoutTimelock(reachoutTimeLock) ?? (await fetchReachoutTimeLock(currentSock));
     const activeState = getActiveReachoutTimelock(state);
     if (activeState) {
+      const hasTrustedContactToken = await hasUsableOutboundTcToken({
+        sock: {
+          getAuthState: () => currentSock.authState,
+          getLIDForPN: async (lookupJid) =>
+            await withWhatsAppSocketOperationTimeout(
+              "getLIDForPN",
+              currentSock.signalRepository.lidMapping.getLIDForPN(lookupJid),
+              sendOperationTimeoutMs,
+            ),
+        },
+        jid,
+      });
+      if (hasTrustedContactToken) {
+        return;
+      }
       throw new Error(formatReachoutTimelockError(activeState));
     }
     if (readinessOptions?.rememberReady && state) {
