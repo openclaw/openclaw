@@ -339,6 +339,22 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to a label-only draft when deletion is unavailable", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    await progress.pushNarrationProgress("Looking at the repository.");
+    await progress.pushNarrationProgress("");
+
+    expect(update).toHaveBeenLastCalledWith("Shelling", { lines: [] });
+  });
+
   it("ignores narration once the final reply started and resets it per turn", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({

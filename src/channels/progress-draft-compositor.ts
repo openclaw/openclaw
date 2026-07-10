@@ -303,11 +303,14 @@ export function createChannelProgressDraftCompositor(params: {
             return await render();
           }
         }
+        if (!params.deleteCurrent) {
+          return await render();
+        }
         if (!lastRenderedText) {
           return false;
         }
         lastRenderedText = "";
-        await params.deleteCurrent?.();
+        await params.deleteCurrent();
         return true;
       }
       narrationText = normalized;
