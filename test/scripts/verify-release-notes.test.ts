@@ -6,8 +6,11 @@ import { describe, expect, it } from "vitest";
 import {
   contaminatingPullRequestReferences,
   countTopLevelSectionBullets,
+  createGithubSnapshotState,
   cumulativeShippedPullRequests,
+  githubApiWithSnapshot,
   highlightCountError,
+  persistGithubSnapshot,
   releaseNoteReferences,
   standardRevertedHash,
   subtractShippedPullRequests,
@@ -33,6 +36,74 @@ function git(cwd: string, args: string[]): string {
 }
 
 describe("release-note verification", () => {
+  it("reuses exact-range GitHub GraphQL snapshots without caching REST reads", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-snapshot-"));
+    try {
+      const filePath = join(cwd, "snapshot.json");
+      let fetches = 0;
+      const fetchApi = (args: string[]) => {
+        fetches += 1;
+        return { request: args, fetches };
+      };
+      const first = createGithubSnapshotState({
+        base: "a".repeat(40),
+        filePath,
+        target: "b".repeat(40),
+      });
+
+      expect(githubApiWithSnapshot(["graphql", "-f", "query=one"], fetchApi, first)).toEqual({
+        request: ["graphql", "-f", "query=one"],
+        fetches: 1,
+      });
+      expect(
+        githubApiWithSnapshot(["repos/openclaw/openclaw/releases/tags/v1"], fetchApi, first),
+      ).toEqual({
+        request: ["repos/openclaw/openclaw/releases/tags/v1"],
+        fetches: 2,
+      });
+      persistGithubSnapshot(first);
+
+      const second = createGithubSnapshotState({
+        base: "a".repeat(40),
+        filePath,
+        target: "b".repeat(40),
+      });
+      expect(githubApiWithSnapshot(["graphql", "-f", "query=one"], fetchApi, second)).toEqual({
+        request: ["graphql", "-f", "query=one"],
+        fetches: 1,
+      });
+      expect(second.hits).toBe(1);
+      expect(second.misses).toBe(0);
+      expect(fetches).toBe(2);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a snapshot bound to a different release target", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "openclaw-release-notes-snapshot-"));
+    try {
+      const filePath = join(cwd, "snapshot.json");
+      const state = createGithubSnapshotState({
+        base: "a".repeat(40),
+        filePath,
+        target: "b".repeat(40),
+      });
+      githubApiWithSnapshot(["graphql", "-f", "query=one"], () => ({ data: true }), state);
+      persistGithubSnapshot(state);
+
+      expect(() =>
+        createGithubSnapshotState({
+          base: "a".repeat(40),
+          filePath,
+          target: "c".repeat(40),
+        }),
+      ).toThrow("use --refresh-github-snapshot");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("ignores nested revert markers in squash-merge bodies", () => {
     const nestedRevert = [
       "feat(android): render display math (#101435)",
