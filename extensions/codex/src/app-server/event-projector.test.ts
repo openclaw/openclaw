@@ -4946,6 +4946,34 @@ describe("CodexAppServerEventProjector", () => {
       );
     });
 
+    it("routes thread-scoped notifications without a turn id to the unknown-method path, not correlation drift", async () => {
+      // Thread-scoped Codex notifications (e.g. thread/status/changed,
+      // thread/name/updated) carry a threadId but no turnId. They belong to the
+      // active thread context, so they must reach the method switch and produce
+      // an unknown-method breadcrumb rather than being mislabeled as active-turn
+      // correlation drift before the switch ever runs.
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const projector = await createProjector();
+
+      for (let i = 0; i < 2; i += 1) {
+        await projector.handleNotification({
+          method: "thread/status/changed",
+          params: { threadId: THREAD_ID, status: "active" },
+        } as ProjectorNotification);
+      }
+
+      expect(
+        warn.mock.calls.filter(
+          (call) => call[0] === "codex app-server notification method not handled by projector",
+        ),
+      ).toHaveLength(1);
+      expect(
+        warn.mock.calls.filter(
+          (call) => call[0] === "codex app-server notification did not match active thread/turn",
+        ),
+      ).toHaveLength(0);
+    });
+
     it("warns once when an item/completed does not match the active turn", async () => {
       const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
       const projector = await createProjector();

@@ -671,7 +671,7 @@ export class CodexAppServerEventProjector {
         this.warnCorrelationMismatchOnce(notification.method, params);
         return;
       }
-    } else if (!this.isNotificationForTurn(params)) {
+    } else if (!this.isNotificationForActiveContext(params)) {
       this.warnCorrelationMismatchOnce(notification.method, params);
       return;
     }
@@ -2438,10 +2438,20 @@ export class CodexAppServerEventProjector {
     } as unknown as AgentMessage;
   }
 
-  private isNotificationForTurn(params: JsonObject): boolean {
+  /**
+   * True when a notification belongs to the active thread context. Same-thread
+   * notifications without a turn id are thread-scoped (e.g. `thread/status/changed`,
+   * `thread/name/updated`) and are treated as in-context so they reach the method
+   * switch and produce an unknown-method breadcrumb; only a different thread or an
+   * explicit different turn is treated as correlation drift.
+   */
+  private isNotificationForActiveContext(params: JsonObject): boolean {
     const threadId = readCodexNotificationThreadId(params);
+    if (threadId !== this.threadId) {
+      return false;
+    }
     const turnId = readCodexNotificationTurnId(params);
-    return threadId === this.threadId && turnId === this.turnId;
+    return turnId === undefined || turnId === this.turnId;
   }
 
   private isHookNotificationForCurrentThread(params: JsonObject): boolean {
