@@ -453,6 +453,7 @@ const ZERO_USAGE: Usage = {
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
 const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 10_000;
 const TOOL_PROGRESS_ECHO_PREFIX_MIN_CHARS = 1_024;
+const TOOL_PROGRESS_ECHO_SIGNATURE_CAP = 8;
 const TOOL_OUTPUT_TRUNCATION_NOTICE_PREFIX = "...(OpenClaw truncated Codex native tool output";
 const MISSING_TOOL_RESULT_ERROR =
   "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";
@@ -488,10 +489,16 @@ type ToolTranscriptResultInput = {
   isError: boolean;
 };
 
-type ToolProgressEchoSignature = {
-  displayText?: string;
-  rawLength?: number;
-  rawPrefix?: string;
+type ToolProgressRawSignature = {
+  length: number;
+  prefix: string;
+};
+
+type ToolProgressEchoState = {
+  displayTexts: string[];
+  // Single slot for handleOutputDelta accumulation; replaced per delta (not appended).
+  streamedDisplayText?: string;
+  rawSignatures: ToolProgressRawSignature[];
 };
 
 type ToolOutputTrimState = {
@@ -522,7 +529,11 @@ export class CodexAppServerEventProjector {
   private readonly activeItemIds = new Set<string>();
   private readonly completedItemIds = new Set<string>();
   private readonly activeCompactionItemIds = new Set<string>();
-  private readonly toolProgressEchoesByItem = new Map<string, ToolProgressEchoSignature>();
+  private readonly toolProgressEchoesByItem = new Map<string, ToolProgressEchoState>();
+  // Raw lane re-emissions are the echo channel; typed agentMessage completions are deliberate
+  // finals (codex-rs userShell injects as user-role, never assistant). Filtering typed items
+  // would drop legitimate verbatim answers ("reply with exactly the command output").
+  private readonly rawPromotedAssistantItemIds = new Set<string>();
   private readonly toolResultSummaryItemIds = new Set<string>();
   private readonly toolResultOutputItemIds = new Set<string>();
   private readonly toolResultOutputStreamedItemIds = new Set<string>();
@@ -614,7 +625,7 @@ export class CodexAppServerEventProjector {
     const text = this.assistantTextByItem.get(itemId)?.trim();
     return {
       itemId,
-      hasText: Boolean(text && !this.isToolProgressEchoText(text)),
+      hasText: Boolean(text && !this.isToolProgressEchoText(itemId, text)),
     };
   }
 
@@ -1397,6 +1408,7 @@ export class CodexAppServerEventProjector {
       displayText: storedOutput.text,
       rawLength: storedOutput.normalizedLength,
       rawPrefix: storedOutput.rawPrefix,
+      streamedDisplay: true,
     });
     if (!this.shouldEmitToolOutput()) {
       return;
@@ -1512,6 +1524,7 @@ export class CodexAppServerEventProjector {
     }
     this.rememberAssistantItem(itemId);
     this.assistantTextByItem.set(itemId, text);
+    this.rawPromotedAssistantItemIds.add(itemId);
     if (phase === "commentary") {
       this.emitCommentaryProgress({ itemId, text });
     } else {
@@ -2334,7 +2347,7 @@ export class CodexAppServerEventProjector {
       if (this.assistantPhaseByItem.get(itemId) === "commentary") {
         continue;
       }
-      if (text && !this.isToolProgressEchoText(text)) {
+      if (text && !this.isToolProgressEchoText(itemId, text)) {
         return { itemId, text };
       }
     }
@@ -2360,7 +2373,7 @@ export class CodexAppServerEventProjector {
       }
       const text = this.assistantTextByItem.get(itemId) ?? "";
       const normalizedText = text.trim();
-      if (normalizedText && this.isToolProgressEchoText(normalizedText)) {
+      if (normalizedText && this.isToolProgressEchoText(itemId, normalizedText)) {
         continue;
       }
       return this.createAssistantMessage(text);
@@ -2368,18 +2381,21 @@ export class CodexAppServerEventProjector {
     return undefined;
   }
 
-  private isToolProgressEchoText(text: string): boolean {
-    for (const signature of this.toolProgressEchoesByItem.values()) {
-      if (signature.displayText === text) {
+  private isToolProgressEchoText(itemId: string, text: string): boolean {
+    if (!this.rawPromotedAssistantItemIds.has(itemId)) {
+      return false;
+    }
+    for (const state of this.toolProgressEchoesByItem.values()) {
+      if (state.streamedDisplayText === text) {
         return true;
       }
-      if (
-        signature.rawPrefix &&
-        signature.rawLength !== undefined &&
-        text.length === signature.rawLength &&
-        text.startsWith(signature.rawPrefix)
-      ) {
+      if (state.displayTexts.includes(text)) {
         return true;
+      }
+      for (const signature of state.rawSignatures) {
+        if (text.length === signature.length && text.startsWith(signature.prefix)) {
+          return true;
+        }
       }
     }
     return false;
@@ -2392,29 +2408,48 @@ export class CodexAppServerEventProjector {
       rawText?: string;
       rawLength?: number;
       rawPrefix?: string;
+      streamedDisplay?: boolean;
     },
   ): void {
     if (!itemId) {
       return;
     }
-    const existing = this.toolProgressEchoesByItem.get(itemId) ?? {};
+    const existing = this.toolProgressEchoesByItem.get(itemId) ?? {
+      displayTexts: [],
+      rawSignatures: [],
+    };
     const displayText = signature.displayText?.trim();
     if (displayText) {
-      existing.displayText = displayText;
+      if (signature.streamedDisplay) {
+        existing.streamedDisplayText = displayText;
+      } else if (!existing.displayTexts.includes(displayText)) {
+        if (existing.displayTexts.length >= TOOL_PROGRESS_ECHO_SIGNATURE_CAP) {
+          existing.displayTexts.shift();
+        }
+        existing.displayTexts.push(displayText);
+      }
     }
     const rawText = signature.rawText?.trim();
     const rawLength = signature.rawLength ?? rawText?.length;
     const rawPrefix = signature.rawPrefix?.trim() ?? rawText;
-    const hasExplicitRawSignature =
-      signature.rawLength !== undefined || signature.rawPrefix !== undefined;
     if (
       rawLength !== undefined &&
       rawPrefix &&
-      rawPrefix.length >= TOOL_PROGRESS_ECHO_PREFIX_MIN_CHARS &&
-      (hasExplicitRawSignature ? rawLength >= (existing.rawLength ?? 0) : !existing.rawPrefix)
+      rawPrefix.length >= TOOL_PROGRESS_ECHO_PREFIX_MIN_CHARS
     ) {
-      existing.rawLength = rawLength;
-      existing.rawPrefix = rawPrefix.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS);
+      const next: ToolProgressRawSignature = {
+        length: rawLength,
+        prefix: rawPrefix.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS),
+      };
+      const matchIndex = existing.rawSignatures.findIndex((entry) => entry.prefix === next.prefix);
+      if (matchIndex >= 0) {
+        existing.rawSignatures[matchIndex] = next;
+      } else {
+        if (existing.rawSignatures.length >= TOOL_PROGRESS_ECHO_SIGNATURE_CAP) {
+          existing.rawSignatures.shift();
+        }
+        existing.rawSignatures.push(next);
+      }
     }
     this.toolProgressEchoesByItem.set(itemId, existing);
   }

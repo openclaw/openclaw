@@ -1031,12 +1031,16 @@ describe("CodexAppServerEventProjector", () => {
     }
 
     const echoState = projector as unknown as {
-      toolProgressEchoesByItem: Map<string, { rawLength?: number; rawPrefix?: string }>;
+      toolProgressEchoesByItem: Map<
+        string,
+        { rawSignatures: Array<{ length: number; prefix: string }> }
+      >;
     };
     expect(echoState.toolProgressEchoesByItem.size).toBe(1);
-    const signature = echoState.toolProgressEchoesByItem.get("cmd-streamed-echo");
-    expect(signature?.rawLength).toBe(rawOutput.length);
-    expect(signature?.rawPrefix?.length).toBeLessThanOrEqual(10_000);
+    const state = echoState.toolProgressEchoesByItem.get("cmd-streamed-echo");
+    const latestRaw = state?.rawSignatures.at(-1);
+    expect(latestRaw?.length).toBe(rawOutput.length);
+    expect(latestRaw?.prefix.length).toBeLessThanOrEqual(10_000);
 
     await projector.handleNotification(
       forCurrentTurn("rawResponseItem/completed", {
@@ -1084,10 +1088,15 @@ describe("CodexAppServerEventProjector", () => {
       }),
     );
     const echoState = projector as unknown as {
-      toolProgressEchoesByItem: Map<string, { rawLength?: number; rawPrefix?: string }>;
+      toolProgressEchoesByItem: Map<
+        string,
+        { rawSignatures: Array<{ length: number; prefix: string }> }
+      >;
     };
-    const signature = echoState.toolProgressEchoesByItem.get("cmd-streamed-echo-newline");
-    expect(signature?.rawLength).toBe(rawOutput.trim().length);
+    const state = echoState.toolProgressEchoesByItem.get("cmd-streamed-echo-newline");
+    expect(state?.rawSignatures.some((entry) => entry.length === rawOutput.trim().length)).toBe(
+      true,
+    );
 
     await projector.handleNotification(
       forCurrentTurn("rawResponseItem/completed", {
@@ -1184,6 +1193,202 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.assistantTexts).toEqual([finalAnswer]);
     expect(result.lastAssistant).toBeDefined();
     expect(result.currentAttemptAssistant).toBeDefined();
+  });
+
+  it("keeps typed agentMessage finals that verbatim-equal tool progress text", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "on",
+      onToolResult,
+    });
+    const commandOutput = "command-output-line\nsecond-line";
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-verbatim",
+          command: "cat result.txt",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-verbatim",
+        delta: commandOutput,
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-verbatim",
+          command: "cat result.txt",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: commandOutput,
+          exitCode: 0,
+          durationMs: 12,
+        },
+      }),
+    );
+    // Typed finals are deliberate model output, including verbatim tool output.
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "msg-verbatim",
+          text: commandOutput,
+        },
+      }),
+    );
+    await projector.handleNotification(turnCompleted());
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual([commandOutput]);
+    expect(result.lastAssistant).toBeDefined();
+    expect(result.currentAttemptAssistant).toBeDefined();
+  });
+
+  it("does not promote a raw echo of an earlier tool progress summary after later stream output", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "full",
+      onToolResult,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-multi-shape",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+    const summaryText = (mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string }).text;
+    expect(summaryText).toBe("🛠️ `run tests (workspace)`");
+
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-multi-shape",
+        delta: "streamed-output-chunk-that-would-overwrite-summary",
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "raw-earlier-summary",
+          role: "assistant",
+          content: [{ type: "output_text", text: summaryText }],
+        },
+      }),
+    );
+    await projector.handleNotification(turnCompleted());
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastAssistant).toBeUndefined();
+    expect(result.currentAttemptAssistant).toBeUndefined();
+  });
+
+  it("does not promote raw echoes of either an oversized summary or a later shorter stream", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "full",
+      onToolResult,
+    });
+    const command = "pnpm test";
+    const cwd = `/very-long-root/${"a".repeat(10_500)}`;
+    const rawSummaryText = formatToolAggregate(
+      "bash",
+      [inferToolMetaFromArgs("exec", { command, cwd }, { detailMode: "explain" }) ?? ""],
+      { markdown: true },
+    );
+    expect(rawSummaryText.length).toBeGreaterThan(10_000);
+    const streamedOutput = `${"o".repeat(2_000)}stream-tail`;
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-summary-then-stream",
+          command,
+          cwd,
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+    const emittedSummary = (mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string })
+      .text;
+    expect(emittedSummary).toHaveLength(10_000);
+
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-summary-then-stream",
+        delta: streamedOutput,
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "raw-oversized-summary-shape",
+          role: "assistant",
+          content: [{ type: "output_text", text: rawSummaryText }],
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "raw-shorter-stream-shape",
+          role: "assistant",
+          content: [{ type: "output_text", text: streamedOutput }],
+        },
+      }),
+    );
+    await projector.handleNotification(turnCompleted());
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastAssistant).toBeUndefined();
+    expect(result.currentAttemptAssistant).toBeUndefined();
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain(rawSummaryText.slice(0, 1_000));
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("stream-tail");
   });
 
   it("does not treat app-server interrupted status as a user cancellation by itself", async () => {
