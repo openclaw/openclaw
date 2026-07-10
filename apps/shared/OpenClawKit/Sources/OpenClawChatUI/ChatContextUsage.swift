@@ -172,8 +172,12 @@ struct ChatMessageUsagePresentation: Equatable {
 
     private static func pressure(for percent: Int?) -> Pressure {
         guard let percent else { return .normal }
-        if percent >= 90 { return .danger }
-        if percent >= 75 { return .warning }
+        if percent >= 90 {
+            return .danger
+        }
+        if percent >= 75 {
+            return .warning
+        }
         return .normal
     }
 
