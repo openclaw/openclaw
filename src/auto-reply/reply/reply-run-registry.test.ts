@@ -643,6 +643,41 @@ describe("reply run registry", () => {
     }
   });
 
+  it("force-releases a running stuck-recovery abort when the owner never returns", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn();
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:hung-stuck-recovery",
+        sessionId: "session-hung-stuck-recovery",
+        resetTriggered: false,
+      });
+      operation.attachBackend({
+        kind: "embedded",
+        cancel,
+        isStreaming: () => true,
+      });
+      operation.setPhase("running");
+
+      expect(operation.abortForStuckRecovery()).toBe(true);
+      expect(operation.result).toEqual({
+        kind: "aborted",
+        code: "aborted_for_stuck_recovery",
+      });
+      expect(cancel).toHaveBeenCalledWith("stuck_recovery");
+
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS - 1);
+      expect(replyRunRegistry.get("agent:main:hung-stuck-recovery")).toBe(operation);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(replyRunRegistry.get("agent:main:hung-stuck-recovery")).toBeUndefined();
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps late owner complete harmless after forced terminal release", async () => {
     vi.useFakeTimers();
     try {

@@ -879,8 +879,10 @@ export function createReplyOperation(params: {
       abortWithReason("stuck_recovery", new Error("Agent run aborted for stuck recovery"), {
         abortedCode: "aborted_for_stuck_recovery",
       });
-      if (phaseBeforeAbort === "queued") {
+      if (phaseBeforeAbort === "queued" && !retainStateUntilCompleteOperations.has(operation)) {
         clearState();
+      } else {
+        scheduleTerminalSettle();
       }
       return true;
     },
