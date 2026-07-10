@@ -46,6 +46,7 @@ const state = vi.hoisted(() => ({
   stopCode: 1,
   bootoutError: "",
   bootoutCode: 1,
+  bootoutKeepsLoadedRemaining: 0,
   serviceLoaded: true,
   serviceRunning: true,
   stopLeavesRunning: false,
@@ -273,6 +274,10 @@ vi.mock("./exec-file.js", () => ({
       if (state.bootoutError) {
         return { stdout: "", stderr: state.bootoutError, code: state.bootoutCode };
       }
+      if (state.bootoutKeepsLoadedRemaining > 0) {
+        state.bootoutKeepsLoadedRemaining -= 1;
+        return { stdout: "", stderr: "", code: 0 };
+      }
       state.serviceLoaded = false;
       state.serviceRunning = false;
       return { stdout: "", stderr: "", code: 0 };
@@ -403,6 +408,7 @@ beforeEach(() => {
   state.stopCode = 1;
   state.bootoutError = "";
   state.bootoutCode = 1;
+  state.bootoutKeepsLoadedRemaining = 0;
   state.serviceLoaded = true;
   state.serviceRunning = true;
   state.stopLeavesRunning = false;
@@ -1503,6 +1509,48 @@ describe("launchd install", () => {
     const serviceId = `${domain}/ai.openclaw.gateway`;
     expect(state.launchctlCalls).toEqual([["bootout", serviceId]]);
     expect(output).toContain("Stopped LaunchAgent");
+  });
+
+  it("quiesces LaunchAgent and retries bootout until launchctl confirms it is unloaded", async () => {
+    const env = createDefaultLaunchdEnv();
+    const stdout = new PassThrough();
+    let output = "";
+    state.bootoutKeepsLoadedRemaining = 1;
+    stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+
+    await stopLaunchAgent({ env, stdout, quiesce: true });
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const serviceId = `${domain}/ai.openclaw.gateway`;
+    expect(state.launchctlCalls).toEqual([
+      ["disable", serviceId],
+      ["bootout", serviceId],
+      ["print", serviceId],
+      ["bootout", serviceId],
+      ["print", serviceId],
+    ]);
+    expect(output).toContain("Quiesced LaunchAgent");
+  });
+
+  it("fails quiescence when launchctl still reports the LaunchAgent after every bootout", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.bootoutKeepsLoadedRemaining = 3;
+
+    await expect(
+      stopLaunchAgent({ env, stdout: new PassThrough(), quiesce: true }),
+    ).rejects.toThrow("LaunchAgent remained loaded after bootout: state=running");
+
+    expect(launchctlCommandNames()).toEqual([
+      "disable",
+      "bootout",
+      "print",
+      "bootout",
+      "print",
+      "bootout",
+      "print",
+    ]);
   });
 
   it("refuses in-band LaunchAgent stop before launchctl bootout", async () => {

@@ -30,6 +30,9 @@ export type GatewayServiceControlArgs = {
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
   disable?: boolean;
+  // Update-time quiescence must suppress supervisor respawn and prove the
+  // service is unloaded before its package root can be replaced.
+  quiesce?: boolean;
   warn?: (message: string) => void;
 };
 

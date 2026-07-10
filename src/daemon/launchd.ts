@@ -60,6 +60,7 @@ const OPENCLAW_NODE_RUNTIME_NAMES = new Set(["bun", "bun.exe", "node", "node.exe
 const OPENCLAW_SCRIPT_NAMES = new Set(["openclaw.mjs"]);
 const LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000;
 const LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS = 100;
+const LAUNCH_AGENT_QUIESCE_BOOTOUT_ATTEMPTS = 3;
 
 export type StaleOpenClawUpdateLaunchdJob = {
   label: string;
@@ -911,6 +912,34 @@ async function bootoutLaunchAgentOrThrow(params: {
   params.stdout.write(`${formatLine("Warning", params.warning)}\n`);
 }
 
+async function quiesceLaunchAgentOrThrow(params: { serviceTarget: string }): Promise<void> {
+  const disable = await execLaunchctl(["disable", params.serviceTarget]);
+  if (disable.code !== 0) {
+    throw new Error(`launchctl disable failed: ${formatLaunchctlResultDetail(disable)}`);
+  }
+
+  let lastState: LaunchAgentProbeResult | null = null;
+  for (let attempt = 0; attempt < LAUNCH_AGENT_QUIESCE_BOOTOUT_ATTEMPTS; attempt += 1) {
+    const bootout = await execLaunchctl(["bootout", params.serviceTarget]);
+    if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+      throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+    }
+    const state = await probeLaunchAgentState(params.serviceTarget);
+    if (state.state === "not-loaded") {
+      return;
+    }
+    lastState = state;
+  }
+
+  const detail =
+    lastState?.state === "unknown" && lastState.detail
+      ? `: ${lastState.detail}`
+      : lastState
+        ? `: state=${lastState.state}`
+        : "";
+  throw new Error(`LaunchAgent remained loaded after bootout${detail}`);
+}
+
 type LaunchAgentProbeResult =
   | { state: "running" }
   | { state: "stopped" }
@@ -994,6 +1023,7 @@ export async function stopLaunchAgent({
   stdout,
   env,
   disable: persistDisable,
+  quiesce,
 }: GatewayServiceControlArgs): Promise<void> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveGuiDomain();
@@ -1006,6 +1036,13 @@ export async function stopLaunchAgent({
     throw new Error(
       `Refusing to stop LaunchAgent ${label} from inside the same launchd service; run this command from an external shell.`,
     );
+  }
+
+  if (quiesce) {
+    await quiesceLaunchAgentOrThrow({ serviceTarget });
+    await assertGatewayPortReleasedAfterStop(serviceEnv);
+    stdout.write(`${formatLine("Quiesced LaunchAgent", serviceTarget)}\n`);
+    return;
   }
 
   if (!persistDisable) {

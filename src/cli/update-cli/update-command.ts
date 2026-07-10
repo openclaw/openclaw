@@ -1211,9 +1211,8 @@ async function maybeStopManagedServiceBeforeMutableUpdate(params: {
 
   const managedUpdateHandoff = process.env.OPENCLAW_UPDATE_RUN_HANDOFF?.trim() === "1";
   const stoppedServiceMayRespawn =
-    (process.platform === "darwin" || managedUpdateHandoff) &&
-    serviceState.loaded &&
-    serviceMatchesMutationRoot !== false;
+    serviceMatchesMutationRoot !== false &&
+    (managedUpdateHandoff || (process.platform === "darwin" && serviceState.loaded));
   if (!serviceState.running && !stoppedServiceMayRespawn) {
     const windowsTaskAutoStartRecovery = await maybeSuspendWindowsTaskAutoStartForPackageUpdate({
       updateInstallKind: params.updateInstallKind,
@@ -1230,8 +1229,8 @@ async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     };
   }
 
-  // A loaded LaunchAgent has KeepAlive; an operator bootout is not loaded.
-  // Other managers need the handoff marker to prove update-owned restart intent.
+  // A loaded LaunchAgent has KeepAlive; the handoff marker also proves
+  // update-owned restart intent across a transient unloaded status snapshot.
   const blockMessage = gatewayAncestryBlockMessage(serviceState.runtime?.pid);
   if (blockMessage) {
     return {
@@ -1272,10 +1271,12 @@ async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     updateInstallKind: params.updateInstallKind,
     serviceEnv: serviceState.env,
   });
+  const quiesceLaunchAgent = process.platform === "darwin";
   try {
     await service.stop({
       env: serviceState.env,
       stdout: serviceControlStdoutForMode(params.jsonMode),
+      ...(quiesceLaunchAgent ? { quiesce: true } : {}),
     });
     if (windowsTaskAutoStartRecovery) {
       await abortWindowsTaskUpdateIfInterrupted(windowsTaskAutoStartRecovery);
@@ -1283,6 +1284,20 @@ async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   } catch (err) {
     if (err instanceof UpdateCommandAbort) {
       throw err;
+    }
+    if (quiesceLaunchAgent) {
+      try {
+        await service.restart({
+          env: serviceState.env,
+          stdout: serviceControlStdoutForMode(params.jsonMode),
+        });
+      } catch (restartErr) {
+        throw createAggregateErrorWithCause(
+          [err, restartErr],
+          `Failed to quiesce the managed gateway (${String(err)}) and restore its LaunchAgent (${String(restartErr)})`,
+          err,
+        );
+      }
     }
     if (windowsTaskAutoStartRecovery) {
       try {

@@ -3817,11 +3817,12 @@ describe("update-cli", () => {
   });
 
   it.each([
-    ["a stopped loaded managed-update handoff", "linux", "1"],
-    ["a stopped loaded Darwin LaunchAgent", "darwin", undefined],
+    ["a stopped loaded managed-update handoff", "linux", "1", true, false],
+    ["a stopped loaded Darwin LaunchAgent", "darwin", undefined, true, true],
+    ["a transiently unloaded Darwin managed-update handoff", "darwin", "1", false, true],
   ] as const)(
     "waits for %s to quiesce before package replacement",
-    async (_caseName, platform, handoffMarker) => {
+    async (_caseName, platform, handoffMarker, loaded, expectsLaunchAgentQuiesce) => {
       const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
       mockPackageInstallStatus(createCaseDir(`openclaw-update-stopped-service-${platform}`));
       serviceReadCommand.mockResolvedValue({
@@ -3831,7 +3832,7 @@ describe("update-cli", () => {
           OPENCLAW_SERVICE_KIND: "gateway",
         },
       });
-      serviceLoaded.mockResolvedValue(true);
+      serviceLoaded.mockResolvedValue(loaded);
       serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
 
       let releaseStop: (() => void) | undefined;
@@ -3870,9 +3871,40 @@ describe("update-cli", () => {
         "managed service stop call order",
       );
       expect(stopOrder).toBeLessThan(installOrder);
+      const stopCall = serviceStop.mock.calls[0]?.[0] as { quiesce?: boolean } | undefined;
+      expect(stopCall?.quiesce).toBe(expectsLaunchAgentQuiesce ? true : undefined);
       expect(runRestartScript).toHaveBeenCalledWith("/tmp/openclaw-restart-test.sh");
     },
   );
+
+  it("restores a Darwin LaunchAgent when update quiescence fails", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    mockPackageInstallStatus(createCaseDir("openclaw-update-quiesce-failure"));
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+    });
+    serviceLoaded.mockResolvedValue(false);
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    serviceStop.mockRejectedValueOnce(new Error("quiesce failed"));
+
+    try {
+      await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: "1" }, async () => {
+        await updateCommand({ yes: true });
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
+
+    expect(serviceStop).toHaveBeenCalledWith(expect.objectContaining({ quiesce: true }));
+    expect(serviceRestart).toHaveBeenCalledTimes(1);
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(
+      requireValue(serviceStop.mock.invocationCallOrder[0], "service stop order"),
+    ).toBeLessThan(
+      requireValue(serviceRestart.mock.invocationCallOrder[0], "service restart order"),
+    );
+  });
 
   it.each(["linux", "win32"] as const)(
     "does not quiesce or recovery-restart a stopped loaded %s service outside a managed-update handoff",
