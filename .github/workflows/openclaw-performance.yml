@@ -288,10 +288,27 @@ jobs:
           git -C "$KOVA_SRC" checkout --detach FETCH_HEAD
           npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund
           node - "$KOVA_SRC" <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+
           const root = process.argv[2];
-          for (const dependency of ["mock-ai-provider", "zod"]) {
-            require.resolve(dependency, { paths: [root] });
+          const packageJsonPath = require.resolve("mock-ai-provider/package.json", {
+            paths: [root],
+          });
+          const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+          const bin =
+            typeof packageJson.bin === "string"
+              ? packageJson.bin
+              : packageJson.bin?.["mock-ai-provider"];
+          if (typeof bin !== "string" || bin.length === 0) {
+            throw new Error("mock-ai-provider does not declare its CLI entrypoint");
           }
+          fs.accessSync(path.resolve(path.dirname(packageJsonPath), bin), fs.constants.R_OK);
+          fs.accessSync(
+            path.join(root, "node_modules", ".bin", "mock-ai-provider"),
+            fs.constants.X_OK,
+          );
+          require.resolve("zod", { paths: [root] });
           NODE
           cat > "$HOME/.local/bin/kova" <<EOF
           #!/usr/bin/env bash
