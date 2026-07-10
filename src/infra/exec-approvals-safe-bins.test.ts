@@ -23,6 +23,8 @@ import {
 import { getTrustedSafeBinDirs } from "./exec-safe-bin-trust.js";
 
 describe("exec approvals safe bins", () => {
+  const systemFixtureTrustedDirs = new Set(["/bin", "/usr/bin"]);
+
   type SafeBinCase = {
     name: string;
     argv: string[];
@@ -401,6 +403,7 @@ describe("exec approvals safe bins", () => {
       },
       safeBins: normalizeSafeBins(testCase.safeBins ?? [executableName]),
       safeBinProfiles: testCase.safeBinProfiles,
+      trustedSafeBinDirs: systemFixtureTrustedDirs,
     });
     expect(ok).toBe(testCase.expected);
   });
