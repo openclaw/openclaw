@@ -1,4 +1,5 @@
 // Feishu plugin module implements media behavior.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -529,6 +530,7 @@ async function sendImageFeishu(params: {
     accountId,
   });
   const content = JSON.stringify({ image_key: imageKey });
+  const uuid = randomUUID();
 
   if (replyToMessageId) {
     const response = await requestFeishuApi(
@@ -538,11 +540,12 @@ async function sendImageFeishu(params: {
           data: {
             content,
             msg_type: "image",
+            uuid,
             ...(replyInThread ? { reply_in_thread: true } : {}),
           },
         }),
       "Feishu image reply failed",
-      { includeNestedErrorLogId: true },
+      { includeNestedErrorLogId: true, retryTransient: true },
     );
     assertFeishuMessageApiSuccess(response, "Feishu image reply failed");
     return toFeishuSendResult(response, receiveId, "media");
@@ -556,10 +559,11 @@ async function sendImageFeishu(params: {
           receive_id: receiveId,
           content,
           msg_type: "image",
+          uuid,
         },
       }),
     "Feishu image send failed",
-    { includeNestedErrorLogId: true },
+    { includeNestedErrorLogId: true, retryTransient: true },
   );
   assertFeishuMessageApiSuccess(response, "Feishu image send failed");
   return toFeishuSendResult(response, receiveId, "media");
@@ -586,6 +590,7 @@ async function sendFileFeishu(params: {
     accountId,
   });
   const content = JSON.stringify({ file_key: fileKey });
+  const uuid = randomUUID();
 
   if (replyToMessageId) {
     const response = await requestFeishuApi(
@@ -595,11 +600,12 @@ async function sendFileFeishu(params: {
           data: {
             content,
             msg_type: msgType,
+            uuid,
             ...(replyInThread ? { reply_in_thread: true } : {}),
           },
         }),
       "Feishu file reply failed",
-      { includeNestedErrorLogId: true },
+      { includeNestedErrorLogId: true, retryTransient: true },
     );
     assertFeishuMessageApiSuccess(response, "Feishu file reply failed");
     return toFeishuSendResult(response, receiveId, resolveFeishuReceiptKind(msgType));
@@ -613,10 +619,11 @@ async function sendFileFeishu(params: {
           receive_id: receiveId,
           content,
           msg_type: msgType,
+          uuid,
         },
       }),
     "Feishu file send failed",
-    { includeNestedErrorLogId: true },
+    { includeNestedErrorLogId: true, retryTransient: true },
   );
   assertFeishuMessageApiSuccess(response, "Feishu file send failed");
   return toFeishuSendResult(response, receiveId, resolveFeishuReceiptKind(msgType));

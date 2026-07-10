@@ -94,6 +94,19 @@ function createFeishuApiError(
 // 11232: tenant-level "create message service trigger rate limit" (100/min, 5/sec per app/bot).
 // Distinct from FEISHU_BACKOFF_CODES in typing.ts, which covers the reaction API (99991400+).
 const FEISHU_SEND_RATE_LIMIT_CODES = new Set([230020, 11232]);
+const FEISHU_SEND_TRANSIENT_ERROR_CODES = new Set([
+  "EAI_AGAIN",
+  "ECONNABORTED",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETDOWN",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EPIPE",
+  "ERR_NETWORK",
+  "ETIMEDOUT",
+]);
 const FEISHU_SEND_MAX_RETRIES = 2;
 const FEISHU_SEND_RETRY_BASE_MS = 500;
 
@@ -136,12 +149,46 @@ export function getFeishuSendRateLimitCodeFromResponse(response: unknown): numbe
   return typeof code === "number" && FEISHU_SEND_RATE_LIMIT_CODES.has(code) ? code : undefined;
 }
 
+function isFeishuSendTransientError(error: unknown, seen = new Set<unknown>()): boolean {
+  if (!isRecord(error) || seen.has(error)) {
+    return false;
+  }
+  seen.add(error);
+
+  const response = isRecord(error.response) ? error.response : undefined;
+  const status = response?.status;
+  if (
+    typeof status === "number" &&
+    (status === 408 || status === 425 || (status >= 500 && status <= 599))
+  ) {
+    return true;
+  }
+
+  const code = readString(error.code)?.toUpperCase();
+  if (code && FEISHU_SEND_TRANSIENT_ERROR_CODES.has(code)) {
+    return true;
+  }
+
+  const message = typeof error.message === "string" ? error.message.toLowerCase() : "";
+  if (
+    message.includes("timeout") ||
+    message.includes("socket hang up") ||
+    message.includes("network error")
+  ) {
+    return true;
+  }
+
+  return isFeishuSendTransientError(error.cause, seen);
+}
+
 export async function requestFeishuApi<T>(
   request: () => Promise<T>,
   errorPrefix: string,
   options: {
     includeConfigParams?: boolean;
     includeNestedErrorLogId?: boolean;
+    /** Retry transient network/server failures. Only enable for idempotent requests. */
+    retryTransient?: boolean;
     /** Base delay per retry attempt in ms; multiplied by attempt index. @internal */
     retryDelayMs?: number;
   } = {},
@@ -172,8 +219,11 @@ export async function requestFeishuApi<T>(
       }
       return result;
     } catch (error) {
+      const retryableRateLimit = getFeishuSendRateLimitCode(error) !== undefined;
+      const retryableTransient =
+        options.retryTransient === true && isFeishuSendTransientError(error);
       const isRetryable =
-        attempt < FEISHU_SEND_MAX_RETRIES && getFeishuSendRateLimitCode(error) !== undefined;
+        attempt < FEISHU_SEND_MAX_RETRIES && (retryableRateLimit || retryableTransient);
       if (!isRetryable) {
         throw createFeishuApiError(error, errorPrefix, options);
       }

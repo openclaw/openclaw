@@ -2,6 +2,7 @@
  * Feishu Streaming Card - Card Kit streaming API for real-time text output
  */
 
+import { randomUUID } from "node:crypto";
 import type { Client } from "@larksuiteoapi/node-sdk";
 import {
   asDateTimestampMs,
@@ -339,6 +340,7 @@ export class FeishuStreamingSession {
     }
     const cardId = createData.data.card_id;
     const cardContent = JSON.stringify({ type: "card", data: { card_id: cardId } });
+    const messageUuid = randomUUID();
 
     // Prefer message.reply when we have a reply target — reply_in_thread
     // reliably routes streaming cards into Feishu topics, whereas
@@ -355,10 +357,12 @@ export class FeishuStreamingSession {
             data: {
               msg_type: "interactive",
               content: cardContent,
+              uuid: messageUuid,
               ...(sendOptions.replyInThread ? { reply_in_thread: true } : {}),
             },
           }),
         "Send card failed",
+        { retryTransient: true },
       );
     } else if (sendMode === "root_create") {
       // root_id is undeclared in the SDK types but accepted at runtime
@@ -367,11 +371,17 @@ export class FeishuStreamingSession {
           this.client.im.message.create({
             params: { receive_id_type: receiveIdType },
             data: Object.assign(
-              { receive_id: receiveId, msg_type: "interactive", content: cardContent },
+              {
+                receive_id: receiveId,
+                msg_type: "interactive",
+                content: cardContent,
+                uuid: messageUuid,
+              },
               { root_id: sendOptions.rootId },
             ),
           }),
         "Send card failed",
+        { retryTransient: true },
       );
     } else {
       sendRes = await requestFeishuApi(
@@ -382,9 +392,11 @@ export class FeishuStreamingSession {
               receive_id: receiveId,
               msg_type: "interactive",
               content: cardContent,
+              uuid: messageUuid,
             },
           }),
         "Send card failed",
+        { retryTransient: true },
       );
     }
     if (sendRes.code !== 0 || !sendRes.data?.message_id) {

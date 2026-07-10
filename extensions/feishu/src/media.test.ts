@@ -435,6 +435,44 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expectMediaTimeoutClientConfigured();
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("image");
+    expect(callData<{ uuid?: string }>(messageCreateMock).uuid).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("reuses one uuid when retrying a transient media message send", async () => {
+    messageCreateMock.mockRejectedValueOnce(
+      Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+    );
+
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("image"),
+      fileName: "photo.png",
+    });
+
+    expect(messageCreateMock).toHaveBeenCalledTimes(2);
+    const firstUuid = callData<{ uuid?: string }>(messageCreateMock, 0).uuid;
+    const secondUuid = callData<{ uuid?: string }>(messageCreateMock, 1).uuid;
+    expect(firstUuid).toMatch(/^[0-9a-f-]{36}$/);
+    expect(secondUuid).toBe(firstUuid);
+  });
+
+  it("does not retry non-idempotent media uploads on transient failures", async () => {
+    imageCreateMock.mockRejectedValueOnce(
+      Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+    );
+
+    await expect(
+      sendMediaFeishu({
+        cfg: emptyConfig,
+        to: "user:ou_target",
+        mediaBuffer: Buffer.from("image"),
+        fileName: "photo.png",
+      }),
+    ).rejects.toThrow("Feishu image upload failed");
+
+    expect(imageCreateMock).toHaveBeenCalledTimes(1);
+    expect(messageCreateMock).not.toHaveBeenCalled();
   });
 
   it("preserves Feishu diagnostics when media sends reject before response checks", async () => {
