@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import type { SessionEntry } from "./types.js";
 
@@ -9,22 +9,10 @@ import type { SessionEntry } from "./types.js";
 // dir (a foreign root), not the default agents dir the caller derived
 // `fallbackSessionFile` from. Sibling fix for the transcript-mirror path: #95782.
 describe("resolveAndPersistSessionFile — honor a relocated session.store", () => {
-  const tmpDirs: string[] = [];
-
-  afterEach(() => {
-    for (const dir of tmpDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  function makeTmpRoot(prefix: string): string {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-    tmpDirs.push(root);
-    return root;
-  }
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   it("roots a new session's transcript in the store dir, not the default agents dir", async () => {
-    const root = makeTmpRoot("sf-store-");
+    const root = tempDirs.make("sf-store-");
     const storeDir = path.join(root, "persist", "agents", "main", "sessions"); // foreign root
     const defaultDir = path.join(root, "state", "agents", "main", "sessions"); // default agents dir
     fs.mkdirSync(storeDir, { recursive: true });
@@ -50,7 +38,7 @@ describe("resolveAndPersistSessionFile — honor a relocated session.store", () 
   });
 
   it("preserves the topic id in the re-rooted filename", async () => {
-    const root = makeTmpRoot("sf-topic-");
+    const root = tempDirs.make("sf-topic-");
     const storeDir = path.join(root, "persist", "agents", "main", "sessions");
     const defaultDir = path.join(root, "state", "agents", "main", "sessions");
     fs.mkdirSync(storeDir, { recursive: true });
@@ -70,7 +58,7 @@ describe("resolveAndPersistSessionFile — honor a relocated session.store", () 
   });
 
   it("is a no-op when the store dir already equals the fallback dir (default layout)", async () => {
-    const root = makeTmpRoot("sf-default-");
+    const root = tempDirs.make("sf-default-");
     const dir = path.join(root, "agents", "main", "sessions");
     fs.mkdirSync(dir, { recursive: true });
 
