@@ -43,6 +43,10 @@ function expectStatByLabel(container: Element, text: string): HTMLElement {
 
 function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettingsProps {
   return {
+    lobsterPetVisits: true,
+    setLobsterPetVisits: () => {},
+    lobsterPetSounds: false,
+    setLobsterPetSounds: () => {},
     currentModel: "gpt-5.5",
     thinkingLevel: "off",
     fastMode: false,

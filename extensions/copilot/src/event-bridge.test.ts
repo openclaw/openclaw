@@ -186,10 +186,7 @@ describe("attachEventBridge", () => {
 
     expect(bridge.snapshot().assistantTexts).toEqual(["root"]);
     expect(bridge.snapshot().startedCount).toBe(0);
-    expect(bridge.snapshot().toolMetas).toEqual([
-      { toolName: "write" },
-      { meta: "child write", toolName: "write" },
-    ]);
+    expect(bridge.snapshot().toolMetas).toEqual([{ meta: "child write", toolName: "write" }]);
     await bridge.awaitDeltaChain();
     expect(onAssistantDelta).toHaveBeenCalledTimes(1);
   });
@@ -689,7 +686,7 @@ describe("attachEventBridge", () => {
     });
   });
 
-  it("tool.execution_complete uses detailedContent or content on success and error.message on failure", () => {
+  it("tool.execution_complete updates one tool meta per call and marks failures", () => {
     const session = createFakeSession();
     const bridge = attachEventBridge(session, {
       getSdkSessionId: () => "sdk-session-id",
@@ -722,10 +719,8 @@ describe("attachEventBridge", () => {
     );
 
     expect(bridge.snapshot().toolMetas).toEqual([
-      { toolName: "bash" },
       { meta: "details", toolName: "bash" },
-      { toolName: "read" },
-      { meta: "failed", toolName: "read" },
+      { meta: "failed", toolName: "read", isError: true },
     ]);
   });
 
@@ -777,6 +772,34 @@ describe("attachEventBridge", () => {
 
     expect(calls).toEqual(["start", "complete:false", "start", "complete:true"]);
     expect(bridge.isCompacting()).toBe(false);
+  });
+
+  it("invalidates shared tool context synchronously after every successful compaction", () => {
+    const session = createFakeSession();
+    const onContextCompacted = vi.fn();
+    attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+      onContextCompacted,
+    });
+
+    session.emit(
+      "session.compaction_complete",
+      makeEvent("session.compaction_complete", { success: false }),
+    );
+    expect(onContextCompacted).not.toHaveBeenCalled();
+
+    session.emit(
+      "session.compaction_complete",
+      makeEvent("session.compaction_complete", { success: true }),
+    );
+    expect(onContextCompacted).toHaveBeenCalledTimes(1);
+
+    session.emit("session.compaction_complete", {
+      ...makeEvent("session.compaction_complete", { success: true }),
+      agentId: "subagent-1",
+    });
+    expect(onContextCompacted).toHaveBeenCalledTimes(2);
   });
 
   it("waits for an active compaction and its completion callback", async () => {

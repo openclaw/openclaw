@@ -5067,10 +5067,18 @@ export const chatHandlers: GatewayRequestHandlers = {
                       return queuedFollowupEnqueued;
                     },
                     onCancellationRetired: () => {
-                      retireQueuedChatTurnCancellation(ensureChatQueuedTurns(context), clientRunId);
+                      retireQueuedChatTurnCancellation(
+                        ensureChatQueuedTurns(context),
+                        clientRunId,
+                        activeRunAbort.controller,
+                      );
                     },
                     onComplete: () => {
-                      completeQueuedChatTurn(ensureChatQueuedTurns(context), clientRunId);
+                      completeQueuedChatTurn(
+                        ensureChatQueuedTurns(context),
+                        clientRunId,
+                        activeRunAbort.controller,
+                      );
                     },
                   },
                   images: replyOptionImages,

@@ -106,8 +106,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         linkMessageHandler.owner = self
         self.webView.navigationDelegate = self
         self.webView.uiDelegate = self
-        self.linkBrowser.webView.navigationDelegate = self
-        self.linkBrowser.webView.uiDelegate = self
+        self.linkBrowser.webViewNavigationDelegate = self
+        self.linkBrowser.webViewUIDelegate = self
         self.linkBrowser.onClose = { [weak self] in self?.closeLinkBrowser() }
         self.linkBrowser.onOpenExternal = { [weak self] url in self?.openExternal(url) }
         self.window?.delegate = self
@@ -125,7 +125,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         initiatedByFrame _: WKFrameInfo,
         completionHandler: @escaping @MainActor @Sendable ([URL]?) -> Void)
     {
-        guard webView === self.webView || webView === self.linkBrowser.webView else {
+        guard webView === self.webView || self.linkBrowser.owns(webView) else {
             completionHandler(nil)
             return
         }
@@ -152,15 +152,25 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         windowFeatures _: WKWindowFeatures) -> WKWebView?
     {
         // WebKit reaches this callback only for user-allowed new-window requests;
-        // both configurations disable automatic JavaScript windows.
-        guard webView === self.webView || webView === self.linkBrowser.webView,
-              navigationAction.targetFrame == nil,
-              let url = navigationAction.request.url,
-              Self.isHTTPURL(url)
+        // every configuration disables automatic JavaScript windows.
+        guard navigationAction.targetFrame == nil,
+              webView === self.webView || self.linkBrowser.owns(webView)
         else {
             return nil
         }
-        self.openExternal(url)
+        // Sidebar target=_blank links become tabs; dashboard requests preserve
+        // the existing handoff to the default browser.
+        switch Self.newWindowAction(
+            for: navigationAction.request.url,
+            sourceIsLinkBrowser: self.linkBrowser.owns(webView))
+        {
+        case let .openTab(url):
+            self.linkBrowser.openInNewTab(url)
+        case let .openExternal(url):
+            self.openExternal(url)
+        case .ignore:
+            break
+        }
         return nil
     }
 
@@ -232,7 +242,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private func openLinkBrowser(_ url: URL) {
         self.linkBrowserItem.isCollapsed = false
         self.linkBrowser.open(url)
-        window?.makeFirstResponder(self.linkBrowser.webView)
+        window?.makeFirstResponder(self.linkBrowser.activeWebView)
     }
 
     private func closeLinkBrowser(focusDashboard: Bool = true) {
@@ -446,16 +456,17 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             topDragRegion.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 78),
             topDragRegion.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -380),
             topDragRegion.topAnchor.constraint(equalTo: container.topAnchor),
-            // Thin edge strip only: the web UI has no desktop topbar row, so a
-            // taller region would swallow clicks meant for the top of the
-            // content column (chat thread, page headers). The sidebar region
-            // below stays the primary drag surface — it floats over the 50px
-            // strip the native chrome CSS reserves in the web sidebar.
-            topDragRegion.heightAnchor.constraint(equalToConstant: 12),
+            // Thin edge strip only: the web topbar's controls sit vertically
+            // centered in its 48px row, so an 8px strip stays clear of them
+            // while still offering a grab edge across the window.
+            topDragRegion.heightAnchor.constraint(equalToConstant: 8),
             topRightDragRegion.leadingAnchor.constraint(equalTo: topDragRegion.trailingAnchor),
             topRightDragRegion.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
             topRightDragRegion.topAnchor.constraint(equalTo: container.topAnchor),
             topRightDragRegion.heightAnchor.constraint(equalToConstant: 6),
+            // Primary drag surface: floats over the web topbar's brand strip,
+            // which the Control UI keeps non-interactive and >=176px wide on
+            // native macOS (layout.css html.openclaw-native-macos rules).
             sidebarDragRegion.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 78),
             sidebarDragRegion.topAnchor.constraint(equalTo: container.topAnchor),
             sidebarDragRegion.widthAnchor.constraint(equalToConstant: 176),
@@ -479,20 +490,16 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     private static func installNativeChromeScript(into userContentController: WKUserContentController) {
+        // Desktop widths need no rules here: the Control UI's own
+        // `html.openclaw-native-macos` styles inset the topbar past the
+        // traffic lights and keep the brand strip passive under the drag
+        // regions installed in makeWindow (layout.css).
         let css = """
         html.openclaw-native-macos {
           --openclaw-native-titlebar-height: 50px;
         }
-        @media (min-width: 700px) {
-          /* Both desktop navigation surfaces must clear AppKit's window controls
-             and drag regions or their first interactive row becomes unreachable. */
-          html.openclaw-native-macos .sidebar-shell,
-          html.openclaw-native-macos .settings-sidebar__header {
-            padding-top: max(14px, var(--openclaw-native-titlebar-height)) !important;
-          }
-        }
         @media (max-width: 1100px) {
-          /* The responsive topbar replaces the sidebar below this breakpoint.
+          /* The drawer topbar replaces the desktop bar below this breakpoint.
              Move its controls below AppKit's traffic lights and drag overlay. */
           html.openclaw-native-macos .shell {
             --shell-topbar-height: calc(58px + var(--openclaw-native-titlebar-height));
@@ -590,7 +597,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
     {
         let isDashboardWebView = webView === self.webView
-        let isLinkBrowserWebView = webView === self.linkBrowser.webView
+        let isLinkBrowserWebView = self.linkBrowser.owns(webView)
         guard isDashboardWebView || isLinkBrowserWebView else {
             decisionHandler(.cancel)
             return
@@ -625,7 +632,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             let isMainFrame = navigationAction.targetFrame?.isMainFrame == true
             if Self.shouldAllowBrowserNavigation(to: url, isMainFrame: isMainFrame) {
                 if isMainFrame {
-                    self.linkBrowser.navigationWillStart(url)
+                    self.linkBrowser.navigationWillStart(url, in: webView)
                 }
                 decisionHandler(.allow)
                 return
@@ -670,19 +677,19 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation _: WKNavigation!) {
-        if webView === self.linkBrowser.webView {
+        if self.linkBrowser.owns(webView) {
             self.linkBrowser.updateChrome()
         }
     }
 
     func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
-        if webView === self.linkBrowser.webView {
-            self.linkBrowser.navigationDidFinish()
+        if self.linkBrowser.owns(webView) {
+            self.linkBrowser.navigationDidFinish(for: webView)
         }
     }
 
     func webView(_ webView: WKWebView, didFail _: WKNavigation!, withError error: Error) {
-        if webView === self.linkBrowser.webView {
+        if self.linkBrowser.owns(webView) {
             self.linkBrowser.updateChrome()
             return
         }
@@ -695,7 +702,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         didFailProvisionalNavigation _: WKNavigation!,
         withError error: Error)
     {
-        if webView === self.linkBrowser.webView {
+        if self.linkBrowser.owns(webView) {
             self.linkBrowser.updateChrome()
             return
         }
@@ -754,6 +761,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             return .openExternal
         }
         return .cancel
+    }
+
+    static func newWindowAction(for url: URL?, sourceIsLinkBrowser: Bool) -> DashboardNewWindowAction {
+        guard let url, self.isHTTPURL(url) else { return .ignore }
+        return sourceIsLinkBrowser ? .openTab(url) : .openExternal(url)
     }
 
     private func decideTargetlessNavigation(
@@ -919,7 +931,10 @@ extension DashboardWindowController {
     }
 
     var _testLinkBrowserDataStore: WKWebsiteDataStore {
-        self.linkBrowser.webView.configuration.websiteDataStore
+        // Prefer the active tab's configured store so tests catch a tab that
+        // was built with the wrong (non-shared) data store.
+        self.linkBrowser.activeWebView?.configuration.websiteDataStore
+            ?? self.linkBrowser._testWebsiteDataStore
     }
 
     var _testLinkBrowserRepresentedURL: URL? {
@@ -930,25 +945,26 @@ extension DashboardWindowController {
         self.linkBrowser._testNavigationObservationCount
     }
 
-    var _testLinkBrowserWebViewIdentity: ObjectIdentifier {
-        ObjectIdentifier(self.linkBrowser.webView)
+    var _testLinkBrowserWebViewIdentity: ObjectIdentifier? {
+        self.linkBrowser.activeWebView.map(ObjectIdentifier.init)
     }
 
     var _testLinkBrowserWebViewURL: URL? {
-        self.linkBrowser.webView.url
+        self.linkBrowser.activeWebView?.url
     }
 
     var _testLinkBrowserHistoryIsEmpty: Bool {
-        let history = self.linkBrowser.webView.backForwardList
+        guard let history = self.linkBrowser.activeWebView?.backForwardList else { return true }
         return history.currentItem == nil && history.backItem == nil && history.forwardItem == nil
     }
 
     var _testLinkBrowserDelegatesAreInstalled: Bool {
-        self.linkBrowser.webView.navigationDelegate === self && self.linkBrowser.webView.uiDelegate === self
+        guard let webView = self.linkBrowser.activeWebView else { return false }
+        return webView.navigationDelegate === self && webView.uiDelegate === self
     }
 
     var _testLinkBrowserWebViewIsInstalled: Bool {
-        self.linkBrowser.webView.superview === self.linkBrowser
+        self.linkBrowser.activeWebView?.superview === self.linkBrowser
     }
 
     var _testDashboardDataStore: WKWebsiteDataStore {
@@ -957,7 +973,9 @@ extension DashboardWindowController {
 
     var _testCanOpenWindowsAutomatically: Bool {
         self.webView.configuration.preferences.javaScriptCanOpenWindowsAutomatically ||
-            self.linkBrowser.webView.configuration.preferences.javaScriptCanOpenWindowsAutomatically
+            self.linkBrowser._testAllWebViews.contains {
+                $0.configuration.preferences.javaScriptCanOpenWindowsAutomatically
+            }
     }
 
     var _testSplitAutosaveName: String? {
@@ -970,6 +988,38 @@ extension DashboardWindowController {
 
     func _testCloseLinkBrowser() {
         self.closeLinkBrowser()
+    }
+
+    var _testLinkBrowserTabCount: Int {
+        self.linkBrowser._testTabCount
+    }
+
+    var _testLinkBrowserTabURLs: [URL?] {
+        self.linkBrowser._testTabURLs
+    }
+
+    var _testLinkBrowserActiveTabIndex: Int? {
+        self.linkBrowser._testActiveTabIndex
+    }
+
+    func _testLinkBrowserOpenInNewTab(_ url: URL) {
+        self.linkBrowser.openInNewTab(url)
+    }
+
+    func _testLinkBrowserCloseTab(at index: Int) {
+        self.linkBrowser._testCloseTab(at: index)
+    }
+
+    func _testLinkBrowserMoveTab(from fromIndex: Int, to toIndex: Int) {
+        self.linkBrowser._testMoveTab(from: fromIndex, to: toIndex)
+    }
+
+    func _testLinkBrowserSelectTab(at index: Int) {
+        self.linkBrowser._testSelectTab(at: index)
+    }
+
+    func _testLinkBrowserContextMenu(forTabAt index: Int) -> NSMenu? {
+        self.linkBrowser._testContextMenu(forTabAt: index)
     }
 
     var _testAllowsBackForwardGestures: Bool {
