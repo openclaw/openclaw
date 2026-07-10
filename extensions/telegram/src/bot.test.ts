@@ -50,8 +50,11 @@ const {
   wasSentByBot,
 } = await import("./bot.create-telegram-bot.test-harness.js");
 const { recordOutboundMessageForPromptContext } = await import("./outbound-message-context.js");
-const { runWithTelegramUpdateProcessingFrame, withTelegramSpooledReplayUpdate } =
-  await import("./bot-processing-outcome.js");
+const {
+  runWithTelegramSpooledReplayUpdate,
+  runWithTelegramUpdateProcessingFrame,
+  withTelegramSpooledReplayUpdate,
+} = await import("./bot-processing-outcome.js");
 
 let createTelegramBotBase: typeof import("./bot-core.js").createTelegramBotCore;
 let setTelegramBotRuntimeForTest: typeof import("./bot-core.js").setTelegramBotRuntimeForTest;
@@ -4670,7 +4673,7 @@ describe("createTelegramBot", () => {
     expect(payload.SenderUsername).toBe("ada_bot");
   });
 
-  it("retries plugin-owned callback text when the previous reply session is still closing", async () => {
+  it("settles spooled plugin callback text after a reply-session conflict retry succeeds", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
     editMessageReplyMarkupSpy.mockClear();
@@ -4703,22 +4706,30 @@ describe("createTelegramBot", () => {
         },
       });
       const callbackHandler = getTelegramCallbackHandlerForTests();
-
-      await callbackHandler({
-        callbackQuery: {
-          id: "cbq-smart-reply-submit-retry",
-          data: "openclaw-smart-replies:v1:TWFrZSBBbGljZSBmdW5uaWVy",
-          from: { id: 9, first_name: "Ada", username: "ada_bot" },
-          message: {
-            chat: { id: 9, type: "private" },
-            date: 1736380800,
-            message_id: 11,
-            text: "Pick a direction",
-          },
+      const callbackQuery = {
+        id: "cbq-smart-reply-submit-retry",
+        data: "openclaw-smart-replies:v1:TWFrZSBBbGljZSBmdW5uaWVy",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 9, type: "private" },
+          date: 1736380800,
+          message_id: 11,
+          text: "Pick a direction",
         },
+      };
+      const update = { update_id: 403, callback_query: callbackQuery };
+      const callbackContext = {
+        update,
+        callbackQuery,
         me: { username: "openclaw_bot" },
         getFile: async () => ({ download: async () => new Uint8Array() }),
+      };
+
+      const replay = await runWithTelegramSpooledReplayUpdate(update, async () => {
+        await callbackHandler(callbackContext);
       });
+      expect(replay.deferredWork).toBeDefined();
+      await expect(replay.deferredWork?.task).resolves.toEqual({ kind: "completed" });
     } finally {
       clearTelegramRuntime();
     }

@@ -402,6 +402,9 @@ async function loadFreshFollowupRunnerModuleForTest() {
     runCliAgent: (params: unknown) => runCliAgentMock(params),
   }));
   vi.doMock("./queue.js", () => ({
+    admitFollowupRunLifecycle: async (run: Pick<FollowupRun, "queuedLifecycle">) => {
+      await run.queuedLifecycle?.onAdmitted?.();
+    },
     clearFollowupQueue: clearFollowupQueueForFollowupTest,
     completeFollowupRunLifecycle: (run: Pick<FollowupRun, "queuedLifecycle">) =>
       run.queuedLifecycle?.onComplete?.(),
@@ -738,8 +741,12 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(call.clientCaps).toEqual(["tool-events", "inline-widgets"]);
   });
 
-  it("notifies queued owners after admission and before model execution", async () => {
+  it("awaits queued-owner admission before model execution", async () => {
     const events: string[] = [];
+    let releaseAdmission!: () => void;
+    const admissionBarrier = new Promise<void>((resolve) => {
+      releaseAdmission = resolve;
+    });
     runEmbeddedAgentMock.mockImplementationOnce(async () => {
       events.push("run");
       return { payloads: [], meta: {} };
@@ -751,17 +758,27 @@ describe("createFollowupRunner reply-lane admission", () => {
       defaultModel: "anthropic/claude",
     });
 
-    await runner(
+    const pending = runner(
       createQueuedRun({
         queuedLifecycle: {
-          onAdmitted: () => events.push("admitted"),
+          onAdmitted: async () => {
+            events.push("admission-started");
+            await admissionBarrier;
+            events.push("admitted");
+          },
           onComplete: () => events.push("complete"),
         },
         run: { provider: "anthropic", model: "claude" },
       }),
     );
 
-    expect(events).toEqual(["admitted", "run", "complete"]);
+    await vi.waitFor(() => expect(events).toEqual(["admission-started"]));
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+
+    releaseAdmission();
+    await pending;
+
+    expect(events).toEqual(["admission-started", "admitted", "run", "complete"]);
   });
 
   it("passes prepared media user turns to embedded runtime dispatch", async () => {

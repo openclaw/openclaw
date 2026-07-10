@@ -42,7 +42,7 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose, sleepWithAbort, warn } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import {
   getSessionEntry,
@@ -91,11 +91,14 @@ import { resolveTelegramMessageTurnSettings } from "./bot-message.js";
 import { parseTelegramNativeCommandCallbackData } from "./bot-native-commands.js";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import {
+  createTelegramSpooledReplayParticipant,
   createTelegramSpooledReplayDeferredParticipant,
+  getTelegramSpooledReplayDeferredParticipant,
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
   type TelegramMessageProcessingResult,
   type TelegramSpooledReplayDeferredParticipant,
+  type TelegramSpooledReplaySettlementHold,
 } from "./bot-processing-outcome.js";
 import {
   MEDIA_GROUP_TIMEOUT_MS,
@@ -167,7 +170,6 @@ import {
   claimTelegramMessageDispatchReplay,
   commitTelegramMessageDispatchReplay,
   createTelegramMessageDispatchReplayGuard,
-  forgetTelegramMessageDispatchReplay,
   releaseTelegramMessageDispatchReplay,
 } from "./message-dispatch-dedupe.js";
 import {
@@ -414,16 +416,14 @@ export const registerTelegramHandlers = ({
       error,
     });
   };
-  const commitDispatchDedupeKeys = async (keys: readonly string[]) => {
+  const commitDispatchDedupeKeys = async (
+    keys: readonly string[],
+    options: { requirePersistent?: boolean } = {},
+  ) => {
     await commitTelegramMessageDispatchReplay({
       guard: messageDispatchReplayGuard,
       keys,
-    });
-  };
-  const forgetDispatchDedupeKeys = async (keys: readonly string[]) => {
-    await forgetTelegramMessageDispatchReplay({
-      guard: messageDispatchReplayGuard,
-      keys,
+      ...options,
     });
   };
   const buildFailedProcessingResult = (error: unknown): TelegramMessageProcessingResult => ({
@@ -437,6 +437,31 @@ export const registerTelegramHandlers = ({
     for (const participant of new Set(participants)) {
       participant.settle(result);
     }
+  };
+  const beginSpooledReplaySettlementHolds = (
+    participants: readonly TelegramSpooledReplayDeferredParticipant[],
+  ) => {
+    const holds: TelegramSpooledReplaySettlementHold[] = [];
+    for (const participant of new Set(participants)) {
+      const hold = participant.beginSettlementHold();
+      if (!hold) {
+        for (const acquired of holds) {
+          acquired.release("replay-pending");
+        }
+        const reason = participant.abortSignal.reason;
+        throw reason instanceof Error
+          ? reason
+          : new Error(
+              `telegram spooled replay participant ${participant.key} settled before durable adoption`,
+            );
+      }
+      holds.push(hold);
+    }
+    return (mode: Parameters<TelegramSpooledReplaySettlementHold["release"]>[0]) => {
+      for (const hold of holds) {
+        hold.release(mode);
+      }
+    };
   };
   const createSpooledReplayParticipantForBufferedWork = (
     key: string,
@@ -674,7 +699,7 @@ export const registerTelegramHandlers = ({
               ...spooledReplayOptions(spooledReplayParticipants),
             },
             dispatchDedupeKeys: last.dispatchDedupeKeys,
-            durableMediaReplay: spooledReplayParticipants.length > 0,
+            spooledReplayParticipants,
           });
           settleSpooledReplayParticipants(spooledReplayParticipants, result);
           return;
@@ -685,6 +710,9 @@ export const registerTelegramHandlers = ({
           .join("\n");
         const combinedMedia = entries.flatMap((entry) => entry.allMedia);
         if (!combinedText.trim() && combinedMedia.length === 0) {
+          releaseDispatchDedupeKeys(
+            mergeDispatchDedupeKeys(...entries.map((entry) => entry.dispatchDedupeKeys)),
+          );
           settleSpooledReplayParticipants(spooledReplayParticipants, { kind: "skipped" });
           return;
         }
@@ -724,7 +752,7 @@ export const registerTelegramHandlers = ({
           dispatchDedupeKeys: mergeDispatchDedupeKeys(
             ...entries.map((entry) => entry.dispatchDedupeKeys),
           ),
-          durableMediaReplay: spooledReplayParticipants.length > 0,
+          spooledReplayParticipants,
         });
         settleSpooledReplayParticipants(spooledReplayParticipants, result);
       } catch (err) {
@@ -762,6 +790,9 @@ export const registerTelegramHandlers = ({
       }
     },
     onCancel: (items) => {
+      releaseDispatchDedupeKeys(
+        mergeDispatchDedupeKeys(...items.map((item) => item.dispatchDedupeKeys)),
+      );
       settleSpooledReplayParticipants(
         items
           .map((item) => item.spooledReplayParticipant)
@@ -770,9 +801,6 @@ export const registerTelegramHandlers = ({
               participant !== undefined,
           ),
         { kind: "skipped" },
-      );
-      releaseDispatchDedupeKeys(
-        mergeDispatchDedupeKeys(...items.map((item) => item.dispatchDedupeKeys)),
       );
     },
   });
@@ -1152,7 +1180,7 @@ export const registerTelegramHandlers = ({
           ...spooledReplayOptions(entry.spooledReplayParticipants),
         },
         dispatchDedupeKeys: entry.dispatchDedupeKeys,
-        durableMediaReplay: entry.spooledReplayParticipants.length > 0,
+        spooledReplayParticipants: entry.spooledReplayParticipants,
       });
       settleSpooledReplayParticipants(entry.spooledReplayParticipants, result);
     } catch (err) {
@@ -1212,7 +1240,7 @@ export const registerTelegramHandlers = ({
           ...spooledReplayOptions(entry.spooledReplayParticipants),
         },
         dispatchDedupeKeys: entry.dispatchDedupeKeys,
-        durableMediaReplay: entry.spooledReplayParticipants.length > 0,
+        spooledReplayParticipants: entry.spooledReplayParticipants,
       });
       settleSpooledReplayParticipants(entry.spooledReplayParticipants, result);
     } catch (err) {
@@ -1498,18 +1526,97 @@ export const registerTelegramHandlers = ({
     storeAllowFrom: string[];
     options?: TelegramMessageContextOptions;
     dispatchDedupeKeys?: string[];
-    durableMediaReplay?: boolean;
+    spooledReplayParticipants?: readonly TelegramSpooledReplayDeferredParticipant[];
+    spooledReplayAbortSignal?: AbortSignal;
   }): Promise<TelegramMessageProcessingResult> => {
     let dispatchDedupeCommitted = false;
-    let dispatchDedupeRollbackAttempted = false;
+    let spooledReplayFinalResult: TelegramMessageProcessingResult | undefined;
+    let spooledReplayFinalization: Promise<TelegramMessageProcessingResult> | undefined;
     // Callback-submit retries also set options.spooledReplay without durable ingress.
     // Media aborts retry only when the update frame or a buffered participant owns replay.
     const durableMediaReplay =
-      params.durableMediaReplay === true || isTelegramSpooledReplayUpdate(params.ctx.update);
+      isTelegramSpooledReplayUpdate(params.ctx.update) ||
+      Boolean(params.spooledReplayParticipants?.length);
     const spooledReplay = params.options?.spooledReplay === true || durableMediaReplay;
-    const forgetCommittedDispatchDedupeKeys = async () => {
-      dispatchDedupeRollbackAttempted = true;
-      await forgetDispatchDedupeKeys(params.dispatchDedupeKeys ?? []);
+    const explicitParticipants = params.spooledReplayParticipants ?? [];
+    const frameParticipant =
+      spooledReplay &&
+      explicitParticipants.length === 0 &&
+      params.options?.isolateSpooledReplaySettlement !== true
+        ? (getTelegramSpooledReplayDeferredParticipant() ??
+          createTelegramSpooledReplayDeferredParticipant(
+            `message:${params.msg.chat.id}:${params.msg.message_id}`,
+          ) ??
+          undefined)
+        : undefined;
+    const ingressSpooledReplayParticipants = [
+      ...explicitParticipants,
+      ...(frameParticipant ? [frameParticipant] : []),
+    ];
+    const processingParticipant =
+      explicitParticipants.length > 0
+        ? createTelegramSpooledReplayParticipant(
+            `message-processing:${params.msg.chat.id}:${params.msg.message_id}`,
+          )
+        : frameParticipant;
+    if (processingParticipant && explicitParticipants.length > 0) {
+      for (const participant of explicitParticipants) {
+        void participant.task.then((result) => {
+          processingParticipant.settle(result);
+        });
+      }
+    }
+    const spooledReplayParticipants = [
+      ...new Set([
+        ...ingressSpooledReplayParticipants,
+        ...(processingParticipant ? [processingParticipant] : []),
+      ]),
+    ];
+    const finalizeSpooledReplayResult = async (
+      result: TelegramMessageProcessingResult,
+    ): Promise<TelegramMessageProcessingResult> => {
+      if (spooledReplayFinalResult) {
+        return spooledReplayFinalResult;
+      }
+      if (spooledReplayFinalization) {
+        return await spooledReplayFinalization;
+      }
+      const finalization = (async () => {
+        const finalized = result;
+        if (result.kind === "completed") {
+          // Do not cache or settle a durable-adoption failure. Deferred queue
+          // ownership retries this callback with the same spool participants.
+          const releaseSettlementHolds = beginSpooledReplaySettlementHolds(
+            ingressSpooledReplayParticipants,
+          );
+          try {
+            await commitDispatchDedupeKeys(params.dispatchDedupeKeys ?? [], {
+              requirePersistent: true,
+            });
+          } catch (error) {
+            releaseSettlementHolds("replay-pending");
+            throw error;
+          }
+          releaseSettlementHolds("discard-pending");
+          dispatchDedupeCommitted = true;
+        } else {
+          releaseDispatchDedupeKeys(
+            params.dispatchDedupeKeys ?? [],
+            result.kind === "failed-retryable" ? result.error : undefined,
+          );
+        }
+        spooledReplayFinalResult = finalized;
+        settleSpooledReplayParticipants(spooledReplayParticipants, finalized);
+        return finalized;
+      })();
+      spooledReplayFinalization = finalization;
+      try {
+        return await finalization;
+      } finally {
+        if (!spooledReplayFinalResult && spooledReplayFinalization === finalization) {
+          spooledReplayFinalization = undefined;
+        }
+      }
     };
     try {
       // One assembled turn owns one config identity. Reloading below this point
@@ -1621,24 +1728,34 @@ export const registerTelegramHandlers = ({
             await commitDispatchDedupeKeys(params.dispatchDedupeKeys ?? []);
             dispatchDedupeCommitted = true;
           },
+          spooledReplayAbortSignal: params.spooledReplayAbortSignal,
+          spooledReplayParticipant: processingParticipant,
+          finalizeSpooledReplayResult: async (processingResult) =>
+            await finalizeSpooledReplayResult(processingResult),
+          completeSpooledReplayAfterIrrevocableAdoption: async () => {
+            const completed = { kind: "completed" } satisfies TelegramMessageProcessingResult;
+            return await finalizeSpooledReplayResult(completed);
+          },
         },
         params.options,
         replyMedia,
         replyChain,
         promptContext,
       );
+      if (spooledReplay) {
+        return await finalizeSpooledReplayResult(result);
+      }
       if (result.kind === "completed" && !dispatchDedupeCommitted) {
         await commitDispatchDedupeKeys(params.dispatchDedupeKeys ?? []);
-      } else if (result.kind === "failed-retryable" && dispatchDedupeCommitted && spooledReplay) {
-        await forgetCommittedDispatchDedupeKeys();
       } else if (result.kind !== "completed" && !dispatchDedupeCommitted) {
         releaseDispatchDedupeKeys(params.dispatchDedupeKeys ?? []);
       }
       return result;
     } catch (err) {
-      if (dispatchDedupeCommitted && spooledReplay && !dispatchDedupeRollbackAttempted) {
-        await forgetCommittedDispatchDedupeKeys();
-      } else if (!dispatchDedupeCommitted) {
+      if (spooledReplay) {
+        return await finalizeSpooledReplayResult(buildFailedProcessingResult(err));
+      }
+      if (!dispatchDedupeCommitted) {
         releaseDispatchDedupeKeys(params.dispatchDedupeKeys ?? [], err);
       }
       throw err;
@@ -1803,11 +1920,6 @@ export const registerTelegramHandlers = ({
   const TELEGRAM_PLUGIN_CALLBACK_SUBMIT_RETRY_DELAYS_MS = [250, 1000, 2500] as const;
   const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
 
-  const sleep = (ms: number): Promise<void> =>
-    new Promise((resolve) => {
-      setTimeout(resolve, ms);
-    });
-
   const resolvePluginCallbackSubmitText = (submitText: unknown): string | undefined => {
     if (typeof submitText !== "string") {
       return undefined;
@@ -1828,6 +1940,17 @@ export const registerTelegramHandlers = ({
     syntheticMessage: Parameters<typeof processMessageWithReplyChain>[0]["msg"];
     storeAllowFrom: Parameters<typeof processMessageWithReplyChain>[0]["storeAllowFrom"];
   }): Promise<"completed" | "skipped"> => {
+    const spooledReplayParticipant = isTelegramSpooledReplayUpdate(params.syntheticCtx.update)
+      ? (getTelegramSpooledReplayDeferredParticipant() ??
+        createTelegramSpooledReplayDeferredParticipant(
+          `plugin-callback-submit:${params.callbackId}`,
+        ) ??
+        undefined)
+      : undefined;
+    const settleFinalResult = (result: TelegramMessageProcessingResult) => {
+      spooledReplayParticipant?.settle(result);
+      return result.kind;
+    };
     for (let attempt = 0; ; attempt++) {
       try {
         const result = await processMessageWithReplyChain({
@@ -1837,14 +1960,18 @@ export const registerTelegramHandlers = ({
           storeAllowFrom: params.storeAllowFrom,
           options: {
             spooledReplay: true,
+            isolateSpooledReplaySettlement: true,
             forceWasMentioned: true,
             messageIdOverride: params.callbackId,
           },
+          spooledReplayAbortSignal: spooledReplayParticipant?.abortSignal,
         });
         if (result.kind === "completed") {
+          settleFinalResult(result);
           return "completed";
         }
         if (result.kind === "skipped") {
+          settleFinalResult(result);
           return "skipped";
         }
         const retryDelayMs = TELEGRAM_PLUGIN_CALLBACK_SUBMIT_RETRY_DELAYS_MS[attempt];
@@ -1854,17 +1981,18 @@ export const registerTelegramHandlers = ({
         logVerbose(
           `telegram plugin callback submitText hit active reply session; retrying in ${retryDelayMs}ms`,
         );
-        await sleep(retryDelayMs);
+        await sleepWithAbort(retryDelayMs, spooledReplayParticipant?.abortSignal);
         continue;
       } catch (err) {
         const retryDelayMs = TELEGRAM_PLUGIN_CALLBACK_SUBMIT_RETRY_DELAYS_MS[attempt];
         if (!isReplySessionInitConflictError(err) || retryDelayMs === undefined) {
+          settleFinalResult(buildFailedProcessingResult(err));
           throw err;
         }
         logVerbose(
           `telegram plugin callback submitText hit active reply session; retrying in ${retryDelayMs}ms`,
         );
-        await sleep(retryDelayMs);
+        await sleepWithAbort(retryDelayMs, spooledReplayParticipant?.abortSignal);
       }
     }
   };
@@ -3343,6 +3471,9 @@ export const registerTelegramHandlers = ({
         throw err.cause;
       }
       runtime.error?.(danger(`callback handler failed: ${String(err)}`));
+      if (isTelegramSpooledReplayUpdate(ctx.update)) {
+        recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
+      }
     }
   });
 
@@ -3682,11 +3813,12 @@ export const registerTelegramHandlers = ({
     } catch (err) {
       releaseDispatchDedupeKeys(dispatchDedupeKeys, err);
       runtime.error?.(danger(`${event.errorMessage}: ${String(err)}`));
-      if (err instanceof TelegramPairingStoreReadError) {
+      const spooledReplay = isTelegramSpooledReplayUpdate(event.ctx.update);
+      if (err instanceof TelegramPairingStoreReadError || spooledReplay) {
         recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
         // Spooled replays are durably retried; live updates get one apology
         // because they are acked without replay.
-        if (isTelegramSpooledReplayUpdate(event.ctx.update)) {
+        if (spooledReplay) {
           return;
         }
         await withTelegramApiErrorLogging({
