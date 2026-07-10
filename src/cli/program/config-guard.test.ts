@@ -186,6 +186,12 @@ describe("ensureConfigReady", () => {
     }
   });
 
+  it("keeps status config guard reads non-observing", async () => {
+    await runEnsureConfigReady(["status"]);
+
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ observe: false });
+  });
+
   it("runs doctor flow when lightweight startup detection finds legacy state", async () => {
     const root = useTempOpenClawHome();
     writeLegacyTaskSidecarMarker(root);

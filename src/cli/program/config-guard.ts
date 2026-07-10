@@ -168,7 +168,10 @@ function shouldRequireStartupMigrationCheckpoint(commandPath: string[]): boolean
   );
 }
 
-async function getConfigSnapshot() {
+async function getConfigSnapshot(options?: { observe: false }) {
+  if (options?.observe === false) {
+    return readConfigFileSnapshot(options);
+  }
   // Tests often mutate config fixtures; caching can make those flaky.
   if (process.env.VITEST === "true") {
     return readConfigFileSnapshot();
@@ -193,6 +196,8 @@ export async function ensureConfigReady(params: {
   beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
 }): Promise<void> {
   const commandPath = params.commandPath ?? [];
+  const commandName = commandPath[0];
+  const subcommandName = commandPath[1];
   let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
   const shouldConsiderStateMigration = shouldMigrateStateFromPath(commandPath);
   const requiresLegacyStateInput = shouldRunStateMigrationOnlyWithLegacyInputs(commandPath);
@@ -230,7 +235,11 @@ export async function ensureConfigReady(params: {
     preflightSnapshot = await runStateMigrationPreflight();
   }
 
-  let snapshot = preflightSnapshot ?? (await getConfigSnapshot());
+  // Status performs a second non-observing read for its materialized/source pair;
+  // keep the startup guard from recording config health before the command begins.
+  const configSnapshotOptions =
+    commandName === "status" ? ({ observe: false } as const) : undefined;
+  let snapshot = preflightSnapshot ?? (await getConfigSnapshot(configSnapshotOptions));
   if (
     !preflightSnapshot &&
     !didRunDoctorConfigFlow &&
@@ -242,8 +251,6 @@ export async function ensureConfigReady(params: {
     preflightSnapshot = await runStateMigrationPreflight();
     snapshot = preflightSnapshot;
   }
-  const commandName = commandPath[0];
-  const subcommandName = commandPath[1];
   const isBareGatewayForegroundRun =
     commandName === "gateway" && (subcommandName === undefined || subcommandName.trim() === "");
   const isReadOnlyTaskStateCommand =
