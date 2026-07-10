@@ -978,6 +978,31 @@ describe("installPluginFromNpmSpec", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts missing dependencies that are overridden by optionalDependencies", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "@openclaw/optional-override";
+    mockNpmViewAndInstall({
+      spec: `${packageName}@1.0.0`,
+      packageName,
+      version: "1.0.0",
+      pluginId: "optional-override",
+      npmRoot,
+      declaredDependency: { name: "@example/optional-override-runtime", version: "1.0.0" },
+      declaredMissingOptionalDependency: {
+        name: "@example/optional-override-runtime",
+        version: "999.999.999",
+      },
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@1.0.0`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("keeps lazy imports from a loaded old npm generation available across updates", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const packageName = "@openclaw/codex";
