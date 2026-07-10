@@ -4,8 +4,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import net from "node:net";
+import { StringDecoder } from "node:string_decoder";
 import { URL } from "node:url";
-import { truncateUtf8PrefixFromBuffer } from "../utils/utf8-truncate.js";
 import { ensureDebugProxyCa } from "./ca.js";
 import type { DebugProxySettings } from "./env.js";
 import { getDebugProxyCaptureStore } from "./store.sqlite.js";
@@ -114,16 +114,11 @@ function normalizeTargetUrl(req: IncomingMessage): URL {
   return new URL(`http://${host}${req.url ?? "/"}`);
 }
 
-// Exported for tests asserting the byte-bounded UTF-8 preview boundary.
-export function createBodyPreviewCapture(): BodyPreviewCapture {
+function createBodyPreviewCapture(): BodyPreviewCapture {
   return { chunks: [], previewBytes: 0, totalBytes: 0, truncated: false };
 }
 
-// Exported for tests asserting the byte-bounded UTF-8 preview boundary.
-export function appendBodyPreviewCapture(
-  capture: BodyPreviewCapture,
-  chunk: Buffer | string,
-): void {
+function appendBodyPreviewCapture(capture: BodyPreviewCapture, chunk: Buffer | string): void {
   const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
   capture.totalBytes += buffer.byteLength;
   const remaining = CAPTURE_BODY_PREVIEW_BYTES - capture.previewBytes;
@@ -139,18 +134,14 @@ export function appendBodyPreviewCapture(
   }
 }
 
-// Exported for tests asserting the byte-bounded UTF-8 preview boundary.
-export function finishBodyPreviewCapture(capture: BodyPreviewCapture): {
+function finishBodyPreviewCapture(capture: BodyPreviewCapture): {
   dataText: string;
   metaJson?: string;
 } {
   return {
-    // The captured chunk slice may end mid-multibyte-sequence when the body was
-    // truncated at the byte budget; decode on a UTF-8 boundary to avoid U+FFFD.
-    dataText: truncateUtf8PrefixFromBuffer(
-      Buffer.concat(capture.chunks, capture.previewBytes),
-      CAPTURE_BODY_PREVIEW_BYTES,
-    ),
+    // write(), unlike end(), omits an incomplete trailing code point introduced
+    // by the byte cap instead of injecting a replacement character into the preview.
+    dataText: new StringDecoder("utf8").write(Buffer.concat(capture.chunks, capture.previewBytes)),
     metaJson: capture.truncated
       ? JSON.stringify({
           bodyBytes: capture.totalBytes,

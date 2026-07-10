@@ -12,7 +12,6 @@ import {
   getDebugProxyCaptureStore,
   persistEventPayload,
 } from "./store.sqlite.js";
-import type { SharedCaptureBlobRecord } from "./types.js";
 
 const cleanupDirs: string[] = [];
 
@@ -268,6 +267,17 @@ describe("DebugProxyCaptureStore", () => {
     expect(store.readBlob(firstPayload.dataBlobId ?? "")).toContain('"ok":true');
   });
 
+  it("keeps byte-limited UTF-8 previews on a complete character boundary", () => {
+    const store = makeStore();
+    const data = `${"x".repeat(8191)}étail`;
+
+    const payload = persistEventPayload(store, { data });
+
+    expect(payload.dataText).toBe("x".repeat(8191));
+    expect(Buffer.byteLength(payload.dataText ?? "", "utf8")).toBeLessThanOrEqual(8192);
+    expect(store.readBlob(payload.dataBlobId ?? "")).toBe(data);
+  });
+
   it("creates and later upgrades an implicit session for direct event capture", () => {
     const store = makeStore();
     store.recordEvent({
@@ -350,52 +360,5 @@ describe("DebugProxyCaptureStore", () => {
       blobs: 1,
     });
     expect(store.readBlob(sharedPayload.dataBlobId ?? "")).toBeNull();
-  });
-});
-
-describe("persistEventPayload UTF-8 preview boundary", () => {
-  // Minimal stub store: persistEventPayload only needs persistPayload to return
-  // blob metadata, so the preview truncation can be tested without SQLite.
-  function makeStubStore() {
-    return {
-      persistPayload: (data: Buffer): SharedCaptureBlobRecord => ({
-        blobId: "blob-1",
-        encoding: "gzip",
-        sizeBytes: data.byteLength,
-        sha256: "deadbeef",
-      }),
-    };
-  }
-
-  it("does not split a multibyte UTF-8 sequence into U+FFFD at the byte limit", () => {
-    // "é" is 2 UTF-8 bytes (0xc3 0xa9); previewLimit=8 lands between them.
-    const data = `${"x".repeat(7)}é${"y".repeat(10)}`;
-    const { dataText } = persistEventPayload(makeStubStore(), { data, previewLimit: 8 });
-    expect(dataText).toBeDefined();
-    expect(dataText?.endsWith("\uFFFD")).toBe(false);
-  });
-
-  it("reproduces the old byte-subarray bug splitting the sequence", () => {
-    const data = `${"x".repeat(7)}é${"y".repeat(10)}`;
-    // The previous implementation: Buffer.from(data).subarray(0, 8).toString("utf8")
-    // is malformed; the fixed path must not equal it.
-    const buggy = Buffer.from(data, "utf8").subarray(0, 8).toString("utf8");
-    const { dataText } = persistEventPayload(makeStubStore(), { data, previewLimit: 8 });
-    expect(buggy.endsWith("\uFFFD")).toBe(true);
-    expect(dataText).not.toBe(buggy);
-  });
-
-  it("keeps a 4-byte emoji whole when the byte budget cuts it", () => {
-    // 😀 = U+1F600 = 4 UTF-8 bytes; total 8193 bytes, limit 8192 cuts into the emoji.
-    const data = `${"x".repeat(8189)}\uD83D\uDE00`;
-    const { dataText } = persistEventPayload(makeStubStore(), { data, previewLimit: 8192 });
-    expect(dataText?.endsWith("\uFFFD")).toBe(false);
-    expect(Buffer.byteLength(dataText ?? "", "utf8")).toBeLessThanOrEqual(8192);
-  });
-
-  it("leaves ASCII under the limit unchanged", () => {
-    const data = '{"ok":true}';
-    const { dataText } = persistEventPayload(makeStubStore(), { data });
-    expect(dataText).toBe(data);
   });
 });

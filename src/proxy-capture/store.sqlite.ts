@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { StringDecoder } from "node:string_decoder";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { normalizeNullableString as normalizeObservedValue } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -16,7 +17,6 @@ import {
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { truncateUtf8PrefixFromBuffer } from "../utils/utf8-truncate.js";
 import type {
   CaptureBlobRecord,
   CaptureEventRecord,
@@ -927,12 +927,11 @@ export function persistEventPayload(
   const buffer = Buffer.isBuffer(params.data) ? params.data : Buffer.from(params.data);
   const previewLimit = params.previewLimit ?? 8192;
   // Store the whole payload as a blob but keep a small UTF-8 preview inline for
-  // fast CLI listings and query output. Decode only the byte-bounded prefix and
-  // backtrack off any trailing multibyte sequence, so the preview never ends in
-  // U+FFFD and a large payload is not fully decoded just to build the preview.
+  // fast CLI listings and query output. write(), unlike end(), omits an incomplete
+  // trailing code point introduced by the byte cap instead of injecting U+FFFD.
   const blob = store.persistPayload(buffer, params.contentType);
   return {
-    dataText: truncateUtf8PrefixFromBuffer(buffer, previewLimit),
+    dataText: new StringDecoder("utf8").write(buffer.subarray(0, previewLimit)),
     dataBlobId: blob.blobId,
     dataSha256: blob.sha256,
   };
