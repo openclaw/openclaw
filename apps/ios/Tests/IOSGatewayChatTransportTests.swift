@@ -6,6 +6,28 @@ import Testing
 @testable import OpenClaw
 
 struct IOSGatewayChatTransportTests {
+    private actor RequestRecorder {
+        struct Request: Sendable {
+            var method: String
+            var paramsJSON: String
+            var timeoutSeconds: Int
+        }
+
+        private var requests: [Request] = []
+
+        func record(method: String, paramsJSON: String, timeoutSeconds: Int) -> Data {
+            self.requests.append(Request(
+                method: method,
+                paramsJSON: paramsJSON,
+                timeoutSeconds: timeoutSeconds))
+            return Data(#"{"key":"forked"}"#.utf8)
+        }
+
+        func all() -> [Request] {
+            self.requests
+        }
+    }
+
     private func object(from json: String) throws -> [String: Any] {
         let data = try #require(json.data(using: .utf8))
         let value = try JSONSerialization.jsonObject(with: data)
@@ -84,13 +106,13 @@ struct IOSGatewayChatTransportTests {
     }
 
     @Test func `list sessions params request archived sessions explicitly`() throws {
-        let params = try self.object(
+        let params = try object(
             from: IOSGatewayChatTransport.makeListSessionsParamsJSON(limit: 12, archived: true))
         #expect(params["archived"] as? Bool == true)
     }
 
     @Test func `patch session params preserve explicit null clearing`() throws {
-        let params = try self.object(
+        let params = try object(
             from: IOSGatewayChatTransport.makePatchSessionParamsJSON(
                 key: "session-1",
                 label: .some(nil),
@@ -106,7 +128,7 @@ struct IOSGatewayChatTransportTests {
     }
 
     @Test func `patch session params include selected global agent`() throws {
-        let params = try self.object(
+        let params = try object(
             from: IOSGatewayChatTransport.makePatchSessionParamsJSON(
                 key: "global",
                 agentId: "reviewer",
@@ -117,7 +139,7 @@ struct IOSGatewayChatTransportTests {
     }
 
     @Test func `fork session params preserve parent agent`() throws {
-        let params = try self.object(
+        let params = try object(
             from: IOSGatewayChatTransport.makeForkSessionParamsJSON(
                 parentKey: "agent:reviewer:telegram:group:1",
                 agentId: "reviewer"))
@@ -127,7 +149,7 @@ struct IOSGatewayChatTransportTests {
     }
 
     @Test func `session model patch params include model and selected agent`() throws {
-        let params = try self.object(
+        let params = try object(
             from: IOSGatewayChatTransport.makeSessionPatchModelParamsJSON(
                 sessionKey: "global",
                 agentId: "reviewer",
@@ -138,7 +160,7 @@ struct IOSGatewayChatTransportTests {
     }
 
     @Test func `session model patch params encode default model as null`() throws {
-        let params = try self.object(
+        let params = try object(
             from: IOSGatewayChatTransport.makeSessionPatchModelParamsJSON(
                 sessionKey: "agent:main:main",
                 model: nil))
@@ -259,6 +281,52 @@ struct IOSGatewayChatTransportTests {
         #expect(IOSGatewayChatTransport.sessionTarget(
             for: "agent::main",
             selectedAgentID: "reviewer") == .init(sessionKey: "agent::main", agentID: nil))
+    }
+
+    @Test func `session mutations dispatch normalized selected agent targets`() async throws {
+        let recorder = RequestRecorder()
+        let transport = IOSGatewayChatTransport(
+            gateway: GatewayNodeSession(),
+            globalAgentId: " Reviewer ",
+            sessionMutationRequest: { method, paramsJSON, timeoutSeconds in
+                await recorder.record(
+                    method: method,
+                    paramsJSON: paramsJSON,
+                    timeoutSeconds: timeoutSeconds)
+            })
+
+        for key in ["Matrix:Channel:Room", "global", "agent:ops:main"] {
+            try await transport.patchSession(key: key, pinned: true)
+            try await transport.deleteSession(key: key)
+            _ = try await transport.forkSession(parentKey: key)
+        }
+
+        let requests = await recorder.all()
+        #expect(requests.map(\.method) == Array(
+            repeating: ["sessions.patch", "sessions.delete", "sessions.create"],
+            count: 3).flatMap(\.self))
+        #expect(requests.map(\.timeoutSeconds) == Array(repeating: 15, count: 9))
+
+        for (offset, expectedKey, expectedMutationAgentID, expectedForkAgentID) in [
+            (0, "agent:reviewer:Matrix:Channel:Room", nil, "reviewer"),
+            (3, "global", "reviewer", "reviewer"),
+            (6, "agent:ops:main", nil, "ops"),
+        ] as [(Int, String, String?, String?)] {
+            let patch = try object(from: requests[offset].paramsJSON)
+            #expect(patch["key"] as? String == expectedKey)
+            #expect(patch["agentId"] as? String == expectedMutationAgentID)
+            #expect(patch["pinned"] as? Bool == true)
+
+            let delete = try object(from: requests[offset + 1].paramsJSON)
+            #expect(delete["key"] as? String == expectedKey)
+            #expect(delete["agentId"] as? String == expectedMutationAgentID)
+            #expect(delete["deleteTranscript"] as? Bool == true)
+
+            let fork = try object(from: requests[offset + 2].paramsJSON)
+            #expect(fork["parentSessionKey"] as? String == expectedKey)
+            #expect(fork["agentId"] as? String == expectedForkAgentID)
+            #expect(fork["fork"] as? Bool == true)
+        }
     }
 
     @Test func `requests fail fast when gateway not connected`() async {
