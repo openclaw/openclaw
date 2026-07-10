@@ -2,6 +2,10 @@
 // prechecks, and context-engine loop hooks for oversized tool outputs.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("./logger.js", () => ({
+  log: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() },
+}));
 import type { ContextEngine, ContextEngineRuntimeSettings } from "../../context-engine/types.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -929,6 +933,26 @@ describe("installContextEngineLoopHook", () => {
     expect(retry).toBe(secondSource);
     expect(retry).not.toBe(compactedView);
     expect(engine.assemble).toHaveBeenCalledTimes(3);
+  });
+  it("logs a warning when the engine throws during assemble", async () => {
+    const { log } = await import("./logger.js");
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine({
+      assemble: async () => {
+        throw new Error("assemble failed");
+      },
+    });
+    installHook(agent, engine, 1);
+    const source = [makeUser("first"), makeToolResult("call_1", "r1")];
+    await callTransform(agent, source);
+    expect(log.warn).toHaveBeenCalledWith(
+      "context engine assemble/afterTurn failed; falling back to raw messages",
+      expect.objectContaining({
+        sessionId,
+        modelId,
+        error: "assemble failed",
+      }),
+    );
   });
 
   it("clears an assembled view when source history shrinks", async () => {

@@ -451,9 +451,17 @@ export function installContextEngineLoopHook(params: {
         }
       }
       lastAssembledView = null;
-    } catch {
-      // Best-effort: any engine failure falls through to the raw source
-      // messages so the tool loop still makes forward progress.
+    } catch (err) {
+      // Engine failure: fall back to the raw source messages so the tool loop
+      // still makes forward progress — but surface the failure instead of
+      // swallowing it silently. A persistently-failing context engine (e.g. a
+      // local model probe timing out under memory pressure) previously left
+      // the session growing unbounded with zero signal to the operator.
+      log.warn("context engine assemble/afterTurn failed; falling back to raw messages", {
+        sessionId,
+        modelId,
+        error: err instanceof Error ? err.message : String(err),
+      });
       lastSeenLength = prePromptMessageCount;
       lastAssembledView = null;
       lastSourceMessages = transcriptMessages;
