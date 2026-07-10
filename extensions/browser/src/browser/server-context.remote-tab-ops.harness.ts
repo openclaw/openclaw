@@ -158,7 +158,8 @@ type JsonListEntry = {
   title: string;
   url: string;
   webSocketDebuggerUrl: string;
-  type: "page";
+  // Real /json/list payloads mix page targets with iframe/worker targets.
+  type: string;
 };
 
 /** Creates a /json/list fetch mock with static entries. */

@@ -113,6 +113,43 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     expect(tabs.map((t) => t.targetId)).toEqual(["T1"]);
   });
 
+  it("filters non-page CDP targets so OOPIF iframes cannot be closed as tabs", async () => {
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
+    const { remote } = deps.createRemoteRouteHarness(
+      vi.fn(
+        deps.createJsonListFetchMock([
+          {
+            id: "IFRAME",
+            title: "Third-party tracker",
+            url: "https://tracker.example/frame",
+            webSocketDebuggerUrl: "wss://1.1.1.1:9222/devtools/page/IFRAME",
+            type: "iframe",
+          },
+          {
+            id: "SW",
+            title: "Service worker",
+            url: "https://example.com/sw.js",
+            webSocketDebuggerUrl: "wss://1.1.1.1:9222/devtools/page/SW",
+            type: "service_worker",
+          },
+          {
+            id: "T1",
+            title: "Tab 1",
+            url: "https://example.com",
+            webSocketDebuggerUrl: "wss://1.1.1.1:9222/devtools/page/T1",
+            type: "page",
+          },
+        ]),
+      ),
+    );
+
+    const tabs = await remote.listTabs();
+    expect(tabs.map((t) => t.targetId)).toEqual(["T1"]);
+    // Closing an OOPIF target via /json/close destroys its host page, so
+    // targetId resolution must reject iframe targets instead of passing them on.
+    await expect(remote.closeTab("IFRAME")).rejects.toThrow(/tab not found/i);
+  });
+
   it("rejects policy-blocked discovered CDP websocket URLs from raw tab listings", async () => {
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
     const { state, remote } = deps.createRemoteRouteHarness(
