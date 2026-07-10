@@ -126,17 +126,17 @@ if (shouldCheckMacosVersions) {
     console.log("[release-preflight] macOS app version metadata OK");
   }
 }
-const { failed } = await runTaskGraph({
+const { failed: checkFailures } = await runTaskGraph({
   commandKey: "check",
   jobs: parsedArgs.jobs,
   tasks: selectedTasks,
 });
-if (macosVersionErrors.length !== 0 || failed.length !== 0) {
+if (macosVersionErrors.length !== 0 || checkFailures.length !== 0) {
   console.error("\nrelease preflight found drift:");
   for (const error of macosVersionErrors) {
     console.error(`- macOS app version metadata: ${error}`);
   }
-  printCommandFailures(failed);
+  printCommandFailures(checkFailures);
   console.error(
     "\nCorrect manual version metadata first. Run `pnpm release:prep` for intentional generated version/config/API changes, then commit the resulting files.",
   );
@@ -220,7 +220,8 @@ async function runTaskGraph({ commandKey, jobs, tasks }) {
   const runnableTasks = tasks
     .filter((task) => task[commandKey])
     .map((task) => ({
-      ...task,
+      id: task.id,
+      name: task.name,
       args: task[commandKey],
       after: commandKey === "fix" ? (task.fixAfter ?? []) : [],
     }));
@@ -228,7 +229,7 @@ async function runTaskGraph({ commandKey, jobs, tasks }) {
   const pending = new Map(runnableTasks.map((task) => [task.id, task]));
   const completed = new Set();
   const failedIds = new Set();
-  const failed = [];
+  const taskFailures = [];
   const skipped = [];
 
   while (pending.size > 0) {
@@ -267,13 +268,13 @@ async function runTaskGraph({ commandKey, jobs, tasks }) {
           completed.add(task.id);
         } else {
           failedIds.add(task.id);
-          failed.push({ ...task, status });
+          taskFailures.push({ ...task, status });
         }
       }
     }
   }
 
-  return { failed, skipped };
+  return { failed: taskFailures, skipped };
 }
 
 async function runCommand(command) {
@@ -407,5 +408,5 @@ function taskMatchesScopes(task, scopes) {
 }
 
 function formatScopes(scopes) {
-  return [...scopes].toSorted().join(",");
+  return [...scopes].toSorted((left, right) => left.localeCompare(right)).join(",");
 }

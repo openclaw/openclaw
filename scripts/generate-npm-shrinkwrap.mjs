@@ -1323,7 +1323,7 @@ function updateOrCheckPackage(packageDir, check, changedPaths = []) {
 }
 
 export async function runBoundedTasks(items, jobs, runTask) {
-  const results = new Array(items.length);
+  const results = Array.from({ length: items.length });
   let nextIndex = 0;
   const workers = Array.from({ length: Math.min(jobs, items.length) }, async () => {
     while (nextIndex < items.length) {
@@ -1427,15 +1427,20 @@ if (!isMainThread && workerData?.kind === SHRINKWRAP_WORKER_KIND) {
       workerData.check,
       workerData.changedPaths,
     );
+    // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node MessagePort has no targetOrigin parameter.
     parentPort?.postMessage({ output });
   } catch (error) {
+    // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node MessagePort has no targetOrigin parameter.
     parentPort?.postMessage({ error: error instanceof Error ? error.message : String(error) });
   }
 } else if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  });
+  main().catch(handleMainError);
+}
+
+/** @param {unknown} error */
+function handleMainError(error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
 }
 
 export {
