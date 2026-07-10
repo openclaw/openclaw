@@ -5,6 +5,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path, { resolve as resolvePath } from "node:path";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ACPX_BACKEND_ID,
   AcpxRuntime as BaseAcpxRuntime,
@@ -139,7 +140,7 @@ async function readCodexWrapperStderrTail(params: {
       "utf8",
     );
     return compactDiagnosticText(
-      redactSensitiveText(text.slice(-CODEX_WRAPPER_ERROR_TAIL_MAX_CHARS)),
+      redactSensitiveText(sliceUtf16Safe(text, -CODEX_WRAPPER_ERROR_TAIL_MAX_CHARS)),
     );
   } catch {
     return "";
