@@ -647,6 +647,28 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels("free", "gpt-5.5", catalog)).toEqual(["off"]);
   });
 
+  it("treats flag-only explicit reasoning-effort disable as off-only", () => {
+    const catalog = [
+      {
+        provider: "free",
+        id: "gpt-5.5",
+        api: "openai-completions",
+        reasoning: true,
+        compat: { supportsReasoningEffort: false },
+      },
+    ];
+
+    expect(listThinkingLevels("free", "gpt-5.5", catalog)).toEqual(["off"]);
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "free",
+        model: "gpt-5.5",
+        level: "medium",
+        catalog,
+      }),
+    ).toBe("off");
+  });
+
   it("honors reasoningEffortMap for provider-native OpenAI-compatible effort labels", () => {
     const catalog = [
       {

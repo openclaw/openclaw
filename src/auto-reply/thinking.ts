@@ -116,21 +116,20 @@ function buildOpenAICompatThinkingProfile(params: {
   compat: ThinkingCatalogEntry["compat"];
   defaultLevel?: ThinkLevel | null;
 }): ResolvedThinkingProfile | undefined {
-  const efforts = params.compat?.supportedReasoningEfforts;
-  if (!Array.isArray(efforts)) {
-    return undefined;
-  }
+  // Explicit reasoning-effort disable takes precedence even when no supported
+  // efforts array is supplied.
   if (params.compat?.supportsReasoningEffort === false) {
     return buildOffOnlyThinkingProfile();
   }
-  const supportedEfforts = new Set(
-    efforts.filter((value): value is string => typeof value === "string"),
-  );
-  if (supportedEfforts.size === 0) {
+  const efforts = params.compat?.supportedReasoningEfforts;
+  if (!Array.isArray(efforts) || efforts.length === 0) {
     // Empty array is treated as "not provided" by the canonical request resolver,
     // which then falls back to model-id defaults. Match that parity here.
     return undefined;
   }
+  const supportedEfforts = new Set(
+    efforts.filter((value): value is string => typeof value === "string"),
+  );
   const levels = new Map<ThinkLevel, RankedThinkingLevelOption>([
     ["off", { id: "off", label: "off", rank: THINKING_LEVEL_RANKS.off }],
   ]);
