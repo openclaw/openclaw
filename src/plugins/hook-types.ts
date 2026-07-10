@@ -201,6 +201,7 @@ export const PROMPT_INJECTION_HOOK_NAMES = [
   "before_prompt_build",
   "before_agent_start",
   "heartbeat_prompt_contribution",
+  "llm_input",
 ] as const satisfies readonly PluginHookName[];
 
 export type PromptInjectionHookName = (typeof PROMPT_INJECTION_HOOK_NAMES)[number];
@@ -276,6 +277,30 @@ export type PluginHookLlmInputEvent = {
   tools?: unknown[];
 };
 
+/**
+ * Result from an llm_input modifying hook.
+ *
+ * Mutation semantics:
+ * - `prompt` / `systemPrompt`: first-setter-wins across priority-ordered handlers.
+ *   Subject to `allowPromptInjection` policy — stripped when `false`.
+ * - `block` / `blockReason`: sticky-true (any handler can block; later handlers cannot unblock).
+ * - Handlers returning `void` or `undefined` have no effect (backward compatible).
+ *
+ * Validation: callers must treat returned strings as untrusted plugin output.
+ * The runtime re-detects images after prompt changes and reverts all overrides
+ * on detection failure.
+ */
+export type PluginHookLlmInputResult = {
+  /** Block the entire LLM call. Throws PluginBlockedError in the runner. */
+  block?: boolean;
+  /** Human-readable reason for blocking (surfaced in error payloads). */
+  blockReason?: string;
+  /** Override the user prompt sent to the model. */
+  prompt?: string;
+  /** Override the system prompt sent to the model. */
+  systemPrompt?: string;
+};
+
 export type PluginHookModelCallBaseEvent = {
   runId: string;
   callId: string;
@@ -341,6 +366,23 @@ export type PluginHookLlmOutputEvent = {
     cacheWrite?: number;
     total?: number;
   };
+};
+
+/**
+ * Result from an llm_output modifying hook.
+ *
+ * Mutation semantics:
+ * - `assistantTexts`: last-setter-wins. Later (lower-priority) handlers see
+ *   the evolved texts from earlier handlers, preventing silent overwrites.
+ * - Handlers returning `void` or `undefined` have no effect (backward compatible).
+ *
+ * When `assistantTexts` is returned, the runner strips text/content from the
+ * original `lastAssistant` to prevent downstream leaking of unredacted output,
+ * while preserving `stopReason`, `usage`, and `errorMessage` for failover.
+ */
+export type PluginHookLlmOutputResult = {
+  /** Replace the assistant response texts. */
+  assistantTexts?: string[];
 };
 
 export type PluginHookAgentEndEvent = {
@@ -1025,11 +1067,14 @@ export type PluginHookHandlerMap = {
     event: PluginHookModelCallEndedEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
-  llm_input: (event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
+  llm_input: (
+    event: PluginHookLlmInputEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookLlmInputResult | void> | PluginHookLlmInputResult | void;
   llm_output: (
     event: PluginHookLlmOutputEvent,
     ctx: PluginHookAgentContext,
-  ) => Promise<void> | void;
+  ) => Promise<PluginHookLlmOutputResult | void> | PluginHookLlmOutputResult | void;
   before_agent_finalize: (
     event: PluginHookBeforeAgentFinalizeEvent,
     ctx: PluginHookAgentContext,
