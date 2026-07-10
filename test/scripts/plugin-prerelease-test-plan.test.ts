@@ -626,8 +626,14 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(releaseChecksWorkflow.jobs.summary.needs).toContain(
       "runtime_tool_coverage_release_checks",
     );
-    expect(releaseChecksSource).toContain(
-      '"runtime_tool_coverage_release_checks=${{ needs.runtime_tool_coverage_release_checks.result }}"',
+    const verifyStep = releaseChecksWorkflow.jobs.summary.steps.find(
+      (step: { name?: string }) => step.name === "Verify release check results",
+    );
+    expect(verifyStep.env.RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT).toBe(
+      "${{ needs.runtime_tool_coverage_release_checks.result }}",
+    );
+    expect(verifyStep.run).toContain(
+      '"runtime_tool_coverage_release_checks=${RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT}"',
     );
   });
 
