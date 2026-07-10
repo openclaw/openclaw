@@ -30,6 +30,23 @@ private final class WebSocketPingContinuationGate: @unchecked Sendable {
     }
 }
 
+private final class GatewayRequestCancellationGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    var isCancelled: Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.cancelled
+    }
+
+    func cancel() {
+        self.lock.lock()
+        self.cancelled = true
+        self.lock.unlock()
+    }
+}
+
 public struct WebSocketTaskBox: @unchecked Sendable {
     public let task: any WebSocketTasking
     public init(task: any WebSocketTasking) {
@@ -260,14 +277,14 @@ public actor GatewayChannelActor {
     private var activeConnectAttemptID: UUID?
     private var pending: [String: CheckedContinuation<GatewayFrame, Error>] = [:]
     private var connected = false
-    private var isConnecting = false
+    private var connectAttemptTask: Task<Void, Never>?
     /// Socket ownership epoch. Every callback and send stays bound to the task
     /// that admitted it so a late failure cannot tear down a replacement socket.
     private var connectionGeneration: UInt64 = 0
     private var disconnectedConnectionGeneration: UInt64?
     private var disconnectNotificationInProgress = false
     private var automaticReconnectRequested = false
-    private var connectWaiters: [CheckedContinuation<Void, Error>] = []
+    private var connectWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
     private var url: URL
     private var token: String?
     private var bootstrapToken: String?
@@ -285,6 +302,9 @@ public actor GatewayChannelActor {
     // Connect now requires this nonce before we send device-auth.
     private var connectTimeoutSeconds: Double = 30
     private var testConnectAttemptFinishedHandler: (@Sendable (UUID) -> Void)?
+    #if DEBUG
+    private var testRequestResumedHandler: (@Sendable () async -> Void)?
+    #endif
     private let connectChallengeTimeoutSeconds: Double = 6.0
     // Some networks will silently drop idle TCP/TLS flows around ~30s. The gateway tick is server->client,
     // but NATs/proxies often require outbound traffic to keep the connection alive.
@@ -339,11 +359,27 @@ public actor GatewayChannelActor {
         self.testConnectAttemptFinishedHandler = handler
     }
 
+    #if DEBUG
+    func _test_setRequestResumedHandler(_ handler: (@Sendable () async -> Void)?) {
+        self.testRequestResumedHandler = handler
+    }
+    #endif
+
+    func _test_pendingRequestCount() -> Int {
+        self.pending.count
+    }
+
+    func _test_connectWaiterCount() -> Int {
+        self.connectWaiters.count
+    }
+
     public func shutdown() async {
         self.shouldReconnect = false
         self.connected = false
         self.activeConnectAttemptID = nil
         self.automaticReconnectRequested = false
+        self.connectAttemptTask?.cancel()
+        self.connectAttemptTask = nil
         // Invalidate callbacks from the socket before cancellation can deliver
         // its receive completion on another task.
         self.connectionGeneration &+= 1
@@ -367,7 +403,7 @@ public actor GatewayChannelActor {
 
         let waiters = self.connectWaiters
         self.connectWaiters.removeAll()
-        for waiter in waiters {
+        for waiter in waiters.values {
             waiter.resume(throwing: NSError(
                 domain: "Gateway",
                 code: 0,
@@ -429,6 +465,7 @@ public actor GatewayChannelActor {
     }
 
     public func connect() async throws {
+        try Task.checkCancellation()
         guard self.shouldReconnect else {
             throw NSError(
                 domain: "Gateway",
@@ -441,6 +478,62 @@ public actor GatewayChannelActor {
                 code: 6,
                 userInfo: [NSLocalizedDescriptionKey: "gateway disconnect cleanup in progress"])
         }
+        if self.connected, self.task?.state == .running { return }
+        if self.connectAttemptTask == nil {
+            self.connectAttemptTask = Task { [weak self] in
+                await self?.runConnectAttempt()
+            }
+        }
+        try await self.waitForConnectAttempt()
+    }
+
+    private func runConnectAttempt() async {
+        do {
+            try await self.performConnectAttempt()
+            self.finishConnectAttempt(error: nil)
+        } catch {
+            self.finishConnectAttempt(error: error)
+        }
+    }
+
+    private func waitForConnectAttempt() async throws {
+        let waiterID = UUID()
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            do {
+                try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                    if Task.isCancelled {
+                        cont.resume(throwing: CancellationError())
+                    } else {
+                        self.connectWaiters[waiterID] = cont
+                    }
+                }
+                try Task.checkCancellation()
+            } catch {
+                try Task.checkCancellation()
+                throw error
+            }
+        } onCancel: {
+            Task { await self.cancelConnectWaiter(id: waiterID) }
+        }
+    }
+
+    private func finishConnectAttempt(error: Error?) {
+        self.connectAttemptTask = nil
+        let waiters = self.connectWaiters
+        self.connectWaiters.removeAll()
+        for waiter in waiters.values {
+            if let error {
+                waiter.resume(throwing: error)
+            } else {
+                waiter.resume(returning: ())
+            }
+        }
+    }
+
+    private func performConnectAttempt() async throws {
+        guard self.shouldReconnect else { throw CancellationError() }
+        guard !self.disconnectNotificationInProgress else { throw CancellationError() }
         if self.connected {
             if self.task?.state == .running {
                 return
@@ -461,14 +554,6 @@ public actor GatewayChannelActor {
                 shouldReconnect: false)
             guard self.shouldReconnect else { throw CancellationError() }
         }
-        if self.isConnecting {
-            try await withCheckedThrowingContinuation { cont in
-                self.connectWaiters.append(cont)
-            }
-            return
-        }
-        self.isConnecting = true
-        defer { self.isConnecting = false }
 
         self.connectionGeneration &+= 1
         let connectionGeneration = self.connectionGeneration
@@ -506,11 +591,6 @@ public actor GatewayChannelActor {
                 error: wrapped,
                 connectionGeneration: connectionGeneration,
                 shouldReconnect: self.automaticReconnectRequested)
-            let waiters = self.connectWaiters
-            self.connectWaiters.removeAll()
-            for waiter in waiters {
-                waiter.resume(throwing: wrapped)
-            }
             self.logger.error("gateway ws connect failed \(wrapped.localizedDescription, privacy: .public)")
             throw wrapped
         }
@@ -527,12 +607,6 @@ public actor GatewayChannelActor {
         self.listen(connectionGeneration: connectionGeneration)
         self.startTickWatchdog(connectionGeneration: connectionGeneration)
         self.startKeepalive(connectionGeneration: connectionGeneration)
-
-        let waiters = self.connectWaiters
-        self.connectWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume(returning: ())
-        }
     }
 
     private func startKeepalive(connectionGeneration: UInt64) {
@@ -1479,7 +1553,9 @@ extension GatewayChannelActor {
         params: [String: AnyCodable]?,
         timeoutMs: Double? = nil) async throws -> Data
     {
+        try Task.checkCancellation()
         try await self.connectOrThrow(context: "gateway connect")
+        try Task.checkCancellation()
         guard let task = self.task else {
             throw NSError(
                 domain: "Gateway",
@@ -1490,28 +1566,61 @@ extension GatewayChannelActor {
         // Zero leaves terminal-operation deadlines to the Gateway owner.
         let effectiveTimeout = Self.resolveRequestTimeoutMs(timeoutMs, defaultMs: self.defaultRequestTimeoutMs)
         let payload = try self.encodeRequest(method: method, params: params, kind: "request")
-        let response = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<GatewayFrame, Error>) in
-            self.pending[payload.id] = cont
-            if let effectiveTimeout {
-                Task { [weak self] in
-                    guard let self else { return }
-                    try? await Task.sleep(nanoseconds: UInt64(effectiveTimeout * 1_000_000))
-                    await self.timeoutRequest(id: payload.id, timeoutMs: effectiveTimeout)
+        let cancellationGate = GatewayRequestCancellationGate()
+        let response: GatewayFrame
+        do {
+            response = try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                return try await withCheckedThrowingContinuation {
+                    (cont: CheckedContinuation<GatewayFrame, Error>) in
+                    guard !cancellationGate.isCancelled else {
+                        cont.resume(throwing: CancellationError())
+                        return
+                    }
+                    self.pending[payload.id] = cont
+                    if let effectiveTimeout {
+                        Task { [weak self] in
+                            guard let self else { return }
+                            try? await Task.sleep(nanoseconds: UInt64(effectiveTimeout * 1_000_000))
+                            await self.timeoutRequest(id: payload.id, timeoutMs: effectiveTimeout)
+                        }
+                    }
+                    Task {
+                        guard !cancellationGate.isCancelled else {
+                            await self.cancelRequest(id: payload.id)
+                            return
+                        }
+                        do {
+                            try await task.send(.data(payload.data))
+                        } catch {
+                            let wrapped = self.wrap(error, context: "gateway send \(method)")
+                            await self.transitionToDisconnected(
+                                reason: "send failed: \(wrapped.localizedDescription)",
+                                error: wrapped,
+                                connectionGeneration: connectionGeneration,
+                                shouldReconnect: true)
+                        }
+                    }
                 }
+            } onCancel: {
+                cancellationGate.cancel()
+                Task { await self.cancelRequest(id: payload.id) }
             }
-            Task {
-                do {
-                    try await task.send(.data(payload.data))
-                } catch {
-                    let wrapped = self.wrap(error, context: "gateway send \(method)")
-                    await self.transitionToDisconnected(
-                        reason: "send failed: \(wrapped.localizedDescription)",
-                        error: wrapped,
-                        connectionGeneration: connectionGeneration,
-                        shouldReconnect: true)
-                }
+        } catch {
+            #if DEBUG
+            if let testRequestResumedHandler {
+                await testRequestResumedHandler()
             }
+            #endif
+            try Task.checkCancellation()
+            throw error
         }
+        #if DEBUG
+        if let testRequestResumedHandler {
+            await testRequestResumedHandler()
+        }
+        #endif
+        try Task.checkCancellation()
         guard case let .res(res) = response else {
             throw NSError(domain: "Gateway", code: 2, userInfo: [NSLocalizedDescriptionKey: "unexpected frame"])
         }
@@ -1529,7 +1638,9 @@ extension GatewayChannelActor {
     }
 
     public func send(method: String, params: [String: AnyCodable]?) async throws {
+        try Task.checkCancellation()
         try await self.connectOrThrow(context: "gateway connect")
+        try Task.checkCancellation()
         try await self.send(
             method: method,
             params: params,
@@ -1558,6 +1669,7 @@ extension GatewayChannelActor {
         params: [String: AnyCodable]?,
         connectionGeneration: UInt64) async throws
     {
+        try Task.checkCancellation()
         let payload = try self.encodeRequest(method: method, params: params, kind: "send")
         guard let task = self.task else {
             throw NSError(
@@ -1566,7 +1678,10 @@ extension GatewayChannelActor {
                 userInfo: [NSLocalizedDescriptionKey: "gateway socket unavailable"])
         }
         do {
+            try Task.checkCancellation()
             try await task.send(.data(payload.data))
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             let wrapped = self.wrap(error, context: "gateway send \(method)")
             await self.transitionToDisconnected(
@@ -1580,7 +1695,8 @@ extension GatewayChannelActor {
 
     /// Wrap low-level URLSession/WebSocket errors with context so UI can surface them.
     private func wrap(_ error: Error, context: String) -> Error {
-        if error is GatewayConnectAuthError ||
+        if error is CancellationError ||
+            error is GatewayConnectAuthError ||
             error is GatewayResponseError ||
             error is GatewayDecodingError ||
             error is GatewayTLSValidationError
@@ -1654,6 +1770,16 @@ extension GatewayChannelActor {
             code: 5,
             userInfo: [NSLocalizedDescriptionKey: "gateway request timed out after \(Int(timeoutMs))ms"])
         waiter.resume(throwing: err)
+    }
+
+    private func cancelRequest(id: String) {
+        guard let waiter = self.pending.removeValue(forKey: id) else { return }
+        waiter.resume(throwing: CancellationError())
+    }
+
+    private func cancelConnectWaiter(id: UUID) {
+        guard let waiter = self.connectWaiters.removeValue(forKey: id) else { return }
+        waiter.resume(throwing: CancellationError())
     }
 }
 

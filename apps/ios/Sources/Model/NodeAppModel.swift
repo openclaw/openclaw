@@ -204,6 +204,11 @@ final class NodeAppModel {
         case error
     }
 
+    private enum AuxiliaryAudioCapture: Equatable {
+        case cameraClip
+        case screenRecording
+    }
+
     var isBackgrounded: Bool = false
     let screen: ScreenController
     private let camera: any CameraServicing
@@ -279,6 +284,7 @@ final class NodeAppModel {
     @ObservationIgnored private var gatewaySessionResetTask: Task<Void, Never>?
     @ObservationIgnored private var gatewaySessionResetGeneration: UInt64 = 0
     @ObservationIgnored private var gatewayRouteGeneration: UInt64 = 0
+    @ObservationIgnored private var operatorTalkConnectionGeneration: UInt64 = 0
     @ObservationIgnored private var credentialHandoffFailureGeneration: UInt64?
     @ObservationIgnored private(set) var gatewayConnectGeneration: UInt64 = 0
     private var forceOperatorTalkPermissionUpgradeRequest = false
@@ -306,14 +312,12 @@ final class NodeAppModel {
     @ObservationIgnored private var testTalkCapturePreparationHandler: (() async -> Void)?
     @ObservationIgnored private var testTalkCaptureStartedHandler: (() async -> Void)?
     #endif
-    private var pttVoiceWakeLeaseCaptureIds: Set<String> = []
-    private var pttVoiceWakeWasSuspended = false
+    private var pttVoiceWakeLeaseCaptureId: String?
     private var talkPttCommandEpoch: UInt64 = 0
     private var talkPreparationInFlight = false
+    private var auxiliaryAudioCapture: AuxiliaryAudioCapture?
+    private var foregroundCaptureCancellations: [UUID: @MainActor () -> Void] = [:]
     private var talkPreparationWaiters: [(id: UUID, continuation: CheckedContinuation<Bool, Never>)] = []
-    private var talkVoiceWakeSuspended = false
-    private var backgroundVoiceWakeSuspended = false
-    private var backgroundTalkSuspended = false
     private var backgroundTalkKeptActive = false
     private var backgroundedAt: Date?
     private var reconnectAfterBackgroundArmed = false
@@ -329,6 +333,7 @@ final class NodeAppModel {
     @ObservationIgnored private var watchMessageRetryTask: Task<Void, Never>?
     @ObservationIgnored private let appleReviewDemoChatTransport = AppleReviewDemoChatTransport()
     @ObservationIgnored private var chatTranscriptCachesByGatewayID: [String: OpenClawChatSQLiteTranscriptCache] = [:]
+    @ObservationIgnored private var chatSessionRoutingRestoreTask: Task<Void, Never>?
     private var watchExecApprovalPromptsByID: [String: ExecApprovalPrompt] = [:]
     private var pendingWatchExecApprovalRecoveryPushes: [ExecApprovalNotificationPrompt] = []
     private var pendingExecApprovalResolvedPushes: [ExecApprovalNotificationPrompt] = []
@@ -353,7 +358,10 @@ final class NodeAppModel {
     var isTalkCaptureActive: Bool {
         // PTT owns its Voice Wake lease before permission and audio setup.
         // Count that pending interval so Chat cannot race another mic owner.
-        self.talkMode.isEnabled || self.talkMode.isPushToTalkActive || !self.pttVoiceWakeLeaseCaptureIds.isEmpty
+        self.talkPreparationInFlight ||
+            self.talkMode.isEnabled ||
+            self.talkMode.isPushToTalkActive ||
+            self.pttVoiceWakeLeaseCaptureId != nil
     }
 
     var localChatFixture: LocalChatFixture? {
@@ -462,7 +470,7 @@ final class NodeAppModel {
         self.gatewaySessionScope = identity.scope
         self.mainSessionBaseKey = identity.mainSessionKey
         self.gatewayDefaultAgentId = identity.defaultAgentID
-        self.talkMode.updateMainSessionKey(self.mainSessionKey)
+        self.synchronizeTalkSessionKey()
         self.homeCanvasRevision &+= 1
     }
 
@@ -560,7 +568,8 @@ final class NodeAppModel {
         motionService: any MotionServicing = MotionService(),
         watchMessagingService: any WatchMessagingServicing = WatchMessagingService(),
         talkMode: TalkModeManager = TalkModeManager(),
-        voiceNoteRecorder: OpenClawVoiceNoteRecorder = OpenClawVoiceNoteRecorder())
+        voiceNoteRecorder: OpenClawVoiceNoteRecorder = OpenClawVoiceNoteRecorder(),
+        audioAdmissionInitiallyAllowed: Bool = true)
     {
         self.screen = screen
         self.camera = camera
@@ -576,11 +585,20 @@ final class NodeAppModel {
         self.watchMessagingService = watchMessagingService
         self.talkMode = talkMode
         self.voiceNoteRecorder = voiceNoteRecorder
-        self.talkMode.setPushToTalkCaptureEndHandler { [weak self] captureId in
+        if !audioAdmissionInitiallyAllowed {
+            // The production scene has not reported its initial phase yet. Keep
+            // every microphone owner closed until SwiftUI explicitly admits it.
+            self.isBackgrounded = true
+            self.voiceWake.setSuppressedForBackground(true)
+            self.talkMode.suspendForBackground()
+        }
+        self.talkMode.setPushToTalkAudioOwnershipEndHandler { [weak self] captureId in
             self?.releasePttVoiceWakeLease(for: captureId)
         }
         self.voiceNoteRecorder.setCaptureAdmissionHandler { [weak self] in
-            self?.isTalkCaptureActive == false
+            self?.isBackgrounded == false &&
+                self?.isTalkCaptureActive == false &&
+                self?.auxiliaryAudioCapture == nil
         }
         self.apnsDeviceTokenHex = UserDefaults.standard.string(forKey: Self.apnsDeviceTokenUserDefaultsKey)
         restorePersistedWatchExecApprovalBridgeState()
@@ -762,6 +780,14 @@ final class NodeAppModel {
         switch phase {
         case .background:
             self.isBackgrounded = true
+            // This durable reason outlives asynchronous PTT/Talk teardown. A
+            // late lease release cannot reopen Voice Wake while backgrounded.
+            self.voiceWake.setSuppressedForBackground(true)
+            // Captures remain owners until cancellation unwinds. Their defers
+            // then clear tracking and any auxiliary-audio suppression they own.
+            for cancel in self.foregroundCaptureCancellations.values {
+                cancel()
+            }
             self.stopGatewayHealthMonitor()
             self.backgroundedAt = Date()
             self.reconnectAfterBackgroundArmed = true
@@ -771,34 +797,30 @@ final class NodeAppModel {
                 // schedule Voice Wake, which the background suspension must catch.
                 self.voiceNoteRecorder.cancel()
             }
-            // Release voice wake mic in background.
-            self.backgroundVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
-            let shouldKeepTalkActive = keepTalkActive && self.talkMode.isEnabled
+            // Invalidate queued or permission-suspended PTT starts before releasing
+            // Talk. Its capture-end callback can otherwise restart Voice Wake after
+            // the background suspension has already run.
+            self.talkPttCommandEpoch &+= 1
+            let shouldKeepTalkActive = keepTalkActive && self.talkMode.canKeepContinuousTalkActiveInBackground
             self.backgroundTalkKeptActive = shouldKeepTalkActive
-            self.backgroundTalkSuspended = self.talkMode.suspendForBackground(keepActive: shouldKeepTalkActive)
-        case .active, .inactive:
+            self.talkMode.suspendForBackground(keepActive: shouldKeepTalkActive)
+        case .inactive:
+            // Background -> inactive is not foreground admission. iOS passes
+            // through this phase before active; keep microphone gates closed.
+            break
+        case .active:
             self.isBackgrounded = false
             self.endBackgroundConnectionGracePeriod(reason: "scene_foreground")
             self.clearBackgroundReconnectSuppression(reason: "scene_foreground")
             var shouldStartGatewayHealthMonitor = self.operatorConnected
-            if phase == .active {
-                self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.backgroundVoiceWakeSuspended)
-                self.backgroundVoiceWakeSuspended = false
-                Task { [weak self] in
-                    guard let self else { return }
-                    let suspended = await MainActor.run { self.backgroundTalkSuspended }
-                    let keptActive = await MainActor.run { self.backgroundTalkKeptActive }
-                    await MainActor.run {
-                        self.backgroundTalkSuspended = false
-                        self.backgroundTalkKeptActive = false
-                    }
-                    await self.talkMode.resumeAfterBackground(wasSuspended: suspended, wasKeptActive: keptActive)
-                }
-                Task { [weak self] in
-                    await self?.resumePendingForegroundNodeActionsIfNeeded(trigger: "scene_active")
-                }
+            self.voiceWake.setSuppressedForBackground(false)
+            let keptActive = self.backgroundTalkKeptActive
+            self.backgroundTalkKeptActive = false
+            self.talkMode.resumeAfterBackground(wasKeptActive: keptActive)
+            Task { [weak self] in
+                await self?.resumePendingForegroundNodeActionsIfNeeded(trigger: "scene_active")
             }
-            if phase == .active, self.reconnectAfterBackgroundArmed {
+            if self.reconnectAfterBackgroundArmed {
                 self.reconnectAfterBackgroundArmed = false
                 let backgroundedFor = self.backgroundedAt.map { Date().timeIntervalSince($0) } ?? 0
                 self.backgroundedAt = nil
@@ -941,11 +963,9 @@ final class NodeAppModel {
             // If talk is enabled, voice wake should not grab the mic.
             if self.talkMode.isEnabled {
                 self.voiceWake.setSuppressedByTalk(true)
-                self.talkVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
             }
         } else {
             self.voiceWake.setSuppressedByTalk(false)
-            self.talkVoiceWakeSuspended = false
         }
     }
 
@@ -956,6 +976,12 @@ final class NodeAppModel {
             self.talkMode.statusText = "Demo mode only"
             return
         }
+        if enabled, self.auxiliaryAudioCapture != nil {
+            UserDefaults.standard.set(false, forKey: "talk.enabled")
+            self.talkMode.setEnabled(false)
+            self.talkMode.statusText = "Finish the active audio capture first"
+            return
+        }
         UserDefaults.standard.set(enabled, forKey: "talk.enabled")
         if enabled {
             if self.voiceNoteRecorder.isRecording || self.voiceNoteRecorder.isRequestingPermission {
@@ -964,11 +990,8 @@ final class NodeAppModel {
             // Voice wake holds the microphone continuously; talk mode needs exclusive access for STT.
             // When talk is enabled from the UI, prioritize talk and pause voice wake.
             self.voiceWake.setSuppressedByTalk(true)
-            self.talkVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
         } else {
             self.voiceWake.setSuppressedByTalk(false)
-            self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.talkVoiceWakeSuspended)
-            self.talkVoiceWakeSuspended = false
         }
         self.talkMode.setEnabled(enabled)
         Task { [weak self] in
@@ -1137,7 +1160,7 @@ final class NodeAppModel {
             await MainActor.run {
                 self.mainSessionBaseKey = mainKey
                 self.gatewaySessionScope = scope
-                self.talkMode.updateMainSessionKey(self.mainSessionKey)
+                self.synchronizeTalkSessionKey()
                 self.homeCanvasRevision &+= 1
             }
         } catch {
@@ -1180,7 +1203,7 @@ final class NodeAppModel {
                     self.selectedAgentId = nil
                     self.focusedChatSessionKey = nil
                 }
-                self.talkMode.updateMainSessionKey(self.mainSessionKey)
+                self.synchronizeTalkSessionKey()
                 self.homeCanvasRevision &+= 1
             }
             if let routingIdentity {
@@ -1218,7 +1241,7 @@ final class NodeAppModel {
         if selectedAgentChanged {
             self.focusedChatSessionKey = nil
         }
-        self.talkMode.updateMainSessionKey(mainSessionKey)
+        self.synchronizeTalkSessionKey()
         self.homeCanvasRevision &+= 1
         if let relay = ShareGatewayRelaySettings.loadConfig() {
             ShareGatewayRelaySettings.saveConfig(
@@ -1407,7 +1430,7 @@ final class NodeAppModel {
                 ok: false,
                 error: OpenClawNodeError(
                     code: .backgroundUnavailable,
-                    message: "NODE_BACKGROUND_UNAVAILABLE: canvas/camera/screen commands require foreground"))
+                    message: "NODE_BACKGROUND_UNAVAILABLE: canvas/camera/screen/talk commands require foreground"))
         }
 
         if command.hasPrefix("camera."), !isCameraEnabled() {
@@ -1684,7 +1707,9 @@ final class NodeAppModel {
             triggerCameraFlash()
             let params = (try? Self.decodeParams(OpenClawCameraSnapParams.self, from: req.paramsJSON)) ??
                 OpenClawCameraSnapParams()
-            let res = try await camera.snap(params: params)
+            let res = try await self.withForegroundCapture {
+                try await self.camera.snap(params: params)
+            }
 
             struct Payload: Codable {
                 var format: String
@@ -1705,11 +1730,13 @@ final class NodeAppModel {
             let params = (try? Self.decodeParams(OpenClawCameraClipParams.self, from: req.paramsJSON)) ??
                 OpenClawCameraClipParams()
 
-            let suspended = (params.includeAudio ?? true) ? self.voiceWake.suspendForExternalAudioCapture() : false
-            defer { self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: suspended) }
-
+            let includeAudio = params.includeAudio ?? true
             showCameraHUD(ownerID: req.id, text: "Recording…", kind: .recording)
-            let res = try await camera.clip(params: params)
+            let res = try await self.withForegroundCapture(
+                audioOwner: includeAudio ? .cameraClip : nil)
+            {
+                try await self.camera.clip(params: params)
+            }
 
             struct Payload: Codable {
                 var format: String
@@ -1742,17 +1769,27 @@ final class NodeAppModel {
                 NSLocalizedDescriptionKey: "INVALID_REQUEST: screen format must be mp4",
             ])
         }
+        let includeAudio = params.includeAudio ?? true
+        guard !self.screenRecordActive else {
+            throw NSError(domain: "Screen", code: 31, userInfo: [
+                NSLocalizedDescriptionKey: "SCREEN_CAPTURE_BUSY: screen recording already active",
+            ])
+        }
         // Status pill mirrors screen recording state so it stays visible without overlay stacking.
         self.screenRecordActive = true
         defer { self.screenRecordActive = false }
-        let path = try await screenRecorder.record(
-            screenIndex: params.screenIndex,
-            durationMs: params.durationMs,
-            fps: params.fps,
-            includeAudio: params.includeAudio,
-            outPath: nil)
-        defer { try? FileManager().removeItem(atPath: path) }
-        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        let data = try await self.withForegroundCapture(
+            audioOwner: includeAudio ? .screenRecording : nil)
+        {
+            let path = try await self.screenRecorder.record(
+                screenIndex: params.screenIndex,
+                durationMs: params.durationMs,
+                fps: params.fps,
+                includeAudio: params.includeAudio,
+                outPath: nil)
+            defer { try? FileManager().removeItem(atPath: path) }
+            return try Data(contentsOf: URL(fileURLWithPath: path))
+        }
         struct Payload: Codable {
             var format: String
             var base64: String
@@ -1767,7 +1804,7 @@ final class NodeAppModel {
             durationMs: params.durationMs,
             fps: params.fps,
             screenIndex: params.screenIndex,
-            hasAudio: params.includeAudio ?? true))
+            hasAudio: includeAudio))
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
@@ -2077,15 +2114,18 @@ final class NodeAppModel {
     }
 
     private func handleTalkInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        try Task.checkCancellation()
         switch req.command {
         case OpenClawTalkCommand.pttStart.rawValue:
             let commandEpoch = self.talkPttCommandEpoch
             var reservedCaptureId: String?
             do {
                 let payload = try await self.withTalkCapturePreparation(commandEpoch: commandEpoch) {
-                    try self.rejectTalkCaptureWhileVoiceNoteActive()
+                    try self.rejectTalkCaptureWhileOtherAudioActive()
                     return try await self.talkMode.beginPushToTalk(
-                        canStartCapture: { self.talkPttCommandEpoch == commandEpoch },
+                        canStartCapture: {
+                            self.talkPttCommandEpoch == commandEpoch && !self.isBackgrounded
+                        },
                         onCaptureReserved: { captureId in
                             reservedCaptureId = captureId
                             self.acquirePttVoiceWakeLease(for: captureId)
@@ -2096,13 +2136,13 @@ final class NodeAppModel {
                     await testTalkCaptureStartedHandler()
                 }
                 #endif
-                try self.ensureTalkPttCommandCurrent(commandEpoch)
+                try self.ensureTalkPttStartCurrent(commandEpoch, captureId: payload.captureId)
                 let json = try Self.encodePayload(payload)
-                try self.ensureTalkPttCommandCurrent(commandEpoch)
+                try self.ensureTalkPttStartCurrent(commandEpoch, captureId: payload.captureId)
                 return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
             } catch {
                 if let reservedCaptureId {
-                    _ = await self.talkMode.cancelPushToTalk(captureId: reservedCaptureId)
+                    _ = self.talkMode.cancelPushToTalk(captureId: reservedCaptureId)
                 }
                 throw error
             }
@@ -2112,9 +2152,11 @@ final class NodeAppModel {
             let start: TalkPushToTalkOnceStart
             do {
                 start = try await self.withTalkCapturePreparation(commandEpoch: commandEpoch) {
-                    try self.rejectTalkCaptureWhileVoiceNoteActive()
+                    try self.rejectTalkCaptureWhileOtherAudioActive()
                     return try await self.talkMode.beginPushToTalkOnce(
-                        canStartCapture: { self.talkPttCommandEpoch == commandEpoch },
+                        canStartCapture: {
+                            self.talkPttCommandEpoch == commandEpoch && !self.isBackgrounded
+                        },
                         onCaptureReserved: { captureId in
                             reservedCaptureId = captureId
                             self.acquirePttVoiceWakeLease(for: captureId)
@@ -2122,7 +2164,7 @@ final class NodeAppModel {
                 }
             } catch {
                 if let reservedCaptureId {
-                    _ = await self.talkMode.cancelPushToTalk(captureId: reservedCaptureId)
+                    _ = self.talkMode.cancelPushToTalk(captureId: reservedCaptureId)
                 }
                 throw error
             }
@@ -2138,12 +2180,12 @@ final class NodeAppModel {
             // Interrupt commands invalidate suspended preparation before touching
             // capture state, then bypass the preparation queue entirely.
             self.talkPttCommandEpoch &+= 1
-            let payload = await talkMode.endPushToTalk()
+            let payload = self.talkMode.endPushToTalk()
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         case OpenClawTalkCommand.pttCancel.rawValue:
             self.talkPttCommandEpoch &+= 1
-            let payload = await talkMode.cancelPushToTalk()
+            let payload = self.talkMode.cancelPushToTalk()
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         default:
@@ -2154,29 +2196,94 @@ final class NodeAppModel {
         }
     }
 
-    private func rejectTalkCaptureWhileVoiceNoteActive() throws {
+    private func rejectTalkCaptureWhileOtherAudioActive() throws {
         // Remote PTT bypasses the Chat Talk toggle. Preserve the user's draft;
         // Talk must not reconfigure AVAudioSession while its recorder owns it.
-        guard self.voiceNoteRecorder.isRecording || self.voiceNoteRecorder.isRequestingPermission else { return }
-        throw NSError(domain: "TalkMode", code: 8, userInfo: [
-            NSLocalizedDescriptionKey: "Finish or cancel the active voice note before starting push-to-talk.",
-        ])
-    }
-
-    private func acquirePttVoiceWakeLease(for captureId: String) {
-        guard self.pttVoiceWakeLeaseCaptureIds.insert(captureId).inserted else { return }
-        if self.pttVoiceWakeLeaseCaptureIds.count == 1 {
-            self.pttVoiceWakeWasSuspended = self.voiceWake.suspendForExternalAudioCapture()
+        if self.voiceNoteRecorder.isRecording || self.voiceNoteRecorder.isRequestingPermission {
+            throw NSError(domain: "TalkMode", code: 8, userInfo: [
+                NSLocalizedDescriptionKey: "Finish or cancel the active voice note before starting push-to-talk.",
+            ])
+        }
+        if self.auxiliaryAudioCapture != nil {
+            throw NSError(domain: "TalkMode", code: 8, userInfo: [
+                NSLocalizedDescriptionKey: "Finish the active audio capture before starting push-to-talk.",
+            ])
         }
     }
 
+    private func acquireAuxiliaryAudioCapture(_ owner: AuxiliaryAudioCapture) throws {
+        guard self.auxiliaryAudioCapture == nil,
+              !self.isBackgrounded,
+              !self.isTalkCaptureActive,
+              !self.voiceNoteRecorder.isRecording,
+              !self.voiceNoteRecorder.isRequestingPermission
+        else {
+            throw NSError(domain: "AudioCapture", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Finish the active audio capture before starting another one.",
+            ])
+        }
+        self.auxiliaryAudioCapture = owner
+        self.voiceWake.setSuppressedForAuxiliaryAudio(true)
+    }
+
+    private func releaseAuxiliaryAudioCapture(_ owner: AuxiliaryAudioCapture) {
+        guard self.auxiliaryAudioCapture == owner else { return }
+        self.auxiliaryAudioCapture = nil
+        self.voiceWake.setSuppressedForAuxiliaryAudio(false)
+    }
+
+    private func withForegroundCapture<T: Sendable>(
+        audioOwner: AuxiliaryAudioCapture? = nil,
+        operation: @escaping @MainActor () async throws -> T) async throws -> T
+    {
+        try self.ensureForegroundCaptureAllowed()
+        if let audioOwner {
+            try self.acquireAuxiliaryAudioCapture(audioOwner)
+        }
+        let captureTask = Task {
+            try Task.checkCancellation()
+            let result = try await operation()
+            try Task.checkCancellation()
+            return result
+        }
+        let captureId = UUID()
+        self.foregroundCaptureCancellations[captureId] = { captureTask.cancel() }
+        defer {
+            self.foregroundCaptureCancellations.removeValue(forKey: captureId)
+            if let audioOwner {
+                self.releaseAuxiliaryAudioCapture(audioOwner)
+            }
+        }
+
+        return try await withTaskCancellationHandler {
+            try await captureTask.value
+        } onCancel: {
+            captureTask.cancel()
+        }
+    }
+
+    private func ensureForegroundCaptureAllowed() throws {
+        guard !self.isBackgrounded else {
+            throw NSError(domain: "AudioCapture", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "NODE_BACKGROUND_UNAVAILABLE: camera and screen capture require foreground",
+            ])
+        }
+    }
+
+    private func acquirePttVoiceWakeLease(for captureId: String) {
+        guard self.pttVoiceWakeLeaseCaptureId != captureId else { return }
+        self.pttVoiceWakeLeaseCaptureId = captureId
+        // The suppression reason outlives Voice Wake enable/disable toggles,
+        // so enabling it mid-capture cannot open a competing audio pipeline.
+        self.voiceWake.setSuppressedByPushToTalk(true)
+    }
+
     private func releasePttVoiceWakeLease(for captureId: String) {
-        guard self.pttVoiceWakeLeaseCaptureIds.remove(captureId) != nil else { return }
-        guard self.pttVoiceWakeLeaseCaptureIds.isEmpty else { return }
+        guard self.pttVoiceWakeLeaseCaptureId == captureId else { return }
+        self.pttVoiceWakeLeaseCaptureId = nil
         // Capture identity makes stale stop/cancel cleanup harmless. Resume Voice
-        // Wake only after the final live capture owner releases its lease.
-        self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeWasSuspended)
-        self.pttVoiceWakeWasSuspended = false
+        // Wake only after the live capture owner releases its lease.
+        self.voiceWake.setSuppressedByPushToTalk(false)
     }
 
     private func withTalkCapturePreparation<T>(
@@ -2197,7 +2304,16 @@ final class NodeAppModel {
 
     private func ensureTalkPttCommandCurrent(_ commandEpoch: UInt64) throws {
         try Task.checkCancellation()
-        guard self.talkPttCommandEpoch == commandEpoch else {
+        guard self.talkPttCommandEpoch == commandEpoch, !self.isBackgrounded else {
+            throw NSError(domain: "TalkMode", code: 9, userInfo: [
+                NSLocalizedDescriptionKey: "PTT_CANCELLED: push-to-talk start was cancelled",
+            ])
+        }
+    }
+
+    private func ensureTalkPttStartCurrent(_ commandEpoch: UInt64, captureId: String) throws {
+        try self.ensureTalkPttCommandCurrent(commandEpoch)
+        guard self.talkMode.isActivePushToTalkCapture(captureId) else {
             throw NSError(domain: "TalkMode", code: 9, userInfo: [
                 NSLocalizedDescriptionKey: "PTT_CANCELLED: push-to-talk start was cancelled",
             ])
@@ -2654,7 +2770,17 @@ extension NodeAppModel {
     func focusChatSession(_ sessionKey: String?) {
         let trimmed = (sessionKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         self.focusedChatSessionKey = trimmed.isEmpty ? nil : trimmed
-        self.talkMode.updateMainSessionKey(self.chatSessionKey)
+        self.synchronizeTalkSessionKey()
+    }
+
+    /// Session changes invalidate queued PTT admission before Talk cancels any
+    /// active owner. Otherwise a waiter can wake and retarget to the new chat.
+    func synchronizeTalkSessionKey(_ sessionKey: String? = nil) {
+        let effectiveSessionKey = sessionKey ?? self.chatSessionKey
+        guard !self.talkMode.isUsingMainSessionKey(effectiveSessionKey) else { return }
+        self.talkPttCommandEpoch &+= 1
+        self.voiceWake.invalidatePendingCommand()
+        self.talkMode.updateMainSessionKey(effectiveSessionKey)
     }
 
     var chatAgentId: String {
@@ -2870,6 +2996,7 @@ extension NodeAppModel {
         let nodeGatewayTask = self.nodeGatewayTask
         let operatorGatewayTask = self.operatorGatewayTask
         self.talkMode.updateGatewayConnected(false)
+        self.voiceWake.invalidatePendingCommand()
         self.gatewayRouteGeneration &+= 1
         nodeGatewayTask?.cancel()
         self.nodeGatewayTask = nil
@@ -2993,7 +3120,10 @@ extension NodeAppModel {
         self.gatewayConnected = false
         setOperatorConnected(false)
         self.talkMode.updateGatewayConnected(false)
-        self.talkMode.updateMainSessionKey(self.mainSessionKey)
+        self.invalidateNodePushToTalkRoute()
+        self.chatSessionRoutingRestoreTask?.cancel()
+        self.chatSessionRoutingRestoreTask = nil
+        self.synchronizeTalkSessionKey()
         ShareGatewayRelaySettings.clearConfig()
         showLocalCanvasOnDisconnect()
     }
@@ -3020,6 +3150,9 @@ extension NodeAppModel {
     }
 
     private func prepareForGatewayConnect(stableID: String) {
+        self.invalidateNodePushToTalkRoute()
+        self.operatorTalkConnectionGeneration &+= 1
+        self.chatSessionRoutingRestoreTask?.cancel()
         self.isAppleReviewDemoModeEnabled = false
         self.isScreenshotFixtureModeEnabled = false
         self.gatewayAutoReconnectEnabled = true
@@ -3046,10 +3179,12 @@ extension NodeAppModel {
         self.gatewayAgents = []
         self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: stableID)
         self.focusedChatSessionKey = nil
+        self.synchronizeTalkSessionKey()
         self.homeCanvasRevision &+= 1
         self.apnsLastRegisteredTokenHex = nil
         self.apnsLastRegisteredGatewayStableID = nil
-        Task { [weak self] in
+        self.chatSessionRoutingRestoreTask = Task { [weak self] in
+            guard !Task.isCancelled, self?.connectedGatewayID == stableID else { return }
             await self?.restoreChatSessionRoutingIdentityIfNeeded()
         }
     }
@@ -3385,27 +3520,36 @@ extension NodeAppModel {
         guard !self.isLocalGatewayFixtureEnabled,
               self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID)
         else { return }
+        self.operatorTalkConnectionGeneration &+= 1
+        let talkConnectionGeneration = self.operatorTalkConnectionGeneration
         self.setOperatorConnected(true)
         self.clearOperatorGatewayConnectionProblemIfCurrent()
         self.forceOperatorTalkPermissionUpgradeRequest = false
-        self.talkMode.updateGatewayConnected(true)
         GatewayDiagnostics.log(
             "operator gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
 
-        let shouldContinue = self.gatewayRouteCheck(
-            generation: routeGeneration,
-            stableID: stableID)
+        let shouldContinue: @MainActor @Sendable () -> Bool = { [weak self] in
+            guard let self else { return false }
+            return self.operatorTalkConnectionGeneration == talkConnectionGeneration &&
+                self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID)
+        }
         await flushPendingWatchExecApprovalResolutions(shouldContinue: shouldContinue)
         guard shouldContinue() else { return }
-        await self.talkMode.reloadConfig(shouldApply: shouldContinue)
+        if let chatSessionRoutingRestoreTask {
+            await chatSessionRoutingRestoreTask.value
+        }
         guard shouldContinue() else { return }
-        await self.talkMode.prefetchRealtimeSessionIfReady(
-            reason: "operator_connected",
-            shouldApply: shouldContinue)
-        guard shouldContinue() else { return }
+        self.chatSessionRoutingRestoreTask = nil
         await self.refreshBrandingFromGateway(shouldApply: shouldContinue)
         guard shouldContinue() else { return }
         await self.refreshAgentsFromGateway(shouldApply: shouldContinue)
+        guard shouldContinue() else { return }
+        await self.talkMode.reloadConfig(shouldApply: shouldContinue)
+        guard shouldContinue() else { return }
+        self.admitTalkAfterSessionHydration()
+        await self.talkMode.prefetchRealtimeSessionIfReady(
+            reason: "operator_connected",
+            shouldApply: shouldContinue)
         guard shouldContinue() else { return }
         await refreshShareRouteFromGateway(shouldApply: shouldContinue)
         guard shouldContinue() else { return }
@@ -3414,6 +3558,11 @@ extension NodeAppModel {
         await self.startVoiceWakeSync(shouldContinue: shouldContinue)
         guard shouldContinue() else { return }
         self.startGatewayHealthMonitor()
+    }
+
+    private func admitTalkAfterSessionHydration() {
+        self.synchronizeTalkSessionKey()
+        self.talkMode.updateGatewayConnected(true)
     }
 
     private func handleNodeGatewayConnected(
@@ -3596,6 +3745,13 @@ extension NodeAppModel {
                                 error: OpenClawNodeError(
                                     code: .invalidRequest,
                                     message: "INVALID_REQUEST: operator session cannot invoke node commands"))
+                        },
+                        onRouteInvalidated: { [weak self] in
+                            await MainActor.run {
+                                self?.handleOperatorGatewayRouteInvalidated(
+                                    routeGeneration: routeGeneration,
+                                    stableID: stableID)
+                            }
                         })
 
                     attempt = 0
@@ -3640,6 +3796,31 @@ extension NodeAppModel {
                 }
             }
         }
+    }
+
+    private func handleOperatorGatewayRouteInvalidated(routeGeneration: UInt64, stableID: String) {
+        guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
+        self.invalidateOperatorTalkRoute()
+    }
+
+    private func invalidateOperatorTalkRoute() {
+        self.operatorTalkConnectionGeneration &+= 1
+        self.chatSessionRoutingRestoreTask?.cancel()
+        self.chatSessionRoutingRestoreTask = nil
+        self.setOperatorConnected(false)
+        self.talkMode.updateGatewayConnected(false)
+        self.invalidateNodePushToTalkRoute()
+    }
+
+    private func handleNodeGatewayRouteInvalidated(routeGeneration: UInt64, stableID: String) {
+        guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
+        self.invalidateNodePushToTalkRoute()
+    }
+
+    private func invalidateNodePushToTalkRoute() {
+        self.talkPttCommandEpoch &+= 1
+        self.voiceWake.invalidatePendingCommand()
+        _ = self.talkMode.cancelPushToTalk()
     }
 
     private func startNodeGatewayLoop(
@@ -3790,6 +3971,13 @@ extension NodeAppModel {
                                 message: "UNAVAILABLE: node not ready"))
                     }
                     return await self.handleInvoke(req, gatewayStableID: context.stableID)
+                },
+                onRouteInvalidated: { [weak self] in
+                    await MainActor.run {
+                        self?.handleNodeGatewayRouteInvalidated(
+                            routeGeneration: context.routeGeneration,
+                            stableID: context.stableID)
+                    }
                 })
 
             guard let reconnectOptions = await self.gatewayOptionsAfterSuccessfulConnection(
@@ -3905,7 +4093,7 @@ extension NodeAppModel {
         self.talkMode.updateGatewayConnected(false)
         // Retain the last verified routing contract for offline capture; reconnect compares it
         // with the live gateway before replay.
-        self.talkMode.updateMainSessionKey(self.mainSessionKey)
+        self.synchronizeTalkSessionKey()
         self.showLocalCanvasOnDisconnect()
     }
 
@@ -4113,7 +4301,7 @@ extension NodeAppModel {
         self.gatewayDefaultAgentId = "main"
         self.gatewayAgents = AppleReviewDemoMode.agents
         self.focusedChatSessionKey = nil
-        self.talkMode.updateMainSessionKey(self.mainSessionKey)
+        self.synchronizeTalkSessionKey()
         self.homeCanvasRevision &+= 1
     }
 
@@ -4155,7 +4343,7 @@ extension NodeAppModel {
         self.gatewayDefaultAgentId = "main"
         self.gatewayAgents = ScreenshotFixtureMode.agents
         self.focusedChatSessionKey = nil
-        self.talkMode.updateMainSessionKey(self.mainSessionKey)
+        self.synchronizeTalkSessionKey()
         self.talkMode.enterScreenshotFixtureMode()
         self.homeCanvasRevision &+= 1
     }
@@ -5121,7 +5309,7 @@ extension NodeAppModel {
             return
         case .startTalk:
             guard !self.isAppleReviewDemoModeEnabled else { break }
-            self.talkMode.updateMainSessionKey(event.sessionKey ?? self.chatSessionKey)
+            self.synchronizeTalkSessionKey(event.sessionKey ?? self.chatSessionKey)
             self.setTalkEnabled(true)
         case .stopTalk:
             self.setTalkEnabled(false)
@@ -7065,11 +7253,25 @@ extension NodeAppModel {
     }
 
     func sendVoiceTranscript(text: String, sessionKey: String?) async throws {
+        try Task.checkCancellation()
+        let routeGeneration = self.gatewayRouteGeneration
+        let gatewayStableID = self.connectedGatewayID
         if await !self.isGatewayConnected() {
             throw NSError(domain: "Gateway", code: 10, userInfo: [
                 NSLocalizedDescriptionKey: "Gateway not connected",
             ])
         }
+        try Task.checkCancellation()
+        guard let gatewayStableID,
+              let nodeRoute = await self.nodeGateway.currentRoute(),
+              self.isCurrentGatewayRoute(
+                  generation: routeGeneration,
+                  stableID: gatewayStableID)
+        else { throw CancellationError() }
+        if let sessionKey, sessionKey != self.mainSessionKey {
+            throw CancellationError()
+        }
+        try Task.checkCancellation()
         struct Payload: Codable {
             var text: String
             var sessionKey: String?
@@ -7081,7 +7283,14 @@ extension NodeAppModel {
                 NSLocalizedDescriptionKey: "Failed to encode voice transcript payload as UTF-8",
             ])
         }
-        await self.nodeGateway.sendEvent(event: "voice.transcript", payloadJSON: json)
+        // Voice Wake suppression cancels the owning command task. Check at the
+        // dispatch boundary so a PTT/background takeover cannot send stale audio intent.
+        try Task.checkCancellation()
+        let sent = await self.nodeGateway.sendEvent(
+            event: "voice.transcript",
+            payloadJSON: json,
+            ifCurrentRoute: nodeRoute)
+        guard sent else { throw CancellationError() }
     }
 
     func handleDeepLink(url: URL) async {
@@ -7218,7 +7427,7 @@ extension NodeAppModel {
             return
         }
         self.mainSessionBaseKey = trimmed
-        self.talkMode.updateMainSessionKey(self.mainSessionKey)
+        self.synchronizeTalkSessionKey()
     }
 
     func approvePendingAgentDeepLinkPrompt() async {
@@ -7390,7 +7599,31 @@ extension NodeAppModel {
     }
 
     func _test_pttVoiceWakeLeaseCaptureIds() -> Set<String> {
-        self.pttVoiceWakeLeaseCaptureIds
+        self.pttVoiceWakeLeaseCaptureId.map { [$0] } ?? []
+    }
+
+    func _test_invalidateNodePushToTalkRoute() {
+        self.invalidateNodePushToTalkRoute()
+    }
+
+    func _test_invalidateOperatorTalkRoute() {
+        self.invalidateOperatorTalkRoute()
+    }
+
+    func _test_applyMainSessionKey(_ key: String?) {
+        self.applyMainSessionKey(key)
+    }
+
+    func _test_prepareForGatewayConnect(stableID: String) {
+        self.prepareForGatewayConnect(stableID: stableID)
+    }
+
+    func _test_admitTalkAfterSessionHydration() async {
+        if let chatSessionRoutingRestoreTask {
+            await chatSessionRoutingRestoreTask.value
+        }
+        self.chatSessionRoutingRestoreTask = nil
+        self.admitTalkAfterSessionHydration()
     }
 
     static func _test_decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {

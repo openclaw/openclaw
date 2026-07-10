@@ -434,6 +434,42 @@ struct TalkModeManagerTests {
         #expect(manager._test_gatewayTalkLastIssueText()?.contains("Realtime closed before") == true)
     }
 
+    @Test func `session switch invalidates an in flight realtime relay start`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        manager._test_setRealtimeRelayStartInFlight(true)
+
+        manager.updateMainSessionKey("agent:main:replacement")
+
+        #expect(!manager._test_realtimeRelayStartIsInFlight())
+        #expect(manager._test_mainSessionKey() == "agent:main:replacement")
+    }
+
+    @Test func `duplicate start preserves realtime owned speaking phase`() async {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        manager.updateGatewayConnected(true)
+        manager.isEnabled = true
+        manager.isListening = false
+        manager.isSpeaking = true
+        manager.statusText = "Speaking"
+        manager._test_setRealtimeRelayStartInFlight(true)
+
+        await manager.start()
+
+        #expect(manager._test_realtimeRelayStartIsInFlight())
+        #expect(!manager.isListening)
+        #expect(manager.isSpeaking)
+        #expect(manager.statusText == "Speaking")
+    }
+
+    @Test func `route preference change does not activate enabled idle Talk`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        manager.isEnabled = true
+
+        manager.applyAudioRoutePreferenceChanged()
+
+        #expect(!manager._test_audioSessionIsActive())
+    }
+
     @Test func `maps web RTC realtime transport to native web RTC on IOS`() {
         let config: [String: Any] = [
             "talk": [
@@ -842,5 +878,65 @@ struct TalkModeManagerTests {
             code: -1,
             userInfo: [NSLocalizedDescriptionKey: "queue enqueue failed"])
         #expect(TalkModeManager._test_isPCMFormatRejectedByAPI(error) == false)
+    }
+
+    @Test func `history fallback only selects the current run reply`() {
+        let messages: [[String: Any]] = [
+            [
+                "role": "assistant",
+                "idempotencyKey": "old-run",
+                "content": [["type": "text", "text": "stale answer"]],
+            ],
+            [
+                "role": "assistant",
+                "__openclaw": ["idempotencyKey": "current-run"],
+                "content": [["type": "text", "text": "current answer"]],
+            ],
+        ]
+
+        #expect(TalkModeManager._test_latestAssistantText(
+            messages: messages,
+            runId: "current-run") == "current answer")
+        #expect(TalkModeManager._test_latestAssistantText(
+            messages: messages,
+            runId: "missing-run") == nil)
+    }
+
+    @Test func `lifecycle end metadata preserves terminal outcome`() {
+        func state(_ values: [String: Any]) -> String? {
+            TalkModeManager._test_lifecycleCompletionState(
+                data: values.mapValues(AnyCodable.init))
+        }
+
+        #expect(state(["phase": "end"]) == "final")
+        #expect(state(["phase": "aborted"]) == "aborted")
+        #expect(state(["status": "cancelled"]) == "aborted")
+        #expect(state(["status": "failed"]) == "error")
+        #expect(state(["phase": "end", "status": "failed"]) == "error")
+        #expect(state(["phase": "end", "aborted": true]) == "timeout")
+        #expect(state(["phase": "end", "aborted": true, "stopReason": "restart"]) == "aborted")
+        #expect(state([
+            "phase": "end",
+            "aborted": true,
+            "stopReason": "user",
+            "providerStarted": true,
+        ]) == "aborted")
+        #expect(state(["phase": "end", "status": "cancelled"]) == "aborted")
+        #expect(state(["phase": "end", "status": "timeout", "providerStarted": true]) == "timeout")
+        #expect(state(["phase": "error"]) == "error")
+        #expect(state(["phase": "error", "stopReason": "user"]) == "aborted")
+    }
+
+    @Test func `late incremental final cannot reopen canceled speech ownership`() async {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        let speechGeneration = manager._test_beginIncrementalSpeechOwnership()
+
+        manager._test_stopSpeaking(storeInterruption: false)
+        let completed = await manager._test_handleIncrementalAssistantFinal(
+            text: "late assistant reply.",
+            speechGeneration: speechGeneration)
+
+        #expect(!completed)
+        #expect(!manager._test_hasIncrementalSpeechOwnership())
     }
 }

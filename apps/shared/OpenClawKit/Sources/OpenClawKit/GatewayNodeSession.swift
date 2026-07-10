@@ -608,6 +608,7 @@ public actor GatewayNodeSession {
         payloadJSON: String?,
         ifCurrentRoute expectedRoute: GatewayNodeSessionRoute? = nil) async -> Bool
     {
+        guard !Task.isCancelled else { return false }
         if let expectedRoute, !self.isCurrentRoute(expectedRoute) {
             return false
         }
@@ -617,6 +618,7 @@ public actor GatewayNodeSession {
             "payloadJSON": AnyCodable(payloadJSON ?? NSNull()),
         ]
         do {
+            try Task.checkCancellation()
             try await channel.send(method: "node.event", params: params)
             return true
         } catch {
@@ -947,12 +949,13 @@ extension GatewayNodeSession {
         guard self.isCurrentRoute(expectedRoute),
               self.channel != nil
         else { return Self.staleRouteInvokeResponse(requestId: request.id) }
-        guard request.command == "computer.act" else {
+        let requiresRouteScopedCancellation = request.command == "computer.act" ||
+            OpenClawTalkCommand(rawValue: request.command) != nil
+        guard requiresRouteScopedCancellation else {
             return await onInvoke(request)
         }
-        // Computer input is side-effecting and owns an explicit lifecycle release
-        // hook. Track only this command; unrelated long-running node work must not
-        // hold route teardown open without a matching cancellation contract.
+        // These side-effecting commands own explicit cancellation cleanup. Route
+        // teardown waits for it so a replacement cannot inherit input ownership.
         let invokeID = UUID()
         let task = Task { await onInvoke(request) }
         self.activeInvokes[invokeID] = ActiveInvoke(

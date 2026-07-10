@@ -155,7 +155,7 @@ public final class OpenClawVoiceNoteRecorder {
     public func start() async -> Bool {
         guard self.state == .idle || self.errorMessage != nil else { return false }
         guard self.captureAdmissionHandler() else {
-            self.fail(message: String(localized: "Push-to-talk is using the microphone."))
+            self.fail(message: String(localized: "Another feature is using the microphone."))
             return false
         }
 
