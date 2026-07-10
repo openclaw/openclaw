@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import webPush from "web-push";
+import webPush, { type SendResult } from "web-push";
 import {
   broadcastWebPush,
   clearWebPushSubscriptionByEndpoint,
@@ -11,6 +11,10 @@ import {
   registerWebPushSubscription,
   resolveVapidKeys,
 } from "./push-web.js";
+
+function sendResult(statusCode = 201): SendResult {
+  return { statusCode, body: "", headers: {} };
+}
 
 const writeJsonMock = vi.hoisted(() => vi.fn());
 
@@ -34,7 +38,7 @@ vi.mock("web-push", () => ({
       privateKey: "test-private-key-base64url",
     })),
     setVapidDetails: vi.fn(),
-    sendNotification: vi.fn().mockResolvedValue({ statusCode: 201 }),
+    sendNotification: vi.fn().mockResolvedValue({ statusCode: 201, body: "", headers: {} }),
   },
 }));
 
@@ -44,7 +48,7 @@ beforeEach(async () => {
   vi.stubEnv("OPENCLAW_VAPID_PUBLIC_KEY", undefined);
   vi.stubEnv("OPENCLAW_VAPID_PRIVATE_KEY", undefined);
   vi.stubEnv("OPENCLAW_VAPID_SUBJECT", undefined);
-  vi.mocked(webPush.sendNotification).mockReset().mockResolvedValue({ statusCode: 201 });
+  vi.mocked(webPush.sendNotification).mockReset().mockResolvedValue(sendResult());
 });
 
 afterEach(async () => {
@@ -252,7 +256,7 @@ describe("sending", () => {
           }
         }
         await sendsReleased;
-        return { statusCode: 201 };
+        return sendResult();
       });
 
       const firstBroadcast = broadcastWebPush({ title: "First" }, tmpDir);
@@ -310,7 +314,7 @@ describe("sending", () => {
       }
       await sendsReleased;
       inFlight -= 1;
-      return { statusCode: 201 };
+      return sendResult();
     });
 
     const broadcast = broadcastWebPush({ title: "Bounded broadcast" }, tmpDir);
@@ -389,7 +393,7 @@ describe("sending", () => {
       });
     }
     vi.mocked(webPush.sendNotification)
-      .mockResolvedValueOnce({ statusCode: 201 })
+      .mockResolvedValueOnce(sendResult())
       .mockRejectedValueOnce(Object.assign(new Error("gone"), { statusCode: 410 }))
       .mockRejectedValueOnce(Object.assign(new Error("missing"), { statusCode: 404 }));
 
