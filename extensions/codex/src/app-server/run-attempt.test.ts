@@ -1243,11 +1243,23 @@ describe("runCodexAppServerAttempt", () => {
       createMockPluginRegistry([{ hookName: "llm_input", handler: llmInput }]),
     );
     vi.stubEnv("OPENCLAW_TRAJECTORY", "1");
-    vi.stubEnv("OPENCLAW_TRAJECTORY_DIR", path.join(tempDir, "trajectory"));
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
+    const trajectoryEvents: Array<{
+      data?: { prompt?: string; systemPrompt?: string };
+      type: string;
+    }> = [];
+    Object.assign(params, {
+      trajectorySessionFile: `sqlite:main:session-1:${path.join(tempDir, "openclaw-agent.sqlite")}`,
+      trajectoryRecorder: {
+        recordEvent: (type: string, data?: { prompt?: string; systemPrompt?: string }) => {
+          trajectoryEvents.push({ type, data });
+        },
+        flush: async () => undefined,
+      },
+    });
     params.skillsSnapshot = {
       prompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
       skills: [],
@@ -1284,15 +1296,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toBe("hello");
     const [llmInputPayload] = mockCall(llmInput, "llm_input") as [{ prompt?: string }, unknown];
     expect(llmInputPayload.prompt).toBe(inputText);
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempDir, "trajectory", "session-1.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map(
-        (line) =>
-          JSON.parse(line) as { data?: { prompt?: string; systemPrompt?: string }; type?: string },
-      );
     const compiledContext = trajectoryEvents.find((event) => event.type === "context.compiled");
     expect(compiledContext?.data?.prompt).toBe(inputText);
     expect(compiledContext?.data?.systemPrompt).toContain("## OpenClaw Skills");
