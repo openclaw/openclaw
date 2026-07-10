@@ -203,6 +203,7 @@ function buildCliMcpGrantContext(params: {
   return {
     sessionKey,
     sessionId: normalizeOptionalMcpContextValue(params.run.sessionId),
+    runId: normalizeOptionalMcpContextValue(params.run.runId),
     messageProvider:
       normalizeMessageChannel(params.run.messageChannel ?? params.run.messageProvider) ?? undefined,
     clientCaps: clientCaps.length > 0 ? clientCaps : undefined,

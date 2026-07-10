@@ -283,6 +283,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
                 config: cfg,
                 sessionKey: requestContext.sessionKey,
                 sessionId: requestContext.sessionId,
+                runId: requestContext.runId,
                 approvalReviewerDeviceId: requestContext.approvalReviewerDeviceId,
                 channelId: requestContext.currentChannelId,
                 turnSourceChannel: requestContext.messageProvider,

@@ -80,6 +80,7 @@ type BeforeToolCallHookInput = {
     config?: unknown;
     sessionKey?: string;
     sessionId?: string;
+    runId?: string;
     approvalReviewerDeviceId?: string;
     channelId?: string;
     turnSourceChannel?: string;
@@ -947,6 +948,7 @@ describe("mcp loopback server", () => {
       context: {
         sessionKey: "agent:main:discord:channel:bound",
         sessionId: "session-bound",
+        runId: "run-bound",
         messageProvider: "discord",
         clientCaps: ["tool-events"],
         currentChannelId: "discord:bound",
@@ -1028,6 +1030,7 @@ describe("mcp loopback server", () => {
       agentId: "main",
       sessionKey: "agent:main:discord:channel:bound",
       sessionId: "session-bound",
+      runId: "run-bound",
       approvalReviewerDeviceId: "bound-reviewer",
       channelId: "discord:bound",
       turnSourceChannel: "discord",

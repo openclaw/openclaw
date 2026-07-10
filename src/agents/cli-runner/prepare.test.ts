@@ -3029,6 +3029,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         context: {
           sessionKey: "agent:main:telegram:group:chat123",
           sessionId: "session-test",
+          runId: "run-test-room-event-tools",
           messageProvider: "telegram",
           clientCaps: ["tool-events", "inline-widgets"],
           currentChannelId: "telegram:-100123:topic:42",

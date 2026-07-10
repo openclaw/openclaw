@@ -10,6 +10,7 @@ import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 export type McpLoopbackRequestContext = {
   sessionKey: string;
   sessionId?: string;
+  runId?: string;
   messageProvider?: string;
   clientCaps?: string[];
   currentChannelId?: string;
