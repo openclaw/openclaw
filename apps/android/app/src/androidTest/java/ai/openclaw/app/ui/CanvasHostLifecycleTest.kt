@@ -96,11 +96,15 @@ class CanvasHostLifecycleTest {
   }
 
   @Test
-  fun rendererTerminationDestroysInvalidWebViewAndNextPresentRecreatesIt() {
+  fun rendererTerminationForgetsFailedPageAndNextShowRecreatesIt() {
     activityRule.scenario.onActivity { activity -> activity.presentFastPage() }
     assertTrue("initial page never finished", activityRule.scenario.waitForPageFinished())
 
-    val firstWebView = activityRule.scenario.readActivity { activity -> checkNotNull(activity.currentWebView()) }
+    val firstWebView =
+      activityRule.scenario.readActivity { activity ->
+        assertNotNull(activity.controller.currentUrl())
+        checkNotNull(activity.currentWebView())
+      }
     val terminated =
       activityRule.scenario.readActivity { activity ->
         activity.currentWebView()?.webViewRenderProcess?.terminate() == true
@@ -113,13 +117,15 @@ class CanvasHostLifecycleTest {
 
     activityRule.scenario.onActivity { activity ->
       assertEquals(CanvasController.PresentationState.Hidden, activity.controller.presentationState.value)
+      assertNull(activity.controller.currentUrl())
       assertEquals(0, activity.host?.childCount)
-      activity.presentFastPage()
+      activity.showCanvas()
     }
     assertTrue(
-      "next present did not create a replacement WebView",
+      "next show did not create a replacement WebView",
       activityRule.scenario.waitUntilActivity { activity -> activity.currentWebView() != null },
     )
+    assertTrue("replacement scaffold never finished", activityRule.scenario.waitForPageFinished())
     activityRule.scenario.onActivity { activity ->
       assertEquals(CanvasController.PresentationState.Visible, activity.controller.presentationState.value)
       assertEquals(1, activity.host?.childCount)

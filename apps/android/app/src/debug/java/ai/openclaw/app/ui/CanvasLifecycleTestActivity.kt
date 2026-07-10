@@ -46,6 +46,10 @@ class CanvasLifecycleTestActivity : ComponentActivity() {
     controller.hide()
   }
 
+  fun showCanvas() {
+    controller.show()
+  }
+
   fun currentWebView(): WebView? = host?.currentWebView
 
   private fun presentHtml(html: String): Long {

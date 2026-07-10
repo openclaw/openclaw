@@ -96,6 +96,9 @@ class CanvasController {
   fun onRenderProcessGone(webView: WebView) {
     if (this.webView !== webView) return
     this.webView = null
+    // Do not replay the page that terminated its renderer into the replacement WebView.
+    url = null
+    _currentUrl.value = null
     hostAttachedState.value = false
     _presentationState.value = PresentationState.Hidden
   }
