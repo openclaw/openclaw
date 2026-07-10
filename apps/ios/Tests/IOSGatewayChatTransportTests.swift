@@ -6,6 +6,28 @@ import Testing
 @testable import OpenClaw
 
 struct IOSGatewayChatTransportTests {
+    private actor RequestRecorder {
+        struct Request: Sendable {
+            var method: String
+            var paramsJSON: String
+            var timeoutSeconds: Int
+        }
+
+        private var requests: [Request] = []
+
+        func record(method: String, paramsJSON: String, timeoutSeconds: Int) -> Data {
+            self.requests.append(Request(
+                method: method,
+                paramsJSON: paramsJSON,
+                timeoutSeconds: timeoutSeconds))
+            return Data(#"{"key":"forked"}"#.utf8)
+        }
+
+        func all() -> [Request] {
+            self.requests
+        }
+    }
+
     private func object(from json: String) throws -> [String: Any] {
         let data = try #require(json.data(using: .utf8))
         let value = try JSONSerialization.jsonObject(with: data)
@@ -259,6 +281,52 @@ struct IOSGatewayChatTransportTests {
         #expect(IOSGatewayChatTransport.sessionTarget(
             for: "agent::main",
             selectedAgentID: "reviewer") == .init(sessionKey: "agent::main", agentID: nil))
+    }
+
+    @Test func `session mutations dispatch normalized selected agent targets`() async throws {
+        let recorder = RequestRecorder()
+        let transport = IOSGatewayChatTransport(
+            gateway: GatewayNodeSession(),
+            globalAgentId: " Reviewer ",
+            sessionMutationRequest: { method, paramsJSON, timeoutSeconds in
+                await recorder.record(
+                    method: method,
+                    paramsJSON: paramsJSON,
+                    timeoutSeconds: timeoutSeconds)
+            })
+
+        for key in ["Matrix:Channel:Room", "global", "agent:ops:main"] {
+            try await transport.patchSession(key: key, pinned: true)
+            try await transport.deleteSession(key: key)
+            _ = try await transport.forkSession(parentKey: key)
+        }
+
+        let requests = await recorder.all()
+        #expect(requests.map(\.method) == Array(
+            repeating: ["sessions.patch", "sessions.delete", "sessions.create"],
+            count: 3).flatMap { $0 })
+        #expect(requests.map(\.timeoutSeconds) == Array(repeating: 15, count: 9))
+
+        for (offset, expectedKey, expectedAgentID) in [
+            (0, "agent:reviewer:Matrix:Channel:Room", nil),
+            (3, "global", "reviewer"),
+            (6, "agent:ops:main", nil),
+        ] as [(Int, String, String?)] {
+            let patch = try self.object(from: requests[offset].paramsJSON)
+            #expect(patch["key"] as? String == expectedKey)
+            #expect(patch["agentId"] as? String == expectedAgentID)
+            #expect(patch["pinned"] as? Bool == true)
+
+            let delete = try self.object(from: requests[offset + 1].paramsJSON)
+            #expect(delete["key"] as? String == expectedKey)
+            #expect(delete["agentId"] as? String == expectedAgentID)
+            #expect(delete["deleteTranscript"] as? Bool == true)
+
+            let fork = try self.object(from: requests[offset + 2].paramsJSON)
+            #expect(fork["parentSessionKey"] as? String == expectedKey)
+            #expect(fork["agentId"] as? String == expectedAgentID)
+            #expect(fork["fork"] as? Bool == true)
+        }
     }
 
     @Test func `requests fail fast when gateway not connected`() async {

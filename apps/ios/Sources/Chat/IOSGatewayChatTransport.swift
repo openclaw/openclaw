@@ -11,6 +11,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     private let gateway: GatewayNodeSession
     private let globalAgentId: String?
     private let outboxGatewayID: String?
+    private let sessionMutationRequest: (@Sendable (String, String, Int) async throws -> Data)?
 
     var outboxRequiresSessionRoutingContract: Bool {
         true
@@ -136,13 +137,15 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     init(
         gateway: GatewayNodeSession,
         globalAgentId: String? = nil,
-        outboxGatewayID: String? = nil)
+        outboxGatewayID: String? = nil,
+        sessionMutationRequest: (@Sendable (String, String, Int) async throws -> Data)? = nil)
     {
         self.gateway = gateway
         let normalized = globalAgentId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         self.globalAgentId = normalized?.isEmpty == false ? normalized : nil
         let normalizedGatewayID = outboxGatewayID?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.outboxGatewayID = normalizedGatewayID?.isEmpty == false ? normalizedGatewayID : nil
+        self.sessionMutationRequest = sessionMutationRequest
     }
 
     func acquireOutboxRouteLease() async -> OpenClawChatTransportRouteLeaseResult {
@@ -388,12 +391,6 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         return json
     }
 
-    private func selectedGlobalAgentId(for sessionKey: String) -> String? {
-        sessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global"
-            ? self.globalAgentId
-            : nil
-    }
-
     struct SessionTarget: Equatable {
         var sessionKey: String
         var agentID: String?
@@ -434,6 +431,20 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             for: sessionKey,
             selectedAgentID: self.globalAgentId,
             overrideAgentID: overrideAgentID)
+    }
+
+    private func requestSessionMutation(
+        method: String,
+        paramsJSON: String,
+        timeoutSeconds: Int) async throws -> Data
+    {
+        if let sessionMutationRequest {
+            return try await sessionMutationRequest(method, paramsJSON, timeoutSeconds)
+        }
+        return try await self.gateway.request(
+            method: method,
+            paramsJSON: paramsJSON,
+            timeoutSeconds: timeoutSeconds)
     }
 
     func createSession(
@@ -498,30 +509,36 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         archived: Bool? = nil,
         unread: Bool? = nil) async throws
     {
+        let target = self.sessionTarget(for: key)
         let json = try Self.makePatchSessionParamsJSON(
-            key: key,
-            agentId: self.selectedGlobalAgentId(for: key),
+            key: target.sessionKey,
+            agentId: target.agentID,
             label: label,
             category: category,
             pinned: pinned,
             archived: archived,
             unread: unread)
-        _ = try await self.gateway.request(method: "sessions.patch", paramsJSON: json, timeoutSeconds: 15)
+        _ = try await self.requestSessionMutation(method: "sessions.patch", paramsJSON: json, timeoutSeconds: 15)
     }
 
     func deleteSession(key: String) async throws {
+        let target = self.sessionTarget(for: key)
         let json = try Self.encodeParams(DeleteSessionParams(
-            key: key,
+            key: target.sessionKey,
             deleteTranscript: true,
-            agentId: self.selectedGlobalAgentId(for: key)))
-        _ = try await self.gateway.request(method: "sessions.delete", paramsJSON: json, timeoutSeconds: 15)
+            agentId: target.agentID))
+        _ = try await self.requestSessionMutation(method: "sessions.delete", paramsJSON: json, timeoutSeconds: 15)
     }
 
     func forkSession(parentKey: String) async throws -> String {
+        let target = self.sessionTarget(for: parentKey)
         let json = try Self.makeForkSessionParamsJSON(
-            parentKey: parentKey,
-            agentId: Self.agentID(fromSessionKey: parentKey) ?? self.selectedGlobalAgentId(for: parentKey))
-        let response = try await self.gateway.request(method: "sessions.create", paramsJSON: json, timeoutSeconds: 15)
+            parentKey: target.sessionKey,
+            agentId: target.agentID)
+        let response = try await self.requestSessionMutation(
+            method: "sessions.create",
+            paramsJSON: json,
+            timeoutSeconds: 15)
         return try JSONDecoder().decode(OpenClawChatCreateSessionResponse.self, from: response).key
     }
 
