@@ -21,6 +21,7 @@ const SHELL_CODING_TOOL_FACTORY_NAMES = new Set(["apply_patch", "exec", "process
 // out of this set so narrow allowlists still materialize plugin tools.
 const OPENCLAW_TOOL_FACTORY_NAMES = new Set([
   "agents_list",
+  "crestodian",
   "canvas",
   "cron",
   "gateway",
@@ -40,11 +41,13 @@ const OPENCLAW_TOOL_FACTORY_NAMES = new Set([
   "sessions_spawn",
   "sessions_yield",
   "skill_workshop",
+  "spawn_task",
   "create_goal",
   "subagents",
   "tts",
   "update_goal",
   "update_plan",
+  "dismiss_task",
   "video_generate",
   "web_fetch",
   "web_search",
@@ -193,6 +196,7 @@ function resolveCodingToolConstructionPlanForAllowlist(
 export function resolveEmbeddedAttemptToolConstructionPlan(params: {
   disableTools?: boolean;
   isRawModelRun?: boolean;
+  toolsEnabled?: boolean;
   toolsAllow?: string[];
   forceMessageTool?: boolean;
 }): {
@@ -201,7 +205,13 @@ export function resolveEmbeddedAttemptToolConstructionPlan(params: {
   runtimeToolAllowlist?: string[];
   codingToolConstructionPlan: OpenClawCodingToolConstructionPlan;
 } {
-  if (params.disableTools === true || params.isRawModelRun === true) {
+  // Model capability is authoritative: forced delivery cannot materialize a
+  // tool the selected model cannot call.
+  if (
+    params.disableTools === true ||
+    params.isRawModelRun === true ||
+    params.toolsEnabled === false
+  ) {
     return {
       constructTools: false,
       includeCoreTools: false,

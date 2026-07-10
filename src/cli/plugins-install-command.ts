@@ -266,7 +266,7 @@ async function tryInstallHookPackFromLocalPath(params: {
   link?: boolean;
   expectedPackageKind?: "hook-only";
   runtime?: RuntimeEnv;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+}): Promise<{ ok: true } | Extract<InstallHooksResult, { ok: false }>> {
   if (params.snapshot.hookMutation.mode === "blocked") {
     return { ok: false, error: params.snapshot.hookMutation.reason };
   }
@@ -358,7 +358,7 @@ async function tryInstallHookPackFromNpmSpec(params: {
   expectedIntegrity?: string;
   expectedPackageKind?: "hook-only";
   runtime?: RuntimeEnv;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+}): Promise<{ ok: true } | Extract<InstallHooksResult, { ok: false }>> {
   if (params.snapshot.hookMutation.mode === "blocked") {
     return { ok: false, error: params.snapshot.hookMutation.reason };
   }
@@ -497,7 +497,7 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
       return { ok: true };
     }
     (params.runtime ?? defaultRuntime).error(
-      formatPluginInstallWithHookFallbackError(result.error, hookFallback.error),
+      formatPluginInstallWithHookFallbackError(result.error, hookFallback),
     );
     return { ok: false };
   }
@@ -1093,7 +1093,7 @@ export async function runPluginInstallCommand(params: {
         if (hookFallback.ok) {
           return;
         }
-        runtime.error(formatPluginInstallWithHookFallbackError(probe.error, hookFallback.error));
+        runtime.error(formatPluginInstallWithHookFallbackError(probe.error, hookFallback));
         return runtime.exit(1);
       }
 
@@ -1147,7 +1147,7 @@ export async function runPluginInstallCommand(params: {
       if (hookFallback.ok) {
         return;
       }
-      runtime.error(formatPluginInstallWithHookFallbackError(result.error, hookFallback.error));
+      runtime.error(formatPluginInstallWithHookFallbackError(result.error, hookFallback));
       return runtime.exit(1);
     }
 

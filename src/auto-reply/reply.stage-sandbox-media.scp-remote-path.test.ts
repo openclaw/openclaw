@@ -171,7 +171,7 @@ describe("stageSandboxMedia scp remote paths", () => {
         });
         queueMicrotask(() => {
           void fs.writeFile(localPath, "staged-image-bytes").then(() => {
-            child.emit("exit", 0);
+            child.emit("close", 0);
           });
         });
         return child;
@@ -230,7 +230,7 @@ describe("stageSandboxMedia scp remote paths", () => {
         });
         queueMicrotask(() => {
           void fs.writeFile(localPath, "staged-image-bytes").then(() => {
-            child.emit("exit", 0);
+            child.emit("close", 0);
           });
         });
         return child;

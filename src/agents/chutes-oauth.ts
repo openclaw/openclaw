@@ -2,8 +2,9 @@
  * Implements Chutes OAuth PKCE, callback parsing, token exchange, and refresh
  * for agent model authentication.
  */
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { resolveExpiresAtMsFromDurationSeconds } from "../infra/parse-finite-number.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
 import { readProviderJsonResponse, readResponseTextLimited } from "./provider-http-errors.js";
@@ -40,7 +41,7 @@ type ChutesStoredOAuth = OAuthCredentials & {
 /** Generates a PKCE verifier/challenge pair for Chutes login. */
 export function generateChutesPkce(): ChutesPkce {
   const verifier = randomBytes(32).toString("hex");
-  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  const challenge = sha256Base64Url(verifier);
   return { verifier, challenge };
 }
 

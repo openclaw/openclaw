@@ -24,11 +24,6 @@ export function approvalQuestion(operation: CrestodianOperation): string {
   return `Apply this operation: ${describeCrestodianPersistentOperation(operation)}?`;
 }
 
-/** Parse affirmative approval text accepted by the interactive dialogue. */
-export function isYes(input: string): boolean {
-  return /^(y|yes|apply|do it|approved?)$/i.test(input.trim());
-}
-
 /** Resolve user input to a Crestodian operation, optionally using the assistant planner. */
 export async function resolveCrestodianOperation(
   input: string,
@@ -42,7 +37,7 @@ export async function resolveCrestodianOperation(
   const overview = await (opts.loadOverview ?? loadCrestodianOverview)();
   const planner = opts.planWithAssistant ?? (await import("./assistant.js")).planCrestodianCommand;
   const plan = await planner({ input, overview });
-  if (!plan) {
+  if (!plan?.command) {
     return operation;
   }
   const planned = parseCrestodianOperation(plan.command);

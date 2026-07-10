@@ -11,6 +11,7 @@ import {
   type ResolvedDiscordAccount,
 } from "./accounts.js";
 import { RequestClient } from "./internal/discord.js";
+import { getGateway } from "./monitor/gateway-registry.js";
 import { resolveDiscordProxyFetchForAccount } from "./proxy-fetch.js";
 import { createDiscordRequestClient } from "./proxy-request-client.js";
 import { createDiscordRetryRunner } from "./retry.js";
@@ -148,6 +149,10 @@ export function createDiscordClient(opts: DiscordClientOpts): {
     retry: opts.retry,
     configRetry: account.config.retry,
     verbose: opts.verbose,
+    isGatewayDisconnected: () => {
+      const gateway = getGateway(account.accountId);
+      return gateway !== undefined && !gateway.isConnected;
+    },
   });
   return { token, rest, request };
 }

@@ -292,6 +292,12 @@ function createRichEntityInvalidError(entity = "EMAIL", operation = "sendRichMes
   );
 }
 
+function createRichContentRequiredError(operation = "sendRichMessage"): Error {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: RICH_MESSAGE_CONTENT_REQUIRED)`,
+  );
+}
+
 function createHtmlParseError(operation = "sendMessage"): Error {
   return new Error(
     `GrammyError: Call to '${operation}' failed! (400: Bad Request: can't parse entities: Can't find end of the entity)`,
@@ -636,6 +642,28 @@ describe("sendMessageTelegram", () => {
     expect(botApi.sendChatAction).toHaveBeenCalledWith("-1001234567890", "typing", {
       message_thread_id: 271,
     });
+  });
+
+  it("retries snippet-only network errors when sending typing", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+        },
+      },
+    });
+    botApi.sendChatAction
+      .mockRejectedValueOnce(new Error("socket hang up"))
+      .mockResolvedValue(true);
+
+    await sendTypingTelegram("telegram:group:-1001234567890", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      accountId: "default",
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+
+    expect(botApi.sendChatAction).toHaveBeenCalledTimes(2);
   });
 
   it("pins and unpins Telegram messages", async () => {
@@ -1021,6 +1049,40 @@ describe("sendMessageTelegram", () => {
     expect(richMessage?.html).toContain("<table bordered striped>");
   });
 
+  it("normalizes raw rich HTML tables before durable rich sends", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const html =
+      '<table data-source="model"><tr><td>Rank</td><td>Model</td><td>Score</td></tr><tr><td>4</td><td>Claude Opus</td><td>78.16%</td></tr></table>';
+
+    await sendMessageTelegram("123", html, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+      textMode: "html",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    const richMessage = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
+    expect(richMessage?.html).toBe(
+      "<table bordered striped><thead><tr><th>Rank</th><th>Model</th><th>Score</th></tr></thead><tbody><tr><td>4</td><td>Claude Opus</td><td>78.16%</td></tr></tbody></table>",
+    );
+  });
+
+  it("warns when raw rich HTML tables degrade to ASCII", async () => {
+    const logFile = captureInfoLogs();
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const cells = Array.from({ length: 21 }, (_, index) => `<td>C${index + 1}</td>`).join("");
+
+    await sendMessageTelegram("123", `<table><tr>${cells}</tr></table>`, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+      textMode: "html",
+    });
+
+    const richMessage = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
+    expect(richMessage?.html).toContain("<pre><code>");
+    expect(capturedLogText(logFile)).toContain("rich-degrade=table-ascii");
+  });
+
   it("skips rich entity detection for provider-prefixed email text", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
     const oauthProfileText =
@@ -1059,6 +1121,41 @@ describe("sendMessageTelegram", () => {
     expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
     expect(botApi.sendMessage).toHaveBeenCalledWith("123", text);
     expect(result).toEqual({ messageId: "46", chatId: "123" });
+  });
+
+  it("falls back to plain text when durable rich sends require nonempty content", async () => {
+    const text = "still visible after rich content rejection";
+    botRawApi.sendRichMessage.mockRejectedValueOnce(createRichContentRequiredError());
+    botApi.sendMessage.mockResolvedValueOnce({ message_id: 55, chat: { id: "123" } });
+
+    const result = await sendMessageTelegram("123", text, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(botApi.sendMessage).toHaveBeenCalledWith("123", text);
+    expect(result).toEqual({ messageId: "55", chatId: "123" });
+  });
+
+  it("uses table-aware plain text when durable rich sends fall back", async () => {
+    const logFile = captureInfoLogs();
+    const html =
+      "<table><tr><td>Rank</td><td>Model</td><td>Score</td></tr><tr><td>4</td><td>Claude Opus</td><td>78.16%</td></tr></table>";
+    botRawApi.sendRichMessage.mockRejectedValueOnce(createRichEntityInvalidError("URL"));
+    botApi.sendMessage.mockResolvedValueOnce({ message_id: 46, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", html, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+      textMode: "html",
+    });
+
+    expect(botApi.sendMessage).toHaveBeenCalledWith(
+      "123",
+      "Rank | Model | Score\n4 | Claude Opus | 78.16%",
+    );
+    expect(capturedLogText(logFile)).toContain("rich-degrade=plain-fallback:rich-entity-invalid");
   });
 
   it("chunks long plain text when durable rich sends reject an invalid entity", async () => {
@@ -1123,6 +1220,28 @@ describe("sendMessageTelegram", () => {
       expect(countTelegramRichHtmlBlocks(html)).toBeLessThanOrEqual(500);
     }
     expect(htmlChunks.join("\n")).toContain(testCase.terminalText);
+  });
+
+  it("keeps rich entity detection skip scoped to the affected chunk", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const firstChunk = Array.from(
+      { length: 700 },
+      (_, index) => `<p><a href="https://example.com/${index}">link ${index}</a></p>`,
+    )
+      .join("")
+      .trim();
+    const text = `${firstChunk}<p>OAuth profile: openai:owner@example.com</p>`;
+
+    await sendMessageTelegram("123", text, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+      textMode: "html",
+    });
+
+    expect(botRawApi.sendRichMessage.mock.calls.length).toBeGreaterThan(1);
+    const richMessages = botRawApi.sendRichMessage.mock.calls.map((call) => call[0]?.rich_message);
+    expect(richMessages[0]).not.toHaveProperty("skip_entity_detection");
+    expect(richMessages.at(-1)).toHaveProperty("skip_entity_detection", true);
   });
 
   it("chunks rich media at Telegram's attachment limit", async () => {
@@ -1401,6 +1520,24 @@ describe("sendMessageTelegram", () => {
     expect(joinedChunks).toContain("Long");
     expect(joinedChunks).toContain("section");
     expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+  });
+
+  it("reports the first Telegram chunk before a later chunk fails", async () => {
+    botApi.sendMessage
+      .mockResolvedValueOnce({ message_id: 54, chat: { id: "123" } })
+      .mockRejectedValueOnce(new Error("second chunk failed"));
+    const onDeliveryResult = vi.fn();
+    const markdown = `# Long\n\n${"**section** with _style_ and `code`\n".repeat(3000)}`;
+
+    await expect(
+      sendMessageTelegram("123", markdown, {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("second chunk failed");
+
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["54"]);
   });
 
   it("chunks long inline markdown through the HTML text path", async () => {
@@ -2285,11 +2422,12 @@ describe("sendMessageTelegram", () => {
     vi.useRealTimers();
   });
 
-  it("retries wrapped pre-connect HttpError sends", async () => {
+  it("retries wrapped Undici connect timeout sends", async () => {
     vi.useFakeTimers();
     const chatId = "123";
-    const root = Object.assign(new Error("connect ECONNREFUSED api.telegram.org"), {
-      code: "ECONNREFUSED",
+    const root = Object.assign(new Error("Connect Timeout Error"), {
+      name: "ConnectTimeoutError",
+      code: "UND_ERR_CONNECT_TIMEOUT",
     });
     const fetchError = Object.assign(new TypeError("fetch failed"), { cause: root });
     const err = Object.assign(new Error("Network request for 'sendMessage' failed!"), {

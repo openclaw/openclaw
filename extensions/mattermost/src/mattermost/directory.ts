@@ -11,7 +11,7 @@ import {
 } from "./client.js";
 import type { ChannelDirectoryEntry, OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
 
-export type MattermostDirectoryParams = {
+type MattermostDirectoryParams = {
   cfg: OpenClawConfig;
   accountId?: string | null;
   query?: string | null;

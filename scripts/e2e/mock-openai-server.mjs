@@ -1,6 +1,7 @@
 // Mock OpenAI-compatible server for broader E2E scenarios.
 import { createHash } from "node:crypto";
 import http from "node:http";
+import { escapeRegExp } from "../lib/regexp.mjs";
 import { readTcpPortEnv } from "./lib/env-limits.mjs";
 import {
   boundedRequestLogBody,
@@ -244,9 +245,7 @@ function collectFunctionCallOutputText(body) {
 }
 
 function hasDeclaredTool(bodyText, name) {
-  return new RegExp(`"name"\\s*:\\s*"${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`, "u").test(
-    bodyText,
-  );
+  return new RegExp(`"name"\\s*:\\s*"${escapeRegExp(name)}"`, "u").test(bodyText);
 }
 
 function mcpCodeModeApiFileEvents(body, bodyText) {

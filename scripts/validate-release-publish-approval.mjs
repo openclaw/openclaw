@@ -7,6 +7,24 @@ const run = JSON.parse(fs.readFileSync(0, "utf8"));
 const releasePublishRunId = process.env.RELEASE_PUBLISH_RUN_ID ?? "";
 const expectedBranch = process.env.EXPECTED_WORKFLOW_BRANCH ?? "";
 const directRecovery = process.env.DIRECT_RELEASE_RECOVERY === "true";
+const approvalPath = process.env.APPROVAL_PATH ?? "";
+
+if (approvalPath) {
+  const approval = JSON.parse(fs.readFileSync(approvalPath, "utf8"));
+  const expectedApproval = {
+    version: 1,
+    repository: process.env.GITHUB_REPOSITORY,
+    workflow: "OpenClaw Release Publish",
+    parentRunId: releasePublishRunId,
+    workflowBranch: expectedBranch,
+    releaseTag: process.env.RELEASE_TAG,
+    targetSha: process.env.RELEASE_TARGET_SHA,
+  };
+  if (JSON.stringify(approval) !== JSON.stringify(expectedApproval)) {
+    console.error("Attested Android release approval does not match this run request.");
+    process.exit(1);
+  }
+}
 
 const checks = [
   ["workflowName", "OpenClaw Release Publish"],

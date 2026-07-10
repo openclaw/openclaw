@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   _teamGroupIdCacheForTest,
   fetchChannelMessage,
+  fetchChatMessageText,
   fetchThreadReplies,
   formatThreadContext,
   resolveTeamGroupId,
@@ -122,6 +123,37 @@ describe("resolveTeamGroupId", () => {
     const result = await resolveTeamGroupId("tok", "team-fallback");
     expect(result).toBe("team-fallback");
   });
+
+  it("caps cache at 500 entries — evicts oldest on overflow", async () => {
+    vi.mocked(fetchGraphJson).mockResolvedValue({ id: "group-guid" } as never);
+
+    const token = "test-token";
+    for (let i = 0; i < 500; i++) {
+      await resolveTeamGroupId(token, `team-${i}`);
+    }
+    expect(_teamGroupIdCacheForTest.size).toBe(500);
+    expect(_teamGroupIdCacheForTest.has("team-0")).toBe(true);
+    expect(_teamGroupIdCacheForTest.has("team-499")).toBe(true);
+
+    vi.mocked(fetchGraphJson).mockClear();
+    await resolveTeamGroupId(token, "team-500");
+    expect(fetchGraphJson).toHaveBeenCalledTimes(1);
+    expect(_teamGroupIdCacheForTest.size).toBe(500);
+    expect(_teamGroupIdCacheForTest.has("team-0")).toBe(false);
+    expect(_teamGroupIdCacheForTest.has("team-500")).toBe(true);
+
+    vi.mocked(fetchGraphJson).mockClear();
+    await resolveTeamGroupId(token, "team-0");
+    expect(fetchGraphJson).toHaveBeenCalledTimes(1);
+    expect(_teamGroupIdCacheForTest.size).toBe(500);
+    expect(_teamGroupIdCacheForTest.has("team-1")).toBe(false);
+    expect(_teamGroupIdCacheForTest.has("team-500")).toBe(true);
+
+    // team-500 remains cached after team-0 is reinserted at the insertion-order tail.
+    vi.mocked(fetchGraphJson).mockClear();
+    await resolveTeamGroupId(token, "team-500");
+    expect(fetchGraphJson).toHaveBeenCalledTimes(0);
+  });
 });
 
 describe("fetchChannelMessage", () => {
@@ -158,6 +190,53 @@ describe("fetchChannelMessage", () => {
       token: "tok",
       path: "/teams/g%2F1/channels/c%2F2/messages/m%2F3?$select=id,from,body,createdDateTime",
     });
+  });
+});
+
+describe("fetchChatMessageText", () => {
+  beforeEach(() => {
+    vi.mocked(fetchGraphJson).mockReset();
+  });
+
+  it("fetches the chat message and strips HTML body to plain text", async () => {
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({
+      id: "1783379480258",
+      body: {
+        content: "<p>San Francisco right now: <at>Bot</at> full text</p>",
+        contentType: "html",
+      },
+    } as never);
+
+    const result = await fetchChatMessageText("tok", "19:chat@thread.v2", "1783379480258");
+
+    expect(result).toBe("San Francisco right now: @Bot full text");
+    expect(fetchGraphJson).toHaveBeenCalledWith({
+      token: "tok",
+      path: "/chats/19%3Achat%40thread.v2/messages/1783379480258",
+    });
+  });
+
+  it("returns trimmed plain text when body is not HTML", async () => {
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({
+      body: { content: "  plain body  ", contentType: "text" },
+    } as never);
+
+    const result = await fetchChatMessageText("tok", "19:chat", "m-1");
+    expect(result).toBe("plain body");
+  });
+
+  it("returns undefined on fetch error", async () => {
+    vi.mocked(fetchGraphJson).mockRejectedValueOnce(new Error("not found") as never);
+
+    const result = await fetchChatMessageText("tok", "19:chat", "m-1");
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined when the message has no body", async () => {
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({} as never);
+
+    const result = await fetchChatMessageText("tok", "19:chat", "m-1");
+    expect(result).toBeUndefined();
   });
 });
 

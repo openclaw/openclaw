@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -17,6 +17,7 @@ import {
   buildGatewaySessionRow,
   capArrayByJsonBytes,
   classifySessionKey,
+  deriveSessionUnread,
   deriveSessionTitle,
   getSessionDefaults,
   listAgentsForGateway,
@@ -35,6 +36,16 @@ import {
   resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "./session-utils.js";
+
+const providerArtifactMocks = vi.hoisted(() => ({
+  resolveBundledProviderPolicySurface: vi.fn<
+    typeof import("../plugins/provider-public-artifacts.js").resolveBundledProviderPolicySurface
+  >(() => null),
+}));
+
+vi.mock("../plugins/provider-public-artifacts.js", () => ({
+  resolveBundledProviderPolicySurface: providerArtifactMocks.resolveBundledProviderPolicySurface,
+}));
 
 function resolveSyncRealpath(filePath: string): string {
   return fs.realpathSync.native(filePath);
@@ -100,6 +111,12 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 }
 
 describe("gateway session utils", () => {
+  beforeEach(() => {
+    // Real artifact loading belongs to its owner tests; session projections only need the contract.
+    providerArtifactMocks.resolveBundledProviderPolicySurface.mockReset();
+    providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue(null);
+  });
+
   afterEach(() => {
     resetConfigRuntimeState();
     resetPluginRuntimeStateForTest();
@@ -108,6 +125,32 @@ describe("gateway session utils", () => {
   test("capArrayByJsonBytes trims from the front", () => {
     const res = capArrayByJsonBytes(["a", "b", "c"], 10);
     expect(res.items).toEqual(["b", "c"]);
+  });
+
+  test.each([
+    { name: "never read", entry: {}, expected: false },
+    {
+      name: "interaction after read",
+      entry: { lastReadAt: 10, lastInteractionAt: 11 },
+      expected: true,
+    },
+    {
+      name: "read after interaction",
+      entry: { lastReadAt: 11, lastInteractionAt: 10 },
+      expected: false,
+    },
+    {
+      name: "activity after read",
+      entry: { lastReadAt: 10, lastActivityAt: 11 },
+      expected: true,
+    },
+    {
+      name: "explicitly marked unread",
+      entry: { lastReadAt: 20, lastInteractionAt: 10, lastActivityAt: 10, markedUnreadAt: 1 },
+      expected: true,
+    },
+  ])("derives unread state for $name", ({ entry, expected }) => {
+    expect(deriveSessionUnread(entry)).toBe(expected);
   });
 
   test("session lists apply a bounded default and expose truncation metadata", async () => {
@@ -170,6 +213,29 @@ describe("gateway session utils", () => {
     expect(listed.limitApplied).toBe(3);
     expect(listed.nextOffset).toBe(3);
     expect(listed.hasMore).toBe(true);
+  });
+
+  test("session lists separate archived rows and sort pinned sessions first", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store = {
+      recent: { sessionId: "recent", updatedAt: 30 },
+      pinned: { sessionId: "pinned", updatedAt: 10, pinnedAt: 40 },
+      archived: { sessionId: "archived", updatedAt: 20, archivedAt: 50 },
+    } satisfies Record<string, SessionEntry>;
+
+    const active = listSessionsFromStore({ cfg, storePath: "", store, opts: {} });
+    expect(active.sessions.map((session) => session.key)).toEqual(["pinned", "recent"]);
+    expect(active.sessions[0]).toMatchObject({ pinned: true, pinnedAt: 40, archived: false });
+
+    const archived = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { archived: true },
+    });
+    expect(archived.sessions).toMatchObject([
+      { key: "archived", archived: true, archivedAt: 50, pinned: false },
+    ]);
   });
 
   test("session lists page from an offset after filtering and sorting", () => {
@@ -380,6 +446,8 @@ describe("gateway session utils", () => {
       storePath: "",
       store: {},
       key: "agent:main:main",
+      lightweightListRow: true,
+      skipTranscriptUsageFallback: true,
       entry: {
         sessionId: "session-1",
         updatedAt: 1,
@@ -549,7 +617,19 @@ describe("gateway session utils", () => {
     expect(row.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
   });
 
-  test("session defaults and rows expose bundled startup-lazy provider thinking without catalog", () => {
+  test("session defaults and rows consume provider-policy thinking without catalog", () => {
+    providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue({
+      resolveThinkingProfile: () => ({
+        levels: [
+          { id: "off" },
+          { id: "minimal" },
+          { id: "low" },
+          { id: "medium" },
+          { id: "high" },
+          { id: "xhigh" },
+        ],
+      }),
+    });
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.5" });
 
     const defaults = getSessionDefaults(cfg);
@@ -562,6 +642,9 @@ describe("gateway session utils", () => {
 
     expect(defaults.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
     expect(row.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
+    expect(providerArtifactMocks.resolveBundledProviderPolicySurface).toHaveBeenCalledWith(
+      "openai",
+    );
   });
 
   test("session defaults use configured thinking default", () => {
@@ -1602,6 +1685,32 @@ describe("gateway session utils", () => {
     });
   });
 
+  test("listAgentsForGateway reports whether each workspace is a git checkout", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-workspace-git-"));
+    const gitWorkspace = path.join(root, "git");
+    const plainWorkspace = path.join(root, "plain");
+    fs.mkdirSync(path.join(gitWorkspace, ".git"), { recursive: true });
+    fs.mkdirSync(plainWorkspace, { recursive: true });
+    const cfg = {
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: gitWorkspace },
+          { id: "plain", workspace: plainWorkspace },
+        ],
+      },
+    } as OpenClawConfig;
+    try {
+      const result = listAgentsForGateway(cfg);
+
+      expect(result.agents.map(({ id, workspaceGit }) => ({ id, workspaceGit }))).toEqual([
+        { id: "main", workspaceGit: true },
+        { id: "plain", workspaceGit: false },
+      ]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("listAgentsForGateway reports explicit plugin runtime metadata", () => {
     const cfg = {
       session: { mainKey: "main" },
@@ -2463,6 +2572,11 @@ describe("deriveSessionTitle", () => {
     expect(result.endsWith("…")).toBe(true);
   });
 
+  test("keeps a derived title valid when the limit bisects an emoji", () => {
+    const entry = { sessionId: "abc123", updatedAt: Date.now() } as SessionEntry;
+    expect(deriveSessionTitle(entry, `${"t".repeat(58)}🚀 extra`)).toBe(`${"t".repeat(58)}…`);
+  });
+
   test("truncates at word boundary when possible", () => {
     const entry = {
       sessionId: "abc123",
@@ -2509,6 +2623,34 @@ describe("deriveSessionTitle", () => {
       subject: "Actual Subject",
     } as SessionEntry;
     expect(deriveSessionTitle(entry)).toBe("Actual Subject");
+  });
+
+  test.each([
+    {
+      name: "uses a label before the first user message",
+      fields: { label: "Label via /name" },
+      firstUserMessage: "Hello, what can you do?",
+      expected: "Label via /name",
+    },
+    {
+      name: "prefers an explicit label over display and group metadata",
+      fields: {
+        displayName: "Display Name",
+        subject: "Group Subject",
+        label: "Label via /name",
+      },
+      firstUserMessage: undefined,
+      expected: "Label via /name",
+    },
+    {
+      name: "ignores a blank label",
+      fields: { label: "   " },
+      firstUserMessage: "Hello!",
+      expected: "Hello!",
+    },
+  ])("$name", ({ fields, firstUserMessage, expected }) => {
+    const entry = { sessionId: "abc123", updatedAt: Date.now(), ...fields } as SessionEntry;
+    expect(deriveSessionTitle(entry, firstUserMessage)).toBe(expected);
   });
 });
 

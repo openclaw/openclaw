@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import { normalizeXaiModelId } from "./api.js";
 
 describe("normalizeXaiModelId", () => {
+  it("normalizes the current Grok Build alias", () => {
+    expect(normalizeXaiModelId("grok-build-latest")).toBe("grok-4.5");
+  });
+
   it("maps deprecated grok 4.20 beta ids to GA ids", () => {
     expect(normalizeXaiModelId("grok-4.20-experimental-beta-0304-reasoning")).toBe(
       "grok-4.20-beta-latest-reasoning",

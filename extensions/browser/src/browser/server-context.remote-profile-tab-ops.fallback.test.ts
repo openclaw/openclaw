@@ -240,7 +240,11 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     expect(createTargetViaCdp).toHaveBeenCalledWith({
       cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
       url: "https://example.com",
-      ssrfPolicy: { allowPrivateNetwork: true },
+      ssrfPolicy: {
+        allowPrivateNetwork: true,
+        allowedHostnames: ["1.1.1.1"],
+        hostnameAllowlist: ["1.1.1.1"],
+      },
       timeouts: {
         httpTimeoutMs: 4321,
         handshakeTimeoutMs: 8765,

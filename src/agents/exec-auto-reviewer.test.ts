@@ -118,6 +118,24 @@ describe("parseExecAutoReviewResponse", () => {
       });
     }
   });
+
+  it("does not split surrogate pairs when truncating rationale", () => {
+    const rationale = "x".repeat(499) + "🚀tail";
+
+    expect(
+      parseExecAutoReviewResponse(
+        JSON.stringify({
+          decision: "ask",
+          risk: "medium",
+          rationale,
+        }),
+      ),
+    ).toEqual({
+      decision: "ask",
+      risk: "medium",
+      rationale: "x".repeat(499),
+    });
+  });
 });
 
 describe("createModelExecAutoReviewer", () => {

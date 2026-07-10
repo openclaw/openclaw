@@ -1,5 +1,8 @@
 // Codex tests cover side question plugin behavior.
-import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  nativeHookRelayTesting,
+  type NativeHookRelayRegistrationHandle,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -11,7 +14,11 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodexServerNotification, JsonObject, RpcRequest } from "./protocol.js";
+import type { CodexServerNotification, JsonObject, JsonValue, RpcRequest } from "./protocol.js";
+import {
+  createCodexTestBindingStore,
+  type CodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
 
 const readCodexAppServerBindingMock = vi.fn();
 const isCodexAppServerNativeAuthProfileMock = vi.fn();
@@ -22,12 +29,10 @@ const toolExecuteMock = vi.fn();
 const handleCodexAppServerApprovalRequestMock = vi.fn();
 const resolveCodexProviderWebSearchSupportForClientMock = vi.fn();
 
-vi.mock("./session-binding.js", () => ({
-  clearCodexAppServerBinding: vi.fn(),
+vi.mock("./session-binding.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-binding.js")>()),
   isCodexAppServerNativeAuthProfile: (...args: unknown[]) =>
     isCodexAppServerNativeAuthProfileMock(...args),
-  readCodexAppServerBinding: (...args: unknown[]) => readCodexAppServerBindingMock(...args),
-  writeCodexAppServerBinding: vi.fn(),
 }));
 
 vi.mock("./shared-client.js", () => ({
@@ -56,7 +61,20 @@ vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
   createOpenClawCodingTools: (...args: unknown[]) => createOpenClawCodingToolsMock(...args),
 }));
 
-const { testing, runCodexAppServerSideQuestion } = await import("./side-question.js");
+const { runCodexAppServerSideQuestion: runCodexAppServerSideQuestionImpl } =
+  await import("./side-question.js");
+const baseBindingStore = createCodexTestBindingStore();
+const bindingStore: CodexAppServerBindingStore = {
+  ...baseBindingStore,
+  read: async (...args) => await readCodexAppServerBindingMock(...args),
+};
+
+function runCodexAppServerSideQuestion(
+  params: Parameters<typeof runCodexAppServerSideQuestionImpl>[0],
+  options: Omit<Parameters<typeof runCodexAppServerSideQuestionImpl>[1], "bindingStore"> = {},
+) {
+  return runCodexAppServerSideQuestionImpl(params, { ...options, bindingStore });
+}
 
 type ServerRequest = Required<Pick<RpcRequest, "id" | "method">> & {
   params?: RpcRequest["params"];
@@ -294,14 +312,24 @@ function turnCompleted(threadId: string, turnId: string, text: string): CodexSer
   };
 }
 
-function turnCompletedWithNestedThread(
-  threadId: string,
-  turnId: string,
-  text: string,
-): CodexServerNotification {
-  const notification = turnCompleted(threadId, turnId, text);
-  const turn = (notification.params as JsonObject).turn;
-  return { method: notification.method, params: { threadId: "parent-thread", turn } };
+function nativeCommandItem(
+  id: string,
+  status: "inProgress" | "completed",
+  durationMs: number | null,
+) {
+  return {
+    type: "commandExecution",
+    id,
+    command: "git status --short",
+    cwd: "/tmp/workspace",
+    processId: null,
+    source: "agent",
+    status,
+    commandActions: [],
+    aggregatedOutput: status === "completed" ? "" : null,
+    exitCode: status === "completed" ? 0 : null,
+    durationMs,
+  };
 }
 
 function sideParams(overrides: Partial<Parameters<typeof runCodexAppServerSideQuestion>[0]> = {}) {
@@ -439,6 +467,7 @@ describe("runCodexAppServerSideQuestion", () => {
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
     resetDiagnosticEventsForTest();
     resetGlobalHookRunner();
+    vi.useRealTimers();
   });
 
   it("forks an ephemeral side thread and returns the completed assistant text", async () => {
@@ -583,6 +612,22 @@ describe("runCodexAppServerSideQuestion", () => {
       senderIsOwner: true,
     });
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
+  });
+
+  it("allocates one fallback run ID per side-question invocation", async () => {
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await runCodexAppServerSideQuestion(sideParams());
+    await runCodexAppServerSideQuestion(sideParams());
+
+    const runIds = createOpenClawCodingToolsMock.mock.calls.map(
+      ([options]) => (options as { runId: string }).runId,
+    );
+    expect(runIds).toHaveLength(2);
+    expect(runIds[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(runIds[1]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(new Set(runIds).size).toBe(2);
   });
 
   it("replays app-scoped reviewer policy into side-thread forks", async () => {
@@ -875,33 +920,6 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(resolveCodexProviderWebSearchSupportForClientMock).not.toHaveBeenCalled();
   });
 
-  it("returns side-thread completions scoped by nested turn thread id", async () => {
-    const client = createFakeClient();
-    client.request.mockImplementation(async (method: string) => {
-      if (method === "thread/fork") {
-        return threadResult("side-thread");
-      }
-      if (method === "thread/inject_items") {
-        return {};
-      }
-      if (method === "turn/start") {
-        queueMicrotask(() =>
-          client.emit(turnCompletedWithNestedThread("side-thread", "turn-1", "Nested answer.")),
-        );
-        return turnStartResult("turn-1");
-      }
-      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
-        return {};
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
-    getSharedCodexAppServerClientMock.mockResolvedValue(client);
-
-    const result = await runCodexAppServerSideQuestion(sideParams());
-
-    expect(result).toEqual({ text: "Nested answer." });
-  });
-
   it("rejects /btw before forking when the current OpenClaw session is sandboxed", async () => {
     await expect(
       runCodexAppServerSideQuestion(
@@ -1026,6 +1044,9 @@ describe("runCodexAppServerSideQuestion", () => {
     const turnStartCall = client.request.mock.calls.find(([method]) => method === "turn/start");
     expect(turnStartCall?.[1]).not.toHaveProperty("config");
     expect(relayIdDuringFork).toBeDefined();
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-side-1" }),
+    );
     expect(
       nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork!),
     ).toBeUndefined();
@@ -1585,6 +1606,218 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(relayId).toBe(relayIdDuringFork);
   });
 
+  it("emits a buffered native pre-tool failure when side turn startup fails", async () => {
+    const client = createFakeClient();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
+      diagnosticEvents.push(event),
+    );
+    let relayId: string | undefined;
+    let reportPreToolUseFailure:
+      | NonNullable<NativeHookRelayRegistrationHandle["onPreToolUseFailure"]>
+      | undefined;
+    client.request.mockImplementation(async (method: string, requestParams: unknown) => {
+      if (method === "thread/fork") {
+        relayId = extractRelayIdFromThreadConfig(
+          (requestParams as { config?: Record<string, unknown> }).config,
+        );
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        if (!relayId) {
+          throw new Error("Expected native hook relay id");
+        }
+        reportPreToolUseFailure =
+          nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(
+            relayId,
+          )?.onPreToolUseFailure;
+        throw new Error("side turn start exploded");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    try {
+      await expect(
+        runCodexAppServerSideQuestion(sideParams(), {
+          nativeHookRelay: { enabled: true },
+        }),
+      ).rejects.toThrow("side turn start exploded");
+      await reportPreToolUseFailure?.({
+        toolName: "exec",
+        toolCallId: "side-turn-start-failure-tool",
+        disposition: "failed",
+        durationMs: 5,
+      });
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribeDiagnostics();
+    }
+
+    expect(diagnosticEvents).toContainEqual(
+      expect.objectContaining({
+        type: "tool.execution.error",
+        toolCallId: "side-turn-start-failure-tool",
+        terminalReason: "failed",
+      }),
+    );
+  });
+
+  it("preserves a late native pre-tool failure after side turn cleanup", async () => {
+    const client = createFakeClient();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
+      diagnosticEvents.push(event),
+    );
+    let reportPreToolUseFailure:
+      | NonNullable<NativeHookRelayRegistrationHandle["onPreToolUseFailure"]>
+      | undefined;
+    client.request.mockImplementation(async (method: string, requestParams: unknown) => {
+      if (method === "thread/fork") {
+        const relayId = extractRelayIdFromThreadConfig(
+          (requestParams as { config?: Record<string, unknown> }).config,
+        );
+        reportPreToolUseFailure =
+          nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(
+            relayId,
+          )?.onPreToolUseFailure;
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
+          client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+        });
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    try {
+      await expect(
+        runCodexAppServerSideQuestion(sideParams(), {
+          nativeHookRelay: { enabled: true },
+        }),
+      ).resolves.toEqual({ text: "Side answer." });
+      await reportPreToolUseFailure?.({
+        toolName: "exec",
+        toolCallId: "late-side-tool",
+        disposition: "failed",
+        durationMs: 5,
+      });
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribeDiagnostics();
+    }
+
+    expect(diagnosticEvents).toContainEqual(
+      expect.objectContaining({
+        type: "tool.execution.error",
+        toolCallId: "late-side-tool",
+        terminalReason: "failed",
+      }),
+    );
+  });
+
+  it("coalesces a native pre-tool failure that arrives during side turn cleanup", async () => {
+    const client = createFakeClient();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
+      diagnosticEvents.push(event),
+    );
+    let reportPreToolUseFailure:
+      | NonNullable<NativeHookRelayRegistrationHandle["onPreToolUseFailure"]>
+      | undefined;
+    client.request.mockImplementation(async (method: string, requestParams: unknown) => {
+      if (method === "thread/fork") {
+        const relayId = extractRelayIdFromThreadConfig(
+          (requestParams as { config?: Record<string, unknown> }).config,
+        );
+        reportPreToolUseFailure =
+          nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(
+            relayId,
+          )?.onPreToolUseFailure;
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          client.emit({
+            method: "item/started",
+            params: {
+              threadId: "side-thread",
+              turnId: "turn-1",
+              item: nativeCommandItem("side-cleanup-failure-tool", "inProgress", null),
+            },
+          });
+          client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+        });
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe") {
+        await reportPreToolUseFailure?.({
+          toolName: "exec",
+          toolCallId: "side-cleanup-failure-tool",
+          disposition: "failed",
+          durationMs: 5,
+        });
+        return {};
+      }
+      if (method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    try {
+      await expect(
+        runCodexAppServerSideQuestion(sideParams(), {
+          nativeHookRelay: { enabled: true },
+        }),
+      ).resolves.toEqual({ text: "Side answer." });
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribeDiagnostics();
+    }
+
+    expect(
+      diagnosticEvents.filter(
+        (event) =>
+          event.type.startsWith("tool.execution.") &&
+          "toolCallId" in event &&
+          event.toolCallId === "side-cleanup-failure-tool",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        type: "tool.execution.started",
+        toolCallId: "side-cleanup-failure-tool",
+      }),
+      expect.objectContaining({
+        type: "tool.execution.error",
+        toolCallId: "side-cleanup-failure-tool",
+        errorCategory: "before_tool_call",
+        terminalReason: "failed",
+      }),
+    ]);
+    expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
+  });
+
   it("bridges side-thread dynamic tool requests to OpenClaw tools", async () => {
     const client = createFakeClient();
     let toolResponse: unknown;
@@ -1635,6 +1868,77 @@ describe("runCodexAppServerSideQuestion", () => {
       success: true,
       contentItems: [{ type: "inputText", text: "tool output" }],
     });
+  });
+
+  it("aborts active side tools before waiting for thread cleanup", async () => {
+    const client = createFakeClient();
+    let releaseUnsubscribe: (() => void) | undefined;
+    const unsubscribePending = new Promise<void>((resolve) => {
+      releaseUnsubscribe = resolve;
+    });
+    let toolAborted = false;
+    let resolveToolStarted: (() => void) | undefined;
+    const toolStarted = new Promise<void>((resolve) => {
+      resolveToolStarted = resolve;
+    });
+    toolExecuteMock.mockImplementation(
+      (_callId: string, _args: unknown, signal?: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          resolveToolStarted?.();
+          signal?.addEventListener(
+            "abort",
+            () => {
+              toolAborted = true;
+              reject(new Error("side tool aborted"));
+            },
+            { once: true },
+          );
+        }),
+    );
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        setTimeout(() => {
+          void (async () => {
+            void client.handleRequest({
+              id: 42,
+              method: "item/tool/call",
+              params: {
+                threadId: "side-thread",
+                turnId: "turn-1",
+                callId: "tool-1",
+                tool: "wiki_status",
+                arguments: {},
+              },
+            });
+            await toolStarted;
+            client.emit(turnCompleted("side-thread", "turn-1", "Finished answer."));
+          })();
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe") {
+        await unsubscribePending;
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    const run = runCodexAppServerSideQuestion(sideParams());
+    await vi.waitFor(() =>
+      expect(client.request.mock.calls.some(([method]) => method === "thread/unsubscribe")).toBe(
+        true,
+      ),
+    );
+    expect(toolAborted).toBe(true);
+    releaseUnsubscribe?.();
+    await expect(run).resolves.toEqual({ text: "Finished answer." });
   });
 
   it("clears side-thread dynamic tool diagnostics at the app-server request boundary", async () => {
@@ -1712,6 +2016,410 @@ describe("runCodexAppServerSideQuestion", () => {
       },
     ]);
     expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
+  });
+
+  it("projects native side-thread tool notifications into trusted diagnostics", async () => {
+    const client = createFakeClient();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
+      diagnosticEvents.push(event),
+    );
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        setTimeout(() => {
+          client.emit({
+            method: "item/started",
+            params: {
+              threadId: "side-thread",
+              turnId: "turn-1",
+              item: nativeCommandItem("native-tool-1", "inProgress", null),
+            },
+          });
+          client.emit({
+            method: "item/completed",
+            params: {
+              threadId: "side-thread",
+              turnId: "turn-1",
+              item: nativeCommandItem("native-tool-1", "completed", 12),
+            },
+          });
+          const webSearchItem = {
+            type: "webSearch",
+            id: "native-search-1",
+            query: "sensitive side-thread query",
+            action: {
+              type: "search",
+              query: "sensitive side-thread query",
+              queries: null,
+            },
+          };
+          client.emit({
+            method: "item/started",
+            params: { threadId: "side-thread", turnId: "turn-1", item: webSearchItem },
+          });
+          client.emit({
+            method: "item/completed",
+            params: { threadId: "side-thread", turnId: "turn-1", item: webSearchItem },
+          });
+          client.emit(turnCompleted("side-thread", "turn-1", "Native tool answer."));
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    try {
+      await runCodexAppServerSideQuestion(
+        sideParams({
+          agentId: "side-agent",
+          sessionKey: "agent:side-agent:main",
+          opts: { runId: "run-side-native-tool" },
+        }),
+      );
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribeDiagnostics();
+    }
+
+    type ToolExecutionEvent = Extract<
+      DiagnosticEventPayload,
+      {
+        type:
+          | "tool.execution.started"
+          | "tool.execution.completed"
+          | "tool.execution.error"
+          | "tool.execution.blocked";
+      }
+    >;
+    const toolEvents = diagnosticEvents.filter((event): event is ToolExecutionEvent =>
+      event.type.startsWith("tool.execution."),
+    );
+    expect(
+      toolEvents.map((event) => ({
+        type: event.type,
+        agentId: event.agentId,
+        toolName: "toolName" in event ? event.toolName : undefined,
+        toolCallId: "toolCallId" in event ? event.toolCallId : undefined,
+        durationMs: "durationMs" in event ? event.durationMs : undefined,
+      })),
+    ).toEqual([
+      {
+        type: "tool.execution.started",
+        agentId: "side-agent",
+        toolName: "bash",
+        toolCallId: "native-tool-1",
+        durationMs: undefined,
+      },
+      {
+        type: "tool.execution.completed",
+        agentId: "side-agent",
+        toolName: "bash",
+        toolCallId: "native-tool-1",
+        durationMs: 12,
+      },
+      {
+        type: "tool.execution.started",
+        agentId: "side-agent",
+        toolName: "web_search",
+        toolCallId: "native-search-1",
+        durationMs: undefined,
+      },
+      {
+        type: "tool.execution.error",
+        agentId: "side-agent",
+        toolName: "web_search",
+        toolCallId: "native-search-1",
+        durationMs: expect.any(Number),
+      },
+    ]);
+    expect(toolEvents.at(-1)).toMatchObject({
+      errorCode: "tool_outcome_unknown",
+      terminalReason: "failed",
+    });
+    expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
+    expect(JSON.stringify(toolEvents)).not.toContain("sensitive side-thread query");
+  });
+
+  it("keeps cleanup-only aborts out of unfinished native tool outcomes", async () => {
+    const client = createFakeClient();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
+      diagnosticEvents.push(event),
+    );
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        setTimeout(() => {
+          client.emit({
+            method: "item/started",
+            params: {
+              threadId: "side-thread",
+              turnId: "turn-1",
+              item: nativeCommandItem("native-tool-unfinished", "inProgress", null),
+            },
+          });
+          client.emit(turnCompleted("side-thread", "turn-1", "Native tool answer."));
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    try {
+      await runCodexAppServerSideQuestion(
+        sideParams({
+          agentId: "side-agent",
+          sessionKey: "agent:side-agent:main",
+          opts: { runId: "run-side-native-unfinished" },
+        }),
+      );
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribeDiagnostics();
+    }
+
+    expect(
+      diagnosticEvents.filter(
+        (event) =>
+          event.type.startsWith("tool.execution.") &&
+          "toolCallId" in event &&
+          event.toolCallId === "native-tool-unfinished",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        type: "tool.execution.started",
+        toolCallId: "native-tool-unfinished",
+      }),
+      expect.objectContaining({
+        type: "tool.execution.error",
+        toolCallId: "native-tool-unfinished",
+        errorCategory: "codex_native_tool_error",
+        terminalReason: "failed",
+      }),
+    ]);
+    expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
+  });
+
+  it("projects snapshot-only native side-thread tools exactly once", async () => {
+    const client = createFakeClient();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
+      diagnosticEvents.push(event),
+    );
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        setTimeout(() => {
+          const notification = turnCompleted("side-thread", "turn-1", "Snapshot answer.");
+          const turn = (notification.params as JsonObject).turn as JsonObject;
+          turn.items = [
+            nativeCommandItem("snapshot-tool-1", "completed", 19),
+            ...(turn.items as JsonValue[]),
+          ];
+          client.emit(notification);
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    try {
+      await runCodexAppServerSideQuestion(
+        sideParams({
+          agentId: "side-agent",
+          sessionKey: "agent:side-agent:main",
+          opts: { runId: "run-side-snapshot-tool" },
+        }),
+      );
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribeDiagnostics();
+    }
+
+    expect(
+      diagnosticEvents
+        .filter((event) => event.type.startsWith("tool.execution."))
+        .map((event) => ({
+          type: event.type,
+          toolCallId: "toolCallId" in event ? event.toolCallId : undefined,
+          durationMs: "durationMs" in event ? event.durationMs : undefined,
+        })),
+    ).toEqual([
+      {
+        type: "tool.execution.started",
+        toolCallId: "snapshot-tool-1",
+        durationMs: undefined,
+      },
+      {
+        type: "tool.execution.completed",
+        toolCallId: "snapshot-tool-1",
+        durationMs: 19,
+      },
+    ]);
+    expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
+  });
+
+  it("finalizes an active native side-thread tool when side completion times out", async () => {
+    vi.useFakeTimers();
+    const client = createFakeClient();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
+      diagnosticEvents.push(event),
+    );
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        setTimeout(() => {
+          client.emit({
+            method: "item/started",
+            params: {
+              threadId: "side-thread",
+              turnId: "turn-1",
+              item: nativeCommandItem("native-tool-timeout", "inProgress", null),
+            },
+          });
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    try {
+      const runResult = runCodexAppServerSideQuestion(
+        sideParams({
+          agentId: "side-agent",
+          sessionKey: "agent:side-agent:main",
+          opts: { runId: "run-side-native-timeout" },
+        }),
+      ).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(600_000);
+
+      await expect(runResult).resolves.toMatchObject({ name: "TimeoutError" });
+      await vi.runAllTimersAsync();
+      expect(diagnosticEvents).toContainEqual(
+        expect.objectContaining({
+          type: "tool.execution.error",
+          agentId: "side-agent",
+          toolCallId: "native-tool-timeout",
+          terminalReason: "timed_out",
+        }),
+      );
+      expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
+    } finally {
+      unsubscribeDiagnostics();
+    }
+  });
+
+  it("classifies an active side tool as timed out when side completion expires", async () => {
+    vi.useFakeTimers();
+    const client = createFakeClient();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
+      diagnosticEvents.push(event),
+    );
+    toolExecuteMock.mockImplementation(
+      (_callId: string, _args: unknown, signal?: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => reject(signal.reason instanceof Error ? signal.reason : new Error("aborted")),
+            { once: true },
+          );
+        }),
+    );
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        setTimeout(() => {
+          void client.handleRequest({
+            id: 42,
+            method: "item/tool/call",
+            params: {
+              threadId: "side-thread",
+              turnId: "turn-1",
+              callId: "tool-timeout",
+              tool: "wiki_status",
+              arguments: {},
+            },
+          });
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    try {
+      const runPromise = runCodexAppServerSideQuestion(
+        sideParams({
+          agentId: "side-agent",
+          sessionKey: "global",
+          opts: { runId: "run-side-timeout" },
+        }),
+      );
+      const runResult = runPromise.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(600_000);
+
+      await expect(runResult).resolves.toMatchObject({ name: "TimeoutError" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(diagnosticEvents).toContainEqual(
+        expect.objectContaining({
+          type: "tool.execution.error",
+          agentId: "side-agent",
+          toolCallId: "tool-timeout",
+          terminalReason: "timed_out",
+        }),
+      );
+    } finally {
+      unsubscribeDiagnostics();
+    }
   });
 
   it("normalizes hook channel ids for side-thread dynamic tool requests", async () => {
@@ -1833,57 +2541,6 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(result).toEqual({ text: "No input needed." });
     expect(unrelatedUserInputResponse).toBeUndefined();
     expect(userInputResponse).toEqual({ answers: {} });
-  });
-
-  it("uses configured image generation timeout for side-thread image_generate calls", () => {
-    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
-      call: {
-        threadId: "side-thread",
-        turnId: "turn-1",
-        callId: "tool-1",
-        tool: "image_generate",
-      },
-      config: {
-        agents: {
-          defaults: {
-            imageGenerationModel: {
-              timeoutMs: 123_456,
-            },
-          },
-        },
-      } as never,
-    });
-
-    expect(timeoutMs).toBe(123_456);
-  });
-
-  it("uses a 120 second default for side-thread image_generate calls", () => {
-    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
-      call: {
-        threadId: "side-thread",
-        turnId: "turn-1",
-        callId: "tool-1",
-        tool: "image_generate",
-      },
-      config: {} as never,
-    });
-
-    expect(timeoutMs).toBe(120_000);
-  });
-
-  it("uses a 90 second default for generic side-thread dynamic tool calls", () => {
-    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
-      call: {
-        threadId: "side-thread",
-        turnId: "turn-1",
-        callId: "tool-1",
-        tool: "session_status",
-        arguments: { sessionKey: "current" },
-      },
-      config: {} as never,
-    });
-
-    expect(timeoutMs).toBe(90_000);
   });
 
   it("cleans up notification handlers when side tool setup fails", async () => {

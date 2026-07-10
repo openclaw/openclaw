@@ -5,6 +5,7 @@
  */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "../../utils.js";
+import { isStringOption } from "../../utils/string-readers.js";
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit"] as const;
 const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn"] as const;
@@ -37,6 +38,9 @@ const CRON_FLAT_SCHEDULE_KEYS = [
 ] as const;
 const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "name",
+  "declarationKey",
+  "displayName",
+  "owner",
   "schedule",
   "sessionTarget",
   "wakeMode",
@@ -56,7 +60,7 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 function isCronScheduleKind(value: unknown): value is (typeof CRON_SCHEDULE_KINDS)[number] {
-  return typeof value === "string" && (CRON_SCHEDULE_KINDS as readonly string[]).includes(value);
+  return isStringOption(value, CRON_SCHEDULE_KINDS);
 }
 
 function isCronPayloadKind(value: unknown): value is (typeof CRON_PAYLOAD_KINDS)[number] {

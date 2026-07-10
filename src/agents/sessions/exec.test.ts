@@ -121,6 +121,25 @@ describe("execCommand", () => {
     expect(result.stdoutTruncatedChars).toBe(3);
   });
 
+  it("keeps caller-capped retained output UTF-16 safe", async () => {
+    const child = createStubChild();
+    const wait = createDeferred<number | null>();
+    spawnMock.mockReturnValue(child);
+    waitForChildProcessMock.mockReturnValue(wait.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const resultPromise = execCommand("cmd", [], "/tmp", { maxOutputChars: 2 });
+    child.stdout.emit("data", Buffer.from("A😀B"));
+    child.stderr.emit("data", Buffer.from("C😀D"));
+    wait.resolve(0);
+
+    const result = await resultPromise;
+    expect(result.stdout).toBe("B");
+    expect(result.stderr).toBe("D");
+    expect(result.stdoutTruncatedChars).toBe(3);
+    expect(result.stderrTruncatedChars).toBe(3);
+  });
+
   it("fails instead of silently truncating default exec output", async () => {
     const child = createStubChild();
     const wait = createDeferred<number | null>();
@@ -129,7 +148,7 @@ describe("execCommand", () => {
     const { execCommand } = await import("./exec.js");
 
     const resultPromise = execCommand("cmd", [], "/tmp");
-    child.stdout.emit("data", Buffer.from("x".repeat(16 * 1024 * 1024 + 1)));
+    child.stdout.emit("data", Buffer.from(`${"x".repeat(16 * 1024 * 1024 - 1)}😀`));
     wait.resolve(0);
 
     const result = await resultPromise;
@@ -141,8 +160,9 @@ describe("execCommand", () => {
     expect(result.code).toBe(1);
     expect(result.killed).toBe(true);
     expect(result.outputLimitExceeded).toBe("stdout");
-    expect(result.stdout.length).toBe(16 * 1024 * 1024);
-    expect(result.stdoutTruncatedChars).toBe(1);
+    expect(result.stdout.length).toBe(16 * 1024 * 1024 - 1);
+    expect(result.stdout.endsWith("x")).toBe(true);
+    expect(result.stdoutTruncatedChars).toBe(2);
     expect(result.stderr).toContain("exec stdout exceeded output limit");
   });
 
@@ -167,5 +187,20 @@ describe("execCommand", () => {
     wait.resolve(null);
     const result = await resultPromise;
     expect(result.killed).toBe(true);
+  });
+
+  it("does not crash when stdout or stderr emit an error event", async () => {
+    const child = createStubChild();
+    const wait = createDeferred<number | null>();
+    spawnMock.mockReturnValue(child);
+    waitForChildProcessMock.mockReturnValue(wait.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const resultPromise = execCommand("cmd", [], "/tmp");
+    child.stdout.emit("error", new Error("EPIPE"));
+    child.stderr.emit("error", new Error("EIO"));
+    wait.resolve(0);
+
+    await expect(resultPromise).resolves.toMatchObject({ code: 0 });
   });
 });

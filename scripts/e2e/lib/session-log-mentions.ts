@@ -3,12 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { readPositiveIntEnv } from "./env-limits.mjs";
 
-export type SessionLogMentionLimits = {
+type SessionLogMentionLimits = {
   fileMaxBytes: number;
   totalMaxBytes: number;
 };
 
-export type SessionLogNeedles = Record<string, string>;
+type SessionLogNeedles = Record<string, string>;
 
 const DEFAULT_FILE_MAX_BYTES = 4 * 1024 * 1024;
 const DEFAULT_TOTAL_MAX_BYTES = 16 * 1024 * 1024;

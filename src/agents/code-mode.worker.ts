@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { EvalFlags, Intrinsics, JSException, QuickJS, type JSValueHandle } from "quickjs-wasi";
 const require = createRequire(import.meta.url);
 const QUICKJS_WASM_PATH = require.resolve("quickjs-wasi/quickjs.wasm");
@@ -149,10 +150,6 @@ function getQuickJsWasmModule(): Promise<WebAssembly.Module> {
     WebAssembly.compile(bytes),
   );
   return quickJsWasmModulePromise;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 // QuickJS error stacks are backtrace frames only ("    at file:line:col"), with

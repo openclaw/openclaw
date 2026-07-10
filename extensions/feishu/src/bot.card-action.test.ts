@@ -511,6 +511,30 @@ describe("Feishu Card Action Handler", () => {
     expect(handleMessage().chat_type).toBe("p2p");
   });
 
+  it("keeps Feishu chat lookup error logs UTF-16 safe at the truncation boundary", async () => {
+    const log = vi.fn();
+    createFeishuClientMock.mockReturnValueOnce({
+      im: {
+        chat: {
+          get: vi
+            .fn()
+            .mockResolvedValue({ code: 99, msg: `${"x".repeat(499)}😀tail` }),
+        },
+      },
+    });
+    const event = createCardActionEvent({
+      token: "tok9d-utf16",
+      chatId: "oc_unknown_chat_utf16",
+      actionValue: { text: "/help" },
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime: { ...runtime, log } });
+
+    expect(log).toHaveBeenCalledWith(
+      `feishu[mock-account]: failed to resolve chat type: ${"x".repeat(499)}; defaulting to p2p`,
+    );
+  });
+
   it("falls back to p2p when Feishu chat API throws", async () => {
     createFeishuClientMock.mockReturnValueOnce({
       im: {

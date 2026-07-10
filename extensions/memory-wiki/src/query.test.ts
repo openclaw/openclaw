@@ -716,6 +716,31 @@ describe("searchMemoryWiki", () => {
     });
   });
 
+  it("reports a contract error when the shared manager lacks search()", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: {
+        search: { backend: "shared", corpus: "all" },
+      },
+    });
+    // Partial manager as registered by @mem0/openclaw-mem0 <= 1.0.14.
+    const partialManager = {
+      status: vi.fn().mockReturnValue({ backend: "builtin", provider: "builtin" }),
+      probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager: partialManager });
+
+    await expect(
+      searchMemoryWiki({
+        config,
+        appConfig: createAppConfig(),
+        query: "alpha",
+        maxResults: 5,
+      }),
+    ).rejects.toThrow("does not implement search() from the MemorySearchManager contract");
+  });
+
   it("includes memory results and backfills wiki capacity for all-corpus search", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,
@@ -1538,6 +1563,28 @@ describe("getMemoryWikiPage", () => {
       from: 2,
       lines: 2,
     });
+  });
+
+  it("reports a contract error when the shared manager lacks readFile()", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: {
+        search: { backend: "shared", corpus: "memory" },
+      },
+    });
+    const partialManager = {
+      search: vi.fn().mockResolvedValue([]),
+      status: vi.fn().mockReturnValue({ backend: "builtin", provider: "builtin" }),
+    };
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager: partialManager });
+
+    await expect(
+      getMemoryWikiPage({
+        config,
+        appConfig: createAppConfig(),
+        lookup: "MEMORY.md",
+      }),
+    ).rejects.toThrow("does not implement readFile() from the MemorySearchManager contract");
   });
 
   it("defaults non-finite memory line options before memory reads", async () => {

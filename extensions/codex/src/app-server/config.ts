@@ -1,7 +1,7 @@
 // Codex helper module supports config behavior.
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { hostname as readHostName } from "node:os";
+import { homedir as readHomeDir, hostname as readHostName } from "node:os";
 import path from "node:path";
 import {
   resolveProviderIdForAuth,
@@ -21,7 +21,13 @@ import {
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
-import type { CodexSandboxPolicy, CodexServiceTier, JsonObject, JsonValue } from "./protocol.js";
+import type {
+  CodexApprovalPolicy,
+  CodexSandboxPolicy,
+  CodexServiceTier,
+  JsonObject,
+  JsonValue,
+} from "./protocol.js";
 
 const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStartOptionsKeySecret");
 const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
@@ -32,6 +38,7 @@ const CODEX_CONFIG_TOML_FILENAME = "config.toml";
 const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
 type CodexAppServerTransportMode = "stdio" | "websocket";
+export type CodexAppServerHomeScope = "agent" | "user";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
 export type CodexAppServerConnectionClass = "local-loopback" | "remote";
 export type CodexAppServerRemoteAppsSubstrate = "preconfigured";
@@ -57,19 +64,9 @@ type CodexAppServerDefaultPolicy = {
   sandbox?: CodexAppServerSandboxMode;
   dangerFullAccessAllowed?: boolean;
 };
-export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
+export type CodexAppServerApprovalPolicy = "never" | "on-request" | "untrusted";
 export type CodexAppServerApprovalPolicySource = "config" | "env" | "requirements" | "implicit";
-export type CodexAppServerEffectiveApprovalPolicy =
-  | CodexAppServerApprovalPolicy
-  | {
-      granular: {
-        mcp_elicitations: boolean;
-        rules: boolean;
-        sandbox_approval: boolean;
-        request_permissions?: boolean;
-        skill_approval?: boolean;
-      };
-    };
+export type CodexAppServerEffectiveApprovalPolicy = CodexApprovalPolicy;
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
@@ -110,6 +107,7 @@ export type CodexPluginEntryConfig = {
 
 export type CodexPluginsConfig = {
   enabled?: boolean;
+  allow_all_plugins?: boolean;
   allow_destructive_actions?: CodexPluginDestructivePolicy;
   plugins?: Record<string, CodexPluginEntryConfig>;
 };
@@ -158,6 +156,7 @@ export type ResolvedCodexPluginPolicy = {
 export type ResolvedCodexPluginsPolicy = {
   configured: boolean;
   enabled: boolean;
+  allowAllPlugins: boolean;
   allowDestructiveActions: boolean;
   destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
   pluginPolicies: ResolvedCodexPluginPolicy[];
@@ -165,6 +164,7 @@ export type ResolvedCodexPluginsPolicy = {
 
 export type CodexAppServerStartOptions = {
   transport: CodexAppServerTransportMode;
+  homeScope?: CodexAppServerHomeScope;
   command: string;
   commandSource?: CodexAppServerCommandSource;
   managedFallbackCommandPaths?: string[];
@@ -200,6 +200,7 @@ export type CodexModelBackedReviewerContext = {
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
   codexConfigToml?: string | null;
+  homeScope?: CodexAppServerHomeScope;
 };
 
 export type CodexPluginConfig = {
@@ -214,6 +215,7 @@ export type CodexPluginConfig = {
   appServer?: {
     mode?: CodexAppServerPolicyMode;
     transport?: CodexAppServerTransportMode;
+    homeScope?: CodexAppServerHomeScope;
     command?: string;
     args?: string[] | string;
     url?: string;
@@ -248,6 +250,7 @@ export function shouldAutoApproveCodexAppServerApprovals(
 export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "mode",
   "transport",
+  "homeScope",
   "command",
   "args",
   "url",
@@ -283,6 +286,7 @@ export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
 
 export const CODEX_PLUGINS_CONFIG_KEYS = [
   "enabled",
+  "allow_all_plugins",
   "allow_destructive_actions",
   "plugins",
 ] as const;
@@ -300,14 +304,15 @@ const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
 const DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX = "openclaw-network";
 
 const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
+const codexAppServerHomeScopeSchema = z.enum(["agent", "user"]);
 const SecretInputSchema = buildSecretInputSchema();
 const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
-const codexAppServerApprovalPolicySchema = z.enum([
-  "never",
-  "on-request",
-  "on-failure",
-  "untrusted",
-]);
+const codexAppServerApprovalPolicySchema = z.preprocess(
+  // Preserve the rest of a shipped plugin config until doctor persists the
+  // canonical value. Rejecting this field would discard the whole config.
+  (value) => (value === "on-failure" ? "on-request" : value),
+  z.enum(["never", "on-request", "untrusted"]),
+);
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
 const codexDynamicToolsLoadingSchema = z.enum(["searchable", "direct"]);
@@ -363,6 +368,7 @@ const codexPluginEntryConfigSchema = z
 const codexPluginsConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
+    allow_all_plugins: z.boolean().optional(),
     allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
     plugins: z.record(z.string(), codexPluginEntryConfigSchema).optional(),
   })
@@ -397,6 +403,7 @@ const codexPluginConfigSchema = z
       .object({
         mode: codexAppServerPolicyModeSchema.optional(),
         transport: codexAppServerTransportSchema.optional(),
+        homeScope: codexAppServerHomeScopeSchema.optional(),
         command: z.string().optional(),
         args: z.union([z.array(z.string()), z.string()]).optional(),
         url: z.string().optional(),
@@ -489,6 +496,7 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
   return {
     configured,
     enabled,
+    allowAllPlugins: enabled && config?.allow_all_plugins === true,
     allowDestructiveActions: destructivePolicy.allowDestructiveActions,
     destructiveApprovalMode: destructivePolicy.destructiveApprovalMode,
     pluginPolicies,
@@ -530,6 +538,7 @@ export function resolveCodexAppServerRuntimeOptions(
   const env = params.env ?? process.env;
   const config = readCodexPluginConfig(params.pluginConfig).appServer ?? {};
   const transport = resolveTransport(config.transport);
+  const homeScope: CodexAppServerHomeScope = config.homeScope === "user" ? "user" : "agent";
   const configCommand = readNonEmptyString(config.command);
   const envCommand = readNonEmptyString(env.OPENCLAW_CODEX_APP_SERVER_BIN);
   const command = configCommand ?? envCommand ?? "codex";
@@ -572,6 +581,7 @@ export function resolveCodexAppServerRuntimeOptions(
     env,
     agentDir: params.agentDir,
     codexConfigToml: params.codexConfigToml,
+    homeScope,
   });
   const explicitModelBackedReviewer =
     explicitApprovalsReviewer === "auto_review" ||
@@ -644,6 +654,11 @@ export function resolveCodexAppServerRuntimeOptions(
       "plugins.entries.codex.config.appServer.url is required when appServer.transport is websocket",
     );
   }
+  if (transport === "websocket" && homeScope === "user") {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.homeScope=user requires appServer.transport=stdio",
+    );
+  }
   assertCodexAppServerConnectionClassConfig({
     connectionClass,
     authToken,
@@ -668,6 +683,7 @@ export function resolveCodexAppServerRuntimeOptions(
   return {
     start: {
       transport,
+      homeScope,
       command,
       commandSource,
       args: args.length > 0 ? args : ["app-server", "--listen", "stdio://"],
@@ -748,6 +764,7 @@ export function isTrustedCodexModelBackedOpenAIProvider(params: {
   model?: string;
   agentDir?: string;
   codexConfigToml?: string | null;
+  homeScope?: CodexAppServerHomeScope;
 }): boolean {
   if (!openAIBaseUrlEnvOverridesAreTrustedForModelBackedReview(params.env)) {
     return false;
@@ -1032,6 +1049,8 @@ export function withMcpElicitationsApprovalPolicy(
         mcp_elicitations: true,
         rules: false,
         sandbox_approval: false,
+        request_permissions: false,
+        skill_approval: false,
       },
     };
   }
@@ -1040,6 +1059,8 @@ export function withMcpElicitationsApprovalPolicy(
       mcp_elicitations: true,
       rules: true,
       sandbox_approval: true,
+      request_permissions: true,
+      skill_approval: true,
     },
   };
 }
@@ -1458,6 +1479,11 @@ function normalizeRequirementsApprovalPolicy(
   value: string,
 ): CodexAppServerApprovalPolicy | undefined {
   const normalized = value.trim().toLowerCase();
+  // Codex 0.143 keeps this deprecated requirements-file alias in its core
+  // parser, but app-server exposes only the canonical on-request value.
+  if (normalized === "on-failure") {
+    return "on-request";
+  }
   return resolveApprovalPolicy(normalized);
 }
 
@@ -1479,9 +1505,6 @@ function selectGuardianApprovalPolicy(
     throw new Error(
       `tools.exec.mode=${execModeRequiringPromptingApprovals} requires Codex app-server prompting approvals`,
     );
-  }
-  if (allowedApprovalPolicies.has("on-failure")) {
-    return "on-failure";
   }
   if (allowedApprovalPolicies.has("untrusted")) {
     return "untrusted";
@@ -1542,12 +1565,16 @@ function isTrustedCodexModelBackedApprovalsReviewerProvider(
       model: params.model,
       agentDir: params.agentDir,
       codexConfigToml: params.codexConfigToml,
+      homeScope: params.homeScope,
     })
   );
 }
 
 function readCodexBaseUrlOverridesForModelBackedReview(
-  params: Pick<CodexModelBackedReviewerContext, "agentDir" | "codexConfigToml">,
+  params: Pick<
+    CodexModelBackedReviewerContext,
+    "agentDir" | "codexConfigToml" | "env" | "homeScope"
+  >,
 ): { openAI: string[]; chatGPT: string[] } | false {
   const configToml = readCodexAppServerConfigToml(params);
   if (configToml === false) {
@@ -1577,7 +1604,10 @@ function readCodexBaseUrlOverridesForModelBackedReview(
 }
 
 function readCodexAppServerConfigToml(
-  params: Pick<CodexModelBackedReviewerContext, "agentDir" | "codexConfigToml">,
+  params: Pick<
+    CodexModelBackedReviewerContext,
+    "agentDir" | "codexConfigToml" | "env" | "homeScope"
+  >,
 ): string | undefined | false {
   if (params.codexConfigToml !== undefined) {
     return params.codexConfigToml ?? undefined;
@@ -1594,13 +1624,25 @@ function readCodexAppServerConfigToml(
 }
 
 function resolveCodexAppServerConfigPath(
-  params: Pick<CodexModelBackedReviewerContext, "agentDir">,
+  params: Pick<CodexModelBackedReviewerContext, "agentDir" | "env" | "homeScope">,
 ): string | undefined {
+  if (params.homeScope === "user") {
+    return path.join(resolveCodexAppServerUserHomeDir(params.env), CODEX_CONFIG_TOML_FILENAME);
+  }
   const agentDir = readNonEmptyString(params.agentDir);
   const codexHome = agentDir
     ? path.join(path.resolve(agentDir), CODEX_APP_SERVER_HOME_DIRNAME)
     : undefined;
   return codexHome ? path.join(codexHome, CODEX_CONFIG_TOML_FILENAME) : undefined;
+}
+
+/** Resolves the native user Codex home used by Desktop and the CLI. */
+export function resolveCodexAppServerUserHomeDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = readHomeDir,
+): string {
+  const configured = readNonEmptyString(env.CODEX_HOME);
+  return path.resolve(configured ?? path.join(homedir(), ".codex"));
 }
 
 function readErrorCode(error: unknown): string | undefined {
@@ -1770,12 +1812,10 @@ function selectGuardianSandbox(
 }
 
 function resolveApprovalPolicy(value: unknown): CodexAppServerApprovalPolicy | undefined {
-  return value === "on-request" ||
-    value === "on-failure" ||
-    value === "untrusted" ||
-    value === "never"
-    ? value
-    : undefined;
+  if (value === "on-failure") {
+    return "on-request";
+  }
+  return value === "on-request" || value === "untrusted" || value === "never" ? value : undefined;
 }
 
 function resolveSandbox(value: unknown): CodexAppServerSandboxMode | undefined {

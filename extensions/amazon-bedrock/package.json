@@ -8,12 +8,12 @@
   },
   "type": "module",
   "dependencies": {
-    "@aws-sdk/client-bedrock": "3.1056.0",
-    "@aws-sdk/client-bedrock-runtime": "3.1056.0",
-    "@aws-sdk/credential-provider-node": "3.972.52",
-    "@smithy/node-http-handler": "4.7.7",
-    "@smithy/shared-ini-file-loader": "4.5.5",
-    "@smithy/types": "4.14.3"
+    "@aws-sdk/client-bedrock": "3.1078.0",
+    "@aws-sdk/client-bedrock-runtime": "3.1078.0",
+    "@aws-sdk/credential-provider-node": "3.972.61",
+    "@smithy/node-http-handler": "4.9.2",
+    "@smithy/shared-ini-file-loader": "4.6.5",
+    "@smithy/types": "4.15.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

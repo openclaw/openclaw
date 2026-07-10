@@ -144,6 +144,19 @@ describe("config schema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts queued status reaction emoji overrides", () => {
+    const result = OpenClawSchema.safeParse({
+      messages: {
+        statusReactions: {
+          emojis: {
+            queued: "👁️",
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("includes MCP SSE header schema under mcp.servers entries", () => {
     const schema = baseSchema.schema as {
       properties?: Record<string, unknown>;

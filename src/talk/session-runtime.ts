@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type {
   RealtimeVoiceBridge,
+  RealtimeVoiceAudioClearReason,
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBargeInOptions,
   RealtimeVoiceCloseReason,
@@ -20,7 +21,7 @@ import type {
 export type RealtimeVoiceAudioSink = {
   isOpen?: () => boolean;
   sendAudio: (audio: Buffer) => void;
-  clearAudio?: () => void;
+  clearAudio?: (reason?: RealtimeVoiceAudioClearReason) => void;
   sendMark?: (markName: string) => void;
 };
 
@@ -113,9 +114,9 @@ export function createRealtimeVoiceBridgeSession(
         params.audioSink.sendAudio(audio);
       }
     },
-    onClearAudio: () => {
+    onClearAudio: (reason) => {
       if (canSendAudio()) {
-        params.audioSink.clearAudio?.();
+        params.audioSink.clearAudio?.(reason);
       }
     },
     onMark: (markName) => {

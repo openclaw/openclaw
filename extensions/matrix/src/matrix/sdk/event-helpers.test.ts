@@ -41,6 +41,14 @@ describe("event-helpers", () => {
     expect(fromText.statusCode).toBe(500);
   });
 
+  it("keeps truncated HTTP error bodies UTF-16 safe", () => {
+    const parsedPrefix = `{"detail":"${"a".repeat(488)}`;
+    const invalidPrefix = `not-json ${"b".repeat(490)}`;
+
+    expect(buildHttpError(500, `${parsedPrefix}😀"}`).message).toBe(parsedPrefix);
+    expect(buildHttpError(502, `${invalidPrefix}🎉tail`).message).toBe(invalidPrefix);
+  });
+
   it("serializes Matrix events and resolves state key from available sources", () => {
     const viaGetter = {
       getId: () => "$1",

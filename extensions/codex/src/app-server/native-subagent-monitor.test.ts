@@ -793,6 +793,134 @@ describe("CodexNativeSubagentMonitor", () => {
     );
   });
 
+  it("runs deferred parent cleanup after native subagent delivery settles", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const monitor = new CodexNativeSubagentMonitor(client, runtime);
+    const cleanup = vi.fn();
+    monitor.registerParent({
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:main",
+      taskRuntimeScope: createTaskScope("agent:main:main"),
+      agentId: "main",
+    });
+
+    await notifyChildStarted(client);
+    monitor.deferUntilParentSettles("parent-thread", cleanup);
+    expect(cleanup).not.toHaveBeenCalled();
+
+    await client.notify(
+      nativeCompletionNotification({
+        agentPath: "child-thread",
+        statusLabel: "completed",
+        result: "child final result",
+      }),
+    );
+
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("leaves immediate parent cleanup with the caller", () => {
+    const client = createClient();
+    const monitor = new CodexNativeSubagentMonitor(client, createRuntime());
+    const cleanup = vi.fn();
+    monitor.registerParent({
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:main",
+      taskRuntimeScope: createTaskScope("agent:main:main"),
+      agentId: "main",
+    });
+
+    expect(monitor.deferUntilParentSettles("parent-thread", cleanup)).toBe(false);
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+
+  it("runs deferred parent cleanup when an interrupted child has no completion to deliver", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const monitor = new CodexNativeSubagentMonitor(client, runtime);
+    const cleanup = vi.fn();
+    monitor.registerParent({
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:main",
+      taskRuntimeScope: createTaskScope("agent:main:main"),
+      agentId: "main",
+    });
+
+    await notifyChildStarted(client);
+    monitor.deferUntilParentSettles("parent-thread", cleanup);
+    await client.notify(childTurnCompletedNotification({ status: "interrupted" }));
+
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+  });
+
+  it("runs deferred parent cleanup when a child ends in a system error", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const monitor = new CodexNativeSubagentMonitor(client, runtime);
+    const cleanup = vi.fn();
+    monitor.registerParent({
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:main",
+      taskRuntimeScope: createTaskScope("agent:main:main"),
+      agentId: "main",
+    });
+
+    await notifyChildStarted(client);
+    monitor.deferUntilParentSettles("parent-thread", cleanup);
+    await client.notify({
+      method: "thread/status/changed",
+      params: {
+        threadId: "child-thread",
+        status: { type: "systemError" },
+      },
+    });
+
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+  });
+
+  it("waits again when an interrupted child starts another turn before cleanup is deferred", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const monitor = new CodexNativeSubagentMonitor(client, runtime);
+    const cleanup = vi.fn();
+    monitor.registerParent({
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:main",
+      taskRuntimeScope: createTaskScope("agent:main:main"),
+      agentId: "main",
+    });
+
+    await notifyChildStarted(client);
+    await client.notify(childTurnCompletedNotification({ status: "interrupted" }));
+    await client.notify({
+      method: "turn/started",
+      params: {
+        threadId: "child-thread",
+        turn: {
+          id: "resumed-child-turn",
+          status: "inProgress",
+          items: [],
+          error: null,
+        },
+      },
+    });
+    monitor.deferUntilParentSettles("parent-thread", cleanup);
+    expect(cleanup).not.toHaveBeenCalled();
+
+    await client.notify(
+      nativeCompletionNotification({
+        agentPath: "child-thread",
+        statusLabel: "completed",
+        result: "resumed child final result",
+      }),
+    );
+
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
   it("reconciles transcript final text before delivering empty Codex completion notifications", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-subagent-"));
     const codexHome = path.join(tempDir, "codex-home");

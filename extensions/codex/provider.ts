@@ -36,6 +36,7 @@ const CODEX_APP_SERVER_SETUP_METHOD_ID = "app-server";
 const CODEX_DEFAULT_MODEL_REF = `${CODEX_PROVIDER_ID}/${FALLBACK_CODEX_MODELS[0].id}`;
 const codexCatalogLog = createSubsystemLogger("codex/catalog");
 const CODEX_REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const GPT_5_PRO_REASONING_EFFORTS = ["medium", "high", "xhigh"] as const;
 
 export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
 
@@ -310,6 +311,10 @@ function resolveCodexThinkingEfforts(params: {
   if (params.supportedReasoningEfforts) {
     return normalizeCodexReasoningEfforts(params.supportedReasoningEfforts);
   }
+  const fallbackEfforts = resolveCodexFallbackReasoningEfforts(params.modelId);
+  if (fallbackEfforts) {
+    return [...fallbackEfforts];
+  }
   return [
     "minimal",
     "low",
@@ -336,17 +341,26 @@ export function resolveCodexSupportedReasoningEffort(params: {
   );
 }
 
-/**
- * Returns true for Codex models that use the modern reasoning effort enum and
- * reject the legacy CLI `minimal` default.
- */
+/** Return the known effort contract when app-server model metadata is unavailable. */
+export function resolveCodexFallbackReasoningEfforts(
+  modelId: string,
+): readonly CodexReasoningEffort[] | undefined {
+  const normalized = modelId.trim().toLowerCase();
+  return normalized === "gpt-5.5-pro" || normalized === "gpt-5.4-pro"
+    ? GPT_5_PRO_REASONING_EFFORTS
+    : undefined;
+}
+
+/** Return whether the model uses the modern Codex reasoning profile. */
 export function isModernCodexModel(modelId: string): boolean {
   const lower = modelId.trim().toLowerCase();
   return (
     lower === "gpt-5.6" ||
     lower.startsWith("gpt-5.6-") ||
     lower === "gpt-5.5" ||
+    lower === "gpt-5.5-pro" ||
     lower === "gpt-5.4" ||
+    lower === "gpt-5.4-pro" ||
     lower === "gpt-5.4-mini" ||
     lower === "gpt-5.3-codex-spark"
   );

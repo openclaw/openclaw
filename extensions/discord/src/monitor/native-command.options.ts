@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/native-command-registry";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { AutocompleteInteraction, CommandOptions } from "../internal/discord.js";
 
 const log = createSubsystemLogger("discord/native-command");
@@ -27,7 +28,7 @@ export function truncateDiscordCommandDescription(params: {
   log.warn(
     `discord: truncating native command description (${label}) from ${value.length} to ${DISCORD_COMMAND_DESCRIPTION_MAX}: ${JSON.stringify(value)}`,
   );
-  return value.slice(0, DISCORD_COMMAND_DESCRIPTION_MAX);
+  return truncateUtf16Safe(value, DISCORD_COMMAND_DESCRIPTION_MAX);
 }
 
 export function truncateDiscordCommandDescriptionLocalizations(params: {

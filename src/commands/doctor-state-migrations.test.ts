@@ -170,6 +170,12 @@ vi.mock("../infra/json-files.js", async () => {
   };
 });
 
+vi.mock("../plugins/doctor-contract-registry.js", () => ({
+  collectRelevantDoctorPluginIds: vi.fn(() => []),
+  listPluginDoctorSessionStoreAgentIds: vi.fn(() => []),
+  listPluginDoctorStateMigrationEntries: vi.fn(() => []),
+}));
+
 async function makeTempRoot() {
   const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-"));
   tempRoots.push(root);

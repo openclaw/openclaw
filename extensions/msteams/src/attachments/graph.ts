@@ -1,4 +1,8 @@
 // Msteams plugin module implements graph behavior.
+import {
+  readProviderJsonArrayFieldResponse,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -14,7 +18,6 @@ import {
   applyAuthorizationHeaderForUrl,
   encodeGraphShareId,
   GRAPH_ROOT,
-  estimateBase64DecodedBytes,
   inferPlaceholder,
   readNestedString,
   isUrlAllowed,
@@ -38,7 +41,6 @@ import type {
 type GraphHostedContent = {
   id?: string | null;
   contentType?: string | null;
-  contentBytes?: string | null;
 };
 
 type GraphAttachment = {
@@ -143,8 +145,12 @@ async function fetchGraphCollection(params: {
       return { status, items: [] };
     }
     try {
-      const data = (await response.json()) as { value?: unknown[] };
-      return { status, items: Array.isArray(data.value) ? data.value : [] };
+      const items = await readProviderJsonArrayFieldResponse(
+        response,
+        "MS Teams Graph collection",
+        "value",
+      );
+      return { status, items };
     } catch {
       return { status, items: [] };
     }
@@ -196,85 +202,46 @@ async function downloadGraphHostedContent(params: {
 
   const out: MSTeamsInboundMedia[] = [];
   for (const item of hosted.items) {
-    const contentBytes = typeof item.contentBytes === "string" ? item.contentBytes : "";
-    let buffer: Buffer;
-    if (contentBytes) {
-      if (estimateBase64DecodedBytes(contentBytes) > params.maxBytes) {
-        continue;
-      }
-      try {
-        buffer = Buffer.from(contentBytes, "base64");
-      } catch (err) {
-        params.logger?.warn?.("msteams graph hostedContent base64 decode failed", {
-          error: err instanceof Error ? err.message : String(err),
-        });
-        continue;
-      }
-    } else if (item.id) {
-      // contentBytes not inline — fetch from the individual $value endpoint.
-      try {
-        const valueUrl = `${params.messageUrl}/hostedContents/${encodeURIComponent(item.id)}/$value`;
-        const { response: valRes, release } = await fetchWithSsrFGuard({
-          url: valueUrl,
-          fetchImpl: params.fetchFn ?? fetch,
-          init: {
-            headers: ensureUserAgentHeader({ Authorization: `Bearer ${params.accessToken}` }),
-          },
-          policy: params.ssrfPolicy,
-          auditContext: "msteams.graph.hostedContent.value",
-        });
-        try {
-          if (!valRes.ok) {
-            continue;
-          }
-          const saved = await getMSTeamsRuntime().channel.media.saveResponseMedia(valRes, {
-            sourceUrl: valueUrl,
-            maxBytes: params.maxBytes,
-            fallbackContentType: item.contentType ?? undefined,
-            subdir: "inbound",
-          });
-          out.push({
-            path: saved.path,
-            contentType: saved.contentType,
-            placeholder: inferPlaceholder({ contentType: saved.contentType }),
-          });
-        } finally {
-          await release();
-        }
-      } catch (err) {
-        params.logger?.warn?.("msteams graph hostedContent value fetch failed", {
-          error: err instanceof Error ? err.message : String(err),
-        });
-        continue;
-      }
-      continue;
-    } else {
+    if (!item.id) {
       continue;
     }
-    if (buffer.byteLength > params.maxBytes) {
-      continue;
-    }
-    const mime = await getMSTeamsRuntime().media.detectMime({
-      buffer,
-      headerMime: item.contentType ?? undefined,
-    });
-    // Download any file type, not just images
+
+    // Graph's list API returns metadata only; hosted bytes live at `$value`.
+    // Keep the JSON cap independent from the configured binary media limit.
     try {
-      const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
-        buffer,
-        mime ?? item.contentType ?? undefined,
-        "inbound",
-        params.maxBytes,
-      );
-      out.push({
-        path: saved.path,
-        contentType: saved.contentType,
-        placeholder: inferPlaceholder({ contentType: saved.contentType }),
+      const valueUrl = `${params.messageUrl}/hostedContents/${encodeURIComponent(item.id)}/$value`;
+      const { response: valRes, release } = await fetchWithSsrFGuard({
+        url: valueUrl,
+        fetchImpl: params.fetchFn ?? fetch,
+        init: {
+          headers: ensureUserAgentHeader({ Authorization: `Bearer ${params.accessToken}` }),
+        },
+        policy: params.ssrfPolicy,
+        auditContext: "msteams.graph.hostedContent.value",
       });
+      try {
+        if (!valRes.ok) {
+          continue;
+        }
+        const saved = await getMSTeamsRuntime().channel.media.saveResponseMedia(valRes, {
+          sourceUrl: valueUrl,
+          maxBytes: params.maxBytes,
+          fallbackContentType: item.contentType ?? undefined,
+          subdir: "inbound",
+        });
+        out.push({
+          path: saved.path,
+          contentType: saved.contentType,
+          placeholder: inferPlaceholder({ contentType: saved.contentType }),
+        });
+      } finally {
+        await release();
+      }
     } catch (err) {
-      params.logger?.warn?.("msteams graph hostedContent save failed", {
+      params.logger?.warn?.("msteams graph hostedContent value fetch failed", {
         error: err instanceof Error ? err.message : String(err),
       });
+      continue;
     }
   }
 
@@ -345,7 +312,10 @@ export async function downloadMSTeamsGraphMedia(params: {
           attachments?: GraphAttachment[];
         };
         try {
-          msgData = (await msgRes.json()) as typeof msgData;
+          msgData = await readProviderJsonResponse<typeof msgData>(
+            msgRes,
+            "MS Teams Graph message",
+          );
         } catch (err) {
           debugLog?.debug?.("graph media message parse failed", {
             messageUrl,

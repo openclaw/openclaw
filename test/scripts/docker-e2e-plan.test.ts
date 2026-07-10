@@ -97,6 +97,42 @@ function bundledPluginSweepLane(index: number): ReturnType<typeof summarizeLane>
 }
 
 describe("scripts/lib/docker-e2e-plan", () => {
+  it("plans package-backed Compose and package artifact proofs", () => {
+    const plan = planFor({
+      selectedLaneNames: ["compose-setup", "docker-package-install"],
+    });
+
+    expect(plan.lanes.map(summarizeLane)).toEqual([
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:compose-setup",
+        imageKind: "functional",
+        live: false,
+        name: "compose-setup",
+        resources: ["docker", "service"],
+        stateScenario: "empty",
+        timeoutMs: 1_200_000,
+        weight: 3,
+      },
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:package-install",
+        imageKind: "bare",
+        live: false,
+        name: "docker-package-install",
+        resources: ["docker", "npm"],
+        stateScenario: "empty",
+        timeoutMs: 1_200_000,
+        weight: 3,
+      },
+    ]);
+    expect(plan.needs).toEqual({
+      bareImage: true,
+      e2eImage: true,
+      functionalImage: true,
+      liveImage: false,
+      package: true,
+    });
+  });
+
   it("plans the full release path against package-backed e2e images", () => {
     const plan = planFor({
       includeOpenWebUI: false,
@@ -145,7 +181,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
 
     expect(withoutOpenWebUI.lanes.map((lane) => lane.name)).not.toContain("openwebui");
-    expect(withOpenWebUI.lanes.map((lane) => lane.name)).toContain("openwebui");
+    expect(withOpenWebUI.lanes.filter((lane) => lane.name === "openwebui")).toHaveLength(1);
   });
 
   it("keeps beta release-path coverage to install, provider, and update proof lanes", () => {
@@ -227,6 +263,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
       includeOpenWebUI: true,
       profile: RELEASE_PATH_PROFILE,
       releaseChunk: "plugins-runtime-services",
+    });
+    const openWebUI = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "openwebui",
     });
     const pluginsRuntimeInstallA = planFor({
       includeOpenWebUI: true,
@@ -421,6 +462,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
         timeoutMs: 1_200_000,
         weight: 3,
       },
+    ]);
+    expect(openWebUI.lanes.map(summarizeLane)).toEqual([
       {
         command:
           "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
@@ -554,6 +597,33 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "plugin-update",
       "openwebui",
     ]);
+  });
+
+  it("includes OpenWebUI exactly once in each legacy plugin aggregate", () => {
+    for (const releaseChunk of [
+      "plugins-runtime-core",
+      "plugins-runtime",
+      "plugins-integrations",
+    ]) {
+      const withOpenWebUI = planFor({
+        includeOpenWebUI: true,
+        profile: RELEASE_PATH_PROFILE,
+        releaseChunk,
+      });
+      const withoutOpenWebUI = planFor({
+        includeOpenWebUI: false,
+        profile: RELEASE_PATH_PROFILE,
+        releaseChunk,
+      });
+
+      expect(
+        withOpenWebUI.lanes.filter((lane) => lane.name === "openwebui"),
+        releaseChunk,
+      ).toHaveLength(1);
+      expect(withoutOpenWebUI.lanes.map((lane) => lane.name), releaseChunk).not.toContain(
+        "openwebui",
+      );
+    }
   });
 
   it("expands the published upgrade survivor lane across deduped baselines", () => {

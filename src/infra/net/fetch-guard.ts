@@ -9,9 +9,10 @@ import {
 } from "../fetch-headers.js";
 import {
   shouldUseConfiguredLocalOriginManagedProxyBypass,
+  shouldResolveConfiguredLocalOriginManagedProxyBypass,
   type ConfiguredLocalOriginManagedProxyBypass,
 } from "./configured-local-origin-bypass.js";
-import { hasProxyEnvConfigured, shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
+import { shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
 import {
   fetchWithRuntimeDispatcher,
@@ -502,8 +503,17 @@ async function fetchWithSsrFGuardInternal(
         usesTrustedExplicitProxyMode ? false : params.pinDns,
       );
       await assertExplicitProxyAllowed(dispatcherPolicy, params.lookupFn, params.policy);
+      const isStrictManagedProxyActive =
+        mode === GUARDED_FETCH_MODE.STRICT && isManagedProxyActive();
+      const shouldCheckManagedProxyBypass =
+        isStrictManagedProxyActive &&
+        shouldResolveConfiguredLocalOriginManagedProxyBypass({
+          url: parsedUrl,
+          managedProxyBypass: params.managedProxyBypass,
+        });
       const canUseManagedProxy =
-        mode === GUARDED_FETCH_MODE.STRICT && isManagedProxyActive() && hasProxyEnvConfigured();
+        isStrictManagedProxyActive &&
+        (shouldUseEnvHttpProxyForUrl(parsedUrl.toString()) || shouldCheckManagedProxyBypass);
       const canUseTrustedEnvProxy =
         (mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY ||
           (params.useEnvProxyForEligibleUrls === true && !canUseManagedProxy)) &&
@@ -518,26 +528,30 @@ async function fetchWithSsrFGuardInternal(
         params.pinDns !== false;
       const timeoutMs = resolveDispatcherTimeoutMs(params.timeoutMs);
 
-      // Trusted env-proxy and pinDns=false can skip local DNS pinning, so keep
-      // the pre-DNS hostname/IP policy checks from the pinned path.
-      if (canUseTrustedEnvProxy || params.pinDns === false) {
+      // Trusted env-proxy, managed proxy, and pinDns=false can skip local DNS
+      // pinning, so keep the pre-DNS hostname/IP policy checks from the pinned path.
+      if (canUseTrustedEnvProxy || canUseManagedProxy || params.pinDns === false) {
         assertHostnameAllowedWithPolicy(parsedUrl.hostname, policyForUrl);
       }
 
       if (canUseTrustedEnvProxy) {
         dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
       } else if (canUseManagedProxy) {
-        const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
-          lookupFn: params.lookupFn,
-          policy: policyForUrl,
-        });
-        dispatcher = shouldUseConfiguredLocalOriginManagedProxyBypass({
-          url: parsedUrl,
-          managedProxyBypass: params.managedProxyBypass,
-          resolvedAddresses: pinned.addresses,
-        })
-          ? createPinnedDispatcher(pinned, dispatcherPolicy, policyForUrl, timeoutMs)
-          : createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
+        if (shouldCheckManagedProxyBypass) {
+          const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+            lookupFn: params.lookupFn,
+            policy: policyForUrl,
+          });
+          dispatcher = shouldUseConfiguredLocalOriginManagedProxyBypass({
+            url: parsedUrl,
+            managedProxyBypass: params.managedProxyBypass,
+            resolvedAddresses: pinned.addresses,
+          })
+            ? createPinnedDispatcher(pinned, dispatcherPolicy, policyForUrl, timeoutMs)
+            : createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
+        } else {
+          dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
+        }
       } else if (usesTrustedExplicitProxyMode) {
         // Explicit proxy targets are still checked against the caller's hostname
         // policy, but the proxy does the DNS resolution for the final target.

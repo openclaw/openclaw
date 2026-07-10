@@ -4,6 +4,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronServiceContract } from "../cron/service-contract.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
+import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import type { GatewayCronState } from "./server-cron.js";
 
 type LazyGatewayCronParams = {
@@ -22,8 +23,18 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
   const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
   const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
   let loaded: LoadedGatewayCronState | null = null;
-  let loading: Promise<LoadedGatewayCronState> | null = null;
   let stopped = false;
+  const cronStateLoader = createLazyPromiseLoader(
+    () =>
+      import("./server-cron.js").then(({ buildGatewayCronService }) => {
+        loaded = {
+          state: buildGatewayCronService(params),
+          started: false,
+        };
+        return loaded;
+      }),
+    { cacheRejections: true },
+  );
 
   const load = async (): Promise<LoadedGatewayCronState> => {
     if (loaded) {
@@ -31,14 +42,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     }
     // Share the same import promise across concurrent API calls so only one
     // scheduler instance is built for a Gateway process.
-    loading ??= import("./server-cron.js").then(({ buildGatewayCronService }) => {
-      loaded = {
-        state: buildGatewayCronService(params),
-        started: false,
-      };
-      return loaded;
-    });
-    return await loading;
+    return await cronStateLoader.load();
   };
 
   const cron: CronServiceContract = {
@@ -74,6 +78,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
         loaded.state.stopExitWatchers?.();
         return;
       }
+      const loading = cronStateLoader.peek();
       if (loading) {
         // Stop may happen while the dynamic import is still in flight; attach a
         // cleanup continuation instead of forcing cron to load synchronously.
@@ -98,11 +103,14 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     async listPage(opts) {
       return await (await load()).state.cron.listPage(opts);
     },
-    async add(input) {
-      return await (await load()).state.cron.add(input);
+    async add(input, opts) {
+      return await (await load()).state.cron.add(input, opts);
     },
     async update(id, patch) {
       return await (await load()).state.cron.update(id, patch);
+    },
+    async updateWithPrecondition(id, patch, precondition) {
+      return await (await load()).state.cron.updateWithPrecondition(id, patch, precondition);
     },
     async remove(id) {
       return await (await load()).state.cron.remove(id);

@@ -2,7 +2,10 @@
 // outbound message execution context.
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../auto-reply/reply/delivery-hints.js";
+import {
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+  ROOM_EVENT_DELIVERY_HINT,
+} from "../../auto-reply/reply/delivery-hints.js";
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
@@ -800,6 +803,24 @@ describe("message tool secret scoping", () => {
 
     expect(input?.inboundAudio).toBe(true);
     expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
+  });
+
+  it("reads steered inbound audio when the message action runs", async () => {
+    mockSendResult();
+    let hasCurrentInboundAudio = false;
+    const tool = createMessageTool({
+      currentInboundAudio: false,
+      hasCurrentInboundAudio: () => hasCurrentInboundAudio,
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: "whatsapp",
+      agentSessionKey: "agent:main:whatsapp:direct:123456789",
+      runMessageAction: mocks.runMessageAction as never,
+    });
+    hasCurrentInboundAudio = true;
+
+    await tool.execute("call1", { action: "send", message: "hi" });
+
+    expect(lastRunMessageActionInput()?.inboundAudio).toBe(true);
   });
 
   it("adds a current-run idempotency key when the model omits one", async () => {
@@ -2287,6 +2308,17 @@ describe("message tool description", () => {
     expect(target?.description).toContain("Telegram chat id/@username");
   });
 
+  it("describes userId as required directly for member-info, not via target", () => {
+    const tool = createMessageTool({
+      config: {} as never,
+    });
+    const properties = getToolProperties(tool);
+    const userId = properties.userId as { description?: string } | undefined;
+
+    expect(userId?.description).toMatch(/member-info/i);
+    expect(userId?.description).toMatch(/not.*`target`|does not accept.*target/i);
+  });
+
   it("hides iMessage group actions for DM targets", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "imessage", source: "test", plugin: imessagePlugin }]),
@@ -3018,6 +3050,10 @@ describe("message tool internal-runtime-context sanitization", () => {
     {
       name: "narration-aware delivery hint only",
       message: MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+    },
+    {
+      name: "room-event delivery hint only",
+      message: ROOM_EVENT_DELIVERY_HINT,
     },
     {
       name: "inbound metadata only",

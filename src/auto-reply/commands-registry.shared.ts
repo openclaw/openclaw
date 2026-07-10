@@ -222,6 +222,23 @@ export function buildBuiltinChatCommands(
       ],
     }),
     defineChatCommand({
+      key: "learn",
+      nativeName: "learn",
+      description: "Draft a reusable skill from recent work or named sources.",
+      textAlias: "/learn",
+      category: "tools",
+      tier: "standard",
+      acceptsArgs: true,
+      args: [
+        {
+          name: "request",
+          description: "Sources and requirements for the skill draft",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "status",
       nativeName: "status",
       description: "Show current status.",
@@ -241,9 +258,9 @@ export function buildBuiltinChatCommands(
       args: [
         {
           name: "action",
-          description: "status, start, pause, resume, complete, block, clear",
+          description: "status, start, edit, pause, resume, complete, block, clear",
           type: "string",
-          choices: ["status", "start", "pause", "resume", "complete", "block", "clear"],
+          choices: ["status", "start", "edit", "pause", "resume", "complete", "block", "clear"],
         },
         {
           name: "text",

@@ -200,31 +200,86 @@ jobs:
 
           run_openai_refresh
 
-      - name: Commit and push locale updates
+      - name: Prepare locale artifact
         env:
           LOCALE: ${{ matrix.locale }}
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/control-ui-locale-${LOCALE}"
+          mkdir -p "${artifact_dir}"
+          git add -A ui/src/i18n
+          git diff --cached --binary --full-index -- ui/src/i18n > "${artifact_dir}/${LOCALE}.patch"
+
+      - name: Upload locale artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: control-ui-locale-${{ matrix.locale }}
+          path: ${{ runner.temp }}/control-ui-locale-${{ matrix.locale }}/${{ matrix.locale }}.patch
+          if-no-files-found: error
+          retention-days: 1
+
+  finalize:
+    name: Commit control UI locale refresh
+    needs: refresh
+    if: needs.refresh.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          submodules: false
+
+      - name: Download locale artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: control-ui-locale-*
+          path: ${{ runner.temp }}/control-ui-locale-artifacts
+          merge-multiple: true
+
+      - name: Apply locale artifacts
+        run: |
+          set -euo pipefail
+          while IFS= read -r patch; do
+            if [ -s "${patch}" ]; then
+              git apply "${patch}"
+            fi
+          done < <(find "${RUNNER_TEMP}/control-ui-locale-artifacts" -type f -name '*.patch' | sort)
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Validate control UI locale refresh
+        run: node --import tsx scripts/control-ui-i18n.ts check
+
+      - name: Commit and push aggregate locale refresh
+        env:
           TARGET_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          if git diff --quiet -- ui/src/i18n; then
-            echo "No control UI locale changes for ${LOCALE}."
+          if ! git status --porcelain -- ui/src/i18n | grep -q .; then
+            echo "No control UI locale changes."
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A ui/src/i18n
-          git commit --no-verify -m "chore(ui): refresh ${LOCALE} control ui locale"
+          git commit --no-verify -m "chore(ui): refresh control ui locales"
 
           for attempt in 1 2 3 4 5; do
             git fetch origin "${TARGET_BRANCH}"
-            git rebase --autostash "origin/${TARGET_BRANCH}"
+            git rebase "origin/${TARGET_BRANCH}"
             if git push origin HEAD:"${TARGET_BRANCH}"; then
               exit 0
             fi
-            echo "Push attempt ${attempt} for ${LOCALE} failed; retrying."
+            git rebase --abort >/dev/null 2>&1 || true
+            echo "Aggregate push attempt ${attempt} failed; retrying."
             sleep $((attempt * 2))
           done
 
-          echo "Failed to push ${LOCALE} locale update after retries."
+          echo "Failed to push aggregate control UI locale update after retries."
           exit 1

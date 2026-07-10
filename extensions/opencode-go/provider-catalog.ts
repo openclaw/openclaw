@@ -390,7 +390,7 @@ const OPENCODE_GO_MODELS = (
   ] satisfies OpencodeGoModelDefinition[]
 ).map((model) => normalizeModelCompat(model) as OpencodeGoModelDefinition);
 
-export type FetchOpencodeGoLiveModelIdsParams = {
+type FetchOpencodeGoLiveModelIdsParams = {
   apiKey?: string;
   discoveryApiKey?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;

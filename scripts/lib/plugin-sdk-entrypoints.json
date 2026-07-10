@@ -329,6 +329,7 @@
   "text-utility-runtime",
   "tool-plugin",
   "tool-payload",
+  "tool-results",
   "tool-send",
   "webhook-ingress",
   "webhook-targets",
