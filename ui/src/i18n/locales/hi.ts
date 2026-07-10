@@ -257,9 +257,12 @@ export const hi: TranslationMap = {
     goal: "लक्ष्य",
     goalNote: "लक्ष्य नोट",
     thinking: "सोच रहा है",
+    thinkingTooltip:
+      "Per-session thinking level override. Each provider profile maps it to that provider's own thinking or reasoning controls; models without thinking support ignore it.",
     fast: "तेज़",
     verbose: "विस्तृत",
     reasoning: "तर्क",
+    reasoningTooltip: "How reasoning output is shown in chat (display/transport).",
     actions: "कार्रवाइयाँ",
     addToWorkboard: "Workboard में जोड़ें",
     openWorkboardCard: "Workboard कार्ड खोलें",
