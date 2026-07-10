@@ -179,6 +179,32 @@ describe("slack prepareSlackMessage inbound contract", () => {
     return { slackCtx, members };
   }
 
+  function createMissingChannelInfoBotCtx(params?: { groupDmEnabled?: boolean; ownerId?: string }) {
+    const conversationsInfo = vi.fn().mockRejectedValue(new Error("missing_scope"));
+    const members = vi.fn().mockResolvedValue({
+      members: params?.ownerId ? [params.ownerId] : [],
+      response_metadata: { next_cursor: "" },
+    });
+    const ctx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true, allowBots: true, replyToMode: "all" } },
+      } as OpenClawConfig,
+      appClient: {
+        conversations: { info: conversationsInfo, members },
+      } as unknown as App["client"],
+      defaultRequireMention: false,
+      replyToMode: "all",
+      groupDmEnabled: params?.groupDmEnabled,
+    });
+    ctx.allowFrom = params?.ownerId ? [params.ownerId] : ctx.allowFrom;
+    ctx.resolveUserName = async () => ({ name: "Alice" });
+    return {
+      account: createSlackAccount({ allowBots: true, replyToMode: "all" }),
+      conversationsInfo,
+      ctx,
+    };
+  }
+
   async function prepareMessageWith(
     ctx: SlackMonitorContext,
     account: ResolvedSlackAccount,
@@ -1887,13 +1913,9 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
   });
 
   it("keeps one mpDM classification when a later event omits channel_type (#102676)", async () => {
-    // Modern mpDMs are C-prefixed. Human-authored messages carry channel_type: "mpim",
-    // but bot-authored ingress shapes omit it; simulate the channel-info fill failing
-    // (e.g. missing mpim:read scope) so the only remaining signal on main is C-prefix
-    // inference, which mis-keys a second slack:channel:<id> session for the same room.
-    const ctx = createReplyToAllSlackCtx();
-    ctx.resolveChannelName = async () => ({});
-    const account = createSlackAccount({ replyToMode: "all" });
+    const { account, conversationsInfo, ctx } = createMissingChannelInfoBotCtx();
+    // The real message ingress boundary records this before preparation starts.
+    ctx.rememberSlackChannelType("C0MPDM42", "mpim");
 
     const humanPrepared = await prepareMessageWith(
       ctx,
@@ -1915,14 +1937,74 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       createSlackMessage({
         channel: "C0MPDM42",
         channel_type: undefined,
-        user: "U2",
-        text: "same room, ingress shape without channel_type",
+        user: undefined,
+        bot_id: "B_OTHER",
+        subtype: "bot_message",
+        username: "other-agent",
+        text: "same room, bot ingress without channel_type",
         ts: "2.000",
       }),
     );
     assertPrepared(typelessPrepared);
     expect(typelessPrepared.ctxPayload.ChatType).toBe("group");
     expect(typelessPrepared.ctxPayload.From).toBe("slack:group:C0MPDM42");
+    expect(typelessPrepared.ctxPayload.SessionKey).toBe(humanPrepared.ctxPayload.SessionKey);
+    expect(conversationsInfo).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a typeless cached mpDM behind the group-DM policy gate (#102676)", async () => {
+    const { account, ctx } = createMissingChannelInfoBotCtx({ groupDmEnabled: false });
+    ctx.rememberSlackChannelType("C0MPDM42", "mpim");
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({
+        channel: "C0MPDM42",
+        channel_type: undefined,
+        user: undefined,
+        bot_id: "B_OTHER",
+        subtype: "bot_message",
+        username: "other-agent",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+  });
+
+  it("keeps unresolved G-prefix private-channel bot ingress on channel sessions (#102676)", async () => {
+    const { account, ctx } = createMissingChannelInfoBotCtx({ ownerId: "UOWNER" });
+
+    const humanPrepared = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({
+        channel: "G0PRIVATE1",
+        channel_type: "group",
+        user: "U1",
+        text: "human in private channel",
+      }),
+    );
+    const botPrepared = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({
+        channel: "G0PRIVATE1",
+        channel_type: undefined,
+        user: undefined,
+        bot_id: "B_OTHER",
+        subtype: "bot_message",
+        username: "other-agent",
+        text: "bot in same private channel",
+        ts: "2.000",
+      }),
+    );
+
+    assertPrepared(humanPrepared);
+    assertPrepared(botPrepared);
+    expect(humanPrepared.ctxPayload.From).toBe("slack:channel:G0PRIVATE1");
+    expect(botPrepared.ctxPayload.From).toBe(humanPrepared.ctxPayload.From);
+    expect(botPrepared.ctxPayload.ChatType).toBe("channel");
   });
 
   it.each([
@@ -4235,8 +4317,6 @@ describe("prepareSlackMessage sender prefix", () => {
       resolveSlackSystemEventSessionKey: () => "agent:main:slack:channel:c1",
       isChannelAllowed: () => true,
       resolveChannelName: async () => ({ name: "general", type: "channel" }),
-      rememberSlackChannelType: () => {},
-      recallSlackChannelType: () => undefined,
       resolveUserName: async () => ({ name: "Alice" }),
       setSlackThreadStatus: async () => undefined,
     } as unknown as SlackMonitorContext;

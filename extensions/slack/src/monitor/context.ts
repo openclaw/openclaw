@@ -3,6 +3,7 @@ import type { App } from "@slack/bolt";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type {
   OpenClawConfig,
   SlackReactionNotificationMode,
@@ -49,7 +50,20 @@ export type SlackAssistantThreadContext = {
   updatedAt: number;
 };
 
+type SlackChannelInfo = {
+  name?: string;
+  type?: SlackMessageEvent["channel_type"];
+  topic?: string;
+  purpose?: string;
+};
+
+type SlackChannelCacheEntry = {
+  info: SlackChannelInfo;
+  metadataLoaded: boolean;
+};
+
 const SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT = "assistant_thread_context";
+const SLACK_CHANNEL_CACHE_MAX_ENTRIES = 1024;
 
 export function buildSlackAssistantThreadMetadata(
   context: Omit<SlackAssistantThreadContext, "updatedAt">,
@@ -164,19 +178,14 @@ export type SlackMonitorContext = {
   resolveChannelName: (
     channelId: string,
     eventScope?: SlackEventScope,
-  ) => Promise<{
-    name?: string;
-    type?: SlackMessageEvent["channel_type"];
-    topic?: string;
-    purpose?: string;
-  }>;
-  /** Records an explicit channel_type seen on an event, keyed like channelCache (#102676). */
+  ) => Promise<SlackChannelInfo>;
+  /** Records authoritative event-carried channel type in the channel metadata cache. */
   rememberSlackChannelType: (
     channelId: string | null | undefined,
     channelType: string | null | undefined,
     eventScope?: SlackEventScope,
   ) => void;
-  /** Returns a previously seen explicit channel_type for the channel/scope, if any. */
+  /** Reads event-carried channel type when Slack omits it from later bot/edit/delete events. */
   recallSlackChannelType: (
     channelId: string | null | undefined,
     eventScope?: SlackEventScope,
@@ -254,52 +263,8 @@ export function createSlackMonitorContext(params: {
   const channelHistories = new Map<string, HistoryEntry[]>();
   const logger = getChildLogger({ module: "slack-auto-reply" });
 
-  const channelCache = new Map<
-    string,
-    {
-      name?: string;
-      type?: SlackMessageEvent["channel_type"];
-      topic?: string;
-      purpose?: string;
-    }
-  >();
+  const channelCache = new Map<string, SlackChannelCacheEntry>();
   const userCache = new Map<string, { name?: string }>();
-  // Explicit channel_type values already seen on events for a channel. Human-authored
-  // mpDM messages carry channel_type: "mpim", but bot-authored ingress shapes omit it;
-  // when the conversations.info fill also cannot resolve the type, C-prefix inference
-  // would fall back to "channel" and key a second, parallel session for the same room
-  // (#102676). Remembering event-carried types keeps every ingress path on one
-  // classification without any extra network lookups.
-  const knownChannelTypes = new Map<string, SlackMessageEvent["channel_type"]>();
-
-  const rememberSlackChannelType = (
-    channelId: string | null | undefined,
-    channelType: string | null | undefined,
-    eventScope?: SlackEventScope,
-  ) => {
-    const id = normalizeOptionalString(channelId);
-    if (!id) {
-      return;
-    }
-    if (
-      channelType === "im" ||
-      channelType === "mpim" ||
-      channelType === "channel" ||
-      channelType === "group"
-    ) {
-      // Same account/team scoping as channelCache: multi-workspace installs must not
-      // cross-contaminate remembered types between scopes that share a channel id.
-      knownChannelTypes.set(scopedKey(id, eventScope), channelType);
-    }
-  };
-
-  const recallSlackChannelType = (
-    channelId: string | null | undefined,
-    eventScope?: SlackEventScope,
-  ): SlackMessageEvent["channel_type"] | undefined => {
-    const id = normalizeOptionalString(channelId);
-    return id ? knownChannelTypes.get(scopedKey(id, eventScope)) : undefined;
-  };
   const seenMessages = createDedupeCache({ ttlMs: 60_000, maxSize: 500 });
   const assistantThreadContexts = new Map<string, SlackAssistantThreadContext>();
   let lastAssistantContextCleanupAt = Date.now();
@@ -315,6 +280,59 @@ export function createSlackMonitorContext(params: {
 
   const scopedKey = (key: string, eventScope?: SlackEventScope) =>
     eventScope ? `${params.accountId}:${eventScope.teamId}:${key}` : key;
+
+  const readCachedChannel = (cacheKey: string): SlackChannelCacheEntry | undefined => {
+    const cached = channelCache.get(cacheKey);
+    if (cached) {
+      // Active rooms stay resident while the bounded cache evicts the oldest entry.
+      channelCache.delete(cacheKey);
+      channelCache.set(cacheKey, cached);
+    }
+    return cached;
+  };
+
+  const writeCachedChannel = (cacheKey: string, entry: SlackChannelCacheEntry): void => {
+    channelCache.delete(cacheKey);
+    channelCache.set(cacheKey, entry);
+    pruneMapToMaxSize(channelCache, SLACK_CHANNEL_CACHE_MAX_ENTRIES);
+  };
+
+  const rememberSlackChannelType = (
+    channelId: string | null | undefined,
+    channelType: string | null | undefined,
+    eventScope?: SlackEventScope,
+  ) => {
+    const id = normalizeOptionalString(channelId);
+    const normalizedType = normalizeOptionalString(channelType)?.toLowerCase();
+    if (
+      !id ||
+      (normalizedType !== "im" &&
+        normalizedType !== "mpim" &&
+        normalizedType !== "channel" &&
+        normalizedType !== "group")
+    ) {
+      return;
+    }
+    const cacheKey = scopedKey(id, eventScope);
+    const cached = readCachedChannel(cacheKey);
+    const type = normalizeSlackChannelType(normalizedType, id);
+    if (cached?.info.type === type) {
+      return;
+    }
+    // Type-only entries must not suppress a later conversations.info metadata fill.
+    writeCachedChannel(cacheKey, {
+      info: { ...cached?.info, type },
+      metadataLoaded: cached?.metadataLoaded ?? false,
+    });
+  };
+
+  const recallSlackChannelType = (
+    channelId: string | null | undefined,
+    eventScope?: SlackEventScope,
+  ): SlackMessageEvent["channel_type"] | undefined => {
+    const id = normalizeOptionalString(channelId);
+    return id ? readCachedChannel(scopedKey(id, eventScope))?.info.type : undefined;
+  };
 
   const markMessageSeen = (
     channelId: string | undefined,
@@ -483,9 +501,9 @@ export function createSlackMonitorContext(params: {
 
   const resolveChannelName = async (channelId: string, eventScope?: SlackEventScope) => {
     const cacheKey = scopedKey(channelId, eventScope);
-    const cached = channelCache.get(cacheKey);
-    if (cached) {
-      return cached;
+    const cached = readCachedChannel(cacheKey);
+    if (cached?.metadataLoaded) {
+      return cached.info;
     }
     try {
       const info = await (eventScope?.client ?? params.app.client).conversations.info({
@@ -506,11 +524,16 @@ export function createSlackMonitorContext(params: {
       const topic = channel && "topic" in channel ? (channel.topic?.value ?? undefined) : undefined;
       const purpose =
         channel && "purpose" in channel ? (channel.purpose?.value ?? undefined) : undefined;
-      const entry = { name, type, topic, purpose };
-      channelCache.set(cacheKey, entry);
-      return entry;
+      const entry: SlackChannelCacheEntry = {
+        // An event-carried type is authoritative and may be the only mpDM signal
+        // available to later bot, edit, and delete events with restricted scopes.
+        info: { name, type: cached?.info.type ?? type, topic, purpose },
+        metadataLoaded: true,
+      };
+      writeCachedChannel(cacheKey, entry);
+      return entry.info;
     } catch {
-      return {};
+      return cached?.info ?? {};
     }
   };
 
