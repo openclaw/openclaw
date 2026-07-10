@@ -1,7 +1,10 @@
 // Sms plugin module implements webhook behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createFixedWindowRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
+import {
+  createFixedWindowRateLimiter,
+  resolveRequestClientIp,
+} from "openclaw/plugin-sdk/webhook-ingress";
 import { dispatchSmsInboundEvent, type SmsChannelRuntime } from "./inbound.js";
 import {
   buildTwilioInboundMessage,
@@ -12,7 +15,14 @@ import {
 } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
 
-const rateLimiter = createFixedWindowRateLimiter({
+// Keep failed-auth request throttling separate from the signed callback quota so
+// invalid traffic cannot spend the budget reserved for validated Twilio messages.
+const preValidationRateLimiter = createFixedWindowRateLimiter({
+  maxRequests: 30,
+  windowMs: 60_000,
+  maxTrackedKeys: 5_000,
+});
+const signedRateLimiter = createFixedWindowRateLimiter({
   maxRequests: 30,
   windowMs: 60_000,
   maxTrackedKeys: 5_000,
@@ -41,9 +51,20 @@ function headerValue(value: string | string[] | undefined): string | undefined {
   return value;
 }
 
-function rateLimitKey(params: { account: ResolvedSmsAccount; req: IncomingMessage }): string {
-  const remoteAddress = params.req.socket?.remoteAddress ?? "unknown";
-  return `${params.account.accountId}:${params.account.webhookPath}:${remoteAddress}`;
+function resolvedClientAddress(params: { cfg: OpenClawConfig; req: IncomingMessage }): string {
+  return (
+    resolveRequestClientIp(
+      params.req,
+      params.cfg.gateway?.trustedProxies,
+      params.cfg.gateway?.allowRealIpFallback === true,
+    ) ??
+    params.req.socket?.remoteAddress ??
+    "unknown"
+  );
+}
+
+function rateLimitKey(params: { account: ResolvedSmsAccount; clientAddress: string }): string {
+  return `${params.account.accountId}:${params.account.webhookPath}:${params.clientAddress}`;
 }
 
 function rememberWebhookMessage(params: {
@@ -71,13 +92,22 @@ export function resetSmsWebhookReplayCacheForTest(): void {
 }
 
 export function resetSmsWebhookRateLimiterForTest(): void {
-  rateLimiter.clear();
+  preValidationRateLimiter.clear();
+  signedRateLimiter.clear();
 }
 
 export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
   return async (req: IncomingMessage, res: ServerResponse) => {
     if (req.method !== "POST") {
       respondTwiml(res, 405, "Method not allowed");
+      return true;
+    }
+
+    const clientAddress = resolvedClientAddress({ cfg: params.cfg, req });
+    const key = rateLimitKey({ account: params.account, clientAddress });
+    if (preValidationRateLimiter.isRateLimited(key)) {
+      params.log?.warn?.(`SMS webhook pre-validation rate limit exceeded for ${key}`);
+      respondTwiml(res, 429, "Rate limit exceeded");
       return true;
     }
 
@@ -116,8 +146,7 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
       respondTwiml(res, 403, "Invalid account");
       return true;
     }
-    const key = rateLimitKey({ account: params.account, req });
-    if (rateLimiter.isRateLimited(key)) {
+    if (signedRateLimiter.isRateLimited(key)) {
       params.log?.warn?.(`SMS webhook rate limit exceeded for ${key}`);
       respondTwiml(res, 429, "Rate limit exceeded");
       return true;

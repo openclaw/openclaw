@@ -58,11 +58,11 @@ function createSignedBody(params?: {
 function createRequest(
   body: string,
   signature: string,
-  options?: { remoteAddress?: string },
+  options?: { headers?: Record<string, string>; remoteAddress?: string },
 ): IncomingMessage {
   const req = Readable.from([body]) as IncomingMessage;
   req.method = "POST";
-  req.headers = { "x-twilio-signature": signature };
+  req.headers = { "x-twilio-signature": signature, ...options?.headers };
   Object.defineProperty(req, "socket", {
     value: { remoteAddress: options?.remoteAddress ?? "127.0.0.1" },
   });
@@ -132,24 +132,42 @@ describe("createSmsWebhookHandler", () => {
     expect(dispatchSmsInboundEvent).not.toHaveBeenCalled();
   });
 
-  it("does not let unsigned requests consume the signed webhook rate limit", async () => {
+  it("does not let unsigned proxy traffic consume another client's signed webhook rate limit", async () => {
     const account = createAccount();
     const handler = createSmsWebhookHandler({
-      cfg: {},
+      cfg: { gateway: { trustedProxies: ["127.0.0.1"] } },
       account,
       channelRuntime: {} as SmsChannelRuntime,
     });
     const unsignedBody =
       "AccountSid=AC123&From=%2B15550000000&To=%2B15557654321&Body=bad&MessageSid=SM-bad";
-    for (let i = 0; i < 31; i += 1) {
+    for (let i = 0; i < 30; i += 1) {
       const rejected = createResponse();
-      await handler(createRequest(unsignedBody, "not-a-valid-signature"), rejected);
+      await handler(
+        createRequest(unsignedBody, "not-a-valid-signature", {
+          headers: { "x-forwarded-for": "203.0.113.10" },
+        }),
+        rejected,
+      );
       expect(rejected.statusCode).toBe(403);
     }
+    const throttled = createResponse();
+    await handler(
+      createRequest(unsignedBody, "not-a-valid-signature", {
+        headers: { "x-forwarded-for": "203.0.113.10" },
+      }),
+      throttled,
+    );
+    expect(throttled.statusCode).toBe(429);
 
     const valid = createSignedBody({ account, messageSid: "SM-valid-after-invalid-burst" });
     const accepted = createResponse();
-    await handler(createRequest(valid.body, valid.signature), accepted);
+    await handler(
+      createRequest(valid.body, valid.signature, {
+        headers: { "x-forwarded-for": "203.0.113.11" },
+      }),
+      accepted,
+    );
 
     expect(accepted.statusCode).toBe(200);
     expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(1);
