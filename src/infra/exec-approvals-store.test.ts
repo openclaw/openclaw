@@ -1765,8 +1765,19 @@ describe("exec approvals store helpers", () => {
     const dir = createHomeDir();
     saveExecApprovals({
       version: 1,
-      defaults: { security: "deny", ask: "off" },
+      defaults: { security: "allowlist", ask: "always" },
       agents: { main: { allowlist: [] } },
+    });
+    const policySnapshot = createExecApprovalPolicySnapshot({
+      file: readExecApprovalsSnapshot().file,
+      agentId: "main",
+    });
+
+    await updateExecApprovals({
+      update: (current) => ({
+        ...current,
+        defaults: { ...current.defaults, security: "deny", ask: "off" },
+      }),
     });
 
     await expect(
@@ -1779,6 +1790,7 @@ describe("exec approvals store helpers", () => {
           security: "allowlist",
           ask: "always",
           allowlistSatisfied: false,
+          policySnapshot,
         },
         allowAlwaysDecision: {
           kind: "exact-command",
