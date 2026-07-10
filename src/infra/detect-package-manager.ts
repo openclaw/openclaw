@@ -60,7 +60,14 @@ async function isBunOwnedPackageRoot(root: string): Promise<boolean> {
 
 async function isPnpmOwnedPackageRoot(root: string): Promise<boolean> {
   const nodeModulesRoot = resolvePnpmNodeModulesRoot(root);
-  if (!nodeModulesRoot || !(await exists(path.join(nodeModulesRoot, ".modules.yaml")))) {
+  if (
+    !nodeModulesRoot ||
+    !(
+      (await exists(path.join(nodeModulesRoot, ".modules.yaml"))) ||
+      (await exists(path.join(nodeModulesRoot, ".pnpm"))) ||
+      (await exists(path.join(nodeModulesRoot, ".pnpm-workspace-state-v1.json")))
+    )
+  ) {
     return false;
   }
   return true;
@@ -68,7 +75,11 @@ async function isPnpmOwnedPackageRoot(root: string): Promise<boolean> {
 
 /** Detects the package manager that owns a package root from manifests, locks, and install layout. */
 export async function detectPackageManager(root: string): Promise<DetectedPackageManager | null> {
-  const pm = (await readPackageManagerSpec(root))?.split("@")[0]?.trim();
+  const realRoot = await fs.realpath(root).catch(() => root);
+  const packageManagerSpec =
+    (await readPackageManagerSpec(root)) ??
+    (path.resolve(realRoot) === path.resolve(root) ? null : await readPackageManagerSpec(realRoot));
+  const pm = packageManagerSpec?.split("@")[0]?.trim();
   const files = await fs.readdir(root).catch((): string[] => []);
   const hasNpmShrinkwrap = files.includes("npm-shrinkwrap.json");
   const hasPnpmLock = files.includes("pnpm-lock.yaml");

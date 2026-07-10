@@ -115,6 +115,37 @@ describe("detectPackageManager", () => {
     });
   });
 
+  it("keeps pnpm-owned scoped global package roots without modules metadata", async () => {
+    await withTempDir({ prefix: "openclaw-detect-pm-pnpm-global-" }, async (base) => {
+      const globalRoot = path.join(base, "pnpm-global", "5");
+      const nodeModulesRoot = path.join(globalRoot, "node_modules");
+      const packageRoot = path.join(nodeModulesRoot, "@scope", "tool");
+      await writePublishedOpenClawRoot(packageRoot, "@scope/tool");
+      await fs.mkdir(path.join(nodeModulesRoot, ".pnpm"), { recursive: true });
+      await fs.writeFile(path.join(nodeModulesRoot, ".pnpm-workspace-state-v1.json"), "{}", "utf8");
+      await fs.writeFile(path.join(globalRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'", "utf8");
+
+      await expect(detectPackageManager(packageRoot)).resolves.toBe("pnpm");
+    });
+  });
+
+  it("keeps pnpm-owned scoped global package roots that are linked to their source", async () => {
+    await withTempDir({ prefix: "openclaw-detect-pm-pnpm-global-link-" }, async (base) => {
+      const globalRoot = path.join(base, "pnpm-global", "5");
+      const nodeModulesRoot = path.join(globalRoot, "node_modules");
+      const sourceRoot = path.join(base, "source");
+      const packageRoot = path.join(nodeModulesRoot, "@scope", "tool");
+      await writePublishedOpenClawRoot(sourceRoot, "@scope/tool");
+      await fs.mkdir(path.dirname(packageRoot), { recursive: true });
+      await fs.symlink(sourceRoot, packageRoot, process.platform === "win32" ? "junction" : "dir");
+      await fs.mkdir(path.join(nodeModulesRoot, ".pnpm"), { recursive: true });
+      await fs.writeFile(path.join(nodeModulesRoot, ".pnpm-workspace-state-v1.json"), "{}", "utf8");
+      await fs.writeFile(path.join(globalRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'", "utf8");
+
+      await expect(detectPackageManager(packageRoot)).resolves.toBe("pnpm");
+    });
+  });
+
   it("keeps pnpm-owned virtual-store package roots that ship npm-shrinkwrap", async () => {
     await withTempDir({ prefix: "openclaw-detect-pm-pnpm-virtual-" }, async (base) => {
       const nodeModulesRoot = path.join(base, "project", "node_modules");
