@@ -234,6 +234,11 @@ export const AgentParamsSchema = Type.Object(
     ),
     disableMessageTool: Type.Optional(Type.Boolean()),
     voiceWakeTrigger: Type.Optional(Type.String()),
+    // Backward-compatibility alias for Paperclip adapter metadata. Tolerated
+    // at the gateway boundary without affecting runtime routing. If additional
+    // adapters need injected metadata, migrate this to a generic adapterMeta
+    // namespace and keep paperclip as a legacy alias for existing deployments.
+    paperclip: Type.Optional(Type.Unknown()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
   },
