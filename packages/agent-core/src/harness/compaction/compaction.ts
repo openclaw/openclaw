@@ -258,10 +258,31 @@ function countContentBlockChars(
     if (block.type === "image") {
       chars += IMAGE_BLOCK_CHARS;
     } else {
-      chars += getCompactionContentBlockText(block).length;
+      chars += weightedChars(getCompactionContentBlockText(block));
     }
   }
   return chars;
+}
+
+/**
+ * Matches CJK Unified Ideographs, CJK Extension A/B, CJK Compatibility
+ * Ideographs, Hangul Syllables, Hiragana, Katakana, and East Asian fullwidth
+ * forms that typically use ~1 token per character. Mirrors the canonical
+ * estimator in src/utils/cjk-chars.ts.
+ */
+const NON_LATIN_RE =
+  /[\u2E80-\u9FFF\uA000-\uA4FF\uAC00-\uD7AF\uF900-\uFAFF\uFF01-\uFF60\uFFE0-\uFFE6\u{20000}-\u{2FA1F}]/gu;
+
+// Most tokenizers encode a CJK character as ~1 token, not 1/4. Weight each
+// non-Latin char as 4 chars so the shared chars/4 heuristic stays accurate:
+// raw .length under-counted CJK sessions ~3-4x and blew keepRecentTokens
+// far past the configured budget (#103930).
+function weightedChars(text: string): number {
+  if (text.length === 0) {
+    return 0;
+  }
+  const nonLatinCount = (text.match(NON_LATIN_RE) ?? []).length;
+  return text.length + nonLatinCount * 3;
 }
 
 /** Estimate token count for one message using a conservative character heuristic. */
@@ -275,7 +296,7 @@ export function estimateTokens(message: AgentMessage): number {
         harnessMessage as { content: string | Array<{ type: string; text?: string }> }
       ).content;
       if (typeof content === "string") {
-        chars = content.length;
+        chars = weightedChars(content);
       } else if (Array.isArray(content)) {
         chars = countContentBlockChars(content);
       }
@@ -285,11 +306,11 @@ export function estimateTokens(message: AgentMessage): number {
       const assistant = harnessMessage;
       for (const block of assistant.content) {
         if (block.type === "text") {
-          chars += block.text.length;
+          chars += weightedChars(block.text);
         } else if (block.type === "thinking") {
-          chars += block.thinking.length;
+          chars += weightedChars(block.thinking);
         } else if (block.type === "toolCall") {
-          chars += block.name.length + safeJsonStringify(block.arguments).length;
+          chars += block.name.length + weightedChars(safeJsonStringify(block.arguments));
         }
       }
       return Math.ceil(chars / 4);
@@ -297,19 +318,19 @@ export function estimateTokens(message: AgentMessage): number {
     case "custom":
     case "toolResult": {
       if (typeof harnessMessage.content === "string") {
-        chars = harnessMessage.content.length;
+        chars = weightedChars(harnessMessage.content);
       } else {
         chars = countContentBlockChars(harnessMessage.content);
       }
       return Math.ceil(chars / 4);
     }
     case "bashExecution": {
-      chars = harnessMessage.command.length + harnessMessage.output.length;
+      chars = weightedChars(harnessMessage.command) + weightedChars(harnessMessage.output);
       return Math.ceil(chars / 4);
     }
     case "branchSummary":
     case "compactionSummary": {
-      chars = harnessMessage.summary.length;
+      chars = weightedChars(harnessMessage.summary);
       return Math.ceil(chars / 4);
     }
   }
