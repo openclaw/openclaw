@@ -284,6 +284,23 @@ export async function createMeetWithBrowserProxyOnNode(params: {
       targetId: tab.targetId,
       timeoutMs: stepTimeoutMs,
     });
+    // Meet automation scripts match English UI labels; a reused tab may have
+    // been opened by the browser/profile in a non-English locale. Navigate to
+    // the English variant so DOM matchers don't go blind.
+    const englishUrl = tab.url ? forceMeetEnglishUi(tab.url) : undefined;
+    if (englishUrl && englishUrl !== tab.url) {
+      tab =
+        readBrowserTab(
+          await callBrowserProxyOnNode({
+            runtime: params.runtime,
+            nodeId,
+            method: "POST",
+            path: "/navigate",
+            body: { targetId: tab.targetId, url: englishUrl },
+            timeoutMs: stepTimeoutMs,
+          }),
+        ) ?? tab;
+    }
   } else {
     tab = readBrowserTab(
       await callBrowserProxyOnNode({

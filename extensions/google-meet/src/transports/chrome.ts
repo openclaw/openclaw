@@ -684,6 +684,22 @@ async function openMeetWithBrowserRequest(params: {
         body: { targetId },
         timeoutMs: Math.min(timeoutMs, 5_000),
       });
+      // Meet automation scripts match English UI labels; a reused tab may have
+      // been opened by the browser/profile in a non-English locale. Navigate to
+      // the English variant so DOM matchers don't go blind.
+      const englishUrl = tab.url ? forceMeetEnglishUi(tab.url) : undefined;
+      if (englishUrl && englishUrl !== tab.url) {
+        const navigated = await params.callBrowser({
+          method: "POST",
+          path: "/navigate",
+          body: { targetId, url: englishUrl },
+          timeoutMs: Math.min(timeoutMs, 5_000),
+        });
+        const navigatedTab = readBrowserTab(navigated);
+        if (navigatedTab?.url) {
+          tab = navigatedTab;
+        }
+      }
     }
   }
   if (!targetId) {

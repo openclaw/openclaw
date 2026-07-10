@@ -3426,6 +3426,16 @@ describe("google-meet plugin", () => {
           if (proxy.path === "/tabs/focus") {
             return { payload: { result: { ok: true } } };
           }
+          if (proxy.path === "/navigate") {
+            return {
+              payload: {
+                result: {
+                  targetId: proxy.body?.targetId ?? "existing-meet-tab",
+                  url: "https://meet.google.com/abc-defg-hij?authuser=me%40example.com&hl=en",
+                },
+              },
+            };
+          }
           if (proxy.path === "/act") {
             return {
               payload: {
@@ -3472,6 +3482,106 @@ describe("google-meet plugin", () => {
       timeoutMs: 5000,
       body: { targetId: "existing-meet-tab" },
     });
+    const navigateCall = nodesInvoke.mock.calls.find(([rawCall]) => {
+      const call = requireRecord(rawCall, "node invoke");
+      const params = requireRecord(call.params, "node invoke params");
+      return params.path === "/navigate";
+    });
+    if (!navigateCall) {
+      throw new Error("Expected browser.proxy /navigate node invoke");
+    }
+    expect(
+      requireRecord(
+        requireRecord(navigateCall[0], "navigate node invoke").params,
+        "navigate params",
+      ),
+    ).toEqual({
+      method: "POST",
+      path: "/navigate",
+      timeoutMs: 5000,
+      body: {
+        targetId: "existing-meet-tab",
+        url: "https://meet.google.com/abc-defg-hij?authuser=me%40example.com&hl=en",
+      },
+    });
+    expect(
+      nodesInvoke.mock.calls.some(([rawCall]) => {
+        const call = requireRecord(rawCall, "node invoke");
+        return requireRecord(call.params, "node invoke params").path === "/tabs/open";
+      }),
+    ).toBe(false);
+  });
+
+  it("does not navigate a reused join tab that is already using English UI", async () => {
+    const { methods, nodesInvoke } = setup(
+      {
+        defaultTransport: "chrome-node",
+        defaultMode: "transcribe",
+      },
+      {
+        nodesInvokeHandler: async (params) => {
+          if (params.command !== "browser.proxy") {
+            return { payload: { launched: true } };
+          }
+          const proxy = params.params as {
+            path?: string;
+            body?: { targetId?: string; url?: string };
+          };
+          if (proxy.path === "/tabs") {
+            return {
+              payload: {
+                result: {
+                  running: true,
+                  tabs: [
+                    {
+                      targetId: "english-meet-tab",
+                      title: "Meet",
+                      url: "https://meet.google.com/abc-defg-hij?hl=en",
+                    },
+                  ],
+                },
+              },
+            };
+          }
+          if (proxy.path === "/tabs/focus") {
+            return { payload: { result: { ok: true } } };
+          }
+          if (proxy.path === "/act") {
+            return {
+              payload: {
+                result: {
+                  result: JSON.stringify({
+                    inCall: true,
+                    title: "Meet",
+                    url: "https://meet.google.com/abc-defg-hij?hl=en",
+                  }),
+                },
+              },
+            };
+          }
+          throw new Error(`unexpected browser proxy path ${proxy.path}`);
+        },
+      },
+    );
+    const handler = methods.get("googlemeet.join") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({
+      params: { url: "https://meet.google.com/abc-defg-hij" },
+      respond,
+    });
+
+    expect(
+      nodesInvoke.mock.calls.some(([rawCall]) => {
+        const call = requireRecord(rawCall, "node invoke");
+        return requireRecord(call.params, "node invoke params").path === "/navigate";
+      }),
+    ).toBe(false);
     expect(
       nodesInvoke.mock.calls.some(([rawCall]) => {
         const call = requireRecord(rawCall, "node invoke");
