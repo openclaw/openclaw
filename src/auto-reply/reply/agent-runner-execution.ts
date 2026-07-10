@@ -1813,7 +1813,7 @@ async function runAgentTurnWithFallbackInternal(
         }
         return { text: sanitized, skip: false };
       };
-      const handlePartialForTyping = async (payload: ReplyPayload): Promise<string | undefined> => {
+      const preparePartialForTyping = (payload: ReplyPayload): string | undefined => {
         if (isSilentReplyPrefixText(payload.text, SILENT_REPLY_TOKEN)) {
           return undefined;
         }
@@ -1821,8 +1821,31 @@ async function runAgentTurnWithFallbackInternal(
         if (skip || !text) {
           return undefined;
         }
+        return text;
+      };
+      const handlePartialForTyping = async (payload: ReplyPayload): Promise<string | undefined> => {
+        const text = preparePartialForTyping(payload);
+        if (text === undefined) {
+          return undefined;
+        }
         await params.typingSignals.signalTextDelta(text);
         return text;
+      };
+      const preserveProgressCallbackStartOrder =
+        params.opts?.preserveProgressCallbackStartOrder === true;
+      const startPresentationWhileTyping = async (
+        typingPromise: Promise<void>,
+        startPresentation: () => void | Promise<void>,
+      ) => {
+        let presentationPromise: void | Promise<void>;
+        try {
+          presentationPromise = startPresentation();
+        } catch (err) {
+          // Typing already started; observe a secondary failure if presentation throws inline.
+          void typingPromise.catch(() => undefined);
+          throw err;
+        }
+        await Promise.all([typingPromise, presentationPromise]);
       };
       const blockReplyPipeline = params.blockReplyPipeline;
       // Build the delivery handler once so both onAgentEvent (compaction start
@@ -2045,31 +2068,69 @@ async function runAgentTurnWithFallbackInternal(
                   onAgentRunStart: notifyAgentRunStart,
                   suppressAssistantBridge: params.followupRun.run.silentExpected,
                   onActivity: () => params.replyOperation?.recordActivity(),
+                  preserveProgressCallbackStartOrder,
                   onAssistantText: async (text) => {
-                    const textForTyping = await handlePartialForTyping({ text } as ReplyPayload);
-                    if (textForTyping === undefined || !params.opts?.onPartialReply) {
+                    if (!preserveProgressCallbackStartOrder) {
+                      const textForTyping = await handlePartialForTyping({
+                        text,
+                      } as ReplyPayload);
+                      if (textForTyping === undefined || !params.opts?.onPartialReply) {
+                        return;
+                      }
+                      await params.opts.onPartialReply({ text: textForTyping });
                       return;
                     }
-                    await params.opts.onPartialReply({ text: textForTyping });
+                    const textForTyping = preparePartialForTyping({ text } as ReplyPayload);
+                    if (textForTyping === undefined) {
+                      return;
+                    }
+                    // Assistant and tool CLI bridges drain independently; stage presentation
+                    // before typing I/O so a later tool cannot overtake this text.
+                    await startPresentationWhileTyping(
+                      params.typingSignals.signalTextDelta(textForTyping),
+                      () => params.opts?.onPartialReply?.({ text: textForTyping }),
+                    );
                   },
                   onReasoningText: createCliReasoningStreamBridge(params.opts?.onReasoningStream),
                   onReasoningProgress: async (payload) => {
                     await params.opts?.onReasoningProgress?.(payload);
                   },
                   onToolEvent: async (payload) => {
-                    await cliToolSummaryTracker.noteToolEvent(payload);
+                    if (!preserveProgressCallbackStartOrder) {
+                      await cliToolSummaryTracker.noteToolEvent(payload);
+                      if (payload.phase === "result") {
+                        return;
+                      }
+                      const { name, phase, args } = payload;
+                      await Promise.all([
+                        params.typingSignals.signalToolStart(),
+                        params.opts?.onToolStart?.({
+                          name,
+                          phase,
+                          args,
+                          detailMode: params.toolProgressDetail,
+                        }),
+                      ]);
+                      return;
+                    }
+                    const summaryPromise = cliToolSummaryTracker.noteToolEvent(payload);
                     if (payload.phase === "result") {
+                      await summaryPromise;
                       return;
                     }
                     const { name, phase, args } = payload;
+                    // Tool and assistant CLI bridges drain independently. Start channel
+                    // presentation before either bridge can yield and invert source order.
                     await Promise.all([
-                      params.typingSignals.signalToolStart(),
-                      params.opts?.onToolStart?.({
-                        name,
-                        phase,
-                        args,
-                        detailMode: params.toolProgressDetail,
-                      }),
+                      summaryPromise,
+                      startPresentationWhileTyping(params.typingSignals.signalToolStart(), () =>
+                        params.opts?.onToolStart?.({
+                          name,
+                          phase,
+                          args,
+                          detailMode: params.toolProgressDetail,
+                        }),
+                      ),
                     ]);
                   },
                   onCommentaryText:
@@ -2322,19 +2383,43 @@ async function runAgentTurnWithFallbackInternal(
                     onExecutionPhase: signalExecutionPhaseForTyping,
                     blockReplyBreak: params.resolvedBlockStreamingBreak,
                     blockReplyChunking: params.blockReplyChunking,
+                    // Subscriber callbacks are detached. Start channel presentation before
+                    // awaiting typing so later source events cannot overtake state staging.
                     onPartialReply: async (payload) => {
-                      const textForTyping = await handlePartialForTyping(payload);
-                      if (!params.opts?.onPartialReply || textForTyping === undefined) {
+                      if (!preserveProgressCallbackStartOrder) {
+                        const textForTyping = await handlePartialForTyping(payload);
+                        if (!params.opts?.onPartialReply || textForTyping === undefined) {
+                          return;
+                        }
+                        await params.opts.onPartialReply({
+                          text: textForTyping,
+                          mediaUrls: payload.mediaUrls,
+                        });
                         return;
                       }
-                      await params.opts.onPartialReply({
-                        text: textForTyping,
-                        mediaUrls: payload.mediaUrls,
-                      });
+                      const textForTyping = preparePartialForTyping(payload);
+                      if (textForTyping === undefined) {
+                        return;
+                      }
+                      await startPresentationWhileTyping(
+                        params.typingSignals.signalTextDelta(textForTyping),
+                        () =>
+                          params.opts?.onPartialReply?.({
+                            text: textForTyping,
+                            mediaUrls: payload.mediaUrls,
+                          }),
+                      );
                     },
                     onAssistantMessageStart: async () => {
-                      await params.typingSignals.signalMessageStart();
-                      await params.opts?.onAssistantMessageStart?.();
+                      if (!preserveProgressCallbackStartOrder) {
+                        await params.typingSignals.signalMessageStart();
+                        await params.opts?.onAssistantMessageStart?.();
+                        return;
+                      }
+                      await startPresentationWhileTyping(
+                        params.typingSignals.signalMessageStart(),
+                        () => params.opts?.onAssistantMessageStart?.(),
+                      );
                     },
                     onReasoningStream:
                       params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
@@ -2342,14 +2427,28 @@ async function runAgentTurnWithFallbackInternal(
                             if (params.followupRun.run.silentExpected) {
                               return;
                             }
-                            await params.typingSignals.signalReasoningDelta();
-                            await params.opts?.onReasoningStream?.({
-                              text: payload.text,
-                              mediaUrls: payload.mediaUrls,
-                              isReasoningSnapshot: payload.isReasoningSnapshot,
-                              requiresReasoningProgressOptIn:
-                                payload.requiresReasoningProgressOptIn,
-                            });
+                            if (!preserveProgressCallbackStartOrder) {
+                              await params.typingSignals.signalReasoningDelta();
+                              await params.opts?.onReasoningStream?.({
+                                text: payload.text,
+                                mediaUrls: payload.mediaUrls,
+                                isReasoningSnapshot: payload.isReasoningSnapshot,
+                                requiresReasoningProgressOptIn:
+                                  payload.requiresReasoningProgressOptIn,
+                              });
+                              return;
+                            }
+                            await startPresentationWhileTyping(
+                              params.typingSignals.signalReasoningDelta(),
+                              () =>
+                                params.opts?.onReasoningStream?.({
+                                  text: payload.text,
+                                  mediaUrls: payload.mediaUrls,
+                                  isReasoningSnapshot: payload.isReasoningSnapshot,
+                                  requiresReasoningProgressOptIn:
+                                    payload.requiresReasoningProgressOptIn,
+                                }),
+                            );
                           }
                         : undefined,
                     streamReasoningInNonStreamModes: params.opts?.streamReasoningInNonStreamModes,

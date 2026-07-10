@@ -147,6 +147,7 @@ describe("createMattermostDraftStream", () => {
     await stream.flush();
     stream.update("Stale final draft");
     await stream.seal();
+    await stream.forceNewMessage();
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.path).toBe("/posts");
@@ -318,12 +319,20 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     expect(stream.postId()).toBe("post-2");
   });
 
-  it("flushes a pending in-flight create before forcing a new post", async () => {
+  it("publishes overlapping fire-and-forget boundaries in generation order", async () => {
     const calls: RequestRecord[] = [];
     let nextId = 1;
     let releaseFirstCreate: (() => void) | undefined;
+    let releaseBoundaryPatch: (() => void) | undefined;
+    let releaseSecondCreate: (() => void) | undefined;
     const firstCreateInFlight = new Promise<void>((resolve) => {
       releaseFirstCreate = resolve;
+    });
+    const boundaryPatchInFlight = new Promise<void>((resolve) => {
+      releaseBoundaryPatch = resolve;
+    });
+    const secondCreateInFlight = new Promise<void>((resolve) => {
+      releaseSecondCreate = resolve;
     });
     let createdCount = 0;
     const requestImpl: MattermostClient["request"] = async <T>(
@@ -336,9 +345,13 @@ describe("createMattermostDraftStream forceNewMessage", () => {
         if (createdCount === 1) {
           await firstCreateInFlight;
         }
+        if (createdCount === 2) {
+          await secondCreateInFlight;
+        }
         return { id: `post-${nextId++}` } as T;
       }
       if (path.startsWith("/posts/")) {
+        await boundaryPatchInFlight;
         return { id: "patched" } as T;
       }
       return {} as T;
@@ -357,18 +370,31 @@ describe("createMattermostDraftStream forceNewMessage", () => {
       throttleMs: 0,
     });
 
-    stream.update("block A");
-    const boundary = stream.forceNewMessage();
+    stream.update("tool start");
+    stream.update("tool complete");
+    const firstBoundary = stream.forceNewMessage();
+    stream.update("assistant progress");
+    const secondBoundary = stream.forceNewMessage();
+    stream.update("final answer");
+    const flush = stream.flush();
     releaseFirstCreate?.();
-    await boundary;
 
-    stream.update("block B");
-    await stream.flush();
+    await vi.waitFor(() => {
+      expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1"]);
+    });
+    releaseBoundaryPatch?.();
+    await vi.waitFor(() => {
+      expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1", "/posts"]);
+    });
+    releaseSecondCreate?.();
+    await Promise.all([firstBoundary, secondBoundary, flush]);
 
-    expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts"]);
-    expect(parseRequestJson(calls[0]?.init)?.message).toBe("block A");
-    expect(parseRequestJson(calls[1]?.init)?.message).toBe("block B");
-    expect(stream.postId()).toBe("post-2");
+    expect(calls.map((c) => c.path)).toEqual(["/posts", "/posts/post-1", "/posts", "/posts"]);
+    expect(parseRequestJson(calls[0]?.init)?.message).toBe("tool start");
+    expect(parseRequestJson(calls[1]?.init)?.message).toBe("tool complete");
+    expect(parseRequestJson(calls[2]?.init)?.message).toBe("assistant progress");
+    expect(parseRequestJson(calls[3]?.init)?.message).toBe("final answer");
+    expect(stream.postId()).toBe("post-3");
   });
 
   it("seals a pending partial onto the in-flight created post instead of duplicating it", async () => {

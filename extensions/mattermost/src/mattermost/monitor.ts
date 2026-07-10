@@ -1754,7 +1754,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           },
         });
         let lastPartialText = "";
-        let blockPreviewInToolActivity = false;
+        let blockPreviewActivity: "none" | "reasoning" | "text" | "tool" = "none";
+        let blockPreviewAssistantMessagePending = false;
         const progressDraft = createChannelProgressDraftCompositor({
           entry: account.config,
           mode: account.streamingMode,
@@ -1767,15 +1768,34 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             }
           },
         });
-        const enterBlockPreviewToolActivity = () => {
-          if (account.streamingMode !== "block" || blockPreviewInToolActivity) {
+        const enterBlockPreviewActivity = (activity: "reasoning" | "text" | "tool") => {
+          if (account.streamingMode !== "block") {
             return undefined;
           }
-          const boundarySettled = previewBoundaryController.noteBoundary();
-          // Parallel tools share one activity post. Rotating per tool would route a late update
-          // for an earlier tool into the newest tool's post.
-          blockPreviewInToolActivity = true;
-          progressDraft.reset();
+          const continuingToolActivity = activity === "tool" && blockPreviewActivity === "tool";
+          const continuingTextActivity =
+            activity === "text" &&
+            blockPreviewActivity === "text" &&
+            !blockPreviewAssistantMessagePending;
+          const continuingReasoningActivity =
+            activity === "reasoning" &&
+            blockPreviewActivity === "reasoning" &&
+            !blockPreviewAssistantMessagePending;
+          const continuesCurrentActivity =
+            continuingToolActivity || continuingTextActivity || continuingReasoningActivity;
+          const boundarySettled = continuesCurrentActivity
+            ? undefined
+            : previewBoundaryController.noteBoundary();
+          // Message-start is only a candidate boundary: consecutive tool-only turns stay in the
+          // same activity post, while the first visible text or reasoning starts a new block.
+          if (!continuesCurrentActivity) {
+            progressDraft.reset();
+          }
+          blockPreviewActivity = activity;
+          blockPreviewAssistantMessagePending = false;
+          if (activity === "tool") {
+            lastPartialText = "";
+          }
           return boundarySettled;
         };
         const previewState: MattermostDraftPreviewState = {
@@ -1820,22 +1840,23 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         const updateDraftFromPartial = (text?: string) => {
           const cleaned = text?.trim();
           if (!cleaned) {
-            return;
+            return undefined;
           }
           if (cleaned === lastPartialText) {
-            return;
+            return undefined;
           }
           if (
             lastPartialText &&
             lastPartialText.startsWith(cleaned) &&
             cleaned.length < lastPartialText.length
           ) {
-            return;
+            return undefined;
           }
+          const boundarySettled = enterBlockPreviewActivity("text");
           lastPartialText = cleaned;
-          blockPreviewInToolActivity = false;
           draftStream.update(cleaned);
           previewBoundaryController.noteUpdate();
+          return boundarySettled;
         };
 
         const deliveryBarrier = createMattermostReplyDeliveryBarrier({
@@ -1851,6 +1872,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             typingCallbacks,
             deliver: async (payloadEntry: ReplyPayload, info) => {
               if (info.kind === "final") {
+                await enterBlockPreviewActivity("text");
                 progressDraft.markFinalReplyStarted();
               }
               // A visible same-thread final arrives either via a normal send or by editing
@@ -2012,6 +2034,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                           ...replyOptions,
                           allowProgressCallbacksWhenSourceDeliverySuppressed:
                             draftToolProgressEnabled ? true : undefined,
+                          preserveProgressCallbackStartOrder: draftPreviewEnabled
+                            ? true
+                            : undefined,
                           onObservedReplyDelivery: draftToolProgressEnabled
                             ? () => draftStream.clear()
                             : undefined,
@@ -2026,28 +2051,32 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                           onModelSelected,
                           onPartialReply: (payloadResult) => {
                             if (account.streamingMode !== "progress") {
-                              updateDraftFromPartial(payloadResult.text);
+                              return updateDraftFromPartial(payloadResult.text);
                             }
+                            return undefined;
                           },
-                          onAssistantMessageStart: async () => {
-                            const boundarySettled = previewBoundaryController.noteBoundary();
+                          onAssistantMessageStart: () => {
                             lastPartialText = "";
-                            blockPreviewInToolActivity = false;
                             progressDraft.resetReasoningProgress();
+                            if (account.streamingMode === "block") {
+                              blockPreviewAssistantMessagePending = true;
+                              return;
+                            }
                             if (account.streamingMode !== "progress") {
                               progressDraft.reset();
                             }
-                            await boundarySettled;
                           },
-                          onReasoningEnd: async () => {
-                            const boundarySettled = previewBoundaryController.noteBoundary();
+                          onReasoningEnd: () => {
+                            // Hidden reasoning has no visible boundary. Only transitions that
+                            // actually render text, reasoning, or tools rotate preview posts.
                             lastPartialText = "";
-                            blockPreviewInToolActivity = false;
                             progressDraft.resetReasoningProgress();
-                            if (account.streamingMode !== "progress") {
+                            if (
+                              account.streamingMode !== "block" &&
+                              account.streamingMode !== "progress"
+                            ) {
                               progressDraft.reset();
                             }
-                            await boundarySettled;
                           },
                           onReasoningStream: async (payloadResult) => {
                             if (account.streamingMode === "progress") {
@@ -2058,13 +2087,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                               return;
                             }
                             if (!lastPartialText) {
-                              blockPreviewInToolActivity = false;
+                              const boundarySettled = enterBlockPreviewActivity("reasoning");
                               draftStream.update("Thinking…");
                               previewBoundaryController.noteUpdate();
+                              await boundarySettled;
                             }
                           },
                           onToolStart: async (payloadValue) => {
-                            const boundarySettled = enterBlockPreviewToolActivity();
+                            const boundarySettled = enterBlockPreviewActivity("tool");
                             if (!draftToolProgressEnabled) {
                               await boundarySettled;
                               return;
@@ -2095,7 +2125,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                             if (!draftToolProgressEnabled) {
                               return;
                             }
-                            const boundarySettled = enterBlockPreviewToolActivity();
+                            const boundarySettled = enterBlockPreviewActivity("tool");
                             const progressSettled = progressDraft.pushToolProgress(
                               buildChannelProgressDraftLineForEntry(account.config, {
                                 event: "item",

@@ -2,7 +2,7 @@
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { monitorMattermostProvider } from "./monitor.js";
-import type { OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
+import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
 
 class FakeWebSocket {
   public readonly sent: string[] = [];
@@ -91,6 +91,7 @@ const mockState = vi.hoisted(() => ({
   resolveMattermostMedia: vi.fn(),
   resolveUserInfo: vi.fn(),
   runtimeCore: undefined as unknown,
+  sendMessageMattermost: vi.fn(),
   updateMattermostPost: vi.fn(),
 }));
 
@@ -148,6 +149,14 @@ vi.mock("./runtime-api.js", async () => {
   };
 });
 
+vi.mock("./send.js", async () => {
+  const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
+  return {
+    ...actual,
+    sendMessageMattermost: mockState.sendMessageMattermost,
+  };
+});
+
 function createRuntimeCore(
   cfg: OpenClawConfig,
   routeOverride?: {
@@ -167,6 +176,9 @@ function createRuntimeCore(
     verboseDebug?: (message: string) => void;
   } = {},
 ) {
+  type ReplyDispatcherOptions = {
+    deliver: (payload: ReplyPayload, info: { kind: "tool" | "block" | "final" }) => Promise<void>;
+  };
   const dispatchPreparedForTest = vi.fn(
     async (turn: {
       storePath: string;
@@ -278,11 +290,12 @@ function createRuntimeCore(
         buildPairingReply: () => "pairing required",
       },
       reply: {
-        createReplyDispatcherWithTyping: vi.fn(() => ({
+        createReplyDispatcherWithTyping: vi.fn((options: ReplyDispatcherOptions) => ({
           dispatcher: {},
           replyOptions: {},
           markDispatchIdle: vi.fn(),
           markRunComplete: vi.fn(),
+          options,
         })),
         dispatchReplyFromConfig: mockState.dispatchReplyFromConfig,
         finalizeInboundContext: (context: unknown) => context,
@@ -424,6 +437,7 @@ describe("mattermost inbound user posts", () => {
     });
     mockState.resolveMattermostMedia.mockResolvedValue([]);
     mockState.resolveUserInfo.mockResolvedValue({ id: "user-1", username: "alice" });
+    mockState.sendMessageMattermost.mockResolvedValue({});
     mockState.dispatchReplyFromConfig.mockImplementation(async () => {
       mockState.abortController?.abort();
     });
@@ -1237,6 +1251,7 @@ describe("mattermost inbound user posts", () => {
     expect(mockState.createMattermostDraftStream).not.toHaveBeenCalled();
     const replyOptions = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].replyOptions;
     expect(replyOptions?.disableBlockStreaming).toBe(false);
+    expect(replyOptions?.preserveProgressCallbackStartOrder).toBeUndefined();
   });
 
   it("preserves text-tool-text boundaries while grouping interleaved tool updates", async () => {
@@ -1253,11 +1268,13 @@ describe("mattermost inbound user posts", () => {
         },
       },
     };
-    mockState.runtimeCore = createRuntimeCore(blockConfig);
+    const runtimeCore = createRuntimeCore(blockConfig);
+    mockState.runtimeCore = runtimeCore;
     const draftUpdate = vi.fn();
     const forceNewMessage = vi.fn(async () => {});
     let releaseToolBoundary: (() => void) | undefined;
     let releaseAssistantBoundary: (() => void) | undefined;
+    let releaseFinalBoundary: (() => void) | undefined;
     let assistantBoundarySettled = false;
     const toolBoundaryPending = new Promise<void>((resolve) => {
       releaseToolBoundary = resolve;
@@ -1265,17 +1282,32 @@ describe("mattermost inbound user posts", () => {
     const assistantBoundaryPending = new Promise<void>((resolve) => {
       releaseAssistantBoundary = resolve;
     });
-    forceNewMessage
-      .mockImplementationOnce(async () => {
+    const finalBoundaryPending = new Promise<void>((resolve) => {
+      releaseFinalBoundary = resolve;
+    });
+    forceNewMessage.mockImplementation(async () => {
+      const callNumber = forceNewMessage.mock.calls.length;
+      if (callNumber === 1) {
         await toolBoundaryPending;
-      })
-      .mockImplementationOnce(async () => {
+        return;
+      }
+      if (callNumber === 2) {
         await assistantBoundaryPending;
         assistantBoundarySettled = true;
-      });
+        return;
+      }
+      if (callNumber === 7) {
+        await finalBoundaryPending;
+      }
+    });
     mockState.createMattermostDraftStream.mockReturnValue({
       update: draftUpdate,
       forceNewMessage,
+      flush: vi.fn(async () => {}),
+      postId: vi.fn(() => undefined),
+      clear: vi.fn(async () => {}),
+      discardPending: vi.fn(async () => {}),
+      seal: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
     });
 
@@ -1283,8 +1315,18 @@ describe("mattermost inbound user posts", () => {
     const abortController = new AbortController();
     mockState.abortController = abortController;
     let sameToolUpdateBoundaryCount = -1;
+    let hiddenReasoningBoundaryCount = -1;
+    let consecutiveToolBoundaryCount = -1;
+    let reasoningStartBoundaryCount = -1;
+    let secondReasoningBoundaryCount = -1;
+    let reasoningTextBoundaryCount = -1;
+    let toolBeforeFinalBoundaryCount = -1;
+    let finalOnlyBoundaryCount = -1;
     let interleavedToolDraft = "";
+    let reasoningDraft = "";
+    let finalToolDraft = "";
     let secondPartialArrivedBeforeBoundarySettled = false;
+    let finalDeliveryWaitedForBoundary = false;
     mockState.dispatchReplyFromConfig.mockImplementation(async (params) => {
       await params.replyOptions?.onAssistantMessageStart?.();
       params.replyOptions?.onPartialReply?.({ text: "A much longer first block" });
@@ -1310,15 +1352,67 @@ describe("mattermost inbound user posts", () => {
         args: { command: "ls -alh" },
       });
       sameToolUpdateBoundaryCount = forceNewMessage.mock.calls.length;
+      params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onReasoningEnd?.();
+      hiddenReasoningBoundaryCount = forceNewMessage.mock.calls.length;
+      const consecutiveToolStart = params.replyOptions?.onToolStart?.({
+        toolCallId: "bash-3",
+        name: "bash",
+        phase: "start",
+        detailMode: "raw",
+        args: { command: "whoami" },
+      });
+      consecutiveToolBoundaryCount = forceNewMessage.mock.calls.length;
       interleavedToolDraft = String(draftUpdate.mock.calls.at(-1)?.[0] ?? "");
 
-      const assistantBoundary = params.replyOptions?.onAssistantMessageStart?.();
-      params.replyOptions?.onPartialReply?.({ text: "Done." });
+      params.replyOptions?.onAssistantMessageStart?.();
+      const assistantBoundary = params.replyOptions?.onPartialReply?.({ text: "Done." });
       secondPartialArrivedBeforeBoundarySettled =
         !assistantBoundarySettled && draftUpdate.mock.calls.at(-1)?.[0] === "Done.";
       releaseToolBoundary?.();
       releaseAssistantBoundary?.();
-      await Promise.all([firstToolStart, secondToolStart, firstToolUpdate, assistantBoundary]);
+      await Promise.all([
+        firstToolStart,
+        secondToolStart,
+        firstToolUpdate,
+        consecutiveToolStart,
+        assistantBoundary,
+      ]);
+      params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onReasoningStream?.({ text: "Private chain of thought" });
+      reasoningStartBoundaryCount = forceNewMessage.mock.calls.length;
+      reasoningDraft = String(draftUpdate.mock.calls.at(-1)?.[0] ?? "");
+      await params.replyOptions?.onReasoningEnd?.();
+      params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onReasoningStream?.({ text: "Second reasoning item" });
+      secondReasoningBoundaryCount = forceNewMessage.mock.calls.length;
+      params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onPartialReply?.({ text: "Answer after reasoning" });
+      reasoningTextBoundaryCount = forceNewMessage.mock.calls.length;
+      params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onToolStart?.({
+        toolCallId: "bash-final",
+        name: "bash",
+        phase: "start",
+        detailMode: "raw",
+        args: { command: "date" },
+      });
+      toolBeforeFinalBoundaryCount = forceNewMessage.mock.calls.length;
+      finalToolDraft = String(draftUpdate.mock.calls.at(-1)?.[0] ?? "");
+      const dispatcherOptions =
+        runtimeCore.channel.reply.createReplyDispatcherWithTyping.mock.results.at(-1)?.value
+          ?.options;
+      const finalDelivery = dispatcherOptions?.deliver(
+        { text: "Final without a partial" },
+        { kind: "final" },
+      );
+      finalOnlyBoundaryCount = forceNewMessage.mock.calls.length;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      finalDeliveryWaitedForBoundary = mockState.sendMessageMattermost.mock.calls.length === 0;
+      releaseFinalBoundary?.();
+      await finalDelivery;
       abortController.abort();
     });
 
@@ -1344,12 +1438,29 @@ describe("mattermost inbound user posts", () => {
     expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
     const replyOptions = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].replyOptions;
     expect(replyOptions?.disableBlockStreaming).toBe(true);
+    expect(replyOptions?.preserveProgressCallbackStartOrder).toBe(true);
     expect(sameToolUpdateBoundaryCount).toBe(1);
+    expect(hiddenReasoningBoundaryCount).toBe(1);
+    expect(consecutiveToolBoundaryCount).toBe(1);
+    expect(reasoningStartBoundaryCount).toBe(3);
+    expect(secondReasoningBoundaryCount).toBe(4);
+    expect(reasoningTextBoundaryCount).toBe(5);
+    expect(toolBeforeFinalBoundaryCount).toBe(6);
     expect(interleavedToolDraft).toContain("pwd");
     expect(interleavedToolDraft).toContain("ls -alh");
-    expect(forceNewMessage).toHaveBeenCalledTimes(2);
+    expect(interleavedToolDraft).toContain("whoami");
+    expect(reasoningDraft).toBe("Thinking…");
+    expect(finalToolDraft).toContain("date");
+    expect(finalOnlyBoundaryCount).toBe(7);
+    expect(forceNewMessage).toHaveBeenCalledTimes(7);
+    expect(finalDeliveryWaitedForBoundary).toBe(true);
+    expect(mockState.sendMessageMattermost).toHaveBeenCalledWith(
+      "channel:chan-1",
+      "Final without a partial",
+      expect.objectContaining({ accountId: "default" }),
+    );
     expect(secondPartialArrivedBeforeBoundarySettled).toBe(true);
     expect(draftUpdate).toHaveBeenNthCalledWith(1, "A much longer first block");
-    expect(draftUpdate).toHaveBeenLastCalledWith("Done.");
+    expect(draftUpdate).toHaveBeenCalledWith("Done.");
   });
 });

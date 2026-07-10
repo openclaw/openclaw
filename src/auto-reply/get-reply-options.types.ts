@@ -147,6 +147,8 @@ export type GetReplyOptions = {
    * both lanes at once.
    */
   onVerboseProgressVisibility?: (isActive: () => boolean) => void;
+  /** Preserve source-event callback start order for stateful channel progress renderers. */
+  preserveProgressCallbackStartOrder?: boolean;
   onPartialReply?: (payload: PartialReplyPayload) => Promise<void> | void;
   onReasoningStream?: (payload: ReasoningStreamPayload) => Promise<void> | void;
   onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void> | void;

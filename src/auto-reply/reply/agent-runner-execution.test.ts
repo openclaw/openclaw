@@ -359,6 +359,8 @@ type EmbeddedAgentParams = {
     firstModelCallStarted?: boolean;
   }) => void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+  onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+  onAssistantMessageStart?: () => Promise<void> | void;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onReasoningStream?: (payload: {
     text?: string;
@@ -366,6 +368,7 @@ type EmbeddedAgentParams = {
     isReasoningSnapshot?: boolean;
     requiresReasoningProgressOptIn?: boolean;
   }) => Promise<void> | void;
+  onReasoningEnd?: () => Promise<void> | void;
   onItemEvent?: (payload: {
     itemId?: string;
     toolCallId?: string;
@@ -3190,6 +3193,181 @@ describe("runAgentTurnWithFallback", () => {
     expect(call?.args).toEqual({ command: "ls -la" });
   });
 
+  it("starts CLI assistant progress before a later tool while typing is slow", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-6"),
+      provider: "claude-cli",
+      model: "claude-opus-4-6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      const agentEvents = await import("../../infra/agent-events.js");
+      agentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "answer before tool", delta: "answer before tool" },
+      });
+      agentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "answer before tool 2", delta: " 2" },
+      });
+      agentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "Bash",
+          toolCallId: "toolu_order",
+          args: { command: "echo hi" },
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    let releaseTyping: (() => void) | undefined;
+    const typingPending = new Promise<void>((resolve) => {
+      releaseTyping = resolve;
+    });
+    const typingSignals = createMockTypingSignaler();
+    vi.mocked(typingSignals.signalTextDelta).mockReturnValue(typingPending);
+    const callbackOrder: string[] = [];
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-6";
+    const runPromise = runAgentTurnWithFallback({
+      commandBody: "hi",
+      followupRun,
+      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: {
+        preserveProgressCallbackStartOrder: true,
+        onPartialReply: (payload) => {
+          callbackOrder.push(`partial:${payload.text}`);
+        },
+        onToolStart: () => {
+          callbackOrder.push("tool");
+        },
+      },
+      typingSignals,
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(callbackOrder).toContain("tool");
+      });
+      expect(callbackOrder).toEqual([
+        "partial:answer before tool",
+        "partial:answer before tool 2",
+        "tool",
+      ]);
+    } finally {
+      releaseTyping?.();
+      await runPromise;
+    }
+  });
+
+  it("starts CLI tool progress before later assistant text while typing is slow", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-6"),
+      provider: "claude-cli",
+      model: "claude-opus-4-6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      const agentEvents = await import("../../infra/agent-events.js");
+      agentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "Bash",
+          toolCallId: "toolu_inverse_order",
+          args: { command: "echo hi" },
+        },
+      });
+      agentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: {
+          phase: "update",
+          name: "Bash",
+          toolCallId: "toolu_inverse_order",
+          args: { command: "echo hi" },
+        },
+      });
+      agentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "answer after tool", delta: "answer after tool" },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    let releaseTyping: (() => void) | undefined;
+    const typingPending = new Promise<void>((resolve) => {
+      releaseTyping = resolve;
+    });
+    const typingSignals = createMockTypingSignaler();
+    vi.mocked(typingSignals.signalToolStart).mockReturnValue(typingPending);
+    const callbackOrder: string[] = [];
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-6";
+    const runPromise = runAgentTurnWithFallback({
+      commandBody: "hi",
+      followupRun,
+      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: {
+        preserveProgressCallbackStartOrder: true,
+        onPartialReply: (payload) => {
+          callbackOrder.push(`partial:${payload.text}`);
+        },
+        onToolStart: (payload) => {
+          callbackOrder.push(`tool:${payload.phase}`);
+        },
+      },
+      typingSignals,
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(callbackOrder).toContain("partial:answer after tool");
+      });
+      expect(callbackOrder).toEqual(["tool:start", "tool:update", "partial:answer after tool"]);
+    } finally {
+      releaseTyping?.();
+      await runPromise;
+    }
+  });
+
   it("bridges CLI commentary agent events into onItemEvent for live preview", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
@@ -4688,6 +4866,102 @@ describe("runAgentTurnWithFallback", () => {
       releaseTyping?.();
       await Promise.resolve();
     }
+  });
+
+  it("starts presentation callbacks in source order while typing signals are slow", async () => {
+    const callbackOrder: string[] = [];
+    let releaseTyping: (() => void) | undefined;
+    const typingPending = new Promise<void>((resolve) => {
+      releaseTyping = resolve;
+    });
+    const typingSignals = createMockTypingSignaler();
+    vi.mocked(typingSignals.signalMessageStart).mockReturnValue(typingPending);
+    vi.mocked(typingSignals.signalTextDelta).mockReturnValue(typingPending);
+    vi.mocked(typingSignals.signalReasoningDelta).mockReturnValue(typingPending);
+    vi.mocked(typingSignals.signalToolStart).mockReturnValue(typingPending);
+
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      void params.onAssistantMessageStart?.();
+      void params.onPartialReply?.({ text: "answer before tool" });
+      void params.onReasoningStream?.({ text: "reasoning before tool" });
+      void params.onReasoningEnd?.();
+      void params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          name: "exec",
+          phase: "start",
+          args: { command: "echo hi" },
+        },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          preserveProgressCallbackStartOrder: true,
+          onAssistantMessageStart: () => {
+            callbackOrder.push("message-start");
+          },
+          onPartialReply: () => {
+            callbackOrder.push("partial");
+          },
+          onReasoningStream: () => {
+            callbackOrder.push("reasoning");
+          },
+          onReasoningEnd: () => {
+            callbackOrder.push("reasoning-end");
+          },
+          onToolStart: () => {
+            callbackOrder.push("tool");
+          },
+        } satisfies GetReplyOptions,
+      }),
+      typingSignals,
+    });
+
+    try {
+      expect(result.kind).toBe("success");
+      expect(callbackOrder).toEqual([
+        "message-start",
+        "partial",
+        "reasoning",
+        "reasoning-end",
+        "tool",
+      ]);
+    } finally {
+      releaseTyping?.();
+      await Promise.resolve();
+    }
+  });
+
+  it("starts typing when a presentation callback throws inline", async () => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await expect(params.onPartialReply?.({ text: "before failure" })).rejects.toThrow(
+        "presentation failed",
+      );
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+    const typingSignals = createMockTypingSignaler();
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          preserveProgressCallbackStartOrder: true,
+          onPartialReply: () => {
+            throw new Error("presentation failed");
+          },
+        },
+      }),
+      typingSignals,
+    });
+
+    expect(result.kind).toBe("success");
+    expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("before failure");
   });
 
   it("leaves Codex app-server telemetry publication to the harness", async () => {

@@ -1,5 +1,8 @@
 // Mattermost plugin module implements draft stream behavior.
-import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  clearFinalizableDraftMessage,
+  createFinalizableDraftLifecycle,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createMattermostPost,
@@ -76,10 +79,15 @@ export function createMattermostDraftStream(params: {
   );
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const streamState = { stopped: false, final: false };
-  let streamPostId: string | undefined;
-  let lastSentText = "";
-  let postGeneration = 0;
-  const createdPostIdsByGeneration = new Map<number, string>();
+  type DraftGeneration = {
+    postId?: string;
+    lastSentText: string;
+    ready: Promise<void>;
+  };
+  let currentGeneration: DraftGeneration = {
+    lastSentText: "",
+    ready: Promise.resolve(),
+  };
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     if (streamState.stopped && !streamState.final) {
@@ -90,13 +98,17 @@ export function createMattermostDraftStream(params: {
     if (!normalized) {
       return false;
     }
-    if (normalized === lastSentText) {
+    const target = currentGeneration;
+    await target.ready;
+    if (streamState.stopped && !streamState.final) {
+      return false;
+    }
+    if (normalized === target.lastSentText) {
       return true;
     }
-    const gen = postGeneration;
     try {
-      if (streamPostId) {
-        await updateMattermostPost(params.client, streamPostId, {
+      if (target.postId) {
+        await updateMattermostPost(params.client, target.postId, {
           message: normalized,
         });
       } else {
@@ -111,14 +123,9 @@ export function createMattermostDraftStream(params: {
           params.warn?.("mattermost stream preview stopped (missing post id from create)");
           return false;
         }
-        createdPostIdsByGeneration.set(gen, postId);
-        if (gen === postGeneration) {
-          streamPostId = postId;
-        }
+        target.postId = postId;
       }
-      if (gen === postGeneration) {
-        lastSentText = normalized;
-      }
+      target.lastSentText = normalized;
       return true;
     } catch (err) {
       streamState.stopped = true;
@@ -129,68 +136,107 @@ export function createMattermostDraftStream(params: {
     }
   };
 
-  const { loop, update, stop, clear, discardPending, seal } = createFinalizableDraftLifecycle({
+  const clearMessageId = () => {
+    currentGeneration.postId = undefined;
+  };
+  const isValidMessageId = (value: unknown): value is string =>
+    typeof value === "string" && value.length > 0;
+  const deleteMessage = async (postId: string) => {
+    await deleteMattermostPost(params.client, postId);
+  };
+  const {
+    loop,
+    update,
+    stop: stopLifecycle,
+    stopForClear,
+    seal: sealLifecycle,
+  } = createFinalizableDraftLifecycle({
     throttleMs,
     state: streamState,
     sendOrEditStreamMessage,
-    readMessageId: () => streamPostId,
-    clearMessageId: () => {
-      streamPostId = undefined;
-      createdPostIdsByGeneration.clear();
-    },
-    isValidMessageId: (value): value is string => typeof value === "string" && value.length > 0,
-    deleteMessage: async (postId) => {
-      await deleteMattermostPost(params.client, postId);
-    },
+    readMessageId: () => currentGeneration.postId,
+    clearMessageId,
+    isValidMessageId,
+    deleteMessage,
     warn: params.warn,
     warnPrefix: "mattermost stream preview cleanup failed",
   });
 
-  const forceNewMessage = async () => {
-    // Agent boundary callbacks are fire-and-forget, so detach before awaiting. The generation
-    // map preserves an in-flight create id so queued text can still seal onto the old post.
+  const forceNewMessage = () => {
+    if (streamState.stopped || streamState.final) {
+      return Promise.resolve();
+    }
+    // Agent boundary callbacks are fire-and-forget. Swap generations synchronously; the new
+    // generation waits for the old send and seal so posts stay in publication order.
     const sealText = loop.takePending();
-    const sealedGeneration = postGeneration;
-    const sealedPostIdAtEntry = streamPostId;
-    const sealedLastSent = lastSentText;
-    postGeneration += 1;
-    streamPostId = undefined;
-    lastSentText = "";
-    loop.resetThrottleWindow();
-    await loop.waitForInFlight();
-    const sealedPostId = sealedPostIdAtEntry ?? createdPostIdsByGeneration.get(sealedGeneration);
-    createdPostIdsByGeneration.delete(sealedGeneration);
-    if (!sealText.trim() || (streamState.stopped && !streamState.final)) {
-      return;
-    }
-    const rendered = params.renderText?.(sealText) ?? sealText;
-    const normalized = normalizeMattermostDraftText(rendered, maxChars);
-    if (!normalized || normalized === sealedLastSent) {
-      return;
-    }
-    try {
-      if (sealedPostId) {
-        await updateMattermostPost(params.client, sealedPostId, { message: normalized });
-      } else {
-        await createMattermostPost(params.client, {
-          channelId: params.channelId,
-          message: normalized,
-          rootId: params.rootId,
-        });
+    const inFlightAtBoundary = loop.waitForInFlight();
+    const sealed = currentGeneration;
+    const boundary = (async () => {
+      try {
+        await sealed.ready;
+        await inFlightAtBoundary;
+        if (!sealText.trim() || (streamState.stopped && !streamState.final)) {
+          return;
+        }
+        const rendered = params.renderText?.(sealText) ?? sealText;
+        const normalized = normalizeMattermostDraftText(rendered, maxChars);
+        if (!normalized || normalized === sealed.lastSentText) {
+          return;
+        }
+        if (sealed.postId) {
+          await updateMattermostPost(params.client, sealed.postId, { message: normalized });
+        } else {
+          await createMattermostPost(params.client, {
+            channelId: params.channelId,
+            message: normalized,
+            rootId: params.rootId,
+          });
+        }
+      } catch (err) {
+        params.warn?.(
+          `mattermost stream preview boundary flush failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
-    } catch (err) {
-      params.warn?.(
-        `mattermost stream preview boundary flush failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+    })();
+    currentGeneration = { lastSentText: "", ready: boundary };
+    loop.resetThrottleWindow();
+    return boundary;
+  };
+
+  const flush = async () => {
+    await loop.flush();
+    await currentGeneration.ready;
+  };
+  const discardPending = async () => {
+    await stopForClear();
+    await currentGeneration.ready;
+  };
+  const clear = async () => {
+    await clearFinalizableDraftMessage({
+      stopForClear: discardPending,
+      readMessageId: () => currentGeneration.postId,
+      clearMessageId,
+      isValidMessageId,
+      deleteMessage,
+      warn: params.warn,
+      warnPrefix: "mattermost stream preview cleanup failed",
+    });
+  };
+  const seal = async () => {
+    await sealLifecycle();
+    await currentGeneration.ready;
+  };
+  const stop = async () => {
+    await stopLifecycle();
+    await currentGeneration.ready;
   };
 
   params.log?.(`mattermost stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
 
   return {
     update,
-    flush: loop.flush,
-    postId: () => streamPostId,
+    flush,
+    postId: () => currentGeneration.postId,
     clear,
     discardPending,
     seal,
