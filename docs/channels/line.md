@@ -168,11 +168,15 @@ exceeded.
 {
   channels: {
     line: {
-      groups: {
-        C0123456789abcdef0123456789abcde: {
-          requireMention: true,
-          requireMentionForNonText: true,
-          pendingMediaLimit: 5,
+      accounts: {
+        default: {
+          groups: {
+            G0123456789abcdef: {
+              requireMention: true,
+              requireMentionForNonText: true,
+              pendingMediaLimit: 3,
+            },
+          },
         },
       },
     },
