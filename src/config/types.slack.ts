@@ -105,6 +105,11 @@ export type SlackSlashCommandConfig = {
   ephemeral?: boolean;
 };
 
+type SlackAppHomeConfig = {
+  /** Inline Block Kit Home view object. Use type: "home" or omit type. */
+  view?: Record<string, unknown>;
+};
+
 export type SlackThreadConfig = {
   /** Scope for thread history context (thread|channel). Default: thread. */
   historyScope?: "thread" | "channel";
@@ -187,6 +192,8 @@ export type SlackAccountConfig = Omit<
     presenceEvents?: SlackPresenceEventsConfig;
     actions?: SlackActionConfig;
     slashCommand?: SlackSlashCommandConfig;
+    /** Slack App Home tab view overrides. */
+    appHome?: SlackAppHomeConfig;
     dm?: SlackDmConfig;
     channels?: Record<string, SlackChannelConfig>;
     /** Reaction emoji added while processing a reply (e.g. "hourglass_flowing_sand"). Removed when done. Useful as a typing indicator fallback when assistant mode is not enabled. */
