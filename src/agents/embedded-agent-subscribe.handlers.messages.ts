@@ -31,6 +31,7 @@ import type {
 } from "./embedded-agent-subscribe.handlers.types.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
+import { emitProviderFallbackLifecycleSteps } from "./embedded-agent-subscribe.provider-fallback-notice.js";
 import { appendRawStream } from "./embedded-agent-subscribe.raw-stream.js";
 import { warnIfAssistantEmittedToolText } from "./embedded-agent-subscribe.tool-text-diagnostics.js";
 import {
@@ -1055,6 +1056,13 @@ export function handleMessageEnd(
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   ctx.commitAssistantUsage();
+  // Surface provider-served (server-side) model fallbacks before any
+  // visible-output suppression: a served-by-fallback turn should update
+  // status surfaces even when the reply text itself is suppressed.
+  emitProviderFallbackLifecycleSteps(
+    ctx,
+    assistantMessage as { model?: unknown; diagnostics?: unknown },
+  );
   if (suppressVisibleAssistantOutput) {
     const commentaryText = coerceChatContentText(extractAssistantCommentaryText(assistantMessage));
     appendRawStream({
