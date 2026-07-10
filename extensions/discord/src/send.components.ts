@@ -319,6 +319,7 @@ export async function sendDiscordComponentMessage(
           body,
         }),
       "components",
+      { nonIdempotent: true },
     )) as { id: string; channel_id: string };
   } catch (err) {
     throw await buildDiscordSendError(err, {

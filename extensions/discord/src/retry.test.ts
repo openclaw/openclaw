@@ -1,7 +1,11 @@
 // Discord tests cover retry plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { RateLimitError } from "./internal/discord.js";
-import { createDiscordRetryRunner, isRetryableDiscordTransientError } from "./retry.js";
+import {
+  createDiscordRetryRunner,
+  isRetryableDiscordPreConnectError,
+  isRetryableDiscordTransientError,
+} from "./retry.js";
 
 const ZERO_DELAY_RETRY = { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 };
 
@@ -50,6 +54,70 @@ describe("isRetryableDiscordTransientError", () => {
     ["plain string", "fetch failed"],
   ])("does not retry %s", (_name, err) => {
     expect(isRetryableDiscordTransientError(err)).toBe(false);
+  });
+});
+
+describe("isRetryableDiscordPreConnectError", () => {
+  it.each([
+    ["rate limit", createRateLimitError()],
+    ["429 status", Object.assign(new Error("rate limited"), { status: 429 })],
+    ["ECONNREFUSED", Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" })],
+    ["ENOTFOUND", Object.assign(new Error("dns failure"), { code: "ENOTFOUND" })],
+    ["EAI_AGAIN cause", new Error("request failed", { cause: { code: "EAI_AGAIN" } })],
+    [
+      "UND_ERR_CONNECT_TIMEOUT",
+      Object.assign(new Error("connect"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
+    ],
+  ])("retries %s", (_name, err) => {
+    expect(isRetryableDiscordPreConnectError(err)).toBe(true);
+  });
+
+  it.each([
+    ["ECONNRESET", Object.assign(new Error("socket hang up"), { code: "ECONNRESET" })],
+    ["ETIMEDOUT cause", new Error("request failed", { cause: { code: "ETIMEDOUT" } })],
+    ["abort", Object.assign(new Error("aborted"), { name: "AbortError" })],
+    ["headers timeout", Object.assign(new Error("timeout"), { code: "UND_ERR_HEADERS_TIMEOUT" })],
+    ["body timeout", Object.assign(new Error("timeout"), { code: "UND_ERR_BODY_TIMEOUT" })],
+    ["socket", Object.assign(new Error("socket"), { code: "UND_ERR_SOCKET" })],
+    ["502 status", Object.assign(new Error("bad gateway"), { status: 502 })],
+    ["fetch failed", new TypeError("fetch failed")],
+  ])("does not retry %s", (_name, err) => {
+    expect(isRetryableDiscordPreConnectError(err)).toBe(false);
+  });
+});
+
+describe("createDiscordRetryRunner nonIdempotent", () => {
+  it("does not retry post-connect-ambiguous errors for non-idempotent sends", async () => {
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("aborted"), { name: "AbortError" }))
+      .mockResolvedValue("ok");
+    const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
+
+    await expect(runner(fn, "text", { nonIdempotent: true })).rejects.toThrow("aborted");
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("still retries pre-connect errors for non-idempotent sends", async () => {
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }))
+      .mockResolvedValue("ok");
+    const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
+
+    await expect(runner(fn, "text", { nonIdempotent: true })).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps retrying the broad transient set for default idempotent calls", async () => {
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("aborted"), { name: "AbortError" }))
+      .mockResolvedValue("ok");
+    const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
+
+    await expect(runner(fn, "react")).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(2);
   });
 });
 
