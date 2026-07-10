@@ -194,7 +194,7 @@ describe("gateway probe endpoints", () => {
           expect(prepared).toMatchObject({
             status: "busy",
             reason: "active-work",
-            counts: { rootRequests: 1 },
+            activeCount: 1,
           });
 
           releaseWatch();

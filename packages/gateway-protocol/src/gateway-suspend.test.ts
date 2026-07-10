@@ -6,22 +6,6 @@ import {
   validateGatewaySuspendStatusResult,
 } from "./index.js";
 
-const emptyCounts = {
-  queueSize: 0,
-  pendingReplies: 0,
-  embeddedRuns: 0,
-  cronRuns: 0,
-  activeTasks: 0,
-  rootRequests: 0,
-  sessionAdmissions: 0,
-  sessionMutations: 0,
-  chatRuns: 0,
-  queuedTurns: 0,
-  terminalPersistence: 0,
-  terminalSessions: 0,
-  totalActive: 0,
-};
-
 describe("gateway suspension protocol", () => {
   it("keeps prepare params closed and bounded", () => {
     expect(validateGatewaySuspendPrepareParams({ requestId: "host-request" })).toBe(true);
@@ -37,7 +21,7 @@ describe("gateway suspension protocol", () => {
         status: "busy",
         reason: "active-work",
         retryAfterMs: 20_000,
-        counts: { ...emptyCounts, queueSize: 1, totalActive: 1 },
+        activeCount: 2,
         blockers: [
           { kind: "queue", count: 1, message: "one queued operation" },
           {
@@ -54,7 +38,7 @@ describe("gateway suspension protocol", () => {
         status: "ready",
         suspensionId: "suspension-id",
         expiresAtMs: 123,
-        counts: emptyCounts,
+        activeCount: 0,
         blockers: [],
       }),
     ).toBe(true);

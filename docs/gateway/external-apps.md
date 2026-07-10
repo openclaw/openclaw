@@ -82,28 +82,14 @@ The RPC contract is:
 
 IDs are trimmed, must contain a non-whitespace character, and are limited to
 128 characters. A busy prepare result has `status: "busy"`, `reason`,
-`retryAfterMs`, `counts`, and `blockers`. A ready result has this shape:
+`retryAfterMs`, `activeCount`, and `blockers`. A ready result has this shape:
 
 ```json
 {
   "status": "ready",
   "suspensionId": "2c3f...",
   "expiresAtMs": 1770000000000,
-  "counts": {
-    "queueSize": 0,
-    "pendingReplies": 0,
-    "embeddedRuns": 0,
-    "cronRuns": 0,
-    "activeTasks": 0,
-    "rootRequests": 0,
-    "sessionAdmissions": 0,
-    "sessionMutations": 0,
-    "chatRuns": 0,
-    "queuedTurns": 0,
-    "terminalPersistence": 0,
-    "terminalSessions": 0,
-    "totalActive": 0
-  },
+  "activeCount": 0,
   "blockers": []
 }
 ```
@@ -139,12 +125,13 @@ APIs, tool/session operations, node watches, and configured hooks, return
 This handshake does not persist incoming messages, stop third-party channel
 transports, or control the hosting platform. The host must fence its ingress
 before preparation and remains responsible for wake, snapshot/freeze, and
-stop. It covers the tracked user-work categories returned in `counts`; it is
-not a general process-quiescence barrier. Channel health, maintenance, cache
-refresh, plugin-owned HTTP routes, and plugin-owned background work can remain
-active. The hosting platform must freeze or snapshot the full process tree and
-its filesystem consistently; unregistered work cannot be proven idle by this
-first contract.
+stop. `activeCount` is the aggregate tracked-work count, while `blockers`
+contains the non-zero category counts and bounded task details. This is not a
+general process-quiescence barrier. Channel health, maintenance, cache refresh,
+plugin-owned HTTP routes, and plugin-owned background work can remain active.
+The hosting platform must freeze or snapshot the full process tree and its
+filesystem consistently; unregistered work cannot be proven idle by this first
+contract.
 
 ## App code vs plugin code
 

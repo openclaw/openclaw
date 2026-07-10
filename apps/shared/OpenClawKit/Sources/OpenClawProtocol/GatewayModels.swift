@@ -425,68 +425,6 @@ public struct ErrorShape: Codable, Sendable {
     }
 }
 
-public struct GatewaySuspendCounts: Codable, Sendable {
-    public let queuesize: Int
-    public let pendingreplies: Int
-    public let embeddedruns: Int
-    public let cronruns: Int
-    public let activetasks: Int
-    public let rootrequests: Int
-    public let sessionadmissions: Int
-    public let sessionmutations: Int
-    public let chatruns: Int
-    public let queuedturns: Int
-    public let terminalpersistence: Int
-    public let terminalsessions: Int
-    public let totalactive: Int
-
-    public init(
-        queuesize: Int,
-        pendingreplies: Int,
-        embeddedruns: Int,
-        cronruns: Int,
-        activetasks: Int,
-        rootrequests: Int,
-        sessionadmissions: Int,
-        sessionmutations: Int,
-        chatruns: Int,
-        queuedturns: Int,
-        terminalpersistence: Int,
-        terminalsessions: Int,
-        totalactive: Int)
-    {
-        self.queuesize = queuesize
-        self.pendingreplies = pendingreplies
-        self.embeddedruns = embeddedruns
-        self.cronruns = cronruns
-        self.activetasks = activetasks
-        self.rootrequests = rootrequests
-        self.sessionadmissions = sessionadmissions
-        self.sessionmutations = sessionmutations
-        self.chatruns = chatruns
-        self.queuedturns = queuedturns
-        self.terminalpersistence = terminalpersistence
-        self.terminalsessions = terminalsessions
-        self.totalactive = totalactive
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case queuesize = "queueSize"
-        case pendingreplies = "pendingReplies"
-        case embeddedruns = "embeddedRuns"
-        case cronruns = "cronRuns"
-        case activetasks = "activeTasks"
-        case rootrequests = "rootRequests"
-        case sessionadmissions = "sessionAdmissions"
-        case sessionmutations = "sessionMutations"
-        case chatruns = "chatRuns"
-        case queuedturns = "queuedTurns"
-        case terminalpersistence = "terminalPersistence"
-        case terminalsessions = "terminalSessions"
-        case totalactive = "totalActive"
-    }
-}
-
 public struct GatewaySuspendTaskBlocker: Codable, Sendable {
     public let taskid: String
     public let status: String
@@ -565,20 +503,20 @@ public struct GatewaySuspendPrepareBusyResult: Codable, Sendable {
     public let status: String
     public let reason: AnyCodable
     public let retryafterms: Int
-    public let counts: GatewaySuspendCounts
+    public let activecount: Int
     public let blockers: [GatewaySuspendBlocker]
 
     public init(
         status: String,
         reason: AnyCodable,
         retryafterms: Int,
-        counts: GatewaySuspendCounts,
+        activecount: Int,
         blockers: [GatewaySuspendBlocker])
     {
         self.status = status
         self.reason = reason
         self.retryafterms = retryafterms
-        self.counts = counts
+        self.activecount = activecount
         self.blockers = blockers
     }
 
@@ -586,7 +524,7 @@ public struct GatewaySuspendPrepareBusyResult: Codable, Sendable {
         case status
         case reason
         case retryafterms = "retryAfterMs"
-        case counts
+        case activecount = "activeCount"
         case blockers
     }
 }
@@ -595,20 +533,20 @@ public struct GatewaySuspendPrepareReadyResult: Codable, Sendable {
     public let status: String
     public let suspensionid: String
     public let expiresatms: Int
-    public let counts: GatewaySuspendCounts
+    public let activecount: Int
     public let blockers: [GatewaySuspendBlocker]
 
     public init(
         status: String,
         suspensionid: String,
         expiresatms: Int,
-        counts: GatewaySuspendCounts,
+        activecount: Int,
         blockers: [GatewaySuspendBlocker])
     {
         self.status = status
         self.suspensionid = suspensionid
         self.expiresatms = expiresatms
-        self.counts = counts
+        self.activecount = activecount
         self.blockers = blockers
     }
 
@@ -616,7 +554,7 @@ public struct GatewaySuspendPrepareReadyResult: Codable, Sendable {
         case status
         case suspensionid = "suspensionId"
         case expiresatms = "expiresAtMs"
-        case counts
+        case activecount = "activeCount"
         case blockers
     }
 }

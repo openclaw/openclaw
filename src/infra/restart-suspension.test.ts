@@ -114,7 +114,7 @@ describe("scheduled restart during gateway suspension", () => {
     expect(prepared).toMatchObject({
       status: "busy",
       reason: "active-work",
-      counts: { rootRequests: 1 },
+      activeCount: 1,
     });
     expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(0);
 

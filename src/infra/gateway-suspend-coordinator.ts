@@ -161,7 +161,7 @@ export function prepareGatewaySuspend(params: {
       status: "ready",
       suspensionId: existing.suspensionId,
       expiresAtMs: existing.expiresAtMs,
-      counts: existing.snapshot.counts,
+      activeCount: existing.snapshot.counts.totalActive,
       blockers: existing.snapshot.blockers,
     };
   }
@@ -182,7 +182,7 @@ export function prepareGatewaySuspend(params: {
       status: "busy",
       reason: "gateway-draining",
       retryAfterMs: GATEWAY_SUSPEND_RETRY_AFTER_MS,
-      counts: snapshot.counts,
+      activeCount: snapshot.counts.totalActive,
       blockers: snapshot.blockers,
     };
   }
@@ -205,7 +205,7 @@ export function prepareGatewaySuspend(params: {
         status: "busy",
         reason: "active-work",
         retryAfterMs: GATEWAY_SUSPEND_RETRY_AFTER_MS,
-        counts: snapshot.counts,
+        activeCount: snapshot.counts.totalActive,
         blockers: snapshot.blockers,
       };
     }
@@ -230,7 +230,7 @@ export function prepareGatewaySuspend(params: {
       status: "ready",
       suspensionId,
       expiresAtMs,
-      counts: snapshot.counts,
+      activeCount: snapshot.counts.totalActive,
       blockers: snapshot.blockers,
     };
   } catch (err) {

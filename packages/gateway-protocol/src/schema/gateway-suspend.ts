@@ -4,25 +4,6 @@ import { Type } from "typebox";
 const SuspensionTokenSchema = Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" });
 const CountSchema = Type.Integer({ minimum: 0 });
 
-export const GatewaySuspendCountsSchema = Type.Object(
-  {
-    queueSize: CountSchema,
-    pendingReplies: CountSchema,
-    embeddedRuns: CountSchema,
-    cronRuns: CountSchema,
-    activeTasks: CountSchema,
-    rootRequests: CountSchema,
-    sessionAdmissions: CountSchema,
-    sessionMutations: CountSchema,
-    chatRuns: CountSchema,
-    queuedTurns: CountSchema,
-    terminalPersistence: CountSchema,
-    terminalSessions: CountSchema,
-    totalActive: CountSchema,
-  },
-  { additionalProperties: false },
-);
-
 export const GatewaySuspendTaskBlockerSchema = Type.Object(
   {
     taskId: Type.String(),
@@ -73,7 +54,7 @@ export const GatewaySuspendPrepareBusyResultSchema = Type.Object(
     status: Type.Literal("busy"),
     reason: Type.Union([Type.Literal("active-work"), Type.Literal("gateway-draining")]),
     retryAfterMs: CountSchema,
-    counts: GatewaySuspendCountsSchema,
+    activeCount: CountSchema,
     blockers: Type.Array(GatewaySuspendBlockerSchema),
   },
   { additionalProperties: false },
@@ -84,7 +65,7 @@ export const GatewaySuspendPrepareReadyResultSchema = Type.Object(
     status: Type.Literal("ready"),
     suspensionId: SuspensionTokenSchema,
     expiresAtMs: CountSchema,
-    counts: GatewaySuspendCountsSchema,
+    activeCount: CountSchema,
     blockers: Type.Array(GatewaySuspendBlockerSchema),
   },
   { additionalProperties: false },

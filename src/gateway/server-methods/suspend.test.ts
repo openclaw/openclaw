@@ -60,7 +60,7 @@ describe("gateway suspend handlers", () => {
     coordinator.prepare.mockReturnValueOnce({
       status: "busy",
       reason: "active-work",
-      counts: { queueSize: 1 },
+      activeCount: 1,
       blockers: [{ kind: "queue", count: 1, message: "busy" }],
     });
     const { respond, pauseScheduling, resumeScheduling } = await invoke("gateway.suspend.prepare", {

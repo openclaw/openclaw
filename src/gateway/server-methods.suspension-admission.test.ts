@@ -151,7 +151,7 @@ describe("gateway request suspension admission", () => {
       expect.objectContaining({
         status: "busy",
         reason: "active-work",
-        counts: expect.objectContaining({ rootRequests: 1 }),
+        activeCount: 1,
         blockers: expect.arrayContaining([
           expect.objectContaining({ kind: "root-request", count: 1 }),
         ]),
@@ -173,7 +173,7 @@ describe("gateway request suspension admission", () => {
       true,
       expect.objectContaining({
         status: "ready",
-        counts: expect.objectContaining({ rootRequests: 0, totalActive: 0 }),
+        activeCount: 0,
         blockers: [],
       }),
     );
