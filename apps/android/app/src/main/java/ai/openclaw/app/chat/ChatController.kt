@@ -1576,9 +1576,9 @@ class ChatController internal constructor(
         publishOutbox()
         return OutboxSendOutcome.Failed
       }
-      // The row stays 'sending' through the backoff: Sending rows expose no Delete/Retry
-      // actions, so the user cannot delete a row this loop is about to resend.
-      runCatching { outbox.updateStatus(item.id, ChatOutboxStatus.Sending, attempts, error) }
+      // A definitive rejection is safe to resume after process death, so persist it as queued
+      // before sleeping. The post-delay re-claim still makes a user deletion win over retry.
+      runCatching { outbox.updateStatus(item.id, ChatOutboxStatus.Queued, attempts, error) }
       publishOutbox()
       // Losing health or the gateway scope mid-flush means this item must not retry now:
       // requeue it for the next reconnect under the right scope. Without the scope check,

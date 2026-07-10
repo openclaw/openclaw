@@ -463,9 +463,9 @@ class ChatControllerOutboxTest {
       gateway.online = true
       gateway.sendResponse = { key -> """{"runId":"$key","status":"error"}""" }
       chat.handleGatewayEvent("health", null)
-      // Run up to the retry backoff delay; the row stays 'sending' so the UI offers no actions.
+      // Run up to the retry backoff delay; a definitive rejection remains safe to retry later.
       runCurrent()
-      assertEquals(ChatOutboxStatus.Sending, outbox.rows.getValue(id).status)
+      assertEquals(ChatOutboxStatus.Queued, outbox.rows.getValue(id).status)
       // Simulate the row disappearing through a non-UI path (e.g. session purge) mid-backoff.
       outbox.rows.remove(id)
       advanceUntilIdle()
@@ -496,6 +496,40 @@ class ChatControllerOutboxTest {
       assertEquals(ChatOutboxStatus.Failed, failed.status)
       assertEquals(OUTBOX_MAX_SEND_ATTEMPTS, failed.retryCount)
       assertNotNull(failed.lastError)
+    }
+
+  @Test
+  fun definitiveRejectionBackoffSurvivesControllerRestart() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val processJob = SupervisorJob()
+      val processScope = CoroutineScope(coroutineContext + processJob)
+      val first = controller(processScope, gateway, outbox)
+      first.load("main")
+      advanceUntilIdle()
+      first.sendMessageAwaitAcceptance(message = "retry after restart", thinkingLevel = "off", attachments = emptyList())
+
+      gateway.online = true
+      gateway.sendResponse = { key -> """{"runId":"$key","status":"error"}""" }
+      first.handleGatewayEvent("health", null)
+      runCurrent()
+
+      val retryable = outbox.rows.values.single()
+      assertEquals(ChatOutboxStatus.Queued, retryable.status)
+      assertEquals(1, retryable.retryCount)
+      assertEquals(1, gateway.sentMessages.size)
+      processJob.cancel()
+
+      val restarted = controller(this, gateway, outbox)
+      restarted.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertEquals(OUTBOX_MAX_SEND_ATTEMPTS, gateway.sentMessages.size)
+      val failed = restarted.outboxItems.value.single()
+      assertEquals(ChatOutboxStatus.Failed, failed.status)
+      assertEquals(OUTBOX_MAX_SEND_ATTEMPTS, failed.retryCount)
+      assertEquals("Chat failed before the run started", failed.lastError)
     }
 
   @Test
