@@ -1,5 +1,6 @@
 // Slack tests cover messages plugin behavior.
 import type { App } from "@slack/bolt";
+import { WebClient } from "@slack/web-api";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInboundSlackTestContext } from "../message-handler/prepare.test-helpers.js";
 import {
@@ -77,6 +78,10 @@ type MessageCase = {
   event?: Record<string, unknown>;
   body?: unknown;
 };
+
+function createListenerClient(label: string): WebClient {
+  return new WebClient(`xoxb-${label}`);
+}
 
 function createHandlers(eventName: RegisteredEventName, overrides?: SlackSystemEventTestOverrides) {
   const harness = createSlackSystemEventTestHarness(overrides);
@@ -244,7 +249,7 @@ async function runMessageCase(input: MessageCase = {}): Promise<void> {
 describe("registerSlackMessageEvents", () => {
   it("accepts two org workspaces and preserves each listener scope", async () => {
     const { handler, handleSlackMessage } = createEnterpriseHandlers("message");
-    const clients = [{ id: "one" }, { id: "two" }];
+    const clients = [createListenerClient("one"), createListenerClient("two")];
     for (const [index, teamId] of ["T111", "T222"].entries()) {
       await handler({
         event: {
@@ -277,7 +282,7 @@ describe("registerSlackMessageEvents", () => {
 
   it("passes enterprise file_share messages to the media-aware handler", async () => {
     const { handler, handleSlackMessage } = createEnterpriseHandlers("message");
-    const client = { id: "listener-client" };
+    const client = createListenerClient("file-share");
     await handler({
       event: {
         type: "message",
@@ -340,7 +345,7 @@ describe("registerSlackMessageEvents", () => {
       event,
       body: { api_app_id: "A_TEST" },
       context: { isEnterpriseInstall: true, enterpriseId: "E_TEST", teamId: "T111" },
-      client: {},
+      client: createListenerClient("bot-message"),
     });
 
     expect(handleSlackMessage).not.toHaveBeenCalled();
@@ -353,7 +358,7 @@ describe("registerSlackMessageEvents", () => {
       event: { ...makeAppMentionEvent(), bot_id: "B_OTHER" },
       body: { api_app_id: "A_TEST" },
       context: { isEnterpriseInstall: true, enterpriseId: "E_TEST", teamId: "T111" },
-      client: {},
+      client: createListenerClient("bot-mention"),
     });
 
     expect(handleSlackMessage).not.toHaveBeenCalled();
@@ -366,7 +371,7 @@ describe("registerSlackMessageEvents", () => {
       event: makeChangedEvent({ channel: "C123", user: "U123" }),
       body: { api_app_id: "A_TEST" },
       context: { isEnterpriseInstall: true, enterpriseId: "E_TEST", teamId: "T111" },
-      client: {},
+      client: createListenerClient("unsupported-subtype"),
     });
 
     expect(handleSlackMessage).not.toHaveBeenCalled();

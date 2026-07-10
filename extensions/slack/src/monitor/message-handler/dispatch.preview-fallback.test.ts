@@ -348,6 +348,7 @@ function createPreparedSlackMessage(params?: {
     isEnterpriseInstall: true;
     teamId: string;
     client: Record<string, unknown>;
+    deliveryClient: Record<string, unknown>;
   };
 }) {
   const routeSessionKey = params?.route?.sessionKey ?? "agent:agent-1:slack:C123";
@@ -426,6 +427,7 @@ async function dispatchNativeProgressScenario(params: {
     isEnterpriseInstall: true;
     teamId: string;
     client: Record<string, unknown>;
+    deliveryClient: Record<string, unknown>;
   };
 }) {
   mockedNativeStreaming = true;
@@ -1855,6 +1857,43 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
   });
 
+  it("omits the account token from Enterprise event-scoped typing writes", async () => {
+    const setSlackThreadStatus = vi.fn(async () => undefined);
+    const readClient = { id: "listener-read" };
+    const deliveryClient = { id: "listener-delivery" };
+    const eventScope = {
+      apiAppId: "A_TEST",
+      enterpriseId: "E_TEST",
+      isEnterpriseInstall: true as const,
+      teamId: "T_ENTERPRISE",
+      client: readClient,
+      deliveryClient,
+    };
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        eventScope,
+        setSlackThreadStatus,
+        typingReaction: "hourglass_flowing_sand",
+      }),
+    );
+
+    const typing = requireCapturedTyping();
+    await typing.start();
+    await typing.stop?.();
+
+    expect(setSlackThreadStatus).toHaveBeenCalledWith(expect.objectContaining({ eventScope }));
+    for (const [mock, label] of [
+      [reactSlackMessageMock, "react Slack message"],
+      [removeSlackReactionMock, "remove Slack reaction"],
+    ] as const) {
+      const call = requireMockCall(mock, 0, label);
+      const options = requireRecord(call[3], `${label} options`);
+      expect(options.client).toBe(deliveryClient);
+      expect(options).not.toHaveProperty("token");
+    }
+  });
+
   it("keeps Slack status reactions when channel replies are message-tool-only", async () => {
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
@@ -2757,6 +2796,10 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         info: vi.fn<() => Promise<{ user: Record<string, never> }>>(async () => ({ user: {} })),
       },
     };
+    const deliveryClient = {
+      chat: { postMessage: postMessageMock, update: chatUpdateMock },
+      users: eventClient.users,
+    };
 
     await dispatchNativeProgressScenario({
       finalPayload: { text: FINAL_REPLY_TEXT },
@@ -2767,11 +2810,12 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         isEnterpriseInstall: true,
         teamId: "T_ENTERPRISE",
         client: eventClient,
+        deliveryClient,
       },
     });
 
     expectMockCallArgFields(startSlackStreamMock, 0, "enterprise progress stream start params", {
-      client: eventClient,
+      client: deliveryClient,
       teamId: "T_ENTERPRISE",
     });
   });
@@ -3211,6 +3255,10 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         info: vi.fn<() => Promise<{ user: Record<string, never> }>>(async () => ({ user: {} })),
       },
     };
+    const deliveryClient = {
+      chat: { postMessage: postMessageMock, update: chatUpdateMock },
+      users: eventClient.users,
+    };
 
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
@@ -3220,12 +3268,13 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
           isEnterpriseInstall: true,
           teamId: "T_ENTERPRISE",
           client: eventClient,
+          deliveryClient,
         },
       }),
     );
 
     expectMockCallArgFields(startSlackStreamMock, 0, "enterprise Slack stream start params", {
-      client: eventClient,
+      client: deliveryClient,
       teamId: "T_ENTERPRISE",
     });
   });

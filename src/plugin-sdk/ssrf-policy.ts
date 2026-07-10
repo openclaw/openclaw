@@ -285,7 +285,7 @@ function isHostnameAllowedBySuffixAllowlist(
   if (allowlist.includes("*")) {
     return true;
   }
-  const normalized = normalizeLowercaseStringOrEmpty(hostname);
+  const normalized = normalizeHostnameSuffix(hostname);
   return allowlist.some((entry) => normalized === entry || normalized.endsWith(`.${entry}`));
 }
 

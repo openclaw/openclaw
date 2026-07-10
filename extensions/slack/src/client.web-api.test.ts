@@ -1,8 +1,9 @@
 // Slack tests cover real Web API routing behavior.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { WebClient } from "@slack/web-api";
 import { afterEach, describe, expect, it } from "vitest";
-import { createSlackWebClient } from "./client.js";
+import { createSlackWebClient, getSlackListenerDeliveryClient } from "./client.js";
 
 const SLACK_API_URL_KEYS = ["SLACK_API_URL"] as const;
 const PROXY_KEYS = [
@@ -20,6 +21,7 @@ const originalEnv = { ...process.env };
 
 type SlackApiRequest = {
   authorization?: string;
+  body?: string;
   method?: string;
   url?: string;
 };
@@ -79,11 +81,119 @@ async function startSlackApiServer(requests: SlackApiRequest[]): Promise<{
   };
 }
 
+async function startDroppedResponseSlackApiServer(requests: SlackApiRequest[]): Promise<{
+  baseUrl: string;
+  close(): Promise<void>;
+}> {
+  const server = createServer((request) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.once("end", () => {
+      requests.push({
+        authorization: request.headers.authorization,
+        body: Buffer.concat(chunks).toString("utf8"),
+        method: request.method,
+        url: request.url,
+      });
+      request.socket.destroy();
+    });
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: () => closeServer(server),
+  };
+}
+
 afterEach(() => {
   restoreTestEnv();
 });
 
 describe("Slack Web API routing", () => {
+  it("keeps dropped Enterprise completion responses to one team-scoped request", async () => {
+    for (const key of TEST_ENV_KEYS) {
+      delete process.env[key];
+    }
+    const requests: SlackApiRequest[] = [];
+    const server = await startDroppedResponseSlackApiServer(requests);
+    try {
+      for (const { teamId, token } of [
+        { teamId: "TENTERPRISE1", token: "xoxb-enterprise-one" },
+        { teamId: "TENTERPRISE2", token: "xoxb-enterprise-two" },
+      ]) {
+        const headers = {
+          Authorization: "Bearer stale-app-token",
+          "X-Slack-Test": "preserved",
+        };
+        const clientOptions = {
+          headers,
+          slackApiUrl: `${server.baseUrl}/api/`,
+          retryConfig: { retries: 2 },
+          timeout: 1000,
+        };
+        const listenerClient = new WebClient(token, clientOptions);
+        const client = getSlackListenerDeliveryClient({
+          listenerClient,
+          teamId,
+          clientOptions,
+        });
+        expect(client).toBeDefined();
+        if (!client) {
+          throw new Error("missing Enterprise delivery client");
+        }
+        expect(client).not.toBe(listenerClient);
+        expect(getSlackListenerDeliveryClient({ listenerClient, teamId, clientOptions })).toBe(
+          client,
+        );
+        expect(
+          getSlackListenerDeliveryClient({
+            listenerClient,
+            teamId: `${teamId}OTHER`,
+            clientOptions,
+          }),
+        ).toBeUndefined();
+        expect(clientOptions).toEqual({
+          headers: {
+            Authorization: "Bearer stale-app-token",
+            "X-Slack-Test": "preserved",
+          },
+          slackApiUrl: `${server.baseUrl}/api/`,
+          retryConfig: { retries: 2 },
+          timeout: 1000,
+        });
+        expect(headers).toEqual({
+          Authorization: "Bearer stale-app-token",
+          "X-Slack-Test": "preserved",
+        });
+        await expect(
+          client.files.completeUploadExternal({
+            files: [{ id: "F123", title: "proof.txt" }],
+            channel_id: "C123",
+          }),
+        ).rejects.toThrow();
+      }
+
+      expect(requests).toHaveLength(2);
+      for (const [index, expected] of [
+        { teamId: "TENTERPRISE1", token: "xoxb-enterprise-one" },
+        { teamId: "TENTERPRISE2", token: "xoxb-enterprise-two" },
+      ].entries()) {
+        const request = requests[index];
+        expect(request).toMatchObject({
+          authorization: `Bearer ${expected.token}`,
+          method: "POST",
+          url: "/api/files.completeUploadExternal",
+        });
+        expect(new URLSearchParams(request?.body).get("team_id")).toBe(expected.teamId);
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   it("routes real WebClient requests to the SLACK_API_URL root", async () => {
     for (const key of TEST_ENV_KEYS) {
       delete process.env[key];

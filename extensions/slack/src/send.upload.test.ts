@@ -1,6 +1,7 @@
 // Slack tests cover send.upload plugin behavior.
 import type { WebClient } from "@slack/web-api";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./blocks.test-helpers.js";
@@ -467,8 +468,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
       signal: expect.any(AbortSignal),
       requireHttps: true,
       policy: {
-        hostnameAllowlist: ["files.slack.com", "files.slack-gov.com"],
-        allowRfc2544BenchmarkRange: true,
+        hostnameAllowlist: ["slack.com", "*.slack.com"],
       },
       capture: false,
       auditContext: "slack-upload-file",
@@ -558,11 +558,27 @@ describe("sendMessageSlack file upload with user IDs", () => {
     );
   });
 
-  it("allows GovSlack upload destinations through the real hostname guard", async () => {
-    const client = createUploadTestClient();
+  it.each([
+    [
+      "a future commercial Slack subdomain",
+      "https://slack.com/api/",
+      "https://future-upload.slack.com/upload/v1/commercial-capability",
+    ],
+    [
+      "a future GovSlack subdomain",
+      "https://slack-gov.com/api/",
+      "https://future-upload.slack-gov.com/upload/v1/gov-capability",
+    ],
+    [
+      "a Slack-owned HTTPS capability returned by a custom API root",
+      "https://slack-relay.example/api/",
+      "https://future-upload.slack.com/upload/v1/relayed-capability",
+    ],
+  ])("allows %s through the real hostname guard", async (_label, apiUrl, uploadUrl) => {
+    const client = createUploadTestClient(apiUrl);
     client.files.getUploadURLExternal.mockResolvedValueOnce({
       ok: true,
-      upload_url: "https://files.slack-gov.com/upload/v1/gov-capability",
+      upload_url: uploadUrl,
       file_id: "F001",
     });
     const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
@@ -570,14 +586,18 @@ describe("sendMessageSlack file upload with user IDs", () => {
     );
     const networkFetch = vi.fn(async () => new Response("ok", { status: 200 }));
     fetchWithSsrFGuard.mockImplementationOnce(async (params) =>
-      actual.fetchWithSsrFGuard({ ...params, fetchImpl: networkFetch }),
+      actual.fetchWithSsrFGuard({
+        ...params,
+        fetchImpl: networkFetch,
+        lookupFn: (async () => [{ address: "93.184.216.34", family: 4 }]) as unknown as LookupFn,
+      }),
     );
 
     await sendMessageSlack("channel:C123CHAN", "caption", {
       token: "xoxb-test",
       cfg: SLACK_TEST_CFG,
       client,
-      mediaUrl: "/tmp/gov-slack.png",
+      mediaUrl: "/tmp/slack-owned-subdomain.png",
     });
 
     expect(networkFetch).toHaveBeenCalledOnce();
@@ -585,12 +605,46 @@ describe("sendMessageSlack file upload with user IDs", () => {
   });
 
   it.each([
-    ["public non-Slack", "https://example.com/upload/v1/not-slack", /not in allowlist/i],
-    ["plaintext Slack", "http://files.slack.com/upload/v1/plaintext", /must use https/i],
+    [
+      "public non-Slack",
+      "https://slack.com/api/",
+      "https://example.com/upload/v1/not-slack",
+      /not in allowlist/i,
+    ],
+    [
+      "plaintext Slack",
+      "https://slack.com/api/",
+      "http://files.slack.com/upload/v1/plaintext",
+      /must use https/i,
+    ],
+    [
+      "commercial Slack to GovSlack",
+      "https://slack.com/api/",
+      "https://files.slack-gov.com/upload/v1/cross-environment",
+      /not in allowlist/i,
+    ],
+    [
+      "GovSlack to commercial Slack",
+      "https://slack-gov.com/api/",
+      "https://files.slack.com/upload/v1/cross-environment",
+      /not in allowlist/i,
+    ],
+    [
+      "trailing-dot commercial Slack to GovSlack",
+      "https://slack.com./api/",
+      "https://files.slack-gov.com/upload/v1/cross-environment",
+      /not in allowlist/i,
+    ],
+    [
+      "trailing-dot GovSlack to commercial Slack",
+      "https://slack-gov.com./api/",
+      "https://files.slack.com/upload/v1/cross-environment",
+      /not in allowlist/i,
+    ],
   ])(
-    "rejects %s default upload destinations before network access",
-    async (_label, uploadUrl, error) => {
-      const client = createUploadTestClient();
+    "rejects %s upload destinations before network access",
+    async (_label, apiUrl, uploadUrl, error) => {
+      const client = createUploadTestClient(apiUrl);
       client.files.getUploadURLExternal.mockResolvedValueOnce({
         ok: true,
         upload_url: uploadUrl,

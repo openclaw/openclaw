@@ -81,6 +81,7 @@ type SlackEnterpriseEventScope = Readonly<{
   teamId: string;
   isEnterpriseInstall: true;
   client: WebClient;
+  deliveryClient: WebClient;
 }>;
 
 type SlackEnterpriseDelivery = Readonly<{
@@ -355,6 +356,7 @@ function resolveEnterpriseEventScope(params: {
     !normalizeOptionalString(scope.enterpriseId) ||
     !/^T[A-Z0-9]+$/i.test(scope.teamId) ||
     !scope.client ||
+    !scope.deliveryClient ||
     params.opts.client !== scope.client
   ) {
     throw new Error("invalid_enterprise_slack_listener_scope");
@@ -937,7 +939,7 @@ export async function sendMessageSlack(
   const enterpriseEventScope = resolveEnterpriseEventScope({ account, opts });
   const enterpriseDelivery = enterpriseEventScope
     ? Object.freeze({
-        client: enterpriseEventScope.client,
+        client: enterpriseEventScope.deliveryClient,
         teamId: enterpriseEventScope.teamId,
       })
     : undefined;

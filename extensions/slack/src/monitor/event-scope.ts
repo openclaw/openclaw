@@ -1,6 +1,7 @@
 // Slack plugin module validates non-serializable per-event Enterprise Grid scope.
-import type { WebClient } from "@slack/web-api";
+import type { WebClient, WebClientOptions } from "@slack/web-api";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getSlackListenerDeliveryClient } from "../client.js";
 import type { SlackInstallationIdentity } from "./enterprise-install.js";
 
 export type SlackEventScope = {
@@ -8,9 +9,10 @@ export type SlackEventScope = {
   enterpriseId: string;
   teamId: string;
   isEnterpriseInstall: true;
-  // Keep Bolt's exact listener client: Bolt pools it by authorized team and WebClient injects
-  // that client's team_id into every API call. Do not recreate it or add team_id payloads here.
+  // Bolt's exact pooled client retains normal retries for listener reads.
   client: WebClient;
+  // One-shot sends use a distinct zero-retry client with the same token, transport, and team scope.
+  deliveryClient: WebClient;
 };
 
 export type SlackEventScopeResolution =
@@ -26,7 +28,9 @@ export type SlackEventScopeResolution =
         | "wrong_enterprise"
         | "missing_team_id"
         | "invalid_team_id"
-        | "missing_listener_client";
+        | "missing_listener_client"
+        | "missing_listener_token"
+        | "listener_team_mismatch";
     };
 
 export function resolveSlackEventScope(params: {
@@ -38,6 +42,7 @@ export function resolveSlackEventScope(params: {
     teamId?: unknown;
   };
   client?: WebClient;
+  clientOptions?: WebClientOptions;
 }): SlackEventScopeResolution {
   const context = params.context ?? {};
   if (params.identity.kind !== "enterprise") {
@@ -74,6 +79,17 @@ export function resolveSlackEventScope(params: {
   if (!params.client) {
     return { ok: false, reason: "missing_listener_client" };
   }
+  if (!normalizeOptionalString(params.client.token)) {
+    return { ok: false, reason: "missing_listener_token" };
+  }
+  const deliveryClient = getSlackListenerDeliveryClient({
+    listenerClient: params.client,
+    teamId,
+    clientOptions: params.clientOptions,
+  });
+  if (!deliveryClient) {
+    return { ok: false, reason: "listener_team_mismatch" };
+  }
   return {
     ok: true,
     scope: {
@@ -82,6 +98,7 @@ export function resolveSlackEventScope(params: {
       teamId,
       isEnterpriseInstall: true,
       client: params.client,
+      deliveryClient,
     },
   };
 }

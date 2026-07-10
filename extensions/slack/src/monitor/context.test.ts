@@ -103,6 +103,42 @@ describe("createSlackMonitorContext isChannelAllowed", () => {
   });
 });
 
+describe("createSlackMonitorContext Enterprise writes", () => {
+  it("uses the delivery client for thread status without overriding its listener token", async () => {
+    const appSetStatus = vi.fn();
+    const readSetStatus = vi.fn();
+    const deliverySetStatus = vi.fn();
+    const ctx = createTestContext({
+      appClient: {
+        assistant: { threads: { setStatus: appSetStatus } },
+      } as unknown as App["client"],
+    });
+    const eventScope = {
+      apiAppId: "A_EXPECTED",
+      enterpriseId: "E_EXPECTED",
+      teamId: "T_EXPECTED",
+      isEnterpriseInstall: true,
+      client: { assistant: { threads: { setStatus: readSetStatus } } },
+      deliveryClient: { assistant: { threads: { setStatus: deliverySetStatus } } },
+    } as unknown as SlackEventScope;
+
+    await ctx.setSlackThreadStatus({
+      channelId: "C123",
+      threadTs: "123.456",
+      status: "is typing...",
+      eventScope,
+    });
+
+    expect(deliverySetStatus).toHaveBeenCalledWith({
+      channel_id: "C123",
+      thread_ts: "123.456",
+      status: "is typing...",
+    });
+    expect(readSetStatus).not.toHaveBeenCalled();
+    expect(appSetStatus).not.toHaveBeenCalled();
+  });
+});
+
 describe("createSlackMonitorContext resolveSlackSystemEventSessionKey", () => {
   it("routes threaded interaction events to the Slack thread session", () => {
     const ctx = createTestContext();
@@ -175,6 +211,7 @@ describe("createSlackMonitorContext channel metadata cache", () => {
         client: {
           conversations: { info: vi.fn().mockRejectedValue(new Error("missing_scope")) },
         },
+        deliveryClient: {},
       }) as unknown as SlackEventScope;
     const ctx = createTestContext();
     const firstTeam = createScope("T_FIRST");

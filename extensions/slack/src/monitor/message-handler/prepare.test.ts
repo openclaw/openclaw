@@ -306,6 +306,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       isEnterpriseInstall: true,
       teamId: "T_ENTERPRISE",
       client: {} as SlackEventScope["client"],
+      deliveryClient: {} as SlackEventScope["deliveryClient"],
     } satisfies SlackEventScope;
 
     const prepared = await prepareSlackMessage({

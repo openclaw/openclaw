@@ -219,7 +219,7 @@ async function fetchSlackChannelMemberIds(
   let cursor: string | undefined;
   do {
     const response = await (eventScope?.client ?? ctx.app.client).conversations.members({
-      token: ctx.botToken,
+      ...(eventScope ? {} : { token: ctx.botToken }),
       channel: channelId,
       limit: 999,
       ...(cursor ? { cursor } : {}),

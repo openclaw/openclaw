@@ -324,7 +324,7 @@ async function resolveSlackHistoryMediaForPendingRecord(params: {
     threadStarter: params.threadStarter,
     isBotMessage: params.isBotMessage,
     client: params.eventScope?.client ?? params.ctx.app.client,
-    botToken: params.ctx.botToken,
+    botToken: params.eventScope?.client.token ?? params.ctx.botToken,
     mediaMaxBytes: Math.min(params.ctx.mediaMaxBytes, SLACK_HISTORY_MEDIA_MAX_BYTES),
     mediaReadIdleTimeoutMs: SLACK_HISTORY_MEDIA_IDLE_TIMEOUT_MS,
     mediaTotalTimeoutMs: SLACK_HISTORY_MEDIA_TOTAL_TIMEOUT_MS,
@@ -610,8 +610,12 @@ async function authorizeSlackInboundMessage(params: {
       sendPairingReply: async (text) => {
         await sendMessageSlack(message.channel, text, {
           cfg: ctx.cfg,
-          token: ctx.botToken,
-          client: params.eventScope?.client ?? ctx.app.client,
+          ...(params.eventScope
+            ? {
+                client: params.eventScope.client,
+                enterpriseEventScope: params.eventScope,
+              }
+            : { token: ctx.botToken, client: ctx.app.client }),
           accountId: account.accountId,
         });
       },
@@ -974,7 +978,7 @@ export async function prepareSlackMessage(params: {
         isThreadReply,
         threadStarter,
         isBotMessage,
-        botToken: ctx.botToken,
+        botToken: opts.eventScope?.client.token ?? ctx.botToken,
         client: slackClient,
         mediaMaxBytes: ctx.mediaMaxBytes,
         resolveUserName: (userId) => ctx.resolveUserName(userId, opts.eventScope),
@@ -1321,8 +1325,8 @@ export async function prepareSlackMessage(params: {
   const ackReactionPromise =
     !statusReactionsWillHandle && shouldSendAckReaction && ackReactionMessageTs && ackReactionValue
       ? reactSlackMessage(message.channel, ackReactionMessageTs, ackReactionValue, {
-          token: ctx.botToken,
-          client: slackClient,
+          ...(opts.eventScope ? {} : { token: ctx.botToken }),
+          client: opts.eventScope?.deliveryClient ?? slackClient,
         }).then(
           () => true,
           (err: unknown) => {

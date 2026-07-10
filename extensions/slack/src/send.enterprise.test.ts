@@ -63,21 +63,26 @@ function createEnterpriseClient(): EnterpriseTestClient {
   } as unknown as EnterpriseTestClient;
 }
 
-function enterpriseEventScope(client: WebClient, teamId = "T1") {
+function enterpriseEventScope(
+  client: WebClient,
+  teamId = "T1",
+  deliveryClient: WebClient = client,
+) {
   return {
     apiAppId: "A1",
     enterpriseId: "E1",
     isEnterpriseInstall: true as const,
     teamId,
     client,
+    deliveryClient,
   };
 }
 
-function enterpriseOptions(client: WebClient, teamId = "T1") {
+function enterpriseOptions(client: WebClient, teamId = "T1", deliveryClient: WebClient = client) {
   return {
     cfg: ENTERPRISE_CFG,
     client,
-    enterpriseEventScope: enterpriseEventScope(client, teamId),
+    enterpriseEventScope: enterpriseEventScope(client, teamId, deliveryClient),
   };
 }
 
@@ -143,11 +148,12 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     expect(otherClient.chat.postMessage).not.toHaveBeenCalled();
   });
 
-  it("uses the exact listener client without a token or team_id method payload", async () => {
-    const client = createEnterpriseClient();
+  it("keeps the listener client for scope and sends through the exact delivery client", async () => {
+    const listenerClient = createEnterpriseClient();
+    const deliveryClient = createEnterpriseClient();
 
     const result = await sendMessageSlack("channel:c08gqh53ejm", "hello", {
-      ...enterpriseOptions(client),
+      ...enterpriseOptions(listenerClient, "T1", deliveryClient),
       cfg: {
         channels: {
           slack: {
@@ -160,15 +166,16 @@ describe("sendMessageSlack Enterprise listener scope", () => {
       },
     });
 
-    expect(client.chat.postMessage).toHaveBeenCalledOnce();
-    expect(postPayload(client)).toEqual({
+    expect(listenerClient.chat.postMessage).not.toHaveBeenCalled();
+    expect(deliveryClient.chat.postMessage).toHaveBeenCalledOnce();
+    expect(postPayload(deliveryClient)).toEqual({
       channel: "C08GQH53EJM",
       text: "hello",
       unfurl_links: false,
       unfurl_media: true,
     });
-    expect(postPayload(client)).not.toHaveProperty("team_id");
-    expect(client.conversations.open).not.toHaveBeenCalled();
+    expect(postPayload(deliveryClient)).not.toHaveProperty("team_id");
+    expect(deliveryClient.conversations.open).not.toHaveBeenCalled();
     expect(result).toMatchObject({ messageId: "123.456", channelId: "C123" });
   });
 
@@ -203,31 +210,40 @@ describe("sendMessageSlack Enterprise listener scope", () => {
   });
 
   it("serializes one workspace and snapshots its validated client before enqueue", async () => {
-    const firstClient = createEnterpriseClient();
-    const secondClient = createEnterpriseClient();
-    const replacementClient = createEnterpriseClient();
+    const firstListenerClient = createEnterpriseClient();
+    const firstDeliveryClient = createEnterpriseClient();
+    const secondListenerClient = createEnterpriseClient();
+    const secondDeliveryClient = createEnterpriseClient();
+    const replacementListenerClient = createEnterpriseClient();
+    const replacementDeliveryClient = createEnterpriseClient();
     const firstDeferred = deferredPostMessage("1.000");
-    firstClient.chat.postMessage.mockReturnValueOnce(firstDeferred.promise);
-    const secondScope = enterpriseEventScope(secondClient, "T1");
+    firstDeliveryClient.chat.postMessage.mockReturnValueOnce(firstDeferred.promise);
+    const secondScope = enterpriseEventScope(secondListenerClient, "T1", secondDeliveryClient);
     const secondOptions = {
       cfg: ENTERPRISE_CFG,
-      client: secondClient as WebClient,
+      client: secondListenerClient as WebClient,
       enterpriseEventScope: secondScope,
     };
 
-    const first = sendMessageSlack("C123", "first", enterpriseOptions(firstClient, "T1"));
-    await vi.waitFor(() => expect(firstClient.chat.postMessage).toHaveBeenCalledOnce());
+    const first = sendMessageSlack(
+      "C123",
+      "first",
+      enterpriseOptions(firstListenerClient, "T1", firstDeliveryClient),
+    );
+    await vi.waitFor(() => expect(firstDeliveryClient.chat.postMessage).toHaveBeenCalledOnce());
     const second = sendMessageSlack("C123", "second", secondOptions);
     await Promise.resolve();
-    expect(secondClient.chat.postMessage).not.toHaveBeenCalled();
+    expect(secondDeliveryClient.chat.postMessage).not.toHaveBeenCalled();
 
-    secondOptions.client = replacementClient;
-    secondScope.client = replacementClient;
+    secondOptions.client = replacementListenerClient;
+    secondScope.client = replacementListenerClient;
+    secondScope.deliveryClient = replacementDeliveryClient;
     firstDeferred.release();
     await Promise.all([first, second]);
 
-    expect(secondClient.chat.postMessage).toHaveBeenCalledOnce();
-    expect(replacementClient.chat.postMessage).not.toHaveBeenCalled();
+    expect(secondDeliveryClient.chat.postMessage).toHaveBeenCalledOnce();
+    expect(replacementListenerClient.chat.postMessage).not.toHaveBeenCalled();
+    expect(replacementDeliveryClient.chat.postMessage).not.toHaveBeenCalled();
   });
 
   it("workspace-qualifies thread participation", async () => {
@@ -275,19 +291,20 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     );
   });
 
-  it("uploads the first caption chunk and posts the remainder with the listener client", async () => {
+  it("uploads the first caption chunk and posts the remainder with the delivery client", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuard.mockResolvedValue({
       response: { ok: true, status: 200 },
       release,
     });
-    const client = createEnterpriseClient();
-    client.chat.postMessage
+    const listenerClient = createEnterpriseClient();
+    const deliveryClient = createEnterpriseClient();
+    deliveryClient.chat.postMessage
       .mockResolvedValueOnce({ ok: true, ts: "123.001", channel: "C123" })
       .mockResolvedValueOnce({ ok: true, ts: "123.002", channel: "C123" });
 
     const result = await sendMessageSlack("C123", "12345678abcdefghZ", {
-      ...enterpriseOptions(client),
+      ...enterpriseOptions(listenerClient, "T1", deliveryClient),
       mediaUrl: "https://example.com/image.png",
       textLimit: 8,
       mediaMaxBytes: 5,
@@ -300,12 +317,13 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
       expect.objectContaining({ auditContext: "slack-enterprise-immediate-upload" }),
     );
-    expect(client.files.completeUploadExternal).toHaveBeenCalledWith({
+    expect(listenerClient.files.completeUploadExternal).not.toHaveBeenCalled();
+    expect(deliveryClient.files.completeUploadExternal).toHaveBeenCalledWith({
       files: [{ id: "F123", title: "image.png" }],
       channel_id: "C123",
       initial_comment: "12345678",
     });
-    expect(client.chat.postMessage.mock.calls.map((call) => call[0]?.text)).toEqual([
+    expect(deliveryClient.chat.postMessage.mock.calls.map((call) => call[0]?.text)).toEqual([
       "abcdefgh",
       "Z",
     ]);

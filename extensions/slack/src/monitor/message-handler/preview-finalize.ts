@@ -30,14 +30,14 @@ function blocksMatch(expected?: (Block | KnownBlock)[], actual?: unknown[]): boo
 
 async function readSlackMessageAfterEditError(params: {
   client: WebClient;
-  token: string;
+  token?: string;
   channelId: string;
   messageId: string;
   threadTs?: string;
 }): Promise<SlackReadbackMessage | null> {
   if (params.threadTs) {
     const replyResult = await params.client.conversations.replies({
-      token: params.token,
+      ...(params.token ? { token: params.token } : {}),
       channel: params.channelId,
       ts: params.threadTs,
       latest: params.messageId,
@@ -51,7 +51,7 @@ async function readSlackMessageAfterEditError(params: {
   }
 
   const historyResult = await params.client.conversations.history({
-    token: params.token,
+    ...(params.token ? { token: params.token } : {}),
     channel: params.channelId,
     latest: params.messageId,
     oldest: params.messageId,
@@ -67,7 +67,7 @@ async function readSlackMessageAfterEditError(params: {
 
 async function didSlackPreviewEditApplyAfterError(params: {
   client: WebClient;
-  token: string;
+  token?: string;
   channelId: string;
   messageId: string;
   text: string;
@@ -91,7 +91,8 @@ async function didSlackPreviewEditApplyAfterError(params: {
 
 export async function finalizeSlackPreviewEdit(params: {
   client: WebClient;
-  token: string;
+  readClient?: WebClient;
+  token?: string;
   accountId?: string;
   channelId: string;
   messageId: string;
@@ -101,7 +102,7 @@ export async function finalizeSlackPreviewEdit(params: {
 }): Promise<void> {
   try {
     await editSlackMessage(params.channelId, params.messageId, params.text, {
-      token: params.token,
+      ...(params.token ? { token: params.token } : {}),
       accountId: params.accountId,
       client: params.client,
       ...(params.blocks?.length ? { blocks: params.blocks } : {}),
@@ -109,8 +110,8 @@ export async function finalizeSlackPreviewEdit(params: {
   } catch (err) {
     try {
       const applied = await didSlackPreviewEditApplyAfterError({
-        client: params.client,
-        token: params.token,
+        client: params.readClient ?? params.client,
+        ...(params.token ? { token: params.token } : {}),
         channelId: params.channelId,
         messageId: params.messageId,
         text: params.text,

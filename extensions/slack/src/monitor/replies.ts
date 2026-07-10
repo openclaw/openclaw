@@ -54,7 +54,7 @@ export async function deliverReplies(params: {
   cfg: OpenClawConfig;
   replies: ReplyPayload[];
   target: string;
-  token: string;
+  token?: string;
   accountId?: string;
   runtime: RuntimeEnv;
   textLimit: number;
@@ -92,7 +92,7 @@ export async function deliverReplies(params: {
   }): Promise<SlackSendResult> => {
     return await sendMessageSlack(params.target, input.text, {
       cfg: params.cfg,
-      token: params.token,
+      ...(!params.eventScope && params.token ? { token: params.token } : {}),
       threadTs: input.threadTs,
       accountId: params.accountId,
       mediaUrl: input.mediaUrl,
