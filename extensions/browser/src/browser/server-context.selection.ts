@@ -195,8 +195,9 @@ export function createProfileSelectionOps({
       return candidates.find((t) => t.targetId === resolved.targetId) ?? null;
     };
 
+    const stickyTargetId = normalizeOptionalString(profileState.lastTargetId);
     const pickDefault = () => {
-      const last = normalizeOptionalString(profileState.lastTargetId) ?? "";
+      const last = stickyTargetId ?? "";
       const lastResolved = last ? resolveById(last, { exactTargetId: true }) : null;
       if (lastResolved && lastResolved !== "AMBIGUOUS") {
         return lastResolved;
@@ -217,7 +218,7 @@ export function createProfileSelectionOps({
       throw new BrowserTargetAmbiguousError();
     }
     if (!chosen) {
-      throw new BrowserTabNotFoundError(targetId ? { input: targetId } : undefined);
+      throw new BrowserTabNotFoundError({ input: targetId ?? stickyTargetId });
     }
     profileState.lastTargetId = chosen.targetId;
     return chosen;

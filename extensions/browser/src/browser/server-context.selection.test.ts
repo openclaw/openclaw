@@ -204,7 +204,7 @@ describe("browser profile tab selection", () => {
     const { selection, profileState } = createSelectionHarness({ snapshots: [[other]] });
     profileState.lastTargetId = "STALE";
 
-    await expect(selection.ensureTabAvailable()).rejects.toThrow(/tab not found/i);
+    await expect(selection.ensureTabAvailable()).rejects.toThrow(/use action=tabs/i);
     expect(profileState.lastTargetId).toBe("STALE");
   });
 

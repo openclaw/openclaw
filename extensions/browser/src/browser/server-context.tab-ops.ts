@@ -133,7 +133,7 @@ function findConfidentReplacement(params: {
   newCandidates: BrowserTab[];
 }): BrowserTab | undefined {
   const { staleEntry, staleEntries, newCandidates } = params;
-  // Preserve shipped form-submit continuity when the entire target set is one-for-one.
+  // Preserve shipped form-submit continuity when the replacement set is one-for-one.
   if (staleEntries.length === 1 && newCandidates.length === 1) {
     return newCandidates[0];
   }
