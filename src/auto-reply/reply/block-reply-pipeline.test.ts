@@ -511,6 +511,7 @@ describe("createBlockReplyPipeline abort + finalization recovery", () => {
           await waitForAbort(options?.abortSignal);
           return "timeout" as never;
         }
+        return undefined;
       },
       timeoutMs: 1,
       coalescing: {
