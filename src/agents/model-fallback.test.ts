@@ -1303,6 +1303,49 @@ describe("runWithModelFallback", () => {
     expect(result.attempts).toStrictEqual([]);
   });
 
+  it("lets a pinned Codex harness bypass unrelated provider auth cooldowns", async () => {
+    const cfg = makeCfg();
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn<AgentHarness["runAttempt"]>(async () => {
+          throw new Error("fallback test should not invoke the harness runtime");
+        }),
+      },
+      { ownerPluginId: "codex-test" },
+    );
+    const tempDir = await makeAuthTempDir();
+    setAuthRuntimeStore(tempDir, {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "anthropic:default": { type: "api_key", provider: "anthropic", key: "test-key" },
+      },
+      usageStats: {
+        "anthropic:default": {
+          disabledUntil: Date.now() + 60_000,
+          disabledReason: "billing",
+          failureCounts: { billing: 1 },
+        },
+      },
+    });
+    const run = vi.fn().mockResolvedValueOnce("native codex ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      agentDir: tempDir,
+      resolveAgentHarnessRuntimeOverride: () => "codex",
+      run,
+    });
+
+    expect(result.result).toBe("native codex ok");
+    expect(run).toHaveBeenCalledOnce();
+    expect(result.attempts).toStrictEqual([]);
+  });
+
   it("lets configured CLI runtimes bypass stale provider auth cooldowns", async () => {
     const cfg = makeCfg({
       agents: {

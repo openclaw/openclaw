@@ -94,6 +94,143 @@ describe("Codex app-server binding store", () => {
     });
   });
 
+  it("fails closed on malformed pending supervision state", async () => {
+    expect(
+      readCodexAppServerThreadBinding({
+        threadId: "thread-source",
+        cwd: "/repo",
+        preserveNativeModel: true,
+        pendingSupervisionBranch: {
+          sourceThreadId: "thread-source",
+          cleanupThreadIds: ["thread-probe", "thread-probe"],
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      readCodexAppServerThreadBinding({
+        threadId: "thread-other",
+        cwd: "/repo",
+        preserveNativeModel: true,
+        pendingSupervisionBranch: { sourceThreadId: "thread-source" },
+      }),
+    ).toBeUndefined();
+    expect(
+      readCodexAppServerThreadBinding({
+        threadId: "thread-source",
+        cwd: "/repo",
+        pendingSupervisionBranch: { sourceThreadId: "thread-source", unknown: true },
+      }),
+    ).toBeUndefined();
+
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-corrupt",
+    };
+    state.register(bindingStoreKey(identity), {
+      version: 1,
+      state: "active",
+      binding: {
+        threadId: "thread-source",
+        cwd: "/repo",
+        preserveNativeModel: true,
+        pendingSupervisionBranch: {
+          sourceThreadId: "thread-source",
+          cleanupThreadIds: ["thread-source"],
+        },
+      },
+    } as never);
+
+    await expect(store.read(identity)).rejects.toThrow("Invalid Codex app-server binding row");
+  });
+
+  it("fails closed on malformed private supervision ownership", () => {
+    const valid = {
+      threadId: "thread-source",
+      cwd: "/repo",
+      connectionScope: "supervision",
+      supervisionSourceThreadId: "thread-source",
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
+      pendingSupervisionBranch: { sourceThreadId: "thread-source" },
+    };
+
+    expect(readCodexAppServerThreadBinding({ ...valid, connectionScope: "user" })).toBeUndefined();
+    expect(readCodexAppServerThreadBinding({ ...valid, connectionScope: {} })).toBeUndefined();
+    expect(
+      readCodexAppServerThreadBinding({ ...valid, supervisionSourceThreadId: undefined }),
+    ).toBeUndefined();
+  });
+
+  it("commits a pending supervision branch only from its exact cleanup snapshot", async () => {
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-supervision-cas",
+    };
+    const initial = { sourceThreadId: "thread-source", lastTurnId: "turn-terminal" };
+    await expect(
+      store.mutate(identity, {
+        kind: "set",
+        if: { kind: "absent" },
+        binding: {
+          threadId: "thread-source",
+          cwd: "/repo",
+          connectionScope: "supervision",
+          supervisionSourceThreadId: "thread-source",
+          preserveNativeModel: true,
+          conversationSourceTransferComplete: true,
+          pendingSupervisionBranch: initial,
+        },
+      }),
+    ).resolves.toBe(true);
+    const tracked = { ...initial, cleanupThreadIds: ["thread-probe"] };
+    await expect(
+      store.mutate(identity, {
+        kind: "patch-pending-supervision-branch",
+        expected: { ...initial, lastTurnId: "turn-other" },
+        pending: tracked,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      store.mutate(identity, {
+        kind: "patch-pending-supervision-branch",
+        expected: initial,
+        pending: tracked,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      store.mutate(identity, {
+        kind: "commit-pending-supervision-branch",
+        expected: initial,
+        threadId: "thread-final",
+        patch: { model: "native-model", modelProvider: "native-provider" },
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      store.mutate(identity, {
+        kind: "commit-pending-supervision-branch",
+        expected: tracked,
+        threadId: "thread-final",
+        patch: { model: "native-model", modelProvider: "native-provider" },
+      }),
+    ).resolves.toBe(true);
+    await expect(store.read(identity)).resolves.toEqual({
+      threadId: "thread-final",
+      cwd: "/repo",
+      connectionScope: "supervision",
+      supervisionSourceThreadId: "thread-source",
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
+      model: "native-model",
+      modelProvider: "native-provider",
+    });
+  });
+
   it("round-trips account app policy context", async () => {
     const { state } = createStateStore();
     const store = createCodexAppServerBindingStore(state);
@@ -556,6 +693,57 @@ describe("Codex app-server binding store", () => {
       }),
     ).resolves.toBe(false);
     await expect(store.read(current)).resolves.toMatchObject({ threadId: "thread-new" });
+  });
+
+  it("preserves a stale private supervision binding instead of reclaiming it as empty", async () => {
+    const { state, values } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const previous = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:telegram:supervised",
+    };
+    const current = { ...previous, sessionId: "session-2" };
+    await store.mutate(previous, {
+      kind: "set",
+      binding: {
+        threadId: "thread-supervised",
+        connectionScope: "supervision",
+        supervisionSourceThreadId: "thread-source",
+        cwd: "/repo",
+        model: "gpt-5.5",
+        modelProvider: "openai",
+        preserveNativeModel: true,
+        conversationSourceTransferComplete: true,
+      },
+    });
+    await expect(
+      store.mutate(previous, {
+        kind: "set",
+        binding: { threadId: "thread-replacement", cwd: "/other" },
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      store.mutate(previous, { kind: "clear", threadId: "thread-supervised" }),
+    ).resolves.toBe(false);
+
+    await expect(
+      store.mutate(current, {
+        kind: "reclaim-generation",
+        expectedPreviousSessionId: previous.sessionId,
+      }),
+    ).resolves.toBe(false);
+    expect(values.get(bindingStoreKey(previous))).toMatchObject({
+      state: "active",
+      sessionId: previous.sessionId,
+      binding: { threadId: "thread-supervised", connectionScope: "supervision" },
+    });
+    await expect(store.read(previous)).resolves.toMatchObject({
+      threadId: "thread-supervised",
+      connectionScope: "supervision",
+    });
+    await expect(store.read(current)).resolves.toBeUndefined();
   });
 
   it("fences a retired physical generation until its successor claims the stable key", async () => {

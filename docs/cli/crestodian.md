@@ -161,6 +161,11 @@ If none are available, setup still writes the workspace and Gateway configuratio
 
 The macOS app drives the same ladder through the `crestodian.setup.detect` and `crestodian.setup.activate` gateway methods: detect lists every reusable backend it finds, activate live-tests one candidate (a real "reply with OK" completion) and only persists the model, workspace, and gateway defaults after the test passes. A failing candidate never persists a broken model or setup state; Codex may still record a managed plugin installation before its live test. The app automatically walks down the ladder and finally offers a manual key/token step populated from the Gateway's active text-inference provider plugins. The selected provider owns its starter model and config, and the credential is verified the same way before it is saved.
 
+When the selected candidate is Codex, successful activation also enables the
+official `codex` plugin and its supervision capability so native, non-archived
+Codex sessions become visible in both apps. An existing explicit
+`plugins.entries.codex.config.supervision.enabled: false` remains an opt-out.
+
 ## AI conversation
 
 Interactive Crestodian is AI-only: every message — including ones that look like typed commands — runs through the same embedded agent loop as regular OpenClaw agents, restricted to one ring-zero `crestodian` tool that wraps the typed operations. Read actions run freely, mutations require your conversational approval for that exact operation (see Operations and approval), and every applied write is audited and re-validated. The agent session persists, so the custodian has real multi-turn memory. It first uses the configured OpenClaw model; with no usable model it falls back to a local runtime already present on the machine, in setup-ladder order:

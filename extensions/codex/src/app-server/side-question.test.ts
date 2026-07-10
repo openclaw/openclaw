@@ -630,6 +630,110 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(new Set(runIds).size).toBe(2);
   });
 
+  it("uses the default supervision runtime, native auth, and exact bound model pair", async () => {
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    readCodexAppServerBindingMock.mockResolvedValue({
+      threadId: "parent-thread",
+      connectionScope: "supervision",
+      supervisionSourceThreadId: "source-thread",
+      cwd: "/tmp/workspace",
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
+    });
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          runtimeModel: {
+            id: "claude-opus-4-6",
+            provider: "anthropic",
+            compat: { supportsTools: false },
+          } as never,
+          authProfileId: "openai:outer",
+        }),
+        { pluginConfig: { supervision: { enabled: true } } },
+      ),
+    ).resolves.toEqual({ text: "Side answer." });
+
+    expect(getSharedCodexAppServerClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileId: null,
+        startOptions: expect.objectContaining({ homeScope: "user" }),
+      }),
+    );
+    const forkCall = client.request.mock.calls.find(([method]) => method === "thread/fork");
+    expect(forkCall?.[1]).toMatchObject({
+      threadId: "parent-thread",
+      model: "gpt-5.5",
+      modelProvider: "openai",
+    });
+    const turnCall = client.request.mock.calls.find(([method]) => method === "turn/start");
+    expect(turnCall?.[1]).toMatchObject({ model: "gpt-5.5" });
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ modelProvider: "openai", modelId: "gpt-5.5" }),
+    );
+  });
+
+  it("rejects an incomplete supervised model pair before selecting a client", async () => {
+    readCodexAppServerBindingMock.mockResolvedValue({
+      threadId: "parent-thread",
+      connectionScope: "supervision",
+      supervisionSourceThreadId: "source-thread",
+      cwd: "/tmp/workspace",
+      model: "gpt-5.5",
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
+    });
+
+    await expect(
+      runCodexAppServerSideQuestion(sideParams(), {
+        pluginConfig: { supervision: { enabled: true } },
+      }),
+    ).rejects.toThrow("missing its native model and provider");
+    expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
+  });
+
+  it("cleans up a supervised fork that returns a different native model pair", async () => {
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    readCodexAppServerBindingMock.mockResolvedValue({
+      threadId: "parent-thread",
+      connectionScope: "supervision",
+      supervisionSourceThreadId: "source-thread",
+      cwd: "/tmp/workspace",
+      model: "gpt-5.4",
+      modelProvider: "openai",
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
+    });
+
+    await expect(
+      runCodexAppServerSideQuestion(sideParams(), {
+        pluginConfig: { supervision: { enabled: true } },
+      }),
+    ).rejects.toThrow("did not preserve its native model and provider");
+
+    expect(client.request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/fork",
+      "thread/unsubscribe",
+    ]);
+    expect(client.request).not.toHaveBeenCalledWith(
+      "thread/inject_items",
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(client.request).not.toHaveBeenCalledWith(
+      "turn/start",
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it("replays app-scoped reviewer policy into side-thread forks", async () => {
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);

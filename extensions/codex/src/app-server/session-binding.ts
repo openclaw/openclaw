@@ -82,6 +82,28 @@ const optionalTimestampSchema = z
   .refine((value) => Number.isFinite(Date.parse(value)))
   .optional()
   .catch(undefined);
+const pendingSupervisionBranchSchema = z
+  .object({
+    sourceThreadId: z.string().trim().min(1),
+    lastTurnId: z.string().trim().min(1).optional(),
+    cleanupThreadIds: z.array(z.string().trim().min(1)).max(2).optional(),
+  })
+  .strict()
+  .superRefine((pending, context) => {
+    const cleanupThreadIds = pending.cleanupThreadIds ?? [];
+    if (new Set(cleanupThreadIds).size !== cleanupThreadIds.length) {
+      context.addIssue({
+        code: "custom",
+        message: "pending supervision cleanup thread ids must be unique",
+      });
+    }
+    if (cleanupThreadIds.includes(pending.sourceThreadId)) {
+      context.addIssue({
+        code: "custom",
+        message: "pending supervision cleanup cannot target its source",
+      });
+    }
+  });
 const contextEngineProjectionSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -131,55 +153,148 @@ const pluginAppPolicyContextSchema = z
     pluginAppIds: z.record(z.string(), z.array(z.string())).default({}),
   })
   .strict();
-const threadBindingSchema = z.object({
-  threadId: z.string().refine((value) => Boolean(value.trim())),
-  cwd: z.string(),
-  authProfileId: optionalStringSchema,
-  model: optionalStringSchema,
-  modelProvider: z
-    .string()
-    .transform((value) => value.trim())
-    .pipe(z.string().min(1))
-    .optional()
-    .catch(undefined),
-  approvalPolicy: z
-    .preprocess(
-      (value) => (value === "on-failure" ? "on-request" : value),
-      z.enum(["never", "on-request", "untrusted"]).optional(),
-    )
-    .catch(undefined),
-  sandbox: z
-    .enum(["read-only", "workspace-write", "danger-full-access"])
-    .optional()
-    .catch(undefined),
-  serviceTier: z
-    .preprocess(
-      normalizeCodexServiceTier,
-      z.custom<CodexServiceTier>((value) => typeof value === "string").optional(),
-    )
-    .optional()
-    .catch(undefined),
-  networkProxyProfileName: optionalStringSchema,
-  networkProxyConfigFingerprint: optionalStringSchema,
-  dynamicToolsFingerprint: optionalStringSchema,
-  dynamicToolsContainDeferred: optionalBooleanSchema,
-  webSearchThreadConfigFingerprint: optionalStringSchema,
-  userMcpServersFingerprint: optionalStringSchema,
-  mcpServersFingerprint: optionalStringSchema,
-  nativeHookRelayGeneration: optionalNonBlankStringSchema,
-  appServerRuntimeFingerprint: optionalStringSchema,
-  pluginAppsFingerprint: optionalStringSchema,
-  pluginAppsInputFingerprint: optionalStringSchema,
-  pluginAppPolicyContext: pluginAppPolicyContextSchema.optional().catch(undefined),
-  contextEngine: contextEngineSchema.optional().catch(undefined),
-  environmentSelectionFingerprint: optionalStringSchema,
-  conversationStartId: optionalStringSchema,
-  conversationSourceTransferComplete: z.literal(true).optional().catch(undefined),
-  historyCoveredThrough: optionalTimestampSchema,
-});
+const threadBindingSchema = z
+  .object({
+    threadId: z.string().refine((value) => Boolean(value.trim())),
+    cwd: z.string(),
+    // Private runtime ownership. Only the supervision catalog creates this
+    // marker; public OpenClaw session metadata must never authorize user-home access.
+    connectionScope: z.literal("supervision").optional(),
+    supervisionSourceThreadId: z.string().trim().min(1).optional(),
+    authProfileId: optionalStringSchema,
+    model: optionalStringSchema,
+    // Codex App Server owns selection for supervised and adopted threads. Keep
+    // this marker across resumes so OpenClaw never substitutes a default or fallback.
+    preserveNativeModel: z.literal(true).optional().catch(undefined),
+    // Continue creates the OpenClaw Chat before native execution. This closed
+    // snapshot state is materialized only inside the fully configured harness.
+    pendingSupervisionBranch: pendingSupervisionBranchSchema.optional(),
+    modelProvider: z
+      .string()
+      .transform((value) => value.trim())
+      .pipe(z.string().min(1))
+      .optional()
+      .catch(undefined),
+    approvalPolicy: z
+      .preprocess(
+        (value) => (value === "on-failure" ? "on-request" : value),
+        z.enum(["never", "on-request", "untrusted"]).optional(),
+      )
+      .catch(undefined),
+    sandbox: z
+      .enum(["read-only", "workspace-write", "danger-full-access"])
+      .optional()
+      .catch(undefined),
+    serviceTier: z
+      .preprocess(
+        normalizeCodexServiceTier,
+        z.custom<CodexServiceTier>((value) => typeof value === "string").optional(),
+      )
+      .optional()
+      .catch(undefined),
+    networkProxyProfileName: optionalStringSchema,
+    networkProxyConfigFingerprint: optionalStringSchema,
+    dynamicToolsFingerprint: optionalStringSchema,
+    dynamicToolsContainDeferred: optionalBooleanSchema,
+    webSearchThreadConfigFingerprint: optionalStringSchema,
+    userMcpServersFingerprint: optionalStringSchema,
+    mcpServersFingerprint: optionalStringSchema,
+    nativeHookRelayGeneration: optionalNonBlankStringSchema,
+    appServerRuntimeFingerprint: optionalStringSchema,
+    pluginAppsFingerprint: optionalStringSchema,
+    pluginAppsInputFingerprint: optionalStringSchema,
+    pluginAppPolicyContext: pluginAppPolicyContextSchema.optional().catch(undefined),
+    contextEngine: contextEngineSchema.optional().catch(undefined),
+    environmentSelectionFingerprint: optionalStringSchema,
+    conversationStartId: optionalStringSchema,
+    conversationSourceTransferComplete: z.literal(true).optional().catch(undefined),
+    historyCoveredThrough: optionalTimestampSchema,
+  })
+  .superRefine((binding, context) => {
+    if (binding.connectionScope === "supervision") {
+      if (!binding.supervisionSourceThreadId) {
+        context.addIssue({
+          code: "custom",
+          message: "supervision connection ownership requires its native source thread id",
+        });
+      }
+      if (binding.preserveNativeModel !== true) {
+        context.addIssue({
+          code: "custom",
+          message: "supervision connection ownership requires native model ownership",
+        });
+      }
+      if (binding.conversationSourceTransferComplete !== true) {
+        context.addIssue({
+          code: "custom",
+          message: "supervision connection ownership requires a completed source transfer",
+        });
+      }
+      if (!binding.pendingSupervisionBranch && (!binding.model?.trim() || !binding.modelProvider)) {
+        context.addIssue({
+          code: "custom",
+          message: "materialized supervision bindings require a native model and provider",
+        });
+      }
+    }
+    if (binding.supervisionSourceThreadId && binding.connectionScope !== "supervision") {
+      context.addIssue({
+        code: "custom",
+        message: "a supervision source thread id requires supervision connection ownership",
+      });
+    }
+    if (!binding.pendingSupervisionBranch) {
+      return;
+    }
+    if (binding.threadId !== binding.pendingSupervisionBranch.sourceThreadId) {
+      context.addIssue({
+        code: "custom",
+        message: "pending supervision source must match the provisional thread binding",
+      });
+    }
+    if (binding.supervisionSourceThreadId !== binding.pendingSupervisionBranch.sourceThreadId) {
+      context.addIssue({
+        code: "custom",
+        message: "pending supervision source must match its durable source identity",
+      });
+    }
+    if (binding.preserveNativeModel !== true) {
+      context.addIssue({
+        code: "custom",
+        message: "pending supervision bindings must defer model selection to Codex App Server",
+      });
+    }
+    if (binding.connectionScope !== "supervision") {
+      context.addIssue({
+        code: "custom",
+        message: "pending supervision bindings require supervision connection ownership",
+      });
+    }
+  });
 
 /** Durable Codex thread facts. Storage identity and schema stay outside this domain value. */
 export type CodexAppServerThreadBinding = z.infer<typeof threadBindingSchema>;
+/** Persisted source snapshot and orphan-cleanup state for a supervised native branch. */
+export type CodexAppServerPendingSupervisionBranch = z.infer<typeof pendingSupervisionBranchSchema>;
+
+export class CodexSupervisionBindingReplacementError extends Error {
+  constructor(threadId: string, operation: string) {
+    super(
+      `Refusing to replace supervised Codex thread ${threadId} while ${operation}; ` +
+        "its native user-home connection and model ownership must be preserved",
+    );
+    this.name = "CodexSupervisionBindingReplacementError";
+  }
+}
+
+export function assertCodexBindingMayBeReplaced(
+  binding: CodexAppServerThreadBinding | undefined,
+  operation: string,
+): void {
+  if (binding?.connectionScope === "supervision") {
+    throw new CodexSupervisionBindingReplacementError(binding.threadId, operation);
+  }
+}
 /** Context-engine state persisted with a Codex app-server thread binding. */
 export type CodexAppServerContextEngineBinding = z.infer<typeof contextEngineSchema>;
 /** Context-engine projection metadata used to guard resumed native threads. */
@@ -199,10 +314,26 @@ type CodexAppServerBindingMutation =
       patch: Partial<Omit<CodexAppServerThreadBinding, "threadId">>;
     }
   | {
+      kind: "patch-pending-supervision-branch";
+      expected: CodexAppServerPendingSupervisionBranch;
+      pending: CodexAppServerPendingSupervisionBranch;
+    }
+  | {
+      kind: "commit-pending-supervision-branch";
+      expected: CodexAppServerPendingSupervisionBranch;
+      threadId: string;
+      patch: Partial<Omit<CodexAppServerThreadBinding, "threadId" | "pendingSupervisionBranch">>;
+    }
+  | {
       kind: "reclaim-generation";
       expectedPreviousSessionId: string;
     }
-  | { kind: "clear"; threadId?: string };
+  | {
+      kind: "clear";
+      threadId?: string;
+      /** Only failed creation may clear the exact provisional supervision owner. */
+      pendingSupervisionSourceThreadId?: string;
+    };
 
 export type CodexSessionGenerationAdoptionResult = "adopted" | "current" | "absent" | "conflict";
 
@@ -525,6 +656,12 @@ export function createCodexAppServerBindingStore(
             if (current.sessionId !== mutation.expectedPreviousSessionId) {
               return { result: false };
             }
+            // A stale physical generation must never turn private user-home ownership into
+            // an ordinary empty binding. Supervision adoption has an explicit generation
+            // transfer path; every other successor fails closed and preserves this owner.
+            if (current.state === "active" && current.binding.connectionScope === "supervision") {
+              return { result: false };
+            }
             return {
               result: true,
               next: {
@@ -539,16 +676,35 @@ export function createCodexAppServerBindingStore(
           const active = ownsGeneration ? storedActive : undefined;
           const retiredGeneration =
             current?.state === "cleared" && current.retired === true && ownsGeneration;
+          const preservesSupervisionOwner =
+            mutation.kind === "set" &&
+            active?.binding.connectionScope === "supervision" &&
+            isSameSupervisionOwner(active.binding, mutation.binding);
+          const clearsPendingSupervisionOwner =
+            mutation.kind === "clear" &&
+            active?.binding.connectionScope === "supervision" &&
+            matchesPendingSupervisionClear(
+              active.binding,
+              mutation.threadId,
+              mutation.pendingSupervisionSourceThreadId,
+            );
           if (
             (mutation.kind === "set" &&
               ((mutation.if?.kind === "absent" && storedActive) ||
                 (current !== undefined && !ownsGeneration) ||
-                retiredGeneration)) ||
+                retiredGeneration ||
+                (active?.binding.connectionScope === "supervision" &&
+                  !preservesSupervisionOwner))) ||
             (mutation.kind === "patch" && active?.binding.threadId !== mutation.threadId) ||
+            ((mutation.kind === "patch-pending-supervision-branch" ||
+              mutation.kind === "commit-pending-supervision-branch") &&
+              !matchesPendingSupervisionBranch(active?.binding, mutation.expected)) ||
             (mutation.kind === "clear" &&
               ((mutation.threadId !== undefined &&
                 active?.binding.threadId !== mutation.threadId) ||
-                !ownsGeneration))
+                !ownsGeneration ||
+                (active?.binding.connectionScope === "supervision" &&
+                  !clearsPendingSupervisionOwner)))
           ) {
             return { result: false };
           }
@@ -569,6 +725,18 @@ export function createCodexAppServerBindingStore(
           let binding: CodexAppServerThreadBinding;
           if (mutation.kind === "set") {
             binding = validateBindingForWrite(mutation.binding);
+          } else if (mutation.kind === "patch-pending-supervision-branch") {
+            binding = validateBindingForWrite({
+              ...active!.binding,
+              pendingSupervisionBranch: mutation.pending,
+            });
+          } else if (mutation.kind === "commit-pending-supervision-branch") {
+            binding = validateBindingForWrite({
+              ...active!.binding,
+              ...mutation.patch,
+              threadId: mutation.threadId,
+              pendingSupervisionBranch: undefined,
+            });
           } else {
             binding = validateBindingForWrite({
               ...active!.binding,
@@ -761,6 +929,53 @@ export function createCodexAppServerBindingStore(
       }
     },
   };
+}
+
+function matchesPendingSupervisionBranch(
+  binding: CodexAppServerThreadBinding | undefined,
+  expected: CodexAppServerPendingSupervisionBranch,
+): boolean {
+  const pending = binding?.pendingSupervisionBranch;
+  if (!pending || binding?.threadId !== expected.sourceThreadId) {
+    return false;
+  }
+  if (
+    pending.sourceThreadId !== expected.sourceThreadId ||
+    pending.lastTurnId !== expected.lastTurnId
+  ) {
+    return false;
+  }
+  const currentCleanup = pending.cleanupThreadIds ?? [];
+  const expectedCleanup = expected.cleanupThreadIds ?? [];
+  return (
+    currentCleanup.length === expectedCleanup.length &&
+    currentCleanup.every((threadId, index) => threadId === expectedCleanup[index])
+  );
+}
+
+function isSameSupervisionOwner(
+  current: CodexAppServerThreadBinding,
+  replacement: CodexAppServerThreadBinding,
+): boolean {
+  return (
+    replacement.connectionScope === "supervision" &&
+    replacement.threadId === current.threadId &&
+    replacement.supervisionSourceThreadId === current.supervisionSourceThreadId
+  );
+}
+
+function matchesPendingSupervisionClear(
+  binding: CodexAppServerThreadBinding,
+  threadId: string | undefined,
+  sourceThreadId: string | undefined,
+): boolean {
+  return (
+    Boolean(sourceThreadId) &&
+    threadId === sourceThreadId &&
+    binding.threadId === sourceThreadId &&
+    binding.supervisionSourceThreadId === sourceThreadId &&
+    binding.pendingSupervisionBranch?.sourceThreadId === sourceThreadId
+  );
 }
 
 /** Stable plugin-state key for one current binding owner. */

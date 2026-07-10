@@ -57,6 +57,10 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import {
+  isModelSelectionLocked,
+  MODEL_SELECTION_LOCKED_RESET_MESSAGE,
+} from "../sessions/model-overrides.js";
+import {
   hasOnlySessionLifecycleMutationKindActive,
   interruptSessionWorkAdmissions,
   isSessionLifecycleMutationActive,
@@ -920,6 +924,14 @@ export async function performGatewaySessionReset(params: {
     params.key,
     resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
   ).entry;
+  // Reject before interrupting admitted work or firing reset hooks. The model lock is
+  // session-id scoped, so rotating first would silently detach native harness ownership.
+  if (isModelSelectionLocked(initialResetEntry)) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_RESET_MESSAGE),
+    };
+  }
   const resetLifecycleIdentities = [
     resetTarget.target.canonicalKey,
     params.key,
@@ -977,6 +989,12 @@ export async function performGatewaySessionReset(params: {
         return {
           ok: false,
           error: errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError),
+        };
+      }
+      if (isModelSelectionLocked(entry)) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_RESET_MESSAGE),
         };
       }
       const hadExistingEntry = Boolean(entry);

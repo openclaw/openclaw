@@ -2982,21 +2982,38 @@ describe("embedded attempt harness pinning", () => {
     expectMockArgFields(runEmbeddedAgentMock, { agentHarnessId: undefined });
   });
 
-  it("ignores stale session Codex harness pins on non-OpenAI model switches", async () => {
+  it("keeps a catalog-adopted Codex harness pinned for direct command attempts", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "mixed-provider-session",
       updatedAt: Date.now(),
       agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      pluginExtensions: {
+        codex: {
+          supervision: {
+            sourceThreadId: "019f-codex-thread",
+            modelLocked: true,
+          },
+        },
+      },
     };
     runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
     } satisfies EmbeddedAgentRunResult);
 
     await runAgentAttempt({
-      providerOverride: "minimax",
-      originalProvider: "minimax",
-      modelOverride: "minimax-m2.7",
-      cfg: {} as OpenClawConfig,
+      providerOverride: "anthropic",
+      originalProvider: "anthropic",
+      modelOverride: "claude-opus-4-7",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      } as OpenClawConfig,
       sessionEntry,
       sessionId: sessionEntry.sessionId,
       sessionKey: "agent:main:main",
@@ -3016,11 +3033,71 @@ describe("embedded attempt harness pinning", () => {
       resolvedVerboseLevel: undefined,
       agentDir: tmpDir,
       onAgentEvent: vi.fn(),
-      authProfileProvider: "minimax",
+      authProfileProvider: "anthropic",
       sessionHasHistory: true,
     });
 
-    expectMockArgFields(runEmbeddedAgentMock, { agentHarnessId: undefined });
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expectMockArgFields(runEmbeddedAgentMock, {
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      agentHarnessId: "codex",
+      agentHarnessRuntimeOverride: "codex",
+      modelSelectionLocked: true,
+    });
+  });
+
+  it("does not leak a persisted CLI harness alias across providers", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "legacy-cli-pin",
+      updatedAt: Date.now(),
+      agentHarnessId: "claude-cli",
+    };
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedAgentRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "openai",
+      originalProvider: "openai",
+      modelOverride: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            cliBackends: { "claude-cli": { command: "claude" } },
+          },
+        },
+      } as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey: "agent:main:main",
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "continue",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-provider-incompatible-cli-pin",
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "openai",
+      sessionHasHistory: true,
+    });
+
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expectMockArgFields(runEmbeddedAgentMock, {
+      provider: "openai",
+      model: "gpt-5.4",
+      agentHarnessId: undefined,
+      agentHarnessRuntimeOverride: undefined,
+    });
   });
 
   it("forwards runtime toolsAllow into embedded attempts", async () => {
@@ -3227,7 +3304,7 @@ describe("embedded attempt harness pinning", () => {
     expectMockArgFields(runEmbeddedAgentMock, { agentHarnessId: undefined });
   });
 
-  it("ignores stale OpenAI sessions pinned to OpenClaw and relies on default Codex routing", async () => {
+  it("keeps OpenAI sessions pinned to their persisted OpenClaw harness", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "stale-agent-session",
       updatedAt: Date.now(),
@@ -3267,7 +3344,8 @@ describe("embedded attempt harness pinning", () => {
 
     expectMockArgFields(runEmbeddedAgentMock, {
       provider: "openai",
-      agentHarnessId: undefined,
+      agentHarnessId: "openclaw",
+      agentHarnessRuntimeOverride: "openclaw",
     });
   });
 

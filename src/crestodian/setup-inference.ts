@@ -1,9 +1,9 @@
-// First-run inference activation: detect candidates, live-test, persist only on success.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeAuthProfileCredential } from "../agents/auth-profiles/credential-normalize.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
@@ -27,6 +27,7 @@ import {
 } from "../commands/onboard-inference.js";
 import { resolveConfigSnapshotHash } from "../config/config.js";
 import { createMergePatch } from "../config/io.write-prepare.js";
+import { applyMergePatch } from "../config/merge-patch.js";
 import {
   normalizeAgentModelRefForConfig,
   resolveAgentModelPrimaryValue,
@@ -55,6 +56,7 @@ import {
   createQuickstartNotePrompter,
 } from "./setup-apply.js";
 
+// First-run inference activation: detect candidates, live-test, persist only on success.
 /**
  * Inference is the one required onboarding step (docs/cli/crestodian.md
  * "Setup bootstrap"). This module gives structured clients (macOS app) the
@@ -135,6 +137,7 @@ export type ActivateSetupInferenceDeps = {
   applySetup?: typeof applyCrestodianSetup;
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
+  refreshPluginRegistryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
   resolvePluginProviders?: typeof resolvePluginProviders;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
   enablePluginInConfig?: typeof enablePluginInConfig;
@@ -175,6 +178,65 @@ function probedTargetChangedError(params: {
   return undefined;
 }
 
+function enableCodexSupervisionForGuidedSetup(
+  config: OpenClawConfig,
+  sourceConfig: OpenClawConfig = config,
+): OpenClawConfig {
+  // Policy and include-owned opt-outs live in the resolved source config.
+  // Runtime defaults cannot distinguish an omitted value from an authored false.
+  const sourceEnabled = enablePluginInConfig(sourceConfig, "codex");
+  if (!sourceEnabled.enabled) {
+    throw new CodexPluginPolicyBlockedError(sourceEnabled.reason);
+  }
+  const enabled = enablePluginInConfig(config, "codex");
+  if (!enabled.enabled) {
+    throw new CodexPluginPolicyBlockedError(enabled.reason);
+  }
+
+  const codex = enabled.config.plugins?.entries?.codex;
+  const pluginConfig = codex?.config ?? {};
+  const sourceSupervision = sourceEnabled.config.plugins?.entries?.codex?.config?.supervision;
+  // A nested false is the explicit supervision opt-out. Selecting Codex still
+  // enables its harness, but onboarding must not silently reverse that choice.
+  if (isRecord(sourceSupervision) && sourceSupervision.enabled === false) {
+    return enabled.config;
+  }
+  const supervision = isRecord(pluginConfig.supervision) ? pluginConfig.supervision : {};
+
+  return {
+    ...enabled.config,
+    plugins: {
+      ...enabled.config.plugins,
+      entries: {
+        ...enabled.config.plugins?.entries,
+        codex: {
+          ...codex,
+          config: {
+            ...pluginConfig,
+            supervision: {
+              ...supervision,
+              enabled: true,
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+class CodexPluginPolicyBlockedError extends Error {
+  constructor(readonly reason?: string) {
+    super(reason ?? "plugin policy");
+  }
+}
+
+function codexPluginPolicyError(reason?: string): ActivateSetupInferenceResult {
+  return {
+    ok: false,
+    status: "unavailable",
+    error: `Codex plugin activation is blocked (${reason ?? "plugin policy"}); update plugin policy and retry setup.`,
+  };
+}
 async function resolveSetupInferenceWorkspace(params: {
   configExists: boolean;
   configValid: boolean;
@@ -759,6 +821,7 @@ async function activateSetupInferenceUnredacted(
       };
     }
 
+    let codexPluginPatch: unknown;
     if (params.kind === "codex-cli") {
       const { stripPendingPluginInstallRecords } =
         await import("../plugins/install-record-commit.js");
@@ -875,12 +938,15 @@ async function activateSetupInferenceUnredacted(
       // Enablement and the model-scoped runtime pin remain transient probe inputs.
       // Persist them only after completion; the managed install record is durable above.
       const stagedCodexConfig = stripPendingPluginInstallRecords(enabledCodex.config);
+      codexPluginPatch = createMergePatch(currentCodexConfig, stagedCodexConfig);
       testPlan = {
         ...testPlan,
         // Probe the policy that will actually persist. Codex rejects deny and
         // allowlist exec modes during initialization; masking that here would
         // pass onboarding and fail the user's first normal run.
-        config: stagedCodexConfig,
+        config: applyMergePatch(stagedCodexConfig, {
+          tools: { exec: { mode: "full" } },
+        }) as OpenClawConfig,
         agentId: resolveDefaultAgentId(stagedCodexConfig),
       };
     }
@@ -911,7 +977,7 @@ async function activateSetupInferenceUnredacted(
     if (resolveConfigSnapshotHash(latestSnapshot) !== probedConfigHash) {
       throw new Error("OpenClaw config changed while AI access was being tested. Try setup again.");
     }
-    const latestConfig: OpenClawConfig = latestSnapshot.exists
+    let latestConfig: OpenClawConfig = latestSnapshot.exists
       ? (latestSnapshot.runtimeConfig ?? latestSnapshot.config)
       : {};
     const postProbeTargetError = probedTargetChangedError({
@@ -921,6 +987,53 @@ async function activateSetupInferenceUnredacted(
     });
     if (postProbeTargetError) {
       throw new Error(postProbeTargetError);
+    }
+
+    if (codexPluginPatch !== undefined) {
+      // Persist success-gated enablement and the model-scoped runtime pin. The managed
+      // install record was committed before the live probe.
+      const { stripPendingPluginInstallRecords } =
+        await import("../plugins/install-record-commit.js");
+      const transformConfig =
+        deps.transformConfigWithPendingPluginInstalls ??
+        (await import("../plugins/install-record-commit.js"))
+          .transformConfigWithPendingPluginInstalls;
+      let committed;
+      try {
+        committed = await transformConfig({
+          // Keep the setup RPC alive until the final model/setup write completes. The explicit
+          // registry refresh below makes the newly installed plugin available without a restart.
+          afterWrite: { mode: "none", reason: "Crestodian setup finalizes config after refresh" },
+          transform: (current, context) => {
+            const patched = applyMergePatch(
+              stripPendingPluginInstallRecords(current),
+              codexPluginPatch,
+            ) as OpenClawConfig;
+            return {
+              nextConfig: enableCodexSupervisionForGuidedSetup(
+                patched,
+                context.snapshot.sourceConfig,
+              ),
+            };
+          },
+        });
+      } catch (error) {
+        if (error instanceof CodexPluginPolicyBlockedError) {
+          return codexPluginPolicyError(error.reason);
+        }
+        throw error;
+      }
+      const refreshPluginRegistry =
+        deps.refreshPluginRegistryAfterConfigMutation ??
+        (await import("../plugins/registry-refresh.js")).refreshPluginRegistryAfterConfigMutation;
+      await refreshPluginRegistry({
+        config: committed.nextConfig,
+        reason: "source-changed",
+        workspaceDir: workspace,
+        logger: { warn: (message) => params.runtime.log?.(message) },
+      });
+      probedConfigHash = committed.persistedHash;
+      latestConfig = committed.nextConfig;
     }
 
     let manualAuthWrite: ManualAuthWrite | undefined;

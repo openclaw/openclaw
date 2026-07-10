@@ -84,6 +84,7 @@ type SidebarRecentSession = {
   active: boolean;
   visuallyActive: boolean;
   hasActiveRun: boolean;
+  modelSelectionLocked: boolean;
   kind?: string;
   pinned: boolean;
   category?: string;
@@ -450,6 +451,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         active: row.key === navigation.activeRowKey,
         visuallyActive: highlightCurrentSession && row.key === navigation.currentSessionKey,
         hasActiveRun: Boolean(row.hasActiveRun),
+        modelSelectionLocked: row.modelSelectionLocked === true,
         kind: row.kind,
         pinned: row.pinned === true,
         category: normalizeOptionalString(row.category),
@@ -1123,7 +1125,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         .y=${menu.y}
         .trigger=${this.sessionMenuTrigger}
         .disabled=${!this.connected}
-        .forkDisabled=${this.sessionsLoading}
+        .forkDisabled=${this.sessionsLoading || session.modelSelectionLocked}
         .archiveAllowed=${archiveAllowed}
         .groups=${this.knownSessionGroups()}
         .canOpenChat=${true}

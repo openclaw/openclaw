@@ -99,6 +99,27 @@ describe("resolveSessionRuntimeOverrideForProvider", () => {
     ).toBe(expected);
   });
 
+  it("keeps a persisted harness pin across provider overrides", () => {
+    expect(
+      resolveSessionRuntimeOverrideForProvider({
+        provider: "anthropic",
+        entry: { agentHarnessId: "codex" },
+      }),
+    ).toBe("codex");
+  });
+
+  it("keeps a locked harness pin ahead of a conflicting runtime override", () => {
+    expect(
+      resolveSessionRuntimeOverrideForProvider({
+        provider: "anthropic",
+        entry: {
+          agentHarnessId: "codex",
+          agentRuntimeOverride: "claude-cli",
+          modelSelectionLocked: true,
+        },
+      }),
+    ).toBe("codex");
+  });
   it("keeps CLI runtime pins only when the runtime serves the selected provider", () => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],
@@ -4080,6 +4101,64 @@ describe("runAgentTurnWithFallback", () => {
       provider: "openai",
       model: "gpt-5.4",
       agentHarnessId: "codex",
+    });
+  });
+
+  it("keeps catalog-adopted Codex sessions on Codex during heartbeat model overrides", async () => {
+    state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "claude-cli");
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("anthropic", "claude-opus-4-6"),
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      attempts: [],
+    }));
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "heartbeat" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude-opus-4-6";
+    followupRun.run.config = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      isHeartbeat: true,
+      getActiveSessionEntry: () =>
+        ({
+          sessionId: "catalog-adopted-session",
+          updatedAt: Date.now(),
+          agentHarnessId: "codex",
+          modelSelectionLocked: true,
+          pluginExtensions: {
+            codex: {
+              supervision: {
+                sourceThreadId: "019f-codex-thread",
+                modelLocked: true,
+              },
+            },
+          },
+        }) as SessionEntry,
+    });
+
+    expect(result.kind).toBe("success");
+    expect(state.runCliAgentMock).not.toHaveBeenCalled();
+    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      trigger: "heartbeat",
+      agentHarnessId: "codex",
+      agentHarnessRuntimeOverride: "codex",
     });
   });
 

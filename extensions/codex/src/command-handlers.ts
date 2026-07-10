@@ -1,12 +1,18 @@
 // Codex plugin module implements command handlers behavior.
 import crypto from "node:crypto";
 import { resolveAgentDir, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  isModelSelectionLocked,
+  MODEL_SELECTION_LOCKED_MESSAGE,
+} from "openclaw/plugin-sdk/model-session-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
+import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
 import {
   installCodexComputerUse,
@@ -22,6 +28,7 @@ import {
   resolveCodexNativeSandboxBlock,
 } from "./app-server/sandbox-guard.js";
 import {
+  assertCodexBindingMayBeReplaced,
   bindingStoreKey,
   normalizeCodexAppServerBindingModelProvider,
   reclaimCurrentCodexSessionGeneration,
@@ -190,6 +197,7 @@ type CodexDiagnosticsTarget = {
   threadId: string;
   identity: CodexAppServerBindingIdentity;
   agentDir: string;
+  connectionScope?: "supervision";
   authProfileId?: string;
   sessionKey?: string;
   sessionId?: string;
@@ -200,7 +208,10 @@ type CodexDiagnosticsTarget = {
   threadParentId?: string;
 };
 
-type CodexDiagnosticsCandidate = Omit<CodexDiagnosticsTarget, "threadId" | "authProfileId">;
+type CodexDiagnosticsCandidate = Omit<
+  CodexDiagnosticsTarget,
+  "threadId" | "connectionScope" | "authProfileId"
+>;
 
 type PendingCodexDiagnosticsConfirmation = {
   token: string;
@@ -512,7 +523,7 @@ export async function handleCodexSubcommand(
     if (rest.length > 0) {
       return { text: "Usage: /codex mcp" };
     }
-    const scope = await resolveCommandAppServerScope(deps, ctx);
+    const scope = await resolveCommandAppServerScope(deps, ctx, options.pluginConfig);
     return {
       text: formatList(
         await deps.codexControlRequest(
@@ -529,7 +540,7 @@ export async function handleCodexSubcommand(
     if (rest.length > 0) {
       return { text: "Usage: /codex skills" };
     }
-    const scope = await resolveCommandAppServerScope(deps, ctx);
+    const scope = await resolveCommandAppServerScope(deps, ctx, options.pluginConfig);
     return {
       text: formatSkills(
         await deps.codexControlRequest(
@@ -545,7 +556,7 @@ export async function handleCodexSubcommand(
     if (rest.length > 0) {
       return { text: "Usage: /codex account" };
     }
-    const scope = await resolveCommandAppServerScope(deps, ctx);
+    const scope = await resolveCommandAppServerScope(deps, ctx, options.pluginConfig);
     const requestScope = { config: ctx.config, ...scope };
     const [account, limits] = await Promise.all([
       deps.safeCodexControlRequest(
@@ -576,6 +587,24 @@ export async function handleCodexSubcommand(
     };
   }
   return { text: `Unknown Codex command: ${formatCodexDisplayText(subcommand)}\n\n${buildHelp()}` };
+}
+
+function isCurrentSessionModelSelectionLocked(ctx: PluginCommandContext): boolean {
+  const sessionKey = ctx.sessionKey?.trim();
+  if (!sessionKey) {
+    return false;
+  }
+  // SessionEntry is the durable authority even when a native binding is absent or stale.
+  // Never infer this lock from binding model metadata such as preserveNativeModel.
+  const storePath = resolveStorePath(ctx.config.session?.store, { agentId: ctx.agentId });
+  return isModelSelectionLocked(
+    getSessionEntry({
+      storePath,
+      sessionKey,
+      hydrateSkillPromptRefs: false,
+      readConsistency: "latest",
+    }),
+  );
 }
 
 function resolveCodexNativeCommandSandboxBlock(
@@ -692,6 +721,9 @@ async function bindConversation(
       text: "Usage: /codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]",
     };
   }
+  if (isCurrentSessionModelSelectionLocked(ctx)) {
+    return { text: MODEL_SELECTION_LOCKED_MESSAGE };
+  }
   const scope = resolveCodexConversationControlScope(ctx);
   const workspaceDir = parsed.cwd ?? deps.resolveCodexDefaultWorkspaceDir(pluginConfig);
   const currentConversation = await ctx.getCurrentConversationBinding();
@@ -715,6 +747,7 @@ async function bindConversation(
       ? conversationBindingIdentity(currentConversationData.bindingId)
       : sessionOwner;
   const existingBinding = currentOwner ? await deps.bindingStore.read(currentOwner) : undefined;
+  assertCodexBindingMayBeReplaced(existingBinding, "binding this conversation to another thread");
   const sessionSource =
     sessionOwner && existingBinding
       ? {
@@ -767,8 +800,15 @@ async function detachConversation(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
 ): Promise<string> {
+  if (isCurrentSessionModelSelectionLocked(ctx)) {
+    return MODEL_SELECTION_LOCKED_MESSAGE;
+  }
   const current = await ctx.getCurrentConversationBinding();
   const data = readCodexConversationBindingData(current);
+  if (data?.kind === "codex-app-server-session") {
+    const binding = await deps.bindingStore.read(conversationBindingIdentity(data.bindingId));
+    assertCodexBindingMayBeReplaced(binding, "detaching its conversation binding");
+  }
   const detached = await ctx.detachConversationBinding();
   if (data?.kind === "codex-app-server-session") {
     await deps.bindingStore.mutate(conversationBindingIdentity(data.bindingId), { kind: "clear" });
@@ -818,7 +858,7 @@ async function buildThreads(
   pluginConfig: unknown,
   filter: string,
 ): Promise<string> {
-  const scope = await resolveCommandAppServerScope(deps, ctx);
+  const scope = await resolveCommandAppServerScope(deps, ctx, pluginConfig);
   const response = await deps.codexControlRequest(
     pluginConfig,
     CODEX_CONTROL_METHODS.listThreads,
@@ -864,6 +904,9 @@ async function resumeThread(
   if (!normalizedThreadId || args.length !== 1) {
     return "Usage: /codex resume <thread-id>";
   }
+  if (isCurrentSessionModelSelectionLocked(ctx)) {
+    return MODEL_SELECTION_LOCKED_MESSAGE;
+  }
   if (!ctx.sessionId) {
     return "Cannot attach a Codex thread because this command did not include an OpenClaw session id.";
   }
@@ -884,6 +927,7 @@ async function resumeThread(
       throw new Error(`Codex session generation is no longer current: ${identity.sessionId}`);
     }
     const currentBinding = await deps.bindingStore.read(identity);
+    assertCodexBindingMayBeReplaced(currentBinding, "attaching a different resumed thread");
     const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
       authProfileId: currentBinding?.authProfileId,
       agentDir: scope.agentDir,
@@ -922,6 +966,8 @@ async function resumeThread(
       agentDir: scope.agentDir,
       config: ctx.config,
     });
+    const bindingBeforeCommit = await deps.bindingStore.read(identity);
+    assertCodexBindingMayBeReplaced(bindingBeforeCommit, "committing a different resumed thread");
     const committed = await deps.bindingStore.mutate(identity, {
       kind: "set",
       binding: {
@@ -949,6 +995,21 @@ async function bindCodexCliNodeSession(
 ): Promise<string> {
   if (!parsed.threadId || !parsed.host || parsed.bindHere !== true) {
     return "Usage: /codex resume <session-id> --host <node> --bind here";
+  }
+  if (isCurrentSessionModelSelectionLocked(ctx)) {
+    return MODEL_SELECTION_LOCKED_MESSAGE;
+  }
+  if (ctx.sessionId) {
+    const scope = resolveCodexConversationControlScope(ctx);
+    const binding = await deps.bindingStore.read(
+      sessionBindingIdentity({
+        sessionId: ctx.sessionId,
+        sessionKey: ctx.sessionKey,
+        agentId: scope.agentId,
+        config: ctx.config,
+      }),
+    );
+    assertCodexBindingMayBeReplaced(binding, "binding a Codex CLI node session");
   }
   const resolved = await deps.resolveCodexCliSessionForBindingOnNode({
     requestedNode: parsed.host,
@@ -1036,12 +1097,15 @@ async function setConversationModel(
   if (args.length > 1) {
     return "Usage: /codex model <model>";
   }
+  const [model = ""] = args;
+  const normalized = model.trim();
+  if (normalized && isCurrentSessionModelSelectionLocked(ctx)) {
+    return MODEL_SELECTION_LOCKED_MESSAGE;
+  }
   const target = await resolveControlTarget(ctx);
   if (!target) {
     return "Cannot set Codex model because this command did not include a stable binding identity.";
   }
-  const [model = ""] = args;
-  const normalized = model.trim();
   if (!normalized) {
     const binding = await deps.bindingStore.read(target.identity);
     return binding?.model
@@ -1143,26 +1207,38 @@ async function resolveControlTarget(
 
 type CommandAppServerScope = Pick<
   CodexControlRequestOptions,
-  "agentDir" | "authProfileId" | "sessionId" | "sessionKey"
+  "agentDir" | "authProfileId" | "sessionId" | "sessionKey" | "startOptions"
 > & { agentId: string };
 
 async function resolveCommandAppServerScope(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
+  pluginConfig: unknown,
 ): Promise<CommandAppServerScope> {
   const target = await resolveControlTarget(ctx);
   const fallback = resolveCodexConversationControlScope(ctx);
   const agentDir = target?.agentDir ?? fallback.agentDir;
   const binding = target ? await deps.bindingStore.read(target.identity) : undefined;
-  const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
-    authProfileId: binding?.authProfileId ?? target?.requestedAuthProfileId,
-    agentDir,
-    config: ctx.config,
+  const authProfileId =
+    binding?.connectionScope === "supervision"
+      ? undefined
+      : resolveCodexAppServerAuthProfileIdForAgent({
+          authProfileId: binding?.authProfileId ?? target?.requestedAuthProfileId,
+          agentDir,
+          config: ctx.config,
+        });
+  const connection = resolveCodexBindingAppServerConnection({
+    binding,
+    authProfileId,
+    pluginConfig,
   });
   return {
     agentId: target?.agentId ?? fallback.agentId,
     agentDir,
-    ...(authProfileId ? { authProfileId } : {}),
+    ...(connection.clientAuthProfileId !== undefined
+      ? { authProfileId: connection.clientAuthProfileId }
+      : {}),
+    ...(connection.usesSupervisionConnection ? { startOptions: connection.appServer.start } : {}),
     ...(ctx.sessionKey ? { sessionKey: ctx.sessionKey } : {}),
     ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
   };
@@ -1448,6 +1524,20 @@ async function sendCodexDiagnosticsFeedbackForTargets(
   const sent: CodexDiagnosticsTarget[] = [];
   const failed: Array<{ target: CodexDiagnosticsTarget; error: string }> = [];
   for (const target of targets) {
+    let connection: ReturnType<typeof resolveCodexBindingAppServerConnection>;
+    try {
+      connection = resolveCodexBindingAppServerConnection({
+        binding: target,
+        authProfileId: target.authProfileId,
+        pluginConfig,
+      });
+    } catch (error) {
+      failed.push({
+        target,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
     const response = await deps.safeCodexControlRequest(
       pluginConfig,
       CODEX_CONTROL_METHODS.feedback,
@@ -1461,7 +1551,12 @@ async function sendCodexDiagnosticsFeedbackForTargets(
       {
         config: ctx.config,
         agentDir: target.agentDir,
-        ...(target.authProfileId ? { authProfileId: target.authProfileId } : {}),
+        ...(connection.clientAuthProfileId !== undefined
+          ? { authProfileId: connection.clientAuthProfileId }
+          : {}),
+        ...(connection.usesSupervisionConnection
+          ? { startOptions: connection.appServer.start }
+          : {}),
         ...(target.sessionId ? { sessionId: target.sessionId } : {}),
         ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
       },
@@ -1566,17 +1661,37 @@ async function resolvePendingCodexDiagnosticsTargets(
 }
 
 function resolveCodexDiagnosticsTarget(
-  target: CodexDiagnosticsCandidate,
-  binding: { threadId: string; authProfileId?: string },
+  target: CodexDiagnosticsCandidate | CodexDiagnosticsTarget,
+  binding: { threadId: string; connectionScope?: "supervision"; authProfileId?: string },
   config?: PluginCommandContext["config"],
 ): CodexDiagnosticsTarget {
+  // Confirmation re-resolution receives the previous target. Rebuild the candidate so a
+  // stale private connection scope or auth profile can never survive a binding change.
+  const candidate: CodexDiagnosticsCandidate = {
+    identity: target.identity,
+    agentDir: target.agentDir,
+    sessionKey: target.sessionKey,
+    sessionId: target.sessionId,
+    channel: target.channel,
+    channelId: target.channelId,
+    accountId: target.accountId,
+    messageThreadId: target.messageThreadId,
+    threadParentId: target.threadParentId,
+  };
+  if (binding.connectionScope === "supervision") {
+    return {
+      ...candidate,
+      threadId: binding.threadId,
+      connectionScope: binding.connectionScope,
+    };
+  }
   const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
     authProfileId: binding.authProfileId,
     agentDir: target.agentDir,
     config,
   });
   return {
-    ...target,
+    ...candidate,
     threadId: binding.threadId,
     authProfileId,
   };
@@ -1590,6 +1705,7 @@ function codexDiagnosticsTargetsMatch(
     JSON.stringify([
       bindingStoreKey(target.identity),
       target.threadId,
+      target.connectionScope ?? null,
       target.authProfileId ?? null,
     ]);
   const expectedTargets = expected.map(fingerprint).toSorted();
@@ -2113,6 +2229,11 @@ async function startThreadAction(
   if (!binding?.threadId) {
     return `No Codex thread is attached to this OpenClaw session yet.`;
   }
+  const connection = resolveCodexBindingAppServerConnection({
+    binding,
+    authProfileId: binding.authProfileId,
+    pluginConfig,
+  });
   await deps.codexControlRequest(
     pluginConfig,
     kind === "compact" ? CODEX_CONTROL_METHODS.compact : CODEX_CONTROL_METHODS.review,
@@ -2121,8 +2242,9 @@ async function startThreadAction(
       : { threadId: binding.threadId },
     {
       agentDir: target.agentDir,
-      authProfileId: binding.authProfileId,
+      authProfileId: connection.clientAuthProfileId,
       config: ctx.config,
+      ...(connection.usesSupervisionConnection ? { startOptions: connection.appServer.start } : {}),
     },
   );
   return `Started Codex ${label} for thread ${formatCodexDisplayText(binding.threadId)}.`;

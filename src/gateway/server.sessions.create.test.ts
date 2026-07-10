@@ -1196,6 +1196,33 @@ test("sessions.create forks the parent transcript into the new session", async (
   testState.sessionConfig = undefined;
 });
 
+test("sessions.create rejects forks of model-selection-locked sessions", async () => {
+  const { dir } = await createSessionStoreDir();
+  testState.sessionConfig = { scope: "per-sender" };
+  const parent = await createCheckpointFixture(dir);
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(parent.sessionId, {
+        sessionFile: parent.sessionFile,
+        modelSelectionLocked: true,
+      }),
+    },
+  });
+
+  const created = await directSessionReq("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "main",
+    fork: true,
+  });
+
+  expect(created.ok).toBe(false);
+  expect(created.error).toMatchObject({
+    code: "INVALID_REQUEST",
+    message: "model-selection-locked sessions cannot be forked",
+  });
+  testState.sessionConfig = undefined;
+});
+
 test("sessions.create rejects fork without parentSessionKey", async () => {
   await createSessionStoreDir();
 

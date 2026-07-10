@@ -172,6 +172,33 @@ describe("detectInferenceBackends", () => {
     expect(candidates[0]?.detail).toBe("installed");
   });
 
+  it.each([
+    ["system", "/Applications/Codex.app/Contents/Resources/codex", "/Users/tester"],
+    ["user", "/Users/tester/Applications/Codex.app/Contents/Resources/codex", "/Users/tester"],
+    ["system beta", "/Applications/Codex Beta.app/Contents/Resources/codex", "/Users/tester"],
+    [
+      "user beta",
+      "/Users/tester/Applications/Codex Beta.app/Contents/Resources/codex",
+      "/Users/tester",
+    ],
+  ])("finds the Codex CLI bundled in the %s macOS app directory", async (_scope, appCli, home) => {
+    const candidates = await detectInferenceBackends({
+      env: { HOME: home },
+      platform: "darwin",
+      deps: {
+        probeLocalCommand: probeDeps({ [appCli]: true }),
+        readClaudeCliCredentials: () => null,
+        readCodexCliCredentials: () => null,
+      },
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      kind: "codex-cli",
+      detail: "installed",
+    });
+  });
+
   it("ignores blank env keys", async () => {
     const candidates = await detectInferenceBackends({
       env: { OPENAI_API_KEY: "   " },

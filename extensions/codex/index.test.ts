@@ -12,6 +12,7 @@ import {
   createCodexTestBindingStateStore,
   testCodexAppServerBindingStore,
 } from "./src/app-server/session-binding.test-helpers.js";
+import { CODEX_SUPERVISION_COMPAT_TOOL_NAMES } from "./src/supervision-tools.js";
 
 const runCodexAppServerAttemptMock = vi.hoisted(() => vi.fn());
 const runCodexAppServerSideQuestionMock = vi.hoisted(() => vi.fn());
@@ -126,12 +127,46 @@ describe("codex plugin", () => {
     expect(migrationRegistration?.id).toBe("codex");
     expect(migrationRegistration?.label).toBe("Codex");
     expect(registerTool).toHaveBeenCalledWith(expect.any(Function), { name: "codex_threads" });
+    expect(registerTool).not.toHaveBeenCalledWith(expect.any(Function), {
+      names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES],
+    });
     expect(registerToolMetadata).toHaveBeenCalledWith(
       expect.objectContaining({ toolName: "codex_threads", risk: "high" }),
     );
     expect(inboundClaimRegistration?.[0]).toBe("inbound_claim");
     expect(typeof inboundClaimRegistration?.[1]).toBe("function");
     expect(typeof bindingResolvedRegistration?.[0]).toBe("function");
+  });
+
+  it("registers the five shipped supervision tools only when supervision is enabled", () => {
+    const registerTool = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: { supervision: { enabled: true } },
+        runtime: createCodexTestRuntime(),
+        registerAgentHarness: vi.fn(),
+        registerCommand: vi.fn(),
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        registerTool,
+        on: vi.fn(),
+      }),
+    );
+
+    const registration = registerTool.mock.calls.find(([, options]) =>
+      Array.isArray(options?.names),
+    ) as
+      | [(context: Record<string, never>) => Array<{ name: string }>, { names: string[] }]
+      | undefined;
+    expect(registration?.[1]).toEqual({ names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES] });
+    expect(registration?.[0]({}).map((tool) => tool.name)).toEqual([
+      ...CODEX_SUPERVISION_COMPAT_TOOL_NAMES,
+    ]);
   });
 
   it("registers with capture APIs that do not expose conversation binding hooks yet", () => {

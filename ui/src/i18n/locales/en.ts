@@ -877,8 +877,8 @@ export const en: TranslationMap = {
   codexSessions: {
     eyebrow: "Codex fleet",
     title: "Sessions across your computers",
-    subtitle:
-      "A read-only view of Codex sessions on this gateway and every connected computer that shares them.",
+    interactiveSubtitle:
+      "Start a Chat branch whose model and provider are selected by Codex App Server and locked in OpenClaw, archive local sessions with confirmation, and view paired-computer sessions.",
     summaryLabel: "Codex session summary",
     summary: {
       sessions: "sessions",
@@ -887,11 +887,6 @@ export const en: TranslationMap = {
     },
     searchLabel: "Search Codex sessions",
     searchPlaceholder: "Search session titles",
-    scopeLabel: "Session archive filter",
-    scope: {
-      active: "Active",
-      archived: "Archived",
-    },
     refresh: "Refresh",
     disconnected: "Reconnect to the gateway to refresh Codex sessions.",
     partial: "Unavailable hosts: {count}. Other hosts remain available.",
@@ -900,11 +895,33 @@ export const en: TranslationMap = {
     loadingMore: "Loading…",
     untitled: "Untitled Codex session",
     threadId: "Thread",
+    actions: {
+      continue: "Continue",
+      continueAsBranch: "Continue as branch",
+      openChat: "Open Chat",
+      continuing: "Continuing…",
+      archive: "Archive",
+      continueLabel: "Continue {title}",
+      continueAsBranchLabel: "Continue {title} as a branch",
+      openChatLabel: "Open Chat for {title}",
+      continueAsBranchHint:
+        "Create a Chat from persisted visible history. On your first message, Codex App Server selects the model and provider, and OpenClaw locks that pair for the new harness thread; the source remains untouched, and in-flight work may be absent.",
+      archiveLabel: "Archive {title}",
+      archiveConfirmation:
+        "Archive {title}? Codex Desktop and Codex CLI must not be using this session. Archiving while another runner is active may interrupt its work.",
+      active: "Active sessions cannot start a branch or be archived.",
+      archiveActivityUnknownHint:
+        "Activity is unknown. Close Codex Desktop and Codex CLI, then archive only after confirming no other runner is using this session.",
+      statusUnavailable: "This Codex session cannot be managed in its current state.",
+      hostOffline: "Reconnect this computer before managing its Codex sessions.",
+      gatewayOffline: "Reconnect to the gateway before managing Codex sessions.",
+      remoteReadOnly: "Paired-computer sessions are view-only for now.",
+    },
     status: {
       active: "Active",
       idle: "Idle",
       archived: "Archived",
-      notLoaded: "Stored",
+      storedActivityUnknown: "Stored / activity unknown",
       systemError: "System error",
       unknown: "Unknown",
     },
@@ -919,10 +936,9 @@ export const en: TranslationMap = {
     empty: {
       title: "No Codex hosts found",
       subtitle:
-        "Enable Codex session sharing on the gateway or a paired computer, then refresh this view.",
+        "Enable Codex supervision on the gateway or a paired computer, then refresh this view.",
       search: "No sessions on this host match your search.",
-      active: "No active sessions on this host.",
-      archived: "No archived sessions on this host.",
+      active: "No non-archived sessions on this host.",
     },
   },
   logbook: {
@@ -2002,6 +2018,11 @@ export const en: TranslationMap = {
       clearSessionSearch: "Clear session search",
       loadMoreSessions: "Load more sessions",
       model: "Chat model",
+      modelSection: "Model",
+      modelLocked: "Locked",
+      modelLockedLabel: "Model locked for this session",
+      lockedSessionModel: "Session model",
+      nativeCodexModel: "Codex-controlled model",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {

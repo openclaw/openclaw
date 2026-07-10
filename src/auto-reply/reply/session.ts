@@ -63,6 +63,11 @@ import {
 } from "../../routing/session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
 import {
+  isModelSelectionLocked,
+  MODEL_SELECTION_LOCKED_RESET_MESSAGE,
+  ModelSelectionLockedError,
+} from "../../sessions/model-overrides.js";
+import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
@@ -555,6 +560,11 @@ async function initSessionStateAttemptLocked(
   if (archivedSessionError) {
     throw new Error(archivedSessionError);
   }
+  // Locked model selection is coupled to the current native session id. Reject before
+  // lifecycle cleanup so a reset cannot detach the durable harness binding.
+  if (resetTriggered && isModelSelectionLocked(entry)) {
+    throw new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
+  }
   const now = Date.now();
   const isThread = resolveThreadFlag({
     sessionKey,
@@ -589,7 +599,10 @@ async function initSessionStateAttemptLocked(
   // resume signal is allowed to suppress configured idle/daily rollover.
   const reconnectResumeRequested =
     params.resumeRequestedSession === true && requestedCurrentSession;
-  const skipImplicitExpiry = hasProviderOwnedSession(entry) && resetPolicy.configured !== true;
+  // Implicit expiry must preserve the same identity for model-locked native sessions too.
+  const lockedModelSelection = isModelSelectionLocked(entry);
+  const skipImplicitExpiry =
+    lockedModelSelection || (hasProviderOwnedSession(entry) && resetPolicy.configured !== true);
   const lifecycleTimestamps = resolveSessionLifecycleTimestamps({
     entry,
     agentId,
@@ -638,6 +651,7 @@ async function initSessionStateAttemptLocked(
     (entryFreshness?.fresh ?? false) &&
     isRecoverableTerminalSessionStatus(entry?.status);
   const freshEntry =
+    (lockedModelSelection && canReuseExistingEntry) ||
     (isSystemEvent && canReuseExistingEntry) ||
     (((reconnectResumeRequested && canReuseExistingEntry) ||
       recoverTerminalVisibleEntry ||

@@ -17,7 +17,10 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
+import {
+  resolvePersistedSessionRuntimeId,
+  resolveSessionRuntimeOverrideForProvider,
+} from "../../agents/session-runtime-compat.js";
 import {
   resolveCandidateThinkingLevel,
   resolveEffectiveAgentRuntime,
@@ -253,7 +256,10 @@ function resolveMemoryFlushModelFallbackOptions(
 function followupUsesCliRuntime(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
-  sessionEntry?: Pick<SessionEntry, "agentRuntimeOverride">;
+  sessionEntry?: Pick<
+    SessionEntry,
+    "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked"
+  >;
 }): boolean {
   const provider = params.followupRun.run.provider;
   if (isCliProvider(provider, params.cfg)) {
@@ -261,7 +267,7 @@ function followupUsesCliRuntime(params: {
   }
   return isCliRuntimeAliasForProvider({
     provider,
-    runtime: params.sessionEntry?.agentRuntimeOverride,
+    runtime: resolvePersistedSessionRuntimeId(params.sessionEntry),
     cfg: params.cfg,
   });
 }
@@ -1328,11 +1334,17 @@ export async function runMemoryFlushIfNeeded(params: {
             params.runtimePolicySessionKey ??
             params.followupRun.run.runtimePolicySessionKey ??
             params.sessionKey,
+          agentHarnessId: agentHarnessRuntimeOverride,
           agentHarnessRuntimeOverride,
           workspaceDir: params.followupRun.run.workspaceDir,
         });
       },
       run: async (provider, model, runOptions) => {
+        const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+          provider,
+          entry: activeSessionEntry,
+          cfg: params.cfg,
+        });
         const candidateThinkLevel = resolveCandidateThinkingLevel({
           cfg: params.cfg,
           provider,
@@ -1344,6 +1356,7 @@ export async function runMemoryFlushIfNeeded(params: {
             params.followupRun.run.runtimePolicySessionKey ??
             params.sessionKey,
           sessionEntry: activeSessionEntry,
+          agentRuntime: sessionRuntimeOverride,
         });
         const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
           run: { ...params.followupRun.run, thinkLevel: candidateThinkLevel },
@@ -1359,6 +1372,8 @@ export async function runMemoryFlushIfNeeded(params: {
           ...embeddedContext,
           ...senderContext,
           ...runBaseParams,
+          agentHarnessId: sessionRuntimeOverride,
+          agentHarnessRuntimeOverride: sessionRuntimeOverride,
           sandboxSessionKey: params.runtimePolicySessionKey,
           allowGatewaySubagentBinding: true,
           silentExpected: true,

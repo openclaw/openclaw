@@ -650,8 +650,15 @@ export type SessionEntryCreateWithTranscriptPrepareResult<TError = string> =
   | { ok: true; entry: SessionEntry }
   | { ok: false; error: TError };
 
+export type SessionEntryCreateWithTranscriptOptions = {
+  /** Protect the newly created row from maintenance during its initial save. */
+  activeSessionKey?: string;
+  /** Throw unless the initial session row is durably persisted. */
+  requireWriteSuccess?: boolean;
+};
+
 type CreatedSessionTranscriptResult =
-  | { ok: true; sessionFile: string }
+  | { ok: true; created: boolean; sessionFile: string }
   | { ok: false; error: string; phase: "transcript" };
 
 export type SessionPatchProjectionContext = SessionEntryPatchProjectionContext;
@@ -1158,41 +1165,69 @@ export async function createSessionEntryWithTranscript<TError = string>(
   ) =>
     | Promise<SessionEntryCreateWithTranscriptPrepareResult<TError>>
     | SessionEntryCreateWithTranscriptPrepareResult<TError>,
+  options: SessionEntryCreateWithTranscriptOptions = {},
 ): Promise<SessionEntryCreateWithTranscriptResult<TError>> {
   const storePath = resolveSessionStorePathForScope(scope);
-  return await updateSessionStore(storePath, async (store) => {
-    const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
-    const created = await createEntry({
-      existingEntry: resolved.existing ? { ...resolved.existing } : undefined,
-      sessionEntries: cloneSessionEntries(store),
-    });
-    if (!created.ok) {
-      return { ok: false, error: created.error, phase: "entry" };
-    }
-
-    const ensured = ensureCreatedSessionTranscript({
-      agentId: scope.agentId,
-      entry: created.entry,
+  let createdTranscriptFile: string | undefined;
+  try {
+    return await updateSessionStore(
       storePath,
-    });
-    if (!ensured.ok) {
-      delete store[resolved.normalizedKey];
-      return ensured;
-    }
+      async (store) => {
+        const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
+        const created = await createEntry({
+          existingEntry: resolved.existing ? { ...resolved.existing } : undefined,
+          sessionEntries: cloneSessionEntries(store),
+        });
+        if (!created.ok) {
+          return { ok: false, error: created.error, phase: "entry" };
+        }
 
-    const entry =
-      created.entry.sessionFile === ensured.sessionFile
-        ? created.entry
-        : {
-            ...created.entry,
-            sessionFile: ensured.sessionFile,
-          };
-    store[resolved.normalizedKey] = entry;
-    for (const legacyKey of resolved.legacyKeys) {
-      delete store[legacyKey];
+        const ensured = ensureCreatedSessionTranscript({
+          agentId: scope.agentId,
+          entry: created.entry,
+          storePath,
+        });
+        if (!ensured.ok) {
+          delete store[resolved.normalizedKey];
+          return ensured;
+        }
+        if (ensured.created) {
+          createdTranscriptFile = ensured.sessionFile;
+        }
+
+        const entry =
+          created.entry.sessionFile === ensured.sessionFile
+            ? created.entry
+            : {
+                ...created.entry,
+                sessionFile: ensured.sessionFile,
+              };
+        store[resolved.normalizedKey] = entry;
+        for (const legacyKey of resolved.legacyKeys) {
+          delete store[legacyKey];
+        }
+        return { ok: true, entry, sessionFile: ensured.sessionFile };
+      },
+      {
+        activeSessionKey: options.activeSessionKey,
+        requireWriteSuccess: options.requireWriteSuccess,
+        skipSaveWhenResult: (result) => !result.ok,
+      },
+    );
+  } catch (error) {
+    if (!createdTranscriptFile) {
+      throw error;
     }
-    return { ok: true, entry, sessionFile: ensured.sessionFile };
-  });
+    try {
+      fs.rmSync(createdTranscriptFile, { force: true });
+    } catch (cleanupError) {
+      throw new Error(
+        `Session entry persistence failed (${formatErrorMessage(error)}) and transcript cleanup did not complete: ${createdTranscriptFile}`,
+        { cause: cleanupError },
+      );
+    }
+    throw error;
+  }
 }
 
 function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string, SessionEntry> {
@@ -1356,7 +1391,8 @@ function ensureCreatedSessionTranscript(params: {
         sessionsDir: path.dirname(path.resolve(params.storePath)),
       },
     );
-    if (!fs.existsSync(sessionFile)) {
+    const created = !fs.existsSync(sessionFile);
+    if (created) {
       fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
       fs.writeFileSync(
         sessionFile,
@@ -1367,7 +1403,7 @@ function ensureCreatedSessionTranscript(params: {
         },
       );
     }
-    return { ok: true, sessionFile };
+    return { ok: true, created, sessionFile };
   } catch (err) {
     return {
       ok: false,

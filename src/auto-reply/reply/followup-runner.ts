@@ -1030,6 +1030,7 @@ export function createFollowupRunner(params: {
               modelId: model,
               agentId: run.agentId,
               sessionKey: run.runtimePolicySessionKey ?? replySessionKey,
+              agentHarnessId: agentHarnessRuntimeOverride,
               agentHarnessRuntimeOverride,
               workspaceDir: run.workspaceDir,
             });
@@ -1077,18 +1078,24 @@ export function createFollowupRunner(params: {
               entry: activeSessionEntry,
               cfg: runtimeConfig,
             });
-            const cliExecutionProvider =
-              (sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, runtimeConfig)
+            const pinnedCliRuntime =
+              sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, runtimeConfig)
                 ? sessionRuntimeOverride
-                : undefined) ??
-              resolveCliRuntimeExecutionProvider({
-                provider,
-                cfg: runtimeConfig,
-                agentId: run.agentId,
-                modelId: model,
-                authProfileId: selectedAuthProfile.authProfileId,
-              }) ??
-              provider;
+                : undefined;
+            const cliExecutionProvider =
+              pinnedCliRuntime ??
+              (sessionRuntimeOverride
+                ? provider
+                : (resolveCliRuntimeExecutionProvider({
+                    provider,
+                    cfg: runtimeConfig,
+                    agentId: run.agentId,
+                    modelId: model,
+                    authProfileId: selectedAuthProfile.authProfileId,
+                  }) ?? provider));
+            const useCliExecution =
+              pinnedCliRuntime !== undefined ||
+              (!sessionRuntimeOverride && isCliProvider(cliExecutionProvider, runtimeConfig));
             let attemptCompactionCount = 0;
             const userTurnTranscriptRecorder =
               effectiveQueued.userTurnTranscriptRecorder ?? opts?.userTurnTranscriptRecorder;
@@ -1124,7 +1131,7 @@ export function createFollowupRunner(params: {
                 }
               });
             try {
-              if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
+              if (useCliExecution) {
                 const cliSessionBinding = getCliSessionBinding(
                   activeSessionEntry,
                   cliExecutionProvider,
@@ -1412,6 +1419,8 @@ export function createFollowupRunner(params: {
                 allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
                 provider,
                 model,
+                agentHarnessId: sessionRuntimeOverride,
+                agentHarnessRuntimeOverride: sessionRuntimeOverride,
                 ...selectedAuthProfile,
                 thinkLevel: candidateThinkLevel,
                 fastMode: candidateFastMode.fastMode,

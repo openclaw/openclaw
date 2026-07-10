@@ -1973,9 +1973,8 @@ async function runAgentTurnWithFallbackInternal(
               model,
               thinkLevel: candidateThinkLevel,
             });
-            const { sessionRuntimeOverride, cliExecutionProvider } = agentTurnTiming.measureSync(
-              "fallback_resolve_runtime",
-              () => {
+            const { sessionRuntimeOverride, cliExecutionProvider, useCliExecution } =
+              agentTurnTiming.measureSync("fallback_resolve_runtime", () => {
                 const resolvedSessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
                   provider,
                   entry: liveModelSwitchRuntimeEntry ?? params.getActiveSessionEntry(),
@@ -1984,27 +1983,33 @@ async function runAgentTurnWithFallbackInternal(
                 const resolvedSelectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
                   config: runtimeConfig,
                 });
-                const resolvedCliExecutionProvider =
-                  (resolvedSessionRuntimeOverride &&
+                const pinnedCliRuntime =
+                  resolvedSessionRuntimeOverride &&
                   isCliProvider(resolvedSessionRuntimeOverride, runtimeConfig)
                     ? resolvedSessionRuntimeOverride
-                    : undefined) ??
-                  resolveCliRuntimeExecutionProvider({
-                    provider,
-                    cfg: runtimeConfig,
-                    agentId: params.followupRun.run.agentId,
-                    modelId: model,
-                    authProfileId: resolvedSelectedAuthProfile.authProfileId,
-                  }) ??
-                  provider;
+                    : undefined;
+                const resolvedCliExecutionProvider =
+                  pinnedCliRuntime ??
+                  (resolvedSessionRuntimeOverride
+                    ? provider
+                    : (resolveCliRuntimeExecutionProvider({
+                        provider,
+                        cfg: runtimeConfig,
+                        agentId: params.followupRun.run.agentId,
+                        modelId: model,
+                        authProfileId: resolvedSelectedAuthProfile.authProfileId,
+                      }) ?? provider));
                 return {
                   sessionRuntimeOverride: resolvedSessionRuntimeOverride,
                   cliExecutionProvider: resolvedCliExecutionProvider,
+                  useCliExecution:
+                    pinnedCliRuntime !== undefined ||
+                    (!resolvedSessionRuntimeOverride &&
+                      isCliProvider(resolvedCliExecutionProvider, runtimeConfig)),
                 };
-              },
-            );
+              });
 
-            if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
+            if (useCliExecution) {
               const cliSessionBinding = getCliSessionBinding(
                 params.getActiveSessionEntry(),
                 cliExecutionProvider,

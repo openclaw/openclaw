@@ -1321,6 +1321,66 @@ describe("createFollowupRunner auto fallback primary probes", () => {
 });
 
 describe("createFollowupRunner runtime config", () => {
+  it("keeps catalog-adopted Codex sessions pinned during queued followups", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "catalog-adopted-session",
+      updatedAt: Date.now(),
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "claude-cli",
+      modelSelectionLocked: true,
+      pluginExtensions: {
+        codex: {
+          supervision: {
+            sourceThreadId: "019f-codex-thread",
+            modelLocked: true,
+          },
+        },
+      },
+    };
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          config: runtimeConfig,
+          sessionId: sessionEntry.sessionId,
+          sessionKey: "main",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      }),
+    );
+
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expect(requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent")).toMatchObject({
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      agentHarnessId: "codex",
+      agentHarnessRuntimeOverride: "codex",
+    });
+  });
+
   it("routes queued followups through CLI runtime dispatch when the model selects a CLI backend", async () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {

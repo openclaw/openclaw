@@ -901,6 +901,50 @@ describe("Discord model picker interactions", () => {
     ).toContain("❌ Failed to apply openai/gpt-4o.");
   });
 
+  it("shows a locked-session rejection without writing a fallback override", async () => {
+    const context = createModelPickerContext();
+    context.threadBindings = createBoundThreadBindingManager({
+      accountId: "default",
+      threadId: "thread-bound",
+      targetSessionKey: "agent:worker:subagent:bound",
+      agentId: "worker",
+    });
+    const pickerData = createDefaultModelPickerData();
+    const modelCommand = createModelCommandDefinition();
+    const storePath = resolveStorePath(context.cfg.session?.store, { agentId: "worker" });
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "agent:worker:subagent:bound",
+      entry: {
+        updatedAt: Date.now(),
+        sessionId: "bound-session",
+        modelSelectionLocked: true,
+      },
+    });
+
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    mockModelCommandPipeline(modelCommand);
+
+    const button = createModelPickerFallbackButton(context, createDispatchSpy());
+    const submitInteraction = createInteraction({ userId: "owner" });
+    submitInteraction.channel = {
+      type: ChannelType.PublicThread,
+      id: "thread-bound",
+    };
+
+    await button.run(
+      submitInteraction as unknown as PickerButtonInteraction,
+      createModelsViewSubmitData(),
+    );
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store["agent:worker:subagent:bound"]?.providerOverride).toBeUndefined();
+    expect(store["agent:worker:subagent:bound"]?.modelOverride).toBeUndefined();
+    expect(
+      JSON.stringify(firstMockArg(submitInteraction.followUp, "interaction.followUp")),
+    ).toContain("❌ Model selection is locked for this session.");
+  });
+
   it("loads model picker data from the effective bound route", async () => {
     const context = createModelPickerContext();
     context.threadBindings = createBoundThreadBindingManager({

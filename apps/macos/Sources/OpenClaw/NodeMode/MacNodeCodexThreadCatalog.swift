@@ -3,7 +3,7 @@ import Darwin
 import Foundation
 
 enum MacNodeCodexThreadCatalogContract {
-    static let pluginId = "codex-supervisor"
+    static let pluginId = "codex"
     static let capability = "codex-app-server-threads"
     static let listCommand = "codex.appServer.threads.list.v1"
 }
@@ -13,11 +13,14 @@ enum MacNodeCodexThreadCatalog {
         var executable: String
         var arguments: [String]
         var cwd: URL?
+        var clearEnv: [String] = []
     }
 
     enum CatalogError: LocalizedError, Equatable {
         case invalidParams(String)
         case codexUnavailable
+        case unsupportedAppServerTransport
+        case unsupportedAppServerHomeScope
         case appServerUnavailable
         case responseTooLarge
         case timedOut
@@ -28,6 +31,10 @@ enum MacNodeCodexThreadCatalog {
                 "INVALID_REQUEST: \(message)"
             case .codexUnavailable:
                 "UNAVAILABLE: Codex CLI not found"
+            case .unsupportedAppServerTransport:
+                "UNAVAILABLE: paired macOS Codex catalog supports appServer.transport stdio only"
+            case .unsupportedAppServerHomeScope:
+                "UNAVAILABLE: paired macOS Codex catalog requires appServer.homeScope user"
             case .appServerUnavailable:
                 "UNAVAILABLE: Codex app-server thread list failed"
             case .responseTooLarge:
@@ -48,15 +55,14 @@ enum MacNodeCodexThreadCatalog {
     private struct ListParams {
         var cursor: String?
         var limit = 50
-        var archived = false
         var searchTerm: String?
         var cwd: String?
     }
 
-    private struct ConfiguredStdioEndpoint {
+    private struct ConfiguredAppServer {
         var command: String?
         var args: [String]?
-        var cwd: String?
+        var clearEnv: [String]
     }
 
     private enum StringOverflow {
@@ -66,6 +72,13 @@ enum MacNodeCodexThreadCatalog {
 
     private static let defaultArguments = ["app-server", "--listen", "stdio://"]
     static let defaultMacOSAppExecutable = "/Applications/Codex.app/Contents/Resources/codex"
+    static let defaultUserMacOSAppExecutable = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Applications/Codex.app/Contents/Resources/codex")
+        .path
+    static let defaultMacOSBetaAppExecutable = "/Applications/Codex Beta.app/Contents/Resources/codex"
+    static let defaultUserMacOSBetaAppExecutable = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Applications/Codex Beta.app/Contents/Resources/codex")
+        .path
     private static let maxSessionIdLength = 256
     private static let maxSessionNameLength = 500
     private static let maxCwdLength = 4096
@@ -104,11 +117,21 @@ enum MacNodeCodexThreadCatalog {
         return try await self.list(params: params, invocation: invocation)
     }
 
+    static func shouldAdvertise(root: [String: Any]? = nil) -> Bool {
+        let root = root ?? OpenClawConfigFile.loadDict()
+        return OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
+            MacNodeCodexThreadCatalogContract.pluginId,
+            path: ["supervision", "enabled"],
+            root: root) && self.supportsConfiguredTransport(root: root) &&
+            self.supportsConfiguredHomeScope(root: root)
+    }
+
     static func list(
         paramsJSON: String?,
         executable: String,
         arguments: [String]? = nil,
         cwd: URL? = nil,
+        clearEnv: [String] = [],
         timeoutSeconds: Double = 12,
         maxLineBytes: Int = 5 * 1024 * 1024) async throws -> String
     {
@@ -118,7 +141,8 @@ enum MacNodeCodexThreadCatalog {
             invocation: ResolvedInvocation(
                 executable: executable,
                 arguments: arguments ?? self.defaultArguments,
-                cwd: cwd),
+                cwd: cwd,
+                clearEnv: clearEnv),
             timeoutSeconds: timeoutSeconds,
             maxLineBytes: maxLineBytes)
     }
@@ -137,7 +161,6 @@ enum MacNodeCodexThreadCatalog {
         let output = try await session.run()
         return try self.normalize(
             listResultData: output.listResultData,
-            archived: params.archived,
             searchTerm: params.searchTerm)
     }
 
@@ -147,26 +170,40 @@ enum MacNodeCodexThreadCatalog {
         currentDirectoryURL: URL = URL(
             fileURLWithPath: FileManager.default.currentDirectoryPath,
             isDirectory: true),
-        defaultMacOSAppExecutable: String = MacNodeCodexThreadCatalog.defaultMacOSAppExecutable) throws
+        defaultMacOSAppExecutable: String = MacNodeCodexThreadCatalog.defaultMacOSAppExecutable,
+        defaultUserMacOSAppExecutable: String = MacNodeCodexThreadCatalog.defaultUserMacOSAppExecutable,
+        defaultMacOSBetaAppExecutable: String = MacNodeCodexThreadCatalog.defaultMacOSBetaAppExecutable,
+        defaultUserMacOSBetaAppExecutable: String = MacNodeCodexThreadCatalog.defaultUserMacOSBetaAppExecutable) throws
         -> ResolvedInvocation
     {
         let root = root ?? OpenClawConfigFile.loadDict()
-        let endpoint = self.configuredStdioEndpoint(root: root)
-        let cwd = endpoint?.cwd.map {
-            self.resolvePath($0, relativeTo: currentDirectoryURL, isDirectory: true)
+        guard self.supportsConfiguredTransport(root: root) else {
+            throw CatalogError.unsupportedAppServerTransport
         }
-        let configuredCommand = endpoint?.command
+        guard self.supportsConfiguredHomeScope(root: root) else {
+            throw CatalogError.unsupportedAppServerHomeScope
+        }
+        let appServer = self.configuredAppServer(root: root)
+        let configuredCommand = appServer?.command
         let rawCommand = configuredCommand ?? "codex"
         let command = rawCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !command.isEmpty else { throw CatalogError.codexUnavailable }
 
         let executable: String?
-        if configuredCommand == nil,
-           FileManager.default.isExecutableFile(atPath: defaultMacOSAppExecutable)
-        {
-            executable = defaultMacOSAppExecutable
+        var installedAppExecutable: String?
+        if configuredCommand == nil {
+            installedAppExecutable = [
+                defaultMacOSAppExecutable,
+                defaultUserMacOSAppExecutable,
+                defaultMacOSBetaAppExecutable,
+                defaultUserMacOSBetaAppExecutable,
+            ]
+                .first { FileManager.default.isExecutableFile(atPath: $0) }
+        }
+        if let installedAppExecutable {
+            executable = installedAppExecutable
         } else if command.contains("/") || command.hasPrefix("~") {
-            let url = self.resolvePath(command, relativeTo: cwd ?? currentDirectoryURL)
+            let url = self.resolvePath(command, relativeTo: currentDirectoryURL)
             executable = FileManager.default.isExecutableFile(atPath: url.path) ? url.path : nil
         } else {
             executable = CommandResolver.findExecutable(named: command, searchPaths: searchPaths)
@@ -174,29 +211,96 @@ enum MacNodeCodexThreadCatalog {
         guard let executable else { throw CatalogError.codexUnavailable }
         return ResolvedInvocation(
             executable: executable,
-            arguments: endpoint?.args ?? self.defaultArguments,
-            cwd: cwd)
+            arguments: appServer?.args ?? self.defaultArguments,
+            cwd: nil,
+            clearEnv: appServer?.clearEnv ?? [])
     }
 
-    private static func configuredStdioEndpoint(root: [String: Any]) -> ConfiguredStdioEndpoint? {
+    private static func supportsConfiguredTransport(root: [String: Any]) -> Bool {
         guard let entry = OpenClawConfigFile.pluginEntry(
             MacNodeCodexThreadCatalogContract.pluginId,
             root: root),
             let config = entry["config"] as? [String: Any],
-            let endpoints = config["endpoints"] as? [Any]
+            let appServer = config["appServer"] as? [String: Any],
+            let transport = appServer["transport"]
+        else { return true }
+
+        return transport as? String == "stdio"
+    }
+
+    private static func supportsConfiguredHomeScope(root: [String: Any]) -> Bool {
+        guard let entry = OpenClawConfigFile.pluginEntry(
+            MacNodeCodexThreadCatalogContract.pluginId,
+            root: root),
+            let config = entry["config"] as? [String: Any],
+            let appServer = config["appServer"] as? [String: Any],
+            let homeScope = appServer["homeScope"]
+        else { return true }
+
+        return homeScope as? String == "user"
+    }
+
+    private static func configuredAppServer(root: [String: Any]) -> ConfiguredAppServer? {
+        guard let entry = OpenClawConfigFile.pluginEntry(
+            MacNodeCodexThreadCatalogContract.pluginId,
+            root: root),
+            let config = entry["config"] as? [String: Any],
+            let appServer = config["appServer"] as? [String: Any]
         else { return nil }
 
-        for value in endpoints {
-            guard let endpoint = value as? [String: Any] else { continue }
-            let transport = endpoint["transport"] as? String
-            guard transport == nil || transport == "stdio-proxy" else { continue }
-            let args = (endpoint["args"] as? [Any])?.compactMap { $0 as? String }
-            return ConfiguredStdioEndpoint(
-                command: endpoint["command"] as? String,
-                args: args?.isEmpty == false ? args : nil,
-                cwd: endpoint["cwd"] as? String)
+        return ConfiguredAppServer(
+            command: self.nonEmptyString(appServer["command"]),
+            args: self.configuredArguments(appServer["args"]),
+            clearEnv: self.configuredStringList(appServer["clearEnv"]))
+    }
+
+    private static func configuredArguments(_ value: Any?) -> [String]? {
+        let args: [String]
+        if let values = value as? [Any] {
+            args = values.compactMap(self.nonEmptyString)
+        } else if let value = value as? String {
+            args = self.splitShellWords(value)
+        } else {
+            return nil
         }
-        return nil
+        return args.isEmpty ? nil : args
+    }
+
+    private static func configuredStringList(_ value: Any?) -> [String] {
+        guard let values = value as? [Any] else { return [] }
+        return values.compactMap(self.nonEmptyString)
+    }
+
+    /// Match the TypeScript app-server config parser exactly: quotes only group
+    /// words and backslashes are ordinary characters. The result never uses a shell.
+    private static func splitShellWords(_ value: String) -> [String] {
+        var words: [String] = []
+        var current = ""
+        var activeQuote: Character?
+        for character in value {
+            if let expectedQuote = activeQuote {
+                if character == expectedQuote {
+                    activeQuote = nil
+                } else {
+                    current.append(character)
+                }
+                continue
+            }
+            if character == "\"" || character == "'" {
+                activeQuote = character
+            } else if character.isWhitespace {
+                if !current.isEmpty {
+                    words.append(current)
+                    current = ""
+                }
+            } else {
+                current.append(character)
+            }
+        }
+        if !current.isEmpty {
+            words.append(current)
+        }
+        return words
     }
 
     private static func resolvePath(
@@ -228,7 +332,7 @@ enum MacNodeCodexThreadCatalog {
         guard let raw = raw as? [String: Any] else {
             throw CatalogError.invalidParams("parameters must be an object")
         }
-        let allowed = Set(["cursor", "limit", "archived", "searchTerm", "cwd"])
+        let allowed = Set(["cursor", "limit", "searchTerm", "cwd"])
         if let unknown = raw.keys.first(where: { !allowed.contains($0) }) {
             throw CatalogError.invalidParams("unknown Codex session catalog parameter: \(unknown)")
         }
@@ -249,14 +353,6 @@ enum MacNodeCodexThreadCatalog {
                 throw CatalogError.invalidParams("limit must be an integer from 1 to 100")
             }
             params.limit = number.intValue
-        }
-        if let value = raw["archived"] {
-            guard CFGetTypeID(value as CFTypeRef) == CFBooleanGetTypeID(),
-                  let archived = value as? Bool
-            else {
-                throw CatalogError.invalidParams("archived must be a boolean")
-            }
-            params.archived = archived
         }
         return params
     }
@@ -286,7 +382,7 @@ enum MacNodeCodexThreadCatalog {
             // An empty provider list means all providers. Omitting sourceKinds keeps
             // Codex's stable interactive-session default.
             "modelProviders": [String](),
-            "archived": params.archived,
+            "archived": false,
             "useStateDbOnly": false,
         ]
         if let cursor = params.cursor {
@@ -302,7 +398,6 @@ enum MacNodeCodexThreadCatalog {
 
     static func normalize(
         listResultData: Data,
-        archived: Bool,
         searchTerm: String? = nil) throws -> String
     {
         guard let result = try JSONSerialization.jsonObject(with: listResultData) as? [String: Any],
@@ -333,7 +428,7 @@ enum MacNodeCodexThreadCatalog {
                 maxLength: self.maxSessionNameLength,
                 overflow: .truncate)
             if let searchTerm,
-               name?.range(of: searchTerm, options: [.literal]) == nil
+               name?.range(of: searchTerm, options: [.caseInsensitive, .literal]) == nil
             {
                 return nil
             }
@@ -362,7 +457,7 @@ enum MacNodeCodexThreadCatalog {
                     gitInfo?["branch"],
                     maxLength: self.maxMetadataLength,
                     overflow: .truncate),
-                archived: archived)
+                archived: false)
         }
 
         let response = WireResponse(
@@ -482,6 +577,9 @@ private final class CodexAppServerThreadListSession: @unchecked Sendable {
         self.process.currentDirectoryURL = invocation.cwd
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
+        for key in invocation.clearEnv {
+            environment.removeValue(forKey: key)
+        }
         self.process.environment = environment
         self.process.standardInput = self.stdinPipe
         self.process.standardOutput = self.stdoutPipe

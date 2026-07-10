@@ -51,7 +51,11 @@ import {
   parseTraceOverride,
   parseVerboseOverride,
 } from "../sessions/level-overrides.js";
-import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
+import {
+  applyModelOverrideToSessionEntry,
+  isModelSelectionLocked,
+  MODEL_SELECTION_LOCKED_MESSAGE,
+} from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { parseSessionLabel, SESSION_LABEL_MAX_LENGTH } from "../sessions/session-label.js";
 
@@ -148,6 +152,9 @@ export async function projectSessionsPatchEntry(params: {
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const { cfg, storeKey, patch } = params;
+  if ("model" in patch && isModelSelectionLocked(params.existingEntry)) {
+    return invalid(MODEL_SELECTION_LOCKED_MESSAGE);
+  }
   const now = Date.now();
   const parsedAgent = parseAgentSessionKey(storeKey);
   const sessionAgentId = normalizeAgentId(

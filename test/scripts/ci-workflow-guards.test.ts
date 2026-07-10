@@ -2208,6 +2208,10 @@ describe("ci workflow guards", () => {
       ".github/codeql/codeql-network-runtime-boundary-critical-quality.yml",
       "utf8",
     );
+    const rawSocketQuery = readFileSync(
+      ".github/codeql/openclaw-boundary/queries/raw-socket-callsite-classification.ql",
+      "utf8",
+    );
     const networkSelector = workflow.slice(
       workflow.indexOf(".github/codeql/codeql-network-runtime-boundary-critical-quality.yml"),
       workflow.indexOf("network-runtime-boundary:"),
@@ -2235,6 +2239,19 @@ describe("ci workflow guards", () => {
       '| select(.filename | test("(^|/)[^/]+\\\\.(?:e2e\\\\.)?test\\\\.tsx?$") | not)',
     );
     expect(workflow).toContain("Network runtime boundary-sensitive added lines");
-    expect(workflow).toContain("if: ${{ github.event_name != 'pull_request' }}");
+    expect(workflow).toContain(
+      'codex_transport="extensions/codex/src/app-server/transport-websocket.ts"',
+    );
+    expect(workflow).toContain('grep -Fv "$codex_transport: " "$added_lines"');
+    expect(workflow).toContain('echo "full_codeql=true" >> "$GITHUB_OUTPUT"');
+    expect(workflow).toContain(
+      "if: ${{ github.event_name != 'pull_request' || steps.network-diff-scan.outputs.full_codeql == 'true' }}",
+    );
+    expect(rawSocketQuery).toContain(
+      'allowedOwnerScope(call, "extensions/codex/src/app-server/transport-websocket.ts", "connectCodexAppServerUnixSocket")',
+    );
+    expect(rawSocketQuery).not.toContain(
+      'call.getFile().getRelativePath() = "extensions/codex/src/app-server/transport-websocket.ts"',
+    );
   });
 });

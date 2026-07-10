@@ -36,7 +36,6 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "bonjour",
   "browser",
   "canvas",
-  "codex-supervisor",
   "device-pair",
   "diagnostics-otel",
   "diagnostics-prometheus",
@@ -579,9 +578,9 @@ describe("bundled plugin metadata", () => {
     expect(entry?.manifest.activation?.onCommands).toStrictEqual(["voicecall"]);
   });
 
-  it("scopes Codex Supervisor CLI activation to the codex command", () => {
+  it("scopes Codex CLI activation to the codex command", () => {
     const entry = listRepoBundledPluginManifests().find(
-      ({ manifest }) => manifest.id === "codex-supervisor",
+      ({ manifest }) => manifest.id === "codex",
     );
 
     expect(entry?.manifest.activation?.onCommands).toStrictEqual(["codex"]);

@@ -1180,6 +1180,9 @@ class ChatPane extends OpenClawLightDomElement {
     const agentDefaultModel = this.context.agents.state.agentsList?.agents.find(
       (agent) => agent.id === currentAgentId,
     )?.model?.primary;
+    const selectedSession = state.sessionsResult?.sessions.find((row) =>
+      areUiSessionKeysEquivalent(row.key, state.sessionKey),
+    );
     const selectedSessionArchived =
       state.selectedChatSessionArchived ||
       state.sessionsResult?.sessions.some(
@@ -1250,6 +1253,8 @@ class ChatPane extends OpenClawLightDomElement {
           loading: state.chatLoading,
           modelCatalog: state.chatModelCatalog,
           modelOverrides: state.sessions.state.modelOverrides,
+          modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
+          modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
           modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
           modelsLoading: state.chatModelsLoading,
           sending: state.chatSending,

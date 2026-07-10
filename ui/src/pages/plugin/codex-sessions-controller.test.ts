@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
+  archiveCodexSession,
   configureCodexSessionsPolling,
+  continueCodexSession,
   getCodexSessionsState,
   loadCodexSessions,
   loadMoreCodexSessions,
@@ -18,16 +20,17 @@ function clientWithRequest(
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
+    reject = rejectPromise;
   });
-  return { promise, resolve };
+  return { promise, reject, resolve };
 }
 
-function payload(
-  sessions: Array<{ threadId: string; name: string }>,
-  nextCursor?: string,
-): CodexSessionsPayload {
+type SessionFixture = { threadId: string; name: string; status?: string };
+
+function payload(sessions: SessionFixture[], nextCursor?: string): CodexSessionsPayload {
   return {
     hosts: [
       {
@@ -35,12 +38,30 @@ function payload(
         label: "MacBook",
         kind: "node",
         connected: true,
-        sessions: sessions.map((session) => ({
+        sessions: sessions.map(({ status = "idle", ...session }) => ({
           ...session,
           archived: false,
-          status: "idle",
+          status,
         })),
         nextCursor,
+      },
+    ],
+  };
+}
+
+function gatewayPayload(sessions: SessionFixture[]): CodexSessionsPayload {
+  const result = payload(sessions);
+  const host = result.hosts[0];
+  if (!host) {
+    return result;
+  }
+  return {
+    hosts: [
+      {
+        ...host,
+        hostId: "gateway:local",
+        label: "Gateway",
+        kind: "gateway",
       },
     ],
   };
@@ -56,7 +77,7 @@ describe("Codex sessions controller", () => {
     vi.useRealTimers();
   });
 
-  it("loads a first page with the active archive scope", async () => {
+  it("loads a first page from the non-archived Codex catalog", async () => {
     const host = {};
     hosts.push(host);
     const request = vi.fn(async () => payload([{ threadId: "thread-1", name: "Fix tests" }]));
@@ -64,12 +85,164 @@ describe("Codex sessions controller", () => {
 
     await loadCodexSessions(state, clientWithRequest(request));
 
-    expect(request).toHaveBeenCalledWith("codex-supervisor.sessions.list", {
-      archived: false,
+    expect(request).toHaveBeenCalledWith("codex.sessions.list", {
       limitPerHost: 40,
     });
     expect(state.hosts[0]?.sessions[0]?.threadId).toBe("thread-1");
     expect(state.refreshedAtMs).not.toBeNull();
+  });
+
+  it("continues an idle Codex thread and returns its OpenClaw session key", async () => {
+    const host = {};
+    hosts.push(host);
+    const state = getCodexSessionsState(host);
+    state.hosts = gatewayPayload([{ threadId: "thread-1", name: "Fix tests" }]).hosts;
+    const request = vi.fn(async () => ({
+      sessionKey: "agent:main:codex-thread-1",
+      disposition: "forked",
+    }));
+    const onContinue = vi.fn();
+
+    await continueCodexSession(
+      state,
+      clientWithRequest(request),
+      "gateway:local",
+      "thread-1",
+      onContinue,
+    );
+
+    expect(request).toHaveBeenCalledWith("codex.sessions.continue", {
+      hostId: "gateway:local",
+      threadId: "thread-1",
+    });
+    expect(onContinue).toHaveBeenCalledWith("agent:main:codex-thread-1");
+    expect(state.pendingSessionActions.size).toBe(0);
+    expect(state.actionError).toBeNull();
+  });
+
+  it("continues or confirmed-archives a not-loaded thread", async () => {
+    const host = {};
+    hosts.push(host);
+    const state = getCodexSessionsState(host);
+    state.hosts = gatewayPayload([
+      { threadId: "thread-stored", name: "Stored work", status: "notLoaded" },
+    ]).hosts;
+    const request = vi.fn(async (method: string) => {
+      if (method === "codex.sessions.continue") {
+        return { sessionKey: "agent:main:codex-fork", disposition: "forked" };
+      }
+      if (method === "codex.sessions.archive") {
+        return { archived: true };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const client = clientWithRequest(request);
+    const onContinue = vi.fn();
+
+    await continueCodexSession(state, client, "gateway:local", "thread-stored", onContinue);
+    await archiveCodexSession(state, client, "gateway:local", "thread-stored", true);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledWith("codex.sessions.continue", {
+      hostId: "gateway:local",
+      threadId: "thread-stored",
+    });
+    expect(request).toHaveBeenCalledWith("codex.sessions.archive", {
+      hostId: "gateway:local",
+      threadId: "thread-stored",
+      confirmNoOtherRunner: true,
+    });
+    expect(onContinue).toHaveBeenCalledWith("agent:main:codex-fork");
+    expect(state.hosts[0]?.sessions).toEqual([]);
+  });
+
+  it("refuses actions for Codex sessions in an unsupported status", async () => {
+    const host = {};
+    hosts.push(host);
+    const state = getCodexSessionsState(host);
+    state.hosts = gatewayPayload([
+      { threadId: "thread-error", name: "Broken work", status: "systemError" },
+    ]).hosts;
+    const request = vi.fn(async () => ({ sessionKey: "unexpected" }));
+    const client = clientWithRequest(request);
+
+    await continueCodexSession(state, client, "gateway:local", "thread-error", vi.fn());
+    await archiveCodexSession(state, client, "gateway:local", "thread-error", true);
+
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps paired-node sessions metadata-only even while the node is connected", async () => {
+    const host = {};
+    hosts.push(host);
+    const state = getCodexSessionsState(host);
+    state.hosts = payload([{ threadId: "thread-remote", name: "Remote work" }]).hosts;
+    const request = vi.fn(async () => ({ sessionKey: "unexpected" }));
+    const client = clientWithRequest(request);
+
+    await continueCodexSession(state, client, "node:macbook", "thread-remote", vi.fn());
+    await archiveCodexSession(state, client, "node:macbook", "thread-remote", true);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(state.hosts[0]?.sessions[0]?.threadId).toBe("thread-remote");
+  });
+
+  it("archives optimistically and keeps the row removed after confirmation", async () => {
+    const host = {};
+    hosts.push(host);
+    const state = getCodexSessionsState(host);
+    state.hosts = gatewayPayload([{ threadId: "thread-1", name: "Fix tests" }]).hosts;
+    const response = deferred<{ archived: boolean }>();
+    const request = vi.fn(() => response.promise);
+    const client = clientWithRequest(request);
+
+    await archiveCodexSession(state, client, "gateway:local", "thread-1", false);
+    expect(request).not.toHaveBeenCalled();
+    expect(state.hosts[0]?.sessions[0]?.threadId).toBe("thread-1");
+
+    const archiving = archiveCodexSession(state, client, "gateway:local", "thread-1", true);
+    expect(state.hosts[0]?.sessions).toEqual([]);
+    expect(request).toHaveBeenCalledWith("codex.sessions.archive", {
+      hostId: "gateway:local",
+      threadId: "thread-1",
+      confirmNoOtherRunner: true,
+    });
+
+    response.resolve({ archived: true });
+    await archiving;
+
+    expect(state.hosts[0]?.sessions).toEqual([]);
+    expect(state.pendingSessionActions.size).toBe(0);
+  });
+
+  it("restores an optimistically archived row when the Gateway rejects it", async () => {
+    const host = {};
+    hosts.push(host);
+    const state = getCodexSessionsState(host);
+    state.hosts = gatewayPayload([
+      { threadId: "thread-1", name: "First" },
+      { threadId: "thread-2", name: "Second" },
+    ]).hosts;
+    const response = deferred<{ archived: boolean }>();
+
+    const archiving = archiveCodexSession(
+      state,
+      clientWithRequest(() => response.promise),
+      "gateway:local",
+      "thread-1",
+      true,
+    );
+    expect(state.hosts[0]?.sessions.map((session) => session.threadId)).toEqual(["thread-2"]);
+
+    response.reject(new Error("thread is still active"));
+    await archiving;
+
+    expect(state.hosts[0]?.sessions.map((session) => session.threadId)).toEqual([
+      "thread-1",
+      "thread-2",
+    ]);
+    expect(state.actionError).toBe("thread is still active");
+    expect(state.pendingSessionActions.size).toBe(0);
   });
 
   it("discards an older response as soon as the search changes", async () => {
@@ -92,9 +265,8 @@ describe("Codex sessions controller", () => {
     expect(state.hosts).toEqual([]);
 
     await vi.advanceTimersByTimeAsync(250);
-    expect(request).toHaveBeenLastCalledWith("codex-supervisor.sessions.list", {
+    expect(request).toHaveBeenLastCalledWith("codex.sessions.list", {
       search: "release",
-      archived: false,
       limitPerHost: 40,
     });
     second.resolve(payload([{ threadId: "fresh", name: "Release" }]));
@@ -119,8 +291,7 @@ describe("Codex sessions controller", () => {
 
     await loadMoreCodexSessions(state, clientWithRequest(request), "node:macbook");
 
-    expect(request).toHaveBeenCalledWith("codex-supervisor.sessions.list", {
-      archived: false,
+    expect(request).toHaveBeenCalledWith("codex.sessions.list", {
       limitPerHost: 40,
       hostIds: ["node:macbook"],
       cursors: { "node:macbook": "cursor-2" },
@@ -251,8 +422,7 @@ describe("Codex sessions controller", () => {
     configureCodexSessionsPolling(state, secondClient, true);
 
     await vi.waitFor(() => expect(secondRequest).toHaveBeenCalledTimes(1));
-    expect(secondRequest).toHaveBeenCalledWith("codex-supervisor.sessions.list", {
-      archived: false,
+    expect(secondRequest).toHaveBeenCalledWith("codex.sessions.list", {
       limitPerHost: 40,
     });
     expect(state.search).toBe("");

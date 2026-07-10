@@ -160,6 +160,19 @@ two-party event loops that do not go through the shared inbound reply runner.
       update: (entry) => ({ thinkingLevel: "high" }),
     });
 
+    const created = await api.runtime.agent.session.createSessionEntry({
+      cfg,
+      key: "agent:main:my-plugin:task-1",
+      initialEntry: {
+        agentHarnessId: "my-harness",
+        modelSelectionLocked: true,
+        pluginExtensions: { "my-plugin": { phase: "initializing" } },
+      },
+      afterCreate: async () => ({
+        pluginExtensions: { "my-plugin": { phase: "ready" } },
+      }),
+    });
+
     const storePath = api.runtime.agent.session.resolveStorePath(cfg.session?.store, { agentId });
     await api.runtime.agent.session.runWithWorkAdmission(
       { storePath, sessionKey },
@@ -170,6 +183,10 @@ two-party event loops that do not go through the shared inbound reply runner.
     ```
 
     Prefer `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted.
+
+    `createSessionEntry(...)` creates a new canonical session row and transcript. Its trusted `initialEntry` surface is deliberately narrow: a non-empty `agentHarnessId`, optional `modelSelectionLocked: true`, and optional `pluginExtensions`. It rejects an existing row; `label` and `spawnedCwd` are separate creation fields rather than trusted-entry patches.
+
+    Creation holds the session lifecycle mutation fence through `afterCreate`, so new work waits for plugin-owned initialization to finish and pre-existing admitted work makes creation fail. The callback receives a clone of the created state. If it returns a patch, that patch may contain only `pluginExtensions`, and its value is the complete final `pluginExtensions` field. A callback or final-persistence failure rolls back the unchanged new row and transcript; guarded rollback preserves a row changed or claimed concurrently. `recoverMatchingInitialEntry: true` is only for retrying interrupted initialization when the persisted trusted fields match exactly, and recovery requires `afterCreate` to return a final patch.
 
     Use `runWithWorkAdmission(...)` when a plugin starts work on a persisted session. The callback rejects archived or concurrently replaced sessions, keeps archive/reset/delete mutations coordinated through completion, and receives an `AbortSignal` that must be forwarded to the agent run.
 

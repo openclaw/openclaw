@@ -9,6 +9,11 @@ import type {
   PluginHookBeforeModelResolveEvent,
 } from "../../../plugins/types.js";
 import {
+  isDefaultAgentRuntimeId,
+  normalizeOptionalAgentRuntimeId,
+  OPENCLAW_AGENT_RUNTIME_ID,
+} from "../../agent-runtime-id.js";
+import {
   evaluateContextWindowGuard,
   formatContextWindowBlockMessage,
   formatContextWindowWarningMessage,
@@ -128,6 +133,47 @@ export function buildBeforeModelResolveAttachments(
   }));
 }
 
+/** Resolves a pinned non-default harness that owns native model selection. */
+export function resolveNativeModelOwnedHarnessId(params: {
+  agentHarnessId?: string;
+  modelSelectionLocked?: boolean;
+  selectedHarnessId: string;
+}): string | undefined {
+  if (params.modelSelectionLocked !== true) {
+    return undefined;
+  }
+  const requestedHarnessId = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
+  const selectedHarnessId = normalizeOptionalAgentRuntimeId(params.selectedHarnessId);
+  if (
+    !requestedHarnessId ||
+    isDefaultAgentRuntimeId(requestedHarnessId) ||
+    requestedHarnessId === OPENCLAW_AGENT_RUNTIME_ID ||
+    requestedHarnessId !== selectedHarnessId
+  ) {
+    return undefined;
+  }
+  return requestedHarnessId;
+}
+
+/** Builds structural model metadata for a harness that resolves its real model natively. */
+export function createNativeModelOwnedRuntimeModel(params: {
+  provider: string;
+  modelId: string;
+}): ProviderRuntimeModel {
+  return {
+    provider: params.provider,
+    id: params.modelId,
+    name: params.modelId,
+    baseUrl: "",
+    api: "openai-responses",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: DEFAULT_CONTEXT_TOKENS,
+    maxTokens: DEFAULT_CONTEXT_TOKENS,
+  };
+}
+
 /**
  * Resolves context-window policy for the selected runtime model and returns the
  * model shape the session runtime should see. Configured context caps are
@@ -192,5 +238,29 @@ export function resolveEffectiveRuntimeModel(params: {
   return {
     ctxInfo,
     effectiveModel,
+  };
+}
+
+/** Resolves only OpenClaw-owned context policy; native model owners keep that policy private. */
+export function resolveEmbeddedRuntimeModelPolicy(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  contextConfigProvider?: string;
+  modelId: string;
+  runtimeModel: ProviderRuntimeModel;
+  nativeModelOwned: boolean;
+}): {
+  contextWindowInfo?: ContextWindowInfo;
+  contextTokenBudget?: number;
+  effectiveModel: ProviderRuntimeModel;
+} {
+  if (params.nativeModelOwned) {
+    return { effectiveModel: params.runtimeModel };
+  }
+  const resolved = resolveEffectiveRuntimeModel(params);
+  return {
+    contextWindowInfo: resolved.ctxInfo,
+    contextTokenBudget: resolved.ctxInfo.tokens,
+    effectiveModel: resolved.effectiveModel,
   };
 }

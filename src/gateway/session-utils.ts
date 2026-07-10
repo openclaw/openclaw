@@ -2239,6 +2239,7 @@ export function buildGatewaySessionRow(params: {
     ),
     modelProvider: rowModelProvider,
     model: rowModel,
+    modelSelectionLocked: entry?.modelSelectionLocked,
     agentRuntime: thinkingProjection.agentRuntime,
     contextTokens,
     contextBudgetStatus: entry?.contextBudgetStatus,

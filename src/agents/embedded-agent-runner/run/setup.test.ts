@@ -6,8 +6,10 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import {
   buildBeforeModelResolveAttachments,
+  resolveEmbeddedRuntimeModelPolicy,
   resolveEffectiveRuntimeModel,
   resolveHookModelSelection,
+  resolveNativeModelOwnedHarnessId,
 } from "./setup.js";
 
 const hookContext = {
@@ -171,5 +173,60 @@ describe("resolveEffectiveRuntimeModel", () => {
       tokens: 272_000,
     });
     expect(result.effectiveModel.contextWindow).toBe(272_000);
+  });
+});
+
+describe("native model-owned harness policy", () => {
+  it("requires an exact pinned, locked, non-default harness", () => {
+    expect(
+      resolveNativeModelOwnedHarnessId({
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        selectedHarnessId: "codex",
+      }),
+    ).toBe("codex");
+    expect(
+      resolveNativeModelOwnedHarnessId({
+        agentHarnessId: "codex",
+        modelSelectionLocked: false,
+        selectedHarnessId: "codex",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveNativeModelOwnedHarnessId({
+        agentHarnessId: "openclaw",
+        modelSelectionLocked: true,
+        selectedHarnessId: "openclaw",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveNativeModelOwnedHarnessId({
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        selectedHarnessId: "other",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not apply outer context guards or budgets", () => {
+    const runtimeModel = createRuntimeModel();
+    const result = resolveEmbeddedRuntimeModelPolicy({
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [createConfiguredModel({ contextWindow: 1, contextTokens: 1 })],
+            },
+          },
+        },
+      },
+      provider: "openai",
+      modelId: runtimeModel.id,
+      runtimeModel,
+      nativeModelOwned: true,
+    });
+
+    expect(result).toEqual({ effectiveModel: runtimeModel });
   });
 });

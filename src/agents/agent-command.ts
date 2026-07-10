@@ -51,6 +51,9 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import {
   applyModelOverrideToSessionEntry,
+  MODEL_SELECTION_LOCKED_MESSAGE,
+  ModelSelectionLockedError,
+  isModelSelectionLocked,
   repairProviderWrappedModelOverride,
 } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
@@ -1475,6 +1478,9 @@ async function agentCommandInternal(
           ? normalizeExplicitOverrideInput(opts.model, "model")
           : undefined;
       const hasExplicitRunOverride = Boolean(explicitProviderOverride || explicitModelOverride);
+      if (hasExplicitRunOverride && isModelSelectionLocked(sessionEntry)) {
+        throw new ModelSelectionLockedError();
+      }
       if (hasExplicitRunOverride && opts.allowModelOverride !== true) {
         throw new Error("Model override is not authorized for this caller.");
       }
@@ -1644,14 +1650,15 @@ async function agentCommandInternal(
           model = normalizedStored.model;
         }
       }
-      const autoFallbackPrimaryProbe = !hasExplicitRunOverride
-        ? resolveAutoFallbackPrimaryProbe({
-            entry: sessionEntry,
-            sessionKey,
-            primaryProvider,
-            primaryModel,
-          })
-        : undefined;
+      const autoFallbackPrimaryProbe =
+        !hasExplicitRunOverride && !isModelSelectionLocked(sessionEntry)
+          ? resolveAutoFallbackPrimaryProbe({
+              entry: sessionEntry,
+              sessionKey,
+              primaryProvider,
+              primaryModel,
+            })
+          : undefined;
       let autoFallbackPrimaryProbeSessionEntry: SessionEntry | undefined;
       if (autoFallbackPrimaryProbe && sessionEntry) {
         provider = autoFallbackPrimaryProbe.provider;
@@ -1702,6 +1709,12 @@ async function agentCommandInternal(
       provider = allowedInitialSelection.provider;
       model = allowedInitialSelection.model;
       providerForAuthProfileValidation = provider;
+      let sessionEntryForAttempt = autoFallbackPrimaryProbeSessionEntry ?? sessionEntry;
+      const initialAgentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+        provider,
+        entry: sessionEntryForAttempt,
+        cfg,
+      });
 
       await ensureSelectedAgentHarnessPlugin({
         config: cfg,
@@ -1709,15 +1722,10 @@ async function agentCommandInternal(
         modelId: model,
         agentId: sessionAgentId,
         sessionKey,
-        agentHarnessRuntimeOverride: resolveSessionRuntimeOverrideForProvider({
-          provider,
-          entry: sessionEntry,
-          cfg,
-        }),
+        agentHarnessRuntimeOverride: initialAgentHarnessRuntimeOverride,
         workspaceDir,
       });
 
-      let sessionEntryForAttempt = autoFallbackPrimaryProbeSessionEntry ?? sessionEntry;
       if (sessionEntryForAttempt) {
         const authProfileId = sessionEntryForAttempt.authProfileOverride;
         if (authProfileId) {
@@ -2084,17 +2092,19 @@ async function agentCommandInternal(
             ? getGeneratedMediaTaskIdsForSessionKey(sessionKey)
             : new Set<string>();
           const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
-          const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
-            cfg,
-            agentId: sessionAgentId,
-            sessionKey,
-            hasSessionModelOverride:
-              hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
-            modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
-            hasAutoFallbackProvenance: hasExplicitRunOverride
-              ? false
-              : hasStoredAutoFallbackProvenance,
-          });
+          const effectiveFallbacksOverride = isModelSelectionLocked(sessionEntry)
+            ? []
+            : resolveEffectiveModelFallbacks({
+                cfg,
+                agentId: sessionAgentId,
+                sessionKey,
+                hasSessionModelOverride:
+                  hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
+                modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
+                hasAutoFallbackProvenance: hasExplicitRunOverride
+                  ? false
+                  : hasStoredAutoFallbackProvenance,
+              });
 
           let fallbackAttemptIndex = 0;
           const fallbackRuntimeState: { originRuntime?: "cli" | "embedded" } = {};
@@ -2305,6 +2315,7 @@ async function agentCommandInternal(
             sessionEntry &&
             sessionStore &&
             sessionKey &&
+            !isModelSelectionLocked(sessionEntry) &&
             !suppressVisibleSessionEffects &&
             !preserveUserFacingSessionModelState &&
             entryMatchesAutoFallbackPrimaryProbe(sessionEntry, autoFallbackPrimaryProbe) &&
@@ -2345,6 +2356,23 @@ async function agentCommandInternal(
           break;
         } catch (err) {
           if (err instanceof LiveSessionModelSwitchError) {
+            if (isModelSelectionLocked(sessionEntry)) {
+              if (!attemptLifecycleState.lifecycleEnded) {
+                emitAgentEvent({
+                  runId,
+                  lifecycleGeneration,
+                  stream: "lifecycle",
+                  data: {
+                    phase: "error",
+                    startedAt,
+                    endedAt: Date.now(),
+                    error: MODEL_SELECTION_LOCKED_MESSAGE,
+                  },
+                });
+              }
+              await fallbackTrajectoryRecorder?.flush();
+              throw new ModelSelectionLockedError();
+            }
             if (
               sessionKey &&
               hasNewGeneratedMediaTaskForSessionKey(sessionKey, liveSwitchMediaTaskIds)

@@ -156,9 +156,22 @@ export type CodexThreadStartResponse = {
   modelProvider?: string | null;
 };
 
-export type CodexThreadForkParams = CodexThreadStartParams & {
+export type CodexThreadForkParams = JsonObject & {
   threadId: string;
+  lastTurnId?: string | null;
+  path?: string | null;
+  model?: string | null;
+  modelProvider?: string | null;
+  serviceTier?: CodexServiceTier | null;
+  cwd?: string | null;
+  runtimeWorkspaceRoots?: string[] | null;
+  approvalPolicy?: CodexApprovalPolicy | null;
+  approvalsReviewer?: CodexApprovalsReviewer | null;
+  sandbox?: CodexSandboxMode | null;
+  permissions?: string | null;
+  config?: JsonObject | null;
   baseInstructions?: string;
+  developerInstructions?: string;
   ephemeral?: boolean;
   threadSource?: string | null;
   excludeTurns?: boolean;
@@ -297,6 +310,7 @@ export type CodexThread = {
   createdAt?: number | null;
   updatedAt?: number | null;
   status?: CodexThreadStatus | null;
+  modelProvider?: string | null;
   cwd?: string | null;
   source?: CodexSessionSource | null;
   threadSource?: string | null;

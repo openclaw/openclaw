@@ -5,7 +5,10 @@ import {
   describeControlFailure,
   type CodexControlMethod,
 } from "./app-server/capabilities.js";
-import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
+import {
+  resolveCodexAppServerRuntimeOptions,
+  type CodexAppServerStartOptions,
+} from "./app-server/config.js";
 import { listCodexAppServerModels } from "./app-server/models.js";
 import type {
   CodexAppServerRequestMethod,
@@ -23,11 +26,12 @@ type AuthProfileOrderConfig = Parameters<
 
 export type CodexControlRequestOptions = {
   config?: AuthProfileOrderConfig;
-  authProfileId?: string;
+  authProfileId?: string | null;
   agentDir?: string;
   sessionKey?: string;
   sessionId?: string;
   isolated?: boolean;
+  startOptions?: CodexAppServerStartOptions;
 };
 
 export function requestOptions(
@@ -69,7 +73,7 @@ export async function codexControlRequest(
     method,
     requestParams,
     timeoutMs: runtime.requestTimeoutMs,
-    startOptions: runtime.start,
+    startOptions: options.startOptions ?? runtime.start,
     config: options.config,
     sessionKey: options.sessionKey,
     sessionId: options.sessionId,

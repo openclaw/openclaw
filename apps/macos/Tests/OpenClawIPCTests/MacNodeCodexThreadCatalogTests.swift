@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 @testable import OpenClaw
@@ -53,9 +54,7 @@ struct MacNodeCodexThreadCatalogTests {
         ]
         let data = try JSONSerialization.data(withJSONObject: raw)
 
-        let json = try MacNodeCodexThreadCatalog.normalize(
-            listResultData: data,
-            archived: false)
+        let json = try MacNodeCodexThreadCatalog.normalize(listResultData: data)
         let decoded = try #require(
             JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         let sessions = try #require(decoded["sessions"] as? [[String: Any]])
@@ -104,9 +103,7 @@ struct MacNodeCodexThreadCatalogTests {
         ]
         let data = try JSONSerialization.data(withJSONObject: raw)
 
-        let json = try MacNodeCodexThreadCatalog.normalize(
-            listResultData: data,
-            archived: false)
+        let json = try MacNodeCodexThreadCatalog.normalize(listResultData: data)
         let decoded = try #require(
             JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         let sessions = try #require(decoded["sessions"] as? [[String: Any]])
@@ -127,12 +124,15 @@ struct MacNodeCodexThreadCatalogTests {
         #expect(decoded["backwardsCursor"] as? String == "opaque-backwards")
     }
 
-    @Test func `resolves and runs the first configured stdio endpoint without a shell`() async throws {
+    @Test func `resolves and runs the configured Codex App Server without a shell`() async throws {
+        let clearEnvSentinel = "OPENCLAW_CODEX_CATALOG_CLEAR_ENV_SENTINEL"
+        _ = setenv(clearEnvSentinel, "present", 1)
+        defer { _ = unsetenv(clearEnvSentinel) }
         let fake = try self.makeFakeCodex(#"""
         #!/bin/sh
         [ "$1" = "custom-app-server" ] || exit 10
         [ "$2" = "--stdio" ] || exit 11
-        pwd > "${0}.cwd"
+        [ -z "${OPENCLAW_CODEX_CATALOG_CLEAR_ENV_SENTINEL+x}" ] || exit 12
         IFS= read -r initialize || exit 2
         printf '%s\n' '{"id":1,"result":{}}'
         IFS= read -r initialized || exit 3
@@ -144,18 +144,16 @@ struct MacNodeCodexThreadCatalogTests {
         let root: [String: Any] = [
             "plugins": [
                 "entries": [
-                    " codex-supervisor ": [
+                    " codex ": [
                         "enabled": true,
                         "config": [
-                            "endpoints": [
-                                ["transport": "websocket", "url": "unix://"],
-                                [
-                                    "transport": "stdio-proxy",
-                                    "command": "./codex",
-                                    "args": ["custom-app-server", "--stdio"],
-                                    "cwd": fake.directory.path,
-                                ],
-                                ["transport": "stdio-proxy", "command": "/must/not/win"],
+                            "supervision": ["enabled": true],
+                            "appServer": [
+                                "transport": "stdio",
+                                "homeScope": "user",
+                                "command": fake.executable.path,
+                                "args": #"custom-app-server "--stdio" workspace\ path "C:\\Codex" 'literal\slash' tail\"#,
+                                "clearEnv": [" \(clearEnvSentinel) ", "", 42],
                             ],
                         ],
                     ],
@@ -169,27 +167,59 @@ struct MacNodeCodexThreadCatalogTests {
             currentDirectoryURL: FileManager.default.temporaryDirectory)
 
         #expect(resolved.executable == fake.executable.standardizedFileURL.path)
-        #expect(resolved.arguments == ["custom-app-server", "--stdio"])
-        #expect(resolved.cwd == fake.directory.standardizedFileURL)
+        #expect(resolved.arguments == [
+            "custom-app-server",
+            "--stdio",
+            "workspace\\",
+            "path",
+            "C:\\\\Codex",
+            "literal\\slash",
+            "tail\\",
+        ])
+        #expect(resolved.cwd == nil)
+        #expect(resolved.clearEnv == [clearEnvSentinel])
 
         let payload = try await MacNodeCodexThreadCatalog.list(
             paramsJSON: nil,
             executable: resolved.executable,
             arguments: resolved.arguments,
-            cwd: resolved.cwd)
+            cwd: resolved.cwd,
+            clearEnv: resolved.clearEnv)
         let response = try #require(
             JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
         #expect((response["sessions"] as? [Any])?.isEmpty == true)
-        let capturedCwd = try String(
-            contentsOf: URL(fileURLWithPath: fake.executable.path + ".cwd"),
-            encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        #expect(
-            URL(fileURLWithPath: capturedCwd).resolvingSymlinksInPath() ==
-                fake.directory.resolvingSymlinksInPath())
     }
 
-    @Test func `prefers the installed Codex app binary for the default endpoint`() throws {
+    @Test func `rejects agent home scope instead of exposing the user Codex home`() throws {
+        let app = try self.makeFakeCodex("#!/bin/sh\nexit 0\n")
+        defer { try? FileManager.default.removeItem(at: app.directory) }
+        let root: [String: Any] = [
+            "plugins": [
+                "entries": [
+                    "codex": [
+                        "enabled": true,
+                        "config": [
+                            "supervision": ["enabled": true],
+                            "appServer": [
+                                "transport": "stdio",
+                                "homeScope": "agent",
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ]
+
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: root))
+        #expect(throws: MacNodeCodexThreadCatalog.CatalogError.unsupportedAppServerHomeScope) {
+            try MacNodeCodexThreadCatalog.resolveInvocation(
+                root: root,
+                searchPaths: [],
+                defaultMacOSAppExecutable: app.executable.path)
+        }
+    }
+
+    @Test func `rejects configured non-stdio transports instead of spawning a local fallback`() throws {
         let app = try self.makeFakeCodex("#!/bin/sh\nexit 0\n")
         let pathCLI = try self.makeFakeCodex("#!/bin/sh\nexit 0\n")
         defer {
@@ -197,12 +227,71 @@ struct MacNodeCodexThreadCatalogTests {
             try? FileManager.default.removeItem(at: pathCLI.directory)
         }
 
+        for transport in ["websocket", "unix"] {
+            let root: [String: Any] = [
+                "plugins": [
+                    "entries": [
+                        "codex": [
+                            "enabled": true,
+                            "config": [
+                                "supervision": ["enabled": true],
+                                "appServer": [
+                                    "transport": transport,
+                                    "command": "/must/not/win",
+                                    "args": ["must-not-win"],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ]
+
+            #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: root))
+            #expect(throws: MacNodeCodexThreadCatalog.CatalogError.unsupportedAppServerTransport) {
+                try MacNodeCodexThreadCatalog.resolveInvocation(
+                    root: root,
+                    searchPaths: [pathCLI.directory.path],
+                    defaultMacOSAppExecutable: app.executable.path)
+            }
+        }
+    }
+
+    @Test func `finds a Codex app installed in the user Applications directory`() throws {
+        let userApp = try self.makeFakeCodex("#!/bin/sh\nexit 0\n")
+        let pathCLI = try self.makeFakeCodex("#!/bin/sh\nexit 0\n")
+        defer {
+            try? FileManager.default.removeItem(at: userApp.directory)
+            try? FileManager.default.removeItem(at: pathCLI.directory)
+        }
+
         let resolved = try MacNodeCodexThreadCatalog.resolveInvocation(
             root: [:],
             searchPaths: [pathCLI.directory.path],
-            defaultMacOSAppExecutable: app.executable.path)
+            defaultMacOSAppExecutable: userApp.directory.appendingPathComponent("missing").path,
+            defaultUserMacOSAppExecutable: userApp.executable.path)
 
-        #expect(resolved.executable == app.executable.path)
+        #expect(resolved.executable == userApp.executable.path)
+        #expect(resolved.arguments == ["app-server", "--listen", "stdio://"])
+    }
+
+    @Test func `finds a Codex Beta app when stable app bundles are absent`() throws {
+        let betaApp = try self.makeFakeCodex("#!/bin/sh\nexit 0\n")
+        let pathCLI = try self.makeFakeCodex("#!/bin/sh\nexit 0\n")
+        defer {
+            try? FileManager.default.removeItem(at: betaApp.directory)
+            try? FileManager.default.removeItem(at: pathCLI.directory)
+        }
+
+        let missing = betaApp.directory.appendingPathComponent("missing").path
+        let resolved = try MacNodeCodexThreadCatalog.resolveInvocation(
+            root: [:],
+            searchPaths: [pathCLI.directory.path],
+            defaultMacOSAppExecutable: missing,
+            defaultUserMacOSAppExecutable: missing,
+            defaultMacOSBetaAppExecutable: betaApp.executable.path,
+            defaultUserMacOSBetaAppExecutable: missing)
+
+        #expect(resolved.executable == betaApp.executable.path)
         #expect(resolved.arguments == ["app-server", "--listen", "stdio://"])
     }
 
@@ -229,7 +318,7 @@ struct MacNodeCodexThreadCatalogTests {
         defer { try? FileManager.default.removeItem(at: fake.directory) }
 
         let payload = try await MacNodeCodexThreadCatalog.list(
-            paramsJSON: #"{"cursor":" cursor ","limit":25,"archived":true,"searchTerm":" One ","cwd":" /work "}"#,
+            paramsJSON: #"{"cursor":" cursor ","limit":25,"searchTerm":" oNe ","cwd":" /work "}"#,
             executable: fake.executable.path)
         let response = try #require(
             JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
@@ -253,7 +342,7 @@ struct MacNodeCodexThreadCatalogTests {
         let listParams = try #require(captured[2]?["params"] as? [String: Any])
         #expect(listParams["cursor"] as? String == "cursor")
         #expect(listParams["limit"] as? Int == 25)
-        #expect(listParams["archived"] as? Bool == true)
+        #expect(listParams["archived"] as? Bool == false)
         #expect(listParams["searchTerm"] == nil)
         #expect(listParams["cwd"] as? String == "/work")
         #expect(listParams["sortKey"] as? String == "recency_at")
@@ -268,7 +357,7 @@ struct MacNodeCodexThreadCatalogTests {
             [
                 "id": "thread-\(index)",
                 "name": "Large catalog \(index)",
-                "cwd": "/workspace/\(String(repeating: "x", count: 2_000))",
+                "cwd": "/workspace/\(String(repeating: "x", count: 2000))",
                 "status": ["type": "notLoaded"],
             ]
         }
@@ -306,6 +395,7 @@ struct MacNodeCodexThreadCatalogTests {
             (#"{"limit":0}"#, "limit must be an integer from 1 to 100"),
             (#"{"limit":101}"#, "limit must be an integer from 1 to 100"),
             (#"{"limit":1.5}"#, "limit must be an integer from 1 to 100"),
+            (#"{"archived":true}"#, "unknown Codex session catalog parameter: archived"),
         ]
         for (paramsJSON, expected) in cases {
             do {

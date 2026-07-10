@@ -1,3 +1,4 @@
+import CoreFoundation
 import CryptoKit
 import Foundation
 import OpenClawProtocol
@@ -213,6 +214,13 @@ enum OpenClawConfigFile {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private static func literalBoolean(_ value: Any?) -> Bool? {
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) == CFBooleanGetTypeID()
+        else { return nil }
+        return number.boolValue
+    }
+
     static func pluginEntry(_ pluginId: String, root: [String: Any]? = nil) -> [String: Any]? {
         let root = root ?? self.loadDict()
         guard let plugins = root["plugins"] as? [String: Any],
@@ -226,10 +234,12 @@ enum OpenClawConfigFile {
     static func explicitlyEnabledPlugin(_ pluginId: String, root: [String: Any]? = nil) -> Bool {
         let root = root ?? self.loadDict()
         guard let plugins = root["plugins"] as? [String: Any],
-              plugins["enabled"] as? Bool != false,
               let entry = self.pluginEntry(pluginId, root: root),
-              entry["enabled"] as? Bool == true
+              self.literalBoolean(entry["enabled"]) == true
         else { return false }
+        if let enabled = plugins["enabled"], self.literalBoolean(enabled) != true {
+            return false
+        }
 
         let deny = (plugins["deny"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
         if deny.contains(pluginId) { return false }
@@ -237,6 +247,27 @@ enum OpenClawConfigFile {
         let allow = (plugins["allow"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
         if !allow.isEmpty, !allow.contains(pluginId) { return false }
         return true
+    }
+
+    static func explicitlyEnabledPluginConfigFlag(
+        _ pluginId: String,
+        path: [String],
+        root: [String: Any]? = nil) -> Bool
+    {
+        let root = root ?? self.loadDict()
+        guard self.explicitlyEnabledPlugin(pluginId, root: root),
+              let entry = self.pluginEntry(pluginId, root: root),
+              let config = entry["config"]
+        else { return false }
+
+        var value = config
+        for key in path {
+            guard let object = value as? [String: Any], let next = object[key] else {
+                return false
+            }
+            value = next
+        }
+        return self.literalBoolean(value) == true
     }
 
     static func setBrowserControlEnabled(_ enabled: Bool) {
