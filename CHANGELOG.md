@@ -28,7 +28,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Exec approval concurrency:** serialize approval use and persistent grants against current policy across CLI, Gateway, Node, and macOS so concurrent revocations remain fail-closed and independent grants survive, while hardening the Mac approval socket lifecycle and bounded JSONL transport. (#78225, #103515) Thanks @coygeek.
 - **Codex runtime switching:** accept the bundled Codex runtime for both `codex/*` and `openai/*` model routes while keeping unsupported provider/runtime pairs rejected. (#103762)
 - **Agent abort cleanup:** serialize prompt lock reacquisition with terminal cleanup so canceled embedded runs do not self-contend on session locks for up to 60 seconds.
 - **Chutes OAuth deadlines:** bound token exchange, profile lookup, and refresh requests, and keep issued tokens when optional userinfo enrichment stalls. (#102026) Thanks @Alix-007.
