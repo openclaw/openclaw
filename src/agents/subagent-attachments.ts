@@ -162,7 +162,7 @@ function validateAttachmentName(name: string): void {
   if (
     Array.from(name).some((char) => {
       const code = char.codePointAt(0) ?? 0;
-      return code < 0x20 || code === 0x7f;
+      return code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f);
     })
   ) {
     failAttachment(`attachments_invalid_name (${name})`);
