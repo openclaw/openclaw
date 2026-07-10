@@ -64,12 +64,16 @@ import type {
   DurableSideEffectUncertaintyFact,
   DurableSideEffectUncertaintyStatus,
   DurableUnresolvedObligation,
+  DurableWakeDeliveryAttempt,
+  DurableWakeDeliveryAttemptStatus,
   UpdateDurableRuntimeRunInput,
   UpdateDurableRuntimeLinkInput,
   RecordDurableContinuationCleanupInput,
   RecordDurableDedupeLedgerInput,
+  RecordDurableWakeDeliveryAttemptInput,
   ResolveDurableSideEffectUncertaintyFactInput,
   UpdateDurableParentWakeInput,
+  UpdateDurableWakeDeliveryAttemptInput,
   UpdateDurableWakeInput,
   UpdateDurableRuntimeStepInput,
   UpdateDurableRuntimeTimerInput,
@@ -269,6 +273,28 @@ type DurableDedupeLedgerEntryRow = {
   metadata_json: string | null;
 };
 
+type DurableWakeDeliveryAttemptRow = {
+  delivery_attempt_id: string;
+  wake_id: string;
+  dedupe_key: string;
+  replay_pass_id: string | null;
+  target_kind: DurableWakeTargetKind | null;
+  target_ref: string | null;
+  route_kind: DurableWakeTargetKind | null;
+  route_ref: string | null;
+  status: DurableWakeDeliveryAttemptStatus;
+  evidence_json: string | null;
+  error_message: string | null;
+  scheduled_at: number | bigint;
+  attempted_at: number | bigint | null;
+  delivered_at: number | bigint | null;
+  failed_at: number | bigint | null;
+  unknown_at: number | bigint | null;
+  created_at: number | bigint;
+  updated_at: number | bigint;
+  metadata_json: string | null;
+};
+
 type DurableUnresolvedObligationRow = {
   obligation_id: string;
   kind: DurableUnresolvedObligation["kind"];
@@ -298,6 +324,7 @@ type DurableRuntimeDatabase = Pick<
   | "durable_runtime_steps"
   | "durable_runtime_timers"
   | "durable_runtime_uncertainty_facts"
+  | "durable_runtime_wake_delivery_attempts"
 >;
 type SyncQuery<Row> = Parameters<typeof executeSqliteQuerySync<Row>>[1];
 
@@ -543,6 +570,30 @@ function rowToDedupeLedgerEntry(row: DurableDedupeLedgerEntryRow): DurableDedupe
     firstSeenAt: Number(row.first_seen_at),
     lastSeenAt: Number(row.last_seen_at),
     hitCount: Number(row.hit_count),
+    ...(row.metadata_json ? { metadata: parseJsonRecord(row.metadata_json) } : {}),
+  };
+}
+
+function rowToWakeDeliveryAttempt(row: DurableWakeDeliveryAttemptRow): DurableWakeDeliveryAttempt {
+  return {
+    deliveryAttemptId: row.delivery_attempt_id,
+    wakeId: row.wake_id,
+    dedupeKey: row.dedupe_key,
+    ...(row.replay_pass_id ? { replayPassId: row.replay_pass_id } : {}),
+    ...(row.target_kind ? { targetKind: row.target_kind } : {}),
+    ...(row.target_ref ? { targetRef: row.target_ref } : {}),
+    ...(row.route_kind ? { routeKind: row.route_kind } : {}),
+    ...(row.route_ref ? { routeRef: row.route_ref } : {}),
+    status: row.status,
+    ...(row.evidence_json ? { evidence: parseJsonRecord(row.evidence_json) } : {}),
+    ...(row.error_message ? { error: row.error_message } : {}),
+    scheduledAt: Number(row.scheduled_at),
+    ...(row.attempted_at == null ? {} : { attemptedAt: Number(row.attempted_at) }),
+    ...(row.delivered_at == null ? {} : { deliveredAt: Number(row.delivered_at) }),
+    ...(row.failed_at == null ? {} : { failedAt: Number(row.failed_at) }),
+    ...(row.unknown_at == null ? {} : { unknownAt: Number(row.unknown_at) }),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
     ...(row.metadata_json ? { metadata: parseJsonRecord(row.metadata_json) } : {}),
   };
 }
@@ -871,6 +922,173 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
         .limit(normalizeQueryLimit(options?.limit, 500)),
     );
     return rows.map(rowToParentWake);
+  };
+
+  const recordWakeDeliveryAttemptRecord = (
+    input: RecordDurableWakeDeliveryAttemptInput,
+  ): DurableWakeDeliveryAttempt => {
+    const now = input.now ?? Date.now();
+    const deliveryAttemptId = input.deliveryAttemptId ?? `wake_delivery_${randomUUID()}`;
+    const dedupeKey = optionalText(input.dedupeKey);
+    if (!dedupeKey) {
+      throw new Error("Durable wake delivery attempt requires a dedupeKey");
+    }
+    return runSqliteImmediateTransactionSync(db, () => {
+      const existing = queryFirst<DurableWakeDeliveryAttemptRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_wake_delivery_attempts")
+          .selectAll()
+          .where("dedupe_key", "=", dedupeKey),
+      );
+      if (existing) {
+        return rowToWakeDeliveryAttempt(existing);
+      }
+      const wake = queryFirst<DurableParentWakeRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_parent_wakes")
+          .selectAll()
+          .where("wake_id", "=", input.wakeId),
+      );
+      if (!wake) {
+        throw new Error(`Durable wake delivery attempt references unknown wake ${input.wakeId}`);
+      }
+      executeQuery(
+        db,
+        durableDb.insertInto("durable_runtime_wake_delivery_attempts").values({
+          delivery_attempt_id: deliveryAttemptId,
+          wake_id: input.wakeId,
+          dedupe_key: dedupeKey,
+          replay_pass_id: optionalText(input.replayPassId),
+          target_kind: optionalText(input.targetKind),
+          target_ref: optionalText(input.targetRef),
+          route_kind: optionalText(input.routeKind),
+          route_ref: optionalText(input.routeRef),
+          status: input.status ?? "pending",
+          evidence_json: serializeJson(input.evidence),
+          error_message: optionalText(input.error),
+          scheduled_at: now,
+          attempted_at: input.attemptedAt ?? null,
+          delivered_at: input.deliveredAt ?? null,
+          failed_at: input.failedAt ?? null,
+          unknown_at: input.unknownAt ?? null,
+          created_at: now,
+          updated_at: now,
+          metadata_json: serializeJson(input.metadata),
+        }),
+      );
+      executeQuery(
+        db,
+        durableDb
+          .updateTable("durable_runtime_parent_wakes")
+          .set({
+            attempt_count: Number(wake.attempt_count) + 1,
+            last_attempt_at: now,
+            updated_at: now,
+          })
+          .where("wake_id", "=", input.wakeId),
+      );
+      const row = queryFirst<DurableWakeDeliveryAttemptRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_wake_delivery_attempts")
+          .selectAll()
+          .where("delivery_attempt_id", "=", deliveryAttemptId),
+      );
+      return rowToWakeDeliveryAttempt(row!);
+    });
+  };
+
+  const updateWakeDeliveryAttemptRecord = (
+    input: UpdateDurableWakeDeliveryAttemptInput,
+  ): DurableWakeDeliveryAttempt | undefined => {
+    const now = input.now ?? Date.now();
+    return runSqliteImmediateTransactionSync(db, () => {
+      const current = queryFirst<DurableWakeDeliveryAttemptRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_wake_delivery_attempts")
+          .selectAll()
+          .where("delivery_attempt_id", "=", input.deliveryAttemptId),
+      );
+      if (!current) {
+        return undefined;
+      }
+      const nextEvidenceJson =
+        input.evidence === undefined ? current.evidence_json : serializeJson(input.evidence);
+      const nextError =
+        input.error === undefined ? current.error_message : optionalText(input.error ?? undefined);
+      const nextAttemptedAt =
+        input.attemptedAt === undefined ? current.attempted_at : input.attemptedAt;
+      const nextDeliveredAt =
+        input.deliveredAt === undefined ? current.delivered_at : input.deliveredAt;
+      const nextFailedAt = input.failedAt === undefined ? current.failed_at : input.failedAt;
+      const nextUnknownAt = input.unknownAt === undefined ? current.unknown_at : input.unknownAt;
+      const nextMetadataJson =
+        input.metadata === undefined ? current.metadata_json : serializeJson(input.metadata);
+      executeQuery(
+        db,
+        durableDb
+          .updateTable("durable_runtime_wake_delivery_attempts")
+          .set({
+            status: input.status,
+            evidence_json: nextEvidenceJson,
+            error_message: nextError,
+            attempted_at: nextAttemptedAt == null ? null : Number(nextAttemptedAt),
+            delivered_at: nextDeliveredAt == null ? null : Number(nextDeliveredAt),
+            failed_at: nextFailedAt == null ? null : Number(nextFailedAt),
+            unknown_at: nextUnknownAt == null ? null : Number(nextUnknownAt),
+            updated_at: now,
+            metadata_json: nextMetadataJson,
+          })
+          .where("delivery_attempt_id", "=", input.deliveryAttemptId),
+      );
+      const row = queryFirst<DurableWakeDeliveryAttemptRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_wake_delivery_attempts")
+          .selectAll()
+          .where("delivery_attempt_id", "=", input.deliveryAttemptId),
+      );
+      return rowToWakeDeliveryAttempt(row!);
+    });
+  };
+
+  const getWakeDeliveryAttemptRecord = (
+    deliveryAttemptId: string,
+  ): DurableWakeDeliveryAttempt | undefined => {
+    const row = queryFirst<DurableWakeDeliveryAttemptRow>(
+      db,
+      durableDb
+        .selectFrom("durable_runtime_wake_delivery_attempts")
+        .selectAll()
+        .where("delivery_attempt_id", "=", deliveryAttemptId),
+    );
+    return row ? rowToWakeDeliveryAttempt(row) : undefined;
+  };
+
+  const listWakeDeliveryAttemptRecords = (options?: {
+    wakeId?: string;
+    dedupeKey?: string;
+    status?: DurableWakeDeliveryAttemptStatus;
+    limit?: number;
+  }): DurableWakeDeliveryAttempt[] => {
+    const wakeId = optionalText(options?.wakeId);
+    const dedupeKey = optionalText(options?.dedupeKey);
+    const rows = queryRows<DurableWakeDeliveryAttemptRow>(
+      db,
+      durableDb
+        .selectFrom("durable_runtime_wake_delivery_attempts")
+        .selectAll()
+        .$if(Boolean(wakeId), (qb) => qb.where("wake_id", "=", wakeId!))
+        .$if(Boolean(dedupeKey), (qb) => qb.where("dedupe_key", "=", dedupeKey!))
+        .$if(Boolean(options?.status), (qb) => qb.where("status", "=", options!.status!))
+        .orderBy("scheduled_at", "desc")
+        .orderBy("delivery_attempt_id", "desc")
+        .limit(normalizeQueryLimit(options?.limit, 500)),
+    );
+    return rows.map(rowToWakeDeliveryAttempt);
   };
 
   return {
@@ -2181,6 +2399,31 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
           .limit(normalizeQueryLimit(options?.limit, 500)),
       );
       return rows.map(rowToDedupeLedgerEntry);
+    },
+
+    recordWakeDeliveryAttempt(
+      input: RecordDurableWakeDeliveryAttemptInput,
+    ): DurableWakeDeliveryAttempt {
+      return recordWakeDeliveryAttemptRecord(input);
+    },
+
+    updateWakeDeliveryAttempt(
+      input: UpdateDurableWakeDeliveryAttemptInput,
+    ): DurableWakeDeliveryAttempt | undefined {
+      return updateWakeDeliveryAttemptRecord(input);
+    },
+
+    getWakeDeliveryAttempt(deliveryAttemptId: string): DurableWakeDeliveryAttempt | undefined {
+      return getWakeDeliveryAttemptRecord(deliveryAttemptId);
+    },
+
+    listWakeDeliveryAttempts(options?: {
+      wakeId?: string;
+      dedupeKey?: string;
+      status?: DurableWakeDeliveryAttemptStatus;
+      limit?: number;
+    }): DurableWakeDeliveryAttempt[] {
+      return listWakeDeliveryAttemptRecords(options);
     },
 
     listUnresolvedObligations(options?: {

@@ -1539,6 +1539,41 @@ CREATE INDEX IF NOT EXISTS idx_durable_runtime_parent_wakes_report_route
   ON durable_runtime_parent_wakes(report_route_ref, status, updated_at)
   WHERE report_route_ref IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS durable_runtime_wake_delivery_attempts (
+  delivery_attempt_id TEXT NOT NULL PRIMARY KEY,
+  wake_id TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  replay_pass_id TEXT,
+  target_kind TEXT,
+  target_ref TEXT,
+  route_kind TEXT,
+  route_ref TEXT,
+  status TEXT NOT NULL,
+  evidence_json TEXT,
+  error_message TEXT,
+  scheduled_at INTEGER NOT NULL,
+  attempted_at INTEGER,
+  delivered_at INTEGER,
+  failed_at INTEGER,
+  unknown_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  metadata_json TEXT,
+  FOREIGN KEY (wake_id) REFERENCES durable_runtime_parent_wakes(wake_id)
+    ON DELETE CASCADE,
+  UNIQUE (dedupe_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_wake_delivery_attempts_wake
+  ON durable_runtime_wake_delivery_attempts(wake_id, status, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_wake_delivery_attempts_status
+  ON durable_runtime_wake_delivery_attempts(status, scheduled_at, delivery_attempt_id);
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_wake_delivery_attempts_route
+  ON durable_runtime_wake_delivery_attempts(route_kind, route_ref, status, scheduled_at)
+  WHERE route_ref IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS durable_runtime_uncertainty_facts (
   fact_id TEXT NOT NULL PRIMARY KEY,
   kind TEXT NOT NULL,

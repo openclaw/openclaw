@@ -694,6 +694,28 @@ export interface DurableRuntimeUncertaintyFacts {
   updated_at: number;
 }
 
+export interface DurableRuntimeWakeDeliveryAttempts {
+  attempted_at: number | null;
+  created_at: number;
+  dedupe_key: string;
+  delivered_at: number | null;
+  delivery_attempt_id: string;
+  error_message: string | null;
+  evidence_json: string | null;
+  failed_at: number | null;
+  metadata_json: string | null;
+  replay_pass_id: string | null;
+  route_kind: string | null;
+  route_ref: string | null;
+  scheduled_at: number;
+  status: string;
+  target_kind: string | null;
+  target_ref: string | null;
+  unknown_at: number | null;
+  updated_at: number;
+  wake_id: string;
+}
+
 export interface ExecApprovalsConfig {
   agent_count: number;
   allowlist_count: number;
@@ -1292,6 +1314,7 @@ export interface DB {
   durable_runtime_steps: DurableRuntimeSteps;
   durable_runtime_timers: DurableRuntimeTimers;
   durable_runtime_uncertainty_facts: DurableRuntimeUncertaintyFacts;
+  durable_runtime_wake_delivery_attempts: DurableRuntimeWakeDeliveryAttempts;
   exec_approvals_config: ExecApprovalsConfig;
   flow_runs: FlowRuns;
   gateway_boot_lifecycle: GatewayBootLifecycle;

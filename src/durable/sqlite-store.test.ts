@@ -21,6 +21,7 @@ const DURABLE_TABLES = [
   "durable_runtime_steps",
   "durable_runtime_timers",
   "durable_runtime_uncertainty_facts",
+  "durable_runtime_wake_delivery_attempts",
 ] as const;
 
 describe("durable runtime sqlite store", () => {
