@@ -294,20 +294,8 @@ describe("installDownloadSpec download byte limit (#103236)", () => {
   // ~103 MiB — enough to exceed the 100 MiB limit in ~3 chunks after hitting it.
   const CHUNKS = Math.ceil((LIMIT_BYTES + CHUNK_BYTES * 3) / CHUNK_BYTES);
 
-  function createStreamingBody(): Readable {
-    return Readable.from(
-      (async function* () {
-        const chunk = Buffer.allocUnsafe(CHUNK_BYTES);
-        for (let i = 0; i < CHUNKS; i++) {
-          yield chunk;
-        }
-      })(),
-    );
-  }
-
   it("aborts an oversized download mid-stream and cleans up staging", async () => {
     const entry = buildEntry("oversized-dl");
-    let destroyed = false;
     let streamedChunks = 0;
 
     const body = new Readable({
