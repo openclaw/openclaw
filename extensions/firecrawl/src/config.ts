@@ -71,6 +71,10 @@ function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
   return fetch;
 }
 
+function readOwnProperty(obj: object, key: string): unknown {
+  return Object.hasOwn(obj, key) ? (obj as Record<string, unknown>)[key] : undefined;
+}
+
 export function resolveFirecrawlSearchConfig(cfg?: OpenClawConfig): FirecrawlSearchConfig {
   const pluginConfig = cfg?.plugins?.entries?.firecrawl?.config as PluginEntryConfig;
   const pluginWebSearch = pluginConfig?.webSearch;
@@ -81,7 +85,7 @@ export function resolveFirecrawlSearchConfig(cfg?: OpenClawConfig): FirecrawlSea
   if (!search || typeof search !== "object") {
     return undefined;
   }
-  const firecrawl = Object.hasOwn(search, "firecrawl") ? search.firecrawl : undefined;
+  const firecrawl = readOwnProperty(search, "firecrawl");
   if (!firecrawl || typeof firecrawl !== "object") {
     return undefined;
   }
@@ -98,7 +102,7 @@ function resolveFirecrawlFetchConfig(cfg?: OpenClawConfig): FirecrawlFetchConfig
   if (!fetch || typeof fetch !== "object") {
     return undefined;
   }
-  const firecrawl = Object.hasOwn(fetch, "firecrawl") ? fetch.firecrawl : undefined;
+  const firecrawl = readOwnProperty(fetch, "firecrawl");
   if (!firecrawl || typeof firecrawl !== "object") {
     return undefined;
   }
