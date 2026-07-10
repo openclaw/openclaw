@@ -527,12 +527,49 @@ describe("check-openclaw-package-tarball", () => {
           name: "@openclaw/ai",
           version: "2026.6.11",
         }),
+        "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
       },
       (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+        const result = spawnSync(
+          "node",
+          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
+          { encoding: "utf8" },
+        );
 
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      },
+      "2026.6.11",
+      {
+        packageJson: {
+          dependencies: { "@openclaw/ai": "2026.6.11" },
+          bundleDependencies: ["@openclaw/ai"],
+        },
+      },
+    );
+  });
+
+  it("rejects a bundled AI package without the runtime imported by core", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": "export {};\n",
+        "node_modules/@openclaw/ai/package.json": JSON.stringify({
+          name: "@openclaw/ai",
+          version: "2026.6.11",
+        }),
+      },
+      (tarball) => {
+        const result = spawnSync(
+          "node",
+          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
+          { encoding: "utf8" },
+        );
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "bundled @openclaw/ai is missing required runtime entry dist/internal/runtime.mjs",
+        );
       },
       "2026.6.11",
       {

@@ -1551,6 +1551,176 @@ stderr="$(<"$TMPDIR/stderr")"
     }
   });
 
+  it("restores root and AI package dist from one Docker image", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-package-dist-restore-"));
+
+    try {
+      const checkoutDir = join(workDir, "checkout");
+      mkdirSync(join(checkoutDir, "dist"), { recursive: true });
+      mkdirSync(join(checkoutDir, "packages", "ai", "dist", "internal"), { recursive: true });
+      mkdirSync(join(workDir, "image-root-dist"), { recursive: true });
+      mkdirSync(join(workDir, "image-ai-dist", "internal"), { recursive: true });
+      writeFileSync(join(checkoutDir, "dist", "old.js"), "old root\n");
+      writeFileSync(join(checkoutDir, "packages", "ai", "dist", "internal", "old.mjs"), "old ai\n");
+      writeFileSync(join(workDir, "image-root-dist", "index.js"), "new root\n");
+      writeFileSync(join(workDir, "image-ai-dist", "internal", "runtime.mjs"), "new ai runtime\n");
+
+      const repoRoot = process.cwd();
+      const script = `
+set -euo pipefail
+REPO_ROOT=${shellQuote(repoRoot)}
+ROOT_DIR=${shellQuote(checkoutDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+
+docker_e2e_docker_cmd() {
+  local operation="$1"
+  shift
+  case "$operation" in
+    create)
+      printf fixture-container
+      ;;
+    cp)
+      case "$1" in
+        *:/app/dist)
+          cp -R "$TMPDIR/image-root-dist" "$2"
+          ;;
+        *:/app/node_modules/@openclaw/ai/dist)
+          cp -R "$TMPDIR/image-ai-dist" "$2"
+          ;;
+        *)
+          return 2
+          ;;
+      esac
+      ;;
+    rm)
+      printf '%s\n' "$operation $*" >>"$TMPDIR/docker-commands"
+      ;;
+    *)
+      return 2
+      ;;
+  esac
+}
+export -f docker_e2e_docker_cmd
+
+source "$REPO_ROOT/scripts/lib/docker-e2e-package.sh"
+docker_e2e_restore_package_dist_from_image fixture-image
+`;
+
+      execFileSync("bash", ["--noprofile", "--norc", "-c", script], { encoding: "utf8" });
+
+      expect(readFileSync(join(checkoutDir, "dist", "index.js"), "utf8")).toBe("new root\n");
+      expect(
+        readFileSync(
+          join(checkoutDir, "packages", "ai", "dist", "internal", "runtime.mjs"),
+          "utf8",
+        ),
+      ).toBe("new ai runtime\n");
+      expect(existsSync(join(checkoutDir, "dist", "old.js"))).toBe(false);
+      expect(existsSync(join(checkoutDir, "packages", "ai", "dist", "internal", "old.mjs"))).toBe(
+        false,
+      );
+      expect(readFileSync(join(workDir, "docker-commands"), "utf8")).toContain(
+        "rm -f fixture-container",
+      );
+      expect(readdirSync(checkoutDir).some((entry) => entry.startsWith(".package-dist."))).toBe(
+        false,
+      );
+      expect(readdirSync(checkoutDir).some((entry) => entry.startsWith(".dist-backup."))).toBe(
+        false,
+      );
+      expect(
+        readdirSync(join(checkoutDir, "packages", "ai")).some((entry) =>
+          entry.startsWith(".dist-backup."),
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves both existing dist trees when the AI image copy fails", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-package-dist-rollback-"));
+
+    try {
+      const checkoutDir = join(workDir, "checkout");
+      mkdirSync(join(checkoutDir, "dist"), { recursive: true });
+      mkdirSync(join(checkoutDir, "packages", "ai", "dist", "internal"), { recursive: true });
+      mkdirSync(join(workDir, "image-root-dist"), { recursive: true });
+      writeFileSync(join(checkoutDir, "dist", "old.js"), "old root\n");
+      writeFileSync(
+        join(checkoutDir, "packages", "ai", "dist", "internal", "runtime.mjs"),
+        "old ai runtime\n",
+      );
+      writeFileSync(join(workDir, "image-root-dist", "index.js"), "new root\n");
+
+      const repoRoot = process.cwd();
+      const script = `
+set -euo pipefail
+REPO_ROOT=${shellQuote(repoRoot)}
+ROOT_DIR=${shellQuote(checkoutDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+
+docker_e2e_docker_cmd() {
+  local operation="$1"
+  shift
+  case "$operation" in
+    create)
+      printf fixture-container
+      ;;
+    cp)
+      case "$1" in
+        *:/app/dist)
+          cp -R "$TMPDIR/image-root-dist" "$2"
+          ;;
+        *:/app/node_modules/@openclaw/ai/dist)
+          return 17
+          ;;
+        *)
+          return 2
+          ;;
+      esac
+      ;;
+    rm)
+      printf '%s\n' "$operation $*" >>"$TMPDIR/docker-commands"
+      ;;
+    *)
+      return 2
+      ;;
+  esac
+}
+export -f docker_e2e_docker_cmd
+
+source "$REPO_ROOT/scripts/lib/docker-e2e-package.sh"
+set +e
+docker_e2e_restore_package_dist_from_image fixture-image
+status="$?"
+set -e
+[[ "$status" -eq 1 ]]
+`;
+
+      execFileSync("bash", ["--noprofile", "--norc", "-c", script], { encoding: "utf8" });
+
+      expect(readFileSync(join(checkoutDir, "dist", "old.js"), "utf8")).toBe("old root\n");
+      expect(
+        readFileSync(
+          join(checkoutDir, "packages", "ai", "dist", "internal", "runtime.mjs"),
+          "utf8",
+        ),
+      ).toBe("old ai runtime\n");
+      expect(existsSync(join(checkoutDir, "dist", "index.js"))).toBe(false);
+      expect(readFileSync(join(workDir, "docker-commands"), "utf8")).toContain(
+        "rm -f fixture-container",
+      );
+      expect(readdirSync(checkoutDir).some((entry) => entry.startsWith(".package-dist."))).toBe(
+        false,
+      );
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects invalid package-backed Docker run pids limits before invoking docker", () => {
     const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-package-pids-"));
 

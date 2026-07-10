@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=./docker/install-sh-common/version-parse.sh
 source "$ROOT_DIR/scripts/docker/install-sh-common/version-parse.sh"
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_INSTALL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"
 INSTALL_SMOKE_DOCKER_RUN_TIMEOUT="${OPENCLAW_INSTALL_SMOKE_DOCKER_RUN_TIMEOUT:-2700s}"
 
@@ -272,25 +272,12 @@ allocate_host_port() {
   '
 }
 
-restore_local_dist_from_image() {
-  local image="$1"
-  local container_id=""
-
-  echo "==> Reuse local dist/ from Docker image: $image"
-  container_id="$(docker_e2e_docker_cmd create "$image")"
-  rm -rf "$ROOT_DIR/dist"
-  if ! docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$ROOT_DIR/dist"; then
-    docker_e2e_docker_cmd rm -f "$container_id" >/dev/null 2>&1 || true
-    return 1
-  fi
-  docker_e2e_docker_cmd rm -f "$container_id" >/dev/null
-}
-
 ensure_local_update_dist_import_closure() {
-  if node scripts/check-package-dist-imports.mjs "$ROOT_DIR"; then
+  if [[ -f "$ROOT_DIR/packages/ai/dist/internal/runtime.mjs" ]] && \
+    node scripts/check-package-dist-imports.mjs "$ROOT_DIR"; then
     return 0
   fi
-  echo "WARN: reused Docker image dist failed import-closure check; rebuilding local release artifacts" >&2
+  echo "WARN: reused Docker image package dist failed import-closure check; rebuilding local release artifacts" >&2
   pnpm build
 }
 
@@ -310,7 +297,7 @@ prepare_update_tarball() {
   else
     echo "==> Build local release artifacts for update smoke"
     if [[ -n "$UPDATE_DIST_IMAGE" ]]; then
-      restore_local_dist_from_image "$UPDATE_DIST_IMAGE"
+      docker_e2e_restore_package_dist_from_image "$UPDATE_DIST_IMAGE"
       ensure_local_update_dist_import_closure
     elif [[ "$UPDATE_SKIP_LOCAL_BUILD" != "1" ]]; then
       pnpm build

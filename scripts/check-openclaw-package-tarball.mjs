@@ -73,6 +73,11 @@ const PACKAGE_DEPENDENCY_SECTIONS = [
   "devDependencies",
 ];
 const REQUIRED_BUNDLED_WORKSPACE_DEPENDENCIES = ["@openclaw/ai"];
+// Packaged core startup and doctor retain this bare import, so a manifest-only
+// bundled AI package is not runnable even when npm accepts the tarball.
+const REQUIRED_BUNDLED_WORKSPACE_DEPENDENCY_ENTRIES = {
+  "@openclaw/ai": ["dist/internal/runtime.mjs"],
+};
 
 function collectWorkspaceProtocolDependencyErrors(packageJson, label) {
   const errors = [];
@@ -134,6 +139,12 @@ function collectRequiredBundledWorkspaceDependencyErrors(packageJson, entrySet) 
     }
     if (!entrySet.has(`node_modules/${name}/package.json`)) {
       errors.push(`package.json dependencies.${name} must be bundled in node_modules/${name}`);
+    }
+    for (const relativePath of REQUIRED_BUNDLED_WORKSPACE_DEPENDENCY_ENTRIES[name] ?? []) {
+      const entryPath = `node_modules/${name}/${relativePath}`;
+      if (!entrySet.has(entryPath)) {
+        errors.push(`bundled ${name} is missing required runtime entry ${relativePath}`);
+      }
     }
   }
 

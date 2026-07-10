@@ -30,6 +30,7 @@ const NONROOT_DOCKERFILE_PATH = "scripts/docker/install-sh-nonroot/Dockerfile";
 const NONROOT_RUNNER_PATH = "scripts/docker/install-sh-nonroot/run.sh";
 const BUN_GLOBAL_SMOKE_PATH = "scripts/e2e/bun-global-install-smoke.sh";
 const BUN_GLOBAL_ASSERTIONS_PATH = "scripts/e2e/lib/bun-global-install/assertions.mjs";
+const DOCKER_E2E_PACKAGE_HELPER_PATH = "scripts/lib/docker-e2e-package.sh";
 const INSTALL_SMOKE_WORKFLOW_PATH = ".github/workflows/install-smoke.yml";
 const RELEASE_CHECKS_WORKFLOW_PATH = ".github/workflows/openclaw-release-checks.yml";
 const LIVE_E2E_WORKFLOW_PATH = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
@@ -354,27 +355,31 @@ describe("test-install-sh-docker", () => {
 
   it("can reuse dist from the already-built root Docker smoke image", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
+    const packageHelper = readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8");
     const dockerfile = readFileSync("Dockerfile", "utf8");
 
     expect(script).toContain('UPDATE_DIST_IMAGE="${OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE:-}"');
-    expect(script).toContain("restore_local_dist_from_image");
-    expect(script).toContain('source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"');
+    expect(script).toContain("docker_e2e_restore_package_dist_from_image");
+    expect(script).toContain('source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"');
     expect(script).toContain(
       'DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_INSTALL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"',
     );
-    expect(script).toContain('container_id="$(docker_e2e_docker_cmd create "$image")"');
-    expect(script).toContain(
-      'docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$ROOT_DIR/dist"',
+    expect(packageHelper).toContain('container_id="$(docker_e2e_docker_cmd create "$image")"');
+    expect(packageHelper).toContain(
+      'docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$temp_dir/dist"',
     );
-    expect(script).toContain('docker_e2e_docker_cmd rm -f "$container_id"');
-    expect(script).not.toContain('container_id="$(docker create "$image")"');
-    expect(script).not.toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
-    expect(script).toContain('echo "==> Reuse local dist/ from Docker image: $image"');
+    expect(packageHelper).toContain('"${container_id}:/app/node_modules/@openclaw/ai/dist"');
+    expect(packageHelper).toContain('mv "$temp_dir/ai-dist" "$ROOT_DIR/packages/ai/dist"');
+    expect(packageHelper).toContain('docker_e2e_docker_cmd rm -f "$container_id"');
     expect(script).toContain("ensure_local_update_dist_import_closure");
+    expect(script).toContain('[[ -f "$ROOT_DIR/packages/ai/dist/internal/runtime.mjs" ]]');
     expect(script).toContain('node scripts/check-package-dist-imports.mjs "$ROOT_DIR"');
-    expect(script).toContain("WARN: reused Docker image dist failed import-closure check");
+    expect(script).toContain("WARN: reused Docker image package dist failed import-closure check");
     expect(script).toContain("pnpm build");
     expect(script).not.toContain("pnpm ui:build");
+    expect(script.indexOf("docker_e2e_restore_package_dist_from_image")).toBeLessThan(
+      script.indexOf("node scripts/package-openclaw-for-docker.mjs"),
+    );
     expect(dockerfile).toContain("node scripts/check-package-dist-imports.mjs /app");
   });
 
@@ -800,6 +805,10 @@ describe("install-sh smoke runner", () => {
     expect(script).toContain("legacy updater process exited after self-swap");
     expect(script).toContain("parseFirstJsonObject");
     expect(script).toContain("unterminated update JSON object");
+    expect(script).toContain("verify_candidate_ai_runtime");
+    expect(script).toContain("openclaw infer image providers --json");
+    expect(script).toContain('steps.find((step) => step?.name === "openclaw doctor")');
+    expect(script).toContain("openclaw doctor step failed");
   });
 
   it.each([
@@ -875,6 +884,7 @@ describe("bun global install smoke", () => {
   it("packs the current tree and verifies image-provider discovery through Bun", () => {
     const script = readFileSync(BUN_GLOBAL_SMOKE_PATH, "utf8");
     const assertions = readFileSync(BUN_GLOBAL_ASSERTIONS_PATH, "utf8");
+    const packageHelper = readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8");
 
     expect(script).toContain("node scripts/package-openclaw-for-docker.mjs");
     expect(script).toContain("--skip-build");
@@ -885,32 +895,28 @@ describe("bun global install smoke", () => {
     expect(script).toContain("assert-image-providers");
     expect(assertions).toContain("image providers output is missing bundled provider");
     expect(script).toContain("OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE");
-    expect(script).toContain('source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"');
+    expect(script).toContain('source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"');
+    expect(script).toContain("docker_e2e_restore_package_dist_from_image");
     expect(script).toContain(
       'COMMAND_TIMEOUT_MS="$(read_positive_int_env OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS 180000)"',
     );
     expect(script).toContain(
       'DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_BUN_GLOBAL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"',
     );
-    expect(script).toContain('container_id="$(docker_e2e_docker_cmd create "$image")"');
-    expect(script).toContain(
+    expect(packageHelper).toContain('container_id="$(docker_e2e_docker_cmd create "$image")"');
+    expect(packageHelper).toContain(
       'docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$temp_dir/dist"',
     );
-    expect(script).toContain('"${container_id}:/app/node_modules/@openclaw/ai/dist"');
-    expect(script).toContain('"$temp_dir/ai-dist"');
-    expect(script).toContain('mv "$temp_dir/ai-dist" "$ROOT_DIR/packages/ai/dist"');
-    expect(script).toContain("cleanup_restore_dist() {");
-    expect(script).toContain('mv "$ROOT_DIR/dist" "$backup_dir"');
-    expect(script).toContain('mv "$temp_dir/dist" "$ROOT_DIR/dist"');
-    expect(script).toContain('mktemp -d "$ROOT_DIR/.bun-dist.XXXXXX"');
-    expect(script).toContain('rm -rf "$ROOT_DIR/dist" >/dev/null 2>&1 || true');
-    expect(script).toContain('&& mv "$backup_dir" "$ROOT_DIR/dist"');
-    expect(script).toContain('docker_e2e_docker_cmd rm -f "$container_id"');
-    expect(script).toContain("cleanup_restore_dist\n    return 1");
-    expect(script).not.toContain("trap cleanup_restore_dist RETURN");
-    expect(script).not.toContain('container_id="$(docker create "$image")"');
-    expect(script).not.toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
-    expect(script).not.toContain('\n  rm -rf "$ROOT_DIR/dist"\n');
+    expect(packageHelper).toContain('"${container_id}:/app/node_modules/@openclaw/ai/dist"');
+    expect(packageHelper).toContain('"$temp_dir/ai-dist"');
+    expect(packageHelper).toContain('mv "$temp_dir/ai-dist" "$ROOT_DIR/packages/ai/dist"');
+    expect(packageHelper).toContain("cleanup_restore_package_dist() {");
+    expect(packageHelper).toContain('mv "$ROOT_DIR/dist" "$backup_dir"');
+    expect(packageHelper).toContain('mv "$temp_dir/dist" "$ROOT_DIR/dist"');
+    expect(packageHelper).toContain('mktemp -d "$ROOT_DIR/.package-dist.XXXXXX"');
+    expect(packageHelper).toContain('rm -rf "$ROOT_DIR/dist" >/dev/null 2>&1 || true');
+    expect(packageHelper).toContain('&& mv "$backup_dir" "$ROOT_DIR/dist"');
+    expect(packageHelper).toContain('docker_e2e_docker_cmd rm -f "$container_id"');
   });
 
   it("rejects invalid Bun global install command timeouts before Bun setup", () => {
