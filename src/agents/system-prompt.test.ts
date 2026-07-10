@@ -367,8 +367,9 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["sessions_spawn", "sessions_yield", "subagents"],
     });
 
-    expect(withoutYield).not.toContain("Use `sessions_yield` only when");
-    expect(withYield).toContain("Use `sessions_yield` only when");
+    expect(withoutYield).not.toContain("use `sessions_yield` when waiting");
+    expect(withYield).toContain("use `sessions_yield` when waiting");
+    expect(withYield).not.toContain("Use `sessions_yield` only when");
   });
 
   it("lists available tools when provided", () => {
@@ -913,15 +914,50 @@ describe("buildAgentSystemPrompt", () => {
     expect(messagingPrompt).not.toContain("sessions_spawn(...)");
     expect(messagingPrompt).not.toContain("subagents(action=list)");
 
-    expect(spawnOnlyPrompt).toContain(
-      "- Sub-agent orchestration -> start directly when the current context is enough; use `sessions_spawn(...)` when parallelism, specialist isolation, fault isolation, or long background work makes the run more reliable.",
-    );
+    expect(spawnOnlyPrompt).not.toContain("Sub-agent orchestration");
+    expect(orchestrationPrompt).not.toContain("Sub-agent orchestration");
+    expect(orchestrationWaitPrompt).not.toContain("Sub-agent orchestration");
     expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
+  });
 
-    expect(orchestrationPrompt).toContain(
+  it("renders durable sub-agent orchestration guidance only when explicitly enabled", () => {
+    const explicitPolicyPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "subagents"],
+      durableOrchestrationPolicy: "auto",
+    });
+
+    expect(explicitPolicyPrompt).toContain(
       "- Sub-agent orchestration -> start directly when the current context is enough; use `sessions_spawn(...)` when parallelism, specialist isolation, fault isolation, or long background work makes the run more reliable. Use `subagents(action=list)` only for on-demand status/debugging visibility, not wait loops.",
     );
-    expect(orchestrationWaitPrompt).toContain("Use `sessions_yield` only when");
+  });
+
+  it("enables durable sub-agent orchestration guidance when durable runtime is enabled", () => {
+    const previousRuntime = process.env.OPENCLAW_DURABLE_RUNTIME;
+    const previousPolicy = process.env.OPENCLAW_DURABLE_ORCHESTRATION_POLICY;
+    process.env.OPENCLAW_DURABLE_RUNTIME = "1";
+    delete process.env.OPENCLAW_DURABLE_ORCHESTRATION_POLICY;
+    try {
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames: ["sessions_spawn", "sessions_yield", "subagents"],
+      });
+
+      expect(prompt).toContain(
+        "- Sub-agent orchestration -> start directly when the current context is enough; use `sessions_spawn(...)` when parallelism, specialist isolation, fault isolation, or long background work makes the run more reliable. Use `sessions_yield` only when",
+      );
+    } finally {
+      if (previousRuntime === undefined) {
+        delete process.env.OPENCLAW_DURABLE_RUNTIME;
+      } else {
+        process.env.OPENCLAW_DURABLE_RUNTIME = previousRuntime;
+      }
+      if (previousPolicy === undefined) {
+        delete process.env.OPENCLAW_DURABLE_ORCHESTRATION_POLICY;
+      } else {
+        process.env.OPENCLAW_DURABLE_ORCHESTRATION_POLICY = previousPolicy;
+      }
+    }
   });
 
   it("adds stronger sub-agent delegation guidance in prefer mode", () => {
@@ -1001,7 +1037,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).not.toContain("## Sub-Agent Delegation");
-    expect(prompt).toContain("Sub-agent orchestration");
+    expect(prompt).not.toContain("Sub-agent orchestration");
   });
 
   it("reapplies provider prompt contributions", () => {
