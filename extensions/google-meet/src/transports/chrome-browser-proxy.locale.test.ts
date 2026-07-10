@@ -17,11 +17,12 @@ describe("isEnglishMeetTab (regression #103385)", () => {
     expect(isEnglishMeetTab("https://meet.google.com/abc-defg-hij?authuser=1&hl=en")).toBe(true);
   });
 
-  it("accepts meet tabs without hl parameter (assume default English)", () => {
-    // Meet default is English if hl not specified
-    expect(isEnglishMeetTab("https://meet.google.com/abc-defg-hij")).toBe(true);
-    expect(isEnglishMeetTab("https://meet.google.com/new")).toBe(true);
-    expect(isEnglishMeetTab("https://meet.google.com/abc-defg-hij?authuser=2")).toBe(true);
+  it("rejects meet tabs without hl parameter (ambiguous locale)", () => {
+    // ClawSweeper P1: No hl parameter is ambiguous - could be localized by account
+    // Only explicit hl=en is safe for reuse
+    expect(isEnglishMeetTab("https://meet.google.com/abc-defg-hij")).toBe(false);
+    expect(isEnglishMeetTab("https://meet.google.com/new")).toBe(false);
+    expect(isEnglishMeetTab("https://meet.google.com/abc-defg-hij?authuser=2")).toBe(false);
   });
 
   it("rejects non-meet URLs", () => {

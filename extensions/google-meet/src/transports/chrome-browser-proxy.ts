@@ -50,8 +50,10 @@ export function isSameMeetUrlForReuse(a: string | undefined, b: string | undefin
   return Boolean(normalizedA && normalizedB && normalizedA === normalizedB);
 }
 
-// Check if a Meet tab URL has English UI (hl=en or no hl parameter).
-// Non-English tabs must be skipped because Meet DOM scripts match English labels.
+// Check if a Meet tab URL has explicit English UI (hl=en only).
+// Non-English and ambiguous tabs must be skipped because Meet DOM scripts match English labels.
+// A tab without hl parameter can still be localized by the signed-in Google account,
+// so we only reuse tabs we explicitly pinned to English with hl=en.
 export function isEnglishMeetTab(url: string | undefined | null): boolean {
   if (!url) {
     return false;
@@ -62,8 +64,8 @@ export function isEnglishMeetTab(url: string | undefined | null): boolean {
       return false;
     }
     const hl = parsed.searchParams.get("hl");
-    // No hl parameter = default English; hl=en = explicit English
-    return !hl || hl.toLowerCase() === "en";
+    // Only accept explicit hl=en; no hl means ambiguous (could be localized)
+    return hl?.toLowerCase() === "en";
   } catch {
     return false;
   }
