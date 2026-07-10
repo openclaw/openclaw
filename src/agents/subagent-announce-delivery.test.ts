@@ -370,6 +370,7 @@ async function deliverSlackChannelAnnouncement(params: {
   runtimeConfig?: Record<string, unknown>;
   requesterSessionEntry?: SessionEntry;
   requesterSessionEntries?: SessionEntry[];
+  resolveRequesterSessionEntry?: (sessionKey: string) => SessionEntry | undefined;
 }) {
   const origin = {
     channel: "slack",
@@ -378,6 +379,10 @@ async function deliverSlackChannelAnnouncement(params: {
   } as const;
   let requesterEntryReadIndex = 0;
   const requesterSessionEntries = params.requesterSessionEntries ?? [];
+  const hasRequesterSessionEntryResolver =
+    params.requesterSessionEntry !== undefined ||
+    requesterSessionEntries.length > 0 ||
+    params.resolveRequesterSessionEntry !== undefined;
 
   testing.setDepsForTest({
     callGateway: params.callGateway,
@@ -389,12 +394,13 @@ async function deliverSlackChannelAnnouncement(params: {
       isActive: params.isActive,
     }),
     getRuntimeConfig: () => (params.runtimeConfig ?? {}) as never,
-    ...(params.requesterSessionEntry || requesterSessionEntries.length
+    ...(hasRequesterSessionEntryResolver
       ? {
           loadRequesterSessionEntry: (sessionKey: string) => ({
             cfg: (params.runtimeConfig ?? {}) as never,
             entry:
               params.requesterSessionEntry ??
+              params.resolveRequesterSessionEntry?.(sessionKey) ??
               requesterSessionEntries[
                 Math.min(requesterEntryReadIndex++, requesterSessionEntries.length - 1)
               ],
@@ -1569,11 +1575,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         isActive: false,
       }),
       getRuntimeConfig: () => ({}) as never,
-      loadRequesterSessionEntry: (sessionKey) => ({
-        cfg: {},
-        entry: readyCronContinuationEntry("cron-run-session"),
-        canonicalKey: sessionKey,
-      }),
     });
 
     const result = await deliverSubagentAnnouncement({
@@ -1606,11 +1607,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
     const dispatchOptions = mockCallArg(dispatchGatewayMethodInProcess, 0, 2);
     expect(dispatchOptions).toMatchObject({
+      allowSyntheticCronRunContinuation: false,
       expectFinal: true,
       forceSyntheticClient: true,
       timeoutMs: 120_000,
     });
-    expect(dispatchOptions).not.toHaveProperty("allowSyntheticCronRunContinuation");
   });
 
   it.each([
@@ -1810,6 +1811,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         isActive: true,
       }),
       getRuntimeConfig: () => ({}) as never,
+      loadRequesterSessionEntry: (sessionKey) => ({
+        cfg: {},
+        entry: readyCronContinuationEntry("cron-run-session"),
+        canonicalKey: sessionKey,
+      }),
     });
 
     const result = await deliverSubagentAnnouncement({
@@ -4395,14 +4401,18 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const unavailable = Object.assign(new Error("cron run continuation is not ready"), {
       gatewayCode: "UNAVAILABLE",
     });
+    const oldReady = readyCronContinuationEntry("old-session-id");
+    const newReady = readyCronContinuationEntry("new-session-id");
+    let currentEntry = oldReady;
     const dispatchGatewayMethodInProcess = vi
       .fn()
-      .mockRejectedValueOnce(unavailable)
+      .mockImplementationOnce(async () => {
+        currentEntry = newReady;
+        throw unavailable;
+      })
       .mockResolvedValue({
         result: { payloads: [{ text: "continued after rotation" }] },
       }) as unknown as typeof runtimeDispatchGatewayMethodInProcess;
-    const oldReady = readyCronContinuationEntry("old-session-id");
-    const newReady = readyCronContinuationEntry("new-session-id");
 
     const result = await deliverSlackChannelAnnouncement({
       callGateway: createGatewayMock(),
@@ -4411,7 +4421,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       sessionId: "old-session-id",
       isActive: false,
       requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
-      requesterSessionEntries: [oldReady, oldReady, oldReady, newReady],
+      resolveRequesterSessionEntry: () => currentEntry,
       expectsCompletionMessage: true,
       directIdempotencyKey: "announce-retry-rotated-cron-session",
       sourceTool: "image_generate",

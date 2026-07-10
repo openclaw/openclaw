@@ -1625,7 +1625,6 @@ async function sendSubagentAnnounceDirectly(params: {
         : undefined;
     const directAgentParams: Record<string, unknown> = {
       sessionKey: canonicalRequesterSessionKey,
-      ...(cronContinuation ? { sessionId: cronContinuation.sessionId } : {}),
       message: params.triggerMessage,
       deliver: shouldDeliverAgentFinal,
       bestEffortDeliver: params.bestEffortDeliver,
@@ -1661,6 +1660,7 @@ async function sendSubagentAnnounceDirectly(params: {
           : "direct announce agent call",
         signal: params.signal,
         run: async () => {
+          let agentParams = directAgentParams;
           if (cronContinuation) {
             const continuation = readCronRunContinuation({
               sessionKey: canonicalRequesterSessionKey,
@@ -1670,10 +1670,10 @@ async function sendSubagentAnnounceDirectly(params: {
               throw cronRunContinuationLostError("cron run continuation changed before delivery");
             }
             cronContinuation = continuation;
-            directAgentParams.sessionId = continuation.sessionId;
+            agentParams = { ...directAgentParams, sessionId: continuation.sessionId };
           }
           return await runAnnounceAgentCall({
-            agentParams: directAgentParams,
+            agentParams,
             cronRunContinuation: cronContinuation !== undefined,
             expectFinal: true,
             timeoutMs: announceTimeoutMs,
