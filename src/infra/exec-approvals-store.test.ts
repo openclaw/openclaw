@@ -1842,6 +1842,48 @@ describe("exec approvals store helpers", () => {
     expect(allowlistEntries(dir, "main")).toEqual([]);
   });
 
+  it("rejects an explicit grant after an allow-always source downgrade", async () => {
+    const dir = createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "always" },
+      agents: {
+        main: { allowlist: [{ pattern: "/usr/bin/rg", source: "allow-always" }] },
+      },
+    });
+    const policySnapshot = createExecApprovalPolicySnapshot({
+      file: readExecApprovalsSnapshot().file,
+      agentId: "main",
+    });
+
+    await updateExecApprovals({
+      update: (current) => ({
+        ...current,
+        agents: { ...current.agents, main: { allowlist: [{ pattern: "/usr/bin/rg" }] } },
+      }),
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [],
+        command: "rg needle",
+        authorization: {
+          source: "explicit-approval",
+          security: "allowlist",
+          ask: "always",
+          allowlistSatisfied: false,
+          policySnapshot,
+        },
+        allowAlwaysDecision: {
+          kind: "patterns",
+          patterns: [{ pattern: "/usr/bin/rg" }],
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+    expect(allowlistEntries(dir, "main")).toEqual([{ pattern: "/usr/bin/rg" }]);
+  });
+
   it("commits an explicit allow-always grant after current-policy authorization", async () => {
     const dir = createHomeDir();
     saveExecApprovals({
@@ -1884,7 +1926,7 @@ describe("exec approvals store helpers", () => {
     saveExecApprovals({
       version: 1,
       defaults: { security: "allowlist", ask: "always" },
-      agents: { researcher: { allowlist: [] } },
+      agents: { researcher: { allowlist: [{ pattern: "/usr/bin/grep" }] } },
     });
     const policySnapshot = createExecApprovalPolicySnapshot({
       file: readExecApprovalsSnapshot().file,

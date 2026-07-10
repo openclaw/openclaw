@@ -42,6 +42,13 @@ struct ExecApprovalPolicySnapshot: Sendable, Equatable {
     struct AllowlistRule: Sendable, Hashable {
         let match: ExecAllowlistEntryMatchKey
         let source: String?
+
+        func isSatisfied(by currentRules: Set<Self>) -> Bool {
+            currentRules.contains(self) ||
+                (self.source == nil && currentRules.contains(Self(
+                    match: self.match,
+                    source: "allow-always")))
+        }
     }
 
     let security: ExecSecurity
@@ -73,9 +80,9 @@ struct ExecApprovalPolicySnapshot: Sendable, Equatable {
             self.ask == current.ask &&
             self.askFallback == current.askFallback &&
             self.autoAllowSkills == current.autoAllowSkills &&
-            // Concurrent operator-approved grants are additive. A revocation or
-            // source downgrade still removes an expected rule and fails closed.
-            self.allowlistRules.isSubset(of: current.allowlistRules)
+            // Concurrent grants and in-place allow-always upgrades are additive.
+            // Revocation and reverse source downgrade still fail closed.
+            self.allowlistRules.allSatisfy { $0.isSatisfied(by: current.allowlistRules) }
     }
 }
 

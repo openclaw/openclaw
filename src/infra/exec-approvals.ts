@@ -2025,6 +2025,25 @@ function buildExecApprovalPolicyRuleKey(entry: ExecAllowlistEntry): string {
   return JSON.stringify([entry.pattern, entry.argPattern ?? null, entry.source ?? null]);
 }
 
+function buildAllowAlwaysUpgradeRuleKey(key: string): string | null {
+  let rule: unknown;
+  try {
+    rule = JSON.parse(key) as unknown;
+  } catch {
+    return null;
+  }
+  if (
+    !Array.isArray(rule) ||
+    rule.length !== 3 ||
+    typeof rule[0] !== "string" ||
+    (rule[1] !== null && typeof rule[1] !== "string") ||
+    rule[2] !== null
+  ) {
+    return null;
+  }
+  return JSON.stringify([rule[0], rule[1], "allow-always"]);
+}
+
 /** Captures effective file policy while excluding ids and mutable usage metadata. */
 export function createExecApprovalPolicySnapshot(params: {
   file: ExecApprovalsFile;
@@ -2058,8 +2077,15 @@ function execApprovalPolicySnapshotIsCurrent(
     expected.askFallback === current.askFallback &&
     expected.autoAllowSkills === current.autoAllowSkills &&
     // Concurrent operator-approved grants are additive. Preserve them while
-    // still rejecting any revoked or source-downgraded rule from the snapshot.
-    expected.allowlistRuleKeys.every((key) => currentRuleKeys.has(key))
+    // accepting an in-place allow-always upgrade of the same rule. Revocations
+    // and reverse source downgrades still remove an expected authority.
+    expected.allowlistRuleKeys.every((key) => {
+      if (currentRuleKeys.has(key)) {
+        return true;
+      }
+      const upgradedKey = buildAllowAlwaysUpgradeRuleKey(key);
+      return upgradedKey !== null && currentRuleKeys.has(upgradedKey);
+    })
   );
 }
 

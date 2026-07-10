@@ -1478,11 +1478,12 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `stale concurrent allow always snapshots preserve every additive grant`() async throws {
+    func `stale concurrent allow always snapshots preserve additive grants and upgrades`() async throws {
         try await self.withTempStateDir { _ in
             _ = try ExecApprovalsStore.updateAgentSettings(agentId: "researcher") { entry in
                 entry.security = .allowlist
                 entry.ask = .always
+                entry.allowlist = [ExecAllowlistEntry(pattern: "/usr/bin/grep")]
             }.get()
             let evaluated = ExecApprovalsStore.resolve(agentId: "researcher")
             let policySnapshot = ExecApprovalPolicySnapshot(
