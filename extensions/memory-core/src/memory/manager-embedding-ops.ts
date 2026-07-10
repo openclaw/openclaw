@@ -86,8 +86,11 @@ type MemoryIndexEntry = MemoryIndexWorkItem["entry"];
 type PreparedMemoryIndexEntry = {
   entry: MemoryIndexEntry;
   source: MemorySource;
+  /** Chunks that still need embedding + insertion; only the new ones when staleChunkIds is set. */
   chunks: MemoryChunk[];
   structuredInputBytes?: number;
+  /** Session chunk delta: writeChunks deletes these ids instead of clearing the whole file. */
+  staleChunkIds?: string[];
 };
 
 function countBatchSources(items: Array<{ source: MemorySource }>): Record<string, number> {
@@ -202,6 +205,9 @@ export async function runEmbeddingOperationWithTimeout<T>(params: {
 }
 
 export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
+  // Session files whose chunk/FTS/vector rows were last written in full
+  // parity; lets planSessionChunkDelta skip its per-sync consistency probes.
+  private readonly sessionChunkParityVerified = new Set<string>();
   protected abstract batchFailureCount: number;
   protected abstract batchFailureLastError?: string;
   protected abstract batchFailureLastProvider?: string;
@@ -743,9 +749,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   /**
-   * Write chunks (and optional embeddings) for a file into the index.
-   * Handles both the chunks table, the vector table, and the FTS table.
-   * Pass an empty embeddings array to skip vector writes (FTS-only mode).
+   * Write chunks (and optional embeddings) for a file into the index: the
+   * chunks table, the vector table, and the FTS table. With staleChunkIds
+   * (session delta) only those ids are deleted and unchanged rows survive;
+   * otherwise the file is cleared and fully rewritten. Callers embed before
+   * this runs, so an embedding failure cannot leave the index partially pruned.
    */
   private writeChunks(
     entry: MemoryIndexEntry,
@@ -754,55 +762,39 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     chunks: MemoryChunk[],
     embeddings: number[][],
     vectorReady: boolean,
+    staleChunkIds?: string[],
   ): void {
     const now = Date.now();
+    let derivedDeletesClean = true;
     runSqliteImmediateTransactionSync(this.db, () => {
-      this.clearIndexedFileData(entry.path, source);
+      if (staleChunkIds) {
+        derivedDeletesClean = this.deleteChunkRowsByIds(staleChunkIds);
+        // The FTS INSERT below has no ON CONFLICT; drop any rows for the ids
+        // being (re)inserted so a concurrent writer cannot leave duplicates.
+        if (this.fts.enabled && this.fts.available && chunks.length > 0) {
+          try {
+            deleteMemoryFtsRows({
+              db: this.db,
+              tableName: FTS_TABLE,
+              ids: chunks.map((chunk) => this.chunkRowId(source, entry.path, chunk, model)),
+            });
+          } catch {
+            derivedDeletesClean = false;
+          }
+        }
+      } else {
+        this.clearIndexedFileData(entry.path, source);
+      }
       for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i];
-        const embedding = embeddings[i] ?? [];
-        const id = hashText(
-          `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
+        this.insertChunkRow(
+          entry.path,
+          source,
+          model,
+          chunks[i],
+          embeddings[i] ?? [],
+          vectorReady,
+          now,
         );
-        this.db
-          .prepare(
-            `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET
-               hash=excluded.hash,
-               model=excluded.model,
-               text=excluded.text,
-               embedding=excluded.embedding,
-               updated_at=excluded.updated_at`,
-          )
-          .run(
-            id,
-            entry.path,
-            source,
-            chunk.startLine,
-            chunk.endLine,
-            chunk.hash,
-            model,
-            chunk.text,
-            JSON.stringify(embedding),
-            now,
-          );
-        if (vectorReady && embedding.length > 0) {
-          replaceMemoryVectorRow({
-            db: this.db,
-            tableName: VECTOR_TABLE,
-            id,
-            embedding,
-          });
-        }
-        if (this.fts.enabled && this.fts.available) {
-          this.db
-            .prepare(
-              `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
-                ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            )
-            .run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
-        }
       }
       this.upsertFileRecord(entry, source);
     });
@@ -814,6 +806,222 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       loadError: this.vector.loadError,
       warn: (message) => log.warn(message),
     });
+    if (source === "sessions") {
+      // Chunk/FTS/vector parity holds after a clean write; remember it so the
+      // next delta plan can skip its consistency probes. Any degraded write
+      // (FTS off, vector not ready, failed derived delete) forces a re-probe.
+      const ftsDegraded = this.fts.enabled && !this.fts.available;
+      // vector.available === false means sqlite-vec cannot load at all; a full
+      // rewrite writes no vector rows either, so parity is not affected.
+      const vectorDegraded =
+        this.vector.enabled &&
+        this.vector.available !== false &&
+        !vectorReady &&
+        embeddings.some((embedding) => embedding.length > 0);
+      const parityKey = `${source}:${entry.path}`;
+      if (derivedDeletesClean && !ftsDegraded && !vectorDegraded) {
+        this.sessionChunkParityVerified.add(parityKey);
+      } else {
+        this.sessionChunkParityVerified.delete(parityKey);
+      }
+      if (staleChunkIds) {
+        log.debug("memory sync: incremental session chunk delta", {
+          path: entry.path,
+          new: chunks.length,
+          stale: staleChunkIds.length,
+        });
+      }
+    }
+  }
+
+  private chunkRowId(
+    source: MemorySource,
+    path: string,
+    chunk: MemoryChunk,
+    model: string,
+  ): string {
+    return hashText(`${source}:${path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`);
+  }
+
+  private insertChunkRow(
+    path: string,
+    source: MemorySource,
+    model: string,
+    chunk: MemoryChunk,
+    embedding: number[],
+    vectorReady: boolean,
+    now: number,
+  ): void {
+    const id = this.chunkRowId(source, path, chunk, model);
+    this.db
+      .prepare(
+        `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           hash=excluded.hash,
+           model=excluded.model,
+           text=excluded.text,
+           embedding=excluded.embedding,
+           updated_at=excluded.updated_at`,
+      )
+      .run(
+        id,
+        path,
+        source,
+        chunk.startLine,
+        chunk.endLine,
+        chunk.hash,
+        model,
+        chunk.text,
+        JSON.stringify(embedding),
+        now,
+      );
+    if (vectorReady && embedding.length > 0) {
+      replaceMemoryVectorRow({
+        db: this.db,
+        tableName: VECTOR_TABLE,
+        id,
+        embedding,
+      });
+    }
+    if (this.fts.enabled && this.fts.available) {
+      this.db
+        .prepare(
+          `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
+            ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(chunk.text, id, path, source, model, chunk.startLine, chunk.endLine);
+    }
+  }
+
+  /**
+   * Diff freshly chunked session content against the indexed rows by
+   * content-addressed chunk id; append-mostly transcripts keep all but the
+   * trailing chunk ids stable, so unchanged rows are skipped entirely.
+   * Null means take the full clear-and-rewrite path, which heals drift.
+   */
+  private planSessionChunkDelta(
+    entry: MemoryIndexEntry,
+    source: MemorySource,
+    model: string,
+    chunks: MemoryChunk[],
+  ): { newChunks: MemoryChunk[]; staleIds: string[] } | null {
+    const existing = this.db
+      .prepare(
+        `SELECT id, embedding = '[]' AS empty_embedding FROM memory_index_chunks WHERE path = ? AND source = ?`,
+      )
+      .all(entry.path, source) as Array<{ id: string; empty_embedding: number }>;
+    if (existing.length === 0) {
+      return null;
+    }
+    const desired = new Map<string, MemoryChunk>();
+    for (const chunk of chunks) {
+      const id = this.chunkRowId(source, entry.path, chunk, model);
+      if (desired.has(id)) {
+        // Duplicate ids collapse to one row under the full rewrite's upsert;
+        // keep that behavior instead of diffing against an ambiguous target.
+        return null;
+      }
+      desired.set(id, chunk);
+    }
+    const existingById = new Map(existing.map((row) => [row.id, row]));
+    const newChunks: MemoryChunk[] = [];
+    const staleIds: string[] = [];
+    const unchangedVectorIds: string[] = [];
+    for (const [id, chunk] of desired) {
+      const row = existingById.get(id);
+      if (!row) {
+        newChunks.push(chunk);
+      } else if (this.provider && row.empty_embedding) {
+        // A row persisted with an empty embedding (partial provider failure)
+        // must not freeze as "unchanged"; replace it so it gets re-embedded.
+        staleIds.push(id);
+        newChunks.push(chunk);
+      } else if (!row.empty_embedding) {
+        unchangedVectorIds.push(id);
+      }
+    }
+    for (const row of existing) {
+      if (!desired.has(row.id)) {
+        staleIds.push(row.id);
+      }
+    }
+    if (this.sessionChunkParityVerified.has(`${source}:${entry.path}`)) {
+      return { newChunks, staleIds };
+    }
+    // Unchanged rows are only safe to skip when their derived FTS/vector rows
+    // actually exist (id-exact, so drift from degraded writes or old-model
+    // leftovers is caught); any mismatch falls back to the healing rewrite.
+    if (this.fts.enabled && this.fts.available) {
+      const ftsRows = this.db
+        .prepare(`SELECT id FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
+        .all(entry.path, source) as Array<{ id: string }>;
+      if (ftsRows.length !== existing.length) {
+        return null;
+      }
+      const ftsIds = new Set(ftsRows.map((row) => row.id));
+      if (ftsIds.size !== existing.length || existing.some((row) => !ftsIds.has(row.id))) {
+        return null;
+      }
+    }
+    // available === false (sqlite-vec unloadable) writes no vector rows on any
+    // path, so probing there would force a pointless full rewrite forever.
+    if (
+      this.vector.enabled &&
+      this.vector.available !== false &&
+      unchangedVectorIds.length > 0 &&
+      !this.hasVectorRows(unchangedVectorIds)
+    ) {
+      return null;
+    }
+    return { newChunks, staleIds };
+  }
+
+  private hasVectorRows(ids: string[]): boolean {
+    try {
+      const row = this.db
+        .prepare(
+          `SELECT COUNT(*) AS c FROM ${VECTOR_TABLE} WHERE id IN (SELECT value FROM json_each(?))`,
+        )
+        .get(JSON.stringify(ids)) as { c: number } | undefined;
+      return (row?.c ?? 0) === ids.length;
+    } catch {
+      // Vector table not created yet; the full rewrite path creates it.
+      return false;
+    }
+  }
+
+  /** Returns false when a derived-table delete was skipped or failed, so parity needs a re-probe. */
+  private deleteChunkRowsByIds(ids: string[]): boolean {
+    if (ids.length === 0) {
+      return true;
+    }
+    const idsJson = JSON.stringify(ids);
+    let derivedClean = true;
+    if (this.vector.enabled) {
+      try {
+        this.db
+          .prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT value FROM json_each(?))`)
+          .run(idsJson);
+      } catch {
+        derivedClean = false;
+      }
+    }
+    if (this.fts.enabled) {
+      if (this.fts.available) {
+        try {
+          deleteMemoryFtsRows({ db: this.db, tableName: FTS_TABLE, ids });
+        } catch {
+          derivedClean = false;
+        }
+      } else {
+        derivedClean = false;
+      }
+    }
+    this.db
+      .prepare(`DELETE FROM memory_index_chunks WHERE id IN (SELECT value FROM json_each(?))`)
+      .run(idsJson);
+    return derivedClean;
   }
 
   private async prepareIndexEntry(
@@ -848,6 +1056,22 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       : baseChunks;
     if (options.source === "sessions" && "lineMap" in entry) {
       remapChunkLines(chunks, entry.lineMap);
+      // Sessions are append-mostly so the chunk-id diff pays off; memory files
+      // edit mid-file, which shifts line-based ids and degenerates to rewrite.
+      const delta = this.planSessionChunkDelta(
+        entry,
+        options.source,
+        this.provider?.model ?? "fts-only",
+        chunks,
+      );
+      if (delta) {
+        return {
+          entry,
+          source: options.source,
+          chunks: delta.newChunks,
+          staleChunkIds: delta.staleIds,
+        };
+      }
     }
     return { entry, source: options.source, chunks };
   }
@@ -940,6 +1164,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           item.chunks,
           fileEmbeddings,
           vectorReady,
+          item.staleChunkIds,
         );
       }
       prepared = [];
@@ -986,10 +1211,21 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         return;
       }
       const prepared = await this.prepareIndexEntry(entry, options);
-      this.writeChunks(entry, options.source, "fts-only", prepared?.chunks ?? [], [], false);
+      this.writeChunks(
+        entry,
+        options.source,
+        "fts-only",
+        prepared?.chunks ?? [],
+        [],
+        false,
+        prepared?.staleChunkIds,
+      );
       return;
     }
 
+    // Concurrent embed failures can null this.provider mid-await
+    // (markLocalEmbeddingProviderDegraded); capture it for use after awaits.
+    const provider = this.provider;
     const prepared = await this.prepareIndexEntry(entry, options);
     if (!prepared) {
       return;
@@ -1012,8 +1248,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         log.warn("memory embeddings: skipping multimodal file rejected as too large", {
           path: entry.path,
           bytes: prepared.structuredInputBytes,
-          provider: this.provider.id,
-          model: this.provider.model,
+          provider: provider.id,
+          model: provider.model,
           error: message,
         });
         this.clearIndexedFileData(entry.path, options.source);
@@ -1027,10 +1263,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     this.writeChunks(
       entry,
       options.source,
-      this.provider.model,
+      provider.model,
       prepared.chunks,
       embeddings,
       vectorReady,
+      prepared.staleChunkIds,
     );
   }
 }
