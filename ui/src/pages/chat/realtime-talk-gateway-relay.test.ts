@@ -114,6 +114,10 @@ function pumpMicrophone(samples: Float32Array): void {
   });
 }
 
+function zeroPcmBase64(sampleRate: number): string {
+  return "AAAA".repeat(sampleRate);
+}
+
 function requestCallsFor(
   client: RealtimeTalkTransportContext["client"],
   method: string,
