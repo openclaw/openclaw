@@ -10,6 +10,13 @@ import {
   resolveTrajectoryPointerOpenFlags,
 } from "./paths.js";
 import { createTrajectoryRuntimeRecorder, toTrajectoryToolDefinitions } from "./runtime.js";
+import {
+  acquireTrajectoryWriterLease,
+  bumpTrajectoryPathGeneration,
+  canonicalizeTrajectoryPath,
+  clearTrajectoryWriterLifecycleRegistryForTest,
+  withTrajectoryPathLock,
+} from "./writer-lifecycle.js";
 
 type TrajectoryRuntimeRecorder = NonNullable<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
 
@@ -23,6 +30,7 @@ function makeTempDir(): string {
 
 afterEach(() => {
   vi.useRealTimers();
+  clearTrajectoryWriterLifecycleRegistryForTest();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -409,6 +417,189 @@ describe("trajectory runtime", () => {
     expect(raw).toContain("old-recorder");
     expect(raw).toContain("new-recorder");
     expect(raw.indexOf("old-recorder")).toBeLessThan(raw.indexOf("new-recorder"));
+  });
+
+  it("rejects a late flush after its canonical path has been retired", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile,
+      maxRuntimeFileBytes: 2_400,
+    });
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("prompt.submitted", { marker: "should-not-land" });
+
+    const runtimeFile = resolveTrajectoryFilePath({ sessionFile, sessionId: "session-1" });
+    const canonicalPath = canonicalizeTrajectoryPath(runtimeFile);
+    await withTrajectoryPathLock(canonicalPath, () => {
+      bumpTrajectoryPathGeneration(canonicalPath, {
+        retire: true,
+        ownerSessionId: "session-1",
+      });
+    });
+
+    await runtimeRecorder.flush();
+
+    expect(fs.existsSync(runtimeFile)).toBe(false);
+  });
+
+  it("keeps a writer evicted from the process cache invalidated once its path is retired", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session-evict.jsonl");
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "evict-session",
+      sessionFile,
+      maxRuntimeFileBytes: 2_400,
+    });
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("prompt.submitted", { marker: "first" });
+    await runtimeRecorder.flush();
+
+    // Drive MAX_TRAJECTORY_WRITERS eviction so the writers-map entry for
+    // "evict-session" is dropped, while this test keeps its own direct
+    // reference to the writer exactly as an abandoned closure would.
+    for (let index = 0; index < 100; index += 1) {
+      expectTrajectoryRuntimeRecorder(
+        createTrajectoryRuntimeRecorder({
+          sessionId: `evict-filler-${index}`,
+          sessionFile: path.join(tmpDir, `evict-filler-${index}.jsonl`),
+          maxRuntimeFileBytes: 2_400,
+        }),
+      );
+    }
+
+    const runtimeFile = resolveTrajectoryFilePath({ sessionFile, sessionId: "evict-session" });
+    const canonicalPath = canonicalizeTrajectoryPath(runtimeFile);
+    await withTrajectoryPathLock(canonicalPath, () => {
+      bumpTrajectoryPathGeneration(canonicalPath, {
+        retire: true,
+        ownerSessionId: "evict-session",
+      });
+      // Mirror what a real sessions.delete does inside the same locked turn:
+      // retire the generation, then remove the artifact it protects.
+      fs.rmSync(runtimeFile, { force: true });
+    });
+
+    runtimeRecorder.recordEvent("prompt.submitted", { marker: "late-after-eviction" });
+    await runtimeRecorder.flush();
+
+    expect(fs.existsSync(runtimeFile)).toBe(false);
+  });
+
+  it("reuses the same lease generation when a live writer is evicted and recreated", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session-reuse.jsonl");
+    const runtimeFile = resolveTrajectoryFilePath({ sessionFile, sessionId: "reuse-session" });
+
+    const recorderA = createTrajectoryRuntimeRecorder({
+      sessionId: "reuse-session",
+      sessionFile,
+      maxRuntimeFileBytes: 2_400,
+    });
+    expectTrajectoryRuntimeRecorder(recorderA);
+    const generationAfterA = acquireTrajectoryWriterLease({
+      sessionId: "reuse-session",
+      candidatePath: runtimeFile,
+    }).generation;
+
+    for (let index = 0; index < 100; index += 1) {
+      expectTrajectoryRuntimeRecorder(
+        createTrajectoryRuntimeRecorder({
+          sessionId: `reuse-filler-${index}`,
+          sessionFile: path.join(tmpDir, `reuse-filler-${index}.jsonl`),
+          maxRuntimeFileBytes: 2_400,
+        }),
+      );
+    }
+
+    const recorderB = createTrajectoryRuntimeRecorder({
+      sessionId: "reuse-session",
+      sessionFile,
+      maxRuntimeFileBytes: 2_400,
+    });
+    const runtimeRecorderB = expectTrajectoryRuntimeRecorder(recorderB);
+    const generationAfterB = acquireTrajectoryWriterLease({
+      sessionId: "reuse-session",
+      candidatePath: runtimeFile,
+    }).generation;
+
+    // Eviction+recreation for the *same* still-live session must not spuriously
+    // bump the generation — it is the same owner reconnecting, not a new epoch.
+    expect(generationAfterB).toBe(generationAfterA);
+
+    runtimeRecorderB.recordEvent("prompt.submitted", { marker: "reused-writer" });
+    await runtimeRecorderB.flush();
+    expect(fs.readFileSync(runtimeFile, "utf8")).toContain("reused-writer");
+  });
+
+  it("keeps colliding sanitized session ids in separate files under an override directory", async () => {
+    const tmpDir = makeTempDir();
+    const trajectoryDir = path.join(tmpDir, "traces");
+    const env = { OPENCLAW_TRAJECTORY_DIR: trajectoryDir };
+    const runtimeRecorder1 = expectTrajectoryRuntimeRecorder(
+      createTrajectoryRuntimeRecorder({
+        env,
+        sessionId: "abc*def",
+        maxRuntimeFileBytes: 2_400,
+      }),
+    );
+    const runtimeRecorder2 = expectTrajectoryRuntimeRecorder(
+      createTrajectoryRuntimeRecorder({
+        env,
+        sessionId: "abc_def",
+        maxRuntimeFileBytes: 2_400,
+      }),
+    );
+
+    expect(runtimeRecorder1.filePath).not.toBe(runtimeRecorder2.filePath);
+
+    runtimeRecorder1.recordEvent("prompt.submitted", { marker: "owner-1" });
+    runtimeRecorder2.recordEvent("prompt.submitted", { marker: "owner-2" });
+    await runtimeRecorder1.flush();
+    await runtimeRecorder2.flush();
+
+    const raw1 = fs.readFileSync(runtimeRecorder1.filePath, "utf8");
+    const raw2 = fs.readFileSync(runtimeRecorder2.filePath, "utf8");
+    expect(raw1).toContain("owner-1");
+    expect(raw1).not.toContain("owner-2");
+    expect(raw2).toContain("owner-2");
+    expect(raw2).not.toContain("owner-1");
+  });
+
+  it("keeps colliding sanitized session ids in separate files under the no-sessionFile cwd fallback", async () => {
+    const tmpDir = makeTempDir();
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(tmpDir);
+    try {
+      const runtimeRecorder1 = expectTrajectoryRuntimeRecorder(
+        createTrajectoryRuntimeRecorder({
+          sessionId: "abc*def",
+          maxRuntimeFileBytes: 2_400,
+        }),
+      );
+      const runtimeRecorder2 = expectTrajectoryRuntimeRecorder(
+        createTrajectoryRuntimeRecorder({
+          sessionId: "abc_def",
+          maxRuntimeFileBytes: 2_400,
+        }),
+      );
+
+      expect(runtimeRecorder1.filePath).not.toBe(runtimeRecorder2.filePath);
+
+      runtimeRecorder1.recordEvent("prompt.submitted", { marker: "owner-1" });
+      runtimeRecorder2.recordEvent("prompt.submitted", { marker: "owner-2" });
+      await runtimeRecorder1.flush();
+      await runtimeRecorder2.flush();
+
+      const raw1 = fs.readFileSync(runtimeRecorder1.filePath, "utf8");
+      const raw2 = fs.readFileSync(runtimeRecorder2.filePath, "utf8");
+      expect(raw1).toContain("owner-1");
+      expect(raw1).not.toContain("owner-2");
+      expect(raw2).toContain("owner-2");
+      expect(raw2).not.toContain("owner-1");
+    } finally {
+      cwdSpy.mockRestore();
+    }
   });
 
   it.runIf(process.platform !== "win32")(
