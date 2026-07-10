@@ -647,6 +647,43 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels("free", "gpt-5.5", catalog)).toEqual(["off"]);
   });
 
+  it("honors reasoningEffortMap for provider-native OpenAI-compatible effort labels", () => {
+    const catalog = [
+      {
+        provider: "groq",
+        id: "qwen/qwen3-32b",
+        api: "openai-completions",
+        reasoning: true,
+        compat: {
+          supportedReasoningEfforts: ["none", "default"],
+          reasoningEffortMap: {
+            off: "none",
+            low: "default",
+            medium: "default",
+            high: "default",
+            xhigh: "default",
+          },
+        },
+      },
+    ];
+
+    expect(listThinkingLevels("groq", "qwen/qwen3-32b", catalog)).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "groq",
+        model: "qwen/qwen3-32b",
+        level: "medium",
+        catalog,
+      }),
+    ).toBe("medium");
+  });
+
   it("does not let catalog xhigh compat override binary thinking providers", () => {
     providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(true);
     const catalog = [

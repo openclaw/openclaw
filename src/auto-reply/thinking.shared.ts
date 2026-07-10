@@ -37,6 +37,7 @@ export type ThinkingCatalogEntry = {
     thinkingFormat?: string;
     supportsReasoningEffort?: boolean;
     supportedReasoningEfforts?: readonly string[] | null;
+    reasoningEffortMap?: Record<string, string>;
   } | null;
 };
 

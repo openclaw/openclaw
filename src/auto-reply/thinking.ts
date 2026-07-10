@@ -122,13 +122,34 @@ function buildOpenAICompatThinkingProfile(params: {
   if (params.compat?.supportsReasoningEffort === false) {
     return buildOffOnlyThinkingProfile();
   }
+  const supportedEfforts = new Set(
+    efforts.filter((value): value is string => typeof value === "string"),
+  );
   const levels = new Map<ThinkLevel, RankedThinkingLevelOption>([
     ["off", { id: "off", label: "off", rank: THINKING_LEVEL_RANKS.off }],
   ]);
-  for (const raw of efforts) {
+  function addCanonicalLevel(level: ThinkLevel) {
+    if (level === "off" || levels.has(level)) {
+      return;
+    }
+    levels.set(level, { id: level, label: level, rank: THINKING_LEVEL_RANKS[level] });
+  }
+  // Provider-native labels that already match canonical effort names.
+  for (const raw of supportedEfforts) {
     const effort = normalizeThinkLevel(raw);
-    if (effort && effort !== "off" && !levels.has(effort)) {
-      levels.set(effort, { id: effort, label: effort, rank: THINKING_LEVEL_RANKS[effort] });
+    if (effort) {
+      addCanonicalLevel(effort);
+    }
+  }
+  // Provider-native labels reached only through a reasoning-effort map.
+  const effortMap = params.compat?.reasoningEffortMap;
+  if (effortMap && typeof effortMap === "object") {
+    for (const raw of Object.keys(effortMap)) {
+      const level = normalizeThinkLevel(raw);
+      const mapped = effortMap[raw];
+      if (level && typeof mapped === "string" && supportedEfforts.has(mapped)) {
+        addCanonicalLevel(level);
+      }
     }
   }
   if (levels.size <= 1) {
