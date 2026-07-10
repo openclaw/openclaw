@@ -11,9 +11,42 @@ import {
 } from "./graph-thread.js";
 import { fetchGraphJson } from "./graph.js";
 
-vi.mock("./graph.js", () => ({
-  fetchGraphJson: vi.fn(),
-}));
+// Mock fetchAllGraphPages follows @odata.nextLink across pages, calling fetchGraphJson.
+vi.mock("./graph.js", () => {
+  const mockFetch = vi.fn();
+  return {
+    fetchGraphJson: mockFetch,
+    fetchAllGraphPages: vi.fn(async (params: {
+      token: string;
+      path: string;
+      headers?: Record<string, string>;
+      maxPages?: number;
+    }) => {
+      const items: unknown[] = [];
+      const maxPages = params.maxPages ?? 50;
+      let nextPath: string | undefined = params.path;
+      const callArgs: Record<string, unknown> = { token: params.token, path: nextPath };
+      if (params.headers) {
+        callArgs.headers = params.headers;
+      }
+      for (let page = 0; page < maxPages && nextPath; page++) {
+        const res = await mockFetch(callArgs) as { value?: unknown[]; "@odata.nextLink"?: string };
+        const pageItems = res?.value ?? [];
+        items.push(...pageItems);
+        const rawNext = res?.["@odata.nextLink"];
+        if (rawNext) {
+          nextPath = rawNext
+            .replace("https://graph.microsoft.com/v1.0", "")
+            .replace("https://graph.microsoft.com/beta", "");
+          callArgs.path = nextPath;
+        } else {
+          nextPath = undefined;
+        }
+      }
+      return { items, truncated: false };
+    }),
+  };
+});
 
 const firstGraphPath = () => {
   const [call] = vi.mocked(fetchGraphJson).mock.calls;
@@ -245,7 +278,7 @@ describe("fetchThreadReplies", () => {
     vi.mocked(fetchGraphJson).mockReset();
   });
 
-  it("fetches replies with correct path and default limit", async () => {
+  it("fetches replies with correct path and default maxReplies", async () => {
     vi.mocked(fetchGraphJson).mockResolvedValueOnce({
       value: [{ id: "reply-1" }, { id: "reply-2" }],
     } as never);
@@ -259,15 +292,36 @@ describe("fetchThreadReplies", () => {
     });
   });
 
-  it("clamps limit to 50 maximum", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({ value: [] } as never);
+  it("clamps maxReplies to 50 maximum", async () => {
+    // 60 items across 2 pages; maxReplies=200 clamped to top=50
+    const page1 = Array.from({ length: 50 }, (_, i) => ({
+      id: `reply-${i + 1}`,
+      createdDateTime: `2026-06-01T00:${String(i).padStart(2, "0")}:00Z`,
+    }));
+    const page2 = Array.from({ length: 10 }, (_, i) => ({
+      id: `reply-${51 + i}`,
+      createdDateTime: `2026-06-01T00:${String(50 + i).padStart(2, "0")}:00Z`,
+    }));
 
-    await fetchThreadReplies("tok", "g", "c", "m", 200);
+    vi.mocked(fetchGraphJson)
+      .mockResolvedValueOnce({
+        value: page1,
+        "@odata.nextLink": "https://graph.microsoft.com/v1.0/teams/g/channels/c/messages/m/replies?$skip=50&$top=50",
+      } as never)
+      .mockResolvedValueOnce({
+        value: page2,
+      } as never);
+
+    const result = await fetchThreadReplies("tok", "g", "c", "m", 200);
 
     expect(firstGraphPath()).toContain("$top=50");
+    expect(result).toHaveLength(50);
+    // Newest 50 should be replies 11-60 (oldest 10 dropped)
+    expect(result[0].id).toBe("reply-11");
+    expect(result[49].id).toBe("reply-60");
   });
 
-  it("clamps limit to 1 minimum", async () => {
+  it("clamps maxReplies to 1 minimum", async () => {
     vi.mocked(fetchGraphJson).mockResolvedValueOnce({ value: [] } as never);
 
     await fetchThreadReplies("tok", "g", "c", "m", 0);
@@ -280,6 +334,124 @@ describe("fetchThreadReplies", () => {
 
     const result = await fetchThreadReplies("tok", "g", "c", "m");
     expect(result).toStrictEqual([]);
+  });
+
+  it("paginates through @odata.nextLink and returns newest 50 replies from 60", async () => {
+    // First page: replies 1-50 (oldest), with nextLink
+    const page1 = Array.from({ length: 50 }, (_, i) => ({
+      id: `reply-${i + 1}`,
+      from: { user: { displayName: `User${i + 1}` } },
+      body: { content: `msg ${i + 1}`, contentType: "text" },
+      createdDateTime: `2026-06-01T00:${String(i).padStart(2, "0")}:00Z`,
+    }));
+    // Second page: replies 51-60 (newest), no nextLink
+    const page2 = Array.from({ length: 10 }, (_, i) => ({
+      id: `reply-${51 + i}`,
+      from: { user: { displayName: `User${51 + i}` } },
+      body: { content: `msg ${51 + i}`, contentType: "text" },
+      createdDateTime: `2026-06-01T00:${String(50 + i).padStart(2, "0")}:00Z`,
+    }));
+
+    vi.mocked(fetchGraphJson)
+      .mockResolvedValueOnce({
+        value: page1,
+        "@odata.nextLink": "https://graph.microsoft.com/v1.0/teams/g/channels/c/messages/m/replies?$skip=50&$top=50",
+      } as never)
+      .mockResolvedValueOnce({
+        value: page2,
+      } as never);
+
+    const result = await fetchThreadReplies("tok", "g", "c", "m");
+
+    expect(result).toHaveLength(50);
+    // The newest 50 should be replies 11-60 (oldest 10 dropped)
+    expect(result[0].id).toBe("reply-11");
+    expect(result[49].id).toBe("reply-60");
+    expect(fetchGraphJson).toHaveBeenCalledTimes(2);
+  });
+
+
+  it("uses maxReplies=30 to limit results from paginated replies", async () => {
+    // 60 items across 2 pages, maxReplies=30
+    const page1 = Array.from({ length: 50 }, (_, i) => ({
+      id: `reply-${i + 1}`,
+      from: { user: { displayName: `User${i + 1}` } },
+      body: { content: `msg ${i + 1}`, contentType: "text" },
+      createdDateTime: `2026-06-01T00:${String(i).padStart(2, "0")}:00Z`,
+    }));
+    const page2 = Array.from({ length: 10 }, (_, i) => ({
+      id: `reply-${51 + i}`,
+      from: { user: { displayName: `User${51 + i}` } },
+      body: { content: `msg ${51 + i}`, contentType: "text" },
+      createdDateTime: `2026-06-01T00:${String(50 + i).padStart(2, "0")}:00Z`,
+    }));
+
+    vi.mocked(fetchGraphJson)
+      .mockResolvedValueOnce({
+        value: page1,
+        "@odata.nextLink": "https://graph.microsoft.com/v1.0/teams/g/channels/c/messages/m/replies?$skip=50&$top=50",
+      } as never)
+      .mockResolvedValueOnce({
+        value: page2,
+      } as never);
+
+    const result = await fetchThreadReplies("tok", "g", "c", "m", 30);
+
+    expect(result).toHaveLength(30);
+    // Newest 30 should be replies 31-60
+    expect(result[0].id).toBe("reply-31");
+    expect(result[29].id).toBe("reply-60");
+    expect(fetchGraphJson).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses maxReplies=1 to return only the newest reply", async () => {
+    // 60 items across 2 pages, maxReplies=1
+    const page1 = Array.from({ length: 50 }, (_, i) => ({
+      id: `reply-${i + 1}`,
+      from: { user: { displayName: `User${i + 1}` } },
+      body: { content: `msg ${i + 1}`, contentType: "text" },
+      createdDateTime: `2026-06-01T00:${String(i).padStart(2, "0")}:00Z`,
+    }));
+    const page2 = Array.from({ length: 10 }, (_, i) => ({
+      id: `reply-${51 + i}`,
+      from: { user: { displayName: `User${51 + i}` } },
+      body: { content: `msg ${51 + i}`, contentType: "text" },
+      createdDateTime: `2026-06-01T00:${String(50 + i).padStart(2, "0")}:00Z`,
+    }));
+
+    vi.mocked(fetchGraphJson)
+      .mockResolvedValueOnce({
+        value: page1,
+        "@odata.nextLink": "https://graph.microsoft.com/v1.0/teams/g/channels/c/messages/m/replies?$skip=50&$top=50",
+      } as never)
+      .mockResolvedValueOnce({
+        value: page2,
+      } as never);
+
+    const result = await fetchThreadReplies("tok", "g", "c", "m", 1);
+
+    expect(result).toHaveLength(1);
+    // Newest reply should be reply-60
+    expect(result[0].id).toBe("reply-60");
+    expect(fetchGraphJson).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns all replies when total is within maxReplies (no pagination needed)", async () => {
+    const replies = Array.from({ length: 30 }, (_, i) => ({
+      id: `reply-${i + 1}`,
+      from: { user: { displayName: `User${i + 1}` } },
+      body: { content: `msg ${i + 1}`, contentType: "text" },
+      createdDateTime: `2026-06-01T00:${String(i).padStart(2, "0")}:00Z`,
+    }));
+
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({ value: replies } as never);
+
+    const result = await fetchThreadReplies("tok", "g", "c", "m");
+
+    expect(result).toHaveLength(30);
+    // Items returned in chronological order (unchanged)
+    expect(result[0].id).toBe("reply-1");
+    expect(result[29].id).toBe("reply-30");
   });
 });
 

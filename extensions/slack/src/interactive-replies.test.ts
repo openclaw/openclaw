@@ -2,6 +2,98 @@
 import { describe, expect, it } from "vitest";
 import { compileSlackInteractiveReplies } from "./interactive-replies.js";
 
+describe("parseChoice behavior (Issue #99823 fix)", () => {
+  it("handles labels with colons in the middle (time labels)", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "[[slack_buttons: Fr 10.07. 9:00:slot_fr_0900, Mo 13.07. 10:45:slot_mo_1045]]",
+    });
+
+    expect(result.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Fr 10.07. 9:00", value: "slot_fr_0900" },
+            { label: "Mo 13.07. 10:45", value: "slot_mo_1045" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("handles labels with colons and style suffixes", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "[[slack_buttons: Approve:approve:primary, Reject:reject:danger]]",
+    });
+
+    expect(result.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Approve", value: "approve", style: "primary" },
+            { label: "Reject", value: "reject", style: "danger" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("handles labels with colons, time, and style suffixes", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "[[slack_buttons: 9:00 AM:slot_morning:success, 5:00 PM:slot_evening:secondary]]",
+    });
+
+    expect(result.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "9:00 AM", value: "slot_morning", style: "success" },
+            { label: "5:00 PM", value: "slot_evening", style: "secondary" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("handles simple label:value pairs without colons in label", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "[[slack_buttons: Retry:retry, Ignore:ignore]]",
+    });
+
+    expect(result.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Retry", value: "retry" },
+            { label: "Ignore", value: "ignore" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("handles labels without any colons (label === value)", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "[[slack_buttons: JustText, AnotherOption]]",
+    });
+
+    expect(result.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "JustText", value: "JustText" },
+            { label: "AnotherOption", value: "AnotherOption" },
+          ],
+        },
+      ],
+    });
+  });
+});
+
 describe("compileSlackInteractiveReplies", () => {
   it("compiles inline Slack button directives into shared interactive blocks", () => {
     const result = compileSlackInteractiveReplies({
