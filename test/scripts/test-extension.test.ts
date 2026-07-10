@@ -14,6 +14,7 @@ import {
 import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   createExtensionTestShards,
+  listTrackedTestFilesForRoots,
   resolveExtensionBatchPlan,
   resolveExtensionTestPlan,
 } from "../../scripts/lib/extension-test-plan.mjs";
@@ -64,6 +65,10 @@ function findExtensionWithoutTests() {
     throw new Error("Expected at least one extension without tests");
   }
   return extensionId;
+}
+
+function listExtensionTestFiles(extensionId: string): string[] {
+  return listTrackedTestFilesForRoots([bundledPluginRoot(extensionId)]);
 }
 
 function expectPositiveIntegerMetric(value: number) {
@@ -468,19 +473,21 @@ describe("scripts/test-extension.mjs", () => {
 
   it("keeps explicitly requested extensions without tests in batch plans", () => {
     const extensionId = findExtensionWithoutTests();
+    const testedExtensionId = "firecrawl";
+    const testedExtensionFiles = listExtensionTestFiles(testedExtensionId);
     const batch = resolveExtensionBatchPlan({
       cwd: process.cwd(),
-      extensionIds: [extensionId, "firecrawl"],
+      extensionIds: [extensionId, testedExtensionId],
     });
 
     expect(batch.extensionIds).toEqual(
-      [extensionId, "firecrawl"].toSorted((left, right) => left.localeCompare(right)),
+      [extensionId, testedExtensionId].toSorted((left, right) => left.localeCompare(right)),
     );
     expect(batch.extensionCount).toBe(2);
     expect(batch.noTestExtensionIds).toEqual([extensionId]);
     expect(batch.hasTests).toBe(true);
-    expect(batch.testFileCount).toBe(2);
-    expect(batch.planGroups.flatMap((group) => group.extensionIds)).toEqual(["firecrawl"]);
+    expect(batch.testFileCount).toBe(testedExtensionFiles.length);
+    expect(batch.planGroups.flatMap((group) => group.extensionIds)).toEqual([testedExtensionId]);
   });
 
   it("counts tracked extension tests without walking extension directories", () => {
@@ -831,16 +838,12 @@ describe("scripts/test-extension.mjs", () => {
 
   it("fails extension batch groups when exact excludes remove every test", async () => {
     const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
+    const firecrawlTestFiles = listExtensionTestFiles("firecrawl");
     const result = await runExtensionBatchPlan(
       resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["firecrawl"] }),
       {
         runGroup,
-        vitestArgs: [
-          "--exclude",
-          bundledPluginFile("firecrawl", "src/firecrawl-tools.test.ts"),
-          "--exclude",
-          bundledPluginFile("firecrawl", "src/firecrawl-client.test.ts"),
-        ],
+        vitestArgs: firecrawlTestFiles.flatMap((testFile) => ["--exclude", testFile]),
       },
     );
 
@@ -850,16 +853,15 @@ describe("scripts/test-extension.mjs", () => {
 
   it("fails extension batch groups when dir-relative exact excludes remove every test", async () => {
     const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
+    const firecrawlTestFiles = listExtensionTestFiles("firecrawl");
     const result = await runExtensionBatchPlan(
       resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["firecrawl"] }),
       {
         runGroup,
-        vitestArgs: [
+        vitestArgs: firecrawlTestFiles.flatMap((testFile) => [
           "--exclude",
-          "firecrawl/src/firecrawl-tools.test.ts",
-          "--exclude",
-          "firecrawl/src/firecrawl-client.test.ts",
-        ],
+          testFile.replace(/^extensions\//u, ""),
+        ]),
       },
     );
 
@@ -869,17 +871,13 @@ describe("scripts/test-extension.mjs", () => {
 
   it("allows extension batch groups to opt into empty exact excludes", async () => {
     const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
+    const firecrawlTestFiles = listExtensionTestFiles("firecrawl");
     const result = await runExtensionBatchPlan(
       resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["firecrawl"] }),
       {
         allowEmptyAfterExclude: true,
         runGroup,
-        vitestArgs: [
-          "--exclude",
-          bundledPluginFile("firecrawl", "src/firecrawl-tools.test.ts"),
-          "--exclude",
-          bundledPluginFile("firecrawl", "src/firecrawl-client.test.ts"),
-        ],
+        vitestArgs: firecrawlTestFiles.flatMap((testFile) => ["--exclude", testFile]),
       },
     );
 
