@@ -182,6 +182,11 @@ export const uk: TranslationMap = {
     reason: "Причина {reason}",
   },
   worktrees: {
+    newWorktree: "New worktree",
+    owner: "Owner",
+    ownerManual: "Manual",
+    ownerSession: "Сесія",
+    ownerWorkboard: "Workboard",
     title: "Керовані Worktrees",
     subtitle: "Ізольовані копії репозиторію, що належать OpenClaw.",
     cleanNow: "Очистити зараз",
@@ -218,6 +223,8 @@ export const uk: TranslationMap = {
     createFailed: "Не вдалося створити сеанс.",
   },
   sessionsView: {
+    deletePreservedWorktreeConfirm:
+      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
     title: "Сеанси",
     subtitle: "Активні ключі сеансів і перевизначення для окремих сеансів.",
     store: "Сховище: {path}",

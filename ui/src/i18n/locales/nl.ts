@@ -183,6 +183,11 @@ export const nl: TranslationMap = {
     reason: "Reden {reason}",
   },
   worktrees: {
+    newWorktree: "New worktree",
+    owner: "Owner",
+    ownerManual: "Manual",
+    ownerSession: "Sessie",
+    ownerWorkboard: "Workboard",
     title: "Beheerde worktrees",
     subtitle: "Geïsoleerde repository-checkouts beheerd door OpenClaw.",
     cleanNow: "Nu opschonen",
@@ -219,6 +224,8 @@ export const nl: TranslationMap = {
     createFailed: "Kan de sessie niet maken.",
   },
   sessionsView: {
+    deletePreservedWorktreeConfirm:
+      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
     title: "Sessies",
     subtitle: "Actieve sessiesleutels en overrides per sessie.",
     store: "Opslag: {path}",

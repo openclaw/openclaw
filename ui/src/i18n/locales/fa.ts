@@ -182,6 +182,11 @@ export const fa: TranslationMap = {
     reason: "دلیل {reason}",
   },
   worktrees: {
+    newWorktree: "New worktree",
+    owner: "Owner",
+    ownerManual: "Manual",
+    ownerSession: "جلسه",
+    ownerWorkboard: "Workboard",
     title: "Worktreeهای مدیریت‌شده",
     subtitle: "checkoutهای ایزولهٔ مخزن که متعلق به OpenClaw هستند.",
     cleanNow: "اکنون پاک‌سازی کن",
@@ -218,6 +223,8 @@ export const fa: TranslationMap = {
     createFailed: "نمی‌توان جلسه را ایجاد کرد.",
   },
   sessionsView: {
+    deletePreservedWorktreeConfirm:
+      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
     title: "نشست‌ها",
     subtitle: "کلیدهای نشست فعال و بازنویسی‌های مخصوص هر نشست.",
     store: "ذخیره‌گاه: {path}",

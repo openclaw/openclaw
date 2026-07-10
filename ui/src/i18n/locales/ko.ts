@@ -180,6 +180,11 @@ export const ko: TranslationMap = {
     reason: "사유 {reason}",
   },
   worktrees: {
+    newWorktree: "New worktree",
+    owner: "Owner",
+    ownerManual: "Manual",
+    ownerSession: "세션",
+    ownerWorkboard: "Workboard",
     title: "관리되는 Worktree",
     subtitle: "OpenClaw가 소유한 격리된 저장소 체크아웃입니다.",
     cleanNow: "지금 정리",
@@ -216,6 +221,8 @@ export const ko: TranslationMap = {
     createFailed: "세션을 만들 수 없습니다.",
   },
   sessionsView: {
+    deletePreservedWorktreeConfirm:
+      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
     title: "세션",
     subtitle: "활성 세션 키 및 세션별 재정의.",
     store: "저장소: {path}",

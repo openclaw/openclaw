@@ -179,6 +179,11 @@ export const en: TranslationMap = {
     reason: "Reason {reason}",
   },
   worktrees: {
+    newWorktree: "New worktree",
+    owner: "Owner",
+    ownerManual: "Manual",
+    ownerSession: "Session",
+    ownerWorkboard: "Workboard",
     title: "Managed Worktrees",
     subtitle: "Isolated repository checkouts owned by OpenClaw.",
     cleanNow: "Clean up now",
@@ -215,6 +220,8 @@ export const en: TranslationMap = {
     createFailed: "Couldn't create the session.",
   },
   sessionsView: {
+    deletePreservedWorktreeConfirm:
+      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
     title: "Sessions",
     subtitle: "Active session keys and per-session overrides.",
     store: "Store: {path}",

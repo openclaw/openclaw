@@ -179,6 +179,11 @@ export const zh_CN: TranslationMap = {
     reason: "原因 {reason}",
   },
   worktrees: {
+    newWorktree: "New worktree",
+    owner: "Owner",
+    ownerManual: "Manual",
+    ownerSession: "会话",
+    ownerWorkboard: "Workboard",
     title: "托管的 Worktrees",
     subtitle: "由 OpenClaw 拥有的隔离代码库检出。",
     cleanNow: "立即清理",
@@ -215,6 +220,8 @@ export const zh_CN: TranslationMap = {
     createFailed: "无法创建会话。",
   },
   sessionsView: {
+    deletePreservedWorktreeConfirm:
+      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
     title: "会话",
     subtitle: "活动会话密钥和每个会话的覆盖设置。",
     store: "存储：{path}",

@@ -181,6 +181,11 @@ export const hi: TranslationMap = {
     reason: "कारण {reason}",
   },
   worktrees: {
+    newWorktree: "New worktree",
+    owner: "Owner",
+    ownerManual: "Manual",
+    ownerSession: "सत्र",
+    ownerWorkboard: "वर्कबोर्ड",
     title: "प्रबंधित Worktrees",
     subtitle: "OpenClaw के स्वामित्व वाले पृथक repository checkouts.",
     cleanNow: "अभी साफ़ करें",
@@ -217,6 +222,8 @@ export const hi: TranslationMap = {
     createFailed: "सत्र नहीं बनाया जा सका।",
   },
   sessionsView: {
+    deletePreservedWorktreeConfirm:
+      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
     title: "सेशन",
     subtitle: "सक्रिय सेशन कुंजियाँ और प्रति-सेशन ओवरराइड।",
     store: "स्टोर: {path}",

@@ -183,6 +183,11 @@ export const tr: TranslationMap = {
     reason: "Neden {reason}",
   },
   worktrees: {
+    newWorktree: "New worktree",
+    owner: "Owner",
+    ownerManual: "Manual",
+    ownerSession: "Oturum",
+    ownerWorkboard: "Workboard",
     title: "Yönetilen Worktree'ler",
     subtitle: "OpenClaw tarafından sahip olunan yalıtılmış depo checkout'ları.",
     cleanNow: "Şimdi temizle",
@@ -220,6 +225,8 @@ export const tr: TranslationMap = {
     createFailed: "Oturum oluşturulamadı.",
   },
   sessionsView: {
+    deletePreservedWorktreeConfirm:
+      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
     title: "Oturumlar",
     subtitle: "Etkin oturum anahtarları ve oturum bazlı geçersiz kılmalar.",
     store: "Depo: {path}",

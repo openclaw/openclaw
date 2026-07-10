@@ -41,6 +41,15 @@ export const SNAPSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // Snapshot refs 
 export const WORKTREE_GC_INTERVAL_MS = 60 * 60 * 1000;
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/** Non-forced removal aborted because the safety snapshot failed. */
+export class WorktreeSnapshotError extends Error {
+  readonly snapshotError: string;
+  constructor(snapshotError: string, options?: ErrorOptions) {
+    super(`worktree snapshot failed; removal aborted: ${snapshotError}`, options);
+    this.snapshotError = snapshotError;
+  }
+}
 const SNAPSHOT_REF_PREFIX = "refs/openclaw/snapshots";
 const OPENCLAW_LOCK_PATTERN = /^openclaw pid=(\d+)$/;
 const log = createSubsystemLogger("agents/worktrees");
@@ -635,9 +644,7 @@ export class ManagedWorktreeService {
     } catch (error) {
       snapshotError = error instanceof Error ? error.message : String(error);
       if (!params.force) {
-        throw new Error(`worktree snapshot failed; removal aborted: ${snapshotError}`, {
-          cause: error,
-        });
+        throw new WorktreeSnapshotError(snapshotError, { cause: error });
       }
     }
     const removed = await runGit(record.repoRoot, ["worktree", "remove", "--force", record.path]);

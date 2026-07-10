@@ -185,6 +185,11 @@ export const ja_JP: TranslationMap = {
     reason: "理由 {reason}",
   },
   worktrees: {
+    newWorktree: "New worktree",
+    owner: "Owner",
+    ownerManual: "Manual",
+    ownerSession: "セッション",
+    ownerWorkboard: "Workboard",
     title: "管理対象ワークツリー",
     subtitle: "OpenClaw が所有する分離されたリポジトリのチェックアウト。",
     cleanNow: "今すぐクリーンアップ",
@@ -222,6 +227,8 @@ export const ja_JP: TranslationMap = {
     createFailed: "セッションを作成できませんでした。",
   },
   sessionsView: {
+    deletePreservedWorktreeConfirm:
+      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
     title: "セッション",
     subtitle: "アクティブなセッションキーとセッションごとの上書き設定。",
     store: "ストア: {path}",

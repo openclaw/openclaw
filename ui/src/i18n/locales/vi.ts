@@ -181,6 +181,11 @@ export const vi: TranslationMap = {
     reason: "Lý do {reason}",
   },
   worktrees: {
+    newWorktree: "New worktree",
+    owner: "Owner",
+    ownerManual: "Manual",
+    ownerSession: "Phiên",
+    ownerWorkboard: "Workboard",
     title: "Worktree được quản lý",
     subtitle: "Các bản checkout kho lưu trữ được cô lập do OpenClaw sở hữu.",
     cleanNow: "Dọn dẹp ngay",
@@ -217,6 +222,8 @@ export const vi: TranslationMap = {
     createFailed: "Không thể tạo phiên.",
   },
   sessionsView: {
+    deletePreservedWorktreeConfirm:
+      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
     title: "Phiên",
     subtitle: "Các khóa phiên đang hoạt động và ghi đè theo từng phiên.",
     store: "Kho lưu trữ: {path}",

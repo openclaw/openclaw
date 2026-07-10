@@ -179,6 +179,11 @@ export const th: TranslationMap = {
     reason: "เหตุผล {reason}",
   },
   worktrees: {
+    newWorktree: "New worktree",
+    owner: "Owner",
+    ownerManual: "Manual",
+    ownerSession: "เซสชัน",
+    ownerWorkboard: "Workboard",
     title: "Worktrees ที่จัดการ",
     subtitle: "การ checkout คลังแยกที่เป็นของ OpenClaw",
     cleanNow: "ล้างข้อมูลตอนนี้",
@@ -215,6 +220,8 @@ export const th: TranslationMap = {
     createFailed: "ไม่สามารถสร้างเซสชันได้",
   },
   sessionsView: {
+    deletePreservedWorktreeConfirm:
+      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
     title: "เซสชัน",
     subtitle: "คีย์เซสชันที่ใช้งานอยู่และการแทนที่ต่อเซสชัน",
     store: "ที่เก็บ: {path}",

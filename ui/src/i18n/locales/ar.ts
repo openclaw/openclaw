@@ -180,6 +180,11 @@ export const ar: TranslationMap = {
     reason: "السبب {reason}",
   },
   worktrees: {
+    newWorktree: "New worktree",
+    owner: "Owner",
+    ownerManual: "Manual",
+    ownerSession: "الجلسة",
+    ownerWorkboard: "Workboard",
     title: "مساحات العمل المُدارة",
     subtitle: "نسخ مستودعات معزولة مملوكة لـ OpenClaw.",
     cleanNow: "تنظيف الآن",
@@ -216,6 +221,8 @@ export const ar: TranslationMap = {
     createFailed: "تعذّر إنشاء الجلسة.",
   },
   sessionsView: {
+    deletePreservedWorktreeConfirm:
+      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
     title: "الجلسات",
     subtitle: "مفاتيح الجلسات النشطة والتجاوزات لكل جلسة.",
     store: "المخزن: {path}",

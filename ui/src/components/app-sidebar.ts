@@ -923,11 +923,30 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const { selectedAgentId } = this.getSessionNavigationState();
     const agentId = parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId;
     try {
-      const deleted = await context.sessions.delete(session.key, {
+      const outcome = await context.sessions.delete(session.key, {
         agentId,
         deleteTranscript: true,
       });
-      if (!deleted || !session.active) {
+      // Dirty/unpushed checkouts survive the delete; offer an explicit force
+      // removal instead of silently orphaning them under the state dir.
+      if (outcome.worktreePreserved) {
+        const preserved = outcome.worktreePreserved;
+        if (
+          window.confirm(
+            t("sessionsView.deletePreservedWorktreeConfirm", { branch: preserved.branch }),
+          )
+        ) {
+          try {
+            await context.gateway.snapshot.client?.request("worktrees.remove", {
+              id: preserved.id,
+              force: true,
+            });
+          } catch (error) {
+            window.alert(String(error));
+          }
+        }
+      }
+      if (!outcome.deleted || !session.active) {
         return;
       }
       this.replaceCurrentSession(

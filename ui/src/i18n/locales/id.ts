@@ -181,6 +181,11 @@ export const id: TranslationMap = {
     reason: "Alasan {reason}",
   },
   worktrees: {
+    newWorktree: "New worktree",
+    owner: "Owner",
+    ownerManual: "Manual",
+    ownerSession: "Sesi",
+    ownerWorkboard: "Workboard",
     title: "Worktree Terkelola",
     subtitle: "Checkout repositori terisolasi yang dimiliki oleh OpenClaw.",
     cleanNow: "Bersihkan sekarang",
@@ -217,6 +222,8 @@ export const id: TranslationMap = {
     createFailed: "Tidak dapat membuat sesi.",
   },
   sessionsView: {
+    deletePreservedWorktreeConfirm:
+      "The session's worktree has uncommitted or unpushed work, so it was kept ({branch}). Delete the checkout anyway?",
     title: "Sesi",
     subtitle: "Kunci sesi aktif dan penggantian per sesi.",
     store: "Penyimpanan: {path}",

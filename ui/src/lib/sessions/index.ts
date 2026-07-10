@@ -103,6 +103,12 @@ type SessionDeleteTarget = {
   agentId?: string;
 };
 
+/** Dirty/unpushed checkouts survive session deletion; callers surface them. */
+export type SessionDeleteOutcome = {
+  deleted: boolean;
+  worktreePreserved?: { id: string; branch: string; path: string };
+};
+
 type SessionDeleteBatchResult = {
   deleted: string[];
   errors: string[];
@@ -170,7 +176,7 @@ export type SessionCapability = {
     options?: { agentId?: string },
   ) => Promise<SessionsPatchResult | null>;
   setModelOverride: (key: string, value: string | null | undefined) => void;
-  delete: (key: string, options?: SessionDeleteOptions) => Promise<boolean>;
+  delete: (key: string, options?: SessionDeleteOptions) => Promise<SessionDeleteOutcome>;
   deleteMany: (targets: readonly SessionDeleteTarget[]) => Promise<SessionDeleteBatchResult>;
   reset: (key: string, options?: SessionResetOptions) => Promise<SessionResetResult>;
   compact: (key: string, options?: { agentId?: string | null }) => Promise<SessionCompactResult>;
@@ -335,8 +341,8 @@ function requestSessionDelete(
   client: SessionRequestClient,
   key: string,
   options: SessionDeleteOptions = {},
-): Promise<{ deleted?: boolean }> {
-  return client.request<{ deleted?: boolean }>("sessions.delete", {
+): Promise<{ deleted?: boolean; worktreePreserved?: SessionDeleteOutcome["worktreePreserved"] }> {
+  return client.request("sessions.delete", {
     ...buildSessionRequestParams(key, options.agentId),
     deleteTranscript: options.deleteTranscript ?? true,
   });
@@ -1010,23 +1016,29 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return true;
   };
 
-  const remove = async (key: string, options: SessionDeleteOptions = {}): Promise<boolean> => {
+  const remove = async (
+    key: string,
+    options: SessionDeleteOptions = {},
+  ): Promise<SessionDeleteOutcome> => {
     const scope = captureConnection();
     if (!scope) {
-      return false;
+      return { deleted: false };
     }
     try {
-      await requestSessionDelete(scope.client, key, options);
+      const response = await requestSessionDelete(scope.client, key, options);
       if (!isCurrentConnection(scope)) {
-        return false;
+        return { deleted: false };
       }
       publish({ ...state, deletedSessions: [{ key, agentId: options.agentId }] });
       setModelOverride(key, undefined);
       await refresh({ agentId: options.agentId, force: true });
-      return isCurrentConnection(scope);
+      return {
+        deleted: isCurrentConnection(scope),
+        ...(response.worktreePreserved ? { worktreePreserved: response.worktreePreserved } : {}),
+      };
     } catch (error) {
       if (!isCurrentConnection(scope)) {
-        return false;
+        return { deleted: false };
       }
       publish({ ...state, error: String(error) });
       throw error;
