@@ -11,6 +11,7 @@ import { resolveExecDefaults, type ExecSessionDefaults } from "../agents/exec-de
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
+import { resolveSenderToolPolicy } from "../agents/sender-tool-policy.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -114,12 +115,24 @@ export function resolveGatewayScopedTools(params: {
     ...gatewayRequestedTools,
     ...runtimeAlsoAllow,
   ]);
+  const senderId = params.channelContext?.sender?.id;
   const groupPolicy = resolveGroupToolPolicy({
     config: params.cfg,
     sessionKey: params.sessionKey,
     messageProvider: params.messageProvider,
     accountId: params.accountId ?? null,
+    senderId,
   });
+  // Only immutable Gateway-launched grants carry channelContext here. Direct
+  // loopback tokens cannot opt into a sender identity or its scoped policy.
+  const senderPolicy = senderId
+    ? resolveSenderToolPolicy({
+        config: params.cfg,
+        agentId,
+        messageProvider: params.messageProvider,
+        senderId,
+      })
+    : undefined;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -163,6 +176,7 @@ export function resolveGatewayScopedTools(params: {
     agentPolicy,
     agentProviderPolicy,
     groupPolicy,
+    senderPolicy,
     sandboxPolicy,
     subagentPolicy,
     inheritedToolPolicy,
@@ -183,6 +197,7 @@ export function resolveGatewayScopedTools(params: {
     agentPolicy,
     agentProviderPolicy,
     groupPolicy,
+    senderPolicy,
     sandboxPolicy,
     subagentPolicy,
     inheritedToolPolicy,
@@ -226,6 +241,7 @@ export function resolveGatewayScopedTools(params: {
       agentPolicy,
       agentProviderPolicy,
       groupPolicy,
+      senderPolicy,
       sandboxPolicy,
       subagentPolicy,
       inheritedToolPolicy,
@@ -330,6 +346,7 @@ export function resolveGatewayScopedTools(params: {
         agentPolicy,
         agentProviderPolicy,
         groupPolicy,
+        senderPolicy,
         agentId,
       }),
       { policy: sandboxPolicy, label: "sandbox tools.allow" },

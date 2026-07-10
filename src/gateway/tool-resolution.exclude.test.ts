@@ -267,6 +267,54 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
   });
 
+  it("filters node exec through immutable sender-scoped policy", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: {
+        tools: {
+          toolsBySender: {
+            "id:blocked-sender": { deny: ["exec"] },
+          },
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:discord:channel:dev",
+      surface: "loopback",
+      senderIsOwner: false,
+      messageProvider: "discord",
+      channelContext: { sender: { id: "blocked-sender" } },
+      includeNodeExecTool: true,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
+    expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
+  });
+
+  it("filters node exec through group sender-scoped policy", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: {
+        channels: {
+          telegram: {
+            groups: {
+              dev: {
+                toolsBySender: {
+                  "id:blocked-sender": { deny: ["exec"] },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:telegram:group:dev",
+      surface: "loopback",
+      senderIsOwner: false,
+      messageProvider: "telegram",
+      channelContext: { sender: { id: "blocked-sender" } },
+      includeNodeExecTool: true,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
+    expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
+  });
+
   it("does not inherit node-only exec as a generic child or cron capability", () => {
     const result = resolveGatewayScopedTools({
       cfg: { tools: { allow: ["exec", "sessions_spawn", "cron"] } } as OpenClawConfig,
