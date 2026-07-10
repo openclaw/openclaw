@@ -38,6 +38,7 @@
       "openai": {
         "baseUrl": "https://api.openai.com/v1",
         "api": "openai-responses",
+        "defaultUtilityModel": "gpt-5.6-luna",
         "models": [
           {
             "id": "gpt-5.3-chat-latest",

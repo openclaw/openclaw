@@ -244,6 +244,8 @@ export type ModelCatalogProvider = {
   baseUrl?: string;
   api?: ModelCatalogApi;
   headers?: Record<string, string>;
+  /** Provider-recommended small model id for short internal utility tasks. */
+  defaultUtilityModel?: string;
   models: ModelCatalogModel[];
 };
 

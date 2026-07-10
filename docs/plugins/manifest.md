@@ -901,6 +901,7 @@ Provider fields:
 | `baseUrl` | `string`                 | Optional default base URL for models in this provider catalog.    |
 | `api`     | `ModelApi`               | Optional default API adapter for models in this provider catalog. |
 | `headers` | `Record<string, string>` | Optional static headers that apply to this provider catalog.      |
+| `defaultUtilityModel` | `string`     | Optional provider-recommended small model id for short internal utility tasks (titles, progress narration). Used when `agents.defaults.utilityModel` is unset and this provider serves the agent's primary model. |
 | `models`  | `object[]`               | Required model rows. Rows without an `id` are ignored.            |
 
 Model fields:
