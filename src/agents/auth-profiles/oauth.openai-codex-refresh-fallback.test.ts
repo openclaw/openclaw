@@ -29,11 +29,14 @@ let hasAvailableAuthForProvider: typeof import("../model-auth.js").hasAvailableA
 let markAuthProfileSuccess: typeof import("./profiles.js").markAuthProfileSuccess;
 type GetOAuthApiKey = typeof import("../../llm/oauth.js").getOAuthApiKey;
 
-const { getOAuthApiKeyMock } = vi.hoisted(() => ({
-  getOAuthApiKeyMock: vi.fn<GetOAuthApiKey>(async () => {
-    throw new Error("Failed to extract accountId from token");
-  }),
-}));
+const { getOAuthApiKeyMock } = vi.hoisted(() => {
+  vi.resetModules();
+  return {
+    getOAuthApiKeyMock: vi.fn<GetOAuthApiKey>(async () => {
+      throw new Error("Failed to extract accountId from token");
+    }),
+  };
+});
 
 const { readCodexCliCredentialsCachedMock } = vi.hoisted(() => ({
   readCodexCliCredentialsCachedMock: vi.fn<(_options?: unknown) => OAuthCredential | null>(
@@ -86,6 +89,7 @@ afterAll(() => {
   vi.doUnmock("../cli-credentials.js");
   vi.doUnmock("../../plugins/provider-runtime.runtime.js");
   vi.doUnmock("../../plugins/provider-runtime.js");
+  vi.resetModules();
 });
 
 async function readPersistedStore(agentDir: string): Promise<AuthProfileStore> {

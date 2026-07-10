@@ -169,4 +169,34 @@ describe("plugin registry runtime config scope", () => {
       pluginSource: "/plugins/google-meet/index.js",
     });
   });
+
+  it("runs gateway requests with the owning plugin scope", async () => {
+    let requestScope = getPluginRuntimeGatewayRequestScope();
+    const runtime = createPluginRuntime();
+    runtime.gateway = {
+      isAvailable: async () => true,
+      request: async <T>() => {
+        requestScope = getPluginRuntimeGatewayRequestScope();
+        return { ok: true } as T;
+      },
+    };
+    const pluginRegistry = createTestRegistry(runtime);
+    const record = createPluginRecord({
+      id: "google-meet",
+      name: "Google Meet",
+      source: "/plugins/google-meet/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+
+    await api.runtime.gateway.request("voicecall.start", { to: "+15550001234" });
+
+    expect(requestScope).toMatchObject({
+      pluginId: "google-meet",
+      pluginOrigin: "bundled",
+      pluginSource: "/plugins/google-meet/index.js",
+    });
+  });
 });

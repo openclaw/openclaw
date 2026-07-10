@@ -103,6 +103,7 @@ export async function executeNodeHostCommand(
     host: "node",
   });
   const target = await resolveNodeExecutionTarget(params);
+  params.signal?.throwIfAborted();
   if (
     shouldSkipNodeApprovalPrepare({
       hostSecurity,
@@ -121,6 +122,7 @@ export async function executeNodeHostCommand(
     hostSecurity,
     hostAsk,
   });
+  params.signal?.throwIfAborted();
   const {
     analysisOk,
     allowlistSatisfied,
@@ -241,7 +243,9 @@ export async function executeNodeHostCommand(
           sessionKey: prepared.sessionKey,
         },
       });
-      if (decision.decision === "allow-once") {
+      params.signal?.throwIfAborted();
+      const autoReviewAllowed = decision.decision === "allow-once" && decision.risk === "low";
+      if (autoReviewAllowed) {
         const approvalId = randomUUID();
         await registerNodeApproval(approvalId, {
           requireDeliveryRoute: false,
@@ -257,7 +261,7 @@ export async function executeNodeHostCommand(
         inlineApprovalDecision = "allow-once";
         inlineApprovalId = approvalId;
       }
-      if (decision.decision !== "allow-once") {
+      if (!autoReviewAllowed) {
         autoReviewRequiresHumanApproval = true;
         params.warnings.push(
           `Exec auto-review deferred to human approval (risk=${decision.risk}): ${decision.rationale}`,
@@ -398,7 +402,7 @@ export async function executeNodeHostCommand(
               buildNodeSystemRunInvoke({
                 target,
                 command: prepared.argv,
-                rawCommand: prepared.rawCommand,
+                rawCommand: prepared.transportRawCommand,
                 cwd: prepared.cwd,
                 agentId: prepared.agentId,
                 sessionKey: prepared.sessionKey,
@@ -464,10 +468,11 @@ export async function executeNodeHostCommand(
   }
 
   const startedAt = Date.now();
+  params.signal?.throwIfAborted();
   const invoke = buildNodeSystemRunInvoke({
     target,
     command: prepared.argv,
-    rawCommand: prepared.rawCommand,
+    rawCommand: prepared.transportRawCommand,
     cwd: prepared.cwd,
     agentId: prepared.agentId,
     sessionKey: prepared.sessionKey,

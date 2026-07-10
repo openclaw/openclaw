@@ -3,6 +3,8 @@ import crypto from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
+import { mintSecretSentinel, resolveSecretSentinel } from "../../secrets/sentinel.js";
 import { prepareGooglePromptCacheStreamFn } from "./google-prompt-cache.js";
 import { EmbeddedAttemptSessionTakeoverError } from "./run/attempt.session-lock.js";
 
@@ -149,6 +151,7 @@ function streamOptions(streamFn: { mock: { calls: unknown[][] } }, callIndex = 0
 }
 
 function preparePromptCacheStream(params: {
+  apiKey?: string;
   fetchMock: ReturnType<typeof vi.fn>;
   now: number;
   sessionManager: TestGooglePromptCacheSessionManager;
@@ -158,7 +161,7 @@ function preparePromptCacheStream(params: {
   // tests can focus on cache lifecycle behavior.
   return prepareGooglePromptCacheStreamFn(
     {
-      apiKey: "gemini-api-key",
+      apiKey: params.apiKey ?? "gemini-api-key",
       extraParams: { cacheRetention: "long" },
       model: makeGoogleModel(),
       modelId: "gemini-3.1-pro-preview",
@@ -175,6 +178,70 @@ function preparePromptCacheStream(params: {
 }
 
 describe("google prompt cache", () => {
+  it("parses sentinel-backed OAuth JSON before guarded cache egress", async () => {
+    const fetchMock = createCacheFetchMock({
+      name: "cachedContents/oauth-cache",
+      expireTime: new Date(2_000_000).toISOString(),
+    });
+    const { streamFn } = createCapturingStreamFn();
+    const oauthJson = JSON.stringify({ token: "google-oauth-token", projectId: "demo" });
+    const sentinel = mintSecretSentinel(oauthJson, { label: "model-auth:google" });
+    const wrapped = await preparePromptCacheStream({
+      apiKey: sentinel,
+      fetchMock,
+      now: 1_000_000,
+      sessionManager: makeSessionManager([]),
+      streamFn,
+    });
+
+    await Promise.resolve(
+      wrapped?.(
+        makeGoogleModel(),
+        { systemPrompt: "Follow policy.", messages: [] } as never,
+        {} as never,
+      ),
+    );
+
+    const headers = fetchInit(fetchMock).headers as Record<string, string>;
+    expect(resolveSecretSentinel(headers.Authorization)).toBe("Bearer google-oauth-token");
+    expect(headers["x-goog-api-key"]).toBeUndefined();
+    expect(headers["Content-Type"]).toBe("application/json");
+  });
+
+  it("registers parsed OAuth headers when sentinels are disabled", async () => {
+    vi.stubEnv("OPENCLAW_SECRET_SENTINELS", "off");
+    const fetchMock = createCacheFetchMock({
+      name: "cachedContents/oauth-cache",
+      expireTime: new Date(2_000_000).toISOString(),
+    });
+    const { streamFn } = createCapturingStreamFn();
+    const oauthJson = JSON.stringify({ token: "google-kill-switch-token", projectId: "demo" });
+    const apiKey = mintSecretSentinel(oauthJson, { label: "model-auth:google" });
+
+    try {
+      const wrapped = await preparePromptCacheStream({
+        apiKey,
+        fetchMock,
+        now: 1_000_000,
+        sessionManager: makeSessionManager([]),
+        streamFn,
+      });
+      await Promise.resolve(
+        wrapped?.(
+          makeGoogleModel(),
+          { systemPrompt: "Follow policy.", messages: [] } as never,
+          {} as never,
+        ),
+      );
+
+      const headers = fetchInit(fetchMock).headers as Record<string, string>;
+      expect(headers.Authorization).toBe("Bearer google-kill-switch-token");
+      expect(isSecretValueRegisteredForRedaction(headers.Authorization)).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("creates cached content from the system prompt and strips that prompt from live requests", async () => {
     // Cached system prompts should move out of live request context and into the
     // cachedContent option to avoid paying prompt tokens repeatedly.

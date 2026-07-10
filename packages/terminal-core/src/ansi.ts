@@ -3,9 +3,11 @@ const ESC_ANSI_CSI_PATTERN = "\\x1b\\[[\\x20-\\x3f]*[\\x40-\\x7e]";
 const C1_ANSI_CSI_PATTERN = "\\x9b[\\x20-\\x3f]*[\\x40-\\x7e]";
 const PARAMETERIZED_C1_ANSI_CSI_PATTERN = "\\x9b[\\x20-\\x3f]+[\\x40-\\x7e]";
 const ANSI_CSI_PATTERN = `(?:${ESC_ANSI_CSI_PATTERN}|${C1_ANSI_CSI_PATTERN})`;
-// OSC: ESC ] <payload> ST. Covers OSC-8 hyperlinks and clipboard/title escapes.
+// OSC: ESC ] or C1 OSC, then <payload> ST. Covers hyperlinks and clipboard/title escapes.
 // ST can be ESC \, BEL, or its C1 form.
-const ANSI_OSC_PATTERN = "(?:\\x1b\\]|\\x9d)[^\\x07\\x1b\\x9c]*(?:\\x1b\\\\|\\x07|\\x9c)";
+const ANSI_OSC_INTRODUCER_PATTERN = "(?:\\x1b\\]|\\x9d)";
+const ANSI_STRING_TERMINATOR_PATTERN = "(?:\\x1b\\\\|\\x07|\\x9c)";
+const ANSI_OSC_PATTERN = `${ANSI_OSC_INTRODUCER_PATTERN}[^\\x07\\x1b\\x9c]*${ANSI_STRING_TERMINATOR_PATTERN}`;
 
 const ANSI_CSI_REGEX = new RegExp(ANSI_CSI_PATTERN, "g");
 const ANSI_OSC_REGEX = new RegExp(ANSI_OSC_PATTERN, "g");
@@ -40,8 +42,7 @@ const SANITIZATION_ANSI_SEQUENCE_REGEX = new RegExp(
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-const ANSI_STRING_TERMINATOR_PATTERN = "(?:\\u0007|\\u001B\\u005C|\\u009C)";
-const ANSI_OSC_SEQUENCE_PATTERN = `(?:\\u001B\\][\\s\\S]*?${ANSI_STRING_TERMINATOR_PATTERN})`;
+const ANSI_OSC_SEQUENCE_PATTERN = `${ANSI_OSC_INTRODUCER_PATTERN}[\\s\\S]*?${ANSI_STRING_TERMINATOR_PATTERN}`;
 const ANSI_CONTROL_SEQUENCE_PATTERN =
   "[\\u001B\\u009B][[\\]()#;?]*(?:\\d{1,4}(?:[;:]\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~]";
 const ANSI_COMPAT_SEQUENCE_REGEX = new RegExp(
@@ -66,7 +67,9 @@ export function stripAnsiSequences(input: string): string {
   if (typeof input !== "string") {
     throw new TypeError(`Expected a \`string\`, got \`${typeof input}\``);
   }
-  if (!input.includes("\u001B") && !input.includes("\u009B")) {
+  // C1 OSC is independent of C1 CSI, so both 8-bit introducers must
+  // participate in the fast path.
+  if (!input.includes("\u001B") && !input.includes("\u009B") && !input.includes("\u009D")) {
     return input;
   }
   return input.replace(ANSI_COMPAT_SEQUENCE_REGEX, "");
@@ -142,13 +145,36 @@ function isFullWidthCodePoint(codePoint: number): boolean {
   );
 }
 
-const emojiLikePattern = /[\p{Extended_Pictographic}\p{Regional_Indicator}\u20e3]/u;
+const rgiEmojiPattern = new RegExp("^\\p{RGI_Emoji}$", "v");
+const emojiPresentationPattern = /\p{Emoji_Presentation}/u;
+const regionalIndicatorPattern = /\p{Regional_Indicator}/u;
+const unqualifiedKeycapPattern = /^[#*0-9]\u20E3$/u;
+const extendedPictographicPattern = /\p{Extended_Pictographic}/gu;
+
+function isWideEmojiGrapheme(grapheme: string): boolean {
+  const isRgiEmoji = rgiEmojiPattern.test(grapheme);
+  // RGI recognizes paired flags while keeping a lone regional indicator narrow.
+  if (regionalIndicatorPattern.test(grapheme)) {
+    return isRgiEmoji;
+  }
+  if (
+    emojiPresentationPattern.test(grapheme) ||
+    isRgiEmoji ||
+    unqualifiedKeycapPattern.test(grapheme)
+  ) {
+    return true;
+  }
+  // Minimally qualified ZWJ sequences still shape as one wide emoji in terminals.
+  return (
+    grapheme.includes("\u200D") && (grapheme.match(extendedPictographicPattern)?.length ?? 0) >= 2
+  );
+}
 
 function graphemeWidth(grapheme: string): number {
   if (!grapheme) {
     return 0;
   }
-  if (emojiLikePattern.test(grapheme)) {
+  if (isWideEmojiGrapheme(grapheme)) {
     return 2;
   }
 

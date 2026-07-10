@@ -4,7 +4,7 @@ import type { DiscordMessagePreflightContext } from "./message-handler.preflight
 
 type SourceReplyDeliveryMode = ReturnType<typeof resolveChannelMessageSourceReplyDeliveryMode>;
 
-export type DiscordAcceptedTypingPrestartDecision = {
+type DiscordAcceptedTypingPrestartDecision = {
   sourceReplyDeliveryMode: SourceReplyDeliveryMode;
   shouldPrestart: boolean;
   reason:

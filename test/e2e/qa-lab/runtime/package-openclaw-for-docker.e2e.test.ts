@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "../../../../scripts/lib/bundled-plugin-build-entries.mjs";
 import {
   buildPackageArtifacts,
   packOpenClawPackageForDocker,
@@ -96,6 +97,7 @@ describe("package-openclaw-for-docker", () => {
       outputDir: ".artifacts/docker",
       outputName: "openclaw-current.tgz",
       packJson: ".artifacts/docker/pack.json",
+      pnpmPack: false,
       skipBuild: true,
       sourceDir: "/repo",
     });
@@ -116,6 +118,7 @@ describe("package-openclaw-for-docker", () => {
       ["--output-dir", ["--output-dir", "one", "--output-dir=two"]],
       ["--output-name", ["--output-name", "one.tgz", "--output-name=two.tgz"]],
       ["--pack-json", ["--pack-json", "one.json", "--pack-json=two.json"]],
+      ["--pnpm-pack", ["--pnpm-pack", "--pnpm-pack"]],
       ["--source-dir", ["--source-dir", "/repo-a", "--source-dir=/repo-b"]],
       ["--skip-build", ["--skip-build", "--skip-build"]],
     ] satisfies Array<[string, string[]]>;
@@ -123,6 +126,13 @@ describe("package-openclaw-for-docker", () => {
     for (const [flag, args] of duplicateCases) {
       expect(() => parseArgs(args), flag).toThrow(`${flag} was provided more than once`);
     }
+  });
+
+  it("rejects pnpm pack with npm metadata output", () => {
+    expect(parseArgs(["--pnpm-pack"]).pnpmPack).toBe(true);
+    expect(() => parseArgs(["--pnpm-pack", "--pack-json", "pack.json"])).toThrow(
+      "--pack-json cannot be combined with --pnpm-pack",
+    );
   });
 
   it("rejects package artifact output names that escape the output directory", () => {
@@ -148,13 +158,22 @@ describe("package-openclaw-for-docker", () => {
       args: string[];
       cwd: string;
       noPnpm: string | undefined;
+      packageExtensions: string | undefined;
+      dockerBuildExtensions: string | undefined;
+      internalDockerBuildPluginIds: string | undefined;
       skipDts: string | undefined;
       timeoutMs: number | undefined;
     }> = [];
     const previousTimeout = process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS;
     const previousSkipDts = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD;
+    const previousPackageExtensions = process.env.OPENCLAW_EXTENSIONS;
+    const previousDockerBuildExtensions = process.env.OPENCLAW_DOCKER_BUILD_EXTENSIONS;
+    const previousInternalPluginIds = process.env[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
     process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS = "1234";
     process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = "1";
+    process.env.OPENCLAW_EXTENSIONS = "clickclack";
+    process.env.OPENCLAW_DOCKER_BUILD_EXTENSIONS = "slack";
+    process.env[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV] = "msteams";
 
     try {
       await buildPackageArtifacts("/repo", {
@@ -169,6 +188,9 @@ describe("package-openclaw-for-docker", () => {
             args,
             cwd,
             noPnpm: options.env?.OPENCLAW_BUILD_ALL_NO_PNPM,
+            packageExtensions: options.env?.OPENCLAW_EXTENSIONS,
+            dockerBuildExtensions: options.env?.OPENCLAW_DOCKER_BUILD_EXTENSIONS,
+            internalDockerBuildPluginIds: options.env?.[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV],
             skipDts: options.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD,
             timeoutMs: options.timeoutMs,
           });
@@ -185,6 +207,17 @@ describe("package-openclaw-for-docker", () => {
       } else {
         process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = previousSkipDts;
       }
+      for (const [envName, previousValue] of [
+        ["OPENCLAW_EXTENSIONS", previousPackageExtensions],
+        ["OPENCLAW_DOCKER_BUILD_EXTENSIONS", previousDockerBuildExtensions],
+        [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV, previousInternalPluginIds],
+      ] as const) {
+        if (previousValue === undefined) {
+          delete process.env[envName];
+        } else {
+          process.env[envName] = previousValue;
+        }
+      }
     }
 
     expect(calls).toEqual([
@@ -192,7 +225,10 @@ describe("package-openclaw-for-docker", () => {
         command: "node",
         args: ["scripts/build-all.mjs", "ciArtifacts"],
         cwd: "/repo",
+        dockerBuildExtensions: undefined,
+        internalDockerBuildPluginIds: undefined,
         noPnpm: "1",
+        packageExtensions: undefined,
         skipDts: "0",
         timeoutMs: 1234,
       },
@@ -385,6 +421,33 @@ describe("package-openclaw-for-docker", () => {
       "npm:pack --silent --ignore-scripts --pack-destination /out:/repo",
       "restore:/repo",
     ]);
+  });
+
+  it("uses pnpm pack when requested", async () => {
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-pack-"));
+    const calls: string[] = [];
+    const packedPath = path.join(outputDir, "openclaw-2026.5.28.tgz");
+
+    try {
+      const tarball = await packOpenClawPackageForDocker("/repo", outputDir, {
+        pnpmPack: true,
+        prepareBundledAiRuntime: skipBundledAiRuntime,
+        prepareChangelog: async () => {},
+        restoreChangelog: async () => {},
+        runCaptureImpl: async (command: string, args: string[], cwd: string) => {
+          calls.push(`${command}:${args.join(" ")}:${cwd}`);
+          fs.writeFileSync(packedPath, "package");
+          return `${packedPath}\n`;
+        },
+      });
+
+      expect(tarball).toBe(packedPath);
+      expect(calls).toEqual([
+        `pnpm:pack --silent --config.ignore-scripts=true --pack-destination ${outputDir}:/repo`,
+      ]);
+    } finally {
+      fs.rmSync(outputDir, { force: true, recursive: true });
+    }
   });
 
   it("writes npm pack metadata for renamed package artifacts", async () => {

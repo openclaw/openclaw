@@ -445,11 +445,11 @@ function registerEventHandlers(
   });
 }
 
-export type BotOpenIdSource =
+type BotOpenIdSource =
   | { kind: "prefetched"; botOpenId?: string; botName?: string }
   | { kind: "fetch" };
 
-export type MonitorSingleAccountParams = {
+type MonitorSingleAccountParams = {
   cfg: ClawdbotConfig;
   account: ResolvedFeishuAccount;
   channelRuntime?: PluginRuntime["channel"];

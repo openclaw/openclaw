@@ -19,8 +19,14 @@ enum GatewayLaunchAgentManager {
             .appendingPathComponent("Library/LaunchAgents/\(gatewayLaunchdLabel).plist")
     }
 
+    private static var generatedEnvironmentDirectoryURL: URL {
+        OpenClawPaths.stateDirURL.appendingPathComponent("service-env", isDirectory: true)
+    }
+
     static func isLaunchAgentWriteDisabled() -> Bool {
-        if FileManager().fileExists(atPath: self.disableLaunchAgentMarkerURL.path) { return true }
+        if FileManager().fileExists(atPath: self.disableLaunchAgentMarkerURL.path) {
+            return true
+        }
         return false
     }
 
@@ -91,7 +97,12 @@ enum GatewayLaunchAgentManager {
     }
 
     static func launchdConfigSnapshot() -> LaunchAgentPlistSnapshot? {
-        LaunchAgentPlist.snapshot(url: self.plistURL)
+        let directory = self.generatedEnvironmentDirectoryURL
+        return LaunchAgentPlist.snapshot(
+            url: self.plistURL,
+            generatedEnvironmentFileURL: directory.appendingPathComponent("\(gatewayLaunchdLabel).env"),
+            generatedEnvironmentWrapperURL: directory.appendingPathComponent(
+                "\(gatewayLaunchdLabel)-env-wrapper.sh"))
     }
 
     static func launchdGatewayLogPath() -> String {
@@ -144,7 +155,9 @@ extension GatewayLaunchAgentManager {
         quiet: Bool = false) async -> String?
     {
         let result = await self.runDaemonCommandResult(args, timeout: timeout, quiet: quiet)
-        if result.success { return nil }
+        if result.success {
+            return nil
+        }
         return result.message ?? "Gateway daemon command failed"
     }
 
@@ -193,7 +206,9 @@ extension GatewayLaunchAgentManager {
     }
 
     private static func withJsonFlag(_ args: [String]) -> [String] {
-        if args.contains("--json") { return args }
+        if args.contains("--json") {
+            return args
+        }
         return args + ["--json"]
     }
 

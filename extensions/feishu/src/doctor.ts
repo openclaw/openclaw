@@ -64,7 +64,7 @@ type FeishuDoctorSessionEntry = {
   entry: FeishuSessionEntry;
 };
 
-export type FeishuDoctorInspection = {
+type FeishuDoctorInspection = {
   stateDir: string;
   feishuStateDir: string;
   findings: FeishuDoctorFinding[];

@@ -227,9 +227,7 @@ actor TalkModeRuntime {
         let meter = self.rmsMeter
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak request, meter] buffer, _ in
             request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
-            if let rms = Self.rmsLevel(buffer: buffer) {
-                meter.set(rms)
-            }
+            meter.set(TalkAudioLevel.rms(buffer: buffer))
         }
 
         audioEngine.prepare()
@@ -275,7 +273,9 @@ actor TalkModeRuntime {
         self.rmsTask = Task { [weak self, meter] in
             while let self {
                 try? await Task.sleep(nanoseconds: 50_000_000)
-                if Task.isCancelled { return }
+                if Task.isCancelled {
+                    return
+                }
                 await self.noteAudioLevel(rms: meter.get())
             }
         }
@@ -362,9 +362,11 @@ actor TalkModeRuntime {
         await self.stopRecognition()
         await self.sendAndSpeak(text)
     }
+}
 
-    // MARK: - Gateway + TTS
+// MARK: - Gateway + TTS
 
+extension TalkModeRuntime {
     private func sendAndSpeak(_ transcript: String) async {
         let gen = self.lifecycleGeneration
         await self.reloadConfig()
@@ -477,7 +479,9 @@ actor TalkModeRuntime {
             group.addTask { [runId, sessionKey] in
                 var latestText: String?
                 for await push in stream {
-                    if Task.isCancelled { return latestText }
+                    if Task.isCancelled {
+                        return latestText
+                    }
                     guard case let .event(evt) = push else { continue }
                     guard evt.event == "chat", let payload = evt.payload else { continue }
                     guard let chatEvent = try? GatewayPayloadDecoding.decode(
@@ -535,7 +539,9 @@ actor TalkModeRuntime {
     private static func matchesSessionKey(_ incoming: String, _ current: String) -> Bool {
         let incoming = incoming.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let current = current.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if incoming == current { return true }
+        if incoming == current {
+            return true
+        }
         return (incoming == "agent:main:main" && current == "main") ||
             (incoming == "main" && current == "agent:main:main")
     }
@@ -955,10 +961,14 @@ actor TalkModeRuntime {
     private func resolveVoiceId(preferred: String?, apiKey: String) async -> String? {
         let trimmed = preferred?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmed.isEmpty {
-            if let resolved = self.resolveVoiceAlias(trimmed) { return resolved }
+            if let resolved = self.resolveVoiceAlias(trimmed) {
+                return resolved
+            }
             self.ttsLogger.warning("talk unknown voice alias \(trimmed, privacy: .public)")
         }
-        if let fallbackVoiceId { return fallbackVoiceId }
+        if let fallbackVoiceId {
+            return fallbackVoiceId
+        }
 
         do {
             let voices = try await ElevenLabsTTSClient(apiKey: apiKey).listVoices()
@@ -987,7 +997,9 @@ actor TalkModeRuntime {
         let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let normalized = trimmed.lowercased()
-        if let mapped = self.voiceAliases[normalized] { return mapped }
+        if let mapped = self.voiceAliases[normalized] {
+            return mapped
+        }
         if self.voiceAliases.values.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
             return trimmed
         }
@@ -1079,9 +1091,13 @@ extension TalkModeRuntime {
         stream: AsyncThrowingStream<Data, Error>,
         sampleRate: Double) async -> StreamingPlaybackResult
     {
-        await PCMStreamingAudioPlayer.shared.play(stream: stream, sampleRate: sampleRate)
+        let metered = TalkModeController.shared.meteredSpeechStream(stream, sampleRate: sampleRate)
+        let result = await PCMStreamingAudioPlayer.shared.play(stream: metered, sampleRate: sampleRate)
+        TalkModeController.shared.endSpeechMetering()
+        return result
     }
 
+    /// MP3 streaming has no metering hook; the wave falls back to its floor.
     @MainActor
     private func playMP3(stream: AsyncThrowingStream<Data, Error>) async -> StreamingPlaybackResult {
         await StreamingAudioPlayer.shared.play(stream: stream)
@@ -1098,13 +1114,16 @@ extension TalkModeRuntime {
     }
 
     @MainActor
-    private func playTalkAudio(data: Data) async -> TalkPlaybackResult {
-        await TalkAudioPlayer.shared.play(data: data)
+    private func playTalkAudio(data: Data) async -> StreamingPlaybackResult {
+        TalkBufferedAudioPlayer.shared.setLevelHandler { level in
+            TalkModeController.shared.updateSpeakingLevel(level)
+        }
+        return await TalkBufferedAudioPlayer.shared.play(data: data)
     }
 
     @MainActor
     private func stopTalkAudio() -> Double? {
-        TalkAudioPlayer.shared.stop()
+        TalkBufferedAudioPlayer.shared.stop()
     }
 
     private func synthesizeMLXVoice(
@@ -1231,7 +1250,9 @@ extension TalkModeRuntime {
     // MARK: - Audio level handling
 
     private func noteAudioLevel(rms: Double) async {
-        if self.phase != .listening, self.phase != .speaking { return }
+        if self.phase != .listening, self.phase != .speaking {
+            return
+        }
         let alpha: Double = rms < self.noiseFloorRMS ? 0.08 : 0.01
         self.noiseFloorRMS = max(1e-7, self.noiseFloorRMS + (rms - self.noiseFloorRMS) * alpha)
 
@@ -1248,22 +1269,12 @@ extension TalkModeRuntime {
         }
     }
 
-    private static func rmsLevel(buffer: AVAudioPCMBuffer) -> Double? {
-        guard let channelData = buffer.floatChannelData?.pointee else { return nil }
-        let frameCount = Int(buffer.frameLength)
-        guard frameCount > 0 else { return nil }
-        var sum: Double = 0
-        for i in 0..<frameCount {
-            let sample = Double(channelData[i])
-            sum += sample * sample
-        }
-        return sqrt(sum / Double(frameCount))
-    }
-
     private func shouldInterrupt(transcript: String, hasConfidence: Bool) async -> Bool {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 3 else { return false }
-        if self.isLikelyEcho(of: trimmed) { return false }
+        if self.isLikelyEcho(of: trimmed) {
+            return false
+        }
         let now = Date()
         if let lastSpeechEnergyAt, now.timeIntervalSince(lastSpeechEnergyAt) > 0.35 {
             return false

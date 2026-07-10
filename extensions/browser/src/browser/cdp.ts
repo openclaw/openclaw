@@ -16,6 +16,7 @@ import {
   isLoopbackHost,
   isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
+  scopeCdpPolicyToConfiguredEndpoint,
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
@@ -50,6 +51,9 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
     ws.protocol = cdp.protocol === "https:" ? "wss:" : "ws:";
   } else if (isLoopbackHost(ws.hostname) && isLoopbackHost(cdp.hostname)) {
     ws.hostname = cdp.hostname;
+    if (!ws.port && cdp.port) {
+      ws.port = cdp.port;
+    }
   }
   if (cdp.protocol === "https:" && ws.protocol === "ws:") {
     ws.protocol = "wss:";
@@ -200,11 +204,12 @@ export async function createTargetViaCdp(opts: {
     url: opts.url,
     ...withBrowserNavigationPolicy(opts.ssrfPolicy),
   });
+  await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
+  const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(opts.cdpUrl, opts.ssrfPolicy);
 
   let wsUrl: string;
   if (isDirectCdpWebSocketEndpoint(opts.cdpUrl)) {
     // Handshake-ready direct WebSocket URL — skip /json/version discovery.
-    await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
     wsUrl = opts.cdpUrl;
   } else {
     // Either an HTTP(S) CDP endpoint or a bare ws/wss root. Try
@@ -221,7 +226,7 @@ export async function createTargetViaCdp(opts: {
         appendCdpPath(discoveryUrl, "/json/version"),
         opts.timeouts?.httpTimeoutMs,
         undefined,
-        opts.ssrfPolicy,
+        cdpControlPolicy,
       );
     } catch (err) {
       // Discovery failed for an HTTP/HTTPS URL — propagate immediately.
@@ -248,9 +253,11 @@ export async function createTargetViaCdp(opts: {
   let lastError: unknown;
   for (const candidateWsUrl of candidateWsUrls) {
     try {
-      await assertCdpEndpointAllowed(candidateWsUrl, opts.ssrfPolicy, {
-        source: candidateWsUrl === opts.cdpUrl ? "configured" : "discovered",
-      });
+      const endpointSource =
+        candidateWsUrl === opts.cdpUrl
+          ? ({ source: "configured" } as const)
+          : ({ source: "discovered", configuredUrl: opts.cdpUrl } as const);
+      await assertCdpEndpointAllowed(candidateWsUrl, cdpControlPolicy, endpointSource);
       return await withCdpSocket(
         candidateWsUrl,
         async (send) => {

@@ -1,4 +1,5 @@
 // Crestodian operations parse, approve, execute, and audit setup-helper commands.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { DoctorOptions } from "../commands/doctor.types.js";
 import {
@@ -54,8 +55,15 @@ export type CrestodianOperation =
       provider?: string;
     }
   | { kind: "setup"; workspace?: string; model?: string }
+  | { kind: "model-setup"; workspace?: string }
   | { kind: "channel-list" }
+  | { kind: "channel-info"; channel: string }
   | { kind: "channel-setup"; channel: string }
+  | {
+      kind: "open-setup";
+      target: "guided" | "classic" | "channels";
+      channel?: string;
+    }
   | { kind: "gateway-status" }
   | { kind: "gateway-start" }
   | { kind: "gateway-stop" }
@@ -77,6 +85,7 @@ export type CrestodianOperationResult = {
   exitsInteractive?: boolean;
   message?: string;
   nextInput?: string;
+  followUp?: Extract<CrestodianOperation, { kind: "model-setup" }>;
 };
 
 /** Injectable command dependencies used by tests and alternate runners. */
@@ -117,6 +126,9 @@ export type CrestodianCommandDeps = {
   /** Where setup side effects run; the gateway surface never manages its own daemon. */
   setupSurface?: "cli" | "gateway";
   applySetup?: typeof import("./setup-apply.js").applyCrestodianSetup;
+  listChannelSetupPlugins?: typeof import("../channels/plugins/setup-registry.js").listChannelSetupPlugins;
+  resolveChannelSetupEntries?: typeof import("../commands/channel-setup/discovery.js").resolveChannelSetupEntries;
+  isChannelConfigured?: typeof import("../config/channel-configured-shared.js").isStaticallyChannelConfigured;
 };
 
 // Grammar tokens. Workspace/path tokens accept quoted strings so paths with
@@ -143,6 +155,10 @@ const SETUP_RE = new RegExp(
   String.raw`^(?:setup|set\s+me\s+up|set\s+up\s+openclaw|onboard(?:\s+me)?|bootstrap|first\s+run)(?:\s+workspace\s+(?<workspace>${TOKEN}))?(?:\s+model\s+(?<model>\S+))?$`,
   "i",
 );
+const MODEL_SETUP_RE = new RegExp(
+  String.raw`^(?:configure\s+(?:a\s+)?model\s+provider|set\s*up\s+(?:a\s+)?model\s+provider|model\s+setup)(?:\s+workspace\s+(?<workspace>${TOKEN}))?$`,
+  "i",
+);
 const CREATE_AGENT_RE = new RegExp(
   String.raw`^(?:create|add|set\s*up|new)\s+(?:(?:an?|new|my)\s+)?agent\s+(?<agent>[a-z0-9_-]+)(?:\s+workspace\s+(?<workspace>${TOKEN}))?(?:\s+model\s+(?<model>\S+))?$`,
   "i",
@@ -166,9 +182,15 @@ const PLUGIN_UNINSTALL_RE =
 const CHANNEL_LIST_RE = /^(?:channels|list\s+channels|show\s+channels)$/i;
 const CHANNEL_CONNECT_RE =
   /^(?:connect|link)\s+(?:channel\s+)?(?:to\s+)?(?<channel>[a-z0-9_-]+)(?:\s+channel)?$/i;
+const CHANNEL_INFO_RE =
+  /^(?:channel\s+info\s+(?<channel>[a-z0-9_-]+)|about\s+(?<aboutChannel>[a-z0-9_-]+)\s+channel)$/i;
+const OPEN_GUIDED_SETUP_RE =
+  /^(?:open\s+setup\s+wizard|setup\s+wizard|menu\s+setup|use\s+the\s+(?:setup\s+)?wizard)$/i;
+const OPEN_CLASSIC_SETUP_RE = /^(?:open\s+classic(?:\s+setup)?\s+wizard|classic\s+setup)$/i;
+const OPEN_CHANNEL_SETUP_RE = /^open\s+channel\s+wizard(?:\s+for\s+(?<channel>[a-z0-9_-]+))?$/i;
 
 const NO_MATCH_MESSAGE =
-  "I can run doctor/status/health, check or restart Gateway, list agents/models, set default model, connect channels (`connect telegram`), show audit, or switch to your agent TUI.";
+  "I can run doctor/status/health, check or restart Gateway, list agents/models, configure a model provider, set default model, connect channels (`connect telegram`), show `channel info <channel>`, open the setup wizard, show audit, or switch to your agent TUI.";
 
 /** Audit/source labels for detected inference backends (docs-visible contract). */
 const INFERENCE_SOURCE_LABELS: Record<InferenceBackendKind, string> = {
@@ -283,9 +305,37 @@ export function parseCrestodianOperation(input: string): CrestodianOperation {
   if (CHANNEL_LIST_RE.test(trimmed)) {
     return { kind: "channel-list" };
   }
+  const channelInfoMatch = trimmed.match(CHANNEL_INFO_RE);
+  const channelInfo = channelInfoMatch?.groups?.channel ?? channelInfoMatch?.groups?.aboutChannel;
+  if (channelInfo) {
+    return { kind: "channel-info", channel: channelInfo.toLowerCase() };
+  }
   const channelConnectMatch = trimmed.match(CHANNEL_CONNECT_RE);
   if (channelConnectMatch?.groups?.channel) {
     return { kind: "channel-setup", channel: channelConnectMatch.groups.channel.toLowerCase() };
+  }
+  const modelSetupMatch = trimmed.match(MODEL_SETUP_RE);
+  if (modelSetupMatch) {
+    const workspace = trimShellishToken(modelSetupMatch.groups?.workspace);
+    return {
+      kind: "model-setup",
+      ...(workspace ? { workspace } : {}),
+    };
+  }
+  if (OPEN_GUIDED_SETUP_RE.test(trimmed)) {
+    return { kind: "open-setup", target: "guided" };
+  }
+  if (OPEN_CLASSIC_SETUP_RE.test(trimmed)) {
+    return { kind: "open-setup", target: "classic" };
+  }
+  const openChannelSetupMatch = trimmed.match(OPEN_CHANNEL_SETUP_RE);
+  if (openChannelSetupMatch) {
+    const channel = openChannelSetupMatch.groups?.channel?.toLowerCase();
+    return {
+      kind: "open-setup",
+      target: "channels",
+      ...(channel ? { channel } : {}),
+    };
   }
   const setupMatch = trimmed.match(SETUP_RE);
   if (setupMatch) {
@@ -381,8 +431,8 @@ function validateCrestodianPluginInstallSpec(spec: string): string | null {
 
 /**
  * Return whether an operation can change local state or process lifecycle.
- * channel-setup is intentionally absent: starting the guided wizard is not a
- * write — the wizard itself collects explicit answers and commits at the end.
+ * Guided setup operations are intentionally absent: starting a wizard is not
+ * itself a write; the wizard owns approval and persistence for its answers.
  */
 export function isPersistentCrestodianOperation(operation: CrestodianOperation): boolean {
   return (
@@ -411,6 +461,8 @@ export function describeCrestodianPersistentOperation(operation: CrestodianOpera
       return `set config ${operation.path} to ${operation.source} SecretRef ${operation.source === "env" ? operation.id : "<redacted>"}`;
     case "setup":
       return formatSetupPlanDescription(operation);
+    case "model-setup":
+      return "configure a model provider and default model";
     case "doctor-fix":
       return "run doctor repairs";
     case "plugin-install":
@@ -560,6 +612,38 @@ async function loadOverviewForOperation(
   }
   const { loadCrestodianOverview } = await loadOverviewModule();
   return await loadCrestodianOverview();
+}
+
+async function resolveChannelSetupState(deps: CrestodianCommandDeps | undefined) {
+  const listPlugins =
+    deps?.listChannelSetupPlugins ??
+    (await import("../channels/plugins/setup-registry.js")).listChannelSetupPlugins;
+  const resolveEntries =
+    deps?.resolveChannelSetupEntries ??
+    (await import("../commands/channel-setup/discovery.js")).resolveChannelSetupEntries;
+  const isConfigured =
+    deps?.isChannelConfigured ??
+    (await import("../config/channel-configured-shared.js")).isStaticallyChannelConfigured;
+  const { shouldShowChannelInSetup } = await import("../commands/channel-setup/discovery.js");
+  const snapshot = await readConfigFileSnapshotLazy();
+  const cfg = snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
+  const installedPlugins = listPlugins();
+  const resolved = resolveEntries({ cfg, installedPlugins });
+  return {
+    cfg,
+    installedPlugins,
+    resolved: {
+      ...resolved,
+      // Match the connect/list surfaces: setup-hidden channels stay invisible
+      // to chat listings and channel info alike.
+      entries: resolved.entries.filter((entry) => shouldShowChannelInSetup(entry.meta)),
+    },
+    isConfigured,
+  };
+}
+
+function formatChannelDocsUrl(docsPath: string): string {
+  return `https://docs.openclaw.ai${docsPath.startsWith("/") ? docsPath : `/${docsPath}`}`;
 }
 
 function formatConfigValidationLine(snapshot: ConfigFileSnapshot): string {
@@ -717,13 +801,13 @@ async function executeSetup(
         ? `Model choice: ${setupModel.model} (${setupModel.source}).`
         : setupModel.source === "existing default model"
           ? `Model choice: keep existing default ${overview.defaultModel}.`
-          : "Model choice: none found yet. I will only set the workspace; install/login Codex or Claude Code, or set OPENAI_API_KEY/ANTHROPIC_API_KEY, then run setup again.",
+          : "Model choice: none found yet. I will set the workspace first, then offer guided model-provider setup.",
     ].join("\n");
     runtime.log(message);
     return { applied: false, message };
   }
   const workspace = resolveUserPath(operation.workspace ?? process.cwd());
-  return await applyPersistentOperation({
+  const result = await applyPersistentOperation({
     auditOperation: "crestodian.setup",
     operation,
     runtime,
@@ -760,6 +844,13 @@ async function executeSetup(
       };
     },
   });
+  if (result.applied && !setupModel.model && !overview.defaultModel) {
+    return {
+      ...result,
+      followUp: { kind: "model-setup", workspace },
+    };
+  }
+  return result;
 }
 
 async function executeSetDefaultModel(
@@ -939,7 +1030,7 @@ export async function executeCrestodianOperation(
       const rendered = JSON.stringify(redacted, null, 2) ?? "null";
       runtime.log(
         rendered.length > CONFIG_GET_OUTPUT_MAX_CHARS
-          ? `${operation.path} = ${rendered.slice(0, CONFIG_GET_OUTPUT_MAX_CHARS)}\n… (truncated)`
+          ? `${operation.path} = ${truncateUtf16Safe(rendered, CONFIG_GET_OUTPUT_MAX_CHARS)}\n… (truncated)`
           : `${operation.path} = ${rendered}`,
       );
       return { applied: false };
@@ -995,22 +1086,8 @@ export async function executeCrestodianOperation(
       // Use the same discovery as channel setup (bundled plugins + trusted
       // catalog), so the listing matches what `connect <channel>` can configure
       // even before any plugin registry is active.
-      const [
-        { listChannelSetupPlugins },
-        { resolveChannelSetupEntries, shouldShowChannelInSetup },
-      ] = await Promise.all([
-        import("../channels/plugins/setup-registry.js"),
-        import("../commands/channel-setup/discovery.js"),
-      ]);
-      const snapshot = await readConfigFileSnapshotLazy();
-      const cfg = snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
-      const resolved = resolveChannelSetupEntries({
-        cfg,
-        installedPlugins: listChannelSetupPlugins(),
-      });
-      const entries = resolved.entries
-        .filter((entry) => shouldShowChannelInSetup(entry.meta))
-        .toSorted((a, b) => a.id.localeCompare(b.id));
+      const { resolved } = await resolveChannelSetupState(opts.deps);
+      const entries = resolved.entries.toSorted((a, b) => a.id.localeCompare(b.id));
       runtime.log(
         [
           "Channels:",
@@ -1019,6 +1096,38 @@ export async function executeCrestodianOperation(
           ),
           "",
           "Say `connect <channel>` to walk through setup (for example `connect telegram`).",
+        ].join("\n"),
+      );
+      return { applied: false };
+    }
+    case "channel-info": {
+      const { cfg, installedPlugins, resolved, isConfigured } = await resolveChannelSetupState(
+        opts.deps,
+      );
+      const channel = operation.channel.toLowerCase();
+      const entry = resolved.entries.find((candidate) => candidate.id === channel);
+      if (!entry) {
+        const knownIds = resolved.entries.map((candidate) => candidate.id).toSorted();
+        runtime.log(
+          [
+            `Unknown channel: ${channel}`,
+            `Known channels: ${knownIds.length > 0 ? knownIds.join(", ") : "none"}`,
+          ].join("\n"),
+        );
+        return { applied: false };
+      }
+      const installed =
+        installedPlugins.some((plugin) => plugin.id === entry.id) ||
+        resolved.installedCatalogById.has(entry.id);
+      runtime.log(
+        [
+          `${entry.meta.label} (${entry.id})`,
+          entry.meta.blurb,
+          `Configured: ${isConfigured(cfg, entry.id) ? "yes" : "no"}`,
+          `Installed: ${installed ? "yes" : "no"}`,
+          `Docs: ${formatChannelDocsUrl(entry.meta.docsPath)}`,
+          "",
+          `Say \`connect ${entry.id}\` to set it up here, or \`open channel wizard for ${entry.id}\` for the masked terminal wizard.`,
         ].join("\n"),
       );
       return { applied: false };
@@ -1035,6 +1144,27 @@ export async function executeCrestodianOperation(
         ].join("\n"),
       );
       return { applied: false };
+    case "model-setup":
+      runtime.log(
+        [
+          "Model provider setup needs an interactive session with masked credential prompts.",
+          "Run `openclaw crestodian` and say `configure model provider`,",
+          "or run `openclaw configure --section model` directly.",
+        ].join("\n"),
+      );
+      return { applied: false };
+    case "open-setup": {
+      const command =
+        operation.target === "guided"
+          ? "openclaw onboard"
+          : operation.target === "classic"
+            ? "openclaw onboard --classic"
+            : `openclaw channels add${operation.channel ? ` --channel ${operation.channel}` : ""}`;
+      runtime.log(
+        `One-shot mode cannot open an interactive wizard. Run \`${command}\` in a terminal.`,
+      );
+      return { applied: false };
+    }
     case "setup":
       return await executeSetup(operation, runtime, opts);
     case "config-set":

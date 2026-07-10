@@ -49,6 +49,7 @@ import {
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { assertCodexThreadStartResponse } from "./protocol-validators.js";
 import {
+  CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   flattenCodexDynamicToolFunctions,
   isJsonObject,
   type CodexDynamicToolSpec,
@@ -437,6 +438,26 @@ export async function startOrResumeThread(params: {
         connectionClass: params.appServer.connectionClass,
       });
       await clearCurrentBinding("rotating a stale thread binding");
+      binding = undefined;
+    }
+    if (
+      binding?.threadId &&
+      shouldRotateCodexGpt56MultiAgentBinding({
+        bindingModel: binding.model,
+        requestedModel: params.params.modelId,
+      })
+    ) {
+      // Codex locks the model-selected multi-agent version on the first turn.
+      // Sol/Terra (V2) and Luna (V1) therefore cannot share one resumed thread.
+      embeddedAgentLog.debug(
+        "codex app-server GPT-5.6 multi-agent version changed; starting a new thread",
+        {
+          threadId: binding.threadId,
+          bindingModel: binding.model,
+          requestedModel: params.params.modelId,
+        },
+      );
+      await clearCurrentBinding("rotating a GPT-5.6 multi-agent thread binding");
       binding = undefined;
     }
     const startModelSelection = resolveCodexAppServerThreadModelSelection({
@@ -1021,6 +1042,38 @@ export function shouldRotateCodexAppServerBindingForRuntime(params: {
   return params.connectionClass === "remote" || Boolean(params.binding);
 }
 
+type CodexGpt56MultiAgentVersion = "v1" | "v2";
+
+function resolveCodexGpt56MultiAgentVersion(
+  modelRef: string | undefined,
+): CodexGpt56MultiAgentVersion | undefined {
+  let modelId = modelRef?.trim().toLowerCase();
+  if (!modelId) {
+    return undefined;
+  }
+  const slashIndex = modelId.indexOf("/");
+  if (slashIndex > 0) {
+    const provider = modelId.slice(0, slashIndex);
+    if (provider !== "openai" && provider !== "codex") {
+      return undefined;
+    }
+    modelId = modelId.slice(slashIndex + 1);
+  }
+  if (modelId === "gpt-5.6-sol" || modelId === "gpt-5.6-terra") {
+    return "v2";
+  }
+  return modelId === "gpt-5.6-luna" ? "v1" : undefined;
+}
+
+function shouldRotateCodexGpt56MultiAgentBinding(params: {
+  bindingModel?: string;
+  requestedModel: string;
+}): boolean {
+  const bindingVersion = resolveCodexGpt56MultiAgentVersion(params.bindingModel);
+  const requestedVersion = resolveCodexGpt56MultiAgentVersion(params.requestedModel);
+  return Boolean(bindingVersion && requestedVersion && bindingVersion !== requestedVersion);
+}
+
 function isTransientWebSearchRestriction(
   params: Pick<
     Parameters<typeof startOrResumeThread>[0],
@@ -1225,6 +1278,7 @@ export function buildThreadStartParams(
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
       nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
       nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
+      directOnlyToolNamespaces: resolveDirectOnlyToolNamespaces(options.dynamicTools),
       webSearchAllowed: options.webSearchAllowed,
       appServer: options.appServer,
     }),
@@ -1286,6 +1340,7 @@ export function buildThreadResumeParams(
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
       nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
       nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
+      directOnlyToolNamespaces: resolveDirectOnlyToolNamespaces(options.dynamicTools),
       webSearchAllowed: options.webSearchAllowed,
       appServer: options.appServer,
     }),
@@ -1397,7 +1452,11 @@ function hasProviderQualifiedModelRef(model: string | undefined): boolean {
 
 export function buildCodexRuntimeThreadConfig(
   config: JsonObject | undefined,
-  options: { nativeCodeModeEnabled?: boolean; nativeCodeModeOnlyEnabled?: boolean } = {},
+  options: {
+    nativeCodeModeEnabled?: boolean;
+    nativeCodeModeOnlyEnabled?: boolean;
+    directOnlyToolNamespaces?: readonly string[];
+  } = {},
 ): JsonObject {
   const codeModeConfig: JsonObject = {
     ...CODEX_CODE_MODE_THREAD_CONFIG,
@@ -1416,20 +1475,46 @@ export function buildCodexRuntimeThreadConfig(
     return disabledConfig;
   }
   if (options.nativeCodeModeOnlyEnabled === true) {
-    return (
-      mergeCodexThreadConfigs(codeModeConfig, config, {
-        "features.code_mode_only": true,
-      }) ?? {
-        ...codeModeConfig,
-        "features.code_mode_only": true,
-      }
-    );
-  }
-  return (
-    mergeCodexThreadConfigs(codeModeConfig, config) ?? {
+    const merged = mergeCodexThreadConfigs(codeModeConfig, config, {
+      "features.code_mode_only": true,
+    }) ?? {
       ...codeModeConfig,
-    }
-  );
+      "features.code_mode_only": true,
+    };
+    return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
+  }
+  const merged = mergeCodexThreadConfigs(codeModeConfig, config) ?? {
+    ...codeModeConfig,
+  };
+  return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
+}
+
+function ensureDirectOnlyToolNamespaces(
+  config: JsonObject,
+  requiredNamespaces: readonly string[] | undefined,
+): JsonObject {
+  if (!requiredNamespaces?.length) {
+    return config;
+  }
+  const configured = config["code_mode.direct_only_tool_namespaces"];
+  const namespaces = Array.isArray(configured)
+    ? configured.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+    : [];
+  return {
+    ...config,
+    "code_mode.direct_only_tool_namespaces": [...new Set([...namespaces, ...requiredNamespaces])],
+  };
+}
+
+function resolveDirectOnlyToolNamespaces(
+  dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
+): string[] {
+  return (dynamicTools ?? [])
+    .filter(
+      (tool) =>
+        tool.type === "namespace" && tool.name === CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+    )
+    .map((tool) => tool.name);
 }
 
 function buildCodexRuntimeThreadConfigForRun(
@@ -1439,6 +1524,7 @@ function buildCodexRuntimeThreadConfigForRun(
     nativeCodeModeEnabled?: boolean;
     nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
     nativeCodeModeOnlyEnabled?: boolean;
+    directOnlyToolNamespaces?: readonly string[];
     webSearchAllowed?: boolean;
     appServer?: Pick<CodexAppServerRuntimeOptions, "networkProxy">;
   } = {},
@@ -1875,7 +1961,7 @@ export function resolveCodexAppServerModelProvider(params: {
 // Other modern models translate `minimal` to `low`. (#71946)
 // Exported for unit-test coverage of the model-aware translation path.
 export function resolveReasoningEffort(
-  thinkLevel: EmbeddedRunAttemptParams["thinkLevel"],
+  thinkLevel: EmbeddedRunAttemptParams["thinkLevel"] | "ultra",
   modelId: string,
   supportedReasoningEfforts?: readonly string[],
 ): CodexReasoningEffort | null {

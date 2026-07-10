@@ -23,7 +23,7 @@ import {
 } from "./runtime-parity.js";
 import { buildTokenEfficiencyReport } from "./token-efficiency-report.js";
 
-export const QA_CONFIDENCE_VERDICTS = [
+const QA_CONFIDENCE_VERDICTS = [
   "pass",
   "product-bug",
   "qa-harness-bug",
@@ -33,9 +33,9 @@ export const QA_CONFIDENCE_VERDICTS = [
   "environment-blocked",
 ] as const;
 
-export type QaConfidenceVerdict = (typeof QA_CONFIDENCE_VERDICTS)[number];
+type QaConfidenceVerdict = (typeof QA_CONFIDENCE_VERDICTS)[number];
 
-export type QaConfidenceLaneKind =
+type QaConfidenceLaneKind =
   | "qa-suite-summary"
   | "runtime-parity-summary"
   | "harness-parity-summary"
@@ -44,7 +44,7 @@ export type QaConfidenceLaneKind =
   | "self-test-summary"
   | "generic-pass-summary";
 
-export type QaConfidenceManifestLane = {
+type QaConfidenceManifestLane = {
   id: string;
   title: string;
   kind: QaConfidenceLaneKind;
@@ -68,9 +68,9 @@ export type QaConfidenceManifest = {
   lanes: QaConfidenceManifestLane[];
 };
 
-export type QaConfidenceLaneStatus = "pass" | "fail" | "blocked" | "missing" | "unknown";
+type QaConfidenceLaneStatus = "pass" | "fail" | "blocked" | "missing" | "unknown";
 
-export type QaConfidenceLaneResult = {
+type QaConfidenceLaneResult = {
   id: string;
   title: string;
   kind: QaConfidenceLaneKind;
@@ -90,7 +90,7 @@ export type QaConfidenceLaneResult = {
   skipBackfilled?: boolean;
 };
 
-export type QaConfidenceReport = {
+type QaConfidenceReport = {
   generatedAt: string;
   profile: string;
   strictZeroUnknowns: boolean;
@@ -110,7 +110,7 @@ export type QaConfidenceReport = {
   lanes: QaConfidenceLaneResult[];
 };
 
-export type QaConfidenceSelfTestCanary = {
+type QaConfidenceSelfTestCanary = {
   id: string;
   category:
     | "prompt"
@@ -125,7 +125,7 @@ export type QaConfidenceSelfTestCanary = {
   details: string;
 };
 
-export type QaConfidenceSelfTestSummary = {
+type QaConfidenceSelfTestSummary = {
   generatedAt: string;
   pass: boolean;
   canaries: QaConfidenceSelfTestCanary[];

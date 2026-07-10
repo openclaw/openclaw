@@ -54,6 +54,7 @@ export const resolveAllowedModelRefMock = createMock();
 export const resolveConfiguredModelRefMock = createMock();
 export const resolveHooksGmailModelMock = createMock();
 export const resolveThinkingDefaultMock = createMock();
+export const resolveEffectiveAgentRuntimeMock = createMock();
 export const runWithModelFallbackMock = createMock();
 export const runEmbeddedAgentMock = createMock();
 export const runCliAgentMock = createMock();
@@ -113,7 +114,7 @@ const getSkillsSnapshotVersionMock = createMock();
 export const loadModelCatalogMock = createMock();
 const getRemoteSkillEligibilityMock = createMock();
 
-vi.mock("./run.runtime.js", () => ({
+vi.mock("./run.runtime.js", async () => ({
   resolveAgentConfig: resolveAgentConfigMock,
   resolveAgentDir: vi.fn().mockReturnValue("/tmp/agent-dir"),
   resolveAgentModelFallbacksOverride: resolveAgentModelFallbacksOverrideMock,
@@ -123,6 +124,12 @@ vi.mock("./run.runtime.js", () => ({
   DEFAULT_CONTEXT_TOKENS: 128000,
   isCliProvider: isCliProviderMock,
   resolveThinkingDefault: resolveThinkingDefaultMock,
+  resolveEffectiveAgentRuntime: resolveEffectiveAgentRuntimeMock,
+  resolveSessionRuntimeOverrideForProvider: (
+    await vi.importActual<typeof import("../../agents/session-runtime-compat.js")>(
+      "../../agents/session-runtime-compat.js",
+    )
+  ).resolveSessionRuntimeOverrideForProvider,
   buildWorkspaceSkillSnapshot: buildWorkspaceSkillSnapshotMock,
   getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
   resolveAgentTimeoutMs: resolveAgentTimeoutMsMock,
@@ -249,6 +256,26 @@ vi.mock("./run-execution.runtime.js", () => ({
   getCliSessionId: getCliSessionIdMock,
   runCliAgent: runCliAgentMock,
   resolveFastModeState: resolveFastModeStateMock,
+  resolveCandidateThinkingLevel: (params: {
+    provider: string;
+    modelId: string;
+    level?: string;
+    catalog?: unknown[];
+  }) => {
+    if (!params.level) {
+      return undefined;
+    }
+    const policy = {
+      provider: params.provider,
+      model: params.modelId,
+      level: params.level,
+      catalog: params.catalog,
+      agentRuntime: resolveEffectiveAgentRuntimeMock(params),
+    };
+    return isThinkingLevelSupportedMock(policy)
+      ? params.level
+      : resolveSupportedThinkingLevelMock(policy);
+  },
   resolveCronAgentLane: resolveCronAgentLaneMock,
   LiveSessionModelSwitchError,
   runWithModelFallback: runWithModelFallbackMock,
@@ -478,6 +505,7 @@ function resetRunConfigMocks(): void {
   resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-5.4" } });
   resolveHooksGmailModelMock.mockReturnValue(null);
   resolveThinkingDefaultMock.mockReturnValue("off");
+  resolveEffectiveAgentRuntimeMock.mockReturnValue("openclaw");
   getModelRefStatusMock.mockReturnValue({ allowed: false });
   resolveCronStyleNowMock.mockReturnValue({
     formattedTime: "2026-02-10 12:00",
@@ -687,7 +715,19 @@ function resetRunSessionMocks(): void {
   loadSessionEntryMock.mockReset();
   loadSessionEntryMock.mockReturnValue(undefined);
   updateSessionStoreMock.mockReset();
-  updateSessionStoreMock.mockResolvedValue(undefined);
+  const sessionStores = new Map<string, Record<string, unknown>>();
+  updateSessionStoreMock.mockImplementation(
+    async (storePath: string, update: (store: Record<string, unknown>) => unknown) => {
+      const resolvedResult = resolveCronSessionMock.mock.results.at(-1);
+      const resolvedSession =
+        resolvedResult?.type === "return" ? (resolvedResult.value as CronSession) : undefined;
+      const store =
+        sessionStores.get(storePath) ??
+        (resolvedSession?.storePath === storePath ? resolvedSession.store : {});
+      sessionStores.set(storePath, store);
+      return await update(store);
+    },
+  );
   resolveCronSessionMock.mockReset();
   resolveCronSessionMock.mockReturnValue(makeCronSession());
   callGatewayMock.mockReset();

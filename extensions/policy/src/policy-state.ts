@@ -25,7 +25,7 @@ const ALLOWLIST_DEFAULT_INGRESS_GROUP_POLICY_CHANNELS = new Set([
 ]);
 const OPEN_GROUPS_DEFAULT_TO_NO_MENTION_CHANNELS = new Set(["feishu", "qa-channel"]);
 
-export type PolicyAttestation = {
+type PolicyAttestation = {
   readonly checkedAt: string;
   readonly policy?: {
     readonly path: string;
@@ -57,14 +57,14 @@ export type PolicyEvidence = {
   readonly execApprovals?: readonly PolicyExecApprovalEvidence[];
 };
 
-export type PolicyChannelEvidence = {
+type PolicyChannelEvidence = {
   readonly id: string;
   readonly provider: string;
   readonly source: string;
   readonly enabled?: boolean;
 };
 
-export type PolicyMcpServerEvidence = {
+type PolicyMcpServerEvidence = {
   readonly id: string;
   readonly transport: "stdio" | "sse" | "streamable-http" | "unknown";
   readonly source: string;
@@ -72,7 +72,7 @@ export type PolicyMcpServerEvidence = {
   readonly url?: string;
 };
 
-export type PolicyToolEvidence = {
+type PolicyToolEvidence = {
   readonly id: string;
   readonly source: string;
   readonly line: number;
@@ -125,19 +125,19 @@ export type PolicySandboxPostureEvidence = {
   readonly explicit?: boolean;
 };
 
-export type PolicyModelProviderEvidence = {
+type PolicyModelProviderEvidence = {
   readonly id: string;
   readonly source: string;
 };
 
-export type PolicyModelRefEvidence = {
+type PolicyModelRefEvidence = {
   readonly ref: string;
   readonly provider: string;
   readonly model: string;
   readonly source: string;
 };
 
-export type PolicyNetworkEvidence = {
+type PolicyNetworkEvidence = {
   readonly id: string;
   readonly source: string;
   readonly value: boolean;
@@ -158,7 +158,7 @@ export type PolicyIngressEvidence = {
   readonly explicit?: boolean;
 };
 
-export type PolicyGatewayExposureEvidence = {
+type PolicyGatewayExposureEvidence = {
   readonly id: string;
   readonly kind:
     | "auth"
@@ -195,7 +195,7 @@ export type PolicyAgentWorkspaceEvidence = {
   readonly explicit?: boolean;
 };
 
-export type PolicySecretEvidence = {
+type PolicySecretEvidence = {
   readonly id: string;
   readonly kind: "input" | "provider";
   readonly source: string;

@@ -104,14 +104,14 @@ function findMockCall(mock: ReturnType<typeof vi.fn>, predicate: (arg: unknown[]
   return call;
 }
 
-function mockResolvedModel(params?: { supportsTools?: boolean }) {
+function mockResolvedModel(params?: { supportsTools?: boolean; input?: string[] }) {
   resolveModelMock.mockReset();
   resolveModelMock.mockReturnValue({
     model: {
       provider: "openai",
       api: "responses",
       id: "fake",
-      input: [],
+      input: params?.input ?? [],
       ...(params?.supportsTools === undefined
         ? {}
         : { compat: { supportsTools: params.supportsTools } }),
@@ -323,6 +323,29 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
+  it("passes resolved agent context to compacted system prompt rebuilds", async () => {
+    resolveSessionAgentIdsMock.mockReturnValue({
+      defaultAgentId: "main",
+      sessionAgentId: "marketing-agent",
+    });
+
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:marketing-agent:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeInfo: expect.objectContaining({
+          agentId: "marketing-agent",
+          sessionKey: "agent:marketing-agent:session-1",
+        }),
+      }),
+    );
+  });
+
   it("keeps the embedded compaction system prompt after active tool selection", async () => {
     buildEmbeddedSystemPromptMock.mockReturnValueOnce("compaction system prompt");
 
@@ -422,6 +445,51 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
+  it("maps logical Ultra to max before compaction provider hooks", () => {
+    const resolveExtraParams = vi.fn(() => undefined);
+    compactTesting.prepareCompactionSessionAgent({
+      session: {
+        agent: { streamFn: vi.fn() },
+        messages: [{ role: "user", content: "hello" }],
+      } as never,
+      providerStreamFn: vi.fn(),
+      sessionId: "session-1",
+      signal: new AbortController().signal,
+      effectiveModel: { provider: "openai", id: "fake", api: "responses", input: [] } as never,
+      resolvedApiKey: undefined,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      config: undefined,
+      provider: "openai",
+      modelId: "gpt-5.6-sol",
+      thinkLevel: "ultra",
+      sessionAgentId: "main",
+      effectiveWorkspace: "/tmp/workspace",
+      agentDir: "/tmp/workspace",
+      runtimePlan: {
+        auth: {},
+        transport: { resolveExtraParams },
+      } as never,
+    });
+
+    expect(resolveExtraParams).toHaveBeenCalledWith(
+      expect.objectContaining({ thinkingLevel: "max" }),
+    );
+    expect(applyExtraParamsToAgentMock).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      "openai",
+      "gpt-5.6-sol",
+      undefined,
+      "max",
+      "main",
+      "/tmp/workspace",
+      expect.anything(),
+      "/tmp/workspace",
+      undefined,
+      expect.anything(),
+    );
+  });
+
   it("preserves full sender identity when building compaction tools", async () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
@@ -440,6 +508,24 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       senderE164: "+15551234567",
     });
   });
+
+  it.each([
+    { input: ["text"], modelHasVision: false },
+    { input: ["text", "image"], modelHasVision: true },
+  ])(
+    "propagates modelHasVision=$modelHasVision when rebuilding compaction tools",
+    async ({ input, modelHasVision }) => {
+      mockResolvedModel({ input });
+
+      await compactEmbeddedAgentSessionDirect({
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+      });
+
+      expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), { modelHasVision });
+    },
+  );
 
   it("uses cwd for compaction runtime tools while preserving workspace bootstrap root", async () => {
     await compactEmbeddedAgentSessionDirect({
@@ -612,6 +698,59 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     if (fallbackCall[3] === undefined) {
       throw new Error("Expected fallback resolve-model options");
     }
+  });
+
+  it("revalidates immutable Ultra for each compaction fallback candidate", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "openclaw" });
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+    sessionCompactImpl
+      .mockRejectedValueOnce(
+        Object.assign(new Error("primary compaction rate limited"), {
+          status: 429,
+          code: "rate_limit_exceeded",
+        }),
+      )
+      .mockResolvedValueOnce({
+        summary: "fallback summary",
+        firstKeptEntryId: "entry-fallback",
+        tokensBefore: 120,
+        details: { ok: true },
+      });
+    const params = {
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      thinkLevel: "ultra" as const,
+      trigger: "overflow" as const,
+      modelFallbacksOverride: ["demo/basic"],
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        },
+      },
+    };
+
+    const result = await compactEmbeddedAgentSessionDirect(params);
+
+    expect(result.ok).toBe(true);
+    expect(
+      createAgentSessionMock.mock.calls.map(
+        (call) => (call[0] as { thinkingLevel?: string }).thinkingLevel,
+      ),
+    ).toEqual(["ultra", "high"]);
+    expect(params.thinkLevel).toBe("ultra");
   });
 
   it("preserves Codex OAuth across same-provider OpenAI compaction fallbacks", async () => {

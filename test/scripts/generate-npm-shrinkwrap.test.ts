@@ -364,6 +364,7 @@ describe("generate-npm-shrinkwrap", () => {
           },
           "node_modules/zod": {
             version: "4.4.3",
+            deprecated: "Use another package",
             peer: true,
           },
           "node_modules/keeps-peer-false": {

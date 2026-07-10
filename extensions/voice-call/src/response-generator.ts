@@ -12,9 +12,10 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveVoiceCallSessionKey, type VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
+import { resolveCallAgentId } from "./resolve-call-agent-id.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
 
-export type VoiceResponseParams = {
+type VoiceResponseParams = {
   /** Voice call config */
   voiceConfig: VoiceCallConfig;
   /** Core OpenClaw config */
@@ -27,6 +28,8 @@ export type VoiceResponseParams = {
   sessionKey?: string;
   /** Caller's phone number */
   from: string;
+  /** Agent frozen on the call record. */
+  agentId?: string;
   /** Conversation transcript */
   transcript: Array<{ speaker: "user" | "bot"; text: string }>;
   /** Latest user message */
@@ -35,7 +38,7 @@ export type VoiceResponseParams = {
   onEarlyText?: (text: string) => Promise<boolean>;
 };
 
-export type VoiceResponseResult = {
+type VoiceResponseResult = {
   text: string | null;
   /** Whether the complete response was handed to the transport before compaction. */
   deliveredEarly: boolean;
@@ -249,15 +252,15 @@ export async function generateVoiceResponse(
     };
   }
   const cfg = coreConfig;
+  const agentId = resolveCallAgentId({ agentId: params.agentId }, voiceConfig);
 
   const resolvedSessionKey = resolveVoiceCallSessionKey({
-    config: voiceConfig,
+    config: { ...voiceConfig, agentId },
     callId,
     phone: from,
     explicitSessionKey: sessionKey,
     coreSession: coreConfig.session,
   });
-  const agentId = voiceConfig.agentId ?? "main";
   const toolsAllow = resolveVoiceAgentToolsAllow(cfg, agentId);
 
   // Resolve paths

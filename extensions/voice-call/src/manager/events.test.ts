@@ -664,6 +664,7 @@ describe("processEvent (functional)", () => {
         inboundGreeting: "Hello from global.",
         numbers: {
           "+15550002222": {
+            agentId: "cards",
             inboundGreeting: "Silver Fox Cards, how can I help?",
           },
         },
@@ -685,6 +686,7 @@ describe("processEvent (functional)", () => {
     const call = requireFirstActiveCall(ctx);
     expect(call.metadata?.initialMessage).toBe("Silver Fox Cards, how can I help?");
     expect(call.metadata?.numberRouteKey).toBe("+15550002222");
+    expect(call.agentId).toBe("cards");
   });
 
   it("deduplicates by dedupeKey even when event IDs differ", () => {
