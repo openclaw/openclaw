@@ -77,6 +77,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   }
 
   pluginLoaderCacheState.beginLoad(context.cacheKey);
+  const previousProcessGlobalState = context.shouldActivate
+    ? snapshotPluginProcessGlobalState()
+    : null;
+  let canRestorePreviousProcessGlobalState = previousProcessGlobalState !== null;
   try {
     // Snapshot loads must not wipe global state registered by the active plugin set.
     if (context.shouldActivate) {
@@ -192,6 +196,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       );
     }
     if (context.shouldActivate) {
+      // Activation installs the new registry before initializing its hook runner.
+      // From this boundary onward, restoring old globals would pair them with the new registry.
+      canRestorePreviousProcessGlobalState = false;
       activatePluginRegistry(
         registry,
         context.cacheKey,
@@ -200,6 +207,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       );
     }
     return registry;
+  } catch (error) {
+    if (canRestorePreviousProcessGlobalState && previousProcessGlobalState) {
+      restorePluginProcessGlobalState(previousProcessGlobalState);
+    }
+    throw error;
   } finally {
     pluginLoaderCacheState.finishLoad(context.cacheKey);
   }

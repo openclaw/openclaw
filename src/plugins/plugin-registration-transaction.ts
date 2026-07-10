@@ -7,7 +7,10 @@ import {
   getDetachedTaskLifecycleRuntimeRegistration,
   restoreDetachedTaskLifecycleRuntimeRegistration,
 } from "../tasks/detached-task-runtime-state.js";
-import { listRegisteredPluginCommands, restorePluginCommands } from "./command-registry-state.js";
+import {
+  listRegisteredPluginCommands,
+  restorePluginCommands,
+} from "./command-registry-state.js";
 import {
   listRegisteredCompactionProviders,
   restoreRegisteredCompactionProviders,
