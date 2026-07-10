@@ -25,6 +25,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Swift protocol initializers:** default every schema-optional generated initializer parameter to `nil` so additive protocol fields no longer break SDK construction call sites.
 - **OpenCode Go MiMo catalog:** stop exposing the deprecated `mimo-v2-omni` and `mimo-v2-pro` aliases that reject agent requests, and keep release validation on the active MiMo V2.5 routes. (#103311, #103329) Thanks @krissding.
 - **OpenAI-compatible streamed tool calls:** execute complete native tool calls from streams that end with SSE `data: [DONE]` but omit `finish_reason`, while keeping transport EOF and visible-text cases fail-closed. (#98124, #97994) Thanks @SunnyShu0925.
 - **xAI provider aliases:** preserve Grok 4.3 and Grok 4.5 thinking profiles, fast-model routing, and encrypted reasoning replay when models use the shipped `x-ai` provider alias instead of clamping valid thinking requests to `minimal`. (#103315)
