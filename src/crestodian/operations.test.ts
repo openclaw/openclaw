@@ -635,7 +635,7 @@ describe("parseCrestodianOperation", () => {
     const { runtime, lines } = createCrestodianTestRuntime();
     const applySetup = vi.fn(async () => ({
       configPath: path.join(tempDir, "openclaw.json"),
-      lines: ["Workspace: /tmp/work", "Default model: openai/gpt-5.5"],
+      lines: ["Workspace: /tmp/work", "Default model: openai/gpt-5.6"],
     }));
 
     const plan = await executeCrestodianOperation(
@@ -646,7 +646,7 @@ describe("parseCrestodianOperation", () => {
     expectRecordFields(plan as unknown as Record<string, unknown>, {
       applied: false,
     });
-    expect(lines.join("\n")).toContain("Model choice: openai/gpt-5.5 (OPENAI_API_KEY).");
+    expect(lines.join("\n")).toContain("Model choice: openai/gpt-5.6 (OPENAI_API_KEY).");
     expect(applySetup).not.toHaveBeenCalled();
 
     const result = await executeCrestodianOperation(
@@ -663,7 +663,7 @@ describe("parseCrestodianOperation", () => {
     expect(lines.join("\n")).toContain("[crestodian] done: crestodian.setup");
     expect(applySetup).toHaveBeenCalledWith({
       workspace: "/tmp/work",
-      model: "openai/gpt-5.5",
+      model: "openai/gpt-5.6",
       surface: "cli",
       runtime,
     });
@@ -673,12 +673,12 @@ describe("parseCrestodianOperation", () => {
       audit,
       {
         operation: "crestodian.setup",
-        summary: "Bootstrapped setup with openai/gpt-5.5",
+        summary: "Bootstrapped setup with openai/gpt-5.6",
       },
       {
         rescue: true,
         workspace: "/tmp/work",
-        model: "openai/gpt-5.5",
+        model: "openai/gpt-5.6",
         modelSource: "OPENAI_API_KEY",
       },
     );
