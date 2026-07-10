@@ -14,8 +14,13 @@ import {
   type DiagnosticSecurityEvent,
 } from "../infra/diagnostic-events.js";
 import type {
+  ExecAllowlistEntry,
   ExecApprovalDecision,
+  ExecApprovalsDefaults,
+  ExecApprovalsFile,
+  ExecAsk,
   ExecCommandSegment,
+  ExecSecurity,
   ExecSegmentSatisfiedBy,
 } from "../infra/exec-approvals.js";
 import {
@@ -23,6 +28,7 @@ import {
   type ExecAuthorizationPlan,
 } from "../infra/exec-authorization-plan.js";
 import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
+import { resolvePolicyTargetCandidatePath } from "../infra/exec-command-resolution.js";
 import type { ExecApprovalFollowupTarget } from "./bash-tools.exec-host-shared.js";
 import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";
 
@@ -43,6 +49,16 @@ type MockAllowlistResult = {
   segmentAllowlistEntries: unknown[];
   segmentSatisfiedBy?: ExecSegmentSatisfiedBy[];
   authorizationPlan?: ExecAuthorizationPlan;
+};
+type MockExecHostApprovalContext = {
+  approvals: {
+    allowlist: ExecAllowlistEntry[];
+    file: ExecApprovalsFile;
+    agent?: Required<ExecApprovalsDefaults>;
+  };
+  hostSecurity: ExecSecurity;
+  hostAsk: ExecAsk;
+  askFallback?: ExecSecurity;
 };
 
 const INLINE_EVAL_HIT = {
@@ -129,12 +145,14 @@ const resolveApprovalDecisionOrUndefinedMock = vi.hoisted(() =>
   vi.fn(async (): Promise<string | null | undefined> => undefined),
 );
 const resolveExecHostApprovalContextMock = vi.hoisted(() =>
-  vi.fn(() => ({
-    approvals: { allowlist: [], file: { version: 1, agents: {} } },
-    hostSecurity: "allowlist",
-    hostAsk: "off",
-    askFallback: "deny",
-  })),
+  vi.fn(
+    (): MockExecHostApprovalContext => ({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "off",
+      askFallback: "deny",
+    }),
+  ),
 );
 const runExecProcessMock = vi.hoisted(() => vi.fn());
 const sendExecApprovalFollowupResultMock = vi.hoisted(() =>
@@ -2141,14 +2159,15 @@ EOF`,
   it("revalidates a timed-out allowlist fallback before foreground execution", async () => {
     const { command, authorizationPlan, segments, enforcedCommand } =
       await planAllowlistedNodeVersion();
+    const policyPath = resolvePolicyTargetCandidatePath(segments[0]?.resolution ?? null) ?? "node";
     requiresExecApprovalMock.mockReturnValue(true);
     buildEnforcedShellCommandMock.mockReturnValue({ ok: true, command: enforcedCommand });
     evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
-      allowlistMatches: [{ pattern: segments[0]?.resolution?.resolvedPath ?? "node" }],
+      allowlistMatches: [{ pattern: policyPath }],
       analysisOk: true,
       allowlistSatisfied: true,
       segments,
-      segmentAllowlistEntries: [{ pattern: segments[0]?.resolution?.resolvedPath ?? "node" }],
+      segmentAllowlistEntries: [{ pattern: policyPath }],
       segmentSatisfiedBy: ["allowlist"],
       authorizationPlan,
     });
@@ -2187,13 +2206,14 @@ EOF`,
   it("binds a full-policy timeout to the current allowlist fallback plan", async () => {
     const { command, authorizationPlan, segments, enforcedCommand } =
       await planAllowlistedNodeVersion();
+    const policyPath = resolvePolicyTargetCandidatePath(segments[0]?.resolution ?? null) ?? "node";
     requiresExecApprovalMock.mockReturnValue(true);
     evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
-      allowlistMatches: [{ pattern: segments[0]?.resolution?.resolvedPath ?? "node" }],
+      allowlistMatches: [{ pattern: policyPath }],
       analysisOk: true,
       allowlistSatisfied: true,
       segments,
-      segmentAllowlistEntries: [{ pattern: segments[0]?.resolution?.resolvedPath ?? "node" }],
+      segmentAllowlistEntries: [{ pattern: policyPath }],
       segmentSatisfiedBy: ["allowlist"],
       authorizationPlan,
     });
@@ -2236,15 +2256,16 @@ EOF`,
   it("commits a headless allowlist timeout fallback before returning its bound plan", async () => {
     const { command, authorizationPlan, segments, enforcedCommand } =
       await planAllowlistedNodeVersion();
+    const policyPath = resolvePolicyTargetCandidatePath(segments[0]?.resolution ?? null) ?? "node";
     requiresExecApprovalMock.mockReturnValue(true);
     shouldResolveExecApprovalUnavailableInlineMock.mockReturnValue(true);
     buildEnforcedShellCommandMock.mockReturnValue({ ok: true, command: enforcedCommand });
     evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
-      allowlistMatches: [{ pattern: segments[0]?.resolution?.resolvedPath ?? "node" }],
+      allowlistMatches: [{ pattern: policyPath }],
       analysisOk: true,
       allowlistSatisfied: true,
       segments,
-      segmentAllowlistEntries: [{ pattern: segments[0]?.resolution?.resolvedPath ?? "node" }],
+      segmentAllowlistEntries: [{ pattern: policyPath }],
       segmentSatisfiedBy: ["allowlist"],
       authorizationPlan,
     });

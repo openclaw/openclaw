@@ -362,7 +362,9 @@ function mockPendingApprovalRegistration() {
       return { status: "accepted", id: "approval-id" };
     }
     if (method === "exec.approval.waitDecision") {
-      return { decision: null };
+      // Keep the detached follow-up pending. Resolving with no decision applies
+      // askFallback and can race the next fixture's policy-file rewrite.
+      return await new Promise<never>(() => {});
     }
     return { ok: true };
   });
@@ -1624,8 +1626,9 @@ describe("exec approvals", () => {
     const systemRun = requireRecord(systemRunInvoke, "system.run invoke");
     expect(systemRun.command).toBe("system.run");
     const params = requireRecord(systemRun.params, "system.run params");
-    expect(params.approved).toBe(true);
-    expect(params.approvalDecision).toBe("allow-once");
+    expect(params.approved).toBeUndefined();
+    expect(params.approvalDecision).toBeNull();
+    expect(params.approvalSource).toBe("ask-fallback");
     expect(params.systemRunPlan).toStrictEqual(preparedPlan);
     expect(params.runId).toBeTypeOf("string");
   });

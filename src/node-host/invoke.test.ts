@@ -479,13 +479,15 @@ describe("node host invoke", () => {
           { current: async () => [] },
         );
 
-        const event = request.mock.calls.find(
-          ([method, params]) =>
-            method === "node.event" &&
-            (params as { event?: string } | undefined)?.event === "exec.finished",
-        )?.[1] as { payloadJSON?: string | null } | undefined;
-        expect(JSON.parse(event?.payloadJSON ?? "{}")).toMatchObject({
-          suppressNotifyOnExit: true,
+        await vi.waitFor(() => {
+          const event = request.mock.calls.find(
+            ([method, params]) =>
+              method === "node.event" &&
+              (params as { event?: string } | undefined)?.event === "exec.finished",
+          )?.[1] as { payloadJSON?: string | null } | undefined;
+          expect(JSON.parse(event?.payloadJSON ?? "{}")).toMatchObject({
+            suppressNotifyOnExit: true,
+          });
         });
       });
     } finally {

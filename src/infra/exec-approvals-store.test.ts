@@ -2011,7 +2011,7 @@ describe("exec approvals store helpers", () => {
       version: 1,
       defaults: { security: "allowlist", ask: "off" },
       agents: {
-        main: { allowlist: [{ pattern: "/usr/bin/rg", source: "manual" }] },
+        main: { allowlist: [{ pattern: "/usr/bin/rg" }] },
       },
     });
 
@@ -2029,7 +2029,7 @@ describe("exec approvals store helpers", () => {
         },
       }),
     ).rejects.toThrow("Exec approval changed before execution");
-    expect(allowlistEntries(dir, "main")).toEqual([{ pattern: "/usr/bin/rg", source: "manual" }]);
+    expect(allowlistEntries(dir, "main")).toEqual([{ pattern: "/usr/bin/rg" }]);
   });
 
   it("persists allow-always patterns with shared helper", () => {
