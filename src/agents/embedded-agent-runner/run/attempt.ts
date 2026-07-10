@@ -258,6 +258,10 @@ import {
   type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
 import {
+  invalidateComputerFrameIfMissing,
+  type ComputerContextEpoch,
+} from "../../tools/computer-tool.js";
+import {
   replaceWithEffectiveCronCreatorToolAllowlist,
   type CronCreatorToolAllowlistEntry,
 } from "../../tools/cron-tool.js";
@@ -1271,6 +1275,9 @@ export async function runEmbeddedAttempt(
       toolConstructionPlan.constructTools ||
       toolSearchControlsEnabledForRun ||
       codeModeControlsEnabledForRun;
+    // Compaction summaries omit screenshot image blocks. Frames are bound to this
+    // generation so retained tool-result text cannot authorize stale coordinates.
+    const computerContextEpoch: ComputerContextEpoch = { value: 0 };
     let toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
     toolSearchCatalogRef =
       toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun
@@ -1425,6 +1432,7 @@ export async function runEmbeddedAttempt(
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
             modelHasVision: params.model.input?.includes("image") ?? false,
+            computerContextEpoch,
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -2843,7 +2851,21 @@ export async function runEmbeddedAttempt(
       const removeHistoryImagePruneContextTransform = installHistoryImagePruneContextTransform(
         activeSession.agent,
       );
+      const previousComputerFrameTransform = activeSession.agent.transformContext;
+      activeSession.agent.transformContext = async (messages, signal) => {
+        const transformed = previousComputerFrameTransform
+          ? await previousComputerFrameTransform.call(activeSession.agent, messages, signal)
+          : messages;
+        const modelContext = Array.isArray(transformed) ? transformed : messages;
+        invalidateComputerFrameIfMissing({
+          contextEpoch: computerContextEpoch,
+          messages: modelContext,
+          imagesBlocked: settingsManager.getBlockImages(),
+        });
+        return modelContext;
+      };
       removeToolResultContextGuard = () => {
+        activeSession.agent.transformContext = previousComputerFrameTransform;
         removeHistoryImagePruneContextTransform();
         removeLoopContextGuard?.();
       };
@@ -5641,6 +5663,7 @@ export async function runEmbeddedAttempt(
             toolName: string;
             meta?: string;
             replaySafe?: boolean;
+            isError?: true;
             asyncStarted?: boolean;
             asyncTaskRunId?: string;
             asyncTaskId?: string;
@@ -5651,6 +5674,7 @@ export async function runEmbeddedAttempt(
             toolName: string;
             meta?: string;
             replaySafe: boolean;
+            isError?: true;
             asyncStarted?: true;
             asyncTaskRunId?: string;
             asyncTaskId?: string;
@@ -5659,6 +5683,9 @@ export async function runEmbeddedAttempt(
             meta: entry.meta,
             replaySafe: entry.replaySafe === true,
           };
+          if (entry.isError === true) {
+            normalized.isError = true;
+          }
           if (entry.asyncStarted === true) {
             normalized.asyncStarted = true;
           }
