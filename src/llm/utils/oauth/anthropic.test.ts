@@ -186,29 +186,40 @@ describe("Anthropic OAuth callback host", () => {
 });
 
 describe("Anthropic OAuth error body redaction", () => {
-  it("redacts raw response body from non-2xx error messages", async () => {
-    // postJson is internal; test that a 400 response does not leak raw body
-    // through the exported refreshAnthropicToken which calls postJson.
-    const sensitiveBody = JSON.stringify({
+  it("redacts secrets and bounds error response bodies (#103269)", async () => {
+    const leakedSecret = "anth-oauth-secret-k8x9m2p4";
+    const errorBody = JSON.stringify({
       error: "invalid_grant",
-      error_description: "The refresh token is invalid or expired.",
+      error_description: `Refresh failed for token=${leakedSecret}`,
     });
+    const oversizedSuffix = "x".repeat(32 * 1024);
+    const body = `${errorBody}${oversizedSuffix}`;
+
     vi.stubGlobal(
       "fetch",
       vi.fn(
         async () =>
-          new Response(sensitiveBody, {
+          new Response(body, {
             status: 400,
             headers: { "Content-Type": "application/json" },
           }),
       ),
     );
 
-    await expect(refreshAnthropicToken("bad-token")).rejects.toThrow(
-      /Anthropic token refresh request failed.*400/,
-    );
-    await expect(refreshAnthropicToken("bad-token")).rejects.not.toThrow(/error_description/);
-    // Structured error code is preserved in the redacted message
-    await expect(refreshAnthropicToken("bad-token")).rejects.toThrow(/code=invalid_grant/);
+    let error: unknown;
+    try {
+      await refreshAnthropicToken("bad-token");
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain("Anthropic token refresh request failed");
+    expect(message).toContain("400");
+    expect(message).not.toContain(leakedSecret);
+    // Message must be bounded — should not contain the full 32 KiB suffix.
+    expect(message.length).toBeLessThan(body.length);
+    expect(message.length).toBeLessThan(18 * 1024);
   });
 });
