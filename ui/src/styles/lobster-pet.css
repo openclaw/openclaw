@@ -59,7 +59,6 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
   height: calc(14px * var(--lob-scale, 2) * var(--lob-h, 1));
   transform: translateX(-50%);
   pointer-events: auto;
-  cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
   -webkit-tap-highlight-color: transparent;
