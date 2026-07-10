@@ -57,18 +57,28 @@ describe("release-note verification", () => {
       "",
       "* fix(ui): clear applied chat picker search on empty input",
     ].join("\n");
+    const conventionalSquashRevert = [
+      "chore: revert dependency guard backfill machinery (#87867)",
+      "",
+      '* Revert "ci: isolate dependency guard backfill label (#87882)"',
+      "",
+      `This reverts commit ${"d".repeat(40)}.`,
+      "",
+      "* ci: preserve clawsweeper bot label filter",
+    ].join("\n");
     const explainedTopLevelRevert = [
       "revert: restore a provider default",
       "",
       "The replacement broke non-native endpoints.",
       "",
-      `This reverts commit ${"d".repeat(40)}.`,
+      `This reverts commit ${"e".repeat(40)}.`,
     ].join("\n");
 
     expect(standardRevertedHash(nestedRevert)).toBeUndefined();
     expect(standardRevertedHash(topLevelRevert)).toBe("b".repeat(40));
     expect(standardRevertedHash(squashRevert)).toBe("c".repeat(40));
-    expect(standardRevertedHash(explainedTopLevelRevert)).toBe("d".repeat(40));
+    expect(standardRevertedHash(conventionalSquashRevert)).toBe("d".repeat(40));
+    expect(standardRevertedHash(explainedTopLevelRevert)).toBe("e".repeat(40));
   });
 
   it("counts only top-level Highlights bullets and enforces the 5-8 policy input", () => {
