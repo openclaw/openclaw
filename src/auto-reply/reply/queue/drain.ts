@@ -1106,6 +1106,7 @@ export function scheduleFollowupDrain(
             isCrossChannel,
             items: queue.items,
             run: effectiveRunFollowup,
+            inFlight: queue.inFlight,
           });
           if (collectDrainResult === "empty") {
             break;
@@ -1194,6 +1195,11 @@ export function scheduleFollowupDrain(
               });
             };
             try {
+              // Mark active group items as in-flight so the drop policy does not
+              // select them as overflow victims while the group drain is awaited.
+              for (const item of activeGroupItems) {
+                queue.inFlight.add(item);
+              }
               await drainGroup();
             } catch (err) {
               if (admitted) {
@@ -1201,6 +1207,9 @@ export function scheduleFollowupDrain(
               }
               throw err;
             } finally {
+              for (const item of activeGroupItems) {
+                queue.inFlight.delete(item);
+              }
               cancellation.dispose();
             }
             if (!admitted) {
@@ -1218,7 +1227,7 @@ export function scheduleFollowupDrain(
           continue;
         }
 
-        if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup))) {
+        if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup, queue.inFlight))) {
           break;
         }
       }

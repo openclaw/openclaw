@@ -255,6 +255,13 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes live command retry helper changes through its regression test", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/ci-live-command-retry.sh"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/ci-live-command-retry.test.ts"],
+    });
+  });
+
   it("routes release wrapper changes through their owner tests", () => {
     expect(resolveChangedTestTargetPlan(["scripts/android-release.sh"])).toEqual({
       mode: "targets",
@@ -497,7 +504,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       [
         "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs",
-        ["test/scripts/docker-build-helper.test.ts"],
+        [
+          "test/scripts/codex-install-assertions.test.ts",
+          "test/scripts/docker-build-helper.test.ts",
+        ],
       ],
       [
         "scripts/e2e/lib/codex-install-utils.mjs",
@@ -1181,15 +1191,19 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
-  it("keeps docs i18n Go module edits on Go module tests", () => {
-    for (const modulePath of [
-      "scripts/docs-i18n/main.go",
-      "scripts/docs-i18n/main_test.go",
-      "scripts/docs-i18n/go.mod",
-    ]) {
+  it("keeps docs i18n Go edits on their module and workflow guards", () => {
+    const cases = [
+      ["scripts/docs-i18n/main.go", ["test/scripts/docs-i18n.test.ts"]],
+      ["scripts/docs-i18n/main_test.go", ["test/scripts/docs-i18n.test.ts"]],
+      [
+        "scripts/docs-i18n/go.mod",
+        ["test/scripts/docs-i18n.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
+      ],
+    ] as const;
+    for (const [modulePath, targets] of cases) {
       expect(resolveChangedTestTargetPlan([modulePath]), modulePath).toEqual({
         mode: "targets",
-        targets: ["test/scripts/docs-i18n.test.ts"],
+        targets,
       });
     }
   });

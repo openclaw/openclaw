@@ -4810,6 +4810,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.sessionEntry = {
       modelProvider: "test-provider",
       model: "vision-model",
+      providerOverride: "test-provider",
+      modelOverride: "vision-model",
     };
     mockState.modelCatalog = [
       {
@@ -5190,6 +5192,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.sessionEntry = {
       modelProvider: "modelscope",
       model: "Qwen/Qwen3.5-35B-A3B",
+      providerOverride: "modelscope",
+      modelOverride: "Qwen/Qwen3.5-35B-A3B",
     };
     mockState.modelCatalog = [
       {
@@ -6115,6 +6119,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.sessionEntry = {
       modelProvider: "test-provider",
       model: "vision-model",
+      providerOverride: "test-provider",
+      modelOverride: "vision-model",
     };
     mockState.modelCatalog = [
       {
