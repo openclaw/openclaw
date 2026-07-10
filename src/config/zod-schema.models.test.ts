@@ -6,6 +6,7 @@ describe("ModelsConfigSchema", () => {
   it.each([
     "claude-cli",
     "azure-openai-responses",
+    "clawrouter",
     "gmi",
     "gmi-cloud",
     "gmicloud",
@@ -18,6 +19,7 @@ describe("ModelsConfigSchema", () => {
     "qwen-cli",
     "qwen-oauth",
     "qwen-portal",
+    "qwen-token-plan",
     "z.ai",
     "z-ai",
   ])("accepts bundled provider overlay for %s without baseUrl or models", (providerId) => {
@@ -30,6 +32,25 @@ describe("ModelsConfigSchema", () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it("requires the legacy bailian-token-plan owner to remain an exact custom provider", () => {
+    expect(
+      ModelsConfigSchema.safeParse({
+        providers: { "bailian-token-plan": { timeoutSeconds: 600 } },
+      }).success,
+    ).toBe(false);
+    expect(
+      ModelsConfigSchema.safeParse({
+        providers: {
+          "bailian-token-plan": {
+            api: "anthropic-messages",
+            baseUrl: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic",
+            models: [{ id: "qwen3.7-plus", name: "qwen3.7-plus" }],
+          },
+        },
+      }).success,
+    ).toBe(true);
   });
 
   it("accepts google-vertex as a model API from MODEL_APIS", () => {

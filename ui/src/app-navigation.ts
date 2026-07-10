@@ -70,7 +70,7 @@ type SettingsNavigationGroup = {
 
 // Grouping feeds the full-page settings sidebar (settings-sidebar.ts).
 export const SETTINGS_NAVIGATION_GROUPS = [
-  { labelKey: null, routes: ["config", "appearance"] },
+  { labelKey: null, routes: ["profile", "config", "appearance"] },
   { labelKey: "nav.settingsGroupConnections", routes: ["channels", "communications"] },
   { labelKey: "nav.settingsGroupAgents", routes: ["ai-agents", "automation", "mcp"] },
   {
@@ -92,13 +92,14 @@ const NAVIGATION_ICONS: NavigationItem = {
   instances: "radio",
   sessions: "fileText",
   usage: "barChart",
-  cron: "loader",
-  tasks: "loader",
+  cron: "calendarClock",
+  tasks: "listChecks",
   skills: "zap",
   "skill-workshop": "wrench",
   nodes: "monitor",
   chat: "messageSquare",
   config: "settings",
+  profile: "lobster",
   communications: "send",
   appearance: "spark",
   automation: "terminal",
@@ -187,6 +188,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   nodes: { titleKey: "tabs.nodes", subtitleKey: "subtitles.nodes" },
   chat: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
   config: { titleKey: "nav.settings", subtitleKey: "subtitles.config" },
+  profile: { titleKey: "tabs.profile", subtitleKey: "subtitles.profile" },
   communications: {
     titleKey: "tabs.communications",
     subtitleKey: "subtitles.communications",

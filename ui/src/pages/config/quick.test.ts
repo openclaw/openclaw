@@ -43,6 +43,8 @@ function expectStatByLabel(container: Element, text: string): HTMLElement {
 
 function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettingsProps {
   return {
+    lobsterPetVisits: true,
+    setLobsterPetVisits: () => {},
     currentModel: "gpt-5.5",
     thinkingLevel: "off",
     fastMode: false,
@@ -500,6 +502,46 @@ describe("renderQuickSettings", () => {
         (label) => label.textContent?.trim() === "Choose image",
       ),
     ).toBe(true);
+  });
+
+  it("keeps a bounded avatar source free of lone surrogates", () => {
+    const container = document.createElement("div");
+    const source = `${"a".repeat(33)}😀${"m".repeat(20)}😀${"b".repeat(23)}`;
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantAvatar: "/avatar/main",
+          assistantAvatarUrl: null,
+          assistantAvatarSource: source,
+          assistantAvatarStatus: "none",
+        }),
+      ),
+      container,
+    );
+
+    expect(expectAssistantAvatarSource(container).source).toBe(
+      `${"a".repeat(33)}...${"b".repeat(23)}`,
+    );
+  });
+
+  it("keeps a malformed data-image header free of lone surrogates", () => {
+    const container = document.createElement("div");
+    const source = `data:image/${"a".repeat(20)}😀tail`;
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantAvatar: "/avatar/main",
+          assistantAvatarUrl: null,
+          assistantAvatarSource: source,
+          assistantAvatarStatus: "none",
+        }),
+      ),
+      container,
+    );
+
+    expect(expectAssistantAvatarSource(container).source).toBe(`data:image/${"a".repeat(20)},...`);
   });
 
   it("reads assistant image imports into an override", () => {

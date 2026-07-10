@@ -14,40 +14,28 @@ import {
 } from "../shared/operator-scope-compat.js";
 import { revokeDeviceBootstrapTokensForDevice } from "./device-bootstrap.js";
 import {
-  createAsyncLock,
-  pruneExpiredPending,
-  readJsonIfExists,
-  reconcilePendingPairingRequests,
-  coercePairingStateRecord,
-  resolvePairingPaths,
-  writeJson,
-} from "./pairing-files.js";
+  loadDevicePairingStoreState,
+  persistDevicePairingStoreState as persistState,
+} from "./device-pairing-store.js";
+import type {
+  DeviceAuthToken,
+  DevicePairingPendingRecord,
+  DevicePairingPendingRequest,
+  PairedDevice,
+  PairedDeviceApprovalKind,
+} from "./device-pairing.types.js";
+import { createAsyncLock, pruneExpiredPending } from "./pairing-files.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
-/** Pending device pairing request awaiting owner approval. */
-export type DevicePairingPendingRequest = {
-  requestId: string;
-  deviceId: string;
-  publicKey: string;
-  displayName?: string;
-  platform?: string;
-  deviceFamily?: string;
-  clientId?: string;
-  clientMode?: string;
-  role?: string;
-  roles?: string[];
-  scopes?: string[];
-  remoteIp?: string;
-  silent?: boolean;
-  isRepair?: boolean;
-  ts: number;
-};
-
-// Internal pending record. refreshedAtMs is a TTL keepalive stamped on refresh so an
-// actively retrying device keeps one pending request (and requestId) alive instead of
-// minting a new request every TTL window and flooding operator approval UIs. It never
-// crosses the protocol boundary, and ordering/--latest still use ts.
-type DevicePairingPendingRecord = DevicePairingPendingRequest & { refreshedAtMs?: number };
+export type {
+  DeviceAuthToken,
+  DevicePairingPendingRecord,
+  DevicePairingPendingRequest,
+  PairedDevice,
+  PairedDeviceApprovalKind,
+  PairedDeviceNodeSurface,
+  PairedDevicePendingNodeSurface,
+} from "./device-pairing.types.js";
 
 /** Pending request summary returned when a replacement supersedes older requests. */
 export type DevicePairingSupersededRequest = Pick<
@@ -61,21 +49,6 @@ export type RequestDevicePairingResult = {
   request: DevicePairingPendingRequest;
   created: boolean;
   superseded?: DevicePairingSupersededRequest[];
-};
-
-/** Bearer token issued to one paired device role. */
-export type DeviceAuthToken = {
-  token: string;
-  role: string;
-  scopes: string[];
-  issuer?: {
-    kind: "shared-gateway-auth";
-    generation: string;
-  };
-  createdAtMs: number;
-  rotatedAtMs?: number;
-  revokedAtMs?: number;
-  lastUsedAtMs?: number;
 };
 
 /** Redacted token metadata safe for list/status responses. */
@@ -106,27 +79,6 @@ export type RevokeDeviceTokenDenyReason = "unknown-device-or-role" | "caller-mis
 export type RevokeDeviceTokenResult =
   | { ok: true; entry: DeviceAuthToken }
   | { ok: false; reason: RevokeDeviceTokenDenyReason; scope?: string };
-
-/** Persisted approved device record, including durable approval and active role tokens. */
-export type PairedDevice = {
-  deviceId: string;
-  publicKey: string;
-  displayName?: string;
-  platform?: string;
-  deviceFamily?: string;
-  clientId?: string;
-  clientMode?: string;
-  role?: string;
-  roles?: string[];
-  scopes?: string[];
-  approvedScopes?: string[];
-  remoteIp?: string;
-  tokens?: Record<string, DeviceAuthToken>;
-  createdAtMs: number;
-  approvedAtMs: number;
-  lastSeenAtMs?: number;
-  lastSeenReason?: string;
-};
 
 /** Metadata fields a device may refresh without changing approval or token state. */
 export type PairedDeviceMetadataPatch = Pick<
@@ -206,39 +158,40 @@ export function formatDevicePairingForbiddenMessage(result: DevicePairingForbidd
 }
 
 async function loadState(baseDir?: string): Promise<DevicePairingStateFile> {
-  const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "devices");
-  const [pending, paired] = await Promise.all([
-    readJsonIfExists<unknown>(pendingPath),
-    readJsonIfExists<unknown>(pairedPath),
-  ]);
-  const state: DevicePairingStateFile = {
-    pendingById: coercePairingStateRecord<DevicePairingPendingRecord>(pending),
-    pairedByDeviceId: coercePairingStateRecord<PairedDevice>(paired),
-  };
-  pruneExpiredPending(state.pendingById, Date.now(), PENDING_TTL_MS);
+  const state: DevicePairingStateFile = loadDevicePairingStoreState(baseDir);
+  const now = Date.now();
+  pruneExpiredPending(state.pendingById, now, PENDING_TTL_MS);
+  // Pending node-surface requests share the pairing TTL; requests refresh
+  // their ts on reconnect so an actively retrying node keeps one alive.
+  for (const device of Object.values(state.pairedByDeviceId)) {
+    if (device.pendingNodeSurface && now - device.pendingNodeSurface.ts > PENDING_TTL_MS) {
+      delete device.pendingNodeSurface;
+    }
+  }
   return state;
 }
 
-type DevicePairingPersistTarget = "pending" | "paired" | "both";
-
-async function persistState(
-  state: DevicePairingStateFile,
+/**
+ * Internal seam for the node-surface module (node-pairing.ts): run one
+ * operation against the paired-device records under the shared pairing lock.
+ * Return `persist: true` to write the paired store after the mutation. Not a
+ * public API — node surface state lives inside device records, and both
+ * modules must serialize through the same lock to avoid lost updates.
+ */
+export async function withPairedDeviceRecords<T>(
   baseDir: string | undefined,
-  target: DevicePairingPersistTarget,
-) {
-  const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "devices");
-  if (target === "pending") {
-    await writeJson(pendingPath, state.pendingById);
-    return;
-  }
-  if (target === "paired") {
-    await writeJson(pairedPath, state.pairedByDeviceId);
-    return;
-  }
-  await Promise.all([
-    writeJson(pendingPath, state.pendingById),
-    writeJson(pairedPath, state.pairedByDeviceId),
-  ]);
+  operate: (
+    pairedByDeviceId: Record<string, PairedDevice>,
+  ) => { value: T; persist: boolean } | Promise<{ value: T; persist: boolean }>,
+): Promise<T> {
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    const outcome = await operate(state.pairedByDeviceId);
+    if (outcome.persist) {
+      persistState(state, baseDir, "paired");
+    }
+    return outcome.value;
+  });
 }
 
 function normalizeDeviceId(deviceId: string) {
@@ -537,6 +490,26 @@ function buildDeviceAuthToken(params: {
   };
 }
 
+// Interactive approvals must stay sticky: a later silent repair/re-approve of the
+// same device id cannot downgrade an owner/bootstrap record into prune-eligible
+// state. Pre-provenance records (approvedVia undefined) may have been approved by
+// an owner, so a non-interactive re-approve must keep them protected (undefined).
+function mergeApprovalKind(
+  existing: PairedDevice | undefined,
+  incoming: PairedDeviceApprovalKind,
+): PairedDeviceApprovalKind | undefined {
+  if (incoming === "owner" || !existing) {
+    return incoming;
+  }
+  if (existing.approvedVia === undefined) {
+    return incoming === "bootstrap" ? "bootstrap" : undefined;
+  }
+  if (existing.approvedVia === "owner" || existing.approvedVia === "bootstrap") {
+    return existing.approvedVia;
+  }
+  return incoming;
+}
+
 function buildApprovedPairedDevice(params: {
   pending: DevicePairingPendingRequest;
   existing: PairedDevice | undefined;
@@ -544,6 +517,7 @@ function buildApprovedPairedDevice(params: {
   approvedScopes: string[] | undefined;
   tokens: Record<string, DeviceAuthToken>;
   now: number;
+  approvedVia: PairedDeviceApprovalKind;
   accessMetadata?: DevicePairingAccessMetadata;
 }): PairedDevice {
   return {
@@ -560,6 +534,13 @@ function buildApprovedPairedDevice(params: {
     approvedScopes: params.approvedScopes,
     remoteIp: params.accessMetadata?.remoteIp ?? params.pending.remoteIp,
     tokens: params.tokens,
+    approvedVia: mergeApprovalKind(params.existing, params.approvedVia),
+    // Node capability approvals ride on the device record; device repair or
+    // role re-approval must not silently revoke an approved node surface.
+    ...(params.existing?.nodeSurface ? { nodeSurface: params.existing.nodeSurface } : {}),
+    ...(params.existing?.pendingNodeSurface
+      ? { pendingNodeSurface: params.existing.pendingNodeSurface }
+      : {}),
     createdAtMs: params.existing?.createdAtMs ?? params.now,
     approvedAtMs: params.now,
     lastSeenAtMs: params.accessMetadata?.lastSeenAtMs ?? params.existing?.lastSeenAtMs,
@@ -670,6 +651,49 @@ export async function getPendingDevicePairing(
   return pending ? toPublicPendingDevicePairingRequest(pending) : null;
 }
 
+/** Result shape for creating or refreshing a pending pairing request. */
+type PendingPairingRequestResult<TPending> = {
+  status: "pending";
+  request: TPending;
+  created: boolean;
+};
+
+/** Refresh one compatible pending request or replace a superseded request set atomically. */
+function reconcilePendingPairingRequests<
+  TPending extends { requestId: string },
+  TIncoming,
+>(params: {
+  pendingById: Record<string, TPending>;
+  existing: readonly TPending[];
+  incoming: TIncoming;
+  canRefreshSingle: (existing: TPending, incoming: TIncoming) => boolean;
+  refreshSingle: (existing: TPending, incoming: TIncoming) => TPending;
+  buildReplacement: (params: { existing: readonly TPending[]; incoming: TIncoming }) => TPending;
+  persist: () => void;
+}): PendingPairingRequestResult<TPending> {
+  if (
+    params.existing.length === 1 &&
+    params.canRefreshSingle(params.existing[0], params.incoming)
+  ) {
+    const refreshed = params.refreshSingle(params.existing[0], params.incoming);
+    params.pendingById[refreshed.requestId] = refreshed;
+    params.persist();
+    return { status: "pending", request: refreshed, created: false };
+  }
+
+  for (const existing of params.existing) {
+    delete params.pendingById[existing.requestId];
+  }
+
+  const request = params.buildReplacement({
+    existing: params.existing,
+    incoming: params.incoming,
+  });
+  params.pendingById[request.requestId] = request;
+  params.persist();
+  return { status: "pending", request, created: true };
+}
+
 /** Create or refresh a pending device pairing request for owner approval. */
 export async function requestDevicePairing(
   req: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
@@ -685,7 +709,7 @@ export async function requestDevicePairing(
     const pendingForDevice = Object.values(state.pendingById)
       .filter((pending) => pending.deviceId === deviceId)
       .toSorted((left, right) => right.ts - left.ts);
-    const result = await reconcilePendingPairingRequests({
+    const result = reconcilePendingPairingRequests({
       pendingById: state.pendingById,
       existing: pendingForDevice,
       incoming: req,
@@ -722,7 +746,7 @@ export async function requestDevicePairing(
           },
         });
       },
-      persist: async () => await persistState(state, baseDir, "pending"),
+      persist: () => persistState(state, baseDir, "pending"),
     });
     // Surface superseded requestIds so callers can broadcast their resolution;
     // clients otherwise keep prompting for requests that can no longer be approved.
@@ -746,13 +770,21 @@ export async function approveDevicePairing(
 ): Promise<ApproveDevicePairingResult>;
 export async function approveDevicePairing(
   requestId: string,
-  options: { callerScopes?: readonly string[]; accessMetadata?: DevicePairingAccessMetadata },
+  options: {
+    callerScopes?: readonly string[];
+    accessMetadata?: DevicePairingAccessMetadata;
+    approvedVia?: Extract<PairedDeviceApprovalKind, "owner" | "silent" | "trusted-cidr">;
+  },
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult>;
 export async function approveDevicePairing(
   requestId: string,
   optionsOrBaseDir?:
-    | { callerScopes?: readonly string[]; accessMetadata?: DevicePairingAccessMetadata }
+    | {
+        callerScopes?: readonly string[];
+        accessMetadata?: DevicePairingAccessMetadata;
+        approvedVia?: Extract<PairedDeviceApprovalKind, "owner" | "silent" | "trusted-cidr">;
+      }
     | string,
   maybeBaseDir?: string,
 ): Promise<ApproveDevicePairingResult> {
@@ -842,11 +874,12 @@ export async function approveDevicePairing(
       approvedScopes,
       tokens,
       now,
+      approvedVia: options?.approvedVia ?? "owner",
       accessMetadata: options?.accessMetadata,
     });
     delete state.pendingById[requestId];
     state.pairedByDeviceId[device.deviceId] = device;
-    await persistState(state, baseDir, "both");
+    persistState(state, baseDir, "both");
     return { status: "approved", requestId, device };
   });
 }
@@ -941,11 +974,12 @@ export async function approveBootstrapDevicePairing(
       approvedScopes: nextApprovedScopes,
       tokens,
       now,
+      approvedVia: "bootstrap",
       accessMetadata: options?.accessMetadata,
     });
     delete state.pendingById[requestId];
     state.pairedByDeviceId[device.deviceId] = device;
-    await persistState(state, baseDir, "both");
+    persistState(state, baseDir, "both");
     return { status: "approved", requestId, device };
   });
 }
@@ -962,7 +996,7 @@ export async function rejectDevicePairing(
       return null;
     }
     delete state.pendingById[requestId];
-    await persistState(state, baseDir, "pending");
+    persistState(state, baseDir, "pending");
     await revokeDeviceBootstrapTokensForDevice({
       deviceId: pending.deviceId,
       publicKey: pending.publicKey,
@@ -989,8 +1023,97 @@ export async function removePairedDevice(
         delete state.pendingById[requestId];
       }
     }
-    await persistState(state, baseDir, "both");
+    persistState(state, baseDir, "both");
     return { deviceId: normalized };
+  });
+}
+
+// Silent pairings from the same client software on the same host mint a fresh
+// deviceId whenever their state dir (and thus keypair) is ephemeral. The cluster
+// key groups those records so a replacement pairing can retire its predecessors.
+function silentPairingClusterKey(
+  device: Pick<PairedDevice, "clientId" | "clientMode" | "displayName">,
+): string | null {
+  const clientId = device.clientId?.trim().toLowerCase() ?? "";
+  const clientMode = device.clientMode?.trim().toLowerCase() ?? "";
+  const displayName = device.displayName?.trim().toLowerCase() ?? "";
+  if (!clientId && !clientMode && !displayName) {
+    return null;
+  }
+  return `${clientId}\0${clientMode}\0${displayName}`;
+}
+
+/** Superseded silent pairing removed in favor of a newer record for the same client. */
+export type PrunedSupersededPairedDevice = {
+  deviceId: string;
+  roles: string[];
+};
+
+// A concurrently approved sibling may still be mid-handshake and not yet visible
+// to the connected-clients check; freshly approved records are never prune
+// candidates so parallel silent pairings cannot delete each other's rows.
+const PRUNE_RECENT_APPROVAL_GRACE_MS = 60_000;
+
+/**
+ * Remove silent-approved sibling records superseded by a newly approved silent
+ * pairing of the same client cluster. Only records whose latest approval was
+ * same-host local ("silent") are eligible, as anchor and as victim: local
+ * clients re-pair silently by construction and share the gateway host, so the
+ * metadata cluster key cannot match a different machine. Currently connected
+ * devices are skipped so concurrent sessions with distinct state dirs keep
+ * their tokens while live.
+ */
+export async function pruneSupersededSilentPairedDevices(params: {
+  deviceId: string;
+  baseDir?: string;
+  isDeviceConnected?: (deviceId: string) => boolean;
+  nowMs?: number;
+}): Promise<PrunedSupersededPairedDevice[]> {
+  return await withLock(async () => {
+    const state = await loadState(params.baseDir);
+    const anchor = state.pairedByDeviceId[normalizeDeviceId(params.deviceId)];
+    if (!anchor || anchor.approvedVia !== "silent") {
+      return [];
+    }
+    const anchorKey = silentPairingClusterKey(anchor);
+    if (!anchorKey) {
+      return [];
+    }
+    const nowMs = params.nowMs ?? Date.now();
+    const removed: PrunedSupersededPairedDevice[] = [];
+    for (const device of Object.values(state.pairedByDeviceId)) {
+      if (device.deviceId === anchor.deviceId) {
+        continue;
+      }
+      // Legacy records without approvedVia stay untouched (fail-safe).
+      if (device.approvedVia !== "silent") {
+        continue;
+      }
+      if (silentPairingClusterKey(device) !== anchorKey) {
+        continue;
+      }
+      if (nowMs - device.approvedAtMs < PRUNE_RECENT_APPROVAL_GRACE_MS) {
+        continue;
+      }
+      if (params.isDeviceConnected?.(device.deviceId)) {
+        continue;
+      }
+      delete state.pairedByDeviceId[device.deviceId];
+      for (const [requestId, pending] of Object.entries(state.pendingById)) {
+        if (pending.deviceId === device.deviceId) {
+          delete state.pendingById[requestId];
+        }
+      }
+      removed.push({
+        deviceId: device.deviceId,
+        roles: listApprovedPairedDeviceRoles(device),
+      });
+    }
+    if (removed.length === 0) {
+      return [];
+    }
+    persistState(state, params.baseDir, "both");
+    return removed;
   });
 }
 
@@ -1019,7 +1142,7 @@ export async function removePairedDeviceRole(params: {
         }
       }
       delete state.pairedByDeviceId[normalizedDeviceId];
-      await persistState(state, params.baseDir, "both");
+      persistState(state, params.baseDir, "both");
       return { deviceId: normalizedDeviceId, role, removedDevice: true };
     }
 
@@ -1066,8 +1189,14 @@ export async function removePairedDeviceRole(params: {
         : {}),
       tokens: Object.keys(tokens).length > 0 ? tokens : undefined,
     };
+    if (role === "node") {
+      // The node capability surface is bound to the node role; revoking the
+      // role must revoke approved command exposure with it.
+      delete next.nodeSurface;
+      delete next.pendingNodeSurface;
+    }
     state.pairedByDeviceId[normalizedDeviceId] = next;
-    await persistState(state, params.baseDir, "both");
+    persistState(state, params.baseDir, "both");
     return { deviceId: normalizedDeviceId, role, removedDevice: false };
   });
 }
@@ -1108,7 +1237,7 @@ export async function updatePairedDeviceMetadata(
       next.lastSeenReason = patch.lastSeenReason;
     }
     state.pairedByDeviceId[normalizedDeviceId] = next;
-    await persistState(state, baseDir, "paired");
+    persistState(state, baseDir, "paired");
     return true;
   });
 }
@@ -1196,7 +1325,7 @@ export async function verifyDeviceToken(params: {
     device.lastSeenAtMs = now;
     device.lastSeenReason = "device-token-auth";
     state.pairedByDeviceId[device.deviceId] = device;
-    await persistState(state, params.baseDir, "paired");
+    persistState(state, params.baseDir, "paired");
     return entry.issuer ? { ok: true, issuer: entry.issuer } : { ok: true };
   });
 }
@@ -1258,7 +1387,7 @@ export async function ensureDeviceToken(params: {
     tokens[role] = next;
     device.tokens = tokens;
     state.pairedByDeviceId[device.deviceId] = device;
-    await persistState(state, params.baseDir, "paired");
+    persistState(state, params.baseDir, "paired");
     return next;
   });
 }
@@ -1348,7 +1477,7 @@ export async function rotateDeviceToken(params: {
     tokens[role] = next;
     device.tokens = tokens;
     state.pairedByDeviceId[device.deviceId] = device;
-    await persistState(state, params.baseDir, "paired");
+    persistState(state, params.baseDir, "paired");
     return { ok: true, entry: next };
   });
 }
@@ -1388,7 +1517,7 @@ export async function revokeDeviceToken(params: {
     tokens[role] = entry;
     device.tokens = tokens;
     state.pairedByDeviceId[device.deviceId] = device;
-    await persistState(state, params.baseDir, "paired");
+    persistState(state, params.baseDir, "paired");
     return { ok: true, entry };
   });
 }

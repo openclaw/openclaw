@@ -5,6 +5,7 @@
  * Each card answers a "what do I want to do?" question with status + actions.
  */
 
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
@@ -19,6 +20,12 @@ import {
   resolveLocalUserAvatarUrl,
 } from "../../app/user-identity.ts";
 import { icons } from "../../components/icons.ts";
+import { getLobsterdex } from "../../components/lobster-dex.ts";
+import {
+  LOBSTER_PET_PALETTES,
+  canonicalLobsterLook,
+  renderLobsterSvg,
+} from "../../components/lobster-pet.ts";
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { resolveAssistantTextAvatar, resolveChatAvatarRenderUrl } from "../../lib/avatar.ts";
@@ -89,6 +96,8 @@ export type QuickSettingsProps = {
   onOpenCustomThemeImport?: () => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
   setTextScale: (value: number) => void;
+  lobsterPetVisits: boolean;
+  setLobsterPetVisits: (enabled: boolean) => void;
   userAvatar?: string | null;
   onUserAvatarChange?: (next: string | null) => void;
 
@@ -199,10 +208,13 @@ function formatAssistantAvatarSource(value: string | null | undefined): string |
     return null;
   }
   if (/^data:image\//i.test(source)) {
-    const header = source.slice(0, source.indexOf(",") > 0 ? source.indexOf(",") : 32);
+    const commaIndex = source.indexOf(",");
+    const header = sliceUtf16Safe(source, 0, commaIndex > 0 ? commaIndex : 32);
     return `${header},...`;
   }
-  return source.length > 72 ? `${source.slice(0, 34)}...${source.slice(-24)}` : source;
+  return source.length > 72
+    ? `${sliceUtf16Safe(source, 0, 34)}...${sliceUtf16Safe(source, -24)}`
+    : source;
 }
 
 function formatAssistantAvatarIssue(
@@ -767,6 +779,50 @@ function renderAppearanceCard(props: QuickSettingsProps) {
                 </button>
               `,
             )}
+          </div>
+        </div>
+        <div class="qs-row">
+          <span class="qs-row__label">${t("quickSettings.appearance.lobsterVisits")}</span>
+          <label class="qs-toggle">
+            <input
+              type="checkbox"
+              .checked=${props.lobsterPetVisits}
+              @change=${(event: Event) =>
+                props.setLobsterPetVisits((event.currentTarget as HTMLInputElement).checked)}
+            />
+            <span class="qs-toggle__track"></span>
+            <span class="qs-toggle__hint muted">
+              ${props.lobsterPetVisits
+                ? t("quickSettings.appearance.lobsterVisitsOn")
+                : t("quickSettings.appearance.lobsterVisitsOff")}
+            </span>
+          </label>
+        </div>
+        <div class="qs-row qs-row--stacked">
+          <span class="qs-row__label">
+            ${t("quickSettings.appearance.lobsterdex")}
+            <span class="muted">
+              ${t("quickSettings.appearance.lobsterdexSeen", {
+                seen: String(LOBSTER_PET_PALETTES.filter((p) => getLobsterdex().has(p.id)).length),
+                total: String(LOBSTER_PET_PALETTES.length),
+              })}
+            </span>
+          </span>
+          <div class="lobsterdex">
+            ${LOBSTER_PET_PALETTES.map((palette) => {
+              const seen = getLobsterdex().has(palette.id);
+              return html`
+                <span
+                  class="lobsterdex__mini lobster-pet--palette-${palette.id} ${seen
+                    ? ""
+                    : "lobsterdex__mini--unseen"}"
+                  style="--lob-shell:${palette.shell};--lob-claw:${palette.claw}"
+                  title=${seen ? palette.id : "?"}
+                >
+                  ${renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true })}
+                </span>
+              `;
+            })}
           </div>
         </div>
       </div>

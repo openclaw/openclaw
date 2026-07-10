@@ -51,6 +51,27 @@ internal fun shouldStartRuntimeOnForeground(
   onboardingCompleted: Boolean,
 ): Boolean = foreground && onboardingCompleted
 
+internal class CronEditorDraftMemory {
+  private var retained: Pair<String, CronEditorDraftState>? = null
+
+  fun get(jobId: String): CronEditorDraftState? = retained?.takeIf { it.first == jobId }?.second
+
+  fun set(
+    jobId: String,
+    state: CronEditorDraftState?,
+  ) {
+    if (state == null) {
+      clear(jobId)
+    } else {
+      retained = jobId to state
+    }
+  }
+
+  fun clear(jobId: String) {
+    if (retained?.first == jobId) retained = null
+  }
+}
+
 /**
  * UI-facing bridge that exposes NodeRuntime and preference state as Compose-friendly StateFlows.
  */
@@ -64,11 +85,16 @@ class MainViewModel(
   private val gatewayConfigOperationSeq = AtomicLong()
   private val gatewayConfigOperationMutex = Mutex()
 
+  // One bounded heap-only slot follows the ViewModel across Activity recreation.
+  // Detail disposal clears it; process death drops it with the ViewModel.
+  internal val cronEditorDraftMemory = CronEditorDraftMemory()
+
   @Volatile private var permissionRequester: PermissionRequester? = null
 
   @Volatile private var foreground = false
 
   @Volatile private var runtimeStartupQueued = false
+  private val initialIntentGate = MainActivityInitialIntentGate()
 
   private val _requestedHomeDestination = MutableStateFlow<HomeDestination?>(null)
   val requestedHomeDestination: StateFlow<HomeDestination?> = _requestedHomeDestination
@@ -92,9 +118,20 @@ class MainViewModel(
     return runtime
   }
 
+  internal fun claimInitialIntentRouting(): Boolean = initialIntentGate.claim()
+
   internal fun enterScreenshotFixtureMode(scene: AndroidScreenshotScene) {
     check(BuildConfig.DEBUG) { "Android screenshot fixtures require a debug build" }
-    check(runtimeRef.value == null) { "Screenshot fixture mode must be selected before runtime startup" }
+    runtimeRef.value?.let { runtime ->
+      // The ViewModel survives locale recreation; keep the fixture runtime instead of
+      // treating the restored Activity as a second fixture startup.
+      check(runtime.mode == NodeRuntimeMode.ScreenshotFixture) {
+        "Screenshot fixture mode must be selected before live runtime startup"
+      }
+      runtime.setForeground(foreground)
+      _requestedHomeDestination.value = scene.homeDestination
+      return
+    }
     prefs.setOnboardingCompleted(true)
     prefs.setAppearanceThemeMode(AppearanceThemeMode.Dark)
     prefs.setDisplayName("Pixel")
@@ -184,6 +221,9 @@ class MainViewModel(
   val cronRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.cronRefreshing }
   val cronErrorText: StateFlow<String?> = runtimeState(initial = null) { it.cronErrorText }
   val cronJobDetailState: StateFlow<GatewayCronJobDetailState> = runtimeState(initial = GatewayCronJobDetailState.Idle) { it.cronJobDetailState }
+  val cronRunHistoryState: StateFlow<GatewayCronRunHistoryState> = runtimeState(initial = GatewayCronRunHistoryState.Idle) { it.cronRunHistoryState }
+  val cronActionState: StateFlow<GatewayCronActionState> = runtimeState(initial = GatewayCronActionState.Idle) { it.cronActionState }
+  val pendingCronRunJobIds: StateFlow<Set<String>> = runtimeState(initial = emptySet()) { it.pendingCronRunJobIds }
   val usageSummary: StateFlow<GatewayUsageSummary> = runtimeState(initial = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())) { it.usageSummary }
   val usageRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.usageRefreshing }
   val usageErrorText: StateFlow<String?> = runtimeState(initial = null) { it.usageErrorText }
@@ -250,6 +290,10 @@ class MainViewModel(
   val talkModeEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeEnabled }
   val talkModeListening: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeListening }
   val talkModeSpeaking: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeSpeaking }
+  val talkInputLevel: StateFlow<Float> = runtimeState(initial = 0f) { it.talkInputLevel }
+  val talkOutputLevel: StateFlow<Float?> = runtimeState(initial = null) { it.talkOutputLevel }
+  val talkSpeechActive: StateFlow<Boolean> = runtimeState(initial = false) { it.talkSpeechActive }
+  val talkAwaitingAgent: StateFlow<Boolean> = runtimeState(initial = false) { it.talkAwaitingAgent }
   val talkModeStatusText: StateFlow<String> = runtimeState(initial = "Off") { it.talkModeStatusText }
   val talkModeConversation: StateFlow<List<VoiceConversationEntry>> =
     runtimeState(initial = emptyList()) { it.talkModeConversation }
@@ -302,6 +346,9 @@ class MainViewModel(
    * Starts runtime on foreground entry only after onboarding has completed.
    */
   fun setForeground(value: Boolean) {
+    // The ViewModel survives configuration recreation. Ignore the replacement
+    // Activity's duplicate true edge so it cannot restart gateway work.
+    if (foreground == value) return
     foreground = value
     if (
       shouldStartRuntimeOnForeground(
@@ -717,8 +764,38 @@ class MainViewModel(
     ensureRuntime().loadCronJobDetail(id)
   }
 
+  fun refreshCronRunHistory(id: String) {
+    ensureRuntime().refreshCronRunHistory(id)
+  }
+
   fun clearCronJobDetail() {
     ensureRuntime().clearCronJobDetail()
+  }
+
+  fun dismissCronActionNotice(id: String) {
+    ensureRuntime().dismissCronActionNotice(id)
+  }
+
+  fun runCronJob(id: String) {
+    ensureRuntime().runCronJob(id)
+  }
+
+  fun setCronJobEnabled(
+    id: String,
+    enabled: Boolean,
+  ) {
+    ensureRuntime().setCronJobEnabled(id = id, enabled = enabled)
+  }
+
+  fun updateCronJob(
+    original: GatewayCronJobDetail,
+    edit: GatewayCronJobEdit,
+  ) {
+    ensureRuntime().updateCronJob(original = original, edit = edit)
+  }
+
+  fun deleteCronJob(id: String) {
+    ensureRuntime().deleteCronJob(id)
   }
 
   fun refreshUsage() {
