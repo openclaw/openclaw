@@ -431,7 +431,7 @@ function normalizeDeadProviderCandidate(
   return candidate.split("/")[0]?.trim().toLowerCase() || undefined;
 }
 
-function isNonAnthropicTimeoutProvider(provider: string | undefined): boolean {
+function isNonAnthropicTimeoutProvider(provider: string | undefined): provider is string {
   if (!provider) {
     return false;
   }
@@ -510,11 +510,12 @@ function maybeAutoReassignDeadProviderTimeouts(params: {
     if (candidate.payload.kind !== "agentTurn") {
       continue;
     }
-    const candidateProvider = normalizeDeadProviderCandidate(candidate.payload.model, undefined);
+    const candidateModel = candidate.payload.model;
+    const candidateProvider = normalizeDeadProviderCandidate(candidateModel, undefined);
     if (candidateProvider !== provider) {
       continue;
     }
-    if (pool.includes(candidate.payload.model)) {
+    if (typeof candidateModel === "string" && pool.includes(candidateModel)) {
       // Already sitting on one of the diversity-pool models; leave it alone.
       continue;
     }

@@ -1344,7 +1344,6 @@ export async function restartLaunchAgent({
       if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
         throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
       }
-      launchAgentBootedOut = true;
     }
     await bootstrapLaunchAgentOrThrow({
       domain,

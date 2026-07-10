@@ -154,7 +154,7 @@ describe("createCronStallDetector", () => {
 
 describe("updateCronStallPause + isCronDispatchPaused (integration)", () => {
   it("does not pause cron dispatch when delay stays below threshold", () => {
-    let nowMs = 0;
+    const nowMs = 0;
     const state = makeState(() => nowMs);
     const { monitor } = createStubMonitor({ p99Ms: 100, maxMs: 100 });
     state.stallDetector = createCronStallDetector({ createDelayMonitor: () => monitor });
@@ -166,7 +166,7 @@ describe("updateCronStallPause + isCronDispatchPaused (integration)", () => {
   });
 
   it("pauses cron dispatch for exactly 300_000ms when the stall threshold is met", () => {
-    let nowMs = 1_000_000;
+    const nowMs = 1_000_000;
     const state = makeState(() => nowMs);
     const { monitor, setDelay } = createStubMonitor();
     state.stallDetector = createCronStallDetector({ createDelayMonitor: () => monitor });

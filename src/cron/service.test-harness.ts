@@ -235,6 +235,7 @@ export function createMockCronStateForJobs(params: {
     running: false,
     stopped: false,
     restartRecoveryPending: false,
+    pausedUntil: null,
     pendingCatchupDeferralJobIds: new Set<string>(),
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutNotified: false,
