@@ -9,13 +9,15 @@ import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
-  type AllowAlwaysPersistenceDecision,
-  commitExecAuthorizationLocked,
-  commandRequiresSecurityAuditSuppressionApproval,
   evaluateExecDenylist,
   type ExecDenylistEntry,
   formatExecDenylistWarning,
   resolveEffectiveExecDenylist,
+} from "../infra/exec-approvals-denylist.js";
+import {
+  type AllowAlwaysPersistenceDecision,
+  commitExecAuthorizationLocked,
+  commandRequiresSecurityAuditSuppressionApproval,
   createExecApprovalPolicySnapshot,
   type ExecAsk,
   type ExecApprovalUsageAuthorization,

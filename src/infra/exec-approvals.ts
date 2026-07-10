@@ -42,7 +42,6 @@ import {
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
-export * from "./exec-approvals-denylist.js";
 export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
