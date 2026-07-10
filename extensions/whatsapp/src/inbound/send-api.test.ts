@@ -792,6 +792,31 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
     expect(sendMessage).toHaveBeenCalledWith("14445550001@s.whatsapp.net", { text: "hello" });
   });
 
+  it("keeps sending when trusted-contact token JID lookup is between reconnects", async () => {
+    const keys = {
+      get: vi.fn(async () => ({})),
+      set: vi.fn(async () => undefined),
+      isInTransaction: () => false,
+      transaction: vi.fn(async (exec: () => Promise<unknown>) => await exec()),
+    } as unknown as SignalKeyStoreWithTransaction;
+    const api = createWebSendApi({
+      sock: {
+        sendMessage,
+        sendPresenceUpdate,
+        getAuthState: () => ({ keys }),
+        getLIDForPN: vi.fn(async () => {
+          throw new Error("no active socket - reconnection in progress");
+        }),
+      },
+      defaultAccountId: "main",
+    });
+
+    await api.sendMessage("+14445550002", "hello");
+
+    expect(sendMessage).toHaveBeenCalledWith("14445550002@s.whatsapp.net", { text: "hello" });
+    expect(keys.get).not.toHaveBeenCalled();
+  });
+
   it("falls back to PN s.whatsapp.net when no LID mapping exists", async () => {
     const api = createWebSendApi({
       sock: { sendMessage, sendPresenceUpdate },

@@ -332,7 +332,13 @@ async function ensureOutboundTcToken(params: { sock: WebSendSocket; jid: string 
   if (!authState?.keys || !getLIDForPN) {
     return;
   }
-  const tcTokenJid = await resolveTcTokenJid(params.jid, async (jid) => await getLIDForPN(jid));
+  let tcTokenJid: string;
+  try {
+    tcTokenJid = await resolveTcTokenJid(params.jid, async (jid) => await getLIDForPN(jid));
+  } catch (err) {
+    logVerbose(`WhatsApp trusted-contact token JID lookup failed: ${String(err)}`);
+    return;
+  }
   const entry = await readOutboundTcTokenEntry({ keys: authState.keys, tcTokenJid });
   if (hasUsableTcToken(entry)) {
     outboundTokenLogger.debug(
