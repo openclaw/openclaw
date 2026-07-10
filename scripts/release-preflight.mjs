@@ -27,7 +27,7 @@ const releaseTasks = [
     name: "npm shrinkwraps",
     scopes: ["dependencies", "version"],
     fix: ["deps:shrinkwrap:changed:generate"],
-    fixAfter: ["plugin-versions"],
+    fixAfter: ["plugin-versions", "plugin-sdk-exports"],
     check: ["deps:shrinkwrap:check"],
   },
   {
@@ -35,7 +35,7 @@ const releaseTasks = [
     name: "plugin inventory",
     scopes: ["plugins", "version"],
     fix: ["plugins:inventory:gen"],
-    fixAfter: ["plugin-versions"],
+    fixAfter: ["plugin-versions", "plugin-sdk-exports"],
     check: ["plugins:inventory:check"],
   },
   {
@@ -65,6 +65,7 @@ const releaseTasks = [
     name: "plugin SDK exports",
     scopes: ["plugin-sdk"],
     fix: ["plugin-sdk:sync-exports"],
+    fixAfter: ["plugin-versions"],
     check: ["plugin-sdk:check-exports"],
   },
   {
