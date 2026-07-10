@@ -25,11 +25,6 @@ import { copyToClipboard } from "../lib/clipboard.ts";
 import { truncateText } from "../lib/format.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 
-const LINE_SEP_RE = new RegExp(
-  "[" + String.fromCodePoint(0x2028) + String.fromCodePoint(0x2029) + "]",
-  "g",
-);
-
 const allowedTags = [
   "a",
   "b",
@@ -689,8 +684,14 @@ function normalizeMarkdownImageLabel(text?: string | null): string {
   return trimmed ? trimmed : "image";
 }
 
+function normalizeMarkdownLineBreaks(value: string): string {
+  return value.replace(/\r\n?|[\u2028\u2029]/g, "\n");
+}
+
 function normalizeMarkdownInput(markdownLocal: string): string {
-  const input = stripUnsupportedCitationControlMarkers(markdownLocal).trim();
+  const input = normalizeMarkdownLineBreaks(
+    stripUnsupportedCitationControlMarkers(markdownLocal),
+  ).trim();
   if (!input) {
     return "";
   }
@@ -699,9 +700,7 @@ function normalizeMarkdownInput(markdownLocal: string): string {
 
 function formatTruncatedMarkdownInput(input: string): string {
   const truncated = truncateText(input, MARKDOWN_CHAR_LIMIT);
-  return appendMarkdownTruncationNotice(truncated)
-    .replace(/\r\n?/g, "\n")
-    .replace(LINE_SEP_RE, "\n");
+  return appendMarkdownTruncationNotice(truncated);
 }
 
 function appendMarkdownTruncationNotice(truncated: {
@@ -716,7 +715,7 @@ function appendMarkdownTruncationNotice(truncated: {
 }
 
 export function isMarkdownBlockArtText(value: string): boolean {
-  const lines = value.replace(/\r\n?/g, "\n").replace(LINE_SEP_RE, "\n").split("\n");
+  const lines = normalizeMarkdownLineBreaks(value).split("\n");
   const artLines = lines.filter((line) => line.trim().length > 0);
   if (artLines.length < 2) {
     return false;
@@ -1351,9 +1350,9 @@ export function toSanitizedMarkdownHtml(
   options: MarkdownRenderOptions = {},
 ): string {
   const renderOptions = normalizeMarkdownRenderOptions(options);
-  const rawInput = stripUnsupportedCitationControlMarkers(markdownLocal)
-    .replace(/\r\n?/g, "\n")
-    .replace(LINE_SEP_RE, "\n");
+  const rawInput = normalizeMarkdownLineBreaks(
+    stripUnsupportedCitationControlMarkers(markdownLocal),
+  );
   const input = rawInput.trim();
   if (!input) {
     return "";
@@ -1406,9 +1405,7 @@ export function toSanitizedMarkdownHtml(
 }
 
 function toEscapedPlainTextHtml(value: string): string {
-  return `<div class="markdown-plain-text-fallback">${escapeHtml(
-    value.replace(/\r\n?/g, "\n").replace(LINE_SEP_RE, "\n"),
-  )}</div>`;
+  return `<div class="markdown-plain-text-fallback">${escapeHtml(normalizeMarkdownLineBreaks(value))}</div>`;
 }
 
 export function toStreamingPlainTextHtml(markdownLocal: string): string {
@@ -1423,9 +1420,9 @@ export function toStreamingMarkdownHtml(
   markdownLocal: string,
   options: MarkdownRenderOptions = {},
 ): string {
-  const rawInput = stripUnsupportedCitationControlMarkers(markdownLocal)
-    .replace(/\r\n?/g, "\n")
-    .replace(LINE_SEP_RE, "\n");
+  const rawInput = normalizeMarkdownLineBreaks(
+    stripUnsupportedCitationControlMarkers(markdownLocal),
+  );
   if (isMarkdownBlockArtText(rawInput)) {
     const truncated = truncateText(rawInput, MARKDOWN_CHAR_LIMIT);
     installHooks();
@@ -1440,10 +1437,11 @@ export function toStreamingMarkdownHtml(
     );
   }
 
-  const input = normalizeMarkdownInput(markdownLocal);
-  if (!input) {
+  const trimmedInput = rawInput.trim();
+  if (!trimmedInput) {
     return "";
   }
+  const input = formatTruncatedMarkdownInput(trimmedInput);
 
   const boundary = findStableStreamingMarkdownBoundary(input);
   if (boundary <= 0) {
