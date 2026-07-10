@@ -369,23 +369,27 @@ describe("chat page split layout host", () => {
     });
   });
 
-  it("resolves a direct header drag and drop to the header's owned pane", async () => {
+  it("accepts an owned header drop and ignores unrelated targets", async () => {
     const page = new ChatPage();
     page.data = { sessionKey: "main" };
     document.body.append(page);
-    setLayout(page, createSplitLayout("main"));
+    const layout = createSplitLayout("main");
+    setLayout(page, layout);
     const navigation = setNavigationContext(page);
     await page.updateComplete;
 
     const pane = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].find(
       (candidate) => candidate.paneId === "p1",
     );
-    const cell = pane?.closest<HTMLElement>(".chat-split-view__cell");
-    const header = cell?.querySelector<HTMLElement>(".chat-pane__header");
     const container = page.querySelector<HTMLElement>(".chat-split-view__drop-container");
     expect(pane).toBeDefined();
-    expect(header).not.toBeNull();
     expect(container).not.toBeNull();
+    // This host test stubs the stateful chat pane; mirror its exact light-DOM
+    // header ownership while the E2E test proves the real component output.
+    const header = document.createElement("div");
+    header.className = "chat-pane__header";
+    pane!.prepend(header);
+    expect(header.closest("openclaw-chat-pane")).toBe(pane);
     const paneRect = { left: 100, top: 50, width: 200, height: 100 } as DOMRect;
     const containerRect = { left: 100, top: 50, width: 400, height: 100 } as DOMRect;
     vi.spyOn(pane!, "getBoundingClientRect").mockReturnValue(paneRect);
@@ -401,7 +405,26 @@ describe("chat page split layout host", () => {
       types: [SESSION_DRAG_MIME],
     } as unknown as DataTransfer;
 
+    const unrelatedTarget = page.querySelector(".chat-split-view");
     expect(getDropIndicator(page)).toBeNull();
+    handleDragOver(page, {
+      target: unrelatedTarget,
+      clientX: 200,
+      clientY: 100,
+      preventDefault: vi.fn(),
+      dataTransfer,
+    } as unknown as DragEvent);
+    handleDrop(page, {
+      target: unrelatedTarget,
+      clientX: 200,
+      clientY: 100,
+      preventDefault: vi.fn(),
+      dataTransfer,
+    } as unknown as DragEvent);
+    expect(getDropIndicator(page)).toBeNull();
+    expect(getLayout(page)).toBe(layout);
+    expect(navigation.replace).not.toHaveBeenCalled();
+
     handleDragOver(page, {
       target: header,
       clientX: 200,
@@ -426,30 +449,5 @@ describe("chat page split layout host", () => {
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       search: searchForSession("agent:main:work"),
     });
-  });
-
-  it("keeps unrelated session drop targets as no-ops", async () => {
-    const page = new ChatPage();
-    page.data = { sessionKey: "main" };
-    document.body.append(page);
-    const layout = createSplitLayout("main");
-    setLayout(page, layout);
-    const navigation = setNavigationContext(page);
-    await page.updateComplete;
-
-    handleDrop(page, {
-      target: page.querySelector(".chat-split-view"),
-      clientX: 200,
-      clientY: 100,
-      preventDefault: vi.fn(),
-      dataTransfer: {
-        types: [SESSION_DRAG_MIME],
-        getData: (type: string) => (type === SESSION_DRAG_MIME ? "agent:main:work" : ""),
-      } as unknown as DataTransfer,
-    } as unknown as DragEvent);
-
-    expect(getLayout(page)).toBe(layout);
-    expect(navigation.navigate).not.toHaveBeenCalled();
-    expect(navigation.replace).not.toHaveBeenCalled();
   });
 });

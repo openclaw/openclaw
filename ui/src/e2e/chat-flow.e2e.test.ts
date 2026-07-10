@@ -273,8 +273,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       // Each pane owns an in-flow header (title + workspace/split/close
       // actions); no fixed toolbar layer mirrors the split geometry.
+      const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       const headers = page.locator(".chat-pane__header");
-      await expect.poll(() => page.locator(".chat-split-view__pane").count()).toBe(2);
+      await expect.poll(() => panes.count()).toBe(2);
       await expect.poll(() => headers.count()).toBe(2);
       await expect
         .poll(async () => {
@@ -298,10 +299,18 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await lastPane.click({ position: { x: 20, y: 80 } });
       await expect.poll(() => cells.last().getAttribute("class")).toContain("--active");
       await expect.poll(() => headers.last().getAttribute("class")).toContain("--active");
+      const targetHeader = headers.first();
+      await expect
+        .poll(() =>
+          targetHeader.evaluate((header) => {
+            const owner = header.closest("openclaw-chat-pane");
+            return (
+              owner === header.parentElement && owner?.classList.contains("chat-split-view__pane")
+            );
+          }),
+        )
+        .toBe(true);
 
-      // A pane header is part of that pane's visible cell even though it is an
-      // in-flow sibling of openclaw-chat-pane. Start with no retained body
-      // preview and dispatch the session drag directly onto the header.
       const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
       await dataTransfer.evaluate(
         (transfer, data) => {
@@ -309,7 +318,23 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         },
         { mime: SESSION_DRAG_MIME, sessionKey: "agent:main:session-b" },
       );
-      const targetHeader = headers.first();
+      const unrelatedTarget = page.locator(".chat-split-view");
+      const unrelatedDrag = {
+        bubbles: true,
+        clientX: 0,
+        clientY: 0,
+        dataTransfer,
+      };
+      await unrelatedTarget.dispatchEvent("dragenter", unrelatedDrag);
+      await unrelatedTarget.dispatchEvent("dragover", unrelatedDrag);
+      await expect.poll(() => page.locator(".chat-split-view__drop-indicator").count()).toBe(0);
+      await unrelatedTarget.dispatchEvent("drop", unrelatedDrag);
+      await expect.poll(() => panes.count()).toBe(2);
+      await expect
+        .poll(() => new URL(page.url()).searchParams.get("session"))
+        .toBe("agent:main:session-a");
+
+      // Start with no retained pane preview and target the visible header.
       const targetBox = await targetHeader.boundingBox();
       if (!targetBox) {
         throw new Error("expected the pane header to have a layout box");
@@ -326,7 +351,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await targetHeader.dispatchEvent("drop", directHeaderDrag);
       await dataTransfer.dispose();
 
-      await expect.poll(() => page.locator(".chat-split-view__pane").count()).toBe(3);
+      await expect.poll(() => panes.count()).toBe(3);
       await expect
         .poll(() => page.locator(".chat-pane__session-title").allTextContents())
         .toContain("Session B");

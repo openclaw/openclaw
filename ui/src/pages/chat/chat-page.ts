@@ -119,8 +119,9 @@ export class ChatPage extends OpenClawLightDomElement {
     if (event.dataTransfer) {
       event.dataTransfer.dropEffect = "copy";
     }
-    const pane = this.resolveDropPane(event.target);
-    if (!pane) {
+    const target = event.target instanceof Element ? event.target : null;
+    const pane = target?.closest<ChatPaneElement>("openclaw-chat-pane");
+    if (!pane || !this.contains(pane)) {
       // Dividers and pane gaps sit between drop targets; keep the last preview
       // instead of flickering it away while the pointer crosses them.
       return;
@@ -169,31 +170,19 @@ export class ChatPage extends OpenClawLightDomElement {
     }
     event.preventDefault();
     const sessionKey = readSessionDragData(event.dataTransfer);
-    const pane = this.resolveDropPane(event.target);
+    const target = event.target instanceof Element ? event.target : null;
+    const pane = target?.closest<ChatPaneElement>("openclaw-chat-pane");
     // Fall back to the retained preview when the drop lands on a divider or
     // gap, so the drop always matches what the indicator promised.
     const indicator =
-      (pane ? this.resolveDropIndicator(pane, event.clientX, event.clientY) : null) ??
-      this.dropIndicator;
+      (pane && this.contains(pane)
+        ? this.resolveDropIndicator(pane, event.clientX, event.clientY)
+        : null) ?? this.dropIndicator;
     this.clearDropIndicator();
     if (sessionKey && indicator) {
       this.applySessionDrop(sessionKey, indicator.paneId, indicator.zone);
     }
   };
-
-  /** A split cell owns one pane plus its in-flow header. Treat both surfaces
-   * as the same drop target without claiming dividers or other page chrome. */
-  private resolveDropPane(target: EventTarget | null): ChatPaneElement | null {
-    if (!(target instanceof Element)) {
-      return null;
-    }
-    const pane =
-      target.closest<ChatPaneElement>("openclaw-chat-pane") ??
-      target
-        .closest<HTMLElement>(".chat-split-view__cell")
-        ?.querySelector<ChatPaneElement>(":scope > openclaw-chat-pane");
-    return pane && this.contains(pane) ? pane : null;
-  }
 
   private readonly handleWindowDragEnd = () => {
     this.clearDropIndicator();
