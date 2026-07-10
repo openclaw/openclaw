@@ -1,8 +1,8 @@
 import AppKit
 import Foundation
-import OpenClawChatUI
 import Testing
 @testable import OpenClaw
+@testable import OpenClawChatUI
 
 @Suite(.serialized)
 @MainActor
@@ -58,5 +58,17 @@ struct WebChatSwiftUISmokeTests {
             transport: TestTransport())
         controller.presentAnchored(anchorProvider: anchor)
         controller.close()
+    }
+
+    @Test func `response and thinking headings keep their semantic typography`() {
+        #expect(ChatMarkdownRenderer.Typography.response.headingStyle == .hierarchy)
+        #expect(ChatMarkdownRenderer.Typography.thinking.headingStyle == .prose)
+    }
+
+    @Test func `assistant segments select one complete markdown typography profile`() {
+        let segments = AssistantTextParser.segments(
+            from: "<think># Internal plan</think><final># Final answer</final>")
+
+        #expect(segments.map(\.kind.markdownTypography) == [.thinking, .response])
     }
 }

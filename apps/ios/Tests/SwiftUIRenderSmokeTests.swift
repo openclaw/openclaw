@@ -138,7 +138,6 @@ struct SwiftUIRenderSmokeTests {
                     text: #"Inline math \(E = mc^2\) stays inside prose."#,
                     context: .assistant,
                     variant: .standard,
-                    font: OpenClawChatTypography.body,
                     textColor: OpenClawChatTheme.assistantText)
                 ChatMathBlockView(block: ChatMathBlock(
                     latex: #"\frac{-b \pm \sqrt{b^2 - 4ac}}{2a}"#,
@@ -183,7 +182,6 @@ struct SwiftUIRenderSmokeTests {
                 text: markdown,
                 context: .assistant,
                 variant: .standard,
-                font: OpenClawChatTypography.body,
                 textColor: OpenClawChatTheme.assistantText)
                 .environment(\.dynamicTypeSize, typeSize)
 
@@ -213,6 +211,54 @@ struct SwiftUIRenderSmokeTests {
             isClean: false)
 
         _ = Self.host(root, size: CGSize(width: 393, height: 400))
+    }
+
+    @Test @MainActor func `completed and streaming assistant trace headings build across type sizes`() {
+        let text = """
+        <think>
+        # Internal plan
+        </think>
+        <final>
+        # Final answer
+        </final>
+        """
+        let message = OpenClawChatMessage(
+            role: "assistant",
+            content: [OpenClawChatMessageContent(
+                type: "text",
+                text: text,
+                mimeType: nil,
+                fileName: nil,
+                content: nil)],
+            timestamp: 1)
+
+        for typeSize in [DynamicTypeSize.large, .accessibility2] {
+            let root = VStack {
+                ChatMessageBubble(
+                    message: message,
+                    style: .standard,
+                    markdownVariant: .standard,
+                    userAccent: nil,
+                    showsAssistantTrace: true,
+                    assistantName: "OpenClaw",
+                    assistantAvatarText: "OC",
+                    assistantAvatarTint: nil,
+                    showsAssistantAvatar: true,
+                    isClean: false)
+                ChatStreamingAssistantBubble(
+                    text: text,
+                    markdownVariant: .standard,
+                    showsAssistantTrace: true,
+                    assistantName: "OpenClaw",
+                    assistantAvatarText: "OC",
+                    assistantAvatarTint: nil,
+                    showsAssistantAvatar: true,
+                    isClean: false)
+            }
+            .environment(\.dynamicTypeSize, typeSize)
+
+            _ = Self.host(root, size: CGSize(width: 393, height: 700))
+        }
     }
 
     @Test @MainActor func `root tabs builds device orientation shell matrix`() {
