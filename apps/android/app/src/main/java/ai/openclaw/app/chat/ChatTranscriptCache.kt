@@ -195,7 +195,7 @@ internal abstract class ChatCacheDatabase : RoomDatabase() {
         .addMigrations(MIGRATION_2_3)
         // v1 has only disposable transcripts. Starting with v2, the outbox is user data, so every
         // supported bump needs an explicit migration; destructive fallback remains for v1 only.
-        .fallbackToDestructiveMigration(dropAllTables = true)
+        .fallbackToDestructiveMigrationFrom(true, 1)
         .build()
   }
 }
