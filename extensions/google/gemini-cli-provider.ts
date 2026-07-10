@@ -58,7 +58,7 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
   return {
     id: PROVIDER_ID,
     label: PROVIDER_LABEL,
-    docsPath: "/providers/google-gemini-cli",
+    docsPath: "/providers/google",
     aliases: ["gemini-cli"],
     envVars: [...ENV_VARS],
     auth: [
