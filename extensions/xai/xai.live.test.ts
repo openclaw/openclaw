@@ -23,7 +23,7 @@ import { XAI_DEFAULT_STT_MODEL } from "./stt.js";
 
 const XAI_API_KEY = process.env.XAI_API_KEY ?? "";
 const LIVE_IMAGE_MODEL = process.env.OPENCLAW_LIVE_XAI_IMAGE_MODEL?.trim() || "grok-imagine-image";
-const ENABLE_VIDEO_15_LIVE = process.env.OPENCLAW_LIVE_XAI_VIDEO_15 === "1";
+const ENABLE_VIDEO_LIVE = process.env.OPENCLAW_LIVE_XAI_VIDEO === "1";
 const liveEnabled = XAI_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 const EMPTY_AUTH_STORE = { version: 1, profiles: {} } as const;
@@ -427,7 +427,7 @@ describeLive("xai plugin live", () => {
           authStore: EMPTY_AUTH_STORE,
           timeoutMs: 180_000,
           count: 1,
-          aspectRatio: "1:1",
+          aspectRatio: "20:9",
           resolution: "1K",
         });
 
@@ -439,8 +439,7 @@ describeLive("xai plugin live", () => {
         const edited = await imageProvider.generateImage({
           provider: "xai",
           model: LIVE_IMAGE_MODEL,
-          prompt:
-            "Render this image as a pencil sketch with detailed shading. Keep the same framing.",
+          prompt: "Combine these three references into one detailed pencil sketch.",
           cfg,
           agentDir,
           authStore: EMPTY_AUTH_STORE,
@@ -451,7 +450,17 @@ describeLive("xai plugin live", () => {
             {
               buffer: createReferencePng(),
               mimeType: "image/png",
-              fileName: "reference.png",
+              fileName: "reference-1.png",
+            },
+            {
+              buffer: createReferencePng(),
+              mimeType: "image/png",
+              fileName: "reference-2.png",
+            },
+            {
+              buffer: createReferencePng(),
+              mimeType: "image/png",
+              fileName: "reference-3.png",
             },
           ],
         });
@@ -466,7 +475,55 @@ describeLive("xai plugin live", () => {
     });
   }, 300_000);
 
-  it.skipIf(!ENABLE_VIDEO_15_LIVE)(
+  it.skipIf(!ENABLE_VIDEO_LIVE)(
+    "generates a classic Grok Imagine clip with inherited image geometry",
+    async () => {
+      await runXaiLiveCase("video-classic-i2v", async () => {
+        const { videoProviders } = await registerXaiPlugin();
+        const videoProvider = requireRegisteredProvider(videoProviders, "xai");
+        const cfg = createLiveConfig();
+        const agentDir = await createTempAgentDir();
+
+        try {
+          const generated = await videoProvider.generateVideo({
+            provider: "xai",
+            model: "grok-imagine-video",
+            prompt: "Animate the square gently while preserving the square framing.",
+            cfg,
+            agentDir,
+            authStore: EMPTY_AUTH_STORE,
+            timeoutMs: 10 * 60_000,
+            durationSeconds: 1,
+            inputImages: [
+              {
+                buffer: createVideoReferencePng(),
+                mimeType: "image/png",
+                fileName: "video-reference.png",
+              },
+            ],
+          });
+
+          expect(generated.model).toBe("grok-imagine-video");
+          expect(generated.videos).toHaveLength(1);
+          const video = generated.videos[0];
+          if (!video?.buffer) {
+            throw new Error("xAI classic image-to-video did not return a buffered video");
+          }
+          expect(video.mimeType.startsWith("video/")).toBe(true);
+          expect(video.buffer.byteLength).toBeGreaterThan(1_000);
+          const outputPath = process.env.OPENCLAW_LIVE_XAI_VIDEO_OUTPUT?.trim();
+          if (outputPath) {
+            await fs.writeFile(outputPath, video.buffer);
+          }
+        } finally {
+          await fs.rm(agentDir, { recursive: true, force: true });
+        }
+      });
+    },
+    12 * 60_000,
+  );
+
+  it.skipIf(!ENABLE_VIDEO_LIVE)(
     "generates a Grok Imagine Video 1.5 clip from one image",
     async () => {
       await runXaiLiveCase("video-1.5", async () => {
