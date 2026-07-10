@@ -8,6 +8,7 @@ SETTINGS_TEXT="Settings"
 SKILLS_TEXT="Skills"
 CLAW_HUB_TEXT="ClawHub"
 REVIEW_TITLE="Review ClawHub audit"
+PROOF_SKILL_TITLE="Proof Clean Skill"
 GATEWAY_PORT="18789"
 CLAW_HUB_PORT="18880"
 GATEWAY_DEVICE_HOST="10.0.2.2"
@@ -598,6 +599,9 @@ record_screen() {
 }
 
 start_real_gateway
+
+: "${PROOF_SKILL_TITLE:?missing clean proof skill title}"
+: "${REVIEW_TITLE:?missing review dialog title}"
 
 emulator -avd "$AVD_NAME" -no-window -no-snapshot -no-snapshot-save -no-audio -no-boot-anim -gpu swiftshader_indirect -memory 2048 -cores 2 > proof-output/emulator.log 2>&1 &
 EMU_PID="$!"
