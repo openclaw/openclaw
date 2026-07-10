@@ -419,10 +419,21 @@ export class FeishuStreamingSession {
         policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
         auditContext: "feishu.streaming-card.update",
       });
-      await release();
-      if (!response.ok) {
-        onError?.(new Error(`Update card content failed with HTTP ${response.status}`));
-        return false;
+      try {
+        if (!response.ok) {
+          throw new Error(`Update card content failed with HTTP ${response.status}`);
+        }
+        const data = await readFeishuJsonResponse<{ code?: number; msg?: string }>(
+          response,
+          "feishu.streaming-card.update",
+        );
+        if (data.code !== 0) {
+          throw new Error(
+            `Update card content failed: ${data.msg ?? "unknown error"} (code=${String(data.code)})`,
+          );
+        }
+      } finally {
+        await release();
       }
       return true;
     } catch (error) {
@@ -490,57 +501,60 @@ export class FeishuStreamingSession {
     const delayMs = Math.max(0, this.updateThrottleMs - (Date.now() - this.lastUpdateTime));
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null;
-      const pending = this.pendingText;
-      if (!pending || this.closed) {
+      if (!this.pendingText || this.closed) {
         return;
       }
-      void this.update(pending).catch((error: unknown) =>
+      this.lastUpdateTime = Date.now();
+      void this.flushPendingUpdate().catch((error: unknown) =>
         this.log?.(`Scheduled flush update failed: ${String(error)}`),
       );
     }, delayMs);
   }
 
+  private async flushPendingUpdate(): Promise<void> {
+    this.queue = this.queue.then(async () => {
+      if (!this.state || this.closed) {
+        return;
+      }
+      const nextText = this.pendingText;
+      if (!nextText) {
+        return;
+      }
+      this.pendingText = null;
+      if (nextText === this.state.sentText) {
+        return;
+      }
+      const sent = await this.updateCardContent(nextText, (e) =>
+        this.log?.(`Update failed: ${String(e)}`),
+      );
+      if (sent && this.state) {
+        this.state.sentText = nextText;
+      } else if (this.state && this.pendingText === null) {
+        // Retain a failed full snapshot for the next update or close retry.
+        this.pendingText = nextText;
+      }
+    });
+    await this.queue;
+  }
+
   async update(text: string): Promise<void> {
-    if (!this.state || this.closed) {
+    if (!this.state || this.closed || !text) {
       return;
     }
-    const mergedInput = mergeStreamingText(this.pendingText ?? this.state.currentText, text);
-    if (!mergedInput || mergedInput === this.state.currentText) {
-      return;
-    }
-    this.pendingText = mergedInput;
+    // The caller supplies the complete current card text. CardKit derives its own
+    // display delta, so merging snapshots here can duplicate divergent reasoning.
+    this.state.currentText = text;
+    this.pendingText = text;
     this.clearFlushTimer();
 
-    const shouldForceUpdate = shouldPushStreamingUpdate(this.state.currentText, mergedInput);
+    const shouldForceUpdate = shouldPushStreamingUpdate(this.state.sentText, text);
     const now = Date.now();
     if (!shouldForceUpdate && now - this.lastUpdateTime < this.updateThrottleMs) {
       this.schedulePendingFlush();
       return;
     }
     this.lastUpdateTime = now;
-
-    this.queue = this.queue.then(async () => {
-      if (!this.state || this.closed) {
-        return;
-      }
-      const nextText = this.pendingText ?? mergedInput;
-      const mergedText = mergeStreamingText(this.state.currentText, nextText);
-      if (!mergedText || mergedText === this.state.currentText) {
-        return;
-      }
-      if (mergedText === this.state.sentText) {
-        return;
-      }
-      this.pendingText = null;
-      this.state.currentText = mergedText;
-      const sent = await this.updateCardContent(mergedText, (e) =>
-        this.log?.(`Update failed: ${String(e)}`),
-      );
-      if (sent && this.state) {
-        this.state.sentText = mergedText;
-      }
-    });
-    await this.queue;
+    await this.flushPendingUpdate();
   }
 
   private async updateNoteContent(note: string): Promise<void> {
@@ -586,8 +600,7 @@ export class FeishuStreamingSession {
     this.clearFlushTimer();
     await this.queue;
 
-    const pendingMerged = mergeStreamingText(this.state.currentText, this.pendingText ?? undefined);
-    const text = finalText ?? pendingMerged;
+    const text = finalText ?? this.pendingText ?? this.state.currentText;
     const apiBase = resolveApiBase(this.creds.domain);
     let visibleContentSent = Boolean(this.state.sentText.trim());
 
