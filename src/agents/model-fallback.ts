@@ -711,6 +711,16 @@ function findLiveSessionModelSwitchRedirectIndex(params: {
   return null;
 }
 
+function isLiveSessionModelSwitchTargetInCandidates(params: {
+  error: LiveSessionModelSwitchError;
+  candidates: ModelCandidate[];
+}): boolean {
+  const targetKey = modelKey(params.error.provider, params.error.model);
+  return params.candidates.some(
+    (candidate) => modelKey(candidate.provider, candidate.model) === targetKey,
+  );
+}
+
 function throwFallbackFailureSummary(params: {
   attempts: FallbackAttempt[];
   candidates: ModelCandidate[];
@@ -1826,10 +1836,28 @@ async function runWithModelFallbackInternal<T>(
 
       // LiveSessionModelSwitchError during fallback may point at a later
       // candidate that is already the active live-session selection.  Jump
-      // there directly.  Stale same/earlier targets remain a known failover
-      // so the outer runner cannot loop on the conflicting model, but they
-      // are not provider overloads.
+      // there directly.
+      //
+      // When the switch target is NOT in the candidate list at all, this is
+      // a genuine user-requested live model switch.  Re-throw so the outer
+      // retry loop (agent-command.ts / agent-runner-execution.ts) can restart
+      // the turn against the newly-selected model.  The outer loop has its
+      // own bounded retry count (MAX_LIVE_SWITCH_RETRIES), so this cannot
+      // loop forever.
+      //
+      // Stale same/earlier targets that ARE in the candidate list remain a
+      // known failover so the fallback chain can advance to configured
+      // fallback candidates rather than retrying a conflicting model.
       if (err instanceof LiveSessionModelSwitchError) {
+        // Auth-profile changes (set, change, or clear) must always reach
+        // the outer retry loop so err.authProfileId / authProfileIdSource
+        // are applied by applyLiveModelSwitchToRun.  This check runs before
+        // the redirect/candidate checks because a later-candidate match
+        // should not suppress a credential change.
+        if (err.authProfileId || err.authProfileIdSource) {
+          throw err;
+        }
+
         const liveSwitchTargetIndex = findLiveSessionModelSwitchRedirectIndex({
           error: err,
           candidates,
@@ -1840,32 +1868,41 @@ async function runWithModelFallbackInternal<T>(
           continue;
         }
 
-        const switchMsg = err.message;
-        const switchNormalized = new FailoverError(switchMsg, {
-          reason: "unknown",
-          provider: candidate.provider,
-          model: candidate.model,
-          sessionId: params.sessionId,
-          lane: params.lane,
-        });
-        lastError = switchNormalized;
-        await observeFailedCandidate({
-          attempts,
-          candidate,
-          error: switchNormalized,
-          runId: params.runId,
-          sessionId: params.sessionId,
-          lane: params.lane,
-          requestedProvider: params.provider,
-          requestedModel: params.model,
-          attempt: i + 1,
-          total: candidates.length,
-          nextCandidate: candidates[i + 1],
-          isPrimary,
-          requestedModelMatched: requestedModel,
-          fallbackConfigured: hasFallbackCandidates,
-        });
-        continue;
+        if (
+          isLiveSessionModelSwitchTargetInCandidates({
+            error: err,
+            candidates,
+          })
+        ) {
+          const switchMsg = err.message;
+          const switchNormalized = new FailoverError(switchMsg, {
+            reason: "unknown",
+            provider: candidate.provider,
+            model: candidate.model,
+            sessionId: params.sessionId,
+            lane: params.lane,
+          });
+          lastError = switchNormalized;
+          await observeFailedCandidate({
+            attempts,
+            candidate,
+            error: switchNormalized,
+            runId: params.runId,
+            sessionId: params.sessionId,
+            lane: params.lane,
+            requestedProvider: params.provider,
+            requestedModel: params.model,
+            attempt: i + 1,
+            total: candidates.length,
+            nextCandidate: candidates[i + 1],
+            isPrimary,
+            requestedModelMatched: requestedModel,
+            fallbackConfigured: hasFallbackCandidates,
+          });
+          continue;
+        }
+
+        throw err;
       }
 
       // Even unrecognized errors should not abort the fallback loop when
