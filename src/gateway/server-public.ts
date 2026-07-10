@@ -9,6 +9,10 @@ export type GatewayCloseOptions = {
   reason?: string;
   restartExpectedMs?: number | null;
   drainTimeoutMs?: number | null;
+  // Forced-exit status if the post-shutdown watchdog has to kill a wedged
+  // process. Defaults to 0; startup-failure cleanup passes nonzero so a
+  // failure-only supervisor still relaunches.
+  postShutdownExitCode?: number;
 };
 
 export type GatewayServer = {

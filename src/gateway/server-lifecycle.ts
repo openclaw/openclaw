@@ -452,7 +452,10 @@ export async function prepareGatewayLifecycle(params: {
       await stopRegisteredGatewayLifetimeSidecars();
       await stopRegisteredPostReadySidecars();
       await runClosePrelude();
-      await createCloseHandler()({ reason: "gateway startup failed" });
+      // Nonzero forced-exit status: if this failed-startup cleanup wedges and
+      // the watchdog must kill the process, a failure-only supervisor still
+      // relaunches instead of reading exit 0 as an intentional clean stop.
+      await createCloseHandler()({ reason: "gateway startup failed", postShutdownExitCode: 1 });
     } finally {
       clearFallbackGatewayContextForServer();
     }
