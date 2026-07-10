@@ -445,20 +445,29 @@ export function startGatewayConfigReloader(opts: {
     next.on("error", (err) => {
       handleWatcherError(next, err);
     });
-    watcher = next;
-    watcherUsesPolling = next.options.usePolling;
-    hotReloadStatus = "active";
     if (reconcile) {
       // A recreate (after a watcher error + backoff) leaves an interval with no
       // live watcher. The new watcher uses ignoreInitial:true, so any config
       // edit made by an external process (a manual edit, or a separate
-      // `openclaw doctor --fix`) during that down window emits no event and its
-      // file becomes the new baseline. Schedule one reconcile read against the
-      // current on-disk config so such an edit is not silently dropped. The
-      // initial startup watcher does not need this: startup already read and
-      // applied the config before the first watcher existed.
-      scheduleAfter(0);
+      // `openclaw doctor --fix`) during that down window — or during the new
+      // watcher's own initial scan — emits no event and its file becomes the new
+      // baseline. Reconcile once the watcher has finished that scan (`ready`),
+      // when any such edit is guaranteed to be on disk, and read the current
+      // config through the scheduler so it is not silently dropped. Waiting for
+      // `ready` (rather than reading immediately) closes the construction→ready
+      // window, where an edit could otherwise land after an eager read yet still
+      // be folded into the baseline. The initial startup watcher does not need
+      // this: startup already read and applied the config before it existed.
+      next.once("ready", () => {
+        if (stopped || watcher !== next) {
+          return;
+        }
+        scheduleAfter(0);
+      });
     }
+    watcher = next;
+    watcherUsesPolling = next.options.usePolling;
+    hotReloadStatus = "active";
   };
 
   const handleWatcherError = (source: typeof watcher, err: unknown) => {

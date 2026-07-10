@@ -635,10 +635,11 @@ describe("resolveGatewayReloadSettings", () => {
 });
 
 type WatcherHandler = () => void;
-type WatcherEvent = "add" | "change" | "unlink" | "error";
+type WatcherEvent = "add" | "change" | "unlink" | "error" | "ready";
 
 function createWatcherMock(effectiveUsePolling?: boolean) {
   const handlers = new Map<WatcherEvent, WatcherHandler[]>();
+  const onceHandlers = new Map<WatcherEvent, WatcherHandler[]>();
   return {
     effectiveUsePolling,
     options: { usePolling: false },
@@ -648,8 +649,19 @@ function createWatcherMock(effectiveUsePolling?: boolean) {
       handlers.set(event, existing);
       return this;
     },
+    once(event: WatcherEvent, handler: WatcherHandler) {
+      const existing = onceHandlers.get(event) ?? [];
+      existing.push(handler);
+      onceHandlers.set(event, existing);
+      return this;
+    },
     emit(event: WatcherEvent) {
       for (const handler of handlers.get(event) ?? []) {
+        handler();
+      }
+      const pendingOnce = onceHandlers.get(event) ?? [];
+      onceHandlers.set(event, []);
+      for (const handler of pendingOnce) {
         handler();
       }
     },
@@ -1885,9 +1897,10 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
 
   it("reconciles against on-disk config after re-creating the watcher post-error", async () => {
     // An external edit (manual, or `openclaw doctor --fix`) can land while the
-    // watcher is down during error-recovery backoff. The re-created watcher uses
-    // ignoreInitial:true, so it emits no event for that edit — a fresh reconcile
-    // read must run after recreation to pick it up.
+    // watcher is down during error-recovery backoff, or during the new watcher's
+    // initial scan. The re-created watcher uses ignoreInitial:true, so it emits
+    // no event for that edit — a fresh reconcile read must run once the watcher
+    // is ready to pick it up.
     const first = createWatcherMock();
     const second = createWatcherMock();
     const readSnapshot = vi.fn(async () => makeSnapshot());
@@ -1900,7 +1913,12 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(watchSpy).toHaveBeenCalledTimes(2);
 
-    // Flush the reconcile read scheduled after the fresh watcher is created.
+    // The reconcile read waits for the recreated watcher's initial scan to
+    // complete; nothing is read until `ready` fires (closes construction→ready race).
+    await vi.advanceTimersByTimeAsync(1);
+    expect(readSnapshot).not.toHaveBeenCalled();
+
+    second.emit("ready");
     await vi.advanceTimersByTimeAsync(1);
     expect(readSnapshot).toHaveBeenCalledTimes(1);
     expect(log.error).not.toHaveBeenCalled();
@@ -1922,7 +1940,7 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       const { watchSpy, log } = started;
       reloader = started.reloader;
 
-      // Drive the native retries to exhaustion (each recreate reconciles too).
+      // Drive the native retries to exhaustion.
       watchers[0]?.emit("error");
       await vi.advanceTimersByTimeAsync(500);
       watchers[1]?.emit("error");
@@ -1938,7 +1956,8 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       await vi.advanceTimersByTimeAsync(500);
       expect(watchSpy).toHaveBeenCalledTimes(5);
 
-      // The polling-degrade recreate path must reconcile too.
+      // The polling-degrade recreate path must reconcile too, once its watcher is ready.
+      watchers[4]?.emit("ready");
       await vi.advanceTimersByTimeAsync(1);
       expect(readSnapshot.mock.calls.length).toBeGreaterThan(readsBeforePollingRecreate);
     } finally {
