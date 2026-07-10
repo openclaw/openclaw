@@ -1,4 +1,5 @@
 // Control UI chat module implements tool cards behavior.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { icons, type IconName } from "../../../components/icons.ts";
@@ -6,6 +7,8 @@ import { isMarkdownBlockArtText } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
+import type { DiffLine, DiffStat } from "../../../lib/chat/tool-call-diff.ts";
+import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
   formatDistinctCollapsedToolSummaryText,
   formatCollapsedToolPreviewText,
@@ -20,6 +23,7 @@ import {
   resolveToolDisplay,
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
+import { getToolCallTitle } from "../tool-titles.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 
 type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
@@ -342,34 +346,286 @@ function renderToolDataBlock(params: { label: string; text: string }) {
   `;
 }
 
-function renderCollapsedToolSummary(params: {
-  label: string;
-  icon: ReturnType<typeof html> | undefined;
-  name?: string;
-  expanded: boolean;
-  isError?: boolean;
-  onToggleExpanded: () => void;
-}) {
-  const { label, icon, name, expanded, isError, onToggleExpanded } = params;
-  const displayLabel = formatCollapsedToolSummaryText(label) ?? label;
-  const displayName = formatDistinctCollapsedToolSummaryText(name, displayLabel);
-  return html`
-    <button
-      class="chat-tool-msg-summary ${isError ? "chat-tool-msg-summary--error" : ""}"
-      type="button"
-      aria-expanded=${String(expanded)}
-      @click=${(event: MouseEvent) => {
-        if (shouldToggleSelectableDisclosure(event)) {
-          onToggleExpanded();
-        }
-      }}
-    >
-      <span class="chat-tool-msg-summary__icon">${icon}</span>
-      <span class="chat-tool-msg-summary__label">${displayLabel}</span>
-      ${displayName
-        ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>`
+// ── Kind-aware tool rows (command / read / edit / write / search / fetch) ──
+
+const TOOL_ROW_VERBS: Partial<Record<ToolCallView["kind"], string>> = {
+  read: "Read",
+  edit: "Edited",
+  write: "Wrote",
+  search: "Searched",
+  fetch: "Fetched",
+};
+
+const TOOL_ROW_ICONS: Partial<Record<ToolCallView["kind"], string>> = {
+  command: "terminal",
+  read: "fileText",
+  edit: "penLine",
+  write: "fileCode",
+  search: "search",
+  fetch: "globe",
+};
+
+function firstCommandLine(command: string): string {
+  const line = command.split("\n")[0]?.trim() ?? "";
+  return truncateUtf16Safe(line, 120);
+}
+
+export function renderDiffStatChips(stat: DiffStat) {
+  if (stat.added === 0 && stat.removed === 0) {
+    return nothing;
+  }
+  return html`<span class="chat-diffstat">
+    ${stat.added > 0 ? html`<span class="chat-diffstat__add">+${stat.added}</span>` : nothing}
+    ${stat.removed > 0 ? html`<span class="chat-diffstat__del">-${stat.removed}</span>` : nothing}
+  </span>`;
+}
+
+function renderToolRowContent(card: ToolCard, view: ToolCallView, isError: boolean) {
+  if (view.kind === "command" && view.command) {
+    const aiTitle = getToolCallTitle(card.name, card.args);
+    const commandPreview = firstCommandLine(view.command);
+    if (aiTitle) {
+      return html`
+        <span class="chat-tool-row__title">${aiTitle}</span>
+        <code class="chat-tool-row__cmd chat-tool-row__cmd--secondary">${commandPreview}</code>
+      `;
+    }
+    return html`
+      <span class="chat-tool-row__prompt" aria-hidden="true">$</span>
+      <code class="chat-tool-row__cmd">${renderHighlightedCommand(commandPreview)}</code>
+    `;
+  }
+
+  const verb = TOOL_ROW_VERBS[view.kind];
+  if (verb && view.target) {
+    return html`
+      <span class="chat-tool-row__verb">${verb}</span>
+      <span class="chat-tool-row__target">${view.target}</span>
+      ${view.stat ? renderDiffStatChips(view.stat) : nothing}
+      ${view.targetDetail
+        ? html`<span class="chat-tool-row__detail">${view.targetDetail}</span>`
         : nothing}
-    </button>
+    `;
+  }
+
+  // Generic tools keep the resolver-driven label + detail, with an optional
+  // AI purpose title when the args are complex enough to warrant one.
+  const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
+  const aiTitle = getToolCallTitle(card.name, card.args);
+  const summary = resolveCollapsedToolSummaryParts({
+    card,
+    displayLabel: display.label,
+    displayDetail: display.detail,
+    isError,
+  });
+  const displayLabel = formatCollapsedToolSummaryText(summary.label) ?? summary.label;
+  const displayName = formatDistinctCollapsedToolSummaryText(summary.name, displayLabel);
+  if (aiTitle) {
+    return html`
+      <span class="chat-tool-row__title">${aiTitle}</span>
+      <span class="chat-tool-row__detail">${displayLabel}</span>
+    `;
+  }
+  return html`
+    <span class="chat-tool-msg-summary__label">${displayLabel}</span>
+    ${displayName
+      ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>`
+      : nothing}
+  `;
+}
+
+export function renderDiffBlock(lines: readonly DiffLine[]) {
+  const hasLineNumbers = lines.some((line) => line.lineNo !== undefined);
+  return html`
+    <div class="chat-diff" role="figure" aria-label="File changes">
+      ${lines.map((line) => {
+        if (line.kind === "skip") {
+          return html`<div class="chat-diff__row chat-diff__row--skip">
+            ${hasLineNumbers ? html`<span class="chat-diff__gutter"></span>` : nothing}
+            <span class="chat-diff__sign"></span>
+            <span class="chat-diff__text">⋯</span>
+          </div>`;
+        }
+        const kindClass =
+          line.kind === "add"
+            ? "chat-diff__row--add"
+            : line.kind === "del"
+              ? "chat-diff__row--del"
+              : "";
+        const sign = line.kind === "add" ? "+" : line.kind === "del" ? "-" : "";
+        return html`<div class="chat-diff__row ${kindClass}">
+          ${hasLineNumbers
+            ? html`<span class="chat-diff__gutter">${line.lineNo ?? ""}</span>`
+            : nothing}
+          <span class="chat-diff__sign">${sign}</span>
+          <span class="chat-diff__text">${line.text || " "}</span>
+        </div>`;
+      })}
+    </div>
+  `;
+}
+
+// ── Command syntax highlighting ──
+
+type CommandToken = { text: string; cls: "name" | "flag" | "str" | "num" | "op" | "plain" | "ws" };
+
+const COMMAND_HIGHLIGHT_MAX_CHARS = 2_000;
+const COMMAND_OP_CHARS = new Set(["|", ";", "&", "<", ">"]);
+
+/** Small shell-ish tokenizer for display colors only; never used for execution. */
+function tokenizeCommand(command: string): CommandToken[] {
+  const tokens: CommandToken[] = [];
+  let index = 0;
+  let expectName = true;
+  while (index < command.length) {
+    const char = command[index];
+    if (/\s/.test(char)) {
+      let end = index;
+      while (end < command.length && /\s/.test(command[end])) {
+        end++;
+      }
+      tokens.push({ text: command.slice(index, end), cls: "ws" });
+      index = end;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      let end = index + 1;
+      while (end < command.length && command[end] !== char) {
+        end += command[end] === "\\" ? 2 : 1;
+      }
+      end = Math.min(end + 1, command.length);
+      tokens.push({ text: command.slice(index, end), cls: "str" });
+      index = end;
+      expectName = false;
+      continue;
+    }
+    if (COMMAND_OP_CHARS.has(char)) {
+      let end = index;
+      while (end < command.length && COMMAND_OP_CHARS.has(command[end])) {
+        end++;
+      }
+      tokens.push({ text: command.slice(index, end), cls: "op" });
+      index = end;
+      expectName = true;
+      continue;
+    }
+    let end = index;
+    while (
+      end < command.length &&
+      !/\s/.test(command[end]) &&
+      !COMMAND_OP_CHARS.has(command[end]) &&
+      command[end] !== "'" &&
+      command[end] !== '"'
+    ) {
+      end++;
+    }
+    const word = command.slice(index, end);
+    const cls = expectName
+      ? "name"
+      : word.startsWith("-")
+        ? "flag"
+        : /^\d+(?:[.,]\d+)?$/.test(word)
+          ? "num"
+          : "plain";
+    tokens.push({ text: word, cls });
+    index = end;
+    expectName = false;
+  }
+  return tokens;
+}
+
+export function renderHighlightedCommand(command: string) {
+  if (command.length > COMMAND_HIGHLIGHT_MAX_CHARS) {
+    return html`${command}`;
+  }
+  return html`${tokenizeCommand(command).map((token) =>
+    token.cls === "ws" || token.cls === "plain"
+      ? html`${token.text}`
+      : html`<span class="chat-cmd--${token.cls}">${token.text}</span>`,
+  )}`;
+}
+
+// ── Key-value args display (generic tools) ──
+
+const KV_MAX_KEYS = 12;
+const KV_MAX_VALUE_CHARS = 400;
+
+function formatKeyValue(value: unknown): string {
+  if (typeof value === "string") {
+    return truncateUtf16Safe(value, KV_MAX_VALUE_CHARS);
+  }
+  if (value === null || value === undefined) {
+    return String(value);
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  try {
+    return truncateUtf16Safe(JSON.stringify(value), KV_MAX_VALUE_CHARS);
+  } catch {
+    return Object.prototype.toString.call(value);
+  }
+}
+
+function renderArgsKeyValueList(args: Record<string, unknown>) {
+  return html`
+    <div class="chat-tool-kv">
+      ${Object.entries(args).map(
+        ([key, value]) => html`
+          <div class="chat-tool-kv__row">
+            <span class="chat-tool-kv__key">${key}:</span>
+            <span class="chat-tool-kv__value">${formatKeyValue(value)}</span>
+          </div>
+        `,
+      )}
+    </div>
+  `;
+}
+
+function canRenderArgsAsKeyValue(args: unknown): args is Record<string, unknown> {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return false;
+  }
+  const keys = Object.keys(args as Record<string, unknown>);
+  return keys.length > 0 && keys.length <= KV_MAX_KEYS;
+}
+
+// Args already represented in the collapsed row / header detail for kinds that
+// summarize their primary target; everything else stays auditable on expand.
+const ROW_SUMMARIZED_ARG_KEYS: Partial<Record<ToolCallView["kind"], ReadonlySet<string>>> = {
+  read: new Set(["path", "file_path", "filePath", "notebook_path", "offset", "limit"]),
+  search: new Set(["pattern", "query", "glob", "path"]),
+  fetch: new Set(["url"]),
+};
+
+function extraArgsBeyondRowTarget(
+  args: unknown,
+  kind: ToolCallView["kind"],
+): Record<string, unknown> | null {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return null;
+  }
+  const summarized = ROW_SUMMARIZED_ARG_KEYS[kind];
+  if (!summarized) {
+    return args as Record<string, unknown>;
+  }
+  const extras = Object.fromEntries(
+    Object.entries(args as Record<string, unknown>).filter(([key]) => !summarized.has(key)),
+  );
+  return Object.keys(extras).length > 0 ? extras : null;
+}
+
+function renderTerminalBlock(command: string, output: string | undefined, isError: boolean) {
+  return html`
+    <div class="chat-tool-term ${isError ? "chat-tool-term--error" : ""}">
+      <div class="chat-tool-term__cmd">
+        <span class="chat-tool-term__prompt">$</span
+        ><code>${renderHighlightedCommand(command)}</code>
+      </div>
+      ${output?.trim()
+        ? html`<pre class="chat-tool-term__out"><code>${output}</code></pre>`
+        : nothing}
+    </div>
   `;
 }
 
@@ -408,12 +664,40 @@ function resolveCollapsedToolSummaryParts(params: {
   };
 }
 
+export function isRunningToolCard(card: ToolCard, runActive: boolean | undefined): boolean {
+  // Only live tool-stream cards can be running; historical transcript calls
+  // without results (aborted runs) must stay inert during later runs. The
+  // result event ends the running state — partial streamed output does not.
+  return (
+    runActive === true && card.live === true && card.completed !== true && !isToolCardError(card)
+  );
+}
+
+/** Plain-text row label, e.g. for the group header while a tool is running. */
+export function resolveToolRowText(card: ToolCard): string {
+  const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
+  if (view.kind === "command" && view.command) {
+    return getToolCallTitle(card.name, card.args) ?? `$ ${firstCommandLine(view.command)}`;
+  }
+  const verb = TOOL_ROW_VERBS[view.kind];
+  if (verb && view.target) {
+    return `${verb} ${view.target}`;
+  }
+  const aiTitle = getToolCallTitle(card.name, card.args);
+  if (aiTitle) {
+    return aiTitle;
+  }
+  const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
+  return display.label;
+}
+
 export function renderToolCard(
   card: ToolCard,
   opts: {
     expanded: boolean;
     onToggleExpanded: (id: string) => void;
     turnSucceeded?: boolean;
+    runActive?: boolean;
     sessionKey?: string;
     agentId?: string;
     onOpenSidebar?: (content: SidebarContent) => void;
@@ -422,14 +706,11 @@ export function renderToolCard(
     allowExternalEmbedUrls?: boolean;
   },
 ) {
+  const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
   const isError = isToolCardError(card) && opts.turnSucceeded !== true;
-  const summary = resolveCollapsedToolSummaryParts({
-    card,
-    displayLabel: display.label,
-    displayDetail: display.detail,
-    isError,
-  });
+  const isRunning = !isError && isRunningToolCard(card, opts.runActive);
+  const icon = TOOL_ROW_ICONS[view.kind] ?? display.icon;
 
   return html`
     <div
@@ -437,14 +718,25 @@ export function renderToolCard(
         ? "is-open"
         : ""}"
     >
-      ${renderCollapsedToolSummary({
-        label: summary.label,
-        icon: renderToolIcon(display.icon),
-        name: summary.name,
-        expanded: opts.expanded,
-        isError,
-        onToggleExpanded: () => opts.onToggleExpanded(card.id),
-      })}
+      <button
+        class="chat-tool-msg-summary chat-tool-row ${isError
+          ? "chat-tool-msg-summary--error"
+          : ""} ${isRunning ? "chat-tool-row--running" : ""}"
+        type="button"
+        aria-expanded=${String(opts.expanded)}
+        @click=${(event: MouseEvent) => {
+          if (shouldToggleSelectableDisclosure(event)) {
+            opts.onToggleExpanded(card.id);
+          }
+        }}
+      >
+        <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
+        ${renderToolRowContent(card, view, isError)}
+        ${isError ? html`<span class="chat-tool-row__badge">failed</span>` : nothing}
+        ${isRunning
+          ? html`<span class="chat-tool-row__spinner" aria-label="Running"></span>`
+          : nothing}
+      </button>
       ${opts.expanded
         ? html`
             <div class="chat-tool-msg-body">
@@ -471,8 +763,14 @@ export function renderExpandedToolCardContent(
   embedSandboxMode: EmbedSandboxMode = "scripts",
   allowExternalEmbedUrls = false,
 ) {
+  const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args });
-  const detail = formatToolDetail(display);
+  // File/search rows already carry their target; the "with …" connector only
+  // reads well for generic tools ("with query …"), not "with from sessions.ts".
+  const detail =
+    view.kind === "read" || view.kind === "search" || view.kind === "fetch"
+      ? display.detail
+      : formatToolDetail(display);
   const hasOutput = Boolean(card.outputText?.trim());
   const hasInput = Boolean(card.inputText?.trim());
   const isError = isToolCardError(card);
@@ -497,6 +795,76 @@ export function renderExpandedToolCardContent(
         allowExternalEmbedUrls,
       })
     : nothing;
+  const sidebarAction = canOpenSidebar
+    ? html`
+        <div class="chat-tool-card__actions">
+          <openclaw-tooltip content="Open in the side panel">
+            <button
+              class="chat-tool-card__action-btn"
+              type="button"
+              @click=${() => onOpenSidebar?.(sidebarActionContent)}
+              aria-label="Open tool details in side panel"
+            >
+              <span class="chat-tool-card__action-icon">${icons.panelRightOpen}</span>
+            </button>
+          </openclaw-tooltip>
+        </div>
+      `
+    : nothing;
+
+  // Command calls render terminal-style: `$ command` + raw output. Remaining
+  // args (workdir, timeout, env…) stay visible as key-value rows so identical
+  // commands in different contexts remain distinguishable in the audit trail.
+  if (view.kind === "command" && view.command && !card.preview) {
+    const argsRecord =
+      card.args && typeof card.args === "object" && !Array.isArray(card.args)
+        ? (card.args as Record<string, unknown>)
+        : null;
+    const extraArgs = Object.fromEntries(
+      Object.entries(argsRecord ?? {}).filter(([key]) => key !== "command"),
+    );
+    return html`
+      <div class="chat-tool-card chat-tool-card--flush ${isError ? "chat-tool-card--error" : ""}">
+        ${sidebarAction}
+        ${renderTerminalBlock(
+          view.command,
+          card.outputText ?? (isError ? "No output — tool failed." : undefined),
+          isError,
+        )}
+        ${Object.keys(extraArgs).length > 0 ? renderArgsKeyValueList(extraArgs) : nothing}
+      </div>
+    `;
+  }
+
+  // Edits and writes with a resolvable diff render it inline; the raw tool
+  // output stays reachable behind the raw-details toggle.
+  if ((view.kind === "edit" || view.kind === "write") && view.diff && view.diff.length > 0) {
+    return html`
+      <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
+        <div class="chat-tool-card__header">
+          <div class="chat-tool-card__detail">
+            ${view.targetDetail ? `${view.targetDetail}/` : ""}${view.target ?? ""}
+          </div>
+          ${sidebarAction}
+        </div>
+        ${renderDiffBlock(view.diff)}
+        ${isError && hasOutput
+          ? renderToolDataBlock({ label: "Tool error", text: card.outputText! })
+          : hasOutput
+            ? renderRawOutputToggle(card.outputText!)
+            : nothing}
+      </div>
+    `;
+  }
+
+  // File reads and searches summarize their primary target in the row, so the
+  // full args JSON is noise — but any remaining args (filters, limits, request
+  // options…) stay visible as key-value rows for auditability.
+  const summarizedKind = view.kind === "read" || view.kind === "search" || view.kind === "fetch";
+  const inputBlockArgs = summarizedKind
+    ? extraArgsBeyondRowTarget(card.args, view.kind)
+    : card.args;
+  const showInputBlock = hasInput && (!summarizedKind || inputBlockArgs !== null);
 
   return html`
     <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
@@ -504,30 +872,17 @@ export function renderExpandedToolCardContent(
         ? html`
             <div class="chat-tool-card__header">
               ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
-              ${canOpenSidebar
-                ? html`
-                    <div class="chat-tool-card__actions">
-                      <openclaw-tooltip content="Open in the side panel">
-                        <button
-                          class="chat-tool-card__action-btn"
-                          type="button"
-                          @click=${() => onOpenSidebar?.(sidebarActionContent)}
-                          aria-label="Open tool details in side panel"
-                        >
-                          <span class="chat-tool-card__action-icon">${icons.panelRightOpen}</span>
-                        </button>
-                      </openclaw-tooltip>
-                    </div>
-                  `
-                : nothing}
+              ${sidebarAction}
             </div>
           `
         : nothing}
-      ${hasInput
-        ? renderToolDataBlock({
-            label: "Tool input",
-            text: card.inputText!,
-          })
+      ${showInputBlock
+        ? canRenderArgsAsKeyValue(inputBlockArgs)
+          ? renderArgsKeyValueList(inputBlockArgs)
+          : renderToolDataBlock({
+              label: "Tool input",
+              text: card.inputText!,
+            })
         : nothing}
       ${hasOutput
         ? card.preview

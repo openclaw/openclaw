@@ -405,9 +405,7 @@ enum ExecApprovalsStore {
             let rawSocketPath = file.socket?.path?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if self.isLegacyDefaultSocketPath(rawSocketPath, legacyFileURL: legacyURL) {
-                if file.socket == nil {
-                    file.socket = ExecApprovalsSocketConfig(path: nil, token: nil)
-                }
+                if file.socket == nil { file.socket = ExecApprovalsSocketConfig(path: nil, token: nil) }
                 file.socket?.path = self.socketPath()
             }
             let encoder = JSONEncoder()

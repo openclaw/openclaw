@@ -1,5 +1,6 @@
 /* Split View Layout */
 .chat-workbench {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
   gap: 0;
@@ -8,10 +9,122 @@
   overflow: hidden;
 }
 
+/* A collapsed rail renders nothing at all — the whole width goes back to the
+   thread. Reopen via the pane header / floating toggle or ⇧⌘B. */
 .chat-workbench--workspace-collapsed {
-  /* Collapsed rail is a slim always-visible icon strip (Cursor-style); it
-     stays in layout so it never overlays or floats over chat content. */
-  grid-template-columns: minmax(0, 1fr) 44px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Bottom dock mirrors the terminal panel: the rail becomes a strip under the
+   thread instead of a column beside it. */
+.chat-workbench--dock-bottom {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(160px, 236px);
+}
+
+.chat-workbench--dock-bottom.chat-workbench--workspace-collapsed {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.chat-workbench--dock-bottom .chat-workspace-rail {
+  grid-column: 1;
+  grid-row: 2;
+  border-left: none;
+  border-top: 1px solid var(--border);
+}
+
+/* Floating opener shown in single-pane mode while the rail is collapsed
+   (split panes host the same toggle in their header row instead). */
+.chat-workspace-open {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 12;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* The rail (and with it every toggle) only exists on wide viewports. */
+@media (max-width: 1120px) {
+  .chat-workspace-open,
+  .chat-pane__actions .chat-workspace-toggle {
+    display: none;
+  }
+}
+
+/* Positioning context for the badge; the floating variant already gets one
+   from its own position: absolute, so scope this to the pane-header variant. */
+.chat-pane__actions .chat-workspace-toggle {
+  position: relative;
+}
+
+.chat-workspace-toggle__badge {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--primary-foreground, #fff);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 14px;
+  text-align: center;
+}
+
+/* Drop zones shown while dragging the rail's grip; the hovered edge wins. */
+.chat-workbench__dock-zones {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+}
+
+.chat-workbench__dock-zone {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 550;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.chat-workbench__dock-zone--right {
+  top: 8px;
+  right: 8px;
+  bottom: 8px;
+  width: 26%;
+}
+
+.chat-workbench__dock-zone--bottom {
+  right: 8px;
+  bottom: 8px;
+  left: 8px;
+  height: 28%;
+}
+
+.chat-workbench__dock-zone--active {
+  border-style: solid;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text-strong);
+}
+
+/* The bottom zone paints over the right zone's lower corner; keep the active
+   one on top so its label stays readable. */
+.chat-workbench__dock-zone--active {
+  z-index: 1;
 }
 
 /* The workspace rail docks flush to the window edge like the terminal panel:
@@ -69,12 +182,6 @@
   background: color-mix(in srgb, var(--panel) 84%, transparent);
 }
 
-.chat-workspace-rail--collapsed {
-  align-items: center;
-  gap: 10px;
-  padding: 12px 6px;
-}
-
 .chat-workspace-rail__header {
   display: flex;
   align-items: center;
@@ -113,6 +220,7 @@
 
 .chat-workspace-rail__terminal,
 .chat-workspace-rail__refresh,
+.chat-workspace-rail__dock,
 .chat-workspace-rail__collapse-toggle {
   width: 32px;
   min-width: 32px;
@@ -120,17 +228,27 @@
   padding: 0;
 }
 
+/* Grab affordance for drag-to-dock. */
+.chat-workspace-rail__grip {
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.chat-workspace-rail__grip:active {
+  cursor: grabbing;
+}
+
 .chat-workspace-rail__terminal {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
-  /* Match the sibling refresh/collapse buttons (.btn radius) so the rail
-     header buttons share one corner treatment. */
+  /* Chromeless at rest like the sibling ghost buttons; chrome on hover only. */
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
 }
 
 .chat-workspace-rail__terminal:hover,
@@ -140,47 +258,29 @@
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-.chat-workspace-rail--collapsed .chat-workspace-rail__terminal {
-  border-color: transparent;
-  background: transparent;
-}
-
-.chat-workspace-rail--collapsed .chat-workspace-rail__terminal:hover,
-.chat-workspace-rail--collapsed .chat-workspace-rail__terminal:focus-visible {
-  border-color: transparent;
-  background: transparent;
-}
-
+/* Overrides the shared .nav-collapse-toggle chrome (border, elevated
+   background, inset highlight): rail header buttons only show chrome on
+   hover. */
 .chat-workspace-rail__collapse-toggle {
   flex: 0 0 auto;
+  border-color: transparent;
+  background: transparent;
   box-shadow: none;
+}
+
+.chat-workspace-rail__collapse-toggle:hover {
+  border-color: transparent;
+  background: var(--bg-hover);
+  transform: none;
 }
 
 .chat-workspace-rail__terminal svg,
 .chat-workspace-rail__refresh svg,
+.chat-workspace-rail__dock svg,
 .chat-workspace-rail__collapse-toggle svg,
 .chat-workspace-rail__file-icon svg {
   width: 15px;
   height: 15px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.chat-workspace-rail__collapsed-icon {
-  color: var(--muted);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-}
-
-.chat-workspace-rail__collapsed-icon svg {
-  width: 18px;
-  height: 18px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.5px;
@@ -237,6 +337,32 @@
   min-height: 0;
   overflow-y: auto;
   padding-top: 8px;
+}
+
+/* Bottom dock is short and wide: sections sit side by side as their own
+   scroll columns instead of compressing into clipped slivers. */
+.chat-workbench--dock-bottom .chat-workspace-rail__scroll {
+  flex-direction: row;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.chat-workbench--dock-bottom .chat-workspace-rail__scroll > .chat-workspace-rail__section {
+  flex: 1 0 260px;
+  min-width: 0;
+}
+
+.chat-workbench--dock-bottom
+  .chat-workspace-rail__scroll
+  > .chat-workspace-rail__section
+  + .chat-workspace-rail__section {
+  border-left: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
+}
+
+/* The empty-state notice can sit in the row too; keep it readable. */
+.chat-workbench--dock-bottom .chat-workspace-rail__scroll > .chat-workspace-rail__state {
+  flex: 0 0 auto;
+  align-self: flex-start;
 }
 
 .chat-workspace-rail__section-title {
@@ -299,7 +425,6 @@
   border: 0;
   background: transparent;
   color: inherit;
-  cursor: pointer;
   font: inherit;
   text-align: left;
 }
@@ -370,7 +495,6 @@
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
 }
 
 .chat-workspace-rail__row-action:hover,
@@ -599,7 +723,6 @@
   font: inherit;
   font-size: 13px;
   text-align: left;
-  cursor: pointer;
 }
 
 .sidebar-file-view__editor-item:hover,
@@ -1187,7 +1310,6 @@
 }
 
 .sidebar-markdown :where(summary) {
-  cursor: pointer;
   padding: 8px 12px;
   font-weight: 500;
   font-size: 13px;

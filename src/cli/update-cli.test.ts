@@ -7448,6 +7448,7 @@ describe("update-cli", () => {
           nonInteractive: true,
           repair: true,
           yes: true,
+          crossStateDirImports: false,
         });
         expect(syncPluginCall()?.channel).toBe("stable");
         expect(syncPluginCall()?.acknowledgeClawHubRisk).toBe(true);
@@ -7547,6 +7548,7 @@ describe("update-cli", () => {
       nonInteractive: true,
       repair: true,
       yes: false,
+      crossStateDirImports: false,
     });
     expect(syncPluginCall()?.channel).toBe("beta");
     expect(syncPluginCall()?.config).toEqual({

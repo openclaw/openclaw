@@ -146,6 +146,7 @@ import {
   suspendSession,
   type SessionSuspensionParams,
 } from "../session-suspension.js";
+import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
 import { DEFAULT_AGENT_TIMEOUT_MS } from "../timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { deriveContextPromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
@@ -257,6 +258,7 @@ import type {
   ToolSummaryTrace,
 } from "./types.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accumulator.js";
+import { mapThinkingLevelForProvider } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
 
@@ -419,6 +421,9 @@ function normalizeEmbeddedRunAttemptResult(
       | null;
     didDeliverSourceReplyViaMessageTool?: boolean | null;
     itemLifecycle?: EmbeddedRunAttemptForRunner["itemLifecycle"] | null;
+    currentAttemptReplayMetadata?:
+      | EmbeddedRunAttemptForRunner["currentAttemptReplayMetadata"]
+      | null;
   };
   return {
     ...attempt,
@@ -437,6 +442,7 @@ function normalizeEmbeddedRunAttemptResult(
       activeCount: 0,
     },
     replayMetadata: resolveAttemptReplayMetadata(raw),
+    currentAttemptReplayMetadata: raw.currentAttemptReplayMetadata ?? undefined,
   };
 }
 
@@ -496,8 +502,8 @@ function createScopedAuthProfileStore(
 }
 
 function buildTraceToolSummary(params: {
-  toolMetas?: Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>;
-  hadFailure: boolean;
+  toolMetas?: EmbeddedRunAttemptForRunner["toolMetas"];
+  fallbackHadFailure: boolean;
 }): ToolSummaryTrace | undefined {
   if (!params.toolMetas?.length) {
     return undefined;
@@ -512,10 +518,13 @@ function buildTraceToolSummary(params: {
     seen.add(toolName);
     tools.push(toolName);
   }
+  const failedToolCalls = params.toolMetas.filter((entry) => entry.isError === true).length;
   return {
     calls: params.toolMetas?.length ?? 0,
     tools,
-    failures: params.hadFailure ? 1 : 0,
+    // Per-call error metadata is additive to the shipped harness result contract.
+    // Keep the prior any-failure signal for external harnesses that do not emit it yet.
+    failures: failedToolCalls || Number(params.fallbackHadFailure),
   };
 }
 
@@ -1056,6 +1065,8 @@ async function runEmbeddedAgentInternal(
         hookRunner,
         hookContext: hookCtx,
       });
+      const modelSelectionChangedByHook =
+        hookSelection.provider !== provider || hookSelection.modelId !== modelId;
       provider = hookSelection.provider;
       modelId = hookSelection.modelId;
       const requestedModelId = modelId;
@@ -1188,8 +1199,11 @@ async function runEmbeddedAgentInternal(
       startupStages.mark("model-resolution");
       notifyExecutionPhase("model_resolution", { provider, model: modelId });
 
+      const pluginHarnessOwnsAuthBootstrap =
+        pluginHarnessOwnsTransport && agentHarness.authBootstrap === "harness";
       const pluginHarnessNeedsOpenClawAuthBootstrap =
         pluginHarnessOwnsTransport &&
+        !pluginHarnessOwnsAuthBootstrap &&
         provider === OPENAI_PROVIDER_ID &&
         effectiveModel.api === "openai-chatgpt-responses";
       const openClawNativeCodexResponsesNeedsAuthBootstrap =
@@ -1451,13 +1465,36 @@ async function runEmbeddedAgentInternal(
         });
       };
 
-      const initialThinkLevel = resolveInitialThinkLevel({
+      const requestedThinkLevel = resolveInitialThinkLevel({
         requested: params.thinkLevel,
         config: params.config,
         provider,
         modelId,
         model: effectiveModel,
       });
+      // Hooks can replace the model after outer selection. Revalidate here so the
+      // final model/runtime never receives an unsupported thinking level.
+      const initialThinkLevel = modelSelectionChangedByHook
+        ? (resolveCandidateThinkingLevel({
+            cfg: params.config,
+            provider,
+            modelId,
+            level: requestedThinkLevel,
+            catalog: [
+              {
+                provider,
+                id: modelId,
+                api: effectiveModel.api,
+                reasoning: effectiveModel.reasoning,
+                params: effectiveModel.params,
+                compat: effectiveModel.compat,
+              },
+            ],
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            agentRuntime: agentHarness.id,
+          }) ?? requestedThinkLevel)
+        : requestedThinkLevel;
       let thinkLevel = initialThinkLevel;
       const attemptedThinking = new Set<ThinkLevel>();
       let apiKeyInfo: ApiKeyInfo | null = null;
@@ -2046,7 +2083,7 @@ async function runEmbeddedAgentInternal(
             workspaceDir: resolvedWorkspace,
             agentDir,
             agentId: workspaceResolution.agentId,
-            thinkingLevel: thinkLevel,
+            thinkingLevel: mapThinkingLevelForProvider(thinkLevel),
             extraParamsOverride: {
               ...params.streamParams,
               fastMode: attemptFastMode,
@@ -2184,6 +2221,7 @@ async function runEmbeddedAgentInternal(
             // attempt too. Otherwise plugin-owned transports can skip OpenClaw auth
             // bootstrap but drift back to OpenClaw when the attempt is created.
             agentHarnessId: agentHarness.id,
+            agentHarnessRuntimeOverride: agentHarness.id,
             ...(params.sessionKey
               ? {
                   agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
@@ -2511,6 +2549,7 @@ async function runEmbeddedAgentInternal(
             defaultModel: DEFAULT_MODEL,
             currentProvider: provider,
             currentModel: modelId,
+            currentAgentRuntimeOverride: params.agentHarnessRuntimeOverride,
             currentAuthProfileId: preferredProfileId,
             currentAuthProfileIdSource: params.authProfileIdSource,
           });
@@ -3443,7 +3482,8 @@ async function runEmbeddedAgentInternal(
             genericUnknownReasoningError ||
             assistantFailoverReason === "no_error_details" ||
             assistantFailoverReason === "unclassified" ||
-            assistantFailoverReason === "unknown";
+            assistantFailoverReason === "unknown" ||
+            assistantFailoverReason === "server_error";
           // Retry replay-safe non-visible provider errors before assistant
           // failover surfaces them as terminal provider failures.
           if (
@@ -3750,7 +3790,7 @@ async function runEmbeddedAgentInternal(
             (attempt.toolMetas?.length ?? 0) === 0;
           const attemptToolSummary = buildTraceToolSummary({
             toolMetas: attempt.toolMetas,
-            hadFailure: Boolean(attempt.lastToolError),
+            fallbackHadFailure: Boolean(attempt.lastToolError),
           });
           const failureSignal = resolveEmbeddedRunFailureSignal({
             trigger: params.trigger,

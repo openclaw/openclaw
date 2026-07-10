@@ -287,7 +287,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
           with: {
             "fetch-depth": 1,
             "fetch-tags": false,
-            "persist-credentials": true,
+            "persist-credentials": false,
             ref: "${{ needs.preflight.outputs.checkout_revision }}",
             submodules: false,
           },
@@ -487,7 +487,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       permissions: {
         actions: "read",
         contents: "read",
-        packages: "write",
+        packages: "read",
         "pull-requests": "read",
       },
       uses: "./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
@@ -499,6 +499,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         include_repo_e2e: false,
         live_models_only: false,
         ref: "${{ needs.preflight.outputs.checkout_revision }}",
+        shared_image_artifact_namespace: "plugin-prerelease",
+        shared_image_policy: "no-push-artifact",
         targeted_docker_lane_group_size: 4,
       },
     });
@@ -530,7 +532,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(fullReleaseWorkflow.concurrency).toEqual({
       group: "full-release-validation-${{ inputs.ref }}-${{ inputs.rerun_group }}",
       "cancel-in-progress":
-        "${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') }}",
+        "${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') || startsWith(inputs.ref, 'release/') }}",
     });
     expect(releaseChecksWorkflow.jobs.resolve_target["runs-on"]).toBe("ubuntu-24.04");
     expect(releaseChecksWorkflow.jobs.prepare_release_package["runs-on"]).toBe("ubuntu-24.04");
@@ -549,15 +551,15 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(fullReleaseWorkflow.jobs.normal_ci["timeout-minutes"]).toBe(
       "${{ inputs.release_profile != 'minimum' && 240 || 60 }}",
     );
-    expect(fullReleaseWorkflow.jobs.normal_ci.needs).toEqual([
-      "resolve_target",
-      "docker_runtime_assets_preflight",
-    ]);
+    expect(fullReleaseWorkflow.jobs.normal_ci.needs).toEqual(["resolve_target", "evidence_reuse"]);
     expect(fullReleaseWorkflow.jobs.normal_ci.if).toContain(
       "needs.resolve_target.result == 'success'",
     );
+    expect(fullReleaseWorkflow.jobs.normal_ci.if).toContain(
+      "needs.evidence_reuse.outputs.reuse != 'true'",
+    );
     expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.if).toBe(
-      "inputs.rerun_group == 'all'",
+      "${{ always() && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && needs.evidence_reuse.outputs.reuse != 'true' }}",
     );
     expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight["timeout-minutes"]).toBe(20);
     const dockerPreflightStep = fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.find(
@@ -624,8 +626,14 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(releaseChecksWorkflow.jobs.summary.needs).toContain(
       "runtime_tool_coverage_release_checks",
     );
-    expect(releaseChecksSource).toContain(
-      '"runtime_tool_coverage_release_checks=${{ needs.runtime_tool_coverage_release_checks.result }}"',
+    const verifyStep = releaseChecksWorkflow.jobs.summary.steps.find(
+      (step: { name?: string }) => step.name === "Verify release check results",
+    );
+    expect(verifyStep.env.RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT).toBe(
+      "${{ needs.runtime_tool_coverage_release_checks.result }}",
+    );
+    expect(verifyStep.run).toContain(
+      '"runtime_tool_coverage_release_checks=${RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT}"',
     );
   });
 

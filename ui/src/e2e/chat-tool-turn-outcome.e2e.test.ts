@@ -67,6 +67,14 @@ describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
       "Tool error",
       "Tool output",
     ]);
+    // The earlier failure must stay visibly marked as an error even though a
+    // later turn recovered; the recovered row must render neutral.
+    const summaryClasses = await page
+      .locator(".chat-tool-msg-summary")
+      .evaluateAll((nodes) => nodes.map((node) => node.className));
+    expect(summaryClasses).toHaveLength(2);
+    expect(summaryClasses[0]).toContain("chat-tool-msg-summary--error");
+    expect(summaryClasses[1]).not.toContain("chat-tool-msg-summary--error");
     await context.close();
   });
 });
