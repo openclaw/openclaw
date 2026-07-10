@@ -95,6 +95,32 @@ describe("local model lean provider scope", () => {
     ).toEqual(["read", "exec"]);
   });
 
+  it("prefers the resolved public endpoint over a configured private provider endpoint", () => {
+    const config: OpenClawConfig = {
+      ...configWithLeanEnabled(),
+      models: {
+        providers: {
+          "custom-local": {
+            baseUrl: "http://192.168.1.25:1234/v1",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+    };
+
+    expect(
+      isLocalModelLeanEnabled({
+        config,
+        agentId: "main",
+        modelProvider: "custom-local",
+        modelApi: "openai-completions",
+        modelBaseUrl: "https://models.example.com/v1",
+        modelId: "qwen3-coder",
+      }),
+    ).toBe(false);
+  });
+
   it("disables lean mode for configured custom hosted endpoints", () => {
     const config: OpenClawConfig = {
       ...configWithLeanEnabled(),
