@@ -266,22 +266,7 @@ function shellQuote(value) {
 }
 
 function githubWorkflowRef(env = process.env) {
-  const explicit = env.OPENCLAW_DOCKER_E2E_WORKFLOW_REF;
-  if (explicit) {
-    return explicit;
-  }
-  const refName = env.GITHUB_REF_NAME;
-  if (refName) {
-    return refName;
-  }
-  const ref = env.GITHUB_REF;
-  if (ref?.startsWith("refs/heads/")) {
-    return ref.slice("refs/heads/".length);
-  }
-  if (ref?.startsWith("refs/tags/")) {
-    return ref.slice("refs/tags/".length);
-  }
-  return undefined;
+  return env.OPENCLAW_DOCKER_E2E_WORKFLOW_REF || undefined;
 }
 
 function maybeGhcrImage(value) {
@@ -312,15 +297,6 @@ export function githubWorkflowRerunCommand(laneNames, ref, env = process.env) {
     "-f",
     "live_models_only=false",
   ];
-  if (env.GITHUB_RUN_ID) {
-    fields.push("-f", `package_artifact_run_id=${shellQuote(env.GITHUB_RUN_ID)}`);
-    fields.push(
-      "-f",
-      `package_artifact_name=${shellQuote(
-        env.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME || "docker-e2e-package",
-      )}`,
-    );
-  }
   if (env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC) {
     fields.push(
       "-f",
@@ -502,7 +478,7 @@ async function writeFailureIndex(logDir, summary) {
         : undefined,
     generatedAt: new Date().toISOString(),
     lanes,
-    note: "Targeted GitHub reruns reuse this run's package artifact and shared Docker images when the generated command includes package_artifact_run_id and docker_e2e_*_image inputs.",
+    note: "Targeted GitHub reruns repack the exact selected ref and reuse only GHCR-backed shared images when the generated command includes docker_e2e_*_image inputs.",
     images: summary.images,
     packageArtifactName: process.env.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME || undefined,
     ref,
