@@ -18,7 +18,9 @@ import {
   parsePnpmPackageKey,
   parseLockPackagePath,
   resolvePackageDirs,
+  resolveShrinkwrapJobs,
   restoreCurrentPnpmLockedPackages,
+  runBoundedTasks,
   shouldUseLegacyPeerDepsForShrinkwrap,
   shrinkwrapPackageDirsForChangedPaths,
 } from "../../scripts/generate-npm-shrinkwrap.mjs";
@@ -84,6 +86,31 @@ describe("generate-npm-shrinkwrap", () => {
     expect(() => resolvePackageDirs(["--changed", "--head", "-h"])).toThrow(
       "--head requires a git ref.",
     );
+    expect(() => resolvePackageDirs(["--jobs", "-h"])).toThrow(
+      "--jobs requires a positive integer.",
+    );
+  });
+
+  it("bounds shrinkwrap package concurrency while preserving result order", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const results = await runBoundedTasks(["slow", "fast", "last"], 2, async (value) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, value === "slow" ? 30 : 5));
+      active -= 1;
+      return value;
+    });
+
+    expect(maxActive).toBe(2);
+    expect(results).toEqual(["slow", "fast", "last"]);
+  });
+
+  it("validates shrinkwrap worker counts from flags and environment", () => {
+    expect(resolveShrinkwrapJobs("3", {})).toBe(3);
+    expect(resolveShrinkwrapJobs(undefined, { OPENCLAW_NPM_SHRINKWRAP_JOBS: "2" })).toBe(2);
+    expect(() => resolveShrinkwrapJobs("0", {})).toThrow("invalid OPENCLAW_NPM_SHRINKWRAP_JOBS: 0");
+    expect(() => resolveShrinkwrapJobs("17", {})).toThrow("maximum is 16");
   });
 
   it("accepts strict npm shrinkwrap command timeout and buffer overrides", () => {
