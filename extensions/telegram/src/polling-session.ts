@@ -37,6 +37,7 @@ import {
   TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS,
 } from "./spooled-update-retry-policy.js";
 import {
+  abandonTelegramSpooledUpdateClaim,
   claimNextTelegramSpooledUpdate,
   completeTelegramSpooledUpdate,
   failTelegramSpooledUpdateClaim,
@@ -328,7 +329,7 @@ export class TelegramPollingSession {
   #webhookCleared = false;
   #forceRestarted = false;
   #activeRunner: ReturnType<typeof run> | undefined;
-  #activeFetchAbort: AbortController | undefined;
+  #activeCycleAbort: AbortController | undefined;
   #spooledUpdateHandlerKeys = new Set<string>();
   #deferredSpooledUpdateClaimKeys = new Set<string>();
   #transportState: TelegramPollingTransportState;
@@ -372,7 +373,7 @@ export class TelegramPollingSession {
   }
 
   abortActiveFetch() {
-    this.#activeFetchAbort?.abort();
+    this.#activeCycleAbort?.abort();
   }
 
   async runUntilAbort(): Promise<void> {
@@ -493,11 +494,16 @@ export class TelegramPollingSession {
   }
 
   async #createPollingBot(): Promise<TelegramBot | undefined> {
-    const fetchAbortController = new AbortController();
-    this.#activeFetchAbort = fetchAbortController;
-    const fetchAbortSignal = this.opts.abortSignal
-      ? AbortSignal.any([this.opts.abortSignal, fetchAbortController.signal])
-      : fetchAbortController.signal;
+    const cycleAbortController = new AbortController();
+    this.#activeCycleAbort = cycleAbortController;
+    const cycleAbortSignal = this.opts.abortSignal
+      ? AbortSignal.any([this.opts.abortSignal, cycleAbortController.signal])
+      : cycleAbortController.signal;
+    // Isolated turns can outlive their polling worker after adoption. Keep their
+    // Bot API client session-owned while media remains cycle-owned and retryable.
+    const botApiAbortSignal = this.opts.isolatedIngress?.enabled
+      ? this.opts.abortSignal
+      : cycleAbortSignal;
     const telegramTransport = this.#transportState.acquireForNextCycle();
     const persistedLastUpdateId = this.opts.getLastUpdateId();
     const lastUpdateId = this.opts.isolatedIngress?.enabled ? null : persistedLastUpdateId;
@@ -514,15 +520,16 @@ export class TelegramPollingSession {
         config: this.opts.config,
         accountId: this.opts.accountId,
         botInfo: this.opts.botInfo,
-        fetchAbortSignal,
+        ...(botApiAbortSignal ? { fetchAbortSignal: botApiAbortSignal } : {}),
+        mediaAbortSignal: cycleAbortSignal,
         minimumClientTimeoutSeconds: TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS,
         ...(updateOffset ? { updateOffset } : {}),
         telegramTransport,
       });
     } catch (err) {
       await this.#waitBeforeRetryOnRecoverableSetupError(err, "Telegram setup network error");
-      if (this.#activeFetchAbort === fetchAbortController) {
-        this.#activeFetchAbort = undefined;
+      if (this.#activeCycleAbort === cycleAbortController) {
+        this.#activeCycleAbort = undefined;
       }
       return undefined;
     }
@@ -965,9 +972,7 @@ export class TelegramPollingSession {
       }
       if (params.shouldStop() || this.opts.abortSignal?.aborted) {
         try {
-          await releaseTelegramSpooledUpdateClaim(claimedUpdate, {
-            lastError: "Telegram polling cycle ended before processing",
-          });
+          await abandonTelegramSpooledUpdateClaim(claimedUpdate);
         } catch (err) {
           this.opts.log(
             `[telegram][diag] spooled update ${claimedUpdate.updateId} could not be requeued after its polling cycle ended: ${formatErrorMessage(err)}`,
@@ -979,9 +984,7 @@ export class TelegramPollingSession {
       const handlerKey = buildSpooledUpdateHandlerKey({ spoolDir: params.spoolDir, laneKey });
       if (activeSpooledUpdateHandlersByLane.has(handlerKey)) {
         blockedByLane.add(handlerKey);
-        await releaseTelegramSpooledUpdateClaim(claimedUpdate, {
-          lastError: "active Telegram spool handler already owns this lane",
-        });
+        await abandonTelegramSpooledUpdateClaim(claimedUpdate);
         blockedLaneKeys.add(laneKey);
         continue;
       }
@@ -1157,16 +1160,16 @@ export class TelegramPollingSession {
     if (!ingress?.enabled) {
       return this.#runPollingCycle(bot);
     }
-    const fetchAbortController = this.#activeFetchAbort;
-    const abortFetch = () => {
-      fetchAbortController?.abort();
+    const cycleAbortController = this.#activeCycleAbort;
+    const abortMedia = () => {
+      cycleAbortController?.abort();
     };
     try {
       await bot.init();
     } catch (err) {
-      abortFetch();
-      if (this.#activeFetchAbort === fetchAbortController) {
-        this.#activeFetchAbort = undefined;
+      abortMedia();
+      if (this.#activeCycleAbort === cycleAbortController) {
+        this.#activeCycleAbort = undefined;
       }
       const shouldRetry = await this.#waitBeforeRetryOnRecoverableSetupError(
         err,
@@ -1223,7 +1226,7 @@ export class TelegramPollingSession {
     let cycleEnding = false;
     const endCycle = () => {
       cycleEnding = true;
-      abortFetch();
+      abortMedia();
     };
     const unsubscribe = worker.onMessage((message) => {
       const ackSpooledUpdate = (
@@ -1516,8 +1519,8 @@ export class TelegramPollingSession {
         await waitForGracefulStop(() => this.#waitForSpooledUpdateHandlers());
       }
       await waitForGracefulStop(stopBot);
-      if (this.#activeFetchAbort === fetchAbortController) {
-        this.#activeFetchAbort = undefined;
+      if (this.#activeCycleAbort === cycleAbortController) {
+        this.#activeCycleAbort = undefined;
       }
     }
   }
@@ -1552,7 +1555,7 @@ export class TelegramPollingSession {
     const runner = run(bot, this.opts.runnerOptions);
     this.opts.log(`[telegram][diag] polling cycle started ${liveness.formatDiagnosticFields()}`);
     this.#activeRunner = runner;
-    const fetchAbortController = this.#activeFetchAbort;
+    const fetchAbortController = this.#activeCycleAbort;
     const abortFetch = () => {
       fetchAbortController?.abort();
     };
@@ -1701,8 +1704,8 @@ export class TelegramPollingSession {
       await waitForGracefulStop(stopRunner);
       await waitForGracefulStop(stopBot);
       this.#activeRunner = undefined;
-      if (this.#activeFetchAbort === fetchAbortController) {
-        this.#activeFetchAbort = undefined;
+      if (this.#activeCycleAbort === fetchAbortController) {
+        this.#activeCycleAbort = undefined;
       }
     }
   }

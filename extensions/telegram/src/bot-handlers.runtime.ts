@@ -233,9 +233,13 @@ export const registerTelegramHandlers = ({
     token: opts.token,
     transport: telegramTransport,
   });
+  const mediaAbortSignal =
+    opts.mediaAbortSignal && opts.fetchAbortSignal
+      ? AbortSignal.any([opts.mediaAbortSignal, opts.fetchAbortSignal])
+      : (opts.mediaAbortSignal ?? opts.fetchAbortSignal);
   const mediaRuntimeWithAbort = {
     ...mediaRuntimeOptions,
-    abortSignal: opts.fetchAbortSignal,
+    abortSignal: mediaAbortSignal,
   };
   const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;

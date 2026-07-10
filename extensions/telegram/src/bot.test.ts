@@ -2991,7 +2991,8 @@ describe("createTelegramBot", () => {
     onSpy.mockClear();
     replySpy.mockClear();
     getFileSpy.mockClear();
-    const shutdown = new AbortController();
+    const botShutdown = new AbortController();
+    const mediaAbort = new AbortController();
     let replyGetFileSignal: AbortSignal | undefined;
     loadWebMedia.mockResolvedValueOnce({ path: "/tmp/reply-photo.png", contentType: "image/png" });
 
@@ -3007,7 +3008,8 @@ describe("createTelegramBot", () => {
     try {
       createTelegramBot({
         token: "tok",
-        fetchAbortSignal: shutdown.signal,
+        fetchAbortSignal: botShutdown.signal,
+        mediaAbortSignal: mediaAbort.signal,
         telegramTransport: {
           fetch: mediaFetch as typeof fetch,
           sourceFetch: mediaFetch as typeof fetch,
@@ -3038,7 +3040,7 @@ describe("createTelegramBot", () => {
       ) as AbortSignal;
       expect(replyGetFileSignal.aborted).toBe(false);
     } finally {
-      shutdown.abort();
+      mediaAbort.abort();
       ssrfMock.mockRestore();
     }
 
@@ -3056,6 +3058,8 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToBody).toBe("<media:image>");
     expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1", expect.any(AbortSignal));
     expect(replyGetFileSignal?.aborted).toBe(true);
+    expect(botShutdown.signal.aborted).toBe(false);
+    botShutdown.abort();
     expect(loadWebMedia).not.toHaveBeenCalled();
     expect(mediaFetch).toHaveBeenCalledTimes(1);
   });
@@ -3112,13 +3116,18 @@ describe("createTelegramBot", () => {
     onSpy.mockClear();
     replySpy.mockClear();
     getFileSpy.mockClear();
-    const shutdown = new AbortController();
+    const botShutdown = new AbortController();
+    const mediaAbort = new AbortController();
     getFileSpy.mockImplementationOnce(async () => {
-      shutdown.abort();
+      botShutdown.abort();
       throw new Error("Bad Request: file is too big");
     });
 
-    createTelegramBot({ token: "tok", fetchAbortSignal: shutdown.signal });
+    createTelegramBot({
+      token: "tok",
+      fetchAbortSignal: botShutdown.signal,
+      mediaAbortSignal: mediaAbort.signal,
+    });
     const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
     const update = {
       update_id: 98081,
@@ -3148,6 +3157,7 @@ describe("createTelegramBot", () => {
     expect(result).toEqual({ kind: "failed-retryable", error: expect.any(Error) });
     expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1", expect.any(AbortSignal));
     expect(replySpy).not.toHaveBeenCalled();
+    expect(mediaAbort.signal.aborted).toBe(false);
   });
 
   it("hydrates reply chains from cached Telegram messages", async () => {
