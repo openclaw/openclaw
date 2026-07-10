@@ -871,10 +871,10 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       );
     }
 
-    bridge.submitToolResult("call_1", { text: "first" });
+    await bridge.submitToolResult("call_1", { text: "first" });
     expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
 
-    bridge.submitToolResult("call_2", { text: "second" });
+    await bridge.submitToolResult("call_2", { text: "second" });
     expect(parseSent(socket).slice(-2)).toEqual([
       {
         type: "conversation.item.create",
@@ -919,12 +919,12 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       ),
     );
 
-    bridge.submitToolResult("call_1", { status: "working" }, { willContinue: true });
-    expect(
-      parseSent(socket).filter((event) => event.type === "conversation.item.create"),
-    ).toEqual([]);
+    await bridge.submitToolResult("call_1", { status: "working" }, { willContinue: true });
+    expect(parseSent(socket).filter((event) => event.type === "conversation.item.create")).toEqual(
+      [],
+    );
 
-    bridge.submitToolResult("call_1", { text: "final" });
+    await bridge.submitToolResult("call_1", { text: "final" });
     expect(parseSent(socket).slice(-2)).toEqual([
       {
         type: "conversation.item.create",
@@ -981,7 +981,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       ),
     );
 
-    bridge.submitToolResult("call_1", { text: "final" });
+    await bridge.submitToolResult("call_1", { text: "final" });
     expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
 
     bridge.acknowledgeMark?.();
@@ -1037,10 +1037,10 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     secondSocket.emit("open");
     secondSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
 
-    bridge.submitToolResult("call_1", { text: "first" });
+    await bridge.submitToolResult("call_1", { text: "first" });
     expect(parseSent(secondSocket).filter((event) => event.type === "response.create")).toEqual([]);
 
-    bridge.submitToolResult("call_2", { text: "second" });
+    await bridge.submitToolResult("call_2", { text: "second" });
     expect(parseSent(secondSocket).slice(-2)).toEqual([
       {
         type: "conversation.item.create",
@@ -1103,9 +1103,10 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     secondSocket.readyState = FakeWebSocket.OPEN;
     secondSocket.emit("open");
 
-    bridge.submitToolResult("call_1", { text: "first" });
-    expect(parseSent(secondSocket).filter((event) => event.type === "conversation.item.create"))
-      .toEqual([]);
+    await bridge.submitToolResult("call_1", { text: "first" });
+    expect(
+      parseSent(secondSocket).filter((event) => event.type === "conversation.item.create"),
+    ).toEqual([]);
 
     secondSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
     expect(parseSent(secondSocket).filter((event) => event.type === "response.create")).toEqual([]);
@@ -1120,7 +1121,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       },
     ]);
 
-    bridge.submitToolResult("call_2", { text: "second" });
+    await bridge.submitToolResult("call_2", { text: "second" });
     expect(parseSent(secondSocket).slice(-2)).toEqual([
       {
         type: "conversation.item.create",
@@ -1168,8 +1169,9 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     secondSocket.emit("open");
 
     bridge.sendUserMessage?.("OpenClaw finished checking.");
-    expect(parseSent(secondSocket).filter((event) => event.type === "conversation.item.create"))
-      .toEqual([]);
+    expect(
+      parseSent(secondSocket).filter((event) => event.type === "conversation.item.create"),
+    ).toEqual([]);
 
     secondSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
     expect(parseSent(secondSocket).slice(-2)).toEqual([
