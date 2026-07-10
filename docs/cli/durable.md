@@ -99,6 +99,20 @@ The durable runtime records enough identity, status, recovery state, and state
 refs to inspect where work stopped. It does not make automatic retry or resume
 decisions by itself in this foundation slice.
 
+## Durable Wake Queue And Attention Obligations
+
+Durable wake rows are runtime facts with `pending`, `delivered`, `acked`,
+`failed`, or `superseded` status. They record the owner or target that needs
+attention, the durable facts that justify the wake, a dedupe key, delivery
+attempt counters, and bounded failure or acknowledgement state.
+
+Wake target resolution is deliberately diagnostic-first. The runtime may resolve
+an owner, parent session, report route, operator route, or inspect-only target
+from recorded facts, but it does not choose retry, resume, abandon, or
+replacement work for that target. Duplicate child completions, repeated recovery
+passes, result-mailbox replays, and repeated delivery attempts are expected to
+dedupe by durable keys instead of creating duplicate attention pressure.
+
 ## Related
 
 - [Gateway protocol](/gateway/protocol#durable-coordination-rpcs)
