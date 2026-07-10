@@ -58,7 +58,10 @@ import {
   resolveResponsesMessageSnapshotCollapse,
 } from "./openai-responses-stream-compat.js";
 import { convertResponsesToolPayload, convertResponsesTools } from "./openai-responses-tools.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeMediaOnlyToolResultPlaceholder,
+  extractToolResultText,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 // =============================================================================
@@ -432,14 +435,8 @@ export function convertResponsesMessages<TApi extends Api>(
     } else if (msg.role === "toolResult") {
       const textResult = extractToolResultText(msg.content);
       const sanitizedTextResult = sanitizeSurrogates(textResult);
-      const hasTextBlock = msg.content.some((c) => c.type === "text");
       const hasImages = msg.content.some((c): c is ImageContent => c.type === "image");
-      // Only use a media placeholder for media-only tool results. If a
-      // toolResult has any text block, even an empty/truncated one, prefer the
-      // normal empty-output fallback over a stale media placeholder (#99241).
-      const mediaPlaceholder = hasTextBlock
-        ? undefined
-        : describeToolResultMediaPlaceholder(msg.content);
+      const mediaPlaceholder = describeMediaOnlyToolResultPlaceholder(msg.content);
       const hasText = sanitizedTextResult.trim().length > 0;
       const [callId] = msg.toolCallId.split("|");
 

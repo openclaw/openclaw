@@ -665,9 +665,8 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
               item.type === "image",
           )
         : [];
-      // Only use a media placeholder for media-only tool results. If a
-      // toolResult has any text block, even an empty/truncated one, prefer the
-      // normal empty-output fallback over a stale media placeholder (#99241).
+      // Keep the public media-description helper independent; this serializer
+      // suppresses its fallback only when a text block is already present.
       const mediaPlaceholder = hasTextBlock
         ? undefined
         : describeToolResultMediaPlaceholder(msg.content);

@@ -33,7 +33,10 @@ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { buildBaseOptions } from "./simple-options.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeMediaOnlyToolResultPlaceholder,
+  extractToolResultText,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 const MISTRAL_TOOL_CALL_ID_LENGTH = 9;
@@ -895,13 +898,7 @@ function toChatMessages(
 
     const toolContent: ContentChunk[] = [];
     const textResult = extractToolResultText(msg.content);
-    // Only use a media placeholder for media-only tool results. If a
-    // toolResult has any text block, even an empty/truncated one, prefer the
-    // normal empty-output fallback over a stale media placeholder (#99241).
-    const hasTextBlock = msg.content.some((part) => part.type === "text");
-    const mediaPlaceholder = hasTextBlock
-      ? undefined
-      : describeToolResultMediaPlaceholder(msg.content);
+    const mediaPlaceholder = describeMediaOnlyToolResultPlaceholder(msg.content);
     const hasImages = msg.content.some((part) => part.type === "image");
     const toolText = buildToolResultText(
       textResult,

@@ -62,7 +62,10 @@ import {
   type OpenAIToolProjection,
 } from "./openai-tool-projection.js";
 import { buildBaseOptions } from "./simple-options.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeMediaOnlyToolResultPlaceholder,
+  extractToolResultText,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 /**
@@ -1200,14 +1203,8 @@ export function convertMessages(
 
         // Extract text and image content
         const textResult = extractToolResultText(toolMsg.content);
-        const hasTextBlock = toolMsg.content.some((c) => c.type === "text");
+        const mediaPlaceholder = describeMediaOnlyToolResultPlaceholder(toolMsg.content);
         const hasImages = toolMsg.content.some((c) => c.type === "image");
-        // Only use a media placeholder for media-only tool results. If a
-        // toolResult has any text block, even an empty/truncated one, prefer the
-        // normal empty-output fallback over a stale media placeholder (#99241).
-        const mediaPlaceholder = hasTextBlock
-          ? undefined
-          : describeToolResultMediaPlaceholder(toolMsg.content);
 
         // Always send tool result with text (or placeholder if only images)
         const content = sanitizeToolResultText(

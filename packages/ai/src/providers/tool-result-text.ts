@@ -124,7 +124,6 @@ function truncateProviderToolText(text: string): string {
 export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): string | undefined {
   let hasImage = false;
   let hasAudio = false;
-  let hasText = false;
 
   for (const block of blocks) {
     if (!block || typeof block !== "object") {
@@ -134,9 +133,6 @@ export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): 
     const type = typeof record.type === "string" ? record.type : undefined;
     const mimeType = readMimeType(record);
 
-    if (type === "text") {
-      hasText = true;
-    }
     if (
       (type && IMAGE_TOOL_RESULT_TYPES.has(type)) ||
       mimeType?.toLowerCase().startsWith("image/")
@@ -151,9 +147,6 @@ export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): 
     }
   }
 
-  if (hasText) {
-    return undefined;
-  }
   if (hasImage && hasAudio) {
     return "(see attached media)";
   }
@@ -164,6 +157,23 @@ export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): 
     return "(see attached image)";
   }
   return undefined;
+}
+
+/** Select a media fallback only when no explicit text block owns the tool-result payload. */
+export function describeMediaOnlyToolResultPlaceholder(
+  blocks: readonly unknown[],
+): string | undefined {
+  if (
+    blocks.some(
+      (block) =>
+        Boolean(block) &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "text",
+    )
+  ) {
+    return undefined;
+  }
+  return describeToolResultMediaPlaceholder(blocks);
 }
 
 export function extractToolResultBlockText(block: unknown): string | undefined {

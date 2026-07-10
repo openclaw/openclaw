@@ -32,7 +32,10 @@ import type {
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeMediaOnlyToolResultPlaceholder,
+  extractToolResultText,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 type GoogleApiType = "google-generative-ai" | "google-vertex";
@@ -280,19 +283,13 @@ export function convertMessages<T extends GoogleApiType>(
     } else if (msg.role === "toolResult") {
       // Extract text and image content
       const textResult = extractToolResultText(msg.content);
-      const hasTextBlock = msg.content.some((item) => item.type === "text");
       const imageContent = model.input.includes("image")
         ? msg.content.filter((c): c is ImageContent => c.type === "image")
         : [];
 
       const hasText = textResult.length > 0;
       const hasImages = imageContent.length > 0;
-      // Only use a media placeholder for media-only tool results. If a
-      // toolResult has any text block, even an empty/truncated one, prefer the
-      // normal empty-output fallback over a stale media placeholder (#99241).
-      const mediaPlaceholder = hasTextBlock
-        ? undefined
-        : describeToolResultMediaPlaceholder(msg.content);
+      const mediaPlaceholder = describeMediaOnlyToolResultPlaceholder(msg.content);
 
       // Gemini 3+ models support multimodal function responses with images nested inside
       // functionResponse.parts. Claude and other non-Gemini models behind Cloud Code Assist /

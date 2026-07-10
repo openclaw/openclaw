@@ -87,7 +87,7 @@ import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.js";
 import {
-  describeToolResultMediaPlaceholder,
+  describeMediaOnlyToolResultPlaceholder,
   extractToolResultBlockText,
   extractToolResultText,
 } from "./tool-result-text.js";
@@ -170,18 +170,7 @@ function convertContentBlocks(
       (item) =>
         item && typeof item === "object" && (item as Record<string, unknown>).type === "image",
     );
-  const hasExplicitTextBlock =
-    Array.isArray(content) &&
-    content.some(
-      (item) =>
-        item && typeof item === "object" && (item as Record<string, unknown>).type === "text",
-    );
-  // Only use a media placeholder for media-only tool results. If a
-  // toolResult has any text block, even an empty/truncated one, prefer the
-  // normal empty-output fallback over a stale media placeholder (#99241).
-  const mediaPlaceholder = hasExplicitTextBlock
-    ? undefined
-    : describeToolResultMediaPlaceholder(content);
+  const mediaPlaceholder = describeMediaOnlyToolResultPlaceholder(content);
 
   if (!hasImages) {
     const sanitized = sanitizeSurrogates(text);
