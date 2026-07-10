@@ -273,6 +273,10 @@ import {
   type PluginsUiDescriptorsResult,
   PluginsUiDescriptorsParamsSchema,
   PluginsUiDescriptorsResultSchema,
+  type PluginsUninstallParams,
+  type PluginsUninstallResult,
+  PluginsUninstallParamsSchema,
+  PluginsUninstallResultSchema,
   ErrorCodes,
   type EnvironmentSummary,
   EnvironmentSummarySchema,
@@ -1100,6 +1104,12 @@ export const validatePluginsSetEnabledParams = lazyCompile<PluginsSetEnabledPara
 export const validatePluginsSetEnabledResult = lazyCompile<PluginsSetEnabledResult>(
   PluginsSetEnabledResultSchema,
 );
+export const validatePluginsUninstallParams = lazyCompile<PluginsUninstallParams>(
+  PluginsUninstallParamsSchema,
+);
+export const validatePluginsUninstallResult = lazyCompile<PluginsUninstallResult>(
+  PluginsUninstallResultSchema,
+);
 export const validatePluginsUiDescriptorsParams = lazyCompile<PluginsUiDescriptorsParams>(
   PluginsUiDescriptorsParamsSchema,
 );
@@ -1419,6 +1429,8 @@ export {
   PluginsSetEnabledResultSchema,
   PluginsUiDescriptorsParamsSchema,
   PluginsUiDescriptorsResultSchema,
+  PluginsUninstallParamsSchema,
+  PluginsUninstallResultSchema,
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
@@ -1646,6 +1658,8 @@ export type {
   PluginsSessionActionResult,
   PluginsSetEnabledParams,
   PluginsSetEnabledResult,
+  PluginsUninstallParams,
+  PluginsUninstallResult,
   SkillsStatusParams,
   ToolsCatalogParams,
   ToolsCatalogResult,

@@ -12,6 +12,7 @@ describe("plugin management gateway descriptors", () => {
       "plugins.search": handler,
       "plugins.install": handler,
       "plugins.setEnabled": handler,
+      "plugins.uninstall": handler,
     });
     const byName = new Map(descriptors.map((descriptor) => [descriptor.name, descriptor]));
 
@@ -22,6 +23,10 @@ describe("plugin management gateway descriptors", () => {
       controlPlaneWrite: true,
     });
     expect(byName.get("plugins.setEnabled")).toMatchObject({
+      scope: "operator.admin",
+      controlPlaneWrite: true,
+    });
+    expect(byName.get("plugins.uninstall")).toMatchObject({
       scope: "operator.admin",
       controlPlaneWrite: true,
     });

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   applyUninstall: vi.fn(),
   clawhubInstall: vi.fn(),
+  commitRecords: vi.fn(),
   installRecords: vi.fn(),
   metadata: vi.fn(),
   npmInstall: vi.fn(),
@@ -58,13 +59,20 @@ vi.mock("./install.js", () => ({
   installPluginFromNpmSpec: (...args: unknown[]) => mocks.npmInstall(...args),
 }));
 
-vi.mock("./installed-plugin-index-records.js", () => ({
+vi.mock("./installed-plugin-index-records.js", async (importOriginal) => ({
+  // Keep the pure config/record helpers real; only record IO is stubbed.
+  ...(await importOriginal<typeof import("./installed-plugin-index-records.js")>()),
   loadInstalledPluginIndexInstallRecords: (...args: unknown[]) => mocks.installRecords(...args),
 }));
 
-vi.mock("./uninstall.js", () => ({
+vi.mock("./uninstall.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./uninstall.js")>()),
   applyPluginUninstallDirectoryRemoval: (...args: unknown[]) => mocks.applyUninstall(...args),
   planPluginUninstall: (...args: unknown[]) => mocks.planUninstall(...args),
+}));
+
+vi.mock("./install-record-commit.js", () => ({
+  commitPluginInstallRecordsWithConfig: (...args: unknown[]) => mocks.commitRecords(...args),
 }));
 
 vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
@@ -79,6 +87,7 @@ const {
   listManagedPlugins,
   overlayBundledOfficialPluginCatalogMetadata,
   setManagedPluginEnabled,
+  uninstallManagedPlugin,
 } = await import("./management-service.js");
 
 function configSnapshot(config: Record<string, unknown> = {}) {
@@ -103,6 +112,7 @@ function metadataSnapshot(params: {
   id?: string;
   name?: string;
   origin?: "bundled" | "global";
+  installRecord?: Record<string, unknown>;
 }) {
   const id = params.id ?? "workboard";
   const manifest = {
@@ -130,6 +140,7 @@ function metadataSnapshot(params: {
           enabled: params.enabled,
         },
       ],
+      installRecords: params.installRecord ? { [id]: params.installRecord } : {},
     },
     byPluginId: new Map([[id, manifest]]),
     plugins: [manifest],
@@ -140,7 +151,7 @@ function metadataSnapshot(params: {
 
 function emptyMetadataSnapshot() {
   return {
-    index: { plugins: [] },
+    index: { plugins: [], installRecords: {} },
     byPluginId: new Map(),
     plugins: [],
     diagnostics: [],
@@ -698,5 +709,119 @@ describe("plugin management service", () => {
       version: "1.2.3",
       warning: "Review the release",
     });
+  });
+
+  it("marks external installs removable and bundled plugins non-removable", async () => {
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({
+        enabled: true,
+        id: "diffs",
+        name: "Diffs",
+        origin: "global",
+        installRecord: { source: "clawhub", installPath: "/tmp/extensions/diffs" },
+      }),
+    );
+    const external = await listManagedPlugins({
+      config: {},
+      env: {},
+      officialCatalog: { entries: [] },
+    });
+    expect(external.plugins[0]).toMatchObject({ id: "diffs", removable: true });
+
+    mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: false }));
+    const bundled = await listManagedPlugins({
+      config: {},
+      env: {},
+      officialCatalog: { entries: [] },
+    });
+    expect(bundled.plugins[0]).toMatchObject({ id: "workboard", removable: false });
+  });
+
+  it("uninstalls an external plugin through commit, file removal, and registry refresh", async () => {
+    const installRecord = {
+      source: "clawhub",
+      spec: "clawhub:@openclaw/diffs",
+      installPath: "/tmp/extensions/diffs",
+    };
+    const prepared = configSnapshot({ plugins: { entries: { diffs: { enabled: true } } } });
+    mocks.readConfig.mockResolvedValue(prepared);
+    mocks.installRecords.mockResolvedValue({ diffs: installRecord });
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({
+        enabled: true,
+        id: "diffs",
+        name: "Diffs",
+        origin: "global",
+        installRecord,
+      }),
+    );
+    mocks.planUninstall.mockReturnValue({
+      ok: true,
+      config: { plugins: { installs: { diffs: installRecord } } },
+      pluginId: "diffs",
+      actions: {
+        entry: true,
+        install: true,
+        allowlist: false,
+        denylist: false,
+        loadPath: false,
+        memorySlot: false,
+        contextEngineSlot: false,
+        channelConfig: false,
+        directory: false,
+      },
+      directoryRemoval: { target: "/tmp/extensions/diffs" },
+    });
+    mocks.commitRecords.mockResolvedValue(undefined);
+    mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
+    mocks.refreshRegistry.mockResolvedValue(undefined);
+
+    const result = await uninstallManagedPlugin({ pluginId: "diffs", env: {} });
+
+    expect(mocks.planUninstall).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginId: "diffs", deleteFiles: true }),
+    );
+    expect(mocks.commitRecords).toHaveBeenCalledWith(
+      expect.objectContaining({
+        previousInstallRecords: { diffs: installRecord },
+        nextInstallRecords: {},
+        baseHash: "base-hash",
+        writeOptions: prepared.writeOptions,
+      }),
+    );
+    // Transient install records never persist into the written config document.
+    expect(mocks.commitRecords.mock.calls[0][0].nextConfig.plugins?.installs).toBeUndefined();
+    expect(mocks.applyUninstall).toHaveBeenCalledWith({ target: "/tmp/extensions/diffs" });
+    expect(mocks.refreshRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "source-changed", installRecords: {} }),
+    );
+    expect(result).toMatchObject({
+      pluginId: "diffs",
+      removed: ["config entry", "install record", "directory"],
+    });
+  });
+
+  it("refuses to uninstall bundled plugins", async () => {
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.installRecords.mockResolvedValue({});
+    mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: false }));
+
+    await expect(uninstallManagedPlugin({ pluginId: "workboard", env: {} })).rejects.toThrow(
+      "bundled plugin cannot be uninstalled",
+    );
+    expect(mocks.commitRecords).not.toHaveBeenCalled();
+    expect(mocks.applyUninstall).not.toHaveBeenCalled();
+  });
+
+  it("surfaces uninstall plan failures as lifecycle errors", async () => {
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.installRecords.mockResolvedValue({});
+    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
+    mocks.planUninstall.mockReturnValue({ ok: false, error: "Plugin not found: ghost" });
+
+    await expect(uninstallManagedPlugin({ pluginId: "ghost", env: {} })).rejects.toThrow(
+      "Plugin not found: ghost",
+    );
+    expect(mocks.commitRecords).not.toHaveBeenCalled();
   });
 });

@@ -123,6 +123,10 @@ export const PluginCatalogEntrySchema = Type.Object(
     order: Type.Optional(Type.Number()),
     install: Type.Optional(PluginCatalogInstallActionSchema),
     error: Type.Optional(Type.String()),
+    /** Coarse manifest-derived grouping (channel, provider, memory, ...) for catalog UIs. */
+    category: Type.Optional(NonEmptyString),
+    /** True when the plugin has an install record and can be removed via plugins.uninstall. */
+    removable: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -164,6 +168,8 @@ export const PluginSearchPackageSchema = Type.Object(
     summary: Type.Optional(Type.String()),
     latestVersion: Type.Optional(NonEmptyString),
     runtimeId: Type.Optional(NonEmptyString),
+    downloads: Type.Optional(Type.Number({ minimum: 0 })),
+    verificationTier: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
@@ -214,6 +220,26 @@ export const PluginsInstallResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Request payload for removing one installed plugin and its managed files. */
+export const PluginsUninstallParamsSchema = Type.Object(
+  {
+    pluginId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+/** Successful plugin removal result listing the cleanup actions that ran. */
+export const PluginsUninstallResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    pluginId: NonEmptyString,
+    restartRequired: Type.Literal(true),
+    removed: Type.Array(Type.String()),
+    warnings: Type.Optional(Type.Array(Type.String())),
+  },
+  { additionalProperties: false },
+);
+
 /** Request payload for changing one installed plugin's policy state. */
 export const PluginsSetEnabledParamsSchema = Type.Object(
   {
@@ -241,5 +267,7 @@ export type PluginsSearchParams = Static<typeof PluginsSearchParamsSchema>;
 export type PluginsSearchResult = Static<typeof PluginsSearchResultSchema>;
 export type PluginsInstallParams = Static<typeof PluginsInstallParamsSchema>;
 export type PluginsInstallResult = Static<typeof PluginsInstallResultSchema>;
+export type PluginsUninstallParams = Static<typeof PluginsUninstallParamsSchema>;
+export type PluginsUninstallResult = Static<typeof PluginsUninstallResultSchema>;
 export type PluginsSetEnabledParams = Static<typeof PluginsSetEnabledParamsSchema>;
 export type PluginsSetEnabledResult = Static<typeof PluginsSetEnabledResultSchema>;

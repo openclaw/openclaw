@@ -29,6 +29,7 @@ const managementMocks = vi.hoisted(() => {
     install: vi.fn(),
     list: vi.fn(),
     setEnabled: vi.fn(),
+    uninstall: vi.fn(),
   };
 });
 const searchMock = vi.hoisted(() => vi.fn());
@@ -40,6 +41,7 @@ vi.mock("../../plugins/management-service.js", () => ({
   installManagedPlugin: (...args: unknown[]) => managementMocks.install(...args),
   listManagedPlugins: (...args: unknown[]) => managementMocks.list(...args),
   setManagedPluginEnabled: (...args: unknown[]) => managementMocks.setEnabled(...args),
+  uninstallManagedPlugin: (...args: unknown[]) => managementMocks.uninstall(...args),
 }));
 
 vi.mock("../../plugins/catalog-search.js", () => ({
@@ -86,6 +88,7 @@ describe("plugin management Gateway handlers", () => {
     managementMocks.install.mockReset();
     managementMocks.list.mockReset();
     managementMocks.setEnabled.mockReset();
+    managementMocks.uninstall.mockReset();
     searchMock.mockReset();
   });
 
@@ -119,6 +122,8 @@ describe("plugin management Gateway handlers", () => {
           latestVersion: "1.2.3",
           runtimeId: "diffs",
           ownerHandle: "openclaw",
+          verificationTier: "source-linked",
+          stats: { downloads: 149263, installs: 280, stars: 0, versions: 83 },
         },
       },
     ]);
@@ -139,6 +144,41 @@ describe("plugin management Gateway handlers", () => {
             summary: "Readable diffs",
             latestVersion: "1.2.3",
             runtimeId: "diffs",
+            downloads: 149263,
+            verificationTier: "source-linked",
+          },
+        },
+      ],
+    });
+  });
+
+  it("omits malformed ClawHub download stats from the public DTO", async () => {
+    searchMock.mockResolvedValue([
+      {
+        score: 0.5,
+        package: {
+          name: "community/demo",
+          displayName: "Demo",
+          family: "code-plugin",
+          channel: "community",
+          isOfficial: false,
+          stats: { downloads: Number.NaN },
+        },
+      },
+    ]);
+
+    const result = await callHandler("plugins.search", { query: "demo" });
+
+    expect(result.response).toEqual({
+      results: [
+        {
+          score: 0.5,
+          package: {
+            name: "community/demo",
+            displayName: "Demo",
+            family: "code-plugin",
+            channel: "community",
+            isOfficial: false,
           },
         },
       ],
@@ -299,6 +339,44 @@ describe("plugin management Gateway handlers", () => {
     expect(result.error).toMatchObject({
       code: "UNAVAILABLE",
       message: "disk full",
+    });
+  });
+
+  it("returns removal actions and forces restart after uninstall", async () => {
+    managementMocks.uninstall.mockResolvedValue({
+      pluginId: "diffs",
+      removed: ["config entry", "install record", "directory"],
+      warnings: ["npm prune skipped"],
+    });
+
+    const result = await callHandler("plugins.uninstall", { pluginId: "diffs" });
+
+    expect(managementMocks.uninstall).toHaveBeenCalledWith({ pluginId: "diffs" });
+    expect(result).toEqual({
+      ok: true,
+      response: {
+        ok: true,
+        pluginId: "diffs",
+        restartRequired: true,
+        removed: ["config entry", "install record", "directory"],
+        warnings: ["npm prune skipped"],
+      },
+      error: undefined,
+    });
+  });
+
+  it("classifies bundled uninstall refusals as invalid requests", async () => {
+    managementMocks.uninstall.mockRejectedValue(
+      new managementMocks.ManagedPluginLifecycleError(
+        "bundled plugin cannot be uninstalled: workboard; disable it instead",
+      ),
+    );
+
+    const result = await callHandler("plugins.uninstall", { pluginId: "workboard" });
+
+    expect(result.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "bundled plugin cannot be uninstalled: workboard; disable it instead",
     });
   });
 });

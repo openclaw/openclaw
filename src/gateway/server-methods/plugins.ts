@@ -8,6 +8,7 @@ import {
   validatePluginsListParams,
   validatePluginsSearchParams,
   validatePluginsSetEnabledParams,
+  validatePluginsUninstallParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { searchInstallablePluginPackages } from "../../plugins/catalog-search.js";
@@ -17,6 +18,7 @@ import {
   listManagedPlugins,
   ManagedPluginLifecycleError,
   setManagedPluginEnabled,
+  uninstallManagedPlugin,
 } from "../../plugins/management-service.js";
 import { buildGatewayReloadPlan } from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
@@ -67,6 +69,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
             ) {
               return [];
             }
+            const downloads = entry.package.stats?.downloads;
             return [
               {
                 score: entry.score,
@@ -81,6 +84,12 @@ export const pluginsHandlers: GatewayRequestHandlers = {
                     ? { latestVersion: entry.package.latestVersion }
                     : {}),
                   ...(entry.package.runtimeId ? { runtimeId: entry.package.runtimeId } : {}),
+                  ...(typeof downloads === "number" && Number.isFinite(downloads) && downloads >= 0
+                    ? { downloads }
+                    : {}),
+                  ...(entry.package.verificationTier
+                    ? { verificationTier: entry.package.verificationTier }
+                    : {}),
                 },
               },
             ];
@@ -134,6 +143,37 @@ export const pluginsHandlers: GatewayRequestHandlers = {
             : ErrorCodes.UNAVAILABLE,
           formatManagedPluginLifecycleError(error),
           details ? { details } : undefined,
+        ),
+      );
+    }
+  },
+  "plugins.uninstall": async ({ params, respond }) => {
+    if (!assertValidParams(params, validatePluginsUninstallParams, "plugins.uninstall", respond)) {
+      return;
+    }
+    try {
+      const result = await uninstallManagedPlugin({ pluginId: params.pluginId });
+      respond(
+        true,
+        {
+          ok: true,
+          pluginId: result.pluginId,
+          restartRequired: true,
+          removed: result.removed,
+          ...(result.warnings ? { warnings: result.warnings } : {}),
+        },
+        undefined,
+      );
+    } catch (error) {
+      const lifecycleError = error instanceof ManagedPluginLifecycleError ? error : undefined;
+      respond(
+        false,
+        undefined,
+        errorShape(
+          lifecycleError?.kind === "invalid-request"
+            ? ErrorCodes.INVALID_REQUEST
+            : ErrorCodes.UNAVAILABLE,
+          formatManagedPluginLifecycleError(error),
         ),
       );
     }

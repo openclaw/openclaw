@@ -281,6 +281,8 @@ import {
   PluginsSetEnabledResultSchema,
   PluginsUiDescriptorsParamsSchema,
   PluginsUiDescriptorsResultSchema,
+  PluginsUninstallParamsSchema,
+  PluginsUninstallResultSchema,
 } from "./plugins.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
@@ -728,6 +730,8 @@ export const ProtocolSchemas = {
   PluginsSetEnabledResult: PluginsSetEnabledResultSchema,
   PluginsUiDescriptorsParams: PluginsUiDescriptorsParamsSchema,
   PluginsUiDescriptorsResult: PluginsUiDescriptorsResultSchema,
+  PluginsUninstallParams: PluginsUninstallParamsSchema,
+  PluginsUninstallResult: PluginsUninstallResultSchema,
   DevicePairListParams: DevicePairListParamsSchema,
   DevicePairApproveParams: DevicePairApproveParamsSchema,
   DevicePairRejectParams: DevicePairRejectParamsSchema,

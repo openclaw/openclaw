@@ -8354,6 +8354,8 @@ public struct PluginCatalogEntry: Codable, Sendable {
     public let order: Double?
     public let install: PluginCatalogInstallAction?
     public let error: String?
+    public let category: String?
+    public let removable: Bool?
 
     public init(
         id: String,
@@ -8369,7 +8371,9 @@ public struct PluginCatalogEntry: Codable, Sendable {
         featured: Bool?,
         order: Double?,
         install: PluginCatalogInstallAction?,
-        error: String?)
+        error: String?,
+        category: String?,
+        removable: Bool?)
     {
         self.id = id
         self.name = name
@@ -8385,6 +8389,8 @@ public struct PluginCatalogEntry: Codable, Sendable {
         self.order = order
         self.install = install
         self.error = error
+        self.category = category
+        self.removable = removable
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -8402,6 +8408,8 @@ public struct PluginCatalogEntry: Codable, Sendable {
         case order
         case install
         case error
+        case category
+        case removable
     }
 }
 
@@ -8460,6 +8468,8 @@ public struct PluginSearchPackage: Codable, Sendable {
     public let summary: String?
     public let latestversion: String?
     public let runtimeid: String?
+    public let downloads: Double?
+    public let verificationtier: String?
 
     public init(
         name: String,
@@ -8469,7 +8479,9 @@ public struct PluginSearchPackage: Codable, Sendable {
         isofficial: Bool,
         summary: String?,
         latestversion: String?,
-        runtimeid: String?)
+        runtimeid: String?,
+        downloads: Double?,
+        verificationtier: String?)
     {
         self.name = name
         self.displayname = displayname
@@ -8479,6 +8491,8 @@ public struct PluginSearchPackage: Codable, Sendable {
         self.summary = summary
         self.latestversion = latestversion
         self.runtimeid = runtimeid
+        self.downloads = downloads
+        self.verificationtier = verificationtier
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -8490,6 +8504,8 @@ public struct PluginSearchPackage: Codable, Sendable {
         case summary
         case latestversion = "latestVersion"
         case runtimeid = "runtimeId"
+        case downloads
+        case verificationtier = "verificationTier"
     }
 }
 
@@ -8804,6 +8820,50 @@ public struct PluginsUiDescriptorsResult: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case ok
         case descriptors
+    }
+}
+
+public struct PluginsUninstallParams: Codable, Sendable {
+    public let pluginid: String
+
+    public init(
+        pluginid: String)
+    {
+        self.pluginid = pluginid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pluginid = "pluginId"
+    }
+}
+
+public struct PluginsUninstallResult: Codable, Sendable {
+    public let ok: Bool
+    public let pluginid: String
+    public let restartrequired: Bool
+    public let removed: [String]
+    public let warnings: [String]?
+
+    public init(
+        ok: Bool,
+        pluginid: String,
+        restartrequired: Bool,
+        removed: [String],
+        warnings: [String]?)
+    {
+        self.ok = ok
+        self.pluginid = pluginid
+        self.restartrequired = restartrequired
+        self.removed = removed
+        self.warnings = warnings
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case pluginid = "pluginId"
+        case restartrequired = "restartRequired"
+        case removed
+        case warnings
     }
 }
 

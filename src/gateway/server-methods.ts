@@ -457,7 +457,13 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadPluginHostHookHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["plugins.list", "plugins.search", "plugins.install", "plugins.setEnabled"],
+    methods: [
+      "plugins.list",
+      "plugins.search",
+      "plugins.install",
+      "plugins.setEnabled",
+      "plugins.uninstall",
+    ],
     loadHandlers: loadPluginsHandlers,
   }),
   ...createLazyCoreHandlers({

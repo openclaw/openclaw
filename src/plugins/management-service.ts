@@ -27,9 +27,16 @@ import {
   persistPluginInstall,
   type ConfigSnapshotForInstallPersist,
 } from "./install-persistence.js";
+import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
 import { installPluginFromNpmSpec } from "./install.js";
-import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
+import {
+  loadInstalledPluginIndexInstallRecords,
+  removePluginInstallRecordFromRecords,
+  withPluginInstallRecords,
+  withoutPluginInstallRecords,
+} from "./installed-plugin-index-records.js";
 import { buildNpmResolutionInstallFields } from "./installs.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   getOfficialExternalPluginCatalogManifest,
@@ -45,7 +52,11 @@ import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
-import { applyPluginUninstallDirectoryRemoval, planPluginUninstall } from "./uninstall.js";
+import {
+  applyPluginUninstallDirectoryRemoval,
+  formatUninstallActionLabels,
+  planPluginUninstall,
+} from "./uninstall.js";
 
 export type ManagedPluginCatalogEntry = {
   id: string;
@@ -62,6 +73,8 @@ export type ManagedPluginCatalogEntry = {
   order?: number;
   install?: { source: "clawhub"; packageName: string } | { source: "official"; pluginId: string };
   error?: string;
+  category?: string;
+  removable?: boolean;
 };
 
 export type ManagedPluginCatalog = {
@@ -244,6 +257,46 @@ function resolveCatalogInstallAction(params: {
   return install ? { source: "official", pluginId: params.pluginId } : undefined;
 }
 
+/** Coarse manifest-derived grouping so catalog UIs can shelve a large inventory. */
+export function derivePluginCategory(
+  manifest: PluginManifestRecord | undefined,
+): string | undefined {
+  if (!manifest) {
+    return undefined;
+  }
+  if (manifest.channels.length > 0 || Object.keys(manifest.channelConfigs ?? {}).length > 0) {
+    return "channel";
+  }
+  const mediaProvider =
+    Object.keys(manifest.imageGenerationProviderMetadata ?? {}).length > 0 ||
+    Object.keys(manifest.videoGenerationProviderMetadata ?? {}).length > 0 ||
+    Object.keys(manifest.musicGenerationProviderMetadata ?? {}).length > 0 ||
+    Object.keys(manifest.mediaUnderstandingProviderMetadata ?? {}).length > 0;
+  if (
+    manifest.providers.length > 0 ||
+    manifest.providerEndpoints?.length ||
+    manifest.modelCatalog ||
+    mediaProvider
+  ) {
+    return "provider";
+  }
+  const kinds = normalizeKinds(manifest.kind);
+  if (kinds?.includes("memory")) {
+    return "memory";
+  }
+  if (kinds?.includes("context-engine")) {
+    return "context-engine";
+  }
+  if (
+    manifest.contracts?.tools?.length ||
+    Object.keys(manifest.toolMetadata ?? {}).length > 0 ||
+    manifest.skills.length > 0
+  ) {
+    return "tool";
+  }
+  return undefined;
+}
+
 function firstPluginError(
   diagnostics: readonly PluginDiagnostic[],
   pluginId: string,
@@ -279,6 +332,10 @@ export async function listManagedPlugins(params: {
     const catalog = normalizeCatalogMetadata(manifest?.catalog);
     const error = firstPluginError(metadata.diagnostics, record.pluginId);
     const kind = normalizeKinds(manifest?.kind);
+    const category = derivePluginCategory(manifest);
+    // Only externally installed plugins (tracked install record, non-bundled) can be removed.
+    const removable =
+      record.origin !== "bundled" && Boolean(metadata.index.installRecords[record.pluginId]);
     return {
       id: record.pluginId,
       name: manifest?.name ?? record.packageName ?? record.pluginId,
@@ -295,6 +352,8 @@ export async function listManagedPlugins(params: {
       ...(catalog?.featured !== undefined ? { featured: catalog.featured } : {}),
       ...(catalog?.order !== undefined ? { order: catalog.order } : {}),
       ...(error ? { error } : {}),
+      ...(category ? { category } : {}),
+      removable,
     };
   });
   const installedIds = new Set(plugins.map((plugin) => plugin.id));
@@ -813,6 +872,71 @@ export async function setManagedPluginEnabled(params: {
       plugin,
       changedPaths: [...changedPaths].filter(Boolean).toSorted(),
       ...(warnings.length > 0 ? { warnings } : {}),
+    };
+  });
+}
+
+/** Remove an installed plugin: config references, install record, and managed files. */
+export async function uninstallManagedPlugin(params: {
+  pluginId: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{ pluginId: string; removed: string[]; warnings?: string[] }> {
+  return await withManagedPluginMutationLock(async () => {
+    const env = params.env ?? process.env;
+    const snapshot = await readPluginMutationSnapshot(env);
+    const installRecords = await loadInstalledPluginIndexInstallRecords();
+    // Mirror the CLI uninstall flow: plan against config carrying install records
+    // so managed npm/git directories resolve, then persist the stripped config.
+    const configWithRecords = withPluginInstallRecords(snapshot.config, installRecords);
+    const metadata = loadPluginMetadataSnapshot({ config: configWithRecords, env });
+    const pluginId = metadata.normalizePluginId(params.pluginId.trim());
+    const record = metadata.index.plugins.find((plugin) => plugin.pluginId === pluginId);
+    if (record?.origin === "bundled") {
+      throw new ManagedPluginLifecycleError(
+        `bundled plugin cannot be uninstalled: ${pluginId}; disable it instead`,
+      );
+    }
+    const manifest = metadata.byPluginId.get(pluginId);
+    // Mirror the CLI cold path: pass channel ownership only when declared so
+    // planPluginUninstall keeps its plugin-id fallback for channel config keys.
+    const channelIds = manifest && manifest.channels.length > 0 ? manifest.channels : undefined;
+    const extensionsDir = resolveDefaultPluginExtensionsDir(env);
+    const plan = planPluginUninstall({
+      config: configWithRecords,
+      pluginId,
+      ...(channelIds ? { channelIds } : {}),
+      deleteFiles: true,
+      extensionsDir,
+    });
+    if (!plan.ok) {
+      throw new ManagedPluginLifecycleError(plan.error);
+    }
+    const nextConfig = withoutPluginInstallRecords(plan.config);
+    const nextInstallRecords = removePluginInstallRecordFromRecords(installRecords, pluginId);
+    await commitPluginInstallRecordsWithConfig({
+      previousInstallRecords: installRecords,
+      nextInstallRecords,
+      nextConfig,
+      baseHash: snapshot.baseHash,
+      writeOptions: snapshot.writeOptions,
+    });
+    const directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
+    const warnings = [...directoryResult.warnings];
+    await refreshPluginRegistryAfterConfigMutation({
+      config: nextConfig,
+      reason: "source-changed",
+      installRecords: nextInstallRecords,
+      invalidateRuntimeCache: false,
+      logger: { warn: (message) => warnings.push(message) },
+    });
+    const removed = formatUninstallActionLabels({
+      ...plan.actions,
+      directory: directoryResult.directoryRemoved,
+    });
+    return {
+      pluginId,
+      removed,
+      ...(warnings.length > 0 ? { warnings: [...new Set(warnings)] } : {}),
     };
   });
 }

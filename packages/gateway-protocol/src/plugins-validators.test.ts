@@ -8,6 +8,8 @@ import {
   validatePluginsSearchResult,
   validatePluginsSetEnabledParams,
   validatePluginsSetEnabledResult,
+  validatePluginsUninstallParams,
+  validatePluginsUninstallResult,
 } from "./index.js";
 
 const installedPlugin = {
@@ -24,6 +26,8 @@ const installedPlugin = {
   featured: true,
   order: 10,
   install: { source: "official", pluginId: "workboard" },
+  category: "tool",
+  removable: false,
 } as const;
 
 describe("plugin lifecycle protocol validators", () => {
@@ -63,6 +67,8 @@ describe("plugin lifecycle protocol validators", () => {
               summary: "Long-term memory tools",
               latestVersion: "2.1.0",
               runtimeId: "memory-plus",
+              downloads: 1420,
+              verificationTier: "source-linked",
             },
           },
         ],
@@ -95,6 +101,29 @@ describe("plugin lifecycle protocol validators", () => {
         warnings: ["Restart the gateway to load this plugin."],
       }),
     ).toBe(true);
+  });
+
+  it("validates uninstall requests and removal summaries", () => {
+    expect(validatePluginsUninstallParams({ pluginId: "memory-plus" })).toBe(true);
+    expect(validatePluginsUninstallParams({ pluginId: "" })).toBe(false);
+    expect(validatePluginsUninstallParams({})).toBe(false);
+    expect(
+      validatePluginsUninstallResult({
+        ok: true,
+        pluginId: "memory-plus",
+        restartRequired: true,
+        removed: ["config entry", "install record", "directory"],
+        warnings: ["npm prune skipped"],
+      }),
+    ).toBe(true);
+    expect(
+      validatePluginsUninstallResult({
+        ok: true,
+        pluginId: "memory-plus",
+        restartRequired: false,
+        removed: [],
+      }),
+    ).toBe(false);
   });
 
   it("validates enablement mutations and dynamic restart metadata", () => {
