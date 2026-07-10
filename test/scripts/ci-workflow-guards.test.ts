@@ -2080,8 +2080,11 @@ describe("ci workflow guards", () => {
     expect(job.with).not.toHaveProperty("publish_pull_request");
     expect(Object.keys(job.secrets)).toEqual(["OPENAI_API_KEY"]);
     expect(summaryJob.needs).toContain("maturity_scorecard_release_checks");
+    expect(verifyStep.env.MATURITY_SCORECARD_RELEASE_CHECKS_RESULT).toBe(
+      "${{ needs.maturity_scorecard_release_checks.result }}",
+    );
     expect(verifyStep.run).toContain(
-      '"maturity_scorecard_release_checks=${{ needs.maturity_scorecard_release_checks.result }}"',
+      '"maturity_scorecard_release_checks=${MATURITY_SCORECARD_RELEASE_CHECKS_RESULT}"',
     );
     expect(verifyStep.run).not.toContain("qa_profile_release_evidence_release_checks");
   });
