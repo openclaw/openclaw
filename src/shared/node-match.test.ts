@@ -139,4 +139,17 @@ describe("shared/node-match", () => {
     expect(resolveNodeIdFromCandidates(nodes, "工作站")).toBe("cn-desktop");
     expect(() => resolveNodeIdFromCandidates(nodes, "###")).toThrow(/unknown node: ###/);
   });
+
+  it("keeps compact display-name selectors below exact name matches", () => {
+    const nodes = [
+      { nodeId: "mac-compact", displayName: "Mac Studio" },
+      { nodeId: "mac-exact", displayName: "MacStudio" },
+      { nodeId: "cafe-node", displayName: "Café 01" },
+    ];
+    expect(resolveNodeIdFromCandidates(nodes, "MacStudio")).toBe("mac-exact");
+    expect(resolveNodeIdFromCandidates([nodes[0]!, nodes[2]!], "MacStudio")).toBe(
+      "mac-compact",
+    );
+    expect(resolveNodeIdFromCandidates([nodes[2]!], "Café01")).toBe("cafe-node");
+  });
 });

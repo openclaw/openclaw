@@ -43,6 +43,10 @@ export function normalizeNodeKey(value: string) {
     .replace(/-+$/, "");
 }
 
+function normalizeCompactNodeKey(value: string) {
+  return normalizeNodeKey(value).replace(/-/g, "");
+}
+
 function listKnownNodes(nodes: NodeMatchCandidate[]): string {
   return nodes
     .map((n) => n.displayName || n.remoteIp || n.nodeId)
@@ -99,8 +103,12 @@ function resolveMatchScore(
     return 3_000;
   }
   const name = typeof node.displayName === "string" ? node.displayName : "";
-  if (name && normalizeNodeKey(name) === queryNormalized) {
+  const nameNormalized = name ? normalizeNodeKey(name) : "";
+  if (nameNormalized && nameNormalized === queryNormalized) {
     return 2_000;
+  }
+  if (nameNormalized && normalizeCompactNodeKey(name) === normalizeCompactNodeKey(query)) {
+    return 1_900;
   }
   if (query.length >= 6 && node.nodeId.startsWith(query)) {
     return 1_000;
