@@ -1,13 +1,13 @@
 ---
 summary: "Nodes: pairing, capabilities, permissions, and CLI helpers for canvas/camera/screen/device/notifications/system"
 read_when:
-  - Pairing iOS/Android nodes to a gateway
+  - Pairing iOS/watchOS/Android nodes to a gateway
   - Using node canvas/camera for agent context
   - Adding new node commands or CLI helpers
 title: "Nodes"
 ---
 
-A **node** is a companion device (macOS/iOS/Android/headless) that connects to the Gateway **WebSocket** (same port as operators) with `role: "node"` and exposes a command surface (e.g. `canvas.*`, `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Protocol details: [Gateway protocol](/gateway/protocol).
+A **node** is a companion device (macOS/iOS/watchOS/Android/headless) that connects to the Gateway with `role: "node"` and exposes a command surface (e.g. `canvas.*`, `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Most nodes use the Gateway WebSocket on the operator port. The optional direct Apple Watch node uses signed HTTPS polling on that same port because watchOS blocks generic low-level networking for ordinary apps. Protocol details: [Gateway protocol](/gateway/protocol).
 
 Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; historical only for current nodes).
 
@@ -19,7 +19,7 @@ Troubleshooting runbook: [/nodes/troubleshooting](/nodes/troubleshooting)
 
 ## Pairing + status
 
-WS nodes use **device pairing**. A node presents a device identity during `connect`; the Gateway creates a device pairing request for `role: node`. Approve via the devices CLI (or UI).
+Nodes use **device pairing**. A node presents a signed device identity during connect; the Gateway creates a device pairing request for `role: node`. Approve via the devices CLI (or UI). The direct Apple Watch setup uses an admin-minted, short-lived node-only setup code to approve its fixed low-risk command surface; later capability expansion still requires normal approval.
 
 ```bash
 openclaw devices list
@@ -29,16 +29,34 @@ openclaw nodes status
 openclaw nodes describe --node <idOrNameOrIp>
 ```
 
-Pending pairing requests expire after 5 minutes; see [Gateway-owned pairing](/gateway/pairing) for the full request/approve/token lifecycle. If a node retries with changed auth details (role/scopes/public key), the prior pending request is superseded and a new `requestId` is created — re-run `openclaw devices list` before approving.
+Pending pairing requests expire 5 minutes after the device's last retry — a device that keeps reconnecting keeps its one pending request (and `requestId`) alive instead of minting a new prompt every few minutes; see [Node pairing](/gateway/pairing) for the full request/approve lifecycle. If a node retries with changed auth details (role/scopes/public key), the prior pending request is superseded and a new `requestId` is created — clients get a `device.pair.resolved` event for the superseded request, and you should re-run `openclaw devices list` before approving.
 
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
 - The device pairing record is the durable approved-role contract. Token rotation stays inside that contract; it cannot upgrade a paired node into a role that pairing approval never granted.
-- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) is a separate, gateway-owned node pairing store that tracks the node's approved command/capability surface across reconnects. It does **not** gate the WS `connect` handshake — device pairing does that.
+- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) is a separate, gateway-owned node pairing store that tracks the node's approved command/capability surface across reconnects. It does **not** gate transport authentication — device pairing does that.
 - `openclaw nodes remove --node <id|name|ip>` removes a node pairing. For a device-backed node it revokes the device's `node` role in `devices/paired.json` and disconnects that device's node-role sessions: a mixed-role device keeps its row and only loses the `node` role, while a node-only device row is deleted. It also clears any matching entry from the separate node pairing store. `operator.pairing` may remove non-operator node rows on other devices; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
 - Approval scope follows the pending request's declared commands:
   - commandless request: `operator.pairing`
   - non-exec node commands: `operator.pairing` + `operator.write`
   - `system.run` / `system.run.prepare` / `system.which`: `operator.pairing` + `operator.admin`
+
+## Version skew and upgrade order
+
+The Gateway WebSocket accepts authenticated node clients across an N-1 protocol window.
+The current v4 Gateway therefore accepts v3 nodes when the connection declares
+both `role: "node"` and `client.mode: "node"`. Operator and UI sessions must
+still use the current protocol.
+
+For staged fleet upgrades, upgrade the Gateway first, then upgrade each node.
+An N-1 node remains visible and manageable while it is upgraded; the Gateway
+logs `legacy node protocol accepted` with an upgrade recommendation. Pairing,
+device authentication, command allowlists, and exec approvals still apply.
+Plugin-owned capabilities and commands stay hidden until the node upgrades to
+the current protocol. Nodes older than N-1 require an out-of-band upgrade before
+reconnecting.
+
+The direct watchOS HTTPS transport requires the current protocol version; update
+the watch app with the Gateway before enabling direct mode.
 
 ## Remote node host (system.run)
 
@@ -64,7 +82,7 @@ On the node machine:
 openclaw node run --host <gateway-host> --port 18789 --display-name "Build Node"
 ```
 
-`node run` also accepts `--context-path` (Gateway WS context path), `--tls`, `--tls-fingerprint <sha256>`, and `--node-id` (overriding it clears the pairing token).
+`node run` also accepts `--context-path` (Gateway WS context path), `--tls`, `--tls-fingerprint <sha256>`, and `--node-id` (override the generated node instance id).
 
 ### Remote gateway via SSH tunnel (loopback bind)
 
@@ -159,6 +177,21 @@ Related:
 
 A desktop or server node can expose chat-capable models from an Ollama server running on that node. Agents use the Ollama plugin's `node_inference` tool to discover installed models and run a bounded prompt remotely; the Gateway does not need direct network access to Ollama. See [Ollama node-local inference](/providers/ollama#node-local-inference) for setup, model filtering, and direct verification commands.
 
+### Codex session catalog
+
+The opt-in `codex-supervisor` plugin lets a headless node host or the native
+macOS node expose metadata for its local interactive Codex sessions. Enable the
+plugin independently in the node's local config and on the Gateway. The node
+setting is local consent; enabling only the Gateway cannot read another
+computer's Codex state.
+
+The node advertises the versioned read-only
+`codex.appServer.threads.list.v1` command. Approve the node pairing upgrade when
+that command first appears. The Gateway invokes it through the normal plugin
+node policy and isolates failures by host. See the [Codex Supervisor plugin
+reference](/plugins/reference/codex-supervisor) for configuration, CLI and
+Control UI use, pagination, and the metadata security boundary.
+
 ## Invoking commands
 
 Low-level (raw RPC):
@@ -173,7 +206,7 @@ openclaw nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"ja
 
 Node commands must pass two gates before they can be invoked:
 
-1. The node must declare the command in its WebSocket `connect.commands` list.
+1. The node must declare the command in its authenticated connect metadata (`connect.commands`).
 2. The gateway's platform-and-approval-derived allowlist must include the declared command.
 
 Default allowlists by platform (before plugin defaults and `allowCommands`/`denyCommands` overrides):
@@ -181,6 +214,7 @@ Default allowlists by platform (before plugin defaults and `allowCommands`/`deny
 | Platform | Commands allowed by default                                                                                                                                                                                                                                                                                           |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | iOS      | `camera.list`, `location.get`, `device.info`, `device.status`, `contacts.search`, `calendar.events`, `reminders.list`, `photos.latest`, `motion.activity`, `motion.pedometer`, `system.notify`                                                                                                                        |
+| watchOS  | `device.info`, `device.status`, `system.notify`                                                                                                                                                                                                                                                                       |
 | Android  | `camera.list`, `location.get`, `notifications.list`, `notifications.actions`, `system.notify`, `device.info`, `device.status`, `device.permissions`, `device.health`, `device.apps`, `contacts.search`, `calendar.events`, `callLog.search`, `reminders.list`, `photos.latest`, `motion.activity`, `motion.pedometer` |
 | macOS    | `camera.list`, `location.get`, `device.info`, `device.status`, `contacts.search`, `calendar.events`, `reminders.list`, `photos.latest`, `motion.activity`, `motion.pedometer`, `system.notify`                                                                                                                        |
 | Windows  | `camera.list`, `location.get`, `device.info`, `device.status`, `system.notify`                                                                                                                                                                                                                                        |
@@ -349,6 +383,20 @@ Notes:
 
 Android nodes can expose `sms.send` and `sms.search` when the user grants **SMS** permission and the device supports telephony. Both commands are dangerous-by-default: the gateway operator must also add them to `gateway.nodes.allowCommands` before they can be invoked (see [Command policy](#command-policy)).
 
+For read-only SMS search, opt in explicitly in `openclaw.json`:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      allowCommands: ["sms.search"],
+    },
+  },
+}
+```
+
+Add `sms.send` separately only when the node should also be able to send messages. Android permission and Gateway command authorization are independent; granting the phone permission does not edit Gateway policy.
+
 Low-level invoke:
 
 ```bash
@@ -357,8 +405,9 @@ openclaw nodes invoke --node <idOrNameOrIp> --command sms.send --params '{"to":"
 
 Notes:
 
-- The permission prompt must be accepted on the Android device before the capability is advertised.
+- `sms.search` may be declared before `READ_SMS` is granted so an invocation can return a permission diagnostic; reading messages still requires that Android permission.
 - Wi-Fi-only devices without telephony will not advertise `sms.send`.
+- A `requires explicit gateway.nodes.allowCommands opt-in` error means the phone declared the command but the Gateway operator has not authorized it.
 
 ## Device and personal data commands
 

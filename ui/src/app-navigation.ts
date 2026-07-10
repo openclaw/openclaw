@@ -5,53 +5,101 @@ import { t } from "./i18n/index.ts";
 
 export type NavigationRouteId = RouteId;
 
-type SidebarSection = {
-  label: string;
-  routes: readonly NavigationRouteId[];
-};
-
 type NavigationItem = {
   [TRouteId in NavigationRouteId]: IconName;
 };
 
-export const SIDEBAR_SECTIONS = [
-  { label: "chat", routes: ["chat"] },
-  {
-    label: "control",
-    routes: ["overview", "activity", "workboard", "instances", "sessions", "usage", "cron"],
-  },
-  { label: "agent", routes: ["agents", "skills", "skill-workshop", "nodes", "dreams"] },
-  { label: "settings", routes: ["config"] },
-] as const satisfies readonly SidebarSection[];
-
-export const SETTINGS_NAVIGATION_ROUTES = [
-  "config",
-  "channels",
-  "communications",
-  "appearance",
-  "automation",
-  "mcp",
-  "infrastructure",
-  "ai-agents",
-  "debug",
-  "logs",
+// The sidebar shows a small user-customizable pinned set; every other nav route
+// lives in the collapsed "More" section. Chat is reachable through the session
+// list and Settings/Docs live in the sidebar footer, so neither is listed here.
+export const SIDEBAR_NAV_ROUTES = [
+  "overview",
+  "activity",
+  "workboard",
+  "instances",
+  "sessions",
+  "usage",
+  "cron",
+  "tasks",
+  "agents",
+  "skills",
+  "skill-workshop",
+  "nodes",
+  "dreams",
 ] as const satisfies readonly NavigationRouteId[];
 
+export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
+
+// Sessions are the sidebar's core content; Overview is the only page pinned by
+// default. Users pin more via the customize menu.
+export const DEFAULT_SIDEBAR_PINNED_ROUTES = [
+  "overview",
+] as const satisfies readonly SidebarNavRoute[];
+
+/**
+ * Normalize a persisted pinned-route list. Returns null when the value is not a
+ * list (caller falls back to defaults); unknown or duplicate entries are dropped
+ * so prefs survive route renames/removals without a migration.
+ */
+export function normalizeSidebarPinnedRoutes(value: unknown): SidebarNavRoute[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const pinned: SidebarNavRoute[] = [];
+  for (const entry of value) {
+    if (
+      typeof entry === "string" &&
+      (SIDEBAR_NAV_ROUTES as readonly string[]).includes(entry) &&
+      !pinned.includes(entry as SidebarNavRoute)
+    ) {
+      pinned.push(entry as SidebarNavRoute);
+    }
+  }
+  return pinned;
+}
+
+export function sidebarMoreRoutes(pinned: readonly SidebarNavRoute[]): SidebarNavRoute[] {
+  return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.includes(routeId));
+}
+
+type SettingsNavigationGroup = {
+  /** i18n key for the group heading; null renders the group without a label. */
+  labelKey: string | null;
+  routes: readonly NavigationRouteId[];
+};
+
+// Grouping feeds the full-page settings sidebar (settings-sidebar.ts).
+export const SETTINGS_NAVIGATION_GROUPS = [
+  { labelKey: null, routes: ["profile", "config", "appearance"] },
+  { labelKey: "nav.settingsGroupConnections", routes: ["channels", "communications"] },
+  { labelKey: "nav.settingsGroupAgents", routes: ["ai-agents", "automation", "mcp"] },
+  {
+    labelKey: "nav.settingsGroupSystem",
+    routes: ["infrastructure", "worktrees", "debug", "logs"],
+  },
+] as const satisfies readonly SettingsNavigationGroup[];
+
+export const SETTINGS_NAVIGATION_ROUTES: readonly NavigationRouteId[] =
+  SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
+
 const NAVIGATION_ICONS: NavigationItem = {
-  agents: "folder",
+  agents: "bot",
   activity: "activity",
   overview: "barChart",
-  workboard: "folder",
+  workboard: "kanban",
+  worktrees: "folder",
   channels: "link",
   instances: "radio",
   sessions: "fileText",
   usage: "barChart",
-  cron: "loader",
+  cron: "calendarClock",
+  tasks: "listChecks",
   skills: "zap",
   "skill-workshop": "wrench",
   nodes: "monitor",
   chat: "messageSquare",
   config: "settings",
+  profile: "lobster",
   communications: "send",
   appearance: "spark",
   automation: "terminal",
@@ -61,20 +109,11 @@ const NAVIGATION_ICONS: NavigationItem = {
   debug: "bug",
   logs: "scrollText",
   dreams: "moon",
+  plugin: "puzzle",
 };
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
   return (SETTINGS_NAVIGATION_ROUTES as readonly NavigationRouteId[]).includes(routeId);
-}
-
-export function isRouteInSidebarSection(
-  section: SidebarSection,
-  routeId: NavigationRouteId,
-): boolean {
-  if (section.label === "settings") {
-    return isSettingsNavigationRoute(routeId);
-  }
-  return section.routes.includes(routeId);
 }
 
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
@@ -134,11 +173,13 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   activity: { titleKey: "tabs.activity", subtitleKey: "subtitles.activity" },
   overview: { titleKey: "tabs.overview", subtitleKey: "subtitles.overview" },
   workboard: { titleKey: "tabs.workboard", subtitleKey: "subtitles.workboard" },
+  worktrees: { titleKey: "tabs.worktrees", subtitleKey: "subtitles.worktrees" },
   channels: { titleKey: "tabs.channels", subtitleKey: "subtitles.channels" },
   instances: { titleKey: "tabs.instances", subtitleKey: "subtitles.instances" },
   sessions: { titleKey: "tabs.sessions", subtitleKey: "subtitles.sessions" },
   usage: { titleKey: "tabs.usage", subtitleKey: "subtitles.usage" },
   cron: { titleKey: "tabs.cron", subtitleKey: "subtitles.cron" },
+  tasks: { titleKey: "tabs.tasks", subtitleKey: "subtitles.tasks" },
   skills: { titleKey: "tabs.skills", subtitleKey: "subtitles.skills" },
   "skill-workshop": {
     titleKey: "tabs.skillWorkshop",
@@ -147,6 +188,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   nodes: { titleKey: "tabs.nodes", subtitleKey: "subtitles.nodes" },
   chat: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
   config: { titleKey: "nav.settings", subtitleKey: "subtitles.config" },
+  profile: { titleKey: "tabs.profile", subtitleKey: "subtitles.profile" },
   communications: {
     titleKey: "tabs.communications",
     subtitleKey: "subtitles.communications",
@@ -159,10 +201,20 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   debug: { titleKey: "tabs.debug", subtitleKey: "subtitles.debug" },
   logs: { titleKey: "tabs.logs", subtitleKey: "subtitles.logs" },
   dreams: { titleKey: "tabs.dreams", subtitleKey: "subtitles.dreams" },
+  plugin: { titleKey: "tabs.plugin", subtitleKey: "subtitles.plugin" },
 };
 
 export function titleForRoute(routeId: NavigationRouteId): string {
   return t(NAVIGATION_COPY[routeId].titleKey);
+}
+
+/**
+ * Sidebar item label inside the settings takeover. The config route is titled
+ * "Settings" globally (gear tooltip, palette) but reads "General" next to its
+ * sibling sections.
+ */
+export function settingsNavigationLabelForRoute(routeId: NavigationRouteId): string {
+  return routeId === "config" ? t("nav.settingsGeneral") : titleForRoute(routeId);
 }
 
 export function subtitleForRoute(routeId: NavigationRouteId): string {

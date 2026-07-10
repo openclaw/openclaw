@@ -625,6 +625,120 @@ PY
     });
   });
 
+  describe("file links", () => {
+    it("links multi-segment paths only when enabled", () => {
+      const enabled = htmlFragment(
+        toSanitizedMarkdownHtml("see src/lib/foo.ts for details", { fileLinks: true }),
+      );
+      const link = enabled.querySelector<HTMLAnchorElement>("a.markdown-file-link");
+      expect(link?.dataset.filePath).toBe("src/lib/foo.ts");
+      expect(link?.hasAttribute("href")).toBe(false);
+
+      const disabled = htmlFragment(
+        toSanitizedMarkdownHtml("see src/lib/foo.ts and src/lib/foo.ts:42 for details"),
+      );
+      expect(disabled.querySelector("a[data-file-path]")).toBeNull();
+    });
+
+    it("links prefixed single-segment paths but not bare prose filenames", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("~/notes.md ./x.ts ../y.ts foo.ts", { fileLinks: true }),
+      );
+      expect(
+        [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")].map(
+          (link) => link.dataset.filePath,
+        ),
+      ).toEqual(["~/notes.md", "./x.ts", "../y.ts"]);
+      expect(fragment.textContent).toContain("foo.ts");
+    });
+
+    it("preserves line suffixes in labels while storing the parsed line", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("src/lib/foo.ts:42 and foo.ts:7:3", { fileLinks: true }),
+      );
+      const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
+      expect(links[0]?.dataset.filePath).toBe("src/lib/foo.ts");
+      expect(links[0]?.dataset.fileLine).toBe("42");
+      expect(links[0]?.textContent).toBe("src/lib/foo.ts:42");
+      expect(links[1]?.dataset.filePath).toBe("foo.ts");
+      expect(links[1]?.dataset.fileLine).toBe("7");
+      expect(links[1]?.textContent).toBe("foo.ts:7:3");
+    });
+
+    it("links Windows absolute paths", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("C:/repo/src/foo.ts:42 and `D:\\work\\bar.ts`", {
+          fileLinks: true,
+        }),
+      );
+      const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
+      expect(links.map((link) => link.dataset.filePath)).toEqual([
+        "C:/repo/src/foo.ts",
+        "D:\\work\\bar.ts",
+      ]);
+      expect(links[0]?.dataset.fileLine).toBe("42");
+    });
+
+    it("links inline-code paths and conservative bare filenames", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("`src/lib/foo.ts` `navigation.ts` `foo.bar()` `notes.xyz123`", {
+          fileLinks: true,
+        }),
+      );
+      expect(
+        [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")].map(
+          (link) => link.dataset.filePath,
+        ),
+      ).toEqual(["src/lib/foo.ts", "navigation.ts"]);
+      expect(fragment.textContent).toContain("foo.bar()");
+      expect(fragment.textContent).toContain("notes.xyz123");
+    });
+
+    it("converts explicit relative and absolute local file links", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("[foo.ts](src/utils/foo.ts:42) [x](/Users/a/b.ts)", {
+          fileLinks: true,
+        }),
+      );
+      const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
+      expect(links).toHaveLength(2);
+      expect(links[0]?.dataset).toMatchObject({
+        filePath: "src/utils/foo.ts",
+        fileLine: "42",
+      });
+      expect(links[1]?.dataset.filePath).toBe("/Users/a/b.ts");
+      expect(links.every((link) => !link.hasAttribute("href"))).toBe(true);
+
+      const disabled = htmlFragment(toSanitizedMarkdownHtml("[x](/Users/a/b.ts)"));
+      expect(disabled.querySelector("a")?.hasAttribute("href")).toBe(false);
+      expect(disabled.querySelector("a")?.hasAttribute("data-file-path")).toBe(false);
+    });
+
+    it("leaves http links as normal links", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("https://example.com/a/b.ts", { fileLinks: true }),
+      );
+      const link = fragment.querySelector<HTMLAnchorElement>("a");
+      expect(link?.href).toBe("https://example.com/a/b.ts");
+      expect(link?.hasAttribute("data-file-path")).toBe(false);
+    });
+
+    it("does not link paths inside fenced code blocks", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("```ts\nsrc/lib/foo.ts:42\n```", { fileLinks: true }),
+      );
+      expect(fragment.querySelector("a[data-file-path]")).toBeNull();
+      expect(fragment.querySelector("code")?.textContent).toContain("src/lib/foo.ts:42");
+    });
+
+    it("guards common prose false positives", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("Node.js, e.g. version 1.2.3", { fileLinks: true }),
+      );
+      expect(fragment.querySelector("a[data-file-path]")).toBeNull();
+    });
+  });
+
   describe("security", () => {
     it("blocks javascript: in links via DOMPurify", () => {
       const html = toSanitizedMarkdownHtml("[click me](javascript:alert(1))");
@@ -675,10 +789,10 @@ PY
 
     it("rewrites docs-root links to the public docs host", () => {
       const html = toSanitizedMarkdownHtml(
-        "[workspace](/concepts/agent-workspace) [hooks](/automation/hooks#session-memory) [telegram](/channels/telegram?tab=setup) [shortlink](/telegram) [openai](/openai) [images](/images) [groups](/groups) [camera](/nodes/camera) [macOS](/platforms/macos) [cliSessions](/cli/sessions) [toolSkills](/tools/skills) [pluginDocs](/plugins/reference/diffs) [prose](/prose) [refactor](/refactor/ingress-core)",
+        "[workspace](/concepts/agent-workspace) [hooks](/automation/hooks#session-memory) [telegram](/channels/telegram?tab=setup) [shortlink](/telegram) [openai](/openai) [images](/images) [groups](/groups) [camera](/nodes/camera) [macOS](/platforms/macos) [cliSessions](/cli/sessions) [toolSkills](/tools/skills) [pluginDocs](/plugins/reference/diffs) [prose](/prose) [access](/channels/access-groups)",
       );
       expect(html).toBe(
-        '<p><a href="https://docs.openclaw.ai/concepts/agent-workspace" rel="noreferrer noopener" target="_blank">workspace</a> <a href="https://docs.openclaw.ai/automation/hooks#session-memory" rel="noreferrer noopener" target="_blank">hooks</a> <a href="https://docs.openclaw.ai/channels/telegram?tab=setup" rel="noreferrer noopener" target="_blank">telegram</a> <a href="https://docs.openclaw.ai/telegram" rel="noreferrer noopener" target="_blank">shortlink</a> <a href="https://docs.openclaw.ai/openai" rel="noreferrer noopener" target="_blank">openai</a> <a href="https://docs.openclaw.ai/images" rel="noreferrer noopener" target="_blank">images</a> <a href="https://docs.openclaw.ai/groups" rel="noreferrer noopener" target="_blank">groups</a> <a href="https://docs.openclaw.ai/nodes/camera" rel="noreferrer noopener" target="_blank">camera</a> <a href="https://docs.openclaw.ai/platforms/macos" rel="noreferrer noopener" target="_blank">macOS</a> <a href="https://docs.openclaw.ai/cli/sessions" rel="noreferrer noopener" target="_blank">cliSessions</a> <a href="https://docs.openclaw.ai/tools/skills" rel="noreferrer noopener" target="_blank">toolSkills</a> <a href="https://docs.openclaw.ai/plugins/reference/diffs" rel="noreferrer noopener" target="_blank">pluginDocs</a> <a href="https://docs.openclaw.ai/prose" rel="noreferrer noopener" target="_blank">prose</a> <a href="https://docs.openclaw.ai/refactor/ingress-core" rel="noreferrer noopener" target="_blank">refactor</a></p>\n',
+        '<p><a href="https://docs.openclaw.ai/concepts/agent-workspace" rel="noreferrer noopener" target="_blank">workspace</a> <a href="https://docs.openclaw.ai/automation/hooks#session-memory" rel="noreferrer noopener" target="_blank">hooks</a> <a href="https://docs.openclaw.ai/channels/telegram?tab=setup" rel="noreferrer noopener" target="_blank">telegram</a> <a href="https://docs.openclaw.ai/telegram" rel="noreferrer noopener" target="_blank">shortlink</a> <a href="https://docs.openclaw.ai/openai" rel="noreferrer noopener" target="_blank">openai</a> <a href="https://docs.openclaw.ai/images" rel="noreferrer noopener" target="_blank">images</a> <a href="https://docs.openclaw.ai/groups" rel="noreferrer noopener" target="_blank">groups</a> <a href="https://docs.openclaw.ai/nodes/camera" rel="noreferrer noopener" target="_blank">camera</a> <a href="https://docs.openclaw.ai/platforms/macos" rel="noreferrer noopener" target="_blank">macOS</a> <a href="https://docs.openclaw.ai/cli/sessions" rel="noreferrer noopener" target="_blank">cliSessions</a> <a href="https://docs.openclaw.ai/tools/skills" rel="noreferrer noopener" target="_blank">toolSkills</a> <a href="https://docs.openclaw.ai/plugins/reference/diffs" rel="noreferrer noopener" target="_blank">pluginDocs</a> <a href="https://docs.openclaw.ai/prose" rel="noreferrer noopener" target="_blank">prose</a> <a href="https://docs.openclaw.ai/channels/access-groups" rel="noreferrer noopener" target="_blank">access</a></p>\n',
       );
     });
 

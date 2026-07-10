@@ -11,14 +11,29 @@ vi.mock("../../channels/plugins/index.js", () => ({
 const baseConfig = {} as OpenClawConfig;
 
 describe("resolveFollowupDeliveryPayloads", () => {
+  it("drops payloads without visible content", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: " \t\n " }, { text: "", mediaUrls: [" "] }],
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps rich content when text is blank", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: " ", mediaUrl: "file:///tmp/reply.png" }],
+      }),
+    ).toMatchObject([{ text: " ", mediaUrl: "file:///tmp/reply.png" }]);
+  });
+
   it("drops a durable reasoning payload when reasoningPayloadsEnabled is not set", () => {
     expect(
       resolveFollowupDeliveryPayloads({
         cfg: baseConfig,
-        payloads: [
-          { text: "internal reasoning", isReasoning: true },
-          { text: "final answer" },
-        ],
+        payloads: [{ text: "internal reasoning", isReasoning: true }, { text: "final answer" }],
       }),
     ).toEqual([{ text: "final answer" }]);
   });
@@ -27,13 +42,22 @@ describe("resolveFollowupDeliveryPayloads", () => {
     expect(
       resolveFollowupDeliveryPayloads({
         cfg: baseConfig,
-        payloads: [
-          { text: "internal reasoning", isReasoning: true },
-          { text: "final answer" },
-        ],
+        payloads: [{ text: "internal reasoning", isReasoning: true }, { text: "final answer" }],
         reasoningPayloadsEnabled: true,
       }),
     ).toEqual([{ text: "internal reasoning", isReasoning: true }, { text: "final answer" }]);
+  });
+
+  it("drops commentary unless its delivery lane is enabled", () => {
+    const payload = { text: "internal commentary", isCommentary: true };
+    expect(resolveFollowupDeliveryPayloads({ cfg: baseConfig, payloads: [payload] })).toEqual([]);
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [payload],
+        commentaryPayloadsEnabled: true,
+      }),
+    ).toMatchObject([payload]);
   });
 
   it("drops heartbeat ack payloads without media", () => {

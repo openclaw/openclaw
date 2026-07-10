@@ -18,6 +18,8 @@ import {
 } from "./server-context.constants.js";
 import type {
   BrowserTab,
+  BrowserOperationOptions,
+  BrowserTabTargetOptions,
   EnsureTabAvailableOptions,
   ProfileRuntimeState,
 } from "./server-context.types.js";
@@ -28,7 +30,7 @@ type SelectionDeps = {
   getProfileState: () => ProfileRuntimeState;
   getCdpControlPolicy: () => SsrFPolicy | undefined;
   ensureBrowserAvailable: (opts?: { headless?: boolean }) => Promise<void>;
-  listTabs: () => Promise<BrowserTab[]>;
+  listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
   openTab: (url: string) => Promise<BrowserTab>;
 };
 
@@ -37,8 +39,8 @@ type SelectionOps = {
     targetId?: string,
     options?: EnsureTabAvailableOptions,
   ) => Promise<BrowserTab>;
-  focusTab: (targetId: string) => Promise<void>;
-  closeTab: (targetId: string) => Promise<void>;
+  focusTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;
+  closeTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;
 };
 
 function mergeOpenedTabSnapshot(
@@ -83,7 +85,9 @@ export function createProfileSelectionOps({
     targetId?: string,
     options?: EnsureTabAvailableOptions,
   ): Promise<BrowserTab> => {
+    options?.signal?.throwIfAborted();
     await ensureBrowserAvailable();
+    options?.signal?.throwIfAborted();
     const profileState = getProfileState();
     let lastNonEmptyTabs: BrowserTab[] = [];
     let lastListError: unknown;
@@ -92,13 +96,14 @@ export function createProfileSelectionOps({
 
     const readTabs = async (): Promise<BrowserTab[]> => {
       try {
-        const tabs = await listTabs();
+        const tabs = await listTabs(options);
         sawSuccessfulList = true;
         if (tabs.length > 0) {
           lastNonEmptyTabs = tabs;
         }
         return tabs;
       } catch (err) {
+        options?.signal?.throwIfAborted();
         lastListError = err;
         return [];
       }
@@ -120,6 +125,9 @@ export function createProfileSelectionOps({
         undefined;
       if (!desiredTargetId) {
         return tabs.length > 0;
+      }
+      if (targetId === undefined) {
+        return tabs.some((tab) => tab.targetId === desiredTargetId);
       }
       const resolved = resolveTargetIdFromTabs(desiredTargetId, tabs);
       return resolved.ok || resolved.reason === "ambiguous";
@@ -173,7 +181,10 @@ export function createProfileSelectionOps({
         : new Error(formatErrorMessage(lastListError));
     }
 
-    const resolveById = (raw: string) => {
+    const resolveById = (raw: string, targetOptions?: BrowserTabTargetOptions) => {
+      if (targetOptions?.exactTargetId) {
+        return candidates.find((tab) => tab.targetId === raw) ?? null;
+      }
       const resolved = resolveTargetIdFromTabs(raw, candidates);
       if (!resolved.ok) {
         if (resolved.reason === "ambiguous") {
@@ -186,7 +197,7 @@ export function createProfileSelectionOps({
 
     const pickDefault = () => {
       const last = normalizeOptionalString(profileState.lastTargetId) ?? "";
-      const lastResolved = last ? resolveById(last) : null;
+      const lastResolved = last ? resolveById(last, { exactTargetId: true }) : null;
       if (lastResolved && lastResolved !== "AMBIGUOUS") {
         return lastResolved;
       }
@@ -207,8 +218,18 @@ export function createProfileSelectionOps({
     return chosen;
   };
 
-  const resolveTargetIdOrThrow = async (targetId: string): Promise<string> => {
+  const resolveTargetIdOrThrow = async (
+    targetId: string,
+    options?: BrowserTabTargetOptions,
+  ): Promise<string> => {
     const tabs = await listTabs();
+    if (options?.exactTargetId) {
+      const exactTarget = tabs.find((tab) => tab.targetId === targetId);
+      if (!exactTarget) {
+        throw new BrowserTabNotFoundError({ input: targetId });
+      }
+      return exactTarget.targetId;
+    }
     const resolved = resolveTargetIdFromTabs(targetId, tabs);
     if (!resolved.ok) {
       if (resolved.reason === "ambiguous") {
@@ -219,8 +240,8 @@ export function createProfileSelectionOps({
     return resolved.targetId;
   };
 
-  const focusTab = async (targetId: string): Promise<void> => {
-    const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
+  const focusTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<void> => {
+    const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
 
     if (capabilities.usesChromeMcp) {
       const { focusChromeMcpTab } = await getChromeMcpModule();
@@ -256,8 +277,8 @@ export function createProfileSelectionOps({
     profileState.lastTargetId = resolvedTargetId;
   };
 
-  const closeTab = async (targetId: string): Promise<void> => {
-    const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
+  const closeTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<void> => {
+    const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
 
     if (capabilities.usesChromeMcp) {
       const { closeChromeMcpTab } = await getChromeMcpModule();

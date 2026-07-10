@@ -70,6 +70,7 @@ import {
   resolveWindowsSystem32Path,
   resolveWindowsTaskkillPath,
 } from "../../scripts/lib/windows-taskkill.mjs";
+import { formatGatewayClientRequestErrorJson } from "../../src/gateway/call.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
@@ -177,9 +178,7 @@ describe("kitchen-sink RPC isolated state", () => {
   it("clamps timer env values before they reach Node timers", () => {
     const oversizedTimerMs = String(Number.MAX_SAFE_INTEGER);
 
-    expect(readPositiveTimerMs(oversizedTimerMs, 60_000)).toBe(
-      MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS,
-    );
+    expect(readPositiveTimerMs(oversizedTimerMs, 60_000)).toBe(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS);
 
     const config = resolveKitchenSinkRpcConfig({
       OPENCLAW_KITCHEN_SINK_RPC_CALL_MS: oversizedTimerMs,
@@ -764,11 +763,15 @@ setInterval(() => {}, 1000);
       "utf8",
     );
 
-    const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath, grandchildReadyPath], {
-      detached: undefined,
-      timeoutKillGraceMs: 25,
-      timeoutMs: 500,
-    });
+    const runPromise = runCommand(
+      process.execPath,
+      [scriptPath, grandchildPidPath, grandchildReadyPath],
+      {
+        detached: undefined,
+        timeoutKillGraceMs: 25,
+        timeoutMs: 500,
+      },
+    );
     const runErrorPromise = runPromise.then(
       () => {
         throw new Error("expected timed command to reject");
@@ -1057,10 +1060,14 @@ setInterval(() => {}, 1000);
       "utf8",
     );
 
-    const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath, grandchildReadyPath], {
-      timeoutKillGraceMs: 2_000,
-      timeoutMs: 1_500,
-    });
+    const runPromise = runCommand(
+      process.execPath,
+      [scriptPath, grandchildPidPath, grandchildReadyPath],
+      {
+        timeoutKillGraceMs: 100,
+        timeoutMs: 100,
+      },
+    );
     const runErrorPromise = runPromise.then(
       () => {
         throw new Error("expected timed command to reject");
@@ -1077,7 +1084,7 @@ setInterval(() => {}, 1000);
 
       const runError = await runErrorPromise;
       expect(runError).toBeInstanceOf(Error);
-      expect((runError as Error).message).toContain("timed out after 1500ms");
+      expect((runError as Error).message).toContain("timed out after 100ms");
       await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
     } finally {
       await runPromise.catch(() => {});
@@ -1138,6 +1145,10 @@ await runCommand(process.execPath, [${JSON.stringify(scriptPath)}], {
     try {
       runner = spawn(process.execPath, [runnerPath], {
         cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OPENCLAW_TEST_KITCHEN_SINK_PARENT_SIGNAL_KILL_GRACE_MS: "100",
+        },
         stdio: ["ignore", "ignore", "pipe"],
       });
       await waitFor(() => existsSync(readyPath) && existsSync(grandchildPidPath));
@@ -1374,7 +1385,6 @@ describe("kitchen-sink RPC command catalog assertions", () => {
   });
 
   it("reconstructs typed request failures from gateway CLI JSON", async () => {
-    const { formatGatewayClientRequestErrorJson } = await import("../../src/gateway/call.js");
     const payload = formatGatewayClientRequestErrorJson(
       Object.assign(new Error("unauthorized role: operator"), {
         name: "GatewayClientRequestError",

@@ -80,20 +80,26 @@ describe("slack channel message adapter", () => {
     const sendText = requireTextSender(adapter);
     const sendMedia = requireMediaSender(adapter);
     const sendPayload = requirePayloadSender(adapter);
+    expect(adapter.durableFinal?.reconcileUnknownSendKinds).toEqual({ text: true });
 
     const proveText = async () => {
       sendSlack.mockClear();
+      const onPlatformSendDispatch = vi.fn();
       const result = await sendText({
         cfg,
         to: "C123",
         text: "hello",
         accountId: "default",
+        deliveryQueueId: "queue-1",
+        onPlatformSendDispatch,
         deps: { sendSlack },
       });
       const [to, text, options] = expectLastSendSlackCall();
       expect(to).toBe("C123");
       expect(text).toBe("hello");
       expect(options.accountId).toBe("default");
+      expect(options.deliveryQueueId).toBe("queue-1");
+      expect(options.onPlatformSendDispatch).toBe(onPlatformSendDispatch);
       expect(result.receipt.platformMessageIds).toEqual(["msg-1"]);
       expect(result.receipt.parts[0]?.kind).toBe("text");
     };
@@ -107,6 +113,7 @@ describe("slack channel message adapter", () => {
         mediaUrl: "https://example.com/a.png",
         mediaLocalRoots: ["/tmp/media"],
         accountId: "default",
+        deliveryQueueId: "queue-1",
         deps: { sendSlack },
       });
       const [to, text, options] = expectLastSendSlackCall();
@@ -115,6 +122,7 @@ describe("slack channel message adapter", () => {
       expect(options.accountId).toBe("default");
       expect(options.mediaUrl).toBe("https://example.com/a.png");
       expect(options.mediaLocalRoots).toEqual(["/tmp/media"]);
+      expect(options.deliveryQueueId).toBeUndefined();
       expect(result.receipt.parts[0]?.kind).toBe("media");
     };
 
@@ -126,12 +134,14 @@ describe("slack channel message adapter", () => {
         text: "payload",
         payload: { text: "payload" },
         accountId: "default",
+        deliveryQueueId: "queue-1",
         deps: { sendSlack },
       });
       const [to, text, options] = expectLastSendSlackCall();
       expect(to).toBe("C123");
       expect(text).toBe("payload");
       expect(options.accountId).toBe("default");
+      expect(options.deliveryQueueId).toBeUndefined();
       expect(result.receipt.platformMessageIds).toEqual(["msg-1"]);
     };
 
@@ -183,6 +193,9 @@ describe("slack channel message adapter", () => {
         thread: proveThreadFallback,
         messageSendingHooks: () => {
           expect(sendText).toBeTypeOf("function");
+        },
+        reconcileUnknownSend: () => {
+          expect(adapter.durableFinal?.reconcileUnknownSend).toBeTypeOf("function");
         },
       },
     });

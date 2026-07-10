@@ -16,6 +16,9 @@ describe("terminal ansi helpers", () => {
     expect(stripAnsi("\u001B]8;;https://openclaw.ai\u001B\\link\u001B]8;;\u001B\\")).toBe("link");
     expect(stripAnsi("\u001B]8;;https://openclaw.ai\u0007link\u001B]8;;\u0007")).toBe("link");
     expect(stripAnsi("copy\u001B]52;c;YWJj\u0007safe")).toBe("copysafe");
+    expect(stripAnsi("\u009B31mred\u009B0m")).toBe("red");
+    expect(stripAnsi("\u009D8;;https://openclaw.ai\u009Clink\u009D8;;\u009C")).toBe("link");
+    expect(stripAnsi("\u001B]unterminated")).toBe("\u001B]unterminated");
   });
 
   it("strips the agent output escape grammar without changing text policy", () => {
@@ -39,6 +42,7 @@ describe("terminal ansi helpers", () => {
       String.fromCharCode(0x9b) +
       "done";
     expect(sanitizeForLog(input)).toBe("warnnextlinedone");
+    expect(sanitizeForLog("\u009B31mred\u009B0m")).toBe("red");
   });
 
   it("measures wide graphemes by terminal cell width", () => {
@@ -51,6 +55,29 @@ describe("terminal ansi helpers", () => {
   it("keeps emoji zwj sequences as single graphemes", () => {
     expect(splitGraphemes("👨‍👩‍👧‍👦")).toEqual(["👨‍👩‍👧‍👦"]);
     expect(visibleWidth("👨‍👩‍👧‍👦")).toBe(2);
+  });
+
+  it("distinguishes text-default symbols from emoji presentation", () => {
+    expect(visibleWidth("©")).toBe(1);
+    expect(visibleWidth("©\uFE0E")).toBe(1);
+    expect(visibleWidth("©️")).toBe(2);
+    expect(visibleWidth("™")).toBe(1);
+    expect(visibleWidth("™️")).toBe(2);
+    expect(visibleWidth("❤")).toBe(1);
+    expect(visibleWidth("❤️")).toBe(2);
+    expect(visibleWidth("✈")).toBe(1);
+    expect(visibleWidth("✈️")).toBe(2);
+    expect(visibleWidth("⌚\uFE0E")).toBe(2);
+    expect(visibleWidth("📸\uFE0E")).toBe(2);
+    expect(visibleWidth("1️")).toBe(1);
+    expect(visibleWidth("1⃣")).toBe(2);
+    expect(visibleWidth("1️⃣")).toBe(2);
+    expect(visibleWidth("❤‍")).toBe(1);
+    expect(visibleWidth("☎️⃣")).toBe(1);
+    expect(visibleWidth("❤‍🔥")).toBe(2);
+    expect(visibleWidth("🇬")).toBe(1);
+    expect(visibleWidth("🇬🇧")).toBe(2);
+    expect(visibleWidth("🇬🇧🇺")).toBe(3);
   });
 
   it("truncates to a visible-width budget without splitting wide graphemes", () => {

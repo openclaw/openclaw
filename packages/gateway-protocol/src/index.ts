@@ -12,6 +12,12 @@ import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import {
   type AgentEvent,
   AgentEventSchema,
+  type AuditEvent,
+  AuditEventSchema,
+  type AuditListParams,
+  AuditListParamsSchema,
+  type AuditListResult,
+  AuditListResultSchema,
   type AgentIdentityParams,
   AgentIdentityParamsSchema,
   type AgentIdentityResult,
@@ -47,6 +53,18 @@ import {
   AgentsFilesSetParamsSchema,
   type AgentsFilesSetResult,
   AgentsFilesSetResultSchema,
+  type AgentsWorkspaceEntry,
+  AgentsWorkspaceEntrySchema,
+  type AgentsWorkspaceFile,
+  AgentsWorkspaceFileSchema,
+  type AgentsWorkspaceGetParams,
+  AgentsWorkspaceGetParamsSchema,
+  type AgentsWorkspaceGetResult,
+  AgentsWorkspaceGetResultSchema,
+  type AgentsWorkspaceListParams,
+  AgentsWorkspaceListParamsSchema,
+  type AgentsWorkspaceListResult,
+  AgentsWorkspaceListResultSchema,
   type ArtifactsDownloadParams,
   ArtifactsDownloadParamsSchema,
   type ArtifactsDownloadResult,
@@ -122,6 +140,10 @@ import {
   TalkSpeakParamsSchema,
   type TalkSpeakResult,
   TalkSpeakResultSchema,
+  type TtsSpeakParams,
+  TtsSpeakParamsSchema,
+  type TtsSpeakResult,
+  TtsSpeakResultSchema,
   type ChannelsStatusParams,
   ChannelsStatusParamsSchema,
   type ChannelsStatusResult,
@@ -165,6 +187,10 @@ import {
   ConnectParamsSchema,
   type CronAddParams,
   CronAddParamsSchema,
+  type CronAddResult,
+  CronAddResultSchema,
+  type CronDeclarativeAddResult,
+  CronDeclarativeAddResultSchema,
   type CronGetParams,
   CronGetParamsSchema,
   type CronJob,
@@ -201,6 +227,8 @@ import {
   ExecApprovalsGetParamsSchema,
   type ExecApprovalsNodeGetParams,
   ExecApprovalsNodeGetParamsSchema,
+  type ExecApprovalsNodeSnapshot,
+  ExecApprovalsNodeSnapshotSchema,
   type ExecApprovalsNodeSetParams,
   ExecApprovalsNodeSetParamsSchema,
   type ExecApprovalsSetParams,
@@ -237,6 +265,10 @@ import {
   EnvironmentsStatusResultSchema,
   type EnvironmentStatus,
   EnvironmentStatusSchema,
+  type SystemInfoParams,
+  SystemInfoParamsSchema,
+  type SystemInfoResult,
+  SystemInfoResultSchema,
   type ErrorShape,
   ErrorShapeSchema,
   type EventFrame,
@@ -244,6 +276,7 @@ import {
   errorShape,
   type GatewayFrame,
   GatewayFrameSchema,
+  GATEWAY_SERVER_CAPS,
   type HelloOk,
   HelloOkSchema,
   type LogsTailParams,
@@ -316,15 +349,12 @@ import {
   NodePairRejectParamsSchema,
   type NodePairRemoveParams,
   NodePairRemoveParamsSchema,
-  type NodePairRequestParams,
-  NodePairRequestParamsSchema,
-  type NodePairVerifyParams,
-  NodePairVerifyParamsSchema,
   type NodeRenameParams,
   NodeRenameParamsSchema,
   type PollParams,
   PollParamsSchema,
   MIN_CLIENT_PROTOCOL_VERSION,
+  MIN_NODE_PROTOCOL_VERSION,
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   type PushTestParams,
@@ -375,8 +405,12 @@ import {
   type SessionFileRelevance,
   SessionFileRelevanceSchema,
   type SessionOperationEvent,
+  type SessionWorktreeInfo,
+  SessionWorktreeInfoSchema,
   type SessionsCreateParams,
   SessionsCreateParamsSchema,
+  type SessionsCreateResult,
+  SessionsCreateResultSchema,
   type SessionsDeleteParams,
   SessionsDeleteParamsSchema,
   type SessionsDescribeParams,
@@ -409,6 +443,28 @@ import {
   SessionsSendParamsSchema,
   type SessionsUsageParams,
   SessionsUsageParamsSchema,
+  type TaskSuggestion,
+  type TaskSuggestionEvent,
+  TaskSuggestionEventSchema,
+  type TaskSuggestionResolution,
+  TaskSuggestionResolutionSchema,
+  TaskSuggestionSchema,
+  type TaskSuggestionsAcceptParams,
+  TaskSuggestionsAcceptParamsSchema,
+  type TaskSuggestionsAcceptResult,
+  TaskSuggestionsAcceptResultSchema,
+  type TaskSuggestionsCreateParams,
+  TaskSuggestionsCreateParamsSchema,
+  type TaskSuggestionsCreateResult,
+  TaskSuggestionsCreateResultSchema,
+  type TaskSuggestionsDismissParams,
+  TaskSuggestionsDismissParamsSchema,
+  type TaskSuggestionsDismissResult,
+  TaskSuggestionsDismissResultSchema,
+  type TaskSuggestionsListParams,
+  TaskSuggestionsListParamsSchema,
+  type TaskSuggestionsListResult,
+  TaskSuggestionsListResultSchema,
   type TaskSummary,
   TaskSummarySchema,
   type TasksCancelParams,
@@ -434,6 +490,14 @@ import {
   SkillsDetailResultSchema,
   type SkillsInstallParams,
   SkillsInstallParamsSchema,
+  type SkillsCuratorActionParams,
+  SkillsCuratorActionParamsSchema,
+  type SkillsCuratorActionResult,
+  SkillsCuratorActionResultSchema,
+  type SkillsCuratorStatusParams,
+  SkillsCuratorStatusParamsSchema,
+  type SkillsCuratorStatusResult,
+  SkillsCuratorStatusResultSchema,
   type SkillsProposalActionParams,
   SkillsProposalActionParamsSchema,
   type SkillsProposalApplyResult,
@@ -509,6 +573,14 @@ import {
   CrestodianChatParamsSchema,
   type CrestodianChatResult,
   CrestodianChatResultSchema,
+  type CrestodianSetupDetectParams,
+  CrestodianSetupDetectParamsSchema,
+  type CrestodianSetupDetectResult,
+  CrestodianSetupDetectResultSchema,
+  type CrestodianSetupActivateParams,
+  CrestodianSetupActivateParamsSchema,
+  type CrestodianSetupActivateResult,
+  CrestodianSetupActivateResultSchema,
   type WizardCancelParams,
   WizardCancelParamsSchema,
   type WizardNextParams,
@@ -525,6 +597,24 @@ import {
   WizardStatusResultSchema,
   type WizardStep,
   WizardStepSchema,
+  type WorktreeRecord,
+  WorktreeRecordSchema,
+  type WorktreesListParams,
+  WorktreesListParamsSchema,
+  type WorktreesListResult,
+  WorktreesListResultSchema,
+  type WorktreesCreateParams,
+  WorktreesCreateParamsSchema,
+  type WorktreesRemoveParams,
+  WorktreesRemoveParamsSchema,
+  type WorktreesRemoveResult,
+  WorktreesRemoveResultSchema,
+  type WorktreesRestoreParams,
+  WorktreesRestoreParamsSchema,
+  type WorktreesGcParams,
+  WorktreesGcParamsSchema,
+  type WorktreesGcResult,
+  WorktreesGcResultSchema,
 } from "./schema.js";
 
 /** Normalized validation error shape exposed by every protocol validator. */
@@ -599,11 +689,24 @@ export const validateMessageActionParams =
 export const validateSendParams = lazyCompile(SendParamsSchema);
 export const validatePollParams = lazyCompile<PollParams>(PollParamsSchema);
 export const validateAgentParams = lazyCompile(AgentParamsSchema);
+export const validateAuditListParams = lazyCompile<AuditListParams>(AuditListParamsSchema);
 export const validateAgentIdentityParams =
   lazyCompile<AgentIdentityParams>(AgentIdentityParamsSchema);
 export const validateAgentWaitParams = lazyCompile<AgentWaitParams>(AgentWaitParamsSchema);
 export const validateWakeParams = lazyCompile<WakeParams>(WakeParamsSchema);
 export const validateAgentsListParams = lazyCompile<AgentsListParams>(AgentsListParamsSchema);
+export const validateWorktreesListParams =
+  lazyCompile<WorktreesListParams>(WorktreesListParamsSchema);
+export const validateWorktreesCreateParams = lazyCompile<WorktreesCreateParams>(
+  WorktreesCreateParamsSchema,
+);
+export const validateWorktreesRemoveParams = lazyCompile<WorktreesRemoveParams>(
+  WorktreesRemoveParamsSchema,
+);
+export const validateWorktreesRestoreParams = lazyCompile<WorktreesRestoreParams>(
+  WorktreesRestoreParamsSchema,
+);
+export const validateWorktreesGcParams = lazyCompile<WorktreesGcParams>(WorktreesGcParamsSchema);
 export const validateAgentsCreateParams = lazyCompile<AgentsCreateParams>(AgentsCreateParamsSchema);
 export const validateAgentsUpdateParams = lazyCompile<AgentsUpdateParams>(AgentsUpdateParamsSchema);
 export const validateAgentsDeleteParams = lazyCompile<AgentsDeleteParams>(AgentsDeleteParamsSchema);
@@ -616,14 +719,17 @@ export const validateAgentsFilesGetParams = lazyCompile<AgentsFilesGetParams>(
 export const validateAgentsFilesSetParams = lazyCompile<AgentsFilesSetParams>(
   AgentsFilesSetParamsSchema,
 );
+export const validateAgentsWorkspaceListParams = lazyCompile<AgentsWorkspaceListParams>(
+  AgentsWorkspaceListParamsSchema,
+);
+export const validateAgentsWorkspaceGetParams = lazyCompile<AgentsWorkspaceGetParams>(
+  AgentsWorkspaceGetParamsSchema,
+);
 export const validateArtifactsListParams =
   lazyCompile<ArtifactsListParams>(ArtifactsListParamsSchema);
 export const validateArtifactsGetParams = lazyCompile<ArtifactsGetParams>(ArtifactsGetParamsSchema);
 export const validateArtifactsDownloadParams = lazyCompile<ArtifactsDownloadParams>(
   ArtifactsDownloadParamsSchema,
-);
-export const validateNodePairRequestParams = lazyCompile<NodePairRequestParams>(
-  NodePairRequestParamsSchema,
 );
 export const validateNodePairListParams = lazyCompile<NodePairListParams>(NodePairListParamsSchema);
 export const validateNodePairApproveParams = lazyCompile<NodePairApproveParams>(
@@ -635,9 +741,6 @@ export const validateNodePairRejectParams = lazyCompile<NodePairRejectParams>(
 export const validateNodePairRemoveParams = lazyCompile<NodePairRemoveParams>(
   NodePairRemoveParamsSchema,
 );
-export const validateNodePairVerifyParams = lazyCompile<NodePairVerifyParams>(
-  NodePairVerifyParamsSchema,
-);
 export const validateNodeRenameParams = lazyCompile<NodeRenameParams>(NodeRenameParamsSchema);
 export const validateNodeListParams = lazyCompile<NodeListParams>(NodeListParamsSchema);
 export const validateEnvironmentsListParams = lazyCompile<EnvironmentsListParams>(
@@ -646,6 +749,8 @@ export const validateEnvironmentsListParams = lazyCompile<EnvironmentsListParams
 export const validateEnvironmentsStatusParams = lazyCompile<EnvironmentsStatusParams>(
   EnvironmentsStatusParamsSchema,
 );
+export const validateSystemInfoParams = lazyCompile<SystemInfoParams>(SystemInfoParamsSchema);
+export const validateSystemInfoResult = lazyCompile<SystemInfoResult>(SystemInfoResultSchema);
 export const validateNodePendingAckParams = lazyCompile<NodePendingAckParams>(
   NodePendingAckParamsSchema,
 );
@@ -739,6 +844,18 @@ export const validateSessionsCompactionRestoreParams = lazyCompile<SessionsCompa
 );
 export const validateSessionsUsageParams =
   lazyCompile<SessionsUsageParams>(SessionsUsageParamsSchema);
+export const validateTaskSuggestionsListParams = lazyCompile<TaskSuggestionsListParams>(
+  TaskSuggestionsListParamsSchema,
+);
+export const validateTaskSuggestionsCreateParams = lazyCompile<TaskSuggestionsCreateParams>(
+  TaskSuggestionsCreateParamsSchema,
+);
+export const validateTaskSuggestionsAcceptParams = lazyCompile<TaskSuggestionsAcceptParams>(
+  TaskSuggestionsAcceptParamsSchema,
+);
+export const validateTaskSuggestionsDismissParams = lazyCompile<TaskSuggestionsDismissParams>(
+  TaskSuggestionsDismissParamsSchema,
+);
 export const validateTasksListParams = lazyCompile<TasksListParams>(TasksListParamsSchema);
 export const validateTasksGetParams = lazyCompile<TasksGetParams>(TasksGetParamsSchema);
 export const validateTasksCancelParams = lazyCompile<TasksCancelParams>(TasksCancelParamsSchema);
@@ -755,6 +872,12 @@ export const validateConfigSchemaLookupResult = lazyCompile<ConfigSchemaLookupRe
 );
 export const validateCrestodianChatParams = lazyCompile<CrestodianChatParams>(
   CrestodianChatParamsSchema,
+);
+export const validateCrestodianSetupDetectParams = lazyCompile<CrestodianSetupDetectParams>(
+  CrestodianSetupDetectParamsSchema,
+);
+export const validateCrestodianSetupActivateParams = lazyCompile<CrestodianSetupActivateParams>(
+  CrestodianSetupActivateParamsSchema,
 );
 export const validateWizardStartParams = lazyCompile<WizardStartParams>(WizardStartParamsSchema);
 export const validateWizardNextParams = lazyCompile<WizardNextParams>(WizardNextParamsSchema);
@@ -823,6 +946,8 @@ export const validateTalkSessionOkResult =
   lazyCompile<TalkSessionOkResult>(TalkSessionOkResultSchema);
 export const validateTalkSpeakParams = lazyCompile<TalkSpeakParams>(TalkSpeakParamsSchema);
 export const validateTalkSpeakResult = lazyCompile<TalkSpeakResult>(TalkSpeakResultSchema);
+export const validateTtsSpeakParams = lazyCompile<TtsSpeakParams>(TtsSpeakParamsSchema);
+export const validateTtsSpeakResult = lazyCompile<TtsSpeakResult>(TtsSpeakResultSchema);
 export const validateChannelsStatusParams = lazyCompile<ChannelsStatusParams>(
   ChannelsStatusParamsSchema,
 );
@@ -854,6 +979,12 @@ export const validateSkillsUploadCommitParams = lazyCompile<SkillsUploadCommitPa
 export const validateSkillsUpdateParams = lazyCompile<SkillsUpdateParams>(SkillsUpdateParamsSchema);
 export const validateSkillsSearchParams = lazyCompile<SkillsSearchParams>(SkillsSearchParamsSchema);
 export const validateSkillsDetailParams = lazyCompile<SkillsDetailParams>(SkillsDetailParamsSchema);
+export const validateSkillsCuratorStatusParams = lazyCompile<SkillsCuratorStatusParams>(
+  SkillsCuratorStatusParamsSchema,
+);
+export const validateSkillsCuratorActionParams = lazyCompile<SkillsCuratorActionParams>(
+  SkillsCuratorActionParamsSchema,
+);
 export const validateSkillsProposalsListParams = lazyCompile<SkillsProposalsListParams>(
   SkillsProposalsListParamsSchema,
 );
@@ -947,6 +1078,9 @@ export const validateExecApprovalsNodeGetParams = lazyCompile<ExecApprovalsNodeG
 );
 export const validateExecApprovalsNodeSetParams = lazyCompile<ExecApprovalsNodeSetParams>(
   ExecApprovalsNodeSetParamsSchema,
+);
+export const validateExecApprovalsNodeSnapshot = lazyCompile<ExecApprovalsNodeSnapshot>(
+  ExecApprovalsNodeSnapshotSchema,
 );
 export const validateLogsTailParams = lazyCompile<LogsTailParams>(LogsTailParamsSchema);
 export const validateTerminalOpenParams = lazyCompile<TerminalOpenParams>(TerminalOpenParamsSchema);
@@ -1047,6 +1181,7 @@ export function formatValidationErrors(errors: ValidationError[] | null | undefi
 // protocol surface changes.
 export {
   ConnectParamsSchema,
+  GATEWAY_SERVER_CAPS,
   HelloOkSchema,
   RequestFrameSchema,
   ResponseFrameSchema,
@@ -1061,6 +1196,8 @@ export {
   EnvironmentsListResultSchema,
   EnvironmentsStatusParamsSchema,
   EnvironmentsStatusResultSchema,
+  SystemInfoParamsSchema,
+  SystemInfoResultSchema,
   StateVersionSchema,
   AgentEventSchema,
   MessageActionParamsSchema,
@@ -1077,12 +1214,10 @@ export {
   WebPushSubscribeParamsSchema,
   WebPushUnsubscribeParamsSchema,
   WebPushTestParamsSchema,
-  NodePairRequestParamsSchema,
   NodePairListParamsSchema,
   NodePairApproveParamsSchema,
   NodePairRejectParamsSchema,
   NodePairRemoveParamsSchema,
-  NodePairVerifyParamsSchema,
   NodeListParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
@@ -1111,7 +1246,9 @@ export {
   SessionsCompactionGetParamsSchema,
   SessionsCompactionBranchParamsSchema,
   SessionsCompactionRestoreParamsSchema,
+  SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
+  SessionsCreateResultSchema,
   SessionsSendParamsSchema,
   SessionsAbortParamsSchema,
   SessionsPatchParamsSchema,
@@ -1124,6 +1261,20 @@ export {
   ArtifactsListParamsSchema,
   ArtifactsGetParamsSchema,
   ArtifactsDownloadParamsSchema,
+  AuditEventSchema,
+  AuditListParamsSchema,
+  AuditListResultSchema,
+  TaskSuggestionSchema,
+  TaskSuggestionEventSchema,
+  TaskSuggestionResolutionSchema,
+  TaskSuggestionsAcceptParamsSchema,
+  TaskSuggestionsAcceptResultSchema,
+  TaskSuggestionsCreateParamsSchema,
+  TaskSuggestionsCreateResultSchema,
+  TaskSuggestionsDismissParamsSchema,
+  TaskSuggestionsDismissResultSchema,
+  TaskSuggestionsListParamsSchema,
+  TaskSuggestionsListResultSchema,
   TaskSummarySchema,
   TasksListParamsSchema,
   TasksListResultSchema,
@@ -1142,6 +1293,10 @@ export {
   UpdateStatusParamsSchema,
   CrestodianChatParamsSchema,
   CrestodianChatResultSchema,
+  CrestodianSetupDetectParamsSchema,
+  CrestodianSetupDetectResultSchema,
+  CrestodianSetupActivateParamsSchema,
+  CrestodianSetupActivateResultSchema,
   WizardStartParamsSchema,
   WizardNextParamsSchema,
   WizardCancelParamsSchema,
@@ -1176,6 +1331,8 @@ export {
   TalkSessionOkResultSchema,
   TalkSpeakParamsSchema,
   TalkSpeakResultSchema,
+  TtsSpeakParamsSchema,
+  TtsSpeakResultSchema,
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
   ChannelsStartParamsSchema,
@@ -1197,6 +1354,12 @@ export {
   AgentsFilesGetResultSchema,
   AgentsFilesSetParamsSchema,
   AgentsFilesSetResultSchema,
+  AgentsWorkspaceEntrySchema,
+  AgentsWorkspaceFileSchema,
+  AgentsWorkspaceListParamsSchema,
+  AgentsWorkspaceListResultSchema,
+  AgentsWorkspaceGetParamsSchema,
+  AgentsWorkspaceGetResultSchema,
   AgentsListParamsSchema,
   AgentsListResultSchema,
   CommandsListParamsSchema,
@@ -1211,6 +1374,10 @@ export {
   ToolsEffectiveParamsSchema,
   ToolsInvokeParamsSchema,
   SkillsInstallParamsSchema,
+  SkillsCuratorActionParamsSchema,
+  SkillsCuratorActionResultSchema,
+  SkillsCuratorStatusParamsSchema,
+  SkillsCuratorStatusResultSchema,
   SkillsSearchParamsSchema,
   SkillsSearchResultSchema,
   SkillsDetailParamsSchema,
@@ -1240,6 +1407,8 @@ export {
   CronStatusParamsSchema,
   CronGetParamsSchema,
   CronAddParamsSchema,
+  CronAddResultSchema,
+  CronDeclarativeAddResultSchema,
   CronUpdateParamsSchema,
   CronRemoveParamsSchema,
   CronRunParamsSchema,
@@ -1273,8 +1442,18 @@ export {
   UpdateRunParamsSchema,
   TickEventSchema,
   ShutdownEventSchema,
+  WorktreeRecordSchema,
+  WorktreesListParamsSchema,
+  WorktreesListResultSchema,
+  WorktreesCreateParamsSchema,
+  WorktreesRemoveParamsSchema,
+  WorktreesRemoveResultSchema,
+  WorktreesRestoreParamsSchema,
+  WorktreesGcParamsSchema,
+  WorktreesGcResultSchema,
   ProtocolSchemas,
   MIN_CLIENT_PROTOCOL_VERSION,
+  MIN_NODE_PROTOCOL_VERSION,
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   ErrorCodes,
@@ -1301,7 +1480,6 @@ export type {
   TickEvent,
   ShutdownEvent,
   WakeParams,
-  NodePairRequestParams,
   NodePairListParams,
   NodePairApproveParams,
   DevicePairListParams,
@@ -1317,6 +1495,10 @@ export type {
   ConfigSchemaResponse,
   CrestodianChatParams,
   CrestodianChatResult,
+  CrestodianSetupDetectParams,
+  CrestodianSetupDetectResult,
+  CrestodianSetupActivateParams,
+  CrestodianSetupActivateResult,
   WizardStartParams,
   WizardNextParams,
   WizardCancelParams,
@@ -1350,6 +1532,8 @@ export type {
   TalkSessionOkResult,
   TalkSpeakParams,
   TalkSpeakResult,
+  TtsSpeakParams,
+  TtsSpeakResult,
   TalkModeParams,
   ChannelsStatusParams,
   ChannelsStatusResult,
@@ -1372,6 +1556,12 @@ export type {
   AgentsFilesGetResult,
   AgentsFilesSetParams,
   AgentsFilesSetResult,
+  AgentsWorkspaceEntry,
+  AgentsWorkspaceFile,
+  AgentsWorkspaceListParams,
+  AgentsWorkspaceListResult,
+  AgentsWorkspaceGetParams,
+  AgentsWorkspaceGetResult,
   SessionFileBrowserEntry,
   SessionFileBrowserResult,
   SessionFileEntry,
@@ -1405,6 +1595,10 @@ export type {
   ToolsInvokeResult,
   SkillsBinsParams,
   SkillsBinsResult,
+  SkillsCuratorActionParams,
+  SkillsCuratorActionResult,
+  SkillsCuratorStatusParams,
+  SkillsCuratorStatusResult,
   SkillsSearchParams,
   SkillsSearchResult,
   SkillsDetailParams,
@@ -1436,9 +1630,10 @@ export type {
   EnvironmentsListResult,
   EnvironmentsStatusParams,
   EnvironmentsStatusResult,
+  SystemInfoParams,
+  SystemInfoResult,
   NodePairRejectParams,
   NodePairRemoveParams,
-  NodePairVerifyParams,
   NodeListParams,
   NodeInvokeParams,
   NodeInvokeResultParams,
@@ -1456,12 +1651,28 @@ export type {
   SessionsDescribeParams,
   SessionsResolveParams,
   SessionOperationEvent,
+  SessionWorktreeInfo,
+  SessionsCreateResult,
   SessionsPatchParams,
   SessionsPatchResult,
   SessionsResetParams,
   SessionsDeleteParams,
   SessionsCompactParams,
   SessionsUsageParams,
+  AuditEvent,
+  AuditListParams,
+  AuditListResult,
+  TaskSuggestion,
+  TaskSuggestionEvent,
+  TaskSuggestionResolution,
+  TaskSuggestionsAcceptParams,
+  TaskSuggestionsAcceptResult,
+  TaskSuggestionsCreateParams,
+  TaskSuggestionsCreateResult,
+  TaskSuggestionsDismissParams,
+  TaskSuggestionsDismissResult,
+  TaskSuggestionsListParams,
+  TaskSuggestionsListResult,
   TaskSummary,
   TasksListParams,
   TasksListResult,
@@ -1474,12 +1685,15 @@ export type {
   CronStatusParams,
   CronGetParams,
   CronAddParams,
+  CronAddResult,
+  CronDeclarativeAddResult,
   CronUpdateParams,
   CronRemoveParams,
   CronRunParams,
   CronRunsParams,
   CronRunLogEntry,
   ExecApprovalsGetParams,
+  ExecApprovalsNodeSnapshot,
   ExecApprovalsSetParams,
   ExecApprovalsSnapshot,
   ExecApprovalGetParams,
@@ -1510,6 +1724,15 @@ export type {
   UpdateStatusParams,
   UpdateRunParams,
   ChatInjectParams,
+  WorktreeRecord,
+  WorktreesListParams,
+  WorktreesListResult,
+  WorktreesCreateParams,
+  WorktreesRemoveParams,
+  WorktreesRemoveResult,
+  WorktreesRestoreParams,
+  WorktreesGcParams,
+  WorktreesGcResult,
 };
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values)];

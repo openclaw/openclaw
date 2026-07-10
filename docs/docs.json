@@ -20,9 +20,9 @@
   },
   "favicon": "/assets/pixel-lobster.svg",
   "colors": {
-    "primary": "#FF5A36",
-    "dark": "#FF5A36",
-    "light": "#FF8A6B"
+    "primary": "#D84A31",
+    "dark": "#E05540",
+    "light": "#F5654A"
   },
   "styling": {
     "codeblocks": {
@@ -1194,6 +1194,7 @@
                   "concepts/context",
                   "concepts/context-engine",
                   "concepts/agent-workspace",
+                  "concepts/managed-worktrees",
                   "concepts/soul",
                   "concepts/oauth",
                   "start/bootstrapping",
@@ -1273,11 +1274,13 @@
                   "plugins/codex-harness",
                   "plugins/codex-native-plugins",
                   "plugins/codex-computer-use",
+                  "plugins/logbook",
                   "plugins/google-meet",
                   "plugins/workboard",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
                   "plugins/voice-call",
+                  "plugins/vault",
                   "plugins/memory-wiki",
                   "plugins/llama-cpp",
                   "plugins/memory-lancedb",
@@ -1327,6 +1330,7 @@
                   "tools/btw",
                   "tools/code-execution",
                   "tools/diffs",
+                  "tools/show-widget",
                   "tools/elevated",
                   "tools/permission-modes",
                   "tools/exec-approvals",
@@ -1350,6 +1354,7 @@
                     "group": "Web browser",
                     "pages": [
                       "tools/browser",
+                      "tools/chrome-extension",
                       "tools/browser-control",
                       "tools/browser-login",
                       "tools/browser-linux-troubleshooting",
@@ -1466,6 +1471,7 @@
                   "providers/ds4",
                   "providers/elevenlabs",
                   "providers/fal",
+                  "providers/featherless",
                   "providers/fireworks",
                   "providers/github-copilot",
                   "providers/gmi",
@@ -1478,6 +1484,8 @@
                   "providers/kilocode",
                   "providers/litellm",
                   "providers/lmstudio",
+                  "providers/longcat",
+                  "providers/meta",
                   "providers/minimax",
                   "providers/mistral",
                   "providers/moonshot",
@@ -1690,6 +1698,7 @@
                   {
                     "group": "Node features",
                     "pages": [
+                      "nodes/computer-use",
                       "nodes/talk",
                       "nodes/voicewake",
                       "nodes/location-command"
@@ -1742,12 +1751,14 @@
                     "pages": [
                       "cli/agent",
                       "cli/agents",
+                      "cli/audit",
                       "cli/hooks",
                       "cli/infer",
                       "cli/memory",
                       "cli/commitments",
                       "cli/message",
                       "cli/models",
+                      "cli/promos",
                       "cli/sessions",
                       "cli/system",
                       "cli/tasks"
@@ -1912,7 +1923,6 @@
               {
                 "group": "Project",
                 "pages": [
-                  "reference/application-modernization-plan",
                   "reference/credits"
                 ]
               },

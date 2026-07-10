@@ -25,19 +25,21 @@ Experimental features are opt-in preview surfaces behind explicit flags. They ne
 
 ## Local model lean mode
 
-`agents.defaults.experimental.localModelLean: true` drops three default tools - `browser`, `cron`, and `message` - from the agent's tool surface every turn. It also defaults to structured Tool Search (`tool_search`, `tool_describe`, `tool_call`) for plugin/MCP/client tool catalogs when `tools.toolSearch` is not already set, so those catalogs stay off the prompt instead of being dumped in. Runs that require direct `message` delivery keep it direct rather than picking up the lean-mode Tool Search default. Use `agents.list[].experimental.localModelLean` to scope this to one agent.
+`agents.defaults.experimental.localModelLean: true` drops heavyweight optional tools from the agent's direct surface every turn: `browser`, `cron`, `message`, `image_generate`, `music_generate`, `video_generate`, `tts`, and `pdf`. Explicitly allowed or delivery-required tools remain available, though Tool Search may catalog them instead of exposing them directly. Lean mode also defaults plugin/MCP/client catalogs to structured Tool Search (`tool_search`, `tool_describe`, `tool_call`) when `tools.toolSearch` is not already set. Use `agents.list[].experimental.localModelLean` to scope this to one agent.
 
 If you already tune Tool Search globally, OpenClaw leaves that config alone. Set `tools.toolSearch: false` to opt out of the lean-mode Tool Search default.
 
-### Why these three tools
+In structured `tools` mode, lean runs keep `exec` directly visible beside the Tool Search controls so coding-tuned local models can still choose their familiar shell path. This changes schema visibility only: normal tool policy, sandboxing, and exec approvals still apply. Explicit `code` and `directory` modes keep their normal compaction behavior.
 
-`browser`, `cron`, and `message` have the largest descriptions and most parameter shapes in the default runtime. On a small-context or stricter OpenAI-compatible backend, that is the difference between:
+### Why these tools
+
+These tools have the largest descriptions, broadest parameter shapes, or highest chance of distracting a small model from the normal coding and conversation path. On a small-context or stricter OpenAI-compatible backend that is the difference between:
 
 - Tool schemas fitting the prompt vs. crowding out conversation history.
 - The model picking the right tool vs. emitting malformed tool calls from too many similar schemas.
 - The Chat Completions adapter staying inside structured-output limits vs. a 400 on tool-call payload size.
 
-Removing them only shortens the direct tool list. The model still has `read`, `write`, `edit`, `exec`, `apply_patch`, web search/fetch (when configured), memory, and session/agent tools. Extra catalogs stay reachable through Tool Search unless you set `tools.toolSearch: false`.
+Removing them only shortens the direct tool list. The model still has `read`, `write`, `edit`, `exec`, `apply_patch`, image understanding, web search/fetch (when configured), memory, and session/agent tools. Extra catalogs stay reachable through Tool Search unless you set `tools.toolSearch: false`; explicit tool allows can opt a lean agent back into a trimmed workflow.
 
 ### When to turn it on
 
@@ -85,7 +87,7 @@ For one agent only:
 }
 ```
 
-Restart the Gateway after changing the flag.
+Restart the Gateway after changing the flag. Lean filtering removes `browser`, `cron`, `message`, `image_generate`, `music_generate`, `video_generate`, `tts`, and `pdf` unless you explicitly preserve them with `tools.allow` or `tools.alsoAllow`; Tool Search may still catalog preserved tools instead of exposing them directly.
 
 ## Experimental does not mean hidden
 

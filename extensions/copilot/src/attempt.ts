@@ -156,12 +156,11 @@ type ModelRefInputObject = {
   maxTokens?: number;
 };
 
-export type { AttemptParamsLike as CopilotPoolAcquireInput, ModelRef };
 export { SUPPORTED_PROVIDERS };
 
-export type ResolveSandboxContextFn = typeof defaultResolveSandboxContext;
+type ResolveSandboxContextFn = typeof defaultResolveSandboxContext;
 
-export interface CopilotAttemptDeps {
+interface CopilotAttemptDeps {
   pool: CopilotClientPool;
   now?: () => number;
   createToolBridge?: typeof createCopilotToolBridge;
@@ -1071,10 +1070,25 @@ export async function runCopilotAttempt(
   // the user message.
   const syntheticUserText = readString(input.transcriptPrompt) ?? readString(input.prompt);
   const tailUserText = readTailUserText(messages);
+  const tailUserIndex = messages.findLastIndex((message) => message.role === "user");
+  const currentTurnMessages = messages.map((message, index) => {
+    if (syntheticUserText !== tailUserText || index !== tailUserIndex) {
+      return message;
+    }
+    return attachCopilotMirrorIdentity(
+      { ...message, idempotencyKey: `${input.runId}:user` } as unknown as AgentMessage,
+      `${input.runId}:prompt`,
+    );
+  });
   const syntheticUser: AgentMessage | undefined =
     syntheticUserText && syntheticUserText !== tailUserText
       ? attachCopilotMirrorIdentity(
-          { role: "user", content: syntheticUserText, timestamp: now() } as AgentMessage,
+          {
+            role: "user",
+            content: syntheticUserText,
+            timestamp: now(),
+            idempotencyKey: `${input.runId}:user`,
+          } as unknown as AgentMessage,
           `${input.runId}:prompt`,
         )
       : undefined;
@@ -1082,7 +1096,7 @@ export async function runCopilotAttempt(
     ? attachCopilotMirrorIdentity(lastAssistant, `${input.runId}:assistant:final`)
     : undefined;
   const messagesSnapshot: AgentMessage[] = [
-    ...messages,
+    ...currentTurnMessages,
     ...(syntheticUser ? [syntheticUser] : []),
     ...(taggedLastAssistant ? [taggedLastAssistant] : []),
   ];
@@ -1220,7 +1234,7 @@ function createResult(
     sessionIdUsed?: string;
     timedOut?: boolean;
     timedOutDuringCompaction?: boolean;
-    toolMetas?: Array<{ meta?: string; toolName: string }>;
+    toolMetas?: AgentHarnessAttemptResult["toolMetas"];
     usage?: AssistantUsageSnapshot;
     yieldDetected?: boolean;
   },
@@ -1597,7 +1611,7 @@ function readResolvedAttemptPath(value: unknown): string | undefined {
   return resolveUserPath(raw);
 }
 
-export function resolveModelRef(params: AttemptParamsLike): ModelRef {
+function resolveModelRef(params: AttemptParamsLike): ModelRef {
   const rawModel = (params as { runtimeModel?: unknown }).runtimeModel ?? params.model;
   if (rawModel && typeof rawModel === "object") {
     const model = rawModel as ModelRefInputObject;
@@ -1733,7 +1747,7 @@ export function toError(error: unknown): Error {
  * version bump that changes the wording will safely fall through to
  * the generic prompt-error path.
  */
-export function isSdkSendAndWaitTimeoutError(error: unknown): boolean {
+function isSdkSendAndWaitTimeoutError(error: unknown): boolean {
   if (error === null || typeof error !== "object") {
     return false;
   }

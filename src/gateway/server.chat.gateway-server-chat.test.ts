@@ -396,7 +396,7 @@ describe("gateway server chat", () => {
         expect(waitRes.ok).toBe(true);
         expectRecordFields(waitRes.payload, {
           runId: "idem-sessions-abort-1",
-          status: "timeout",
+          status: "error",
           stopReason: "rpc",
         });
       } else {

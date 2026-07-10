@@ -32,7 +32,7 @@ export const IMESSAGE_CATCHUP_CURSOR_NAMESPACE = "imessage.catchup-cursors";
 export const IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES = 256;
 const cursorWriteQueue = new KeyedAsyncQueue();
 
-export type IMessageCatchupConfig = {
+type IMessageCatchupConfig = {
   enabled?: boolean;
   maxAgeMinutes?: number;
   perRunLimit?: number;
@@ -311,7 +311,7 @@ export type CatchupFetchFn = (params: {
 
 export type CatchupDispatchFn = (row: IMessageCatchupRow) => Promise<{ ok: boolean }>;
 
-export type PerformCatchupParams = {
+type PerformCatchupParams = {
   accountId: string;
   config: ResolvedCatchupConfig;
   now?: number;

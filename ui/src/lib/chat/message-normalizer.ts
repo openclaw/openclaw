@@ -42,6 +42,20 @@ export function isToolResultMessage(message: unknown): boolean {
   return role === "toolresult" || role === "tool_result";
 }
 
+export function isStandaloneToolMessageForDisplay(message: unknown): boolean {
+  const m = message as Record<string, unknown>;
+  const role = typeof m.role === "string" ? normalizeRoleForGrouping(m.role) : "unknown";
+  return (
+    role === "tool" ||
+    typeof m.toolCallId === "string" ||
+    typeof m.tool_call_id === "string" ||
+    typeof m.toolUseId === "string" ||
+    typeof m.tool_use_id === "string" ||
+    typeof m.toolName === "string" ||
+    typeof m.tool_name === "string"
+  );
+}
+
 function isTextContentBlock(
   item: Record<string, unknown>,
   role: string,
@@ -82,6 +96,9 @@ function coerceCanvasPreview(
     ...(typeof preview.viewId === "string" ? { viewId: preview.viewId } : {}),
     ...(typeof preview.className === "string" ? { className: preview.className } : {}),
     ...(typeof preview.style === "string" ? { style: preview.style } : {}),
+    ...(preview.sandbox === "strict" || preview.sandbox === "scripts"
+      ? { sandbox: preview.sandbox }
+      : {}),
   };
 }
 
@@ -130,6 +147,7 @@ const MIME_BY_EXT: Record<string, string> = {
   aac: "audio/aac",
   opus: "audio/opus",
   m4a: "audio/mp4",
+  m2a: "audio/mpeg",
   mp4: "video/mp4",
   mov: "video/quicktime",
   pdf: "application/pdf",
@@ -349,7 +367,11 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 
   // Detect tool messages by common gateway shapes.
   // Some tool events come through as assistant role with tool_* items in the content array.
-  const hasToolId = typeof m.toolCallId === "string" || typeof m.tool_call_id === "string";
+  const hasToolId =
+    typeof m.toolCallId === "string" ||
+    typeof m.tool_call_id === "string" ||
+    typeof m.toolUseId === "string" ||
+    typeof m.tool_use_id === "string";
 
   const contentRaw = m.content;
   const contentItems = Array.isArray(contentRaw) ? contentRaw : null;

@@ -580,6 +580,7 @@ final class AppState {
     private func applyConfigFromDisk() {
         let root = OpenClawConfigFile.loadDict()
         self.applyConfigOverrides(root)
+        MacNodeModeCoordinator.shared.refresh()
     }
 
     private func applyConfigOverrides(_ root: [String: Any]) {

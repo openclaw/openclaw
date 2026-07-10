@@ -22,7 +22,7 @@ import { renderOverviewCards } from "./cards.ts";
 import { renderOverviewEventLog } from "./event-log.ts";
 import { renderOverviewLogTail } from "./log-tail.ts";
 
-export type OverviewProps = {
+type OverviewProps = {
   connected: boolean;
   hello: GatewayHelloOk | null;
   settings: UiSettings;

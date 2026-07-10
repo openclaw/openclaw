@@ -1,4 +1,3 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type {
   ChatAttachment,
   ChatQueueItem,
@@ -16,7 +15,7 @@ import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
 const MAX_STORED_SESSIONS = 20;
 const MAX_STORED_QUEUE_ITEMS = 50;
-export const CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS = 200;
+const CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS = 200;
 export const INTERRUPTED_MODEL_WAIT_ERROR =
   "Model selection was interrupted. Review and retry when ready.";
 
@@ -489,7 +488,7 @@ export function restoreChatComposerState(
   return true;
 }
 
-export class ChatComposerPersistenceController implements ReactiveController {
+export class ChatComposerPersistence {
   private timer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private ready = false;
   private lastPersisted: {
@@ -498,16 +497,7 @@ export class ChatComposerPersistenceController implements ReactiveController {
     chatQueue: ChatQueueItem[];
   } | null = null;
 
-  constructor(
-    host: ReactiveControllerHost,
-    private readonly getState: () => ChatComposerPersistenceState | undefined,
-  ) {
-    host.addController(this);
-  }
-
-  hostDisconnected() {
-    this.stop();
-  }
+  constructor(private readonly getState: () => ChatComposerPersistenceState | undefined) {}
 
   start() {
     const state = this.getState();
@@ -542,7 +532,7 @@ export class ChatComposerPersistenceController implements ReactiveController {
     this.persist(true);
   }
 
-  persistQueueIfChanged() {
+  persistChangedState() {
     const state = this.getState();
     if (this.lastPersisted?.chatQueue !== state?.chatQueue) {
       this.persistNow();

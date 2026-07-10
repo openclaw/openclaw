@@ -1,6 +1,12 @@
 // Crestodian ring-zero tool tests: approval gating, action mapping, verification.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createCrestodianTool } from "./crestodian-tool.js";
+import {
+  createCrestodianTool,
+  hashCrestodianOperation,
+  resolveCrestodianDirectiveTransition,
+  resolveCrestodianProposalTransition,
+  type CrestodianToolDirective,
+} from "./crestodian-tool.js";
 
 const mocks = vi.hoisted(() => ({
   executeCrestodianOperation: vi.fn(async (_op: unknown, runtime: { log: (m: string) => void }) => {
@@ -47,6 +53,13 @@ describe("crestodian tool", () => {
     expect(toolText(result)).toContain("op-output");
     expect(mocks.executeCrestodianOperation).toHaveBeenCalledWith(
       { kind: "status" },
+      expect.anything(),
+      expect.objectContaining({ approved: false }),
+    );
+
+    await tool.execute("t1b", { action: "channel_info", channel: "Slack" });
+    expect(mocks.executeCrestodianOperation).toHaveBeenCalledWith(
+      { kind: "channel-info", channel: "slack" },
       expect.anything(),
       expect.objectContaining({ approved: false }),
     );
@@ -219,5 +232,108 @@ describe("crestodian tool", () => {
   it("rejects unknown or underspecified actions as input errors", async () => {
     const tool = createCrestodianTool({ surface: "cli" });
     await expect(tool.execute("t5", { action: "config_get" })).rejects.toThrow(/path/);
+  });
+
+  it("records interactive directives for the host without executing operations", async () => {
+    const directiveRef: { current?: CrestodianToolDirective } = {};
+    const tool = createCrestodianTool({ surface: "cli", directiveRef });
+
+    const connect = await tool.execute("t5", { action: "connect_channel", channel: "Telegram" });
+    expect(toolText(connect)).toContain("directive:");
+    expect(directiveRef.current).toEqual({ kind: "channel-setup", channel: "telegram" });
+
+    const configureModel = await tool.execute("t6", {
+      action: "configure_model_provider",
+      workspace: "/tmp/work",
+    });
+    expect(toolText(configureModel)).toContain("directive:");
+    expect(directiveRef.current).toEqual({ kind: "model-setup", workspace: "/tmp/work" });
+
+    const open = await tool.execute("t7", { action: "open_agent", agentId: "work" });
+    expect(toolText(open)).toContain("directive:");
+    expect(directiveRef.current).toEqual({ kind: "open-tui", agentId: "work" });
+
+    const setup = await tool.execute("t7", {
+      action: "open_setup",
+      target: "channels",
+      channel: "Slack",
+    });
+    expect(toolText(setup)).toContain("directive:");
+    expect(directiveRef.current).toEqual({
+      kind: "open-setup",
+      target: "channels",
+      channel: "slack",
+    });
+
+    // Directives are host handoffs, never operation executions.
+    expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
+  });
+
+  it("mirrors directive transitions for out-of-process (CLI MCP) hosts", () => {
+    expect(
+      resolveCrestodianDirectiveTransition({
+        args: { action: "connect_channel", channel: "telegram" },
+        resultText: "directive: the host chat now starts the guided telegram setup.",
+      }),
+    ).toEqual({ kind: "channel-setup", channel: "telegram" });
+    expect(
+      resolveCrestodianDirectiveTransition({
+        args: { action: "open_agent" },
+        resultText: "directive: the host now hands the user over.",
+      }),
+    ).toEqual({ kind: "open-tui" });
+    expect(
+      resolveCrestodianDirectiveTransition({
+        args: { action: "configure_model_provider", workspace: "/tmp/work" },
+        resultText: "directive: the host now starts masked model-provider setup.",
+      }),
+    ).toEqual({ kind: "model-setup", workspace: "/tmp/work" });
+    expect(
+      resolveCrestodianDirectiveTransition({
+        args: { action: "open_setup", target: "classic" },
+        resultText: "directive: the host now opens the classic setup wizard.",
+      }),
+    ).toEqual({ kind: "open-setup", target: "classic" });
+    // Non-directive results and other actions never mirror.
+    expect(
+      resolveCrestodianDirectiveTransition({ args: { action: "status" }, resultText: "ok" }),
+    ).toBeNull();
+    expect(
+      resolveCrestodianDirectiveTransition({
+        args: { action: "connect_channel", channel: "telegram" },
+        resultText: "error: boom",
+      }),
+    ).toBeNull();
+  });
+
+  it("mirrors proposal transitions for out-of-process (CLI MCP) hosts", () => {
+    const args = { action: "set_default_model", model: "openai/gpt-5.5" };
+    const hash = hashCrestodianOperation({ kind: "set-default-model", model: "openai/gpt-5.5" });
+
+    // Denial registers the exact-operation hash on the host.
+    expect(
+      resolveCrestodianProposalTransition({
+        args,
+        resultText: "needs-approval: this action changes state.",
+      }),
+    ).toEqual({ proposal: hash });
+    // A voided approval clears it.
+    expect(
+      resolveCrestodianProposalTransition({
+        args,
+        resultText: "approval-mismatch: this call is not the operation the user approved.",
+      }),
+    ).toEqual({ proposal: undefined });
+    // An executed mutation consumes it.
+    expect(
+      resolveCrestodianProposalTransition({ args, resultText: "Default model updated." }),
+    ).toEqual({ proposal: undefined });
+    // Read actions and unparsable calls never touch the proposal.
+    expect(
+      resolveCrestodianProposalTransition({ args: { action: "status" }, resultText: "ok" }),
+    ).toBeNull();
+    expect(
+      resolveCrestodianProposalTransition({ args: { action: "bogus" }, resultText: "ok" }),
+    ).toBeNull();
   });
 });

@@ -780,6 +780,52 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("preserves streamed Claude text when the final result text is empty", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-456" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Hello" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: " world" },
+          },
+        }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-456",
+          result: "",
+          usage: { input_tokens: 18, output_tokens: 4 },
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "Hello world",
+      sessionId: "session-456",
+      usage: {
+        input: 18,
+        output: 4,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: undefined,
+      },
+    });
+  });
+
   it("unwraps nested Claude agent result JSON from stream-json output", () => {
     const result = parseCliJsonl(
       [
@@ -1024,6 +1070,48 @@ describe("createCliJsonlStreamingParser", () => {
     expect(parser.getOutput()).toEqual({
       text: "streamed answer",
       sessionId: "session-stream-no-result",
+      usage: undefined,
+    });
+  });
+
+  it("preserves streamed Claude text when the final result event is empty", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-stream" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "hello" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: " world" },
+          },
+        }),
+        JSON.stringify({ type: "result", session_id: "session-stream", result: "" }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "hello world",
+      sessionId: "session-stream",
       usage: undefined,
     });
   });
@@ -1652,6 +1740,7 @@ describe("createCliJsonlStreamingParser", () => {
       {
         toolCallId: "tool-1",
         name: "mcp_openclaw_create_goal",
+        kind: "tool_use",
         args: { objective: "Update files" },
       },
     ]);
@@ -1855,7 +1944,9 @@ describe("createCliJsonlStreamingParser", () => {
     );
     parser.finish();
 
-    expect(starts).toEqual([{ toolCallId: "toolu_1", name: "Bash", args: { command: "ls -la" } }]);
+    expect(starts).toEqual([
+      { toolCallId: "toolu_1", name: "Bash", kind: "tool_use", args: { command: "ls -la" } },
+    ]);
     expect(results).toEqual([
       { toolCallId: "toolu_1", name: "Bash", isError: false, result: "total 0\n" },
     ]);
@@ -1910,7 +2001,12 @@ describe("createCliJsonlStreamingParser", () => {
     parser.finish();
 
     expect(starts).toEqual([
-      { toolCallId: "toolu_chunked", name: "Bash", args: { command: "echo hi" } },
+      {
+        toolCallId: "toolu_chunked",
+        name: "Bash",
+        kind: "tool_use",
+        args: { command: "echo hi" },
+      },
     ]);
   });
 
@@ -1954,7 +2050,7 @@ describe("createCliJsonlStreamingParser", () => {
     );
     parser.finish();
 
-    expect(starts).toEqual([{ toolCallId: "toolu_bad", name: "Bash", args: {} }]);
+    expect(starts).toEqual([{ toolCallId: "toolu_bad", name: "Bash", kind: "tool_use", args: {} }]);
   });
 
   it.each(["server_tool_use", "mcp_tool_use"])("recognizes %s blocks", (type) => {
@@ -1998,7 +2094,12 @@ describe("createCliJsonlStreamingParser", () => {
     parser.finish();
 
     expect(starts).toEqual([
-      { toolCallId: "toolu_hosted", name: "web_search", args: { query: "openclaw" } },
+      {
+        toolCallId: "toolu_hosted",
+        name: "web_search",
+        kind: type,
+        args: { query: "openclaw" },
+      },
     ]);
   });
 
@@ -2065,7 +2166,12 @@ describe("createCliJsonlStreamingParser", () => {
     parser.finish();
 
     expect(starts).toEqual([
-      { toolCallId: fixture.toolCallId, name: fixture.name, args: fixture.input },
+      {
+        toolCallId: fixture.toolCallId,
+        name: fixture.name,
+        kind: fixture.useType,
+        args: fixture.input,
+      },
     ]);
     expect(results).toEqual([
       {

@@ -224,6 +224,20 @@ describe("gateway tool restart continuation", () => {
     });
   });
 
+  it("keeps the bounded restart reason UTF-16 well-formed", async () => {
+    const tool = createGatewayTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+    });
+
+    await tool.execute?.("tool-call-utf16", {
+      action: "restart",
+      reason: `${"x".repeat(199)}🚀tail`,
+    });
+
+    expect(requireScheduledRestartArgs().reason).toBe("x".repeat(199));
+  });
+
   it("uses the runtime session, not model-supplied params, for scheduler ownership and sentinel routing (#86742)", async () => {
     const tool = createGatewayTool({
       agentSessionKey: "agent:main:session-A",

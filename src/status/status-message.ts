@@ -7,6 +7,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveContextTokensForModel } from "../agents/context.js";
+import { resolveCronStyleNow } from "../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
@@ -44,7 +45,10 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import { resolveSessionLifecycleTimestamps } from "../config/sessions/lifecycle.js";
-import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
+import {
+  hasSessionActiveAutoModelFallback,
+  hasSessionAutoModelFallbackProvenance,
+} from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-readers.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
@@ -563,6 +567,10 @@ function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
 
 export function buildStatusMessage(args: StatusArgs): string {
   const now = args.now ?? Date.now();
+  // Derive the live wall clock here so both /status and session_status expose
+  // the same configured timezone without duplicating formatting at each caller.
+  const timeLine =
+    args.timeLine ?? (args.config ? resolveCronStyleNow(args.config, now).timeLine : undefined);
   const entry = args.sessionEntry;
   const selectionConfig = {
     agents: {
@@ -1069,15 +1077,18 @@ export function buildStatusMessage(args: StatusArgs): string {
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
   const configuredDefaultModelLabel = normalizeOptionalString(args.configuredDefaultModelLabel);
   const sessionHasPersistedModelSelection = hasUserPinnedModelSelection(entry);
+  const sessionHasAutoFallback = hasSessionActiveAutoModelFallback(entry);
   const configDefaultDiffersFromSession =
-    sessionHasPersistedModelSelection &&
+    (sessionHasPersistedModelSelection || sessionHasAutoFallback) &&
     configuredDefaultModelLabel &&
     selectedModelLabel !== configuredDefaultModelLabel &&
     !areRuntimeModelRefsEquivalent(selectedModelLabel, configuredDefaultModelLabel, {
       config: args.config,
     });
   const overrideLabel = configDefaultDiffersFromSession
-    ? ` · pinned session; config primary ${configuredDefaultModelLabel} · clear /model default`
+    ? sessionHasPersistedModelSelection
+      ? ` · pinned session; config primary ${configuredDefaultModelLabel} · clear /model default`
+      : ` · auto fallback; config primary ${configuredDefaultModelLabel} · check provider`
     : "";
   const modelLines = [
     `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}${overrideLabel}`,
@@ -1113,7 +1124,7 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   return [
     versionLine,
-    args.timeLine,
+    timeLine,
     args.uptimeLine,
     ...modelLines,
     configuredFallbacksLine,

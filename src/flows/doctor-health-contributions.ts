@@ -1,11 +1,13 @@
 // Doctor health contribution helpers collect health checks from plugin manifests.
 import fs from "node:fs";
+import nodePath from "node:path";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import {
   isLegacyParentWritableUpdateDoctorPass,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
 } from "../commands/doctor/shared/update-phase.js";
+import { resolveIsNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
@@ -542,6 +544,10 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   if (migrated.changes.length > 0) {
     note(migrated.changes.join("\n"), "Doctor changes");
   }
+  const notices = migrated.notices ?? [];
+  if (notices.length > 0) {
+    note(notices.join("\n"), "Doctor notices");
+  }
   if (migrated.warnings.length > 0) {
     note(migrated.warnings.join("\n"), "Doctor warnings");
   }
@@ -695,12 +701,20 @@ async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<v
     noteMacStaleOpenClawUpdateLaunchdJobs,
   } = await import("../commands/doctor-platform-notes.js");
   await maybeScanExtraGatewayServices(ctx.options, ctx.runtime, ctx.prompter);
-  await maybeRepairGatewayServiceConfig(
+  const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
+  ctx.cfg = await maybeRepairGatewayServiceConfig(
     ctx.cfg,
     resolveDoctorMode(ctx.cfg),
     ctx.runtime,
     ctx.prompter,
-    { allowExecSecretRefs: ctx.options.allowExec === true },
+    {
+      allowExecSecretRefs: ctx.options.allowExec === true,
+      allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
+      skipPluginValidation:
+        ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
+      preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
+      ...resolveLegacyParentVersionOverride(ctx),
+    },
   );
   await noteMacLaunchAgentOverrides();
   await noteMacStaleOpenClawUpdateLaunchdJobs();
@@ -1272,11 +1286,8 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       ctx.runtime.log("Skipping doctor config write during legacy update handoff.");
       return;
     }
-    const legacyParentVersionOverride = isLegacyParentWritableUpdateDoctorPass(
-      ctx.env ?? process.env,
-    )
-      ? ctx.configResult.sourceLastTouchedVersion?.trim() || ctx.cfg.meta?.lastTouchedVersion
-      : undefined;
+    const legacyParentVersionOverride =
+      resolveLegacyParentVersionOverride(ctx).lastTouchedVersionOverride;
     await replaceConfigFile({
       nextConfig: ctx.cfg,
       afterWrite: { mode: "auto" },
@@ -1306,6 +1317,104 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
   if (!ctx.prompter.shouldRepair) {
     ctx.runtime.log(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply changes.`);
   }
+}
+
+async function collectWriteConfigHealthFindings(
+  ctx: Parameters<HealthCheck["detect"]>[0],
+): Promise<readonly HealthFinding[]> {
+  const findings: HealthFinding[] = [];
+  const configPath = ctx.configPath;
+  if (resolveIsNixMode(process.env)) {
+    findings.push({
+      checkId: "core/doctor/write-config",
+      severity: "warning",
+      message: "Doctor config writes are disabled because OpenClaw is running in Nix mode.",
+      ...(configPath ? { path: configPath } : {}),
+      requirement: "mutable-config-write-path",
+      fixHint:
+        "Edit the Nix source for this install and rebuild; do not run doctor --fix against this config file.",
+    });
+  }
+  if (!configPath) {
+    return findings;
+  }
+  const configDirectory = nodePath.dirname(configPath);
+  const configPathExists = fs.existsSync(configPath);
+  const existingParent = configPathExists
+    ? configDirectory
+    : findNearestExistingParent(configDirectory);
+  if (!isDirectoryPath(existingParent)) {
+    findings.push({
+      checkId: "core/doctor/write-config",
+      severity: "warning",
+      message: "Doctor cannot create the config directory because a path component is a file.",
+      path: existingParent,
+      target: configDirectory,
+      requirement: "config-directory-path",
+      fixHint: "Move the file blocking the config directory path before running doctor --fix.",
+    });
+    return findings;
+  }
+  try {
+    fs.accessSync(existingParent, fs.constants.W_OK | fs.constants.X_OK);
+  } catch {
+    findings.push({
+      checkId: "core/doctor/write-config",
+      severity: "warning",
+      message: configPathExists
+        ? "Doctor cannot write config because the config directory is not writable."
+        : "Doctor cannot create the config directory because the nearest existing parent is not writable.",
+      path: existingParent,
+      target: configPathExists ? configPath : configDirectory,
+      requirement: "writable-config-directory",
+      fixHint:
+        "Make the existing config directory or parent directory writable before running doctor --fix.",
+    });
+  }
+  return findings;
+}
+
+function findNearestExistingParent(path: string): string {
+  let candidate = path;
+  while (!pathEntryExists(candidate)) {
+    const parent = nodePath.dirname(candidate);
+    if (parent === candidate) {
+      return candidate;
+    }
+    candidate = parent;
+  }
+  return candidate;
+}
+
+function pathEntryExists(path: string): boolean {
+  if (fs.existsSync(path)) {
+    return true;
+  }
+  try {
+    fs.lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isDirectoryPath(path: string): boolean {
+  try {
+    return fs.statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function resolveLegacyParentVersionOverride(ctx: DoctorHealthFlowContext): {
+  lastTouchedVersionOverride?: string;
+} {
+  if (!isLegacyParentWritableUpdateDoctorPass(ctx.env ?? process.env)) {
+    return {};
+  }
+  const version =
+    ctx.configResult.sourceLastTouchedVersion?.trim() || ctx.cfg.meta?.lastTouchedVersion;
+  return version ? { lastTouchedVersionOverride: version } : {};
 }
 
 async function runWorkspaceSuggestionsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -1357,14 +1466,17 @@ function formatHealthFindings(findings: readonly HealthFinding[]): string {
     .join("\n");
 }
 
-async function runProviderCatalogProjectionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+async function runCoreHealthFindingNote(
+  ctx: DoctorHealthFlowContext,
+  checkId: string,
+): Promise<void> {
   const { registerCoreHealthChecks } = await loadDoctorCoreChecksModule();
   const { getHealthCheck } = await loadHealthCheckRegistryModule();
   const { resolveAgentWorkspaceDir, resolveDefaultAgentId } = await loadAgentScopeModule();
   const { note } = await loadNoteModule();
 
   registerCoreHealthChecks();
-  const check = getHealthCheck("core/doctor/provider-catalog-projection");
+  const check = getHealthCheck(checkId);
   if (!check) {
     return;
   }
@@ -1382,29 +1494,16 @@ async function runProviderCatalogProjectionHealth(ctx: DoctorHealthFlowContext):
   note(formatHealthFindings(findings), "Doctor warnings");
 }
 
-async function runRuntimeToolSchemasHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { registerCoreHealthChecks } = await loadDoctorCoreChecksModule();
-  const { getHealthCheck } = await loadHealthCheckRegistryModule();
-  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } = await loadAgentScopeModule();
-  const { note } = await loadNoteModule();
+async function runProviderCatalogProjectionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  await runCoreHealthFindingNote(ctx, "core/doctor/provider-catalog-projection");
+}
 
-  registerCoreHealthChecks();
-  const check = getHealthCheck("core/doctor/runtime-tool-schemas");
-  if (!check) {
-    return;
-  }
-  const findings = await check.detect({
-    mode: "doctor",
-    runtime: ctx.runtime,
-    cfg: ctx.cfg,
-    cwd: resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg)),
-    configPath: ctx.configPath,
-  });
-  if (findings.length === 0) {
-    return;
-  }
-  ctx.healthOk = false;
-  note(formatHealthFindings(findings), "Doctor warnings");
+async function runRuntimeToolSchemasHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  await runCoreHealthFindingNote(ctx, "core/doctor/runtime-tool-schemas");
+}
+
+async function runSkillWorkshopToolPolicyHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  await runCoreHealthFindingNote(ctx, "core/doctor/skill-workshop-tool-policy");
 }
 
 export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
@@ -1674,6 +1773,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       healthChecks: {
         id: "core/doctor/session-transcripts",
         description: "Legacy or branchy session transcript files are represented as findings.",
+        defaultEnabled: false,
         async detect() {
           const { detectSessionTranscriptHealthIssues, sessionTranscriptIssueToHealthFinding } =
             await import("../commands/doctor-session-transcripts.js");
@@ -1706,6 +1806,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       healthChecks: {
         id: "core/doctor/session-snapshots",
         description: "Stale cached session snapshot paths are represented as findings.",
+        defaultEnabled: false,
         async detect(ctx) {
           const { detectSessionSnapshotHealthIssues, sessionSnapshotIssueToHealthFinding } =
             await import("../commands/doctor-session-snapshots.js");
@@ -1821,6 +1922,29 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runGatewayServicesHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:default-account-routing",
+      label: "Default account routing",
+      healthChecks: {
+        id: "core/doctor/default-account-routing",
+        description: "Multi-account channels have explicit default routing or complete bindings.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const {
+            collectMissingDefaultAccountBindingWarnings,
+            collectMissingExplicitDefaultAccountWarnings,
+          } = await import("../commands/doctor/shared/default-account-warnings.js");
+          return [
+            ...collectMissingDefaultAccountBindingWarnings(ctx.cfg),
+            ...collectMissingExplicitDefaultAccountWarnings(ctx.cfg),
+          ].map((message) => ({
+            checkId: "core/doctor/default-account-routing",
+            severity: "warning" as const,
+            message: message.replace(/^- /, "").trim(),
+          }));
+        },
+      },
+    }),
+    createDoctorHealthContribution({
       id: "doctor:startup-channel-maintenance",
       label: "Startup channel maintenance",
       healthCheckIds: [
@@ -1905,6 +2029,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runRuntimeToolSchemasHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:skill-workshop-tool-policy",
+      label: "Skill Workshop tool policy",
+      healthCheckIds: ["core/doctor/skill-workshop-tool-policy"],
+      run: runSkillWorkshopToolPolicyHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:systemd-linger",
       label: "systemd linger",
       healthChecks: {
@@ -1936,6 +2066,32 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
         },
       },
       run: runWorkspaceStatusHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:skill-curator",
+      label: "Skill curator",
+      healthChecks: {
+        id: "core/doctor/skill-curator",
+        description: "Stalled skill lifecycle curation is reported as a warning.",
+        defaultEnabled: false,
+        async detect() {
+          const { getSkillCuratorDoctorWarning } = await import("../skills/workshop/curator.js");
+          const warning = getSkillCuratorDoctorWarning();
+          return warning
+            ? [
+                {
+                  checkId: "core/doctor/skill-curator",
+                  severity: "warning" as const,
+                  source: "doctor",
+                  message: warning,
+                  target: "skill-curator",
+                  requirement:
+                    "latest sweep succeeds and attempts do not trail success by seven days",
+                },
+              ]
+            : [];
+        },
+      },
     }),
     createDoctorHealthContribution({
       id: "doctor:skills",
@@ -2042,6 +2198,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:write-config",
       label: "Write config",
+      healthChecks: {
+        id: "core/doctor/write-config",
+        description: "Config write blockers are findings before doctor repair writes.",
+        defaultEnabled: false,
+        detect: collectWriteConfigHealthFindings,
+      },
       run: runWriteConfigHealth,
     }),
     createDoctorHealthContribution({

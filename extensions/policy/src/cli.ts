@@ -20,24 +20,24 @@ import {
 } from "./policy-conformance.js";
 import { createPolicyAttestation } from "./policy-state.js";
 
-export type PolicyCommandRuntime = {
+type PolicyCommandRuntime = {
   writeStdout(value: string): void;
   error(value: string): void;
   sleep?(ms: number): Promise<void>;
 };
 
-export interface PolicyCheckOptions {
+interface PolicyCheckOptions {
   readonly json?: boolean;
   readonly severityMin?: string;
   readonly cwd?: string;
 }
 
-export interface PolicyWatchOptions extends PolicyCheckOptions {
+interface PolicyWatchOptions extends PolicyCheckOptions {
   readonly intervalMs?: string | number;
   readonly once?: boolean;
 }
 
-export interface PolicyCompareOptions {
+interface PolicyCompareOptions {
   readonly baseline?: string;
   readonly policy?: string;
   readonly json?: boolean;

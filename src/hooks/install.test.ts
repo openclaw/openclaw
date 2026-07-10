@@ -33,8 +33,12 @@ vi.mock("../plugins/install-security-scan.js", () => ({
 
 vi.resetModules();
 
-const { installHooksFromArchive, installHooksFromNpmSpec, installHooksFromPath } =
-  await import("./install.js");
+const {
+  HOOK_INSTALL_ERROR_CODE,
+  installHooksFromArchive,
+  installHooksFromNpmSpec,
+  installHooksFromPath,
+} = await import("./install.js");
 const hookInstallRuntime = await import("./install.runtime.js");
 
 const fixtureRoot = path.join(process.cwd(), ".tmp", `openclaw-hook-install-${randomUUID()}`);
@@ -322,6 +326,29 @@ describe("installHooksFromArchive", () => {
 });
 
 describe("installHooksFromPath", () => {
+  it.each([
+    {
+      openclaw: {},
+      error: "package.json missing openclaw.hooks",
+      code: HOOK_INSTALL_ERROR_CODE.MISSING_OPENCLAW_HOOKS,
+    },
+    {
+      openclaw: { hooks: [] },
+      error: "package.json openclaw.hooks is empty",
+      code: HOOK_INSTALL_ERROR_CODE.EMPTY_OPENCLAW_HOOKS,
+    },
+  ])("returns a stable code for $error", async ({ openclaw, error, code }) => {
+    const pkgDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/test-hooks", openclaw }),
+    );
+
+    const result = await installHooksFromPath({ path: pkgDir, hooksDir: makeTempDir() });
+
+    expect(result).toEqual({ ok: false, error, code });
+  });
+
   it("uses --ignore-scripts for dependency install", async () => {
     const workDir = makeTempDir();
     const stateDir = makeTempDir();

@@ -12,6 +12,7 @@ type Workflow = {
       inputs?: {
         bypass_extended_stable_guard?: { default?: boolean; type?: string };
         npm_dist_tag?: { options?: string[] };
+        plugin_npm_run_id?: { required?: boolean; type?: string };
       };
     };
   };
@@ -63,6 +64,9 @@ describe("minimal npm extended-stable workflow", () => {
       "openclaw-npm-extended-stable-release.mjs validate-request",
     );
     expect(
+      step(parsed.jobs?.preflight_openclaw_npm, "Validate npm release request").env?.PREFLIGHT_ONLY,
+    ).toBe("${{ inputs.preflight_only }}");
+    expect(
       step(parsed.jobs?.validate_publish_request, "Validate npm release request").run,
     ).toContain("openclaw-npm-extended-stable-release.mjs validate-request");
     expect(step(parsed.jobs?.publish_openclaw_npm, "Recheck npm release request").run).toContain(
@@ -107,12 +111,61 @@ describe("minimal npm extended-stable workflow", () => {
     expect(summary.run).toContain("Extended-stable guard bypass: ${BYPASS_EXTENDED_STABLE_GUARD}");
   });
 
+  it("accepts arbitrary SHA preflight targets and exercises every publishable plugin package", () => {
+    const parsed = workflow();
+    const preflight = parsed.jobs?.preflight_openclaw_npm;
+    const metadata = step(preflight, "Validate release metadata");
+    expect(metadata.run).toContain('RELEASE_BRANCH_REF="${RELEASE_SHA}"');
+    expect(metadata.run).not.toContain("Validation-only SHA mode only supports");
+
+    const plugins = step(preflight, "Exercise all extended-stable plugin npm packages");
+    expect(step(preflight, "Verify release contents").env).toMatchObject({
+      OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR:
+        "${{ steps.ai_runtime_tarballs.outputs.dir }}",
+    });
+    expect(plugins.if).toBe("${{ inputs.npm_dist_tag == 'extended-stable' }}");
+    expect(plugins.env).toMatchObject({
+      OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: "extended-stable",
+    });
+    expect(plugins.run).toContain("--selection-mode all-publishable");
+    expect(plugins.run).toContain("--npm-dist-tag extended-stable");
+    expect(plugins.run).toContain("scripts/check-plugin-npm-runtime-builds.mjs");
+    expect(plugins.run).toContain("scripts/plugin-npm-publish.sh --pack");
+    expect(plugins.run).toContain("OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR");
+    expect(plugins.run).not.toContain("--publish");
+    expect(step(preflight, "Upload extended-stable plugin npm packages")).toBeDefined();
+  });
+
   it("authenticates exact extended-stable run and Full Validation identities", () => {
     const raw = readFileSync(workflowPath, "utf8");
     expect(raw).toContain("--json workflowName,headBranch,headSha,event,conclusion,url");
     expect(raw).toContain("--json workflowName,headBranch,headSha,event,status,conclusion,url");
-    expect(raw.match(/openclaw-npm-extended-stable-release\.mjs verify-run/g)).toHaveLength(2);
+    expect(raw.match(/openclaw-npm-extended-stable-release\.mjs verify-run/g)).toHaveLength(3);
     expect(raw).toContain("openclaw-npm-extended-stable-release.mjs verify-manifest");
+  });
+
+  it("requires and authenticates the plugin npm run before an extended-stable core publish", () => {
+    const parsed = workflow();
+    expect(parsed.on?.workflow_dispatch?.inputs?.plugin_npm_run_id).toMatchObject({
+      required: false,
+      type: "string",
+    });
+    const required = step(
+      parsed.jobs?.validate_publish_request,
+      "Require preflight artifact promotion on real publish",
+    );
+    expect(required.env?.PLUGIN_NPM_RUN_ID).toBe("${{ inputs.plugin_npm_run_id }}");
+    expect(required.run).toContain("Extended-stable publish requires plugin_npm_run_id");
+
+    const verify = step(
+      parsed.jobs?.publish_openclaw_npm,
+      "Verify plugin npm release run metadata",
+    );
+    expect(verify.env?.RUN_KIND).toBe("plugin");
+    expect(verify.run).toContain(
+      "--json workflowName,displayTitle,headBranch,headSha,event,status,conclusion,url",
+    );
+    expect(verify.run).toContain("openclaw-npm-extended-stable-release.mjs verify-run");
   });
 
   it("captures selector fail closed, publishes extended-stable, retries, and summarizes", () => {

@@ -167,6 +167,15 @@ stale CLI/device pairing baselines blocking local backend work. Remote,
 browser-origin, node, and explicit device-token/device-identity clients still
 go through normal pairing and scope-upgrade checks.
 
+### Client capabilities
+
+Operator clients may advertise optional capabilities in `connect.params.caps`:
+
+- `tool-events`: accepts structured tool lifecycle events.
+- `inline-widgets`: can render hosted inline widget tool results.
+
+Client capabilities describe the connected client, not authorization. Agent tools may declare required capabilities; the Gateway omits those tools unless every requirement appears in the originating client's `caps`. Channel-originated runs have no Gateway client capabilities, so capability-gated tools are unavailable even when tool policy explicitly allows them.
+
 ### Node connect example
 
 ```json
@@ -350,6 +359,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `doctor.memory.dreamDiary`, `doctor.memory.backfillDreamDiary`, `doctor.memory.resetDreamDiary`, `doctor.memory.resetGroundedShortTerm`, `doctor.memory.repairDreamingArtifacts`, and `doctor.memory.dedupeDreamDiary` accept optional `{ "agentId": "agent-id" }`; omitted, they operate on the configured default agent workspace.
     - `doctor.memory.remHarness` returns a bounded, read-only REM harness preview for remote control-plane clients, including workspace paths, memory snippets, rendered grounded markdown, and deep promotion candidates. Requires `operator.read`.
     - `sessions.usage` returns per-session usage summaries. Pass `agentId` for one agent, or `agentScope: "all"` to list configured agents together.
+      Both usage methods accept `mode: "specific"` with an IANA `timeZone` for DST-aware calendar-day boundaries and buckets. `utcOffset` remains supported for older clients and as a fallback when the Gateway runtime does not recognize the requested zone.
     - `sessions.usage.timeseries` returns timeseries usage for one session.
     - `sessions.usage.logs` returns usage log entries for one session.
 
@@ -404,6 +414,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `tts.enable` and `tts.disable` toggle TTS prefs state.
     - `tts.setProvider` updates the preferred TTS provider.
     - `tts.convert` runs one-shot text-to-speech conversion.
+    - `tts.speak` (`operator.write`) renders non-empty `text` with the configured general TTS provider chain and returns one whole clip inline as `audioBase64`, plus `provider` and optional `outputFormat`, `mimeType`, and `fileExtension` metadata. Unlike `tts.convert`, it does not return a Gateway-local path; unlike `talk.speak`, it does not require a Talk provider. Text above `messages.tts.maxTextLength` returns `INVALID_REQUEST`; synthesis failures return `UNAVAILABLE`.
 
   </Accordion>
 
@@ -426,6 +437,8 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `agents.list` returns configured agent entries, including effective model and runtime metadata.
     - `agents.create`, `agents.update`, and `agents.delete` manage agent records and workspace wiring.
     - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
+    - `audit.list` returns a bounded metadata-only ledger of agent run and tool action events.
+    - `agents.workspace.list` and `agents.workspace.get` (`operator.read`) expose read-only, paginated browsing of an agent's workspace directory for clients in the trusted operator domain described in [Operator scopes](/gateway/operator-scopes). Requests accept workspace-relative paths only; reads stay confined to the realpathed workspace root (symlink and hardlink escapes rejected), size-capped, and limited to UTF-8 text plus common image types (base64). Responses do not expose the host workspace path. There are no write operations in this namespace.
     - `tasks.list`, `tasks.get`, and `tasks.cancel` expose the gateway task ledger to SDK and operator clients. See [Task ledger RPCs](#task-ledger-rpcs) below.
     - `artifacts.list`, `artifacts.get`, and `artifacts.download` expose transcript-derived artifact summaries and downloads for an explicit `sessionKey`, `runId`, or `taskId` scope. Run and task queries resolve the owning session server-side and only return transcript media with matching provenance; unsafe or local URL sources return unsupported downloads instead of fetching server-side.
     - `environments.list` and `environments.status` expose read-only gateway-local and node environment discovery for SDK clients.
@@ -467,7 +480,7 @@ methods. Treat this as feature discovery, not a full enumeration of
   </Accordion>
 
   <Accordion title="Node pairing, invoke, and pending work">
-    - `node.pair.request`, `node.pair.list`, `node.pair.approve`, `node.pair.reject`, `node.pair.remove`, and `node.pair.verify` cover node pairing and bootstrap verification.
+    - `node.pair.list`, `node.pair.approve`, `node.pair.reject`, and `node.pair.remove` cover node capability approvals. `node.pair.request` and `node.pair.verify` were removed in 2026.7 together with the standalone node pairing store; pending requests are created by the Gateway during node connects.
     - `node.list` and `node.describe` return known/connected node state.
     - `node.rename` updates a paired node label.
     - `node.invoke` forwards a command to a connected node.
@@ -524,6 +537,35 @@ methods. Treat this as feature discovery, not a full enumeration of
 
 Nodes may call `skills.bins` to fetch the current list of skill executables
 for auto-allow checks.
+
+## Audit ledger RPC
+
+`audit.list` gives operator clients a stable newest-first view of agent run and
+tool action metadata. It requires `operator.read`. Queries exclude records
+older than 30 days, and the shared SQLite ledger is capped at 100,000 records.
+Expired rows are deleted during Gateway startup, hourly maintenance, and later
+writes.
+
+- Params: optional exact `agentId`, `sessionKey`, or `runId`; optional `kind`
+  (`"agent_run"` or `"tool_action"`); optional `status` (`"started"`,
+  `"succeeded"`, `"failed"`, `"cancelled"`, `"timed_out"`, `"blocked"`, or
+  `"unknown"`); optional inclusive `after` / `before` Unix-millisecond bounds;
+  optional `limit` from `1` to `500`; and optional string `cursor` from the
+  preceding page.
+- Result: `{ "events": AuditEvent[], "nextCursor"?: string }`.
+
+Each event includes a stable event id, monotonic ledger sequence, source event
+sequence, timestamp, actor, agent/session/run provenance, action, status, and a
+normalized error code when applicable. Tool events may include tool call id and
+tool name. The `redaction` field is always `"metadata_only"`: the ledger does
+not store prompts, messages, tool arguments, tool results, command output, or
+raw error text.
+
+Recording is on by default and controlled by
+[`audit.enabled`](/gateway/configuration-reference#audit); when disabled,
+`audit.list` keeps serving records written earlier until they expire.
+
+Use [`openclaw audit`](/cli/audit) for text queries and bounded JSON exports.
 
 ## Task ledger RPCs
 
@@ -688,12 +730,18 @@ context.
 
 ## Versioning
 
-- `PROTOCOL_VERSION` and `MIN_CLIENT_PROTOCOL_VERSION` live in
-  `packages/gateway-protocol/src/version.ts`. Both are currently `4`.
-- Clients send `minProtocol` + `maxProtocol`; the gateway accepts a connect
-  when `maxProtocol >= PROTOCOL_VERSION && minProtocol <= PROTOCOL_VERSION`
-  (`src/gateway/server/ws-connection/message-handler.ts`). Current clients and
-  servers both run protocol v4.
+- `PROTOCOL_VERSION`, `MIN_CLIENT_PROTOCOL_VERSION`,
+  `MIN_NODE_PROTOCOL_VERSION`, and `MIN_PROBE_PROTOCOL_VERSION` live in
+  `packages/gateway-protocol/src/version.ts`.
+- Clients send `minProtocol` + `maxProtocol`. Operator and UI clients must
+  include the current protocol in that range; current clients and servers run
+  protocol v4.
+- Authenticated clients with both `role: "node"` and `client.mode: "node"`
+  may use the N-1 node protocol (currently v3). Lightweight restart probes use
+  the same N-1 window. Device auth, pairing, scopes, command policy, and exec
+  approvals are unchanged by this compatibility window. Plugin-owned node
+  capabilities and commands are withheld until the node upgrades to the current
+  protocol because their hosted surfaces are not part of the N-1 contract.
 - Schemas and models are generated from TypeBox definitions:
   - `pnpm protocol:gen`
   - `pnpm protocol:gen:swift`
@@ -710,6 +758,8 @@ third-party clients.
 | ----------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `PROTOCOL_VERSION`                        | `4`                                                   | `packages/gateway-protocol/src/version.ts`                                                                                |
 | `MIN_CLIENT_PROTOCOL_VERSION`             | `4`                                                   | `packages/gateway-protocol/src/version.ts`                                                                                |
+| `MIN_NODE_PROTOCOL_VERSION`               | `3`                                                   | `packages/gateway-protocol/src/version.ts`                                                                                |
+| `MIN_PROBE_PROTOCOL_VERSION`              | `3`                                                   | `packages/gateway-protocol/src/version.ts`                                                                                |
 | Request timeout (per RPC)                 | `30_000` ms                                           | `packages/gateway-client/src/client.ts` (`requestTimeoutMs`)                                                              |
 | Preauth / connect-challenge timeout       | `15_000` ms                                           | `packages/gateway-client/src/timeouts.ts` (`OPENCLAW_HANDSHAKE_TIMEOUT_MS` env can raise the paired server/client budget) |
 | Initial reconnect backoff                 | `1_000` ms                                            | `packages/gateway-client/src/client.ts` (`backoffMs`)                                                                     |

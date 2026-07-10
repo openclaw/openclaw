@@ -31,6 +31,7 @@ type MockWebListener = {
   close: () => Promise<void>;
   onClose: Promise<WebListenerCloseReason>;
   signalClose: () => void;
+  assertSendReady: () => Promise<void>;
   sendMessage: () => Promise<WhatsAppSendResult>;
   sendPoll: () => Promise<WhatsAppSendResult>;
   sendContact: () => Promise<WhatsAppSendResult>;
@@ -244,6 +245,7 @@ export function createWebListenerFactoryCapture(): AnyExport {
         onMessage: (msg: WebInboundMessageInput) => Promise<void>;
         shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
         debounceMs?: number;
+        appendReplyWindow?: { afterMs: number; untilMs: number; maxAgeMs: number };
         selfChatMode?: boolean;
       }
     | undefined;
@@ -251,6 +253,7 @@ export function createWebListenerFactoryCapture(): AnyExport {
     onMessage: (msg: WebInboundMessageInput) => Promise<void>;
     shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
     debounceMs?: number;
+    appendReplyWindow?: { afterMs: number; untilMs: number; maxAgeMs: number };
     selfChatMode?: boolean;
   }) => {
     capturedOnMessage = opts.onMessage;
@@ -270,6 +273,7 @@ export function createMockWebListener(): MockWebListener {
     close: vi.fn(async () => undefined),
     onClose: new Promise<WebListenerCloseReason>(() => {}),
     signalClose: vi.fn(),
+    assertSendReady: vi.fn(async () => undefined),
     sendMessage: vi.fn(async () => createAcceptedWhatsAppSendResultForHarness("text", "msg-1")),
     sendPoll: vi.fn(async () => createAcceptedWhatsAppSendResultForHarness("poll", "poll-1")),
     sendContact: vi.fn(async () =>

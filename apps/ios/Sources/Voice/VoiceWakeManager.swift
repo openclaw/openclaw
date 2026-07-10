@@ -49,6 +49,11 @@ private enum VoiceWakeAudioError: LocalizedError {
     }
 }
 
+private enum VoiceWakeSuppressionReason: Hashable {
+    case talk
+    case voiceNote
+}
+
 extension AVAudioPCMBuffer {
     fileprivate func deepCopy() -> AVAudioPCMBuffer? {
         let format = self.format
@@ -111,7 +116,7 @@ final class VoiceWakeManager: NSObject {
     private var lastDispatched: String?
     private var onCommand: (@Sendable (String) async -> Void)?
     private var userDefaultsObserver: NSObjectProtocol?
-    private var suppressedByTalk: Bool = false
+    private var suppressionReasons: Set<VoiceWakeSuppressionReason> = []
 
     private let externalAudioResumeDelayNs: UInt64
     private let recognitionErrorRestartDelayNs: UInt64
@@ -167,8 +172,23 @@ final class VoiceWakeManager: NSObject {
     }
 
     func setSuppressedByTalk(_ suppressed: Bool) {
-        self.suppressedByTalk = suppressed
+        self.setSuppressed(suppressed, reason: .talk)
+    }
+
+    func setSuppressedByVoiceNote(_ suppressed: Bool) {
+        self.setSuppressed(suppressed, reason: .voiceNote)
+    }
+
+    private func setSuppressed(_ suppressed: Bool, reason: VoiceWakeSuppressionReason) {
         if suppressed {
+            self.suppressionReasons.insert(reason)
+        } else {
+            self.suppressionReasons.remove(reason)
+        }
+
+        // Each microphone owner clears only its own reason, so Talk ending
+        // cannot restart Voice Wake over an active voice-note recording.
+        if !self.suppressionReasons.isEmpty {
             self.cancelScheduledStart()
             if self.isListening {
                 self.isListening = false
@@ -214,7 +234,7 @@ final class VoiceWakeManager: NSObject {
         self.isStarting = true
         defer { self.isStarting = false }
 
-        guard !self.suppressedByTalk else {
+        guard self.suppressionReasons.isEmpty else {
             self.isListening = false
             self.statusText = "Paused"
             return
@@ -255,7 +275,7 @@ final class VoiceWakeManager: NSObject {
             return
         }
 
-        guard self.isEnabled, !self.suppressedByTalk, !self.isSuspendedForExternalAudio else {
+        guard self.isEnabled, self.suppressionReasons.isEmpty, !self.isSuspendedForExternalAudio else {
             self.isListening = false
             self.statusText = self.isEnabled ? "Paused" : "Off"
             return
@@ -303,7 +323,7 @@ final class VoiceWakeManager: NSObject {
     }
 
     private func startRecognition() throws {
-        guard self.isEnabled, !self.suppressedByTalk, !self.isSuspendedForExternalAudio else { return }
+        guard self.isEnabled, self.suppressionReasons.isEmpty, !self.isSuspendedForExternalAudio else { return }
 
         self.recognitionTask?.cancel()
         self.recognitionTask = nil
@@ -353,6 +373,8 @@ final class VoiceWakeManager: NSObject {
     }
 
     private func tearDownRecognitionPipeline() {
+        let hadRecognitionPipeline = self.recognitionRequest != nil
+
         self.tapDrainTask?.cancel()
         self.tapDrainTask = nil
         self.tapQueue?.clear()
@@ -360,13 +382,16 @@ final class VoiceWakeManager: NSObject {
 
         self.recognitionTask?.cancel()
         self.recognitionTask = nil
-        self.recognitionRequest = nil
 
         if self.audioEngine.isRunning {
             self.audioEngine.stop()
         }
-        // A tap can be installed before AVAudioEngine.start() throws.
-        self.audioEngine.inputNode.removeTap(onBus: 0)
+        if hadRecognitionPipeline {
+            // Accessing inputNode initializes RemoteIO. Only touch it after
+            // startRecognition created a request and may have installed a tap.
+            self.audioEngine.inputNode.removeTap(onBus: 0)
+        }
+        self.recognitionRequest = nil
 
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
@@ -491,15 +516,7 @@ final class VoiceWakeManager: NSObject {
                 onTimeout: { NSError(domain: "VoiceWake", code: 6, userInfo: [
                     NSLocalizedDescriptionKey: "permission request timed out",
                 ]) },
-                operation: {
-                    await withCheckedContinuation(isolation: nil) { cont in
-                        Task { @MainActor in
-                            operation { ok in
-                                cont.resume(returning: ok)
-                            }
-                        }
-                    }
-                })
+                operation: { await PermissionRequestBridge.awaitRequest(operation) })
         } catch {
             return false
         }
@@ -543,6 +560,10 @@ extension VoiceWakeManager {
 
     func _test_setStartInFlight(_ isStarting: Bool) {
         self.isStarting = isStarting
+    }
+
+    func _test_isSuspendedForExternalAudio() -> Bool {
+        self.isSuspendedForExternalAudio
     }
 
     func _test_waitForScheduledStart() async {

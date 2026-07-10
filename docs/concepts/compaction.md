@@ -123,7 +123,7 @@ and are pruned by normal session cleanup.
 
 ### Compaction notices
 
-By default, compaction runs silently. Set `notifyUser` to show brief status messages when compaction starts and completes:
+By default, compaction runs silently. Set `notifyUser` to show brief status messages when compaction starts and completes, and to surface a degraded notice when a pre-compaction memory flush is exhausted but the reply still continues:
 
 ```json5
 {

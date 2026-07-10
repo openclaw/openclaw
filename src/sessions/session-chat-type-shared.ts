@@ -93,7 +93,7 @@ function deriveBuiltInLegacySessionChatType(
   return undefined;
 }
 
-export function deriveSessionChatTypeFromScopedKey(
+function deriveSessionChatTypeFromScopedKey(
   scopedSessionKey: string,
   deriveLegacySessionChatTypes: Array<
     (scopedSessionKey: string) => SessionKeyChatType | undefined

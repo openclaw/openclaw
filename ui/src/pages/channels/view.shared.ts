@@ -26,7 +26,7 @@ function resolveChannelStatus(
   return channels?.[key] as Record<string, unknown> | undefined;
 }
 
-export function resolveDefaultChannelAccount(
+function resolveDefaultChannelAccount(
   key: ChannelKey,
   props: ChannelsProps,
 ): ChannelAccountSnapshot | null {
@@ -131,7 +131,7 @@ export function renderSingleAccountChannelCard(params: {
   `;
 }
 
-export function getChannelAccountCount(
+function getChannelAccountCount(
   key: ChannelKey,
   channelAccounts?: Record<string, ChannelAccountSnapshot[]> | null,
 ): number {

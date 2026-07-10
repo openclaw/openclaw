@@ -4,6 +4,16 @@
   "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
   "entries": [
     {
+      "id": "native.android.d55616e142c8be0f",
+      "source": "Off",
+      "translated": "Aus"
+    },
+    {
+      "id": "native.android.f59b83f58086eb89",
+      "source": "Default",
+      "translated": "Standard"
+    },
+    {
       "id": "native.android.805d35da3b3c9d18",
       "source": "Ready",
       "translated": "Bereit"
@@ -284,6 +294,11 @@
       "translated": "Gateway gekoppelt"
     },
     {
+      "id": "native.android.d6a820ac673a7e99",
+      "source": "Mac Studio - Tailnet",
+      "translated": "Mac Studio - Tailnet"
+    },
+    {
       "id": "native.android.1f25c777941aac38",
       "source": "Node",
       "translated": "Knoten"
@@ -324,6 +339,11 @@
       "translated": "Immer. Ich lauere im Schatten und mache ein Peeling."
     },
     {
+      "id": "native.android.6b036c7f4efe72a0",
+      "source": "Listening on device",
+      "translated": "Hört auf Gerät"
+    },
+    {
       "id": "native.android.3b61a88d99e08f21",
       "source": "Talk mode",
       "translated": "Sprechmodus"
@@ -342,6 +362,11 @@
       "id": "native.android.e263b68101dc6920",
       "source": "Screen tools",
       "translated": "Bildschirmtools"
+    },
+    {
+      "id": "native.android.addea052bcd9ea96",
+      "source": "Shared with your gateway",
+      "translated": "Mit Ihrer Gateway geteilt"
     },
     {
       "id": "native.android.8644d2fe89ba47a1",
@@ -419,6 +444,11 @@
       "translated": "Canvas"
     },
     {
+      "id": "native.android.d5938abf7b7a7ee9",
+      "source": "Current screen output and interactive app surface.",
+      "translated": "Aktuelle Bildschirmausgabe und interaktive App-Oberfläche."
+    },
+    {
       "id": "native.android.c4abd4ecd607865f",
       "source": "Offline",
       "translated": "Offline"
@@ -479,6 +509,11 @@
       "translated": "Kanäle"
     },
     {
+      "id": "native.android.269dcd676377df1a",
+      "source": "Messaging surfaces connected to this gateway.",
+      "translated": "Mit dieser Gateway verbundene Messaging-Oberflächen."
+    },
+    {
       "id": "native.android.3ae4829888a376e6",
       "source": "Refresh",
       "translated": "Aktualisieren"
@@ -537,6 +572,11 @@
       "id": "native.android.7c4288229860edf1",
       "source": "No actions found",
       "translated": "Keine Aktionen gefunden"
+    },
+    {
+      "id": "native.android.48ad0ae0e930e02b",
+      "source": "Try Chat, Voice, Sessions, Providers, or Settings.",
+      "translated": "Probieren Sie Chat, Voice, Sessions, Providers oder Settings aus."
     },
     {
       "id": "native.android.d4fbd1ee4f55a5db",
@@ -669,9 +709,19 @@
       "translated": "Passwort (optional)"
     },
     {
+      "id": "native.android.4ddaa88cd4939df2",
+      "source": "CF-Access-Client-Id",
+      "translated": "CF-Access-Client-Id"
+    },
+    {
       "id": "native.android.b735fb6c7d284ecf",
       "source": "Dreaming",
       "translated": "Träumen"
+    },
+    {
+      "id": "native.android.4f96e0e1568d3220",
+      "source": "Memory consolidation and dream diary.",
+      "translated": "Speicherkonsolidierung und Traumtagebuch."
     },
     {
       "id": "native.android.fe6205cd51ca9294",
@@ -849,6 +899,11 @@
       "translated": "Zustand"
     },
     {
+      "id": "native.android.6c1eb72c4b19c43a",
+      "source": "Gateway status, phone node readiness, and recent log stream.",
+      "translated": "Gateway-Status, Bereitschaft des Telefonknotens und aktueller Log-Stream."
+    },
+    {
       "id": "native.android.cac027a1232254cd",
       "source": "Offline",
       "translated": "Offline"
@@ -897,6 +952,11 @@
       "id": "native.android.3abbc8d1a0faf105",
       "source": "Log Entry",
       "translated": "Protokolleintrag"
+    },
+    {
+      "id": "native.android.dd65a0b8f32f1441",
+      "source": "Readable gateway log detail.",
+      "translated": "Lesbare Gateway-Logdetails."
     },
     {
       "id": "native.android.27493dc9da0b1868",
@@ -962,6 +1022,11 @@
       "id": "native.android.7eda627dad7e16cf",
       "source": "Nodes & Devices",
       "translated": "Knoten & Geräte"
+    },
+    {
+      "id": "native.android.006a92f5811c5406",
+      "source": "Live nodes, paired phones, and pending device requests.",
+      "translated": "Live-Knoten, gekoppelte Telefone und ausstehende Geräteanfragen."
     },
     {
       "id": "native.android.a14d051ca26b222a",
@@ -1074,6 +1139,11 @@
       "translated": "Willkommen bei OpenClaw"
     },
     {
+      "id": "native.android.c38e106cc8f1e9ff",
+      "source": "Turn this device into a secure OpenClaw node for chat, voice, camera, and device tools.",
+      "translated": "Verwandeln Sie dieses Gerät in einen sicheren OpenClaw-Knoten für Chat, Sprache, Kamera und Gerätetools."
+    },
+    {
       "id": "native.android.f941909a3fa51055",
       "source": "OpenClaw logo",
       "translated": "OpenClaw-Logo"
@@ -1109,6 +1179,11 @@
       "translated": "Gateway verbinden"
     },
     {
+      "id": "native.android.f50a9c1ee6d47055",
+      "source": "Scan a QR code or use the setup code from your OpenClaw Gateway.",
+      "translated": "Scannen Sie einen QR-Code oder verwenden Sie den Einrichtungscode von Ihrem OpenClaw Gateway."
+    },
+    {
       "id": "native.android.58d80589d9d4b7ff",
       "source": "Could not open setup guide.",
       "translated": "Einrichtungsanleitung konnte nicht geöffnet werden."
@@ -1134,9 +1209,19 @@
       "translated": "Zugriff auf das Gateway-Gerät"
     },
     {
+      "id": "native.android.c8a43dbba02941f0",
+      "source": "Have a terminal open on the device running OpenClaw.",
+      "translated": "Halten Sie ein Terminal auf dem Gerät geöffnet, auf dem OpenClaw ausgeführt wird."
+    },
+    {
       "id": "native.android.71ce00f359981a0b",
       "source": "Phone can reach the Gateway",
       "translated": "Smartphone kann die Gateway erreichen"
+    },
+    {
+      "id": "native.android.08aa33afe19b0c9c",
+      "source": "Use the same network, or a secure remote Gateway URL.",
+      "translated": "Verwenden Sie dasselbe Netzwerk oder eine sichere Remote-Gateway-URL."
     },
     {
       "id": "native.android.68a31cee94a9db86",
@@ -1154,9 +1239,19 @@
       "translated": "Starte deine Gateway."
     },
     {
+      "id": "native.android.d4b295b5146af4b8",
+      "source": "openclaw gateway",
+      "translated": "openclaw gateway"
+    },
+    {
       "id": "native.android.c6f9da7008df05a6",
       "source": "Generate a QR code.",
       "translated": "Generiere einen QR-Code."
+    },
+    {
+      "id": "native.android.db24e4be7a1b5547",
+      "source": "openclaw qr",
+      "translated": "openclaw qr"
     },
     {
       "id": "native.android.96d40475de2885d6",
@@ -1359,6 +1454,11 @@
       "translated": "Ich habe genehmigt"
     },
     {
+      "id": "native.android.0d4dd8ed358a6fb2",
+      "source": "Checking approval…",
+      "translated": "Genehmigung wird geprüft…"
+    },
+    {
       "id": "native.android.cdc44aaeb8bd6e4a",
       "source": "Still waiting for approval",
       "translated": "Warte noch auf Genehmigung"
@@ -1459,11 +1559,6 @@
       "translated": "Nicht erteilt"
     },
     {
-      "id": "native.android.561d07951dc36959",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
-    },
-    {
       "id": "native.android.3b7e036da1b10671",
       "source": "Back",
       "translated": "Zurück"
@@ -1482,6 +1577,11 @@
       "id": "native.android.0a5b541f486e6760",
       "source": "Connected providers",
       "translated": "Verbundene Anbieter"
+    },
+    {
+      "id": "native.android.c76ebb6f80eaad93",
+      "source": "Connect your Gateway to load provider readiness.",
+      "translated": "Verbinden Sie Ihre Gateway, um die Anbieterbereitschaft zu laden."
     },
     {
       "id": "native.android.bffaa0de604a6248",
@@ -1574,6 +1674,11 @@
       "translated": "Aktuell"
     },
     {
+      "id": "native.android.78654c0f198c6df2",
+      "source": "Archived",
+      "translated": "Archiviert"
+    },
+    {
       "id": "native.android.9d0765fc76c3fca5",
       "source": "Newest",
       "translated": "Neueste"
@@ -1614,6 +1719,46 @@
       "translated": "OpenClaw-Sitzung"
     },
     {
+      "id": "native.android.786774c8a76e50d7",
+      "source": "Rename session",
+      "translated": "Sitzung umbenennen"
+    },
+    {
+      "id": "native.android.f869da474db7cf6e",
+      "source": "Rename",
+      "translated": "Umbenennen"
+    },
+    {
+      "id": "native.android.ddbfb1989d641bd2",
+      "source": "New group",
+      "translated": "Neue Gruppe"
+    },
+    {
+      "id": "native.android.3208d7c67e225e7f",
+      "source": "Create",
+      "translated": "Erstellen"
+    },
+    {
+      "id": "native.android.4805fb9d6623e8c0",
+      "source": "Delete session?",
+      "translated": "Sitzung löschen?"
+    },
+    {
+      "id": "native.android.0c3283a2b2445eae",
+      "source": "This permanently deletes the session and its transcript.",
+      "translated": "Dadurch werden die Sitzung und ihr Transkript dauerhaft gelöscht."
+    },
+    {
+      "id": "native.android.807ba5c6699af2f1",
+      "source": "Delete",
+      "translated": "Löschen"
+    },
+    {
+      "id": "native.android.03fd4e5e90f1afe7",
+      "source": "Pinned",
+      "translated": "Angeheftet"
+    },
+    {
       "id": "native.android.94a95bad91565148",
       "source": "Workspace",
       "translated": "Arbeitsbereich"
@@ -1622,6 +1767,41 @@
       "id": "native.android.b5e4ae7f8c9eca2d",
       "source": "OpenClaw",
       "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.6637da0312da85f9",
+      "source": "Pin",
+      "translated": "Anheften"
+    },
+    {
+      "id": "native.android.fb512b81634fa8c4",
+      "source": "Unpin",
+      "translated": "Loslösen"
+    },
+    {
+      "id": "native.android.b75c8710d4537222",
+      "source": "Mark as read",
+      "translated": "Als gelesen markieren"
+    },
+    {
+      "id": "native.android.a9619e8ed4fd6aa2",
+      "source": "Mark as unread",
+      "translated": "Als ungelesen markieren"
+    },
+    {
+      "id": "native.android.54c10a1eec2fa17c",
+      "source": "Group name",
+      "translated": "Gruppenname"
+    },
+    {
+      "id": "native.android.91851a0eb519765f",
+      "source": "Name",
+      "translated": "Name"
+    },
+    {
+      "id": "native.android.4e1ffc65a44efec5",
+      "source": "Cancel",
+      "translated": "Abbrechen"
     },
     {
       "id": "native.android.db243d71d056afa4",
@@ -1634,6 +1814,11 @@
       "translated": "Keine aktuelle Sitzung"
     },
     {
+      "id": "native.android.acbcc9c9ea53d8c0",
+      "source": "No archived sessions",
+      "translated": "Keine archivierten Sitzungen"
+    },
+    {
       "id": "native.android.0a38a1167c6b6941",
       "source": "Start a new conversation and it will show up here.",
       "translated": "Starten Sie eine neue Unterhaltung; sie wird dann hier angezeigt."
@@ -1644,9 +1829,14 @@
       "translated": "Öffnen Sie den Chat, um die aktuelle Sitzung zu starten oder fortzusetzen."
     },
     {
-      "id": "native.android.6ab7c2c111f866ba",
-      "source": "Main session",
-      "translated": "Hauptsitzung"
+      "id": "native.android.085515989f8a2022",
+      "source": "Archived sessions will show up here.",
+      "translated": "Archivierte Sitzungen werden hier angezeigt."
+    },
+    {
+      "id": "native.android.dcb7d5956029bbc4",
+      "source": "Provider limits and quota health.",
+      "translated": "Anbieterlimits und Kontingentstatus."
     },
     {
       "id": "native.android.aa3fb483f7e264fe",
@@ -1674,9 +1864,9 @@
       "translated": "Cron Jobs"
     },
     {
-      "id": "native.android.4a583b7a36684ed7",
-      "source": "Enabled",
-      "translated": "Aktiviert"
+      "id": "native.android.5e3e4cd42004cb28",
+      "source": "Scheduled OpenClaw work from your gateway.",
+      "translated": "Geplante OpenClaw-Arbeit von Ihrer Gateway."
     },
     {
       "id": "native.android.b043fde2bb211935",
@@ -1699,9 +1889,34 @@
       "translated": "Erstellen Sie wiederkehrende OpenClaw-Aufgaben in der Desktop-App."
     },
     {
+      "id": "native.android.f6dd71419863574c",
+      "source": "Inspect scheduled gateway work.",
+      "translated": "Geplante Gateway-Arbeit prüfen."
+    },
+    {
+      "id": "native.android.e3a6337e3c28d3f5",
+      "source": "Connect the gateway to inspect cron jobs.",
+      "translated": "Verbinden Sie die Gateway, um Cronjobs zu prüfen."
+    },
+    {
+      "id": "native.android.2d3daa5032913461",
+      "source": "Cron job not loaded.",
+      "translated": "Cronjob nicht geladen."
+    },
+    {
+      "id": "native.android.401993832e04f790",
+      "source": "Loading cron job…",
+      "translated": "Cronjob wird geladen…"
+    },
+    {
       "id": "native.android.6da97c8c6e1a3d3a",
       "source": "Agents",
       "translated": "Agents"
+    },
+    {
+      "id": "native.android.0f33ca43db97b2a9",
+      "source": "Choose and inspect the assistants available on this gateway.",
+      "translated": "Wählen Sie die auf dieser Gateway verfügbaren Assistenten aus und prüfen Sie sie."
     },
     {
       "id": "native.android.8db68417b1226437",
@@ -1717,6 +1932,11 @@
       "id": "native.android.1ba6a31da5ad58e7",
       "source": "Approvals",
       "translated": "Genehmigungen"
+    },
+    {
+      "id": "native.android.b53cdcaacd0eb0f2",
+      "source": "Review actions that need your attention.",
+      "translated": "Überprüfen Sie Aktionen, die Ihre Aufmerksamkeit erfordern."
     },
     {
       "id": "native.android.2f7b688eb1fe6797",
@@ -1759,6 +1979,11 @@
       "translated": "Chat-Tool-Aufrufe, die in der aktiven Sitzung warten, bleiben hier sichtbar."
     },
     {
+      "id": "native.android.fea93eda5bf97d9e",
+      "source": "How this phone appears to OpenClaw.",
+      "translated": "So wird dieses Telefon in OpenClaw angezeigt."
+    },
+    {
       "id": "native.android.695229fd01afbc2d",
       "source": "Profile",
       "translated": "Profil"
@@ -1772,6 +1997,11 @@
       "id": "native.android.18cd027f897c1ba8",
       "source": "Save Profile",
       "translated": "Profil speichern"
+    },
+    {
+      "id": "native.android.19f0834b4dbcc85a",
+      "source": "Configure voice, transport, and playback.",
+      "translated": "Sprache, Transport und Wiedergabe konfigurieren."
     },
     {
       "id": "native.android.8d0458a4fe154e9b",
@@ -1844,6 +2074,11 @@
       "translated": "Blockliste"
     },
     {
+      "id": "native.android.9feed8722db5d2cc",
+      "source": "Choose what reaches OpenClaw.",
+      "translated": "Wählen Sie aus, was OpenClaw erreicht."
+    },
+    {
       "id": "native.android.d32071018de11907",
       "source": "Notifications",
       "translated": "Benachrichtigungen"
@@ -1909,6 +2144,11 @@
       "translated": "System-Apps anzeigen"
     },
     {
+      "id": "native.android.4859d7f773be5e98",
+      "source": "Include Android and background packages.",
+      "translated": "Android- und Hintergrundpakete einschließen."
+    },
+    {
       "id": "native.android.5a5f58fc2b917d5b",
       "source": "No matching apps.",
       "translated": "Keine passenden Apps."
@@ -1917,6 +2157,11 @@
       "id": "native.android.7c979f32e6ea115f",
       "source": "Showing ${visibleApps.size} of ${apps.size}. Refine search for more.",
       "translated": "${visibleApps.size} von ${apps.size} werden angezeigt. Suche verfeinern, um mehr zu sehen."
+    },
+    {
+      "id": "native.android.ae3122660b0489fc",
+      "source": "Choose what this phone can share.",
+      "translated": "Wählen Sie aus, was dieses Telefon teilen kann."
     },
     {
       "id": "native.android.13c46f9ddf516110",
@@ -1949,9 +2194,29 @@
       "translated": "Standort"
     },
     {
-      "id": "native.android.53928793ec65d766",
-      "source": "While Using",
-      "translated": "Während der Nutzung"
+      "id": "native.android.58549715b04997cc",
+      "source": "Always allows requested location checks while OpenClaw is in the background; Android shows this in the persistent node notification.",
+      "translated": "Erlaubt angeforderte Standortprüfungen immer, während OpenClaw im Hintergrund ausgeführt wird; Android zeigt dies in der dauerhaften Knotenbenachrichtigung an."
+    },
+    {
+      "id": "native.android.d5a8d7f97a7971b1",
+      "source": "Allow background location?",
+      "translated": "Hintergrundstandort zulassen?"
+    },
+    {
+      "id": "native.android.9d149d1ad66e42f9",
+      "source": "OpenClaw only checks location when your paired Gateway requests it. ",
+      "translated": "OpenClaw prüft den Standort nur, wenn Ihre gekoppelte Gateway dies anfordert. "
+    },
+    {
+      "id": "native.android.c48805f3de1d72ca",
+      "source": "Open Settings",
+      "translated": "Einstellungen öffnen"
+    },
+    {
+      "id": "native.android.fd97640418602532",
+      "source": "Not Now",
+      "translated": "Nicht jetzt"
     },
     {
       "id": "native.android.f3d5fd047bfdb023",
@@ -1964,9 +2229,19 @@
       "translated": "Einrichtung ersetzen"
     },
     {
+      "id": "native.android.66aad1078731e6a3",
+      "source": "Forget gateway?",
+      "translated": "Gateway vergessen?"
+    },
+    {
       "id": "native.android.c6c8e0c4b8a9a7cf",
       "source": "Cancel",
       "translated": "Abbrechen"
+    },
+    {
+      "id": "native.android.9d658ff26e59274b",
+      "source": "Connection between this phone and OpenClaw.",
+      "translated": "Verbindung zwischen diesem Telefon und OpenClaw."
     },
     {
       "id": "native.android.718cb50d1bff3e32",
@@ -1999,14 +2274,34 @@
       "translated": "Trennen"
     },
     {
-      "id": "native.android.68959b6e93aec68b",
-      "source": "Clear this phone's saved gateway access and scan a fresh setup code.",
-      "translated": "Gespeicherten Gateway-Zugriff dieses Telefons löschen und einen neuen Einrichtungscode scannen."
+      "id": "native.android.87eee1e2bafbf13b",
+      "source": "Gateways",
+      "translated": "Gateways"
     },
     {
-      "id": "native.android.7fd6bb4d56f1fb3f",
-      "source": "Pair New Gateway",
-      "translated": "Neue Gateway koppeln"
+      "id": "native.android.c3974020a08e239e",
+      "source": "No paired gateways.",
+      "translated": "Keine gekoppelten Gateways."
+    },
+    {
+      "id": "native.android.74ee3bbbd2e37e9c",
+      "source": "Forget",
+      "translated": "Vergessen"
+    },
+    {
+      "id": "native.android.56e98811c4e9b027",
+      "source": "Gateway setup",
+      "translated": "Gateway-Einrichtung"
+    },
+    {
+      "id": "native.android.c040d4ee72a810e0",
+      "source": "Scan or paste a setup code to add another gateway.",
+      "translated": "Scannen Sie einen Einrichtungscode oder fügen Sie ihn ein, um ein weiteres Gateway hinzuzufügen."
+    },
+    {
+      "id": "native.android.a7c243ff3f1d6447",
+      "source": "Add gateway",
+      "translated": "Gateway hinzufügen"
     },
     {
       "id": "native.android.77a03c8c22155ec5",
@@ -2064,6 +2359,16 @@
       "translated": "Speichern & verbinden"
     },
     {
+      "id": "native.android.633d0dcf4b6d6ed8",
+      "source": "Enter a valid setup code or gateway address.",
+      "translated": "Geben Sie einen gültigen Einrichtungscode oder eine Gateway-Adresse ein."
+    },
+    {
+      "id": "native.android.6f19c75742af5126",
+      "source": "A calm, high-contrast OpenClaw interface.",
+      "translated": "Eine ruhige, kontrastreiche OpenClaw-Oberfläche."
+    },
+    {
       "id": "native.android.5311e446ce2bf857",
       "source": "Appearance",
       "translated": "Erscheinungsbild"
@@ -2084,6 +2389,11 @@
       "translated": "Info"
     },
     {
+      "id": "native.android.c2d37ac2ad4c9e3c",
+      "source": "OpenClaw for Android.",
+      "translated": "OpenClaw für Android."
+    },
+    {
       "id": "native.android.d744d434533ea8ed",
       "source": "Gateway",
       "translated": "Gateway"
@@ -2097,6 +2407,26 @@
       "id": "native.android.b84ae70dbae95380",
       "source": "Update",
       "translated": "Update"
+    },
+    {
+      "id": "native.android.aac3310699b496c8",
+      "source": "© 2026 OpenClaw Foundation — MIT License.",
+      "translated": "© 2026 OpenClaw Foundation — MIT-Lizenz."
+    },
+    {
+      "id": "native.android.a157bbb606e9b398",
+      "source": "OpenClaw logo",
+      "translated": "OpenClaw-Logo"
+    },
+    {
+      "id": "native.android.7b78b4869baf2160",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.ad4c14835d1b71ca",
+      "source": "Personal AI on your devices",
+      "translated": "Persönliche KI auf deinen Geräten"
     },
     {
       "id": "native.android.13f70e22b5648308",
@@ -2174,6 +2504,41 @@
       "translated": "Problem"
     },
     {
+      "id": "native.android.4a583b7a36684ed7",
+      "source": "Enabled",
+      "translated": "Aktiviert"
+    },
+    {
+      "id": "native.android.1a3b13c02f53120f",
+      "source": "No",
+      "translated": "Nein"
+    },
+    {
+      "id": "native.android.9f6111d68ea1c273",
+      "source": "Yes",
+      "translated": "Ja"
+    },
+    {
+      "id": "native.android.4fcad8b85203f5a8",
+      "source": "Last Error",
+      "translated": "Letzter Fehler"
+    },
+    {
+      "id": "native.android.369f2775636e8fd4",
+      "source": "Delivery Error",
+      "translated": "Zustellungsfehler"
+    },
+    {
+      "id": "native.android.d02323bcac09c67f",
+      "source": "Tap to copy",
+      "translated": "Zum Kopieren tippen"
+    },
+    {
+      "id": "native.android.09641868d42a68fb",
+      "source": "$title copied",
+      "translated": "$title kopiert"
+    },
+    {
       "id": "native.android.727e7f203b075b43",
       "source": "Default assistant",
       "translated": "Standardassistent"
@@ -2212,6 +2577,26 @@
       "id": "native.android.35d4bc86e9ba395d",
       "source": "Off",
       "translated": "Aus"
+    },
+    {
+      "id": "native.android.22f3549d0fab271d",
+      "source": "System Event Text",
+      "translated": "Systemereignistext"
+    },
+    {
+      "id": "native.android.35e7850777bd6c6a",
+      "source": "Agent Prompt",
+      "translated": "Agenten-Prompt"
+    },
+    {
+      "id": "native.android.c49027320aa3f807",
+      "source": "Command",
+      "translated": "Befehl"
+    },
+    {
+      "id": "native.android.f36439e78187c554",
+      "source": "Payload Text",
+      "translated": "Payload-Text"
     },
     {
       "id": "native.android.46ba30c035d8f9b3",
@@ -2299,9 +2684,9 @@
       "translated": "SMS"
     },
     {
-      "id": "native.android.51b5f4cf7eaa5c86",
-      "source": "Send and search SMS from this device.",
-      "translated": "SMS von diesem Gerät senden und durchsuchen."
+      "id": "native.android.cba20518e9758043",
+      "source": "Grants Android SMS access. The Gateway must separately allow `sms.search` and, only if needed, `sms.send`.",
+      "translated": "Gewährt Android-SMS-Zugriff. Die Gateway muss `sms.search` und, nur falls erforderlich, `sms.send` separat erlauben."
     },
     {
       "id": "native.android.8c32ca1f11a93a25",
@@ -2549,6 +2934,11 @@
       "translated": "Keine aktuellen Sitzungen"
     },
     {
+      "id": "native.android.2e33a4fd5f60b550",
+      "source": "Start a chat and your active OpenClaw conversations will appear here.",
+      "translated": "Starten Sie einen Chat, und Ihre aktiven OpenClaw-Unterhaltungen werden hier angezeigt."
+    },
+    {
       "id": "native.android.85726cfd4207d48a",
       "source": "Start Chat",
       "translated": "Chat starten"
@@ -2657,6 +3047,16 @@
       "id": "native.android.7178756ffe9e4c72",
       "source": "Recent conversations",
       "translated": "Aktuelle Unterhaltungen"
+    },
+    {
+      "id": "native.android.cbdaff5e476b7dad",
+      "source": "Browse",
+      "translated": "Durchsuchen"
+    },
+    {
+      "id": "native.android.c093a2297a02405a",
+      "source": "Offline",
+      "translated": "Offline"
     },
     {
       "id": "native.android.1196e848f04a3dc1",
@@ -2794,6 +3194,11 @@
       "translated": "Skills"
     },
     {
+      "id": "native.android.73a666b0a4a0e617",
+      "source": "Installed capabilities available to OpenClaw.",
+      "translated": "Installierte Funktionen, die für OpenClaw verfügbar sind."
+    },
+    {
       "id": "native.android.9507bc022dc2e3ed",
       "source": "Refresh",
       "translated": "Aktualisieren"
@@ -2817,6 +3222,11 @@
       "id": "native.android.ab93e3d2d6496eda",
       "source": "Skills installed on the gateway will appear here.",
       "translated": "Auf der Gateway installierte Skills werden hier angezeigt."
+    },
+    {
+      "id": "native.android.81d900273232ce39",
+      "source": "Inspect installed skill capability and setup state.",
+      "translated": "Installierte Skill-Funktion und Einrichtungsstatus prüfen."
     },
     {
       "id": "native.android.f8ddbaf7e1288598",
@@ -3144,14 +3554,64 @@
       "translated": "OpenClaw denkt nach…"
     },
     {
+      "id": "native.android.eb6ff96aba8f67b4",
+      "source": "Files unavailable",
+      "translated": "Dateien nicht verfügbar"
+    },
+    {
+      "id": "native.android.fefb4a6c1717210d",
+      "source": "Empty folder",
+      "translated": "Leerer Ordner"
+    },
+    {
+      "id": "native.android.b74f90dc5f65b1da",
+      "source": "This folder has no files yet.",
+      "translated": "Dieser Ordner enthält noch keine Dateien."
+    },
+    {
+      "id": "native.android.8f0b5317c75e334d",
+      "source": "Could not load this folder.",
+      "translated": "Dieser Ordner konnte nicht geladen werden."
+    },
+    {
+      "id": "native.android.4e48916e1b0f86ab",
+      "source": "Load more",
+      "translated": "Mehr laden"
+    },
+    {
+      "id": "native.android.f26b7b179d4765b0",
+      "source": "${entries.size} of $totalEntries",
+      "translated": "${entries.size} von $totalEntries"
+    },
+    {
+      "id": "native.android.b2a525ca00a799df",
+      "source": "Back",
+      "translated": "Zurück"
+    },
+    {
+      "id": "native.android.737edf881bc586d5",
+      "source": "Share file",
+      "translated": "Datei teilen"
+    },
+    {
+      "id": "native.android.095574301bf487a1",
+      "source": "No preview",
+      "translated": "Keine Vorschau"
+    },
+    {
+      "id": "native.android.f57b231996a10d14",
+      "source": "This image could not be decoded.",
+      "translated": "Dieses Bild konnte nicht decodiert werden."
+    },
+    {
       "id": "native.android.4949d6815387ee5c",
       "source": "Type a message…",
       "translated": "Nachricht eingeben…"
     },
     {
-      "id": "native.android.6522139155c1eebd",
-      "source": "Gateway is offline. Open Settings to reconnect.",
-      "translated": "Gateway ist offline. Öffnen Sie die Einstellungen, um die Verbindung wiederherzustellen."
+      "id": "native.android.8e06942aa080e420",
+      "source": "Gateway is offline. Text messages are queued and sent after reconnecting.",
+      "translated": "Gateway ist offline. Textnachrichten werden in die Warteschlange gestellt und nach der erneuten Verbindung gesendet."
     },
     {
       "id": "native.android.d6227e983e46ca7c",
@@ -3184,9 +3644,64 @@
       "translated": "Keine Befehle gefunden"
     },
     {
+      "id": "native.android.cd2033b0a82a72dd",
+      "source": "$index.",
+      "translated": "$index."
+    },
+    {
       "id": "native.android.bef360f847488651",
       "source": "Image unavailable",
       "translated": "Bild nicht verfügbar"
+    },
+    {
+      "id": "native.android.e64a6673728dadcb",
+      "source": "$quoted\n\n",
+      "translated": "$quoted\n\n"
+    },
+    {
+      "id": "native.android.7bf61a1da504c271",
+      "source": "Message actions",
+      "translated": "Nachrichtenaktionen"
+    },
+    {
+      "id": "native.android.fab176fe78fc2500",
+      "source": "Copy",
+      "translated": "Kopieren"
+    },
+    {
+      "id": "native.android.319b4a29df279bb3",
+      "source": "Select text",
+      "translated": "Text auswählen"
+    },
+    {
+      "id": "native.android.fc50d4d9ec3b5a0b",
+      "source": "Share",
+      "translated": "Teilen"
+    },
+    {
+      "id": "native.android.7b896902a024d85f",
+      "source": "Reply",
+      "translated": "Antworten"
+    },
+    {
+      "id": "native.android.3f40011c9f02a65a",
+      "source": "Done",
+      "translated": "Fertig"
+    },
+    {
+      "id": "native.android.833dec4c78ab5eae",
+      "source": "Message copied",
+      "translated": "Nachricht kopiert"
+    },
+    {
+      "id": "native.android.7fecaa645b302769",
+      "source": "Share message",
+      "translated": "Nachricht teilen"
+    },
+    {
+      "id": "native.android.d06711f88020d74e",
+      "source": "No app can share this message",
+      "translated": "Keine App kann diese Nachricht teilen"
     },
     {
       "id": "native.android.97a0b44d89402809",
@@ -3204,9 +3719,34 @@
       "translated": "Noch keine Nachrichten"
     },
     {
+      "id": "native.android.71ef7f8dbe2b0dbe",
+      "source": "Preview · $domain",
+      "translated": "Vorschau · $domain"
+    },
+    {
+      "id": "native.android.b49e81e487cdbaa3",
+      "source": "Expand link preview",
+      "translated": "Linkvorschau erweitern"
+    },
+    {
+      "id": "native.android.986fd353169b6153",
+      "source": "Loading preview…",
+      "translated": "Vorschau wird geladen…"
+    },
+    {
+      "id": "native.android.edb04556385d80d5",
+      "source": "No preview available",
+      "translated": "Keine Vorschau verfügbar"
+    },
+    {
       "id": "native.android.a50e44d8f380f9ad",
       "source": "Thinking...",
       "translated": "Denkt nach..."
+    },
+    {
+      "id": "native.android.ff4a092a02bd5d17",
+      "source": "Tools",
+      "translated": "Tools"
     },
     {
       "id": "native.android.3788802f6c138c8b",
@@ -3224,9 +3764,24 @@
       "translated": "... +${toolCalls.size - 6} weitere"
     },
     {
-      "id": "native.android.1d0bb431f08154a6",
+      "id": "native.android.b3ff30d4e0b3ce58",
       "source": "You",
       "translated": "Du"
+    },
+    {
+      "id": "native.android.9bd31c23ebdf7c7a",
+      "source": "Retry",
+      "translated": "Erneut versuchen"
+    },
+    {
+      "id": "native.android.b728b15914267f57",
+      "source": "Delete",
+      "translated": "Löschen"
+    },
+    {
+      "id": "native.android.dfbd755eb43b4d26",
+      "source": "OpenClaw · Live",
+      "translated": "OpenClaw · Live"
     },
     {
       "id": "native.android.d29098025118ce4b",
@@ -3262,6 +3817,11 @@
       "id": "native.android.4437f3cbdb3c8cbe",
       "source": "New chat",
       "translated": "Neuer Chat"
+    },
+    {
+      "id": "native.android.6b0f8ea129bca167",
+      "source": "More new chat options",
+      "translated": "Weitere neue Chat-Optionen"
     },
     {
       "id": "native.android.0066c3883e9eff15",
@@ -3304,6 +3864,11 @@
       "translated": "Tools werden ausgeführt"
     },
     {
+      "id": "native.android.d851a32f367f8b31",
+      "source": "OpenClaw is working",
+      "translated": "OpenClaw arbeitet"
+    },
+    {
       "id": "native.android.0fd6b75cadc0ce75",
       "source": "+${toolCalls.size - 4} more",
       "translated": "+${toolCalls.size - 4} weitere"
@@ -3322,6 +3887,21 @@
       "id": "native.android.76d574acfac94fee",
       "source": "Stop",
       "translated": "Stopp"
+    },
+    {
+      "id": "native.android.2cb3ec7379426dfe",
+      "source": "Default",
+      "translated": "Standard"
+    },
+    {
+      "id": "native.android.f8d0f6ba7608abc3",
+      "source": "Pin model",
+      "translated": "Modell anheften"
+    },
+    {
+      "id": "native.android.09a13ed8f039a9c3",
+      "source": "Unpin model",
+      "translated": "Modell lösen"
     },
     {
       "id": "native.android.5953c956ff208e6e",
@@ -3374,6 +3954,11 @@
       "translated": "CHAT-FEHLER"
     },
     {
+      "id": "native.android.64459adde73e63f2",
+      "source": "Local command center",
+      "translated": "Lokale Kommandozentrale"
+    },
+    {
       "id": "native.android.dc3aa392cc80e61c",
       "source": "OC",
       "translated": "OC"
@@ -3409,9 +3994,19 @@
       "translated": "Test, Test, 1, 2, 3"
     },
     {
+      "id": "native.android.9ffcbda6cdb9bc00",
+      "source": "14 messages · Android",
+      "translated": "14 Nachrichten · Android"
+    },
+    {
       "id": "native.android.5c84ed8a78a5c5d5",
       "source": "Provider setup",
       "translated": "Anbieter einrichten"
+    },
+    {
+      "id": "native.android.794873efdfcdff4f",
+      "source": "OpenClaw gateway",
+      "translated": "OpenClaw-Gateway"
     },
     {
       "id": "native.android.2d3b6dd9a8f186fe",
@@ -3449,9 +4044,9 @@
       "translated": "Nichts erfordert deine Aufmerksamkeit"
     },
     {
-      "id": "native.android.75e509075f59deaa",
-      "source": "Needs attention",
-      "translated": "Erfordert Aufmerksamkeit"
+      "id": "native.android.3457b4ee28d964ee",
+      "source": "OpenClaw will surface approvals, failed jobs, and channel issues here.",
+      "translated": "OpenClaw zeigt hier Genehmigungen, fehlgeschlagene Aufträge und Kanalprobleme an."
     },
     {
       "id": "native.android.c5e56f0e8af094fb",
@@ -3462,6 +4057,11 @@
       "id": "native.android.7228c229ce9f97c6",
       "source": "Speaking…",
       "translated": "Spricht…"
+    },
+    {
+      "id": "native.android.6fbf0916309dbaba",
+      "source": "Mic on · waiting for gateway",
+      "translated": "Mikrofon an · wartet auf Gateway"
     },
     {
       "id": "native.android.d84c6c14e42763ff",
@@ -3574,6 +4174,11 @@
       "translated": "Abbrechen"
     },
     {
+      "id": "native.android.88d68890ea867ffc",
+      "source": "New chat in worktree",
+      "translated": "Neuer Chat im Worktree"
+    },
+    {
       "id": "native.android.c12edfa8fda16801",
       "source": "Endpoint",
       "translated": "Endpunkt"
@@ -3644,6 +4249,36 @@
       "translated": "Passwort"
     },
     {
+      "id": "native.android.43900769f2cf0458",
+      "source": "Custom headers (optional)",
+      "translated": "Benutzerdefinierte Header (optional)"
+    },
+    {
+      "id": "native.android.6d42cb48a4a32331",
+      "source": "Sent with every connection to this gateway, for example Cloudflare Access service token headers. Stored encrypted and applied on the next reconnect.",
+      "translated": "Wird bei jeder Verbindung zu diesem Gateway gesendet, zum Beispiel Cloudflare Access-Diensttoken-Header. Wird verschlüsselt gespeichert und beim nächsten erneuten Verbindungsaufbau angewendet."
+    },
+    {
+      "id": "native.android.c4d4f0299965fe55",
+      "source": "Header value",
+      "translated": "Header-Wert"
+    },
+    {
+      "id": "native.android.123e497273b8586e",
+      "source": "This header is managed by the connection and cannot be overridden.",
+      "translated": "Dieser Header wird von der Verbindung verwaltet und kann nicht überschrieben werden."
+    },
+    {
+      "id": "native.android.94f0633a1fb099bc",
+      "source": "Add header",
+      "translated": "Header hinzufügen"
+    },
+    {
+      "id": "native.android.ff4c8c3b56827d8e",
+      "source": "Remove %1$s",
+      "translated": "%1$s entfernen"
+    },
+    {
       "id": "native.android.a43f43c1338a6960",
       "source": "Run onboarding again",
       "translated": "Onboarding erneut ausführen"
@@ -3662,6 +4297,21 @@
       "id": "native.android.6ad2d3f084142bed",
       "source": "The gateway certificate changed. Continue only if you expected this.\n\nOld SHA-256:\n%1$s\n\nNew SHA-256:\n%2$s",
       "translated": "Das Gateway-Zertifikat hat sich geändert. Fahren Sie nur fort, wenn Sie dies erwartet haben.\n\nAlter SHA-256:\n%1$s\n\nNeuer SHA-256:\n%2$s"
+    },
+    {
+      "id": "native.android.7c49ec7fe94a9063",
+      "source": "Switch gateway",
+      "translated": "Gateway wechseln"
+    },
+    {
+      "id": "native.android.9e0a677fd629a15f",
+      "source": "Select gateway",
+      "translated": "Gateway auswählen"
+    },
+    {
+      "id": "native.android.b0034ac5bbc6b25f",
+      "source": "Active gateway",
+      "translated": "Aktives Gateway"
     },
     {
       "id": "native.apple.8f741d09cc1d5495",
@@ -4154,6 +4804,16 @@
       "translated": "Nutzung"
     },
     {
+      "id": "native.apple.f48d33a93f53ae56",
+      "source": "Files",
+      "translated": "Dateien"
+    },
+    {
+      "id": "native.apple.b84aa382768fe819",
+      "source": "Workspace files",
+      "translated": "Arbeitsbereich-Dateien"
+    },
+    {
       "id": "native.apple.98306aca23d04451",
       "source": "Dreaming",
       "translated": "Träumen"
@@ -4529,6 +5189,56 @@
       "translated": "Bereit"
     },
     {
+      "id": "native.apple.9c4e8b82edf0b324",
+      "source": "Files",
+      "translated": "Dateien"
+    },
+    {
+      "id": "native.apple.ada58d7ce8866f71",
+      "source": "This folder is empty.",
+      "translated": "Dieser Ordner ist leer."
+    },
+    {
+      "id": "native.apple.35512c4d46a2da28",
+      "source": "Load More",
+      "translated": "Mehr laden"
+    },
+    {
+      "id": "native.apple.e617cdacc3bce5ea",
+      "source": "\\(self.entries.count) of \\(self.totalEntries)",
+      "translated": "\\(self.entries.count) von \\(self.totalEntries)"
+    },
+    {
+      "id": "native.apple.336a7eeb12d6e5f4",
+      "source": "Share file",
+      "translated": "Datei teilen"
+    },
+    {
+      "id": "native.apple.0ab324ff650d720c",
+      "source": "Could not share this file.",
+      "translated": "Diese Datei konnte nicht geteilt werden."
+    },
+    {
+      "id": "native.apple.8218f673399060cc",
+      "source": "OK",
+      "translated": "OK"
+    },
+    {
+      "id": "native.apple.e5524d5756a62744",
+      "source": "Unable to Export Transcript",
+      "translated": "Transkript kann nicht exportiert werden"
+    },
+    {
+      "id": "native.apple.942d6a10fd90d6e3",
+      "source": "OK",
+      "translated": "OK"
+    },
+    {
+      "id": "native.apple.3548c8d1ab43e85e",
+      "source": "OpenClaw could not prepare the Markdown file.",
+      "translated": "OpenClaw konnte die Markdown-Datei nicht vorbereiten."
+    },
+    {
       "id": "native.apple.202b97e93b938049",
       "source": "What would you like to work on?",
       "translated": "Woran möchten Sie arbeiten?"
@@ -4544,6 +5254,26 @@
       "translated": "Öffnet Einstellungen / Gateway"
     },
     {
+      "id": "native.apple.7c87384c7d1370e1",
+      "source": "New Chat",
+      "translated": "Neuer Chat"
+    },
+    {
+      "id": "native.apple.1876037e64a74110",
+      "source": "New Chat in Worktree",
+      "translated": "Neuer Chat im Worktree"
+    },
+    {
+      "id": "native.apple.ced228bb4d20a726",
+      "source": "Export Transcript",
+      "translated": "Transkript exportieren"
+    },
+    {
+      "id": "native.apple.940e1f943750c94b",
+      "source": "Chat actions",
+      "translated": "Chat-Aktionen"
+    },
+    {
       "id": "native.apple.b635acd93246d67b",
       "source": "Connected",
       "translated": "Verbunden"
@@ -4554,14 +5284,19 @@
       "translated": "Nicht verfügbar"
     },
     {
-      "id": "native.apple.889fe76e02b8ad5d",
-      "source": "Connect to a gateway",
-      "translated": "Mit einer Gateway verbinden"
+      "id": "native.apple.4dcedefea4b49a1c",
+      "source": "Message \\(self.agentDisplayName)...",
+      "translated": "Nachricht an \\(self.agentDisplayName) …"
     },
     {
-      "id": "native.apple.e8173c7d24457256",
-      "source": "Message \\(self.agentDisplayName)...",
-      "translated": "Nachricht an \\(self.agentDisplayName)..."
+      "id": "native.apple.84767ec18054524b",
+      "source": "Message \\(self.agentDisplayName); sends when connected",
+      "translated": "Nachricht an \\(self.agentDisplayName); wird bei Verbindung gesendet"
+    },
+    {
+      "id": "native.apple.11b20bef7e51ab69",
+      "source": "Connect to a gateway",
+      "translated": "Mit einem Gateway verbinden"
     },
     {
       "id": "native.apple.14492e334b87e4f2",
@@ -4592,6 +5327,116 @@
       "id": "native.apple.65e462758be96174",
       "source": "Help me start a realtime voice session from this phone.",
       "translated": "Helfen Sie mir, von diesem Telefon aus eine Echtzeit-Sprachsitzung zu starten."
+    },
+    {
+      "id": "native.apple.41afc4a5d600ded5",
+      "source": "Unarchive",
+      "translated": "Aus Archiv entfernen"
+    },
+    {
+      "id": "native.apple.69b8d4842a6b18ca",
+      "source": "Pin",
+      "translated": "Anheften"
+    },
+    {
+      "id": "native.apple.43b1796d55760cbf",
+      "source": "Unpin",
+      "translated": "Loslösen"
+    },
+    {
+      "id": "native.apple.48fe0c28f708d02d",
+      "source": "Mark as Read",
+      "translated": "Als gelesen markieren"
+    },
+    {
+      "id": "native.apple.b0c19ea32f3b60dc",
+      "source": "Mark as Unread",
+      "translated": "Als ungelesen markieren"
+    },
+    {
+      "id": "native.apple.1a700eb0a3a26dd2",
+      "source": "Rename…",
+      "translated": "Umbenennen…"
+    },
+    {
+      "id": "native.apple.036b0faa4e17f39c",
+      "source": "Fork",
+      "translated": "Fork"
+    },
+    {
+      "id": "native.apple.35e23b306162f6ad",
+      "source": "Archive",
+      "translated": "Archivieren"
+    },
+    {
+      "id": "native.apple.ef105487ab62349a",
+      "source": "Create",
+      "translated": "Erstellen"
+    },
+    {
+      "id": "native.apple.1d017f810676d86b",
+      "source": "Save",
+      "translated": "Speichern"
+    },
+    {
+      "id": "native.apple.f488b9caf6e51ac3",
+      "source": "Delete Session?",
+      "translated": "Sitzung löschen?"
+    },
+    {
+      "id": "native.apple.8634b17be9b111bc",
+      "source": "Delete Session",
+      "translated": "Sitzung löschen"
+    },
+    {
+      "id": "native.apple.9b1aed19568a048e",
+      "source": "Cancel",
+      "translated": "Abbrechen"
+    },
+    {
+      "id": "native.apple.4a9568ac9b18d8d3",
+      "source": "This permanently deletes the session and its transcript.",
+      "translated": "Dadurch werden die Sitzung und ihr Transkript dauerhaft gelöscht."
+    },
+    {
+      "id": "native.apple.0965d8d2429c3b9f",
+      "source": "New Group…",
+      "translated": "Neue Gruppe…"
+    },
+    {
+      "id": "native.apple.e6506ceb05d0ab33",
+      "source": "Remove from Group",
+      "translated": "Aus Gruppe entfernen"
+    },
+    {
+      "id": "native.apple.6def347a80370aac",
+      "source": "Move to Group",
+      "translated": "In Gruppe verschieben"
+    },
+    {
+      "id": "native.apple.de18cef702422ac0",
+      "source": "Delete…",
+      "translated": "Löschen…"
+    },
+    {
+      "id": "native.apple.6595d3fd006a1a01",
+      "source": "New Group",
+      "translated": "Neue Gruppe"
+    },
+    {
+      "id": "native.apple.5bccdc23a1640895",
+      "source": "Rename Session",
+      "translated": "Sitzung umbenennen"
+    },
+    {
+      "id": "native.apple.31424500c53d6c32",
+      "source": "Group name",
+      "translated": "Gruppenname"
+    },
+    {
+      "id": "native.apple.af789b2d2fda0f67",
+      "source": "Session name",
+      "translated": "Sitzungsname"
     },
     {
       "id": "native.apple.e8018adcccaa2a4d",
@@ -4639,6 +5484,11 @@
       "translated": "Letzte Sitzungen"
     },
     {
+      "id": "native.apple.9161ca3c61de6cc7",
+      "source": "Gateway offline",
+      "translated": "Gateway offline"
+    },
+    {
       "id": "native.apple.e01aac63fda4c147",
       "source": "Online",
       "translated": "Online"
@@ -4664,29 +5514,54 @@
       "translated": "Sitzungen"
     },
     {
+      "id": "native.apple.0422818cc95d5071",
+      "source": "Archived sessions",
+      "translated": "Archivierte Sitzungen"
+    },
+    {
+      "id": "native.apple.bc8e64efb095a625",
+      "source": "Show Archived",
+      "translated": "Archivierte anzeigen"
+    },
+    {
       "id": "native.apple.b272115c83f7ef58",
       "source": "Sessions unavailable",
       "translated": "Sitzungen nicht verfügbar"
     },
     {
-      "id": "native.apple.98512bfb25426929",
+      "id": "native.apple.79937d7781fb65ae",
       "source": "Connect to the gateway.",
       "translated": "Mit dem Gateway verbinden."
     },
     {
-      "id": "native.apple.bb1a311441d3cf24",
-      "source": "Start a chat and it will appear here.",
-      "translated": "Starte einen Chat, dann wird er hier angezeigt."
+      "id": "native.apple.54f8260c9b863087",
+      "source": "Loading archived sessions",
+      "translated": "Archivierte Sitzungen werden geladen"
     },
     {
-      "id": "native.apple.9161ca3c61de6cc7",
-      "source": "Gateway offline",
-      "translated": "Gateway offline"
+      "id": "native.apple.9b305868873dade2",
+      "source": "Loading recent sessions",
+      "translated": "Letzte Sitzungen werden geladen"
+    },
+    {
+      "id": "native.apple.1f4501a6bf2bae4c",
+      "source": "No archived sessions",
+      "translated": "Keine archivierten Sitzungen"
     },
     {
       "id": "native.apple.28c97cf23665ee01",
       "source": "No recent sessions",
       "translated": "Keine letzten Sitzungen"
+    },
+    {
+      "id": "native.apple.2a1ba7a5e1979c9e",
+      "source": "Archived sessions will appear here.",
+      "translated": "Archivierte Sitzungen werden hier angezeigt."
+    },
+    {
+      "id": "native.apple.bb1a311441d3cf24",
+      "source": "Start a chat and it will appear here.",
+      "translated": "Starte einen Chat, dann wird er hier angezeigt."
     },
     {
       "id": "native.apple.ffaad4538bcfe1ac",
@@ -5289,6 +6164,11 @@
       "translated": "Instanzen"
     },
     {
+      "id": "native.apple.3f2726ccd1acd987",
+      "source": "Files",
+      "translated": "Dateien"
+    },
+    {
       "id": "native.apple.614c9b40919fb103",
       "source": "Dreaming",
       "translated": "Träumen"
@@ -5874,6 +6754,16 @@
       "translated": "OpenClaw dankt seinen Partnern in der Open-Source-Community."
     },
     {
+      "id": "native.apple.fc49f9b63e160581",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.apple.eaa4fe72f3730f3f",
+      "source": "Personal AI on your devices",
+      "translated": "Persönliche KI auf deinen Geräten"
+    },
+    {
       "id": "native.apple.35714980723b430d",
       "source": "OpenClaw app version",
       "translated": "OpenClaw-App-Version"
@@ -5882,6 +6772,36 @@
       "id": "native.apple.bbb2c589c2049217",
       "source": "iOS",
       "translated": "iOS"
+    },
+    {
+      "id": "native.apple.9f71c5c00d1bba49",
+      "source": "Website",
+      "translated": "Website"
+    },
+    {
+      "id": "native.apple.7d10fb0ea5b704fa",
+      "source": "Docs",
+      "translated": "Docs"
+    },
+    {
+      "id": "native.apple.e501402343d42f4d",
+      "source": "GitHub",
+      "translated": "GitHub"
+    },
+    {
+      "id": "native.apple.ee880812d92bcacf",
+      "source": "Discord",
+      "translated": "Discord"
+    },
+    {
+      "id": "native.apple.b962116ff5bf1905",
+      "source": "© 2026 OpenClaw Foundation — MIT License.",
+      "translated": "© 2026 OpenClaw Foundation — MIT License."
+    },
+    {
+      "id": "native.apple.106434d1305d153b",
+      "source": "Title",
+      "translated": "Titel"
     },
     {
       "id": "native.apple.0f4e7486619df175",
@@ -5999,6 +6919,11 @@
       "translated": "Gateway-Passwort"
     },
     {
+      "id": "native.apple.438ae7e5b8544548",
+      "source": "Custom Headers",
+      "translated": "Benutzerdefinierte Header"
+    },
+    {
       "id": "native.apple.c9cd035bc39af480",
       "source": "Reset Onboarding",
       "translated": "Onboarding zurücksetzen"
@@ -6024,7 +6949,7 @@
       "translated": "Freisprecher"
     },
     {
-      "id": "native.apple.e1383011b9ccc3a3",
+      "id": "native.apple.1604352fea16d495",
       "source": "Wake Words",
       "translated": "Aktivierungswörter"
     },
@@ -6099,9 +7024,9 @@
       "translated": "Debug-Bildschirmstatus"
     },
     {
-      "id": "native.apple.2bb13c2d7465f99e",
+      "id": "native.apple.8584babe715b1133",
       "source": "Discovery Logs",
-      "translated": "Discovery-Protokolle"
+      "translated": "Erkennungsprotokolle"
     },
     {
       "id": "native.apple.f0a16e985312895b",
@@ -6629,19 +7554,14 @@
       "translated": "Fertig"
     },
     {
-      "id": "native.apple.948e3fafb80564c9",
-      "source": "Connect to a Gateway?",
-      "translated": "Mit einem Gateway verbinden?"
-    },
-    {
       "id": "native.apple.e8f30dffd2d62d96",
       "source": "Connecting…",
       "translated": "Verbindung wird hergestellt…"
     },
     {
-      "id": "native.apple.a735b07046d583e7",
-      "source": "Connect",
-      "translated": "Verbinden"
+      "id": "native.apple.78d430515e5bb8eb",
+      "source": "Connect to this Gateway",
+      "translated": "Mit dieser Gateway verbinden"
     },
     {
       "id": "native.apple.102d0ce74e6253f3",
@@ -6649,17 +7569,12 @@
       "translated": "Nicht jetzt"
     },
     {
-      "id": "native.apple.88dbf6b7151586b4",
-      "source": "Don’t show this again",
+      "id": "native.apple.5204dc0158d98ebf",
+      "source": "Don't show this again",
       "translated": "Nicht erneut anzeigen"
     },
     {
-      "id": "native.apple.51d42270d75ea40a",
-      "source": "No gateways found yet. Make sure your gateway is running and Bonjour discovery is enabled.",
-      "translated": "Noch keine Gateways gefunden. Stellen Sie sicher, dass Ihre Gateway ausgeführt wird und die Bonjour-Erkennung aktiviert ist."
-    },
-    {
-      "id": "native.apple.d2445a87f9cb6ff4",
+      "id": "native.apple.476757fc54c63560",
       "source": "Quick Setup",
       "translated": "Schnelleinrichtung"
     },
@@ -6667,6 +7582,66 @@
       "id": "native.apple.977a6e4a5022184f",
       "source": "Close",
       "translated": "Schließen"
+    },
+    {
+      "id": "native.apple.f2642d91a3ac8c25",
+      "source": "Connect a nearby Gateway",
+      "translated": "Eine Gateway in der Nähe verbinden"
+    },
+    {
+      "id": "native.apple.63bb4ac4eaf496bc",
+      "source": "Local",
+      "translated": "Lokal"
+    },
+    {
+      "id": "native.apple.1122855cccc617bd",
+      "source": "Secure",
+      "translated": "Sicher"
+    },
+    {
+      "id": "native.apple.052a650dbff9657b",
+      "source": "Discovery",
+      "translated": "Erkennung"
+    },
+    {
+      "id": "native.apple.c284afdefb55f224",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.apple.26a7ff6b06dbeb67",
+      "source": "Node",
+      "translated": "Knoten"
+    },
+    {
+      "id": "native.apple.f2c3934d3e670237",
+      "source": "Operator",
+      "translated": "Operator"
+    },
+    {
+      "id": "native.apple.33be51249563ed37",
+      "source": "Looking for a Gateway",
+      "translated": "Gateway wird gesucht"
+    },
+    {
+      "id": "native.apple.0e828048fafce681",
+      "source": "Keep your iPhone on the same LAN or tailnet, then start the Gateway on your host machine.",
+      "translated": "Lassen Sie Ihr iPhone im selben LAN oder Tailnet und starten Sie dann die Gateway auf Ihrem Host-Computer."
+    },
+    {
+      "id": "native.apple.c18f5bd36f119282",
+      "source": "Run openclaw gateway --port 18789.",
+      "translated": "Führen Sie openclaw gateway --port 18789 aus."
+    },
+    {
+      "id": "native.apple.a4eb9a9b02915961",
+      "source": "Check that Bonjour discovery is enabled.",
+      "translated": "Prüfen Sie, ob die Bonjour-Erkennung aktiviert ist."
+    },
+    {
+      "id": "native.apple.72083d0b7fc77a6d",
+      "source": "Open Settings if you need a manual host.",
+      "translated": "Öffnen Sie die Einstellungen, wenn Sie einen manuellen Host benötigen."
     },
     {
       "id": "native.apple.8ef0909bddf2f9ee",
@@ -6929,24 +7904,54 @@
       "translated": "Gleicher Rechner (Dev)"
     },
     {
-      "id": "native.apple.8197d399f16b6d15",
-      "source": "Welcome to OpenClaw",
-      "translated": "Willkommen bei OpenClaw"
+      "id": "native.apple.09e7832b23cf14f6",
+      "source": "Security notice",
+      "translated": "Sicherheitshinweis"
     },
     {
-      "id": "native.apple.aec45c66e9d1436e",
-      "source": "The connected agent can use capabilities you enable, including camera, microphone, photos, contacts, calendar, and location. Continue only if you trust the gateway and agent.",
-      "translated": "Der verbundene Agent kann von Ihnen aktivierte Funktionen verwenden, einschließlich Kamera, Mikrofon, Fotos, Kontakte, Kalender und Standort. Fahren Sie nur fort, wenn Sie dem Gateway und dem Agenten vertrauen."
+      "id": "native.apple.d4d9568dca8ceaa9",
+      "source": "The connected OpenClaw agent can use device capabilities you enable.",
+      "translated": "Der verbundene OpenClaw-Agent kann die von Ihnen aktivierten Gerätefunktionen nutzen."
     },
     {
-      "id": "native.apple.f755248f69e3e497",
-      "source": "Security",
-      "translated": "Sicherheit"
+      "id": "native.apple.fdd93eb6b6eef525",
+      "source": "Camera, microphone, photos, contacts, calendar, and location may be available.",
+      "translated": "Kamera, Mikrofon, Fotos, Kontakte, Kalender und Standort können verfügbar sein."
     },
     {
-      "id": "native.apple.116debd4caba7aff",
-      "source": "You can change permissions later in Settings.",
-      "translated": "Sie können Berechtigungen später in den Einstellungen ändern."
+      "id": "native.apple.7cc0f656abb41f6d",
+      "source": "Continue only if you trust the gateway and agent you connect to.",
+      "translated": "Fahren Sie nur fort, wenn Sie dem Gateway und dem Agenten vertrauen, mit denen Sie sich verbinden."
+    },
+    {
+      "id": "native.apple.eae3bd9e4e9112a0",
+      "source": "Copy setup code command",
+      "translated": "Befehl für Einrichtungscode kopieren"
+    },
+    {
+      "id": "native.apple.e8b4dc00cd23ae73",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.apple.c9419426ba8c2a2e",
+      "source": "Securely connect this iPhone to your gateway.",
+      "translated": "Verbinden Sie dieses iPhone sicher mit Ihrer Gateway."
+    },
+    {
+      "id": "native.apple.3e233ba3ed3181d4",
+      "source": "Connect to your gateway",
+      "translated": "Mit Ihrer Gateway verbinden"
+    },
+    {
+      "id": "native.apple.b6978424ac0a4d14",
+      "source": "Choose device permissions",
+      "translated": "Geräteberechtigungen auswählen"
+    },
+    {
+      "id": "native.apple.4109460a5b8927d8",
+      "source": "Use OpenClaw from your phone",
+      "translated": "OpenClaw auf Ihrem Telefon verwenden"
     },
     {
       "id": "native.apple.cae311a6e975c879",
@@ -6954,94 +7959,44 @@
       "translated": "Fortfahren"
     },
     {
-      "id": "native.apple.68e933b36353a30c",
+      "id": "native.apple.c686068c2a79bf9e",
       "source": "Connect Gateway",
       "translated": "Gateway verbinden"
     },
     {
-      "id": "native.apple.9f65b2eadb6aee92",
-      "source": "/pair qr",
-      "translated": "/pair qr"
+      "id": "native.apple.8f76a5962329b43f",
+      "source": "Run this on your gateway host and scan the code",
+      "translated": "Führen Sie dies auf Ihrem Gateway-Host aus und scannen Sie den Code"
     },
     {
-      "id": "native.apple.fe3269c93d6f8524",
-      "source": "Copied",
-      "translated": "Kopiert"
+      "id": "native.apple.d71a98568b7184a5",
+      "source": "Connecting…",
+      "translated": "Verbindung wird hergestellt…"
     },
     {
-      "id": "native.apple.bad4a8110ca864e1",
-      "source": "Copy",
-      "translated": "Kopieren"
+      "id": "native.apple.577764b38b1d903c",
+      "source": "Scan QR",
+      "translated": "QR scannen"
     },
     {
-      "id": "native.apple.b6f3f5c300b28f17",
-      "source": "Copy pair command",
-      "translated": "Kopplungsbefehl kopieren"
+      "id": "native.apple.913a586956440f64",
+      "source": "or",
+      "translated": "oder"
     },
     {
-      "id": "native.apple.7308cbcb1e40d70e",
-      "source": "Pair command copied",
-      "translated": "Kopplungsbefehl kopiert"
+      "id": "native.apple.57614f0c4e59677b",
+      "source": "Connect Manually",
+      "translated": "Manuell verbinden"
     },
     {
-      "id": "native.apple.b727174424127618",
-      "source": "Run this in your OpenClaw chat, then scan the code.",
-      "translated": "Führen Sie dies in Ihrem OpenClaw-Chat aus und scannen Sie dann den Code."
+      "id": "native.apple.4916d34cab45e6c3",
+      "source": "You're connected",
+      "translated": "Sie sind verbunden"
     },
     {
-      "id": "native.apple.429ac70f39c21302",
-      "source": "Scan QR Code",
-      "translated": "QR-Code scannen"
-    },
-    {
-      "id": "native.apple.7ba3027e51acb255",
-      "source": "Set Up Manually",
-      "translated": "Manuell einrichten"
-    },
-    {
-      "id": "native.apple.94c7d6cc4a2cf2dc",
-      "source": "Welcome",
-      "translated": "Willkommen"
-    },
-    {
-      "id": "native.apple.5e905afc1c8cd46a",
-      "source": "Connect Gateway",
-      "translated": "Gateway verbinden"
-    },
-    {
-      "id": "native.apple.cef4a6612b762154",
-      "source": "Connection Mode",
-      "translated": "Verbindungsmodus"
-    },
-    {
-      "id": "native.apple.38d3190134a58030",
-      "source": "Connect",
-      "translated": "Verbinden"
-    },
-    {
-      "id": "native.apple.bfee748063f6f82c",
-      "source": "Authentication",
-      "translated": "Authentifizierung"
-    },
-    {
-      "id": "native.apple.71f969ccb10fb5cc",
-      "source": "Connected",
-      "translated": "Verbunden"
-    },
-    {
-      "id": "native.apple.e3cc3df936dce84d",
-      "source": "Back",
-      "translated": "Zurück"
-    },
-    {
-      "id": "native.apple.e58367cfa71115cc",
-      "source": "Close",
-      "translated": "Schließen"
-    },
-    {
-      "id": "native.apple.7822f4f0f671d841",
-      "source": "Done",
-      "translated": "Fertig"
+      "id": "native.apple.b5e401fa9bfb4b49",
+      "source": "Go to Chat",
+      "translated": "Zum Chat"
     },
     {
       "id": "native.apple.a62e0764b51937cb",
@@ -7054,9 +8009,9 @@
       "translated": "OK"
     },
     {
-      "id": "native.apple.80a2693bba128a6c",
-      "source": "Scan QR Code",
-      "translated": "QR-Code scannen"
+      "id": "native.apple.d50aa0885c7e064f",
+      "source": "Scan Setup Code",
+      "translated": "Einrichtungscode scannen"
     },
     {
       "id": "native.apple.f58429a2d9d3371f",
@@ -7069,9 +8024,34 @@
       "translated": "Fotos"
     },
     {
+      "id": "native.apple.09ed26daf34a4c5d",
+      "source": "Back",
+      "translated": "Zurück"
+    },
+    {
+      "id": "native.apple.e58367cfa71115cc",
+      "source": "Close",
+      "translated": "Schließen"
+    },
+    {
+      "id": "native.apple.1e60db061979db60",
+      "source": "Dismiss Keyboard",
+      "translated": "Tastatur ausblenden"
+    },
+    {
+      "id": "native.apple.95e2c98254da2aba",
+      "source": "Home Network",
+      "translated": "Heimnetzwerk"
+    },
+    {
       "id": "native.apple.d9a6d673aa6693ee",
       "source": "LAN or Tailscale host",
       "translated": "LAN- oder Tailscale-Host"
+    },
+    {
+      "id": "native.apple.431d02f8b68a96cf",
+      "source": "Remote Domain",
+      "translated": "Remote-Domain"
     },
     {
       "id": "native.apple.7021301971f631bf",
@@ -7079,9 +8059,19 @@
       "translated": "VPS mit Domain"
     },
     {
+      "id": "native.apple.7451f8d052016642",
+      "source": "Same Machine (Dev)",
+      "translated": "Derselbe Computer (Dev)"
+    },
+    {
       "id": "native.apple.22e740296a762256",
       "source": "For local iOS app development",
       "translated": "Für lokale iOS-App-Entwicklung"
+    },
+    {
+      "id": "native.apple.e1b1ccbfc9e73df8",
+      "source": "Manual Connection",
+      "translated": "Manuelle Verbindung"
     },
     {
       "id": "native.apple.b7dc527c2a7e95cb",
@@ -7092,16 +8082,6 @@
       "id": "native.apple.93d3e17fabd5e082",
       "source": "Developer mode",
       "translated": "Entwicklermodus"
-    },
-    {
-      "id": "native.apple.ac7ea1c7379819d3",
-      "source": "Off",
-      "translated": "Aus"
-    },
-    {
-      "id": "native.apple.04df230fe508a665",
-      "source": "On",
-      "translated": "Ein"
     },
     {
       "id": "native.apple.d444d84eb269f529",
@@ -7132,6 +8112,36 @@
       "id": "native.apple.378c2c7be159c1f2",
       "source": "Back to Mode Selection",
       "translated": "Zurück zur Modusauswahl"
+    },
+    {
+      "id": "native.apple.4014217851d06190",
+      "source": "Plaintext (local network)",
+      "translated": "Klartext (lokales Netzwerk)"
+    },
+    {
+      "id": "native.apple.cf616b515da5bc19",
+      "source": "Security",
+      "translated": "Sicherheit"
+    },
+    {
+      "id": "native.apple.db7b52a1bbc6fac5",
+      "source": "Use Manual Setup",
+      "translated": "Manuelle Einrichtung verwenden"
+    },
+    {
+      "id": "native.apple.7dbdf9a439f64f08",
+      "source": "Setup Link",
+      "translated": "Einrichtungslink"
+    },
+    {
+      "id": "native.apple.6bfb611862fb1687",
+      "source": "Plaintext may expose credentials. Continue only if you trust this local network and host.",
+      "translated": "Klartext kann Zugangsdaten offenlegen. Fahren Sie nur fort, wenn Sie diesem lokalen Netzwerk und Host vertrauen."
+    },
+    {
+      "id": "native.apple.3329c7f367f10c78",
+      "source": "Review this endpoint. Credentials are applied only after you tap Connect.",
+      "translated": "Prüfen Sie diesen Endpunkt. Zugangsdaten werden erst angewendet, nachdem Sie auf „Verbinden“ tippen."
     },
     {
       "id": "native.apple.2f00ef4bc35ecb8d",
@@ -7174,14 +8184,14 @@
       "translated": "Der Standardhost ist localhost. Verwende die LAN-IP deines Mac, wenn das Simulator-Netzwerk dies erfordert."
     },
     {
-      "id": "native.apple.4cc6c6c21864bff9",
-      "source": "Gateway rejected credentials. Scan a fresh QR code or update token/password.",
-      "translated": "Gateway hat die Anmeldedaten abgelehnt. Scanne einen neuen QR-Code oder aktualisiere Token/Passwort."
+      "id": "native.apple.5847cf494847ed98",
+      "source": "Gateway rejected credentials. Scan a fresh setup code or update token/password.",
+      "translated": "Gateway hat die Anmeldedaten abgelehnt. Scannen Sie einen neuen Einrichtungscode oder aktualisieren Sie Token/Passwort."
     },
     {
-      "id": "native.apple.5841249e14da136f",
-      "source": "Auth token looks valid.",
-      "translated": "Auth token sieht gültig aus."
+      "id": "native.apple.559dccb9f9dfbbad",
+      "source": "OpenClaw is checking gateway and node access.",
+      "translated": "OpenClaw prüft den Zugriff auf Gateway und Node."
     },
     {
       "id": "native.apple.4404f435fb496b62",
@@ -7199,9 +8209,9 @@
       "translated": "Genehmige dieses Gerät auf dem Gateway.\n1) `\\(commandLine)`\n2) `/pair approve` in deinem OpenClaw-Chat\n\\(requestLine)\nOpenClaw versucht es außerdem automatisch erneut, wenn du zu dieser App zurückkehrst."
     },
     {
-      "id": "native.apple.7ff9099402ff9f21",
-      "source": "Scan QR Code Again",
-      "translated": "QR-Code erneut scannen"
+      "id": "native.apple.af3890b1e07c3084",
+      "source": "Scan Setup Code Again",
+      "translated": "Einrichtungscode erneut scannen"
     },
     {
       "id": "native.apple.0134e9bd57c74d27",
@@ -7209,24 +8219,14 @@
       "translated": "Verbindung erneut versuchen"
     },
     {
-      "id": "native.apple.e674edbcb002aec6",
-      "source": "Go to Chat",
-      "translated": "Zum Chat"
+      "id": "native.apple.abe248e02d451890",
+      "source": "Enter setup code",
+      "translated": "Einrichtungscode eingeben"
     },
     {
-      "id": "native.apple.4679e949156e07e3",
-      "source": "Paste setup code",
-      "translated": "Setup-Code einfügen"
-    },
-    {
-      "id": "native.apple.880898c80cab264e",
-      "source": "Applying...",
-      "translated": "Wird angewendet..."
-    },
-    {
-      "id": "native.apple.064ae900e9c5b550",
-      "source": "Apply Setup Code",
-      "translated": "Setup-Code anwenden"
+      "id": "native.apple.d9e6ff8a72f4525b",
+      "source": "Apply",
+      "translated": "Anwenden"
     },
     {
       "id": "native.apple.74d4be2078a04261",
@@ -7234,9 +8234,9 @@
       "translated": "Setup-Code"
     },
     {
-      "id": "native.apple.c522fa3b5b0d812a",
-      "source": "Use this if you received a setup code instead of a QR code.",
-      "translated": "Verwende dies, wenn du statt eines QR-Codes einen Setup-Code erhalten hast."
+      "id": "native.apple.ee24a5a75d7b1e4f",
+      "source": "Use this if you have a setup code instead of scanning.",
+      "translated": "Verwenden Sie dies, wenn Sie einen Einrichtungscode haben, statt ihn zu scannen."
     },
     {
       "id": "native.apple.826c84d7090d253c",
@@ -7272,6 +8272,11 @@
       "id": "native.apple.6c3fe084ab7b318d",
       "source": "Connecting…",
       "translated": "Verbinden…"
+    },
+    {
+      "id": "native.apple.ab58b30ddda7aeb0",
+      "source": "Connect",
+      "translated": "Verbinden"
     },
     {
       "id": "native.apple.f2ea327bfea8b8e3",
@@ -7342,6 +8347,11 @@
       "id": "native.apple.47426e84372bc0a5",
       "source": "Instances",
       "translated": "Instanzen"
+    },
+    {
+      "id": "native.apple.d1a5c9b0c4acbfe2",
+      "source": "Files",
+      "translated": "Dateien"
     },
     {
       "id": "native.apple.ad3c65353227b63e",
@@ -7434,6 +8444,11 @@
       "translated": "Sitzungen"
     },
     {
+      "id": "native.apple.253cb2debeb51859",
+      "source": "Files",
+      "translated": "Dateien"
+    },
+    {
       "id": "native.apple.f7e04202c3e37bd8",
       "source": "Dreaming",
       "translated": "Träumen"
@@ -7472,6 +8487,41 @@
       "id": "native.apple.e69088f1f2dcbd99",
       "source": "Connection",
       "translated": "Verbindung"
+    },
+    {
+      "id": "native.apple.41e812a22a1b042d",
+      "source": "Value",
+      "translated": "Wert"
+    },
+    {
+      "id": "native.apple.acc5936e406af08c",
+      "source": "Headers",
+      "translated": "Header"
+    },
+    {
+      "id": "native.apple.8896386269ac4882",
+      "source": "Sent with foreground app connections to this gateway. Changes apply on the next reconnect; Share extension delivery is not yet supported.",
+      "translated": "Wird bei Verbindungen der Vordergrund-App zu dieser Gateway gesendet. Änderungen werden beim nächsten erneuten Verbinden angewendet; die Zustellung über die Share-Erweiterung wird noch nicht unterstützt."
+    },
+    {
+      "id": "native.apple.319594454c1ff701",
+      "source": "Header name",
+      "translated": "Header-Name"
+    },
+    {
+      "id": "native.apple.7c4ff27cd7fa2c96",
+      "source": "Header value",
+      "translated": "Header-Wert"
+    },
+    {
+      "id": "native.apple.a1368ad2d29a1152",
+      "source": "Add Header",
+      "translated": "Header hinzufügen"
+    },
+    {
+      "id": "native.apple.19fba912c31023b5",
+      "source": "Custom Headers",
+      "translated": "Benutzerdefinierte Header"
     },
     {
       "id": "native.apple.4dac301c7e0c921c",
@@ -8387,6 +9437,26 @@
       "id": "native.apple.936bfd42a2f08232",
       "source": "Partial: \\(self.summary.totals.missingCostEntries) entries missing cost",
       "translated": "Teilweise: Bei \\(self.summary.totals.missingCostEntries) Einträgen fehlen Kosten"
+    },
+    {
+      "id": "native.apple.84f1d9ae4965cfe0",
+      "source": "Crestodian",
+      "translated": "Crestodian"
+    },
+    {
+      "id": "native.apple.69557562fe99d402",
+      "source": "Your setup helper. It can check status, fix config, switch models, ",
+      "translated": "Ihr Einrichtungsassistent. Er kann den Status prüfen, die Konfiguration reparieren, Modelle wechseln, "
+    },
+    {
+      "id": "native.apple.648423d89aec0c13",
+      "source": "Chat",
+      "translated": "Chat"
+    },
+    {
+      "id": "native.apple.bd180b943ee89cfe",
+      "source": "Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.",
+      "translated": "Tipp: Versuchen Sie „status“, „doctor“, „set default model …“ oder „connect telegram“."
     },
     {
       "id": "native.apple.779f488d2ddd9eaf",
@@ -9684,14 +10754,29 @@
       "translated": "Identitätsdatei"
     },
     {
+      "id": "native.apple.5eaffd822af43300",
+      "source": "/Users/you/.ssh/id_ed25519",
+      "translated": "/Users/you/.ssh/id_ed25519"
+    },
+    {
       "id": "native.apple.8bd4eccc71e5668f",
       "source": "Project root",
       "translated": "Projektstammverzeichnis"
     },
     {
+      "id": "native.apple.c663b8a50de8a7d8",
+      "source": "/home/you/Projects/openclaw",
+      "translated": "/home/you/Projects/openclaw"
+    },
+    {
       "id": "native.apple.938ee646aac4ce66",
       "source": "CLI path",
       "translated": "CLI-Pfad"
+    },
+    {
+      "id": "native.apple.09f99e863e081f9f",
+      "source": "/Applications/OpenClaw.app/.../openclaw",
+      "translated": "/Applications/OpenClaw.app/.../openclaw"
     },
     {
       "id": "native.apple.f588f7dad51aae2e",
@@ -10354,6 +11439,151 @@
       "translated": "Weiter"
     },
     {
+      "id": "native.apple.99c49ed9c135cdcd",
+      "source": "Claude (Anthropic)",
+      "translated": "Claude (Anthropic)"
+    },
+    {
+      "id": "native.apple.5c0a3a27717239d6",
+      "source": "OpenAI",
+      "translated": "OpenAI"
+    },
+    {
+      "id": "native.apple.f85f71cced8225d6",
+      "source": "Google Gemini",
+      "translated": "Google Gemini"
+    },
+    {
+      "id": "native.apple.0a6a895baa7f708e",
+      "source": "Looking for AI you already use…",
+      "translated": "Es wird nach KI gesucht, die Sie bereits verwenden …"
+    },
+    {
+      "id": "native.apple.9d19cb7eb5fa6d79",
+      "source": "Checking for Claude Code, Codex, Gemini, and saved API keys.",
+      "translated": "Claude Code, Codex, Gemini und gespeicherte API-Schlüssel werden geprüft."
+    },
+    {
+      "id": "native.apple.7e1e827f427bc317",
+      "source": "Couldn’t check this Mac for AI accounts",
+      "translated": "Dieser Mac konnte nicht auf KI-Konten geprüft werden"
+    },
+    {
+      "id": "native.apple.87a3b9052eedd7eb",
+      "source": "Try again",
+      "translated": "Erneut versuchen"
+    },
+    {
+      "id": "native.apple.3a585b31d77507d8",
+      "source": "None of the found options worked",
+      "translated": "Keine der gefundenen Optionen hat funktioniert"
+    },
+    {
+      "id": "native.apple.86f29266102f1bf3",
+      "source": "The details are listed on each option above. You can fix the login and retry, or connect with an API key below.",
+      "translated": "Die Details sind bei jeder Option oben aufgeführt. Sie können die Anmeldung korrigieren und es erneut versuchen oder unten eine Verbindung mit einem API-Schlüssel herstellen."
+    },
+    {
+      "id": "native.apple.ff87d5ec9e15e581",
+      "source": "Check again",
+      "translated": "Erneut prüfen"
+    },
+    {
+      "id": "native.apple.dc51d7deab7b6c1e",
+      "source": "Need help? Chat with Crestodian",
+      "translated": "Brauchen Sie Hilfe? Chatten Sie mit Crestodian"
+    },
+    {
+      "id": "native.apple.6bf2e2bdd950a97d",
+      "source": "Your AI is ready",
+      "translated": "Ihre KI ist bereit"
+    },
+    {
+      "id": "native.apple.c3ed46eded513a65",
+      "source": "No AI accounts found on this Mac",
+      "translated": "Auf diesem Mac wurden keine KI-Konten gefunden"
+    },
+    {
+      "id": "native.apple.f87ba9e9eb97d8bb",
+      "source": "That’s fine — you can connect one with an API key. If you use Claude Code, Codex, or the Gemini CLI on this Mac, sign in there first and hit “Check again”.",
+      "translated": "Das ist in Ordnung — Sie können eines mit einem API-Schlüssel verbinden. Wenn Sie Claude Code, Codex oder die Gemini CLI auf diesem Mac verwenden, melden Sie sich dort zuerst an und klicken Sie auf „Erneut prüfen“."
+    },
+    {
+      "id": "native.apple.f51a11c7f56bdb29",
+      "source": "Recommended",
+      "translated": "Empfohlen"
+    },
+    {
+      "id": "native.apple.361c4a91a6aef57b",
+      "source": "Connect with an API key instead…",
+      "translated": "Stattdessen mit einem API-Schlüssel verbinden …"
+    },
+    {
+      "id": "native.apple.99c1034543042eca",
+      "source": "Connect with an API key",
+      "translated": "Mit einem API-Schlüssel verbinden"
+    },
+    {
+      "id": "native.apple.9da1d31635dca50b",
+      "source": "Provider",
+      "translated": "Anbieter"
+    },
+    {
+      "id": "native.apple.41d117fdc784999f",
+      "source": "Connect",
+      "translated": "Verbinden"
+    },
+    {
+      "id": "native.apple.3863947506f62f17",
+      "source": "Create a key at \\(self.model.manualProvider.consoleName), paste it here, and OpenClaw checks it with a real test question.",
+      "translated": "Erstellen Sie einen Schlüssel bei \\(self.model.manualProvider.consoleName), fügen Sie ihn hier ein, und OpenClaw prüft ihn mit einer echten Testfrage."
+    },
+    {
+      "id": "native.apple.ce55144c35473419",
+      "source": "That key didn’t work",
+      "translated": "Dieser Schlüssel hat nicht funktioniert"
+    },
+    {
+      "id": "native.apple.95ba6710c48389ae",
+      "source": "Crestodian — setup helper",
+      "translated": "Crestodian — Einrichtungsassistent"
+    },
+    {
+      "id": "native.apple.06d9df11b5b462b4",
+      "source": "Done",
+      "translated": "Fertig"
+    },
+    {
+      "id": "native.apple.c3460290224a3ed3",
+      "source": "Open help…",
+      "translated": "Hilfe öffnen…"
+    },
+    {
+      "id": "native.apple.6124d93872cfcfe4",
+      "source": "Crestodian is working…",
+      "translated": "Crestodian arbeitet…"
+    },
+    {
+      "id": "native.apple.105683a219ce17d7",
+      "source": "Restart",
+      "translated": "Neu starten"
+    },
+    {
+      "id": "native.apple.839da8db3e4256b2",
+      "source": "Enter secret…",
+      "translated": "Secret eingeben…"
+    },
+    {
+      "id": "native.apple.3e9e9347173fffbc",
+      "source": "Reply to Crestodian… (yes sets everything up)",
+      "translated": "Crestodian antworten… (yes richtet alles ein)"
+    },
+    {
+      "id": "native.apple.78d1ad73762a7ce8",
+      "source": "Connect your AI",
+      "translated": "Verbinden Sie Ihre KI"
+    },
+    {
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "Zurück"
@@ -10364,9 +11594,14 @@
       "translated": "Willkommen bei OpenClaw"
     },
     {
-      "id": "native.apple.dd7411f18b0fe203",
-      "source": "OpenClaw is your personal AI assistant. It can answer questions, work with files and apps, and connect to services like WhatsApp and Telegram through a Gateway you control.",
-      "translated": "OpenClaw ist Ihr persönlicher KI-Assistent. Er kann Fragen beantworten, mit Dateien und Apps arbeiten und über ein von Ihnen gesteuertes Gateway Verbindungen zu Diensten wie WhatsApp und Telegram herstellen."
+      "id": "native.apple.0629bbbd6db95199",
+      "source": "Your personal AI assistant, living on your own Mac.",
+      "translated": "Ihr persönlicher KI-Assistent, der auf Ihrem eigenen Mac läuft."
+    },
+    {
+      "id": "native.apple.ff6f4069f0185b9b",
+      "source": "It answers questions, works with your files and apps, and can chat with you on WhatsApp or Telegram. Setup takes about two minutes.",
+      "translated": "Er beantwortet Fragen, arbeitet mit Ihren Dateien und Apps und kann mit Ihnen über WhatsApp oder Telegram chatten. Die Einrichtung dauert etwa zwei Minuten."
     },
     {
       "id": "native.apple.86e4509eb0626ec8",
@@ -10379,14 +11614,14 @@
       "translated": "Geben Sie Ihrem Assistenten Aufgaben und lassen Sie ihn Ihnen auf Ihrem Mac helfen."
     },
     {
-      "id": "native.apple.16ab10ed9293b718",
-      "source": "Connect the tools you use",
-      "translated": "Verbinden Sie die Tools, die Sie verwenden"
+      "id": "native.apple.8496e933d9cbc56d",
+      "source": "Chat wherever you like",
+      "translated": "Chatten Sie, wo immer Sie möchten"
     },
     {
-      "id": "native.apple.687c1c2abdb8581e",
-      "source": "Bring conversations and services together in one assistant.",
-      "translated": "Führen Sie Unterhaltungen und Dienste in einem Assistenten zusammen."
+      "id": "native.apple.d6ca07ea4a825a3f",
+      "source": "This app, WhatsApp, Telegram, Discord, Slack — your choice.",
+      "translated": "Diese App, WhatsApp, Telegram, Discord, Slack — Sie haben die Wahl."
     },
     {
       "id": "native.apple.caf822c2d393914f",
@@ -10394,9 +11629,9 @@
       "translated": "Behalten Sie die Kontrolle"
     },
     {
-      "id": "native.apple.203bfa5e80135faa",
-      "source": "Choose where the Gateway runs and which permissions OpenClaw receives.",
-      "translated": "Wählen Sie, wo das Gateway ausgeführt wird und welche Berechtigungen OpenClaw erhält."
+      "id": "native.apple.46514f735df5cddc",
+      "source": "Everything runs where you decide, with permissions you grant.",
+      "translated": "Alles läuft dort, wo Sie es festlegen, mit den Berechtigungen, die Sie erteilen."
     },
     {
       "id": "native.apple.fb64a5b187cfdc15",
@@ -10404,24 +11639,39 @@
       "translated": "OpenClaw kann mit den von Ihnen aktivierten Berechtigungen und Diensten Aktionen ausführen. Prüfen Sie Aufforderungen und verbinden Sie nur Tools, denen Sie vertrauen."
     },
     {
-      "id": "native.apple.2033d33228ce52d7",
-      "source": "Where should OpenClaw run?",
-      "translated": "Wo soll OpenClaw ausgeführt werden?"
+      "id": "native.apple.a5d02aaf6208e924",
+      "source": "Where should your assistant live?",
+      "translated": "Wo soll Ihr Assistent laufen?"
     },
     {
-      "id": "native.apple.4791cce2ae762f19",
-      "source": "For the simplest setup, run the Gateway on this Mac. OpenClaw installs it and keeps it running for you.",
-      "translated": "Für die einfachste Einrichtung führen Sie das Gateway auf diesem Mac aus. OpenClaw installiert es und hält es für Sie am Laufen."
+      "id": "native.apple.e6acb60b10ef1206",
+      "source": "Most people pick this Mac — OpenClaw installs everything and keeps it running in the background. You can change this anytime in Settings.",
+      "translated": "Die meisten wählen diesen Mac — OpenClaw installiert alles und hält es im Hintergrund am Laufen. Sie können dies jederzeit in den Einstellungen ändern."
     },
     {
-      "id": "native.apple.300a583f28880928",
-      "source": "This Mac",
-      "translated": "Dieser Mac"
+      "id": "native.apple.21f1053c1054db24",
+      "source": "On this Mac",
+      "translated": "Auf diesem Mac"
     },
     {
-      "id": "native.apple.43f381cd291c5e11",
-      "source": "Don’t start the Gateway yet.",
-      "translated": "Gateway noch nicht starten."
+      "id": "native.apple.848c45dfcda2c160",
+      "source": "On another computer",
+      "translated": "Auf einem anderen Computer"
+    },
+    {
+      "id": "native.apple.1921bcc57bcd747d",
+      "source": "Set up later",
+      "translated": "Später einrichten"
+    },
+    {
+      "id": "native.apple.3647303a73877ecf",
+      "source": "Skip Gateway setup for now; pick Local or Remote later in Settings → General.",
+      "translated": "Gateway-Einrichtung vorerst überspringen; wählen Sie später in Einstellungen → Allgemein Lokal oder Remote aus."
+    },
+    {
+      "id": "native.apple.d54084b48f40aa0a",
+      "source": "OK — OpenClaw won’t start anything yet. Pick Local or Remote later in Settings → General.",
+      "translated": "OK — OpenClaw startet noch nichts. Wählen Sie später in Einstellungen → Allgemein „Lokal“ oder „Remote“ aus."
     },
     {
       "id": "native.apple.8d9eb247d41a0ca7",
@@ -10439,19 +11689,29 @@
       "translated": " (\\(probe.command) pid \\(probe.pid))"
     },
     {
-      "id": "native.apple.ea066347e0bcb237",
-      "source": "Retry remote discovery (Tailscale DNS-SD + Serve probe).",
-      "translated": "Remote-Erkennung erneut versuchen (Tailscale DNS-SD + Serve-Probe)."
+      "id": "native.apple.9ab228a4cb7d4403",
+      "source": "1 gateway found on your network — click to choose it.",
+      "translated": "1 Gateway in Ihrem Netzwerk gefunden — zum Auswählen anklicken."
     },
     {
-      "id": "native.apple.d8b14de6ceb397fb",
-      "source": "Searching for nearby gateways…",
-      "translated": "Suche nach Gateways in der Nähe…"
+      "id": "native.apple.279c63b244b85ece",
+      "source": "\\(count) gateways found on your network — click to choose one.",
+      "translated": "\\(count) Gateways in Ihrem Netzwerk gefunden — klicken Sie, um eines auszuwählen."
     },
     {
-      "id": "native.apple.98436332aec81f9b",
-      "source": "Nearby gateways",
-      "translated": "Gateways in der Nähe"
+      "id": "native.apple.43777eabc068e240",
+      "source": "No gateways found on your network yet.",
+      "translated": "Noch keine Gateways in Ihrem Netzwerk gefunden."
+    },
+    {
+      "id": "native.apple.b485089ad79067a9",
+      "source": "Look again",
+      "translated": "Erneut suchen"
+    },
+    {
+      "id": "native.apple.e39798604090ef9c",
+      "source": "Retry discovery (Bonjour + Tailscale DNS-SD).",
+      "translated": "Erkennung erneut versuchen (Bonjour + Tailscale DNS-SD)."
     },
     {
       "id": "native.apple.94575e6937b47f7b",
@@ -10584,54 +11844,54 @@
       "translated": "Berechtigungen erteilen"
     },
     {
-      "id": "native.apple.0cbf774c4168d80b",
-      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac.",
-      "translated": "Diese macOS-Berechtigungen ermöglichen OpenClaw, Apps zu automatisieren und Kontext auf diesem Mac zu erfassen."
+      "id": "native.apple.ce0d1241d7417406",
+      "source": "These macOS permissions let OpenClaw automate apps and capture context on this Mac. Status updates automatically.",
+      "translated": "Diese macOS-Berechtigungen ermöglichen OpenClaw, Apps zu automatisieren und Kontext auf diesem Mac zu erfassen. Der Status wird automatisch aktualisiert."
     },
     {
-      "id": "native.apple.c9c5c08199b23e4a",
-      "source": "Refresh status",
-      "translated": "Status aktualisieren"
+      "id": "native.apple.42af85cdf91d0264",
+      "source": "Getting things ready",
+      "translated": "Vorbereitung läuft"
     },
     {
-      "id": "native.apple.8d7590f1d8f61a1d",
-      "source": "Setting up OpenClaw",
-      "translated": "OpenClaw wird eingerichtet"
+      "id": "native.apple.183aee003b44ede6",
+      "source": "OpenClaw is setting up its background service on this Mac. This usually takes under a minute — no Terminal, no administrator password.",
+      "translated": "OpenClaw richtet seinen Hintergrunddienst auf diesem Mac ein. Das dauert normalerweise weniger als eine Minute — kein Terminal, kein Administratorpasswort."
     },
     {
-      "id": "native.apple.e88512a0fe7fb140",
-      "source": "OpenClaw is installing the local Gateway and its managed runtime.",
-      "translated": "OpenClaw installiert das lokale Gateway und seine verwaltete Laufzeitumgebung."
+      "id": "native.apple.d0b8cf59f852b3d0",
+      "source": "Install OpenClaw",
+      "translated": "OpenClaw installieren"
     },
     {
-      "id": "native.apple.0c05ab4b362710de",
-      "source": "Checking existing setup…",
-      "translated": "Vorhandene Einrichtung wird geprüft…"
+      "id": "native.apple.0112e18fa97e7c0c",
+      "source": "Start the background service",
+      "translated": "Hintergrunddienst starten"
     },
     {
-      "id": "native.apple.56b68eb592ecf449",
-      "source": "Installing the Gateway…",
-      "translated": "Gateway wird installiert…"
+      "id": "native.apple.d1f9f278b55fe9b0",
+      "source": "Runs quietly and starts again after a restart.",
+      "translated": "Läuft unauffällig und startet nach einem Neustart wieder."
     },
     {
-      "id": "native.apple.80155398d97fbe63",
-      "source": "Gateway installed",
-      "translated": "Gateway installiert"
+      "id": "native.apple.0357f1eea66db068",
+      "source": "Ready for the next step",
+      "translated": "Bereit für den nächsten Schritt"
     },
     {
-      "id": "native.apple.2d2acbf2e16f8604",
-      "source": "Retry setup",
-      "translated": "Einrichtung erneut versuchen"
+      "id": "native.apple.9f58badc863cbf2b",
+      "source": "Once the service answers, you’ll connect your AI.",
+      "translated": "Sobald der Dienst antwortet, verbinden Sie Ihre KI."
     },
     {
-      "id": "native.apple.4d58294df8d0b1e6",
-      "source": "Check again",
-      "translated": "Erneut prüfen"
+      "id": "native.apple.3bcb83316b3d90bb",
+      "source": "The Gateway didn’t start",
+      "translated": "Die Gateway wurde nicht gestartet"
     },
     {
-      "id": "native.apple.15cfa96c75b57b04",
-      "source": "Uses a private user-space install. No Terminal, administrator access, or Homebrew required.",
-      "translated": "Verwendet eine private Installation im Benutzerbereich. Kein Terminal, Administratorzugriff oder Homebrew erforderlich."
+      "id": "native.apple.f36edc58238aa8ce",
+      "source": "Try again",
+      "translated": "Erneut versuchen"
     },
     {
       "id": "native.apple.155fc8bc8b9f8c3f",
@@ -10694,14 +11954,19 @@
       "translated": "Lerne deinen Agenten kennen"
     },
     {
-      "id": "native.apple.dad36dffbcbdfa9c",
-      "source": "This is a dedicated onboarding chat. Your agent will introduce itself, learn who you are, and help you connect WhatsApp or Telegram if you want.",
-      "translated": "Dies ist ein spezieller Onboarding-Chat. Dein Agent stellt sich vor, lernt, wer du bist, und hilft dir auf Wunsch, WhatsApp oder Telegram zu verbinden."
+      "id": "native.apple.6c35dc9becd6ca0f",
+      "source": "Your agent introduces itself, picks a name with you, and helps you connect WhatsApp, Telegram, or another channel — just chat.",
+      "translated": "Ihr Agent stellt sich vor, wählt gemeinsam mit Ihnen einen Namen aus und hilft Ihnen, WhatsApp, Telegram oder einen anderen Kanal zu verbinden — einfach chatten."
     },
     {
-      "id": "native.apple.5e1277166b2ad41a",
-      "source": "All set",
-      "translated": "Alles bereit"
+      "id": "native.apple.25e82538dc9e9aad",
+      "source": "You’re all set!",
+      "translated": "Alles bereit!"
+    },
+    {
+      "id": "native.apple.9f73f753266a9fa2",
+      "source": "Finish opens the chat — say hi to your new agent.",
+      "translated": "„Fertigstellen“ öffnet den Chat — sagen Sie Ihrem neuen Agenten Hallo."
     },
     {
       "id": "native.apple.678dee9dedd72ce4",
@@ -10734,9 +11999,9 @@
       "translated": "Klicke auf das OpenClaw-Menüleistensymbol für schnellen Chat und Status."
     },
     {
-      "id": "native.apple.1a91058f54cbd6e2",
-      "source": "Connect WhatsApp or Telegram",
-      "translated": "WhatsApp oder Telegram verbinden"
+      "id": "native.apple.1b6cfcf3be8765c2",
+      "source": "Connect Discord, Slack, Telegram, WhatsApp, …",
+      "translated": "Discord, Slack, Telegram, WhatsApp verbinden, …"
     },
     {
       "id": "native.apple.568b8fcf5608d3ea",
@@ -10817,71 +12082,6 @@
       "id": "native.apple.b82621bc28d4c6e3",
       "source": "No skills reported yet.",
       "translated": "Noch keine Skills gemeldet."
-    },
-    {
-      "id": "native.apple.a611a5555d06da70",
-      "source": "Setup Wizard",
-      "translated": "Einrichtungsassistent"
-    },
-    {
-      "id": "native.apple.195e6fbfdd7f4647",
-      "source": "Follow the guided setup from the Gateway. This keeps onboarding in sync with the CLI.",
-      "translated": "Folge der geführten Einrichtung über die Gateway. So bleibt das Onboarding mit der CLI synchron."
-    },
-    {
-      "id": "native.apple.593a59a20ed22b12",
-      "source": "Wizard error",
-      "translated": "Assistentenfehler"
-    },
-    {
-      "id": "native.apple.5ad203347ffbe0e8",
-      "source": "Retry",
-      "translated": "Erneut versuchen"
-    },
-    {
-      "id": "native.apple.4850230e903ad303",
-      "source": "Setup is paused",
-      "translated": "Die Einrichtung ist pausiert"
-    },
-    {
-      "id": "native.apple.860797a4ad8455d2",
-      "source": "Resume OpenClaw to start the local Gateway and continue setup.",
-      "translated": "Setze OpenClaw fort, um das lokale Gateway zu starten und mit der Einrichtung fortzufahren."
-    },
-    {
-      "id": "native.apple.9781249acc361d32",
-      "source": "Resume setup",
-      "translated": "Einrichtung fortsetzen"
-    },
-    {
-      "id": "native.apple.48cc28b5b02b9140",
-      "source": "Starting wizard…",
-      "translated": "Assistent wird gestartet…"
-    },
-    {
-      "id": "native.apple.3559abd61b4a02b3",
-      "source": "Wizard complete. Continue to the next step.",
-      "translated": "Assistent abgeschlossen. Fahre mit dem nächsten Schritt fort."
-    },
-    {
-      "id": "native.apple.4b16d82449e62fef",
-      "source": "Waiting for wizard…",
-      "translated": "Warten auf den Assistenten…"
-    },
-    {
-      "id": "native.apple.3000242e4a2f9031",
-      "source": "Unsupported step type",
-      "translated": "Nicht unterstützter Schritttyp"
-    },
-    {
-      "id": "native.apple.bceef69ef30abb27",
-      "source": "Continue",
-      "translated": "Fortfahren"
-    },
-    {
-      "id": "native.apple.96628eeeceb361fb",
-      "source": "Run",
-      "translated": "Ausführen"
     },
     {
       "id": "native.apple.6223e5f12aa9464b",
@@ -11402,6 +12602,11 @@
       "id": "native.apple.f5f4ff67674093ec",
       "source": "Voice & Talk",
       "translated": "Voice & Talk"
+    },
+    {
+      "id": "native.apple.f5aa19bc071cf585",
+      "source": "Crestodian",
+      "translated": "Crestodian"
     },
     {
       "id": "native.apple.04b9c8402f19b8ce",
@@ -12329,6 +13534,31 @@
       "translated": "Modell"
     },
     {
+      "id": "native.apple.745b004e0b5b6b80",
+      "source": "Pinned",
+      "translated": "Angeheftet"
+    },
+    {
+      "id": "native.apple.69381a0a462ccd84",
+      "source": "Recent",
+      "translated": "Zuletzt verwendet"
+    },
+    {
+      "id": "native.apple.aa321cf4820426ef",
+      "source": "Models",
+      "translated": "Modelle"
+    },
+    {
+      "id": "native.apple.75550b03f06d6abc",
+      "source": "Pin model",
+      "translated": "Modell anheften"
+    },
+    {
+      "id": "native.apple.af4df27bdbacb5de",
+      "source": "Unpin model",
+      "translated": "Modell lösen"
+    },
+    {
       "id": "native.apple.5dfc0700d8dff8de",
       "source": "Session",
       "translated": "Sitzung"
@@ -12434,6 +13664,76 @@
       "translated": "Schreibt"
     },
     {
+      "id": "native.apple.cbc285107b965641",
+      "source": "Preparing audio…",
+      "translated": "Audio wird vorbereitet…"
+    },
+    {
+      "id": "native.apple.d781ade49132fec6",
+      "source": "Speaking…",
+      "translated": "Spricht…"
+    },
+    {
+      "id": "native.apple.9e4b306460f4a32d",
+      "source": "Preparing audio, tap to cancel",
+      "translated": "Audio wird vorbereitet, zum Abbrechen tippen"
+    },
+    {
+      "id": "native.apple.142c01bf6b97e380",
+      "source": "Speaking, tap to stop",
+      "translated": "Spricht, zum Stoppen tippen"
+    },
+    {
+      "id": "native.apple.86695104895ebed8",
+      "source": "Queued",
+      "translated": "In Warteschlange"
+    },
+    {
+      "id": "native.apple.a85f179b35d39d8f",
+      "source": "Sending…",
+      "translated": "Wird gesendet…"
+    },
+    {
+      "id": "native.apple.38722ea25417ad4f",
+      "source": "Confirming…",
+      "translated": "Bestätigen…"
+    },
+    {
+      "id": "native.apple.78682085b14232f8",
+      "source": "Delivery unknown",
+      "translated": "Zustellung unbekannt"
+    },
+    {
+      "id": "native.apple.2888a268bfa49e9e",
+      "source": "Not sent",
+      "translated": "Nicht gesendet"
+    },
+    {
+      "id": "native.apple.593219d4c4479c59",
+      "source": "Queued, sends when reconnected",
+      "translated": "In Warteschlange, wird bei erneuter Verbindung gesendet"
+    },
+    {
+      "id": "native.apple.00e673b9c5263c5c",
+      "source": "Sending",
+      "translated": "Senden"
+    },
+    {
+      "id": "native.apple.bfe7aab77abe9a2c",
+      "source": "Sent, waiting for chat history confirmation",
+      "translated": "Gesendet, wartet auf Bestätigung des Chatverlaufs"
+    },
+    {
+      "id": "native.apple.7eb6eca416d33bb4",
+      "source": "Delivery unconfirmed, touch and hold to retry or delete",
+      "translated": "Zustellung unbestätigt, zum erneuten Versuchen oder Löschen berühren und halten"
+    },
+    {
+      "id": "native.apple.df1a81bd7a0bca36",
+      "source": "Not sent, touch and hold to retry or delete",
+      "translated": "Nicht gesendet, zum erneuten Versuch oder Löschen berühren und halten"
+    },
+    {
       "id": "native.apple.6b18ea1d85b5d3a2",
       "source": "Running tools…",
       "translated": "Tools werden ausgeführt…"
@@ -12447,6 +13747,26 @@
       "id": "native.apple.43be8a2336e42faf",
       "source": "Sessions",
       "translated": "Sitzungen"
+    },
+    {
+      "id": "native.apple.5824df4efbf6c977",
+      "source": "Retry Send",
+      "translated": "Erneut senden"
+    },
+    {
+      "id": "native.apple.cdad35e9657fa693",
+      "source": "Delete",
+      "translated": "Löschen"
+    },
+    {
+      "id": "native.apple.9d58b2a2a23c0d69",
+      "source": "Stop Listening",
+      "translated": "Zuhören beenden"
+    },
+    {
+      "id": "native.apple.99df7de891c8235f",
+      "source": "Listen",
+      "translated": "Zuhören"
     },
     {
       "id": "native.apple.f84b674ad395b694",
@@ -12477,6 +13797,16 @@
       "id": "native.apple.82c2287cd78da56f",
       "source": "\\(baseName).jpg",
       "translated": "\\(baseName).jpg"
+    },
+    {
+      "id": "native.apple.2b45abdc56b2caed",
+      "source": "delivery unconfirmed",
+      "translated": "Zustellung unbestätigt"
+    },
+    {
+      "id": "native.apple.722f1f90b97e8e45",
+      "source": "queued after route change",
+      "translated": "nach Routenänderung in Warteschlange"
     },
     {
       "id": "native.apple.59aa8697b933d6b6",

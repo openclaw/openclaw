@@ -113,12 +113,12 @@ creates a device pairing request that must be approved.
 Use an already connected Control UI session with `operator.admin` access:
 
 1. Open the Control UI and select **Nodes**.
-2. In **Devices**, click **Pair mobile device**.
+2. In **Nodes & devices**, click **Pair mobile device**.
 3. On your phone, open the OpenClaw app → **Settings** → **Gateway**.
 4. Scan the QR code or paste the setup code, then connect.
 
 Official OpenClaw iOS and Android apps are approved automatically when their
-setup-code metadata matches. If **Devices** shows a pending request (for
+setup-code metadata matches. If **Pending approval** shows a request (for
 example, for a non-official client or mismatched metadata), review its role and
 scopes before approving it.
 
@@ -140,6 +140,7 @@ If you use the `device-pair` plugin, you can do first-time device pairing entire
 The setup code is a base64-encoded JSON payload that contains:
 
 - `url`: the Gateway WebSocket URL (`ws://...` or `wss://...`)
+- `urls`: when available, the ordered LAN/Tailnet routes the mobile app can try
 - `bootstrapToken`: a single-use bootstrap token for the initial pairing handshake (expires after 10 minutes; `expiresAtMs` is included in the payload)
 
 Run `/pair cleanup` to invalidate unused setup codes once pairing finishes.
@@ -163,6 +164,13 @@ or another `wss://` Gateway URL. Plaintext `ws://` setup codes are accepted only
 for loopback, private LAN addresses, `.local` Bonjour hosts, and the Android
 emulator host. Tailnet CGNAT addresses, `.ts.net` names, and public hosts still
 fail closed before QR/setup-code issuance.
+
+For `gateway.bind=lan` setup URLs, OpenClaw detects persistent Tailscale Serve
+HTTPS roots that proxy the active Gateway's loopback port and advertises them
+alongside the LAN route. Specific-interface `custom` and `tailnet` binds do not
+receive that fallback because a loopback Serve proxy cannot reach those
+listeners. The iOS app probes the advertised routes in order and saves the first
+reachable endpoint.
 
 ### Approve a node device
 
@@ -218,8 +226,9 @@ Stored under `~/.openclaw/devices/`:
 
 ### Notes
 
-- The legacy `node.pair.*` API (CLI: `openclaw nodes pending|approve|reject|remove|rename`) is a
-  separate gateway-owned pairing store. WS nodes still require device pairing.
+- The `node.pair.*` API (CLI: `openclaw nodes pending|approve|reject|remove|rename`) manages
+  node capability approvals stored on the same paired device records. WS nodes
+  still require device pairing; see [Node pairing](/gateway/pairing).
 - The pairing record is the durable source of truth for approved roles. Active
   device tokens stay bounded to that approved role set; a stray token entry
   outside the approved roles does not create new access.

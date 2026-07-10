@@ -1,5 +1,5 @@
 // Verifies TUI command definitions and parser metadata.
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { getSlashCommands, helpText, parseCommand } from "./commands.js";
 
 describe("parseCommand", () => {
@@ -23,6 +23,11 @@ describe("parseCommand", () => {
 });
 
 describe("getSlashCommands", () => {
+  beforeAll(() => {
+    // Provider thinking policies are process-stable; warm the fallback before timing assertions.
+    getSlashCommands({ provider: "minimax", model: "MiniMax-M3", thinkingLevels: [] });
+  });
+
   it("provides level completions for built-in toggles", () => {
     const commands = getSlashCommands();
     const verbose = commands.find((command) => command.name === "verbose");
@@ -71,16 +76,23 @@ describe("getSlashCommands", () => {
     ]);
   });
 
-  it("falls back to provider-resolved levels when thinkingLevels is empty (#76482)", async () => {
+  it("falls back to provider-resolved levels when thinkingLevels is empty (#76482)", () => {
     const commands = getSlashCommands({
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
+      provider: "minimax",
+      model: "MiniMax-M3",
       thinkingLevels: [], // empty from lightweight session row
     });
     const think = commands.find((command) => command.name === "think");
     // Should fall back to listThinkingLevelLabels, not return empty completions
-    const completions = await think?.getArgumentCompletions?.("");
-    expect(completions?.length).toBeGreaterThan(0);
+    const completions = think?.getArgumentCompletions?.("");
+    expect(Array.isArray(completions)).toBe(true);
+    if (!Array.isArray(completions)) {
+      throw new Error("expected synchronous thinking-level completions");
+    }
+    expect(completions).toEqual([
+      { value: "off", label: "off" },
+      { value: "adaptive", label: "adaptive" },
+    ]);
   });
 
   it("merges dynamic gateway commands", () => {
