@@ -491,7 +491,7 @@ final class RealtimeTalkRelaySession {
             self.startupWaiter = continuation
             Task { [weak self] in
                 try? await Task.sleep(nanoseconds: UInt64(max(0, timeoutSeconds)) * 1_000_000_000)
-                await self?.timeoutStartupWaiterIfNeeded(lifecycleGeneration: lifecycleGeneration)
+                self?.timeoutStartupWaiterIfNeeded(lifecycleGeneration: lifecycleGeneration)
             }
         }
     }
