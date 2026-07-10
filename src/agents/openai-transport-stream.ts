@@ -41,7 +41,7 @@ import {
   withFirstStreamEventTimeout,
 } from "@openclaw/ai/internal/runtime";
 import {
-  describeMediaOnlyToolResultPlaceholder,
+  describeToolResultMediaPlaceholder,
   extractToolResultText,
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
@@ -1301,30 +1301,36 @@ function convertResponsesMessages(
     } else if (msg.role === "toolResult") {
       const textResult = extractToolResultText(msg.content);
       const sanitizedTextResult = sanitizeTransportPayloadText(textResult);
+      const hasTextBlock = msg.content.some((item) => item.type === "text");
       const hasText = sanitizedTextResult.trim().length > 0;
-      const mediaPlaceholder = describeMediaOnlyToolResultPlaceholder(msg.content);
       const hasImages = msg.content.some((item) => item.type === "image");
+      const willSendImages = hasImages && model.input.includes("image");
+      // Empty text owns the fallback only when its image is actually delivered.
+      // Text-only models still need a description for media they omit.
+      const suppressMediaPlaceholder = hasTextBlock && (hasText || willSendImages);
+      const mediaPlaceholder = suppressMediaPlaceholder
+        ? undefined
+        : describeToolResultMediaPlaceholder(msg.content);
       const [callId] = msg.toolCallId.split("|");
       messages.push({
         type: "function_call_output",
         call_id: callId,
-        output:
-          hasImages && model.input.includes("image")
-            ? ([
-                ...(hasText
-                  ? [{ type: "input_text", text: sanitizedTextResult }]
-                  : mediaPlaceholder === "(see attached media)"
-                    ? [{ type: "input_text", text: mediaPlaceholder }]
-                    : []),
-                ...msg.content
-                  .filter((item) => item.type === "image")
-                  .map((item) => ({
-                    type: "input_image",
-                    detail: "auto",
-                    image_url: `data:${item.mimeType};base64,${item.data}`,
-                  })),
-              ] as ResponseFunctionCallOutputItemList)
-            : sanitizeNonEmptyTransportPayloadText(textResult, mediaPlaceholder ?? "(no output)"),
+        output: willSendImages
+          ? ([
+              ...(hasText
+                ? [{ type: "input_text", text: sanitizedTextResult }]
+                : mediaPlaceholder === "(see attached media)"
+                  ? [{ type: "input_text", text: mediaPlaceholder }]
+                  : []),
+              ...msg.content
+                .filter((item) => item.type === "image")
+                .map((item) => ({
+                  type: "input_image",
+                  detail: "auto",
+                  image_url: `data:${item.mimeType};base64,${item.data}`,
+                })),
+            ] as ResponseFunctionCallOutputItemList)
+          : sanitizeNonEmptyTransportPayloadText(textResult, mediaPlaceholder ?? "(no output)"),
       });
     }
     msgIndex += 1;
