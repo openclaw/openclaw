@@ -75,7 +75,9 @@ export type DurableRuntimeSignalStatus = "pending" | "consumed";
 
 export type DurableParentWakeStatus = "pending" | "delivered" | "acked" | "failed" | "superseded";
 
-export type DurableParentWakeReason =
+export type DurableWakeStatus = DurableParentWakeStatus;
+
+export type DurableWakeReason =
   | "child_terminal"
   | "fan_in_incomplete"
   | "restart_interrupted"
@@ -83,6 +85,38 @@ export type DurableParentWakeReason =
   | "side_effect_uncertain"
   | "no_handler"
   | "operator_requested";
+
+export type DurableParentWakeReason = DurableWakeReason;
+
+export type DurableWakeTargetKind =
+  | "agent_session"
+  | "run"
+  | "channel_route"
+  | "external_route"
+  | "taskflow"
+  | "scheduler"
+  | "workboard"
+  | "plugin"
+  | "operator"
+  | "inspect_only";
+
+export type DurableWakeOwnerKind =
+  | "agent_session"
+  | "run"
+  | "taskflow"
+  | "scheduler"
+  | "workboard"
+  | "plugin"
+  | "operator"
+  | "external_route";
+
+export type DurableWakeTargetResolutionStatus =
+  | "unresolved"
+  | "resolved"
+  | "ambiguous"
+  | "missing"
+  | "unauthorized"
+  | "inspect_only";
 
 export type DurableSideEffectUncertaintyKind =
   | "unknown_after_side_effect"
@@ -240,6 +274,13 @@ export type DurableParentWake = {
   targetAgent?: string;
   targetSession?: string;
   targetChannel?: string;
+  targetKind?: DurableWakeTargetKind;
+  targetRef?: string;
+  ownerKind?: DurableWakeOwnerKind;
+  ownerRef?: string;
+  reportRouteRef?: string;
+  targetResolutionStatus?: DurableWakeTargetResolutionStatus;
+  targetResolutionReason?: string;
   reason: DurableParentWakeReason;
   factsRef?: string;
   sourceRunId?: string;
@@ -253,6 +294,8 @@ export type DurableParentWake = {
   createdAt: number;
   updatedAt: number;
 };
+
+export type DurableWake = DurableParentWake;
 
 export type DurableSideEffectUncertaintyFact = {
   factId: string;
@@ -486,6 +529,13 @@ export type CreateDurableParentWakeInput = {
   targetAgent?: string;
   targetSession?: string;
   targetChannel?: string;
+  targetKind?: DurableWakeTargetKind;
+  targetRef?: string;
+  ownerKind?: DurableWakeOwnerKind;
+  ownerRef?: string;
+  reportRouteRef?: string;
+  targetResolutionStatus?: DurableWakeTargetResolutionStatus;
+  targetResolutionReason?: string;
   reason: DurableParentWakeReason;
   factsRef?: string;
   sourceRunId?: string;
@@ -493,6 +543,8 @@ export type CreateDurableParentWakeInput = {
   metadata?: Record<string, unknown>;
   now?: number;
 };
+
+export type CreateDurableWakeInput = CreateDurableParentWakeInput;
 
 export type UpdateDurableParentWakeInput = {
   wakeId: string;
@@ -504,6 +556,8 @@ export type UpdateDurableParentWakeInput = {
   metadata?: Record<string, unknown>;
   now?: number;
 };
+
+export type UpdateDurableWakeInput = UpdateDurableParentWakeInput;
 
 export type CreateDurableSideEffectUncertaintyFactInput = {
   factId?: string;
@@ -635,6 +689,21 @@ export type DurableRuntimeStore = {
   consumeSignal(input: { signalId: string; now?: number }): DurableRuntimeSignal | undefined;
   listPendingSignals(options?: { limit?: number }): DurableRuntimeSignal[];
   listSignals(runtimeRunId: string): DurableRuntimeSignal[];
+  createDurableWake(input: CreateDurableWakeInput): DurableWake;
+  updateDurableWake(input: UpdateDurableWakeInput): DurableWake | undefined;
+  getDurableWake(wakeId: string): DurableWake | undefined;
+  listDurableWakes(options?: {
+    parentRunId?: string;
+    parentSessionKey?: string;
+    targetKind?: DurableWakeTargetKind;
+    targetRef?: string;
+    ownerKind?: DurableWakeOwnerKind;
+    ownerRef?: string;
+    reportRouteRef?: string;
+    targetResolutionStatus?: DurableWakeTargetResolutionStatus;
+    status?: DurableWakeStatus;
+    limit?: number;
+  }): DurableWake[];
   createParentWake(input: CreateDurableParentWakeInput): DurableParentWake;
   updateParentWake(input: UpdateDurableParentWakeInput): DurableParentWake | undefined;
   getParentWake(wakeId: string): DurableParentWake | undefined;

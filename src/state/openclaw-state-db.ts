@@ -265,6 +265,78 @@ function repairAgentDatabasesCompositePrimaryKey(db: DatabaseSync): boolean {
   return true;
 }
 
+function hasGeneralizedDurableParentWakeConstraint(db: DatabaseSync): boolean {
+  if (!tableExists(db, "durable_runtime_parent_wakes")) {
+    return true;
+  }
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get("durable_runtime_parent_wakes") as { sql?: string | null } | undefined;
+  const createSql = row?.sql ?? "";
+  return !createSql.includes("CHECK (parent_run_id IS NOT NULL OR parent_session_key IS NOT NULL)");
+}
+
+function repairDurableParentWakeConstraint(db: DatabaseSync): void {
+  if (hasGeneralizedDurableParentWakeConstraint(db)) {
+    return;
+  }
+  db.exec(`
+    DROP TABLE IF EXISTS durable_runtime_parent_wakes_migration_new;
+    CREATE TABLE durable_runtime_parent_wakes_migration_new (
+      wake_id TEXT NOT NULL PRIMARY KEY,
+      parent_run_id TEXT,
+      parent_session_key TEXT,
+      target_agent TEXT,
+      target_session TEXT,
+      target_channel TEXT,
+      target_kind TEXT,
+      target_ref TEXT,
+      owner_kind TEXT,
+      owner_ref TEXT,
+      report_route_ref TEXT,
+      target_resolution_status TEXT,
+      target_resolution_reason TEXT,
+      reason TEXT NOT NULL,
+      facts_ref TEXT,
+      source_run_id TEXT,
+      dedupe_key TEXT NOT NULL,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at INTEGER,
+      acked_at INTEGER,
+      failed_reason TEXT,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      metadata_json TEXT,
+      CHECK (
+        parent_run_id IS NOT NULL
+        OR parent_session_key IS NOT NULL
+        OR target_ref IS NOT NULL
+        OR report_route_ref IS NOT NULL
+        OR target_resolution_status IN ('ambiguous', 'missing', 'unauthorized', 'inspect_only')
+      )
+    );
+    INSERT INTO durable_runtime_parent_wakes_migration_new (
+      wake_id, parent_run_id, parent_session_key, target_agent, target_session,
+      target_channel, target_kind, target_ref, owner_kind, owner_ref,
+      report_route_ref, target_resolution_status, target_resolution_reason,
+      reason, facts_ref, source_run_id, dedupe_key, attempt_count,
+      last_attempt_at, acked_at, failed_reason, status, created_at, updated_at,
+      metadata_json
+    )
+    SELECT
+      wake_id, parent_run_id, parent_session_key, target_agent, target_session,
+      target_channel, target_kind, target_ref, owner_kind, owner_ref,
+      report_route_ref, target_resolution_status, target_resolution_reason,
+      reason, facts_ref, source_run_id, dedupe_key, attempt_count,
+      last_attempt_at, acked_at, failed_reason, status, created_at, updated_at,
+      metadata_json
+    FROM durable_runtime_parent_wakes;
+    DROP TABLE durable_runtime_parent_wakes;
+    ALTER TABLE durable_runtime_parent_wakes_migration_new RENAME TO durable_runtime_parent_wakes;
+  `);
+}
+
 function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: string): void {
   if (hasCanonicalAgentDatabasesPrimaryKey(db)) {
     return;
@@ -955,11 +1027,19 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "durable_runtime_steps", "claimed_by TEXT");
   ensureColumn(db, "durable_runtime_steps", "claim_expires_at INTEGER");
   ensureColumn(db, "durable_runtime_steps", "heartbeat_at INTEGER");
+  ensureColumn(db, "durable_runtime_parent_wakes", "target_kind TEXT");
+  ensureColumn(db, "durable_runtime_parent_wakes", "target_ref TEXT");
+  ensureColumn(db, "durable_runtime_parent_wakes", "owner_kind TEXT");
+  ensureColumn(db, "durable_runtime_parent_wakes", "owner_ref TEXT");
+  ensureColumn(db, "durable_runtime_parent_wakes", "report_route_ref TEXT");
+  ensureColumn(db, "durable_runtime_parent_wakes", "target_resolution_status TEXT");
+  ensureColumn(db, "durable_runtime_parent_wakes", "target_resolution_reason TEXT");
 }
 
 function ensureSchema(db: DatabaseSync, pathname: string): void {
   assertSupportedSchemaVersion(db, pathname);
   ensureAdditiveStateColumns(db);
+  repairDurableParentWakeConstraint(db);
   assertCanonicalStateSchemaShape(db, pathname);
   db.exec(OPENCLAW_STATE_SCHEMA_SQL);
   ensureAdditiveStateColumns(db);

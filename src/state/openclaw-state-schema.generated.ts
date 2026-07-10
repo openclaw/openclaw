@@ -1485,6 +1485,13 @@ CREATE TABLE IF NOT EXISTS durable_runtime_parent_wakes (
   target_agent TEXT,
   target_session TEXT,
   target_channel TEXT,
+  target_kind TEXT,
+  target_ref TEXT,
+  owner_kind TEXT,
+  owner_ref TEXT,
+  report_route_ref TEXT,
+  target_resolution_status TEXT,
+  target_resolution_reason TEXT,
   reason TEXT NOT NULL,
   facts_ref TEXT,
   source_run_id TEXT,
@@ -1497,7 +1504,13 @@ CREATE TABLE IF NOT EXISTS durable_runtime_parent_wakes (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   metadata_json TEXT,
-  CHECK (parent_run_id IS NOT NULL OR parent_session_key IS NOT NULL)
+  CHECK (
+    parent_run_id IS NOT NULL
+    OR parent_session_key IS NOT NULL
+    OR target_ref IS NOT NULL
+    OR report_route_ref IS NOT NULL
+    OR target_resolution_status IN ('ambiguous', 'missing', 'unauthorized', 'inspect_only')
+  )
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_durable_runtime_parent_wakes_dedupe
@@ -1513,6 +1526,18 @@ CREATE INDEX IF NOT EXISTS idx_durable_runtime_parent_wakes_parent_run
 CREATE INDEX IF NOT EXISTS idx_durable_runtime_parent_wakes_parent_session
   ON durable_runtime_parent_wakes(parent_session_key, status, updated_at)
   WHERE parent_session_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_parent_wakes_target
+  ON durable_runtime_parent_wakes(target_kind, target_ref, status, updated_at)
+  WHERE target_ref IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_parent_wakes_owner
+  ON durable_runtime_parent_wakes(owner_kind, owner_ref, status, updated_at)
+  WHERE owner_ref IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_durable_runtime_parent_wakes_report_route
+  ON durable_runtime_parent_wakes(report_route_ref, status, updated_at)
+  WHERE report_route_ref IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS durable_runtime_uncertainty_facts (
   fact_id TEXT NOT NULL PRIMARY KEY,

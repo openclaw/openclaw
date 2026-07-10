@@ -584,6 +584,168 @@ describe("durable runtime sqlite store", () => {
     }
   });
 
+  it("stores generalized durable wake target fields while preserving parent wake compatibility", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
+    const store = openDurableRuntimeSqliteStore({
+      path: path.join(dir, "openclaw.sqlite"),
+    });
+    try {
+      const routeWake = store.createDurableWake({
+        targetKind: "external_route",
+        targetRef: "slack:channel:C123:thread:456",
+        ownerKind: "external_route",
+        ownerRef: "slack:channel:C123",
+        reportRouteRef: "slack:channel:C123:thread:456",
+        targetResolutionStatus: "resolved",
+        targetResolutionReason: "report_route",
+        reason: "delivery_unknown",
+        factsRef: "event:delivery:unknown",
+        sourceRunId: "run_reporter",
+        dedupeKey: "wake:external-route:1",
+        now: 100,
+      });
+
+      expect(routeWake).toMatchObject({
+        targetKind: "external_route",
+        targetRef: "slack:channel:C123:thread:456",
+        ownerKind: "external_route",
+        ownerRef: "slack:channel:C123",
+        reportRouteRef: "slack:channel:C123:thread:456",
+        targetResolutionStatus: "resolved",
+        targetResolutionReason: "report_route",
+      });
+      expect(
+        store.listDurableWakes({
+          targetKind: "external_route",
+          targetRef: "slack:channel:C123:thread:456",
+        }),
+      ).toEqual([routeWake]);
+      expect(
+        store.listDurableWakes({
+          reportRouteRef: "slack:channel:C123:thread:456",
+          targetResolutionStatus: "resolved",
+        }),
+      ).toEqual([routeWake]);
+
+      const parentWake = store.createParentWake({
+        parentSessionKey: "agent:parent:session",
+        targetKind: "agent_session",
+        targetRef: "agent:parent:session",
+        ownerKind: "agent_session",
+        ownerRef: "agent:parent:session",
+        targetResolutionStatus: "resolved",
+        targetResolutionReason: "delegation_subagent_child",
+        reason: "child_terminal",
+        dedupeKey: "wake:parent-compat:1",
+        now: 110,
+      });
+      expect(store.listParentWakes({ parentSessionKey: "agent:parent:session" })).toEqual([
+        parentWake,
+      ]);
+      expect(store.listDurableWakes({ parentSessionKey: "agent:parent:session" })).toEqual([
+        parentWake,
+      ]);
+      expect(() =>
+        store.createParentWake({
+          targetKind: "operator",
+          targetRef: "operator:durable",
+          reason: "no_handler",
+          dedupeKey: "wake:parent-wrapper-without-parent",
+        }),
+      ).toThrow(/requires parentRunId or parentSessionKey/);
+    } finally {
+      store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates v2 parent wake tables to allow generalized durable wake targets", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec(`
+        CREATE TABLE durable_schema_migrations (
+          schema_name TEXT NOT NULL PRIMARY KEY,
+          version INTEGER NOT NULL,
+          applied_at INTEGER NOT NULL,
+          metadata_json TEXT
+        );
+
+        INSERT INTO durable_schema_migrations (schema_name, version, applied_at, metadata_json)
+        VALUES ('durable_runtime', 2, 100, NULL);
+
+        CREATE TABLE durable_runtime_parent_wakes (
+          wake_id TEXT NOT NULL PRIMARY KEY,
+          parent_run_id TEXT,
+          parent_session_key TEXT,
+          target_agent TEXT,
+          target_session TEXT,
+          target_channel TEXT,
+          reason TEXT NOT NULL,
+          facts_ref TEXT,
+          source_run_id TEXT,
+          dedupe_key TEXT NOT NULL,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          last_attempt_at INTEGER,
+          acked_at INTEGER,
+          failed_reason TEXT,
+          status TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          metadata_json TEXT,
+          CHECK (parent_run_id IS NOT NULL OR parent_session_key IS NOT NULL)
+        );
+
+        INSERT INTO durable_runtime_parent_wakes (
+          wake_id, parent_run_id, parent_session_key, target_agent, target_session,
+          target_channel, reason, facts_ref, source_run_id, dedupe_key, attempt_count,
+          last_attempt_at, acked_at, failed_reason, status, created_at, updated_at,
+          metadata_json
+        )
+        VALUES (
+          'wake_legacy', NULL, 'agent:legacy:parent', NULL, NULL, NULL,
+          'child_terminal', NULL, 'run_child', 'wake:legacy', 0,
+          NULL, NULL, NULL, 'pending', 100, 100, NULL
+        );
+      `);
+    } finally {
+      db.close();
+    }
+
+    const store = openDurableRuntimeSqliteStore({ path: dbPath });
+    try {
+      expect(store.getStats()).toMatchObject({
+        schemaVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
+      expect(store.getParentWake("wake_legacy")).toMatchObject({
+        wakeId: "wake_legacy",
+        parentSessionKey: "agent:legacy:parent",
+      });
+      expect(
+        store.createDurableWake({
+          targetKind: "operator",
+          targetRef: "operator:durable",
+          ownerKind: "operator",
+          ownerRef: "operator:durable",
+          targetResolutionStatus: "inspect_only",
+          targetResolutionReason: "no_handler_inspect_only",
+          reason: "no_handler",
+          dedupeKey: "wake:generalized-after-v2-migration",
+          now: 200,
+        }),
+      ).toMatchObject({
+        targetKind: "operator",
+        targetRef: "operator:durable",
+        targetResolutionStatus: "inspect_only",
+      });
+    } finally {
+      store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("records uncertainty facts, cleanup audit, dedupe evidence, and unresolved obligations", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
     const store = openDurableRuntimeSqliteStore({
