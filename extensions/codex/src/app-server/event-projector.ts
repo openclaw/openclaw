@@ -453,8 +453,8 @@ const ZERO_USAGE: Usage = {
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
 const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 10_000;
 const TOOL_PROGRESS_ECHO_PREFIX_MIN_CHARS = 1_024;
-// Cap must cover every shape one item can mechanically emit (stream chunks + summary +
-// final output + aggregate + slack) so early signatures are never FIFO-evicted mid-stream.
+// FIFO holds genuinely distinct emitted shapes (summary/chunk/final/aggregate). Stream
+// accumulation owns a dedicated slot and does not consume FIFO capacity.
 const TOOL_PROGRESS_ECHO_SIGNATURE_CAP = MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM + 4;
 const TOOL_OUTPUT_TRUNCATION_NOTICE_PREFIX = "...(OpenClaw truncated Codex native tool output";
 const MISSING_TOOL_RESULT_ERROR =
@@ -500,6 +500,8 @@ type ToolProgressEchoState = {
   displayTexts: string[];
   // Single slot for handleOutputDelta accumulation; replaced per delta (not appended).
   streamedDisplayText?: string;
+  // One logical stream shape; replaced per delta (not pushed into rawSignatures FIFO).
+  streamedRawSignature?: ToolProgressRawSignature;
   rawSignatures: ToolProgressRawSignature[];
 };
 
@@ -2394,6 +2396,13 @@ export class CodexAppServerEventProjector {
       if (state.displayTexts.includes(text)) {
         return true;
       }
+      if (
+        state.streamedRawSignature &&
+        text.length === state.streamedRawSignature.length &&
+        text.startsWith(state.streamedRawSignature.prefix)
+      ) {
+        return true;
+      }
       for (const signature of state.rawSignatures) {
         if (text.length === signature.length && text.startsWith(signature.prefix)) {
           return true;
@@ -2443,14 +2452,21 @@ export class CodexAppServerEventProjector {
         length: rawLength,
         prefix: rawPrefix.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS),
       };
-      const matchIndex = existing.rawSignatures.findIndex((entry) => entry.prefix === next.prefix);
-      if (matchIndex >= 0) {
-        existing.rawSignatures[matchIndex] = next;
+      if (signature.streamedDisplay) {
+        // Stream accumulation is one logical shape; replace the dedicated slot only.
+        existing.streamedRawSignature = next;
       } else {
-        if (existing.rawSignatures.length >= TOOL_PROGRESS_ECHO_SIGNATURE_CAP) {
-          existing.rawSignatures.shift();
+        const matchIndex = existing.rawSignatures.findIndex(
+          (entry) => entry.prefix === next.prefix,
+        );
+        if (matchIndex >= 0) {
+          existing.rawSignatures[matchIndex] = next;
+        } else {
+          if (existing.rawSignatures.length >= TOOL_PROGRESS_ECHO_SIGNATURE_CAP) {
+            existing.rawSignatures.shift();
+          }
+          existing.rawSignatures.push(next);
         }
-        existing.rawSignatures.push(next);
       }
     }
     this.toolProgressEchoesByItem.set(itemId, existing);

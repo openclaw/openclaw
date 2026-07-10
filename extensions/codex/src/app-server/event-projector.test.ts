@@ -1033,12 +1033,17 @@ describe("CodexAppServerEventProjector", () => {
     const echoState = projector as unknown as {
       toolProgressEchoesByItem: Map<
         string,
-        { rawSignatures: Array<{ length: number; prefix: string }> }
+        {
+          rawSignatures: Array<{ length: number; prefix: string }>;
+          streamedRawSignature?: { length: number; prefix: string };
+        }
       >;
     };
     expect(echoState.toolProgressEchoesByItem.size).toBe(1);
     const state = echoState.toolProgressEchoesByItem.get("cmd-streamed-echo");
-    const latestRaw = state?.rawSignatures.at(-1);
+    // Stream owns one dedicated slot; FIFO stays empty for pure stream accumulation.
+    expect(state?.rawSignatures).toEqual([]);
+    const latestRaw = state?.streamedRawSignature;
     expect(latestRaw?.length).toBe(rawOutput.length);
     expect(latestRaw?.prefix.length).toBeLessThanOrEqual(10_000);
 
@@ -1090,13 +1095,14 @@ describe("CodexAppServerEventProjector", () => {
     const echoState = projector as unknown as {
       toolProgressEchoesByItem: Map<
         string,
-        { rawSignatures: Array<{ length: number; prefix: string }> }
+        {
+          rawSignatures: Array<{ length: number; prefix: string }>;
+          streamedRawSignature?: { length: number; prefix: string };
+        }
       >;
     };
     const state = echoState.toolProgressEchoesByItem.get("cmd-streamed-echo-newline");
-    expect(state?.rawSignatures.some((entry) => entry.length === rawOutput.trim().length)).toBe(
-      true,
-    );
+    expect(state?.streamedRawSignature?.length).toBe(rawOutput.trim().length);
 
     await projector.handleNotification(
       forCurrentTurn("rawResponseItem/completed", {
@@ -1458,6 +1464,89 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.currentAttemptAssistant).toBeUndefined();
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain(rawSummaryText.slice(0, 1_000));
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("stream-tail");
+  });
+
+  it("does not promote summary or stream echoes after fine-grained streamed deltas", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "full",
+      onToolResult,
+    });
+    const command = "pnpm test";
+    const cwd = `/very-long-root/${"a".repeat(10_500)}`;
+    const originalSummaryText = formatToolAggregate(
+      "bash",
+      [inferToolMetaFromArgs("exec", { command, cwd }, { detailMode: "explain" }) ?? ""],
+      { markdown: true },
+    );
+    expect(originalSummaryText.length).toBeGreaterThan(10_000);
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-fine-stream-slots",
+          command,
+          cwd,
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+    const emittedSummary = (mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string })
+      .text;
+    expect(emittedSummary).toHaveLength(10_000);
+
+    // Fine-grained pipe chunks: ~40 distinct cumulative prefixes would overflow the old
+    // FIFO (cap 24) and evict the start-summary signature. Stream owns one dedicated slot.
+    const streamChunkCount = 40;
+    const streamChunk = "s".repeat(300);
+    const streamedChunks: string[] = [];
+    for (let i = 0; i < streamChunkCount; i += 1) {
+      const delta = `${streamChunk}${String(i).padStart(2, "0")}`;
+      streamedChunks.push(delta);
+      await projector.handleNotification(
+        forCurrentTurn("item/commandExecution/outputDelta", {
+          itemId: "cmd-fine-stream-slots",
+          delta,
+        }),
+      );
+    }
+    const fullStreamedOutput = streamedChunks.join("");
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "raw-original-summary-after-fine-stream",
+          role: "assistant",
+          content: [{ type: "output_text", text: originalSummaryText }],
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "raw-full-streamed-output-after-fine-stream",
+          role: "assistant",
+          content: [{ type: "output_text", text: fullStreamedOutput }],
+        },
+      }),
+    );
+    await projector.handleNotification(turnCompleted());
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastAssistant).toBeUndefined();
+    expect(result.currentAttemptAssistant).toBeUndefined();
   });
 
   it("does not treat app-server interrupted status as a user cancellation by itself", async () => {
