@@ -2,7 +2,16 @@
 
 import { expect, it, vi } from "vitest";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
-import "./agent-select.ts";
+import { i18n, t } from "../i18n/index.ts";
+import { AgentSelect } from "./agent-select.ts";
+
+const AGENT_SELECT_TEST_TAG = "test-openclaw-agent-select";
+
+// The shared jsdom registry outlives Vitest's per-file module reset. Use the
+// freshly imported class so locale state and the element controller stay paired.
+if (!customElements.get(AGENT_SELECT_TEST_TAG)) {
+  customElements.define(AGENT_SELECT_TEST_TAG, class extends AgentSelect {});
+}
 
 type AgentSelectElement = HTMLElement & {
   agents: GatewayAgentRow[];
@@ -35,7 +44,7 @@ function createIdentity(
 async function createAgentSelect(
   overrides: Partial<Omit<AgentSelectElement, keyof HTMLElement>> = {},
 ): Promise<AgentSelectElement> {
-  const element = document.createElement("openclaw-agent-select") as AgentSelectElement;
+  const element = document.createElement(AGENT_SELECT_TEST_TAG) as AgentSelectElement;
   element.agents = agents;
   element.selectedId = "alpha";
   Object.assign(element, overrides);
@@ -321,5 +330,25 @@ it("renders a disabled trigger with the empty-state label", async () => {
     expect(element.querySelector(".agent-select__label")?.textContent?.trim()).toBe("No agents");
   } finally {
     element.remove();
+  }
+});
+
+it("refreshes translated labels when the locale changes while mounted", async () => {
+  await i18n.setLocale("en");
+  const element = await createAgentSelect({ agents: [], selectedId: null });
+
+  try {
+    const label = element.querySelector(".agent-select__label");
+    const englishLabel = label?.textContent?.trim();
+
+    await i18n.setLocale("zh-CN");
+    await element.updateComplete;
+
+    const translatedLabel = element.querySelector(".agent-select__label");
+    expect(translatedLabel?.textContent?.trim()).toBe(t("agents.noAgents"));
+    expect(translatedLabel?.textContent?.trim()).not.toBe(englishLabel);
+  } finally {
+    element.remove();
+    await i18n.setLocale("en");
   }
 });

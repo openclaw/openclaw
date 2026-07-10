@@ -6403,7 +6403,6 @@ details[open] > .ov-expandable-toggle::after {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
   opacity: 0;
   pointer-events: none;
   transition:

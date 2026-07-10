@@ -299,6 +299,19 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
   animation-delay: calc(var(--i, 0) * 0.7s);
 }
 
+/* Party days: confetti-colored z's. */
+.lobster-pet--party .lobster-pet__z:nth-of-type(1) {
+  color: #ffd166;
+}
+
+.lobster-pet--party .lobster-pet__z:nth-of-type(2) {
+  color: #5cd9c4;
+}
+
+.lobster-pet--party .lobster-pet__z:nth-of-type(3) {
+  color: #ff5c8a;
+}
+
 /* ---- Bubbles ---- */
 
 .lobster-pet__bubble {
@@ -559,4 +572,29 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* ---- Lobsterdex (appearance settings gallery) ---- */
+
+.lobsterdex {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: flex-end;
+}
+
+.lobsterdex__mini {
+  display: inline-block;
+  position: relative;
+  width: 26px;
+  height: 23px;
+}
+
+.lobsterdex__mini .lobster-pet__svg {
+  animation: none;
+}
+
+/* Unseen palettes are dim silhouettes until one visits. */
+.lobsterdex__mini--unseen {
+  filter: grayscale(1) brightness(0.45) opacity(0.55);
 }
