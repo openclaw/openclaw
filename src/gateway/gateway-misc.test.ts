@@ -944,6 +944,24 @@ describe("normalizeVoiceWakeTriggers", () => {
     const result = normalizeVoiceWakeTriggers(["  hello  ", "", "world"]);
     expect(result).toEqual(["hello", "world"]);
   });
+
+  test("preserves surrogate pairs at truncation boundary", () => {
+    // Build a string where an emoji (2 UTF-16 code units) straddles
+    // the 64-unit truncation boundary.  63 ASCII chars + 😀 = 65 units.
+    const emoji = String.fromCharCode(0xd83d, 0xde00); // 😀
+    const base = "x".repeat(63);
+    const input = `${base}${emoji}`; // 65 code units
+    expect(input.length).toBe(65);
+
+    const [result] = normalizeVoiceWakeTriggers([input]);
+    // Must not contain a lone surrogate
+    expect(result).not.toContain(String.fromCharCode(0xd83d));
+    // Must preserve the full pair at or before the 64-unit limit
+    expect(result.length).toBeLessThanOrEqual(64);
+    // With the emoji positioned at units 63-64 (0-indexed), the safe
+    // truncation rounds down to 63 units to avoid splitting the pair.
+    expect(result).toBe(base);
+  });
 });
 
 describe("formatError", () => {
