@@ -25,7 +25,6 @@ import { createProfileTabOps } from "./server-context.tab-ops.js";
 import type {
   BrowserServerState,
   BrowserRouteContext,
-  BrowserTab,
   ContextOptions,
   ProfileContext,
   ProfileRuntimeState,

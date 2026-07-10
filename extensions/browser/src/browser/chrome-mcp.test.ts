@@ -188,7 +188,7 @@ type SessionPage = { id: number; url: string; selected?: boolean };
 function createPageSession(params: {
   pages: SessionPage[];
   pid: number;
-  onTool?: (call: ToolCall) => Promise<unknown> | unknown;
+  onTool?: (call: ToolCall) => unknown;
 }): ChromeMcpSession {
   const callTool = vi.fn(async (call: ToolCall) => {
     const custom = await params.onTool?.(call);
@@ -322,8 +322,11 @@ describe("chrome MCP page parsing", () => {
       fn: "() => document.URL",
     });
     expect(evaluatedPageId).toBe(1);
-    const callTool = session.client.callTool as unknown as ToolCallMock;
-    expect(callTool.mock.calls.filter(([call]) => call.name === "list_pages")).toHaveLength(2);
+    expect(
+      (session.client.callTool as unknown as ToolCallMock).mock.calls.filter(
+        ([call]) => call.name === "list_pages",
+      ),
+    ).toHaveLength(2);
   });
 
   it("routes an opaque target to its numeric page for close without replay", async () => {
@@ -494,7 +497,9 @@ describe("chrome MCP page parsing", () => {
     await firstStarted;
     const queued = listChromeMcpTabs("chrome-live");
     const queuedExpectation = expect(queued).rejects.toThrow(/changed before the operation/);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     releaseFirst();
 
     await firstExpectation;
@@ -503,7 +508,10 @@ describe("chrome MCP page parsing", () => {
       expect.objectContaining({ url: "https://session-2.example" }),
     ]);
     expect(factoryCalls).toBe(2);
-    const firstCalls = (firstSession?.client.callTool as unknown as ToolCallMock).mock.calls;
+    if (!firstSession) {
+      throw new Error("Expected the first Chrome MCP session to be created");
+    }
+    const firstCalls = (firstSession.client.callTool as unknown as ToolCallMock).mock.calls;
     expect(firstCalls.filter(([call]) => call.name === "list_pages")).toHaveLength(1);
   });
 
@@ -527,9 +535,10 @@ describe("chrome MCP page parsing", () => {
         return undefined;
       },
     });
-    const close = vi.mocked(session.client.close).mockImplementation(async () => {
+    const close = vi.fn(async () => {
       rejectList(new Error("session closed by explicit stop"));
     });
+    session.client.close = close as typeof session.client.close;
     setChromeMcpSessionFactoryForTest(async () => session);
 
     const active = listChromeMcpTabs("chrome-live");
@@ -574,7 +583,9 @@ describe("chrome MCP page parsing", () => {
     await listStarted;
     const queued = listChromeMcpTabs("chrome-live");
     const queuedExpectation = expect(queued).rejects.toThrow(/changed before the operation/);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     await expect(closeChromeMcpSession("chrome-live")).resolves.toBe(true);
     releaseList();
@@ -614,10 +625,11 @@ describe("chrome MCP page parsing", () => {
         return undefined;
       },
     });
-    vi.mocked(session.client.close).mockImplementation(async () => {
+    const close = vi.fn(async () => {
       markCloseStarted();
       await closeGate;
     });
+    session.client.close = close as typeof session.client.close;
     setChromeMcpSessionFactoryForTest(async () => {
       factoryCalls += 1;
       return session;
@@ -674,7 +686,9 @@ describe("chrome MCP page parsing", () => {
     const timedOutExpectation = expect(timedOut).rejects.toThrow(
       /timed out after 20ms while waiting/,
     );
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     ctrl.abort(new Error("queued caller cancelled"));
 
     await abortedExpectation;
@@ -682,7 +696,9 @@ describe("chrome MCP page parsing", () => {
     expect(listCalls).toBe(1);
     releaseFirst();
     await first;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(listCalls).toBe(1);
   });
 
@@ -1299,7 +1315,8 @@ describe("chrome MCP page parsing", () => {
   it("keeps handle-producing list calls persistent even if a legacy caller passes ephemeral", async () => {
     let factoryCalls = 0;
     const session = createFakeSession();
-    const close = vi.mocked(session.client.close);
+    const close = vi.fn().mockResolvedValue(undefined);
+    session.client.close = close as typeof session.client.close;
     setChromeMcpSessionFactoryForTest(async () => {
       factoryCalls += 1;
       return session;
