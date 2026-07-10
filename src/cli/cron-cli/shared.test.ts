@@ -1,5 +1,6 @@
 // Cron shared tests cover shared cron CLI parsing, display, and error helpers.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import type { CronJob } from "../../cron/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -103,6 +104,31 @@ describe("printCronList", () => {
     const output = logs.join("\n");
     expect(Buffer.from(output, "utf8").toString("utf8")).toBe(output);
     expect(output).not.toContain("\uFFFD");
+  });
+
+  it("sizes CJK and emoji names by terminal display width", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const cjkName = `${"x".repeat(19)}表tail`;
+    const familyName = `${"x".repeat(20)}👨‍👩‍👧‍👦`;
+
+    printCronList(
+      [
+        createBaseJob({ id: "wide-name", name: cjkName }),
+        createBaseJob({ id: "family-name", name: familyName }),
+      ],
+      runtime,
+    );
+
+    const header = logs[0] ?? "";
+    const rows = logs.slice(1);
+    const scheduleColumn = visibleWidth(header.slice(0, header.indexOf("Schedule")));
+    for (const row of rows) {
+      const scheduleIndex = row.indexOf("at ");
+      expect(scheduleIndex).toBeGreaterThan(-1);
+      expect(visibleWidth(row.slice(0, scheduleIndex))).toBe(scheduleColumn);
+    }
+    expectLogsToInclude(logs, `${"x".repeat(19)}表...`);
+    expectLogsToInclude(logs, familyName);
   });
 
   it("shows declaration metadata and existing run status", () => {
