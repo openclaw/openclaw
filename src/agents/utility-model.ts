@@ -4,7 +4,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { resolveAgentConfig } from "./agent-scope.js";
+import { resolveAgentConfig, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
+import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
 
 export type UtilityModelSetting =
@@ -87,9 +88,18 @@ export function resolveUtilityModelRefForAgent(params: {
   if (!provider) {
     return undefined;
   }
-  return resolveProviderDefaultUtilityModelRef({
+  const derived = resolveProviderDefaultUtilityModelRef({
     cfg: params.cfg,
     provider,
     metadataSnapshot: params.metadataSnapshot,
   });
+  if (!derived) {
+    return undefined;
+  }
+  // The derived default shares the primary's provider, so a trailing auth
+  // profile on the primary ref must carry over; otherwise profile-isolated
+  // setups would route utility calls through default credentials.
+  const primaryRef = resolveAgentEffectiveModelPrimary(params.cfg, params.agentId) ?? "";
+  const primaryProfile = primaryRef ? splitTrailingAuthProfile(primaryRef)?.profile : undefined;
+  return primaryProfile ? `${derived}@${primaryProfile}` : derived;
 }

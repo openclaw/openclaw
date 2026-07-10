@@ -118,6 +118,16 @@ describe("resolveUtilityModelRefForAgent", () => {
     );
   });
 
+  it("carries the primary model's auth profile onto the derived default", () => {
+    const cfg = {
+      agents: { defaults: { model: "openai/gpt-5.5@work" } },
+    } as OpenClawConfig;
+
+    expect(resolveUtilityModelRefForAgent({ cfg, agentId: "main", metadataSnapshot })).toBe(
+      "openai/gpt-5.6-luna@work",
+    );
+  });
+
   it("prefers a caller-resolved primary provider over re-derivation", () => {
     expect(
       resolveUtilityModelRefForAgent({
