@@ -100,7 +100,7 @@ export function createQaSmokeCiPart(partId: string): QaSmokeCiPart {
     partition.cost += estimateScenarioCost(scenario);
   }
 
-  const matrixPartIndex = 1;
+  const matrixPartIndex = 0;
   const partIndex = QA_SMOKE_CI_PARTS.indexOf(partId);
   const runs: QaSmokeCiRun[] = [
     {

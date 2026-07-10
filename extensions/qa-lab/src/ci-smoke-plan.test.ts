@@ -13,8 +13,8 @@ describe("createQaSmokeCiPart", () => {
     expect(repeatedSecond).toEqual(second);
     expect(first.runs[0]?.channel).toBe(OPENCLAW_CRABLINE_DEFAULT_CHANNEL);
     expect(second.runs[0]?.channel).toBe(OPENCLAW_CRABLINE_DEFAULT_CHANNEL);
-    expect(first.runs.some((run) => run.channel === "matrix")).toBe(false);
-    expect(second.runs.some((run) => run.channel === "matrix")).toBe(true);
+    expect(first.runs.some((run) => run.channel === "matrix")).toBe(true);
+    expect(second.runs.some((run) => run.channel === "matrix")).toBe(false);
 
     const scenarioIds = [...first.runs, ...second.runs].flatMap((run) => run.scenario_ids);
     expect(new Set(scenarioIds).size).toBe(scenarioIds.length);
