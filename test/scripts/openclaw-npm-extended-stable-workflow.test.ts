@@ -97,10 +97,11 @@ describe("minimal npm extended-stable workflow", () => {
     expect(metadata.run).not.toContain("Validation-only SHA mode only supports");
 
     const plugins = step(preflight, "Exercise all extended-stable plugin npm packages");
-    expect(step(preflight, "Verify release contents").env).toMatchObject({
-      OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR:
-        "${{ steps.ai_runtime_tarballs.outputs.dir }}",
-    });
+    expect(
+      step(preflight, "Verify release contents").env
+        ?.OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR,
+    ).toBeUndefined();
+    expect(readFileSync(workflowPath, "utf8")).not.toContain("ai_runtime_tarballs");
     expect(plugins.if).toBe("${{ inputs.npm_dist_tag == 'extended-stable' }}");
     expect(plugins.env).toMatchObject({
       OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: "extended-stable",
