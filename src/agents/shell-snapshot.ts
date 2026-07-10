@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { killProcessTree } from "../process/kill-tree.js";
+import { releaseChildProcessListeners } from "./utils/child-process.js";
 
 const SNAPSHOT_VERSION = 1;
 const SNAPSHOT_REFRESH_MS = 5 * 60 * 1000;
@@ -456,6 +457,7 @@ async function runShell(opts: {
       }
       settled = true;
       clearTimeout(timeout);
+      releaseChildProcessListeners(child);
       killProcessTree(child.pid ?? 0, { graceMs: 0 });
       resolve({ status });
     };

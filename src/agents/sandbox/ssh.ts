@@ -12,6 +12,7 @@ import { toErrorObject } from "../../infra/errors.js";
 import { parseSshTarget } from "../../infra/ssh-tunnel.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveUserPath } from "../../utils.js";
+import { releaseChildProcessListeners } from "../utils/child-process.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
@@ -690,6 +691,7 @@ export async function runSshSandboxCommand(
         return;
       }
       settled = true;
+      releaseChildProcessListeners(child);
       if (terminate) {
         try {
           child.kill("SIGKILL");
@@ -823,6 +825,8 @@ export async function uploadDirectoryToSshTarget(params: {
         return;
       }
       settled = true;
+      releaseChildProcessListeners(tar);
+      releaseChildProcessListeners(ssh);
       for (const child of [tar, ssh]) {
         try {
           child.kill("SIGKILL");
@@ -861,6 +865,8 @@ export async function uploadDirectoryToSshTarget(params: {
         return;
       }
       settled = true;
+      releaseChildProcessListeners(tar);
+      releaseChildProcessListeners(ssh);
       if (tarCode !== 0) {
         reject(
           new Error(

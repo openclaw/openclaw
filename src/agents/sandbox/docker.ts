@@ -10,6 +10,7 @@ import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
 } from "../../plugin-sdk/windows-spawn.js";
+import { releaseChildProcessListeners } from "../utils/child-process.js";
 import {
   sanitizeEnvVars,
   sanitizeExplicitSandboxEnvVars,
@@ -118,6 +119,7 @@ export function execDockerRaw(
     });
 
     child.on("error", (error) => {
+      releaseChildProcessListeners(child);
       if (signal) {
         signal.removeEventListener("abort", handleAbort);
       }
@@ -140,6 +142,7 @@ export function execDockerRaw(
     });
 
     child.on("close", (code) => {
+      releaseChildProcessListeners(child);
       if (signal) {
         signal.removeEventListener("abort", handleAbort);
       }

@@ -5,6 +5,31 @@
  */
 import type { ChildProcess } from "node:child_process";
 
+/**
+ * Release data listeners from a child process and its stdio streams after settle.
+ *
+ * After a promise settles on child lifecycle events the process object and its
+ * pipe buffers remain reachable through leftover data listeners, delaying GC.
+ * Call this from settle paths so accumulated stdout/stderr buffers are eligible
+ * for collection immediately rather than on the next tick.
+ *
+ * Stream error listeners are intentionally preserved — Node.js throws unhandled
+ * "error" events when no listener is attached, and late stream errors after
+ * settle must be swallowed rather than surfaced as crashes.
+ */
+export function releaseChildProcessListeners(child: ChildProcess): void {
+  // Remove only data listeners from stdout/stderr (the heavy ones that hold
+  // buffer references through closures). Error listeners stay to swallow late
+  // stream errors without crashing.
+  child.stdout?.removeAllListeners("data");
+  child.stderr?.removeAllListeners("data");
+  // stdin has no data listener; it only carries an error guard. Keep that too.
+  child.stdin?.removeAllListeners("data");
+  // Child process lifecycle events (error, close, exit) are safe to remove
+  // entirely — the promise already settled.
+  child.removeAllListeners();
+}
+
 const EXIT_STDIO_GRACE_MS = 100;
 const EXIT_STDIO_MAX_DRAIN_MS = 1_000;
 

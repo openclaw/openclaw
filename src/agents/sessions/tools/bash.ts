@@ -14,7 +14,7 @@ import { truncateToVisualLines } from "../../modes/interactive/components/visual
 import { theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { getBashShellConfig, getShellEnv, killProcessTree } from "../../shell-utils.js";
-import { waitForChildProcess } from "../../utils/child-process.js";
+import { releaseChildProcessListeners, waitForChildProcess } from "../../utils/child-process.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import type { BashOperations } from "./bash-operations.js";
 import { OutputAccumulator } from "./output-accumulator.js";
@@ -99,6 +99,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
         // on inherited stdio handles held by detached descendants.
         waitForChildProcess(child)
           .then((code) => {
+            releaseChildProcessListeners(child);
             if (timeoutHandle) {
               clearTimeout(timeoutHandle);
             }
@@ -116,6 +117,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
             resolve({ exitCode: code });
           })
           .catch((err: unknown) => {
+            releaseChildProcessListeners(child);
             if (timeoutHandle) {
               clearTimeout(timeoutHandle);
             }
