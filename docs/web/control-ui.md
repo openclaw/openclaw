@@ -115,15 +115,52 @@ Imported themes are stored only in the current browser profile; they are not wri
 
 Appearance also has a browser-local Text size setting, stored with the rest of Control UI preferences. It applies to chat text, composer text, tool cards, and chat sidebars, and keeps text inputs at least 16px so mobile Safari does not auto-zoom on focus.
 
-## Navigation
+## Manage plugins
 
-On desktop, a slim top bar is the app chrome: the OpenClaw mark (with a connection-status dot), navigation pills for **Chat** plus every pinned destination, a **More** menu with the remaining destinations, and global actions on the right — the command-palette **Search** pill (⌘K), mobile pairing, the light/dark/system color-mode toggle, and **Settings**. **Docs** and **Edit pinned items** live in the More menu; right-clicking the navigation pills also opens the pin editor. **Overview** is the only destination pinned by default, and the pinned set is stored in the current browser profile.
+Open **Plugins** in the sidebar, or use `/settings/plugins` relative to the
+configured Control UI base path, to browse and manage plugins without leaving
+the Control UI. For example, a base path of `/openclaw` uses
+`/openclaw/settings/plugins`. The page is always available, even when every
+optional plugin is disabled.
 
-Below the top bar, the side panel is a scrollable session list split into **Pinned**, one section per custom group (the session `category`), and **Ungrouped** for the rest. Every active session loaded for the selected agent stays visible inline; opening a session moves the selection highlight without reordering the rows. Sessions with new activity since they were last read show an unread dot, and opening one marks it read. Each session row has a context menu (kebab button or right-click) with Pin/Unpin, Mark as unread/read, Rename, Fork, Move to group (including New group and Remove from group), Archive, and Delete; touch layouts keep the direct pin and menu controls visible. Drag a session onto a custom group or **Ungrouped** to move it. Group headers can be collapsed, expanded, or dragged to reorder them; the collapsed state and custom order are stored in the current browser profile. Group headers also have a menu (kebab button or right-click) with Rename group, New group, and Delete group; renaming or deleting a group updates every member session, including archived ones, and deleting a group keeps its sessions and moves them back to Ungrouped. Groups created from the header start empty and stay visible as move targets. The sort control in the session list header also has a Group by toggle: Custom groups (default) or None for one flat list (Pinned stays separate); the choice is stored in the current browser profile. Multi-agent setups show a compact scope control in the session-list header.
+The **Installed** tab shows the full local inventory grouped by category, with
+overview counts. Each row opens a detail view; its overflow (`…`) menu enables
+or disables the plugin and offers **Remove** for externally installed plugins.
+It also lists configured [MCP servers](/cli/mcp) and supports adding, disabling,
+and removing them inline. The **Discover** tab is the store: featured plugins
+included with OpenClaw, official external plugins, and one-click MCP connectors
+for popular services. Typing in the search box queries
+[ClawHub](https://clawhub.ai/plugins) inline and appends a **From ClawHub**
+section with download counts and source-verification badges.
+
+Included plugins are already present on the Gateway and show **Enable** or
+**Disable** instead of **Install**. For example, Workboard is included with
+OpenClaw but disabled by default, so its action is **Enable**. Bundled plugins
+cannot be removed, only disabled.
+
+Reading the catalog and searching ClawHub require `operator.read`. Installing,
+enabling, disabling, or removing a plugin and changing MCP servers require
+`operator.admin`; those actions stay disabled for read-only operators.
+
+ClawHub installs run through the Gateway and keep the same trust, integrity,
+and plugin-install policy checks as other Gateway-mediated installs. Installing
+or removing plugin code requires a Gateway restart. Enabling or disabling an
+installed plugin can apply without a restart when the plugin and current
+Gateway runtime support it; otherwise the UI reports that a restart is
+required. OAuth-backed MCP connectors need a one-time
+`openclaw mcp login <name>` from the CLI after they are added.
+
+The page intentionally focuses on inventory, discovery, install, enablement,
+and removal. Use [`openclaw plugins`](/cli/plugins) for arbitrary npm, git, or
+local-path sources, updates, and advanced plugin configuration.
+
+## Sidebar navigation
+
+The sidebar pins navigation above a scrollable session list split into **Pinned**, one section per custom group (the session `category`), and **Ungrouped** for the rest. Every active session loaded for the selected agent stays visible inline; opening a session moves the selection highlight without reordering the rows. Sessions with new activity since they were last read show an unread dot, and opening one marks it read. Each session row has a context menu (kebab button or right-click) with Pin/Unpin, Mark as unread/read, Rename, Fork, Move to group (including New group and Remove from group), Archive, and Delete; touch layouts keep the direct pin and menu controls visible. Drag a session onto a custom group or **Ungrouped** to move it. Group headers can be collapsed, expanded, or dragged to reorder them; the collapsed state and custom order are stored in the current browser profile. Group headers also have a menu (kebab button or right-click) with Rename group, New group, and Delete group; renaming or deleting a group updates every member session, including archived ones, and deleting a group keeps its sessions and moves them back to Ungrouped. Groups created from the header start empty and stay visible as move targets. The sort control in the session list header also has a Group by toggle: Custom groups (default) or None for one flat list (Pinned stays separate); the choice is stored in the current browser profile. Multi-agent setups show a compact scope control in the session-list header. **Overview** is the only destination pinned by default; expand **More** to reach every other destination. Select **Edit pinned items** under More, or right-click the navigation area, to pin or unpin destinations and restore the defaults. The pinned set and More expansion state are stored in the current browser profile and survive reloads.
 
 Inside **Settings**, the dedicated sidebar starts with a **Search settings** field for quickly finding settings sections.
 
-The top bar's panel toggle (⌘B) hides the session panel entirely for a full-width workspace; navigation stays in the top bar. Narrow viewports swap the session panel for a slide-over drawer (holding brand, pinned and More navigation, sessions, and the utility footer) behind a compact header row with the drawer toggle, brand, and command-palette search. Navigation uses regular browser history, so the browser's back/forward buttons traverse it; the macOS app adds native back/forward buttons next to the window controls, plus trackpad swipe gestures.
+A **Search** field at the top of the sidebar opens the command palette (⌘K). The compact footer keeps connection status, **Settings**, **Docs**, mobile pairing, and the light/dark/system color-mode toggle together. The sidebar header also holds the collapse toggle (⌘B); collapsing hides the sidebar entirely for a full-width workspace, and a floating expand control (or ⌘B) brings it back. The sidebar is the only navigation chrome on desktop, with no top bar. Narrow viewports swap the sidebar for a slide-over drawer behind a compact header row holding the drawer toggle, brand, and command-palette search; in the macOS app that header row folds the titlebar clearance into a single compact strip beside the window controls. Navigation uses regular browser history, so the browser's back/forward buttons traverse it; the macOS app adds native back/forward buttons next to the window controls, plus trackpad swipe gestures.
 
 ## What it can do (today)
 
@@ -147,9 +184,10 @@ The top bar's panel toggle (⌘B) hides the session panel entirely for a full-wi
     - Dreams: dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`).
 
   </Accordion>
-  <Accordion title="Cron, tasks, skills, nodes, exec approvals">
+  <Accordion title="Cron, tasks, plugins, skills, nodes, exec approvals">
     - Cron jobs: list/add/edit/run/enable/disable plus run history (`cron.*`).
     - Tasks: live active and recent background task ledger with linked sessions and cancellation (`tasks.*`).
+    - Plugins: browse the installed inventory and curated store, search ClawHub, install and remove plugin code, and enable or disable installed plugins (`plugins.*`); MCP server rows edit `mcp.servers` through the config methods.
     - Skills: status, enable/disable, install, API key updates (`skills.*`).
     - Nodes: one **Nodes & devices** inventory that joins paired device records with the node catalog (`node.list`, `device.pair.list`) — one entry per machine with roles, live link status, tokens, and capabilities. Duplicate pairings of the same client collapse into an expandable group, and **Clean up N stale** bulk-removes superseded pairings that are offline and were auto-approved (silent local or trusted-CIDR), so affected clients re-pair without user action. Entries can be removed (`node.pair.remove`, `device.pair.remove`), device pairing and node re-approvals handled inline (`device.pair.*`, `node.pair.approve`/`reject`), and mobile setup codes created from the same card.
     - Exec approvals: edit gateway or node allowlists and ask policy for `exec host=gateway/node` (`exec.approvals.*`).
@@ -247,14 +285,14 @@ The terminal is also available as a full-screen, terminal-only document at `/?vi
     - The sidebar lists every loaded active session by pinned/custom/ungrouped section with a New Session action. Opening a visible row moves only the highlight. Custom groups are collapsible and drag-reorderable, and sessions can be dropped onto a group or Ungrouped; the browser preserves the group order and collapsed state across reloads. A new dashboard session asynchronously gets a concise generated title from its first non-command message; explicit names are never replaced. Set `agents.defaults.utilityModel` (or `agents.list[].utilityModel`) to route this separate model call to a lower-cost model. Switching the compact agent scope shows only sessions tied to that agent and falls back to that agent's main session when it has no saved dashboard sessions yet.
     - Session search lives in the command palette (⌘K, or the Search field at the top of the sidebar): typing a query follows a bounded number of matching pages across agents, filters internal child/cron rows, and lists visible matches next to navigation commands. The Sessions page keeps the exhaustive searchable list with filters.
     - Each sidebar row keeps direct pin access plus a full context menu for unread state, rename, fork, grouping, archive, and delete. An active run and an agent's main session cannot be archived. Archiving or deleting the currently selected session switches Chat back to that agent's main session.
-    - In the macOS app, the top bar's brand strip sits next to the native window controls and stays non-interactive so it doubles as the window drag area.
+    - In the macOS app, the OpenClaw mark uses the otherwise-empty native titlebar strip next to the window controls instead of consuming a sidebar row.
     - On desktop widths, chat controls stay on one compact row and collapse while scrolling down the transcript; scrolling up, returning to the top, or reaching the bottom restores the controls.
     - Consecutive duplicate text-only messages render as one bubble with a count badge. Messages that carry images, attachments, tool output, or canvas previews are left uncollapsed.
-    - The session workspace rail in each Chat pane lists session files, project files, and artifacts. It docks to the pane's right edge by default; drag its header (or use the dock button) to move it to the bottom, and the choice is stored in the current browser profile. Press ⇧⌘B to expand or collapse the active pane's rail; the collapsed strip keeps working expand, files (with a changed-file count), and terminal buttons. The separate file, tool, and Canvas detail panel is unaffected.
+    - The session workspace rail in each Chat pane lists session files, project files, and artifacts. It docks to the pane's right edge by default; drag its header (or use the dock button) to move it to the bottom, and the choice is stored in the current browser profile. A collapsed rail takes no space at all: reopen it with ⇧⌘B, the files toggle in the split-pane header, or the floating files button in single-pane chat (both carry a changed-file count badge). The separate file, tool, and Canvas detail panel is unaffected.
     - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
     - **Split view:** open it from the bottom-right page action, then split the active pane right or down for as many panes as fit. Each pane has its own session, transcript, composer, and tool stream.
     - Drag a session from the sidebar into chat to open it in a pane. An animated drop preview glides between zones and labels the outcome — "Split" over the exact half a new pane will occupy, "Open here" over a whole pane — and drops also work from single-pane mode.
-    - The active split pane drives the sidebar selection and URL. Each pane carries its own header row with the session title and split/close controls; dividers resize columns and stacked panes, and the browser stores the layout locally across reloads.
+    - The active split pane drives the sidebar selection and URL. Each pane carries its own header row with the session title plus workspace-rail, split, and close controls; dividers resize columns and stacked panes, and the browser stores the layout locally across reloads.
     - On narrow screens, split view keeps the layout but renders only the active pane, including its header with the close control.
     - If you send a message while a model picker change for the same session is still saving, the composer waits for that session patch before calling `chat.send` so the send uses the selected model.
     - Typing `/new` creates and switches to the same fresh dashboard session as New Chat, except when `session.dmScope: "main"` is configured and the current parent is the agent's main session; then it resets the main session in place. Typing `/reset` keeps the Gateway's explicit in-place reset for the current session.

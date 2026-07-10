@@ -14,17 +14,14 @@ import "../components/resizable-divider.ts";
 import "../components/terminal/terminal-panel.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
-import {
-  isSettingsNavigationRoute,
-  orderedControlUiPluginTabs,
-  type SidebarNavRoute,
-} from "../app-navigation.ts";
+import { isSettingsNavigationRoute, type SidebarNavRoute } from "../app-navigation.ts";
 import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPalette,
   type CommandPaletteTargetDetail,
 } from "../components/command-palette.ts";
+import { icons } from "../components/icons.ts";
 import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
@@ -50,6 +47,10 @@ import { NAV_WIDTH_MAX, NAV_WIDTH_MIN, loadSettings } from "./settings.ts";
 type ShellRouteState = {
   routeId?: RouteId;
   location?: RouteLocation;
+};
+
+type AppSidebarElement = HTMLElement & {
+  dismissTransientMenus: () => boolean;
 };
 
 // Stable references so the sidebar's enabledRouteIds property does not churn
@@ -533,23 +534,34 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
     if (isMobileNavLayout()) {
       if (this.navDrawerOpen) {
-        this.closeNavDrawer({ restoreFocus: Boolean(trigger) });
+        this.closeNavDrawer({ restoreFocus: true });
         return;
       }
-      this.navDrawerTrigger = trigger ?? null;
+      this.navDrawerTrigger = trigger ?? this.querySelector<HTMLElement>(".topbar-nav-toggle");
       this.navDrawerOpen = true;
       return;
     }
     // A drawer that survived a breakpoint change is visually expanded even
     // when the persisted desktop preference says collapsed.
     const nextNavCollapsed = this.navDrawerOpen || !context.navigation.snapshot.navCollapsed;
+    if (nextNavCollapsed) {
+      this.dismissSidebarTransientMenus();
+    }
     this.closeNavDrawer();
     context.navigation.update({
       navCollapsed: nextNavCollapsed,
     });
+    if (nextNavCollapsed) {
+      void this.updateComplete.then(() => {
+        this.querySelector<HTMLElement>(".shell-nav-expand")?.focus();
+      });
+    }
   }
 
   private closeNavDrawer(options: { restoreFocus?: boolean } = {}) {
+    if (this.navDrawerOpen) {
+      this.dismissSidebarTransientMenus();
+    }
     const focusTarget = options.restoreFocus ? this.navDrawerTrigger : null;
     this.navDrawerOpen = false;
     this.navDrawerTrigger = null;
@@ -576,8 +588,22 @@ class OpenClawShell extends OpenClawLightDomElement {
   }
 
   private readonly handleWindowResize = () => {
+    const dismissedHiddenMenus =
+      isMobileNavLayout() && !this.navDrawerOpen && this.dismissSidebarTransientMenus();
     this.requestUpdate();
+    if (dismissedHiddenMenus) {
+      void this.updateComplete.then(() => {
+        this.querySelector<HTMLElement>(".topbar-nav-toggle")?.focus();
+      });
+    }
   };
+
+  private dismissSidebarTransientMenus(): boolean {
+    return (
+      this.querySelector<AppSidebarElement>("openclaw-app-sidebar")?.dismissTransientMenus() ??
+      false
+    );
+  }
 
   private readonly handleShellKeydown = (event: KeyboardEvent) => {
     if (event.defaultPrevented || event.key !== "Escape" || !this.navDrawerOpen) {
@@ -822,28 +848,24 @@ class OpenClawShell extends OpenClawLightDomElement {
           .searchDisabled=${false}
           .navDrawerOpen=${navDrawerOpen}
           .onboarding=${this.onboarding}
-          .activeRouteId=${activeRoute}
-          .activePluginTabId=${activePluginTabId}
-          .enabledRouteIds=${this.enabledRouteIds()}
-          .pinnedRoutes=${navigationSnapshot.sidebarPinnedRoutes}
-          .pluginTabs=${orderedControlUiPluginTabs(gatewaySnapshot.hello?.controlUiTabs ?? [])}
-          .sessionKey=${this.activeSessionKey}
-          .connected=${gatewaySnapshot.connected}
-          .canPairDevice=${gatewaySnapshot.connected &&
-          hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
-          .themeMode=${context.theme.mode}
-          .navCollapsed=${navCollapsed}
           .onOpenPalette=${this.openPalette}
           .onToggleDrawer=${(trigger: HTMLElement) => this.toggleNavigationSurface(trigger)}
-          .onToggleSidebar=${() => this.toggleNavigationSurface()}
-          .onPairMobile=${() => void context.overlays.openDevicePairSetup()}
-          .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
-            this.navigate(routeId, options)}
-          .onPreloadRoute=${(routeId: string) =>
-            isRouteId(routeId) ? context.preload(routeId) : Promise.resolve()}
-          .onUpdatePinnedRoutes=${(routes: SidebarNavRoute[]) =>
-            context.navigation.update({ sidebarPinnedRoutes: routes })}
         ></openclaw-app-topbar>
+        ${navCollapsed && !this.onboarding
+          ? html`
+              <openclaw-tooltip .content=${`${t("nav.expand")} (⌘B)`}>
+                <button
+                  type="button"
+                  class="shell-nav-expand"
+                  aria-label=${t("nav.expand")}
+                  aria-expanded="false"
+                  @click=${() => this.toggleNavigationSurface()}
+                >
+                  ${icons.panelLeftOpen}
+                </button>
+              </openclaw-tooltip>
+            `
+          : nothing}
         <div class="shell-nav">
           ${settingsTakeover
             ? renderSettingsSidebar({
@@ -868,7 +890,6 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .activeRouteId=${activeRoute}
                 .activePluginTabId=${activePluginTabId}
                 .enabledRouteIds=${this.enabledRouteIds()}
-                .variant=${isMobileNavLayout() ? "drawer" : "panel"}
                 .sessionKey=${this.activeSessionKey}
                 .connected=${gatewaySnapshot.connected}
                 .canPairDevice=${gatewaySnapshot.connected &&
@@ -881,6 +902,8 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .gatewayVersion=${context.config.current.serverVersion ??
                 gatewaySnapshot.hello?.server?.version ??
                 null}
+                .onOpenPalette=${this.openPalette}
+                .onToggleSidebar=${() => this.toggleNavigationSurface()}
                 .onToggleMore=${() =>
                   context.navigation.update({
                     sidebarMoreExpanded: !context.navigation.snapshot.sidebarMoreExpanded,

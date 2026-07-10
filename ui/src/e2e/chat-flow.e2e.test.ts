@@ -1,6 +1,7 @@
 // Control UI tests cover chat flow behavior.
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { SESSION_DRAG_MIME } from "../lib/sessions/drag.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -232,7 +233,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     await closeOpenBrowserContexts();
   });
 
-  it("keeps the topbar persistent and renders per-pane headers in split view", async () => {
+  it("renders per-pane headers in split view without desktop topbar chrome", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -247,20 +248,16 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           timestamp: Date.now(),
         },
       ],
+      methodResponses: { "sessions.list": chatSessionListResponse() },
+      sessionKey: "agent:main:session-a",
     });
 
     try {
       await page.goto(`${server.baseUrl}chat`);
       await page.getByText("Split toolbar proof.").waitFor({ timeout: 10_000 });
 
-      // The topbar is the app chrome on desktop: always visible, carrying
-      // brand + primary navigation + global actions.
-      const topbar = page.locator(".topbar");
-      await expect.poll(() => topbar.isVisible()).toBe(true);
-      await expect
-        .poll(() => page.locator(".topbar-nav .topnav-item").count())
-        .toBeGreaterThanOrEqual(2);
-      await expect.poll(() => page.locator(".topbar-search").isVisible()).toBe(true);
+      // Desktop renders no topbar row: the sidebar owns navigation.
+      await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
 
       const splitEntry = page.getByRole("button", { name: "Open split view" });
       await expect.poll(() => splitEntry.isVisible()).toBe(true);
@@ -274,10 +271,11 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .toBe(true);
       await splitEntry.click();
 
-      // Each pane owns an in-flow header (title + split/close actions) below
-      // the topbar; no fixed toolbar layer mirrors the split geometry.
+      // Each pane owns an in-flow header (title + workspace/split/close
+      // actions); no fixed toolbar layer mirrors the split geometry.
+      const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       const headers = page.locator(".chat-pane__header");
-      await expect.poll(() => page.locator(".chat-split-view__pane").count()).toBe(2);
+      await expect.poll(() => panes.count()).toBe(2);
       await expect.poll(() => headers.count()).toBe(2);
       await expect
         .poll(async () => {
@@ -286,17 +284,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         })
         .toBe(true);
       await expect.poll(() => splitEntry.count()).toBe(0);
-
-      const [topbarBox, headerBox] = await Promise.all([
-        topbar.boundingBox(),
-        headers.first().boundingBox(),
-      ]);
-      expect(topbarBox).not.toBeNull();
-      expect(headerBox).not.toBeNull();
-      if (!topbarBox || !headerBox) {
-        throw new Error("expected the topbar and pane header to have layout boxes");
-      }
-      expect(headerBox.y).toBeGreaterThanOrEqual(topbarBox.y + topbarBox.height - 1);
+      // The pane header hosts the session workspace toggle (the old collapsed
+      // rail strip is gone).
+      await expect.poll(() => headers.first().locator(".chat-workspace-toggle").count()).toBe(1);
+      await expect.poll(() => page.locator(".chat-workspace-rail").count()).toBe(0);
 
       // Pane headers render a static session title; keyboard focus lands on
       // the pane buttons and marks the pane active.
@@ -308,6 +299,65 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await lastPane.click({ position: { x: 20, y: 80 } });
       await expect.poll(() => cells.last().getAttribute("class")).toContain("--active");
       await expect.poll(() => headers.last().getAttribute("class")).toContain("--active");
+      const targetHeader = headers.first();
+      await expect
+        .poll(() =>
+          targetHeader.evaluate((header) => {
+            const owner = header.closest("openclaw-chat-pane");
+            return (
+              owner === header.parentElement && owner?.classList.contains("chat-split-view__pane")
+            );
+          }),
+        )
+        .toBe(true);
+
+      const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
+      await dataTransfer.evaluate(
+        (transfer, data) => {
+          transfer.setData(data.mime, data.sessionKey);
+        },
+        { mime: SESSION_DRAG_MIME, sessionKey: "agent:main:session-b" },
+      );
+      const unrelatedTarget = page.locator(".chat-split-view");
+      const unrelatedDrag = {
+        bubbles: true,
+        clientX: 0,
+        clientY: 0,
+        dataTransfer,
+      };
+      await unrelatedTarget.dispatchEvent("dragenter", unrelatedDrag);
+      await unrelatedTarget.dispatchEvent("dragover", unrelatedDrag);
+      await expect.poll(() => page.locator(".chat-split-view__drop-indicator").count()).toBe(0);
+      await unrelatedTarget.dispatchEvent("drop", unrelatedDrag);
+      await expect.poll(() => panes.count()).toBe(2);
+      await expect
+        .poll(() => new URL(page.url()).searchParams.get("session"))
+        .toBe("agent:main:session-a");
+
+      // Start with no retained pane preview and target the visible header.
+      const targetBox = await targetHeader.boundingBox();
+      if (!targetBox) {
+        throw new Error("expected the pane header to have a layout box");
+      }
+      const directHeaderDrag = {
+        bubbles: true,
+        clientX: targetBox.x + targetBox.width / 2,
+        clientY: targetBox.y + targetBox.height / 2,
+        dataTransfer,
+      };
+      await targetHeader.dispatchEvent("dragenter", directHeaderDrag);
+      await targetHeader.dispatchEvent("dragover", directHeaderDrag);
+      await expect.poll(() => page.locator(".chat-split-view__drop-indicator").count()).toBe(1);
+      await targetHeader.dispatchEvent("drop", directHeaderDrag);
+      await dataTransfer.dispose();
+
+      await expect.poll(() => panes.count()).toBe(3);
+      await expect
+        .poll(() => page.locator(".chat-pane__session-title").allTextContents())
+        .toContain("Session B");
+      await expect
+        .poll(() => new URL(page.url()).searchParams.get("session"))
+        .toBe("agent:main:session-b");
     } finally {
       await closeBrowserContext(context);
     }
@@ -980,7 +1030,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await page.getByRole("button", { name: "Expand session workspace" }).click();
+      await page.locator(".chat-workspace-open").click();
       await page.getByText("AGENTS.md").waitFor({ timeout: 10_000 });
 
       await page.getByRole("button", { name: "Copy path" }).click();
@@ -1049,23 +1099,18 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await page.getByRole("button", { name: "Expand session workspace" }).waitFor({
-        timeout: 10_000,
-      });
+      // Collapsed rails render nothing; the floating opener (with the
+      // changed-file badge) is the only pointer affordance.
+      const opener = page.locator(".chat-workspace-open");
+      await opener.waitFor({ timeout: 10_000 });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
-      expect(await page.locator(".chat-workspace-rail__file").count()).toBe(0);
-      expect(await page.locator(".chat-workspace-rail__files svg").count()).toBe(1);
-      // The rail docks flush to the window edge in both states (no content gutter).
-      const railEdgeGap = () =>
-        page.locator(".chat-workspace-rail").evaluate((element) => {
-          return window.innerWidth - element.getBoundingClientRect().right;
-        });
-      expect(await railEdgeGap()).toBe(0);
+      expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
 
-      await page.getByRole("button", { name: "Expand session workspace" }).click();
+      await opener.click();
       await page.getByRole("button", { name: "Collapse session workspace" }).waitFor({
         timeout: 10_000,
       });
+      expect(await opener.count()).toBe(0);
       await page.getByText("AGENTS.md").waitFor({ timeout: 10_000 });
       await page.getByText("preview.png").waitFor({ timeout: 10_000 });
       await page.getByText("Project files").waitFor({ timeout: 10_000 });
@@ -1074,16 +1119,18 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
       expect(await gateway.getRequests("artifacts.list")).toHaveLength(1);
-      expect(await railEdgeGap()).toBe(0);
+      // The rail docks flush to the window edge (no content gutter).
+      expect(
+        await page.locator(".chat-workspace-rail").evaluate((element) => {
+          return window.innerWidth - element.getBoundingClientRect().right;
+        }),
+      ).toBe(0);
 
       await page.getByRole("button", { name: "Collapse session workspace" }).click();
-      await page.getByRole("button", { name: "Expand session workspace" }).waitFor({
-        timeout: 10_000,
-      });
-      expect(await page.locator(".chat-workspace-rail__file").count()).toBe(0);
-      expect(await page.locator(".chat-workspace-rail__files svg").count()).toBe(1);
+      await opener.waitFor({ timeout: 10_000 });
+      expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
 
-      await page.getByRole("button", { name: "Expand session workspace" }).click();
+      await opener.click();
       await page.getByRole("button", { name: "Collapse session workspace" }).waitFor({
         timeout: 10_000,
       });
@@ -1126,7 +1173,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await page.getByRole("button", { name: "Expand session workspace" }).click();
+      await page.locator(".chat-workspace-open").click();
       await page.locator(".chat-workspace-rail__file-name", { hasText: "file-60.ts" }).waitFor({
         timeout: 10_000,
       });

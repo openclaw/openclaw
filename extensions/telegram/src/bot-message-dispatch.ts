@@ -248,6 +248,8 @@ type DispatchTelegramMessageParams = {
   opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb">;
   retryDispatchErrors?: boolean;
   suppressFailureFallback?: boolean;
+  /** Fires after recovery-relevant session/run state is durably persisted. */
+  onTurnAdopted?: () => void | Promise<void>;
 };
 
 type TelegramDispatchResult = { kind: "completed" } | { kind: "failed-retryable"; error: unknown };
@@ -787,6 +789,7 @@ export const dispatchTelegramMessage = async ({
   opts,
   retryDispatchErrors = false,
   suppressFailureFallback = false,
+  onTurnAdopted,
 }: DispatchTelegramMessageParams): Promise<TelegramDispatchResult> => {
   const dispatchStartedAt = Date.now();
   const dispatchContext = resolveDispatchTelegramContext({ context });
@@ -1507,7 +1510,9 @@ export const dispatchTelegramMessage = async ({
         activeKey: replyFenceKey.activeKey,
         laneKey: scopedReplyFenceLaneKey,
       });
-  if (!isRoomEvent && supersedeReplyFence) {
+  // Ambient room-event work uses a separate fence key. Any non-room-event
+  // inbound may cancel it without owning abort authority over adopted user turns.
+  if (!isRoomEvent) {
     supersedeTelegramReplyFence(replyFenceKey.roomEventKey);
   }
   replyFenceGeneration = beginTelegramReplyFence({
@@ -1843,7 +1848,11 @@ export const dispatchTelegramMessage = async ({
           recordOutboundMessageForPromptContext
         )({
           cfg,
-          account: { accountId: route.accountId },
+          account: {
+            accountId: route.accountId,
+            ...(telegramCfg.name !== undefined ? { name: telegramCfg.name } : {}),
+            ...(context.primaryCtx.me ? { bot: context.primaryCtx.me } : {}),
+          },
           chatId: deliveryBaseOptions.chatId,
           message: { message_id: result.delivery.messageId },
           messageId: result.delivery.messageId,
@@ -2615,6 +2624,17 @@ export const dispatchTelegramMessage = async ({
                   skillFilter,
                   disableBlockStreaming,
                   abortSignal: replyAbortController.signal,
+                  onTurnAdopted: async () => {
+                    // Fence abort authority ends at adoption. Core (queue interrupt
+                    // mode / reply-run registry abort) is the sole owner of killing
+                    // adopted runs; without this release a channel supersede could
+                    // kill an owned turn (#85361 sibling, group incident 2026-07-10).
+                    releaseTelegramReplyFenceAbortController(
+                      activeReplyFenceKey,
+                      replyAbortController,
+                    );
+                    await onTurnAdopted?.();
+                  },
                   sourceReplyDeliveryMode: isRoomEvent ? "message_tool_only" : undefined,
                   queuedDeliveryCorrelations: isRoomEvent
                     ? [{ begin: beginDeliveryCorrelation }]

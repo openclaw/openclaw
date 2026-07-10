@@ -1,5 +1,4 @@
 // Control UI app navigation defines sidebar and settings presentation metadata.
-import type { GatewayControlUiPluginTab } from "./api/gateway.ts";
 import type { RouteId } from "./app-route-paths.ts";
 import type { IconName } from "./components/icons.ts";
 import { t } from "./i18n/index.ts";
@@ -24,6 +23,7 @@ export const SIDEBAR_NAV_ROUTES = [
   "tasks",
   "agents",
   "skills",
+  "plugins",
   "skill-workshop",
   "nodes",
   "dreams",
@@ -63,16 +63,6 @@ export function sidebarMoreRoutes(pinned: readonly SidebarNavRoute[]): SidebarNa
   return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.includes(routeId));
 }
 
-/** Dynamic plugin tabs stay in "More"; only stable static route ids can be
- * persisted as pins. Grouped ordering keeps related tabs adjacent. */
-export function orderedControlUiPluginTabs(
-  tabs: readonly GatewayControlUiPluginTab[],
-): GatewayControlUiPluginTab[] {
-  return ["chat", "control", "agent", "settings"].flatMap((group) =>
-    tabs.filter((tab) => (tab.group ?? "control") === group),
-  );
-}
-
 type SettingsNavigationGroup = {
   /** i18n key for the group heading; null renders the group without a label. */
   labelKey: string | null;
@@ -86,7 +76,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   { labelKey: "nav.settingsGroupAgents", routes: ["ai-agents", "automation", "mcp"] },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: ["infrastructure", "worktrees", "debug", "logs"],
+    routes: ["infrastructure", "worktrees", "debug", "logs", "about"],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
@@ -106,6 +96,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   cron: "calendarClock",
   tasks: "listChecks",
   skills: "zap",
+  plugins: "puzzle",
   "skill-workshop": "wrench",
   nodes: "monitor",
   chat: "messageSquare",
@@ -116,6 +107,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   automation: "terminal",
   mcp: "wrench",
   infrastructure: "globe",
+  about: "fileText",
   "ai-agents": "brain",
   debug: "bug",
   logs: "scrollText",
@@ -192,6 +184,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   cron: { titleKey: "tabs.cron", subtitleKey: "subtitles.cron" },
   tasks: { titleKey: "tabs.tasks", subtitleKey: "subtitles.tasks" },
   skills: { titleKey: "tabs.skills", subtitleKey: "subtitles.skills" },
+  plugins: { titleKey: "tabs.plugins", subtitleKey: "subtitles.plugins" },
   "skill-workshop": {
     titleKey: "tabs.skillWorkshop",
     subtitleKey: "subtitles.skillWorkshop",
@@ -208,6 +201,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   automation: { titleKey: "tabs.automation", subtitleKey: "subtitles.automation" },
   mcp: { titleKey: "tabs.mcp", subtitleKey: "subtitles.mcp" },
   infrastructure: { titleKey: "tabs.infrastructure", subtitleKey: "subtitles.infrastructure" },
+  about: { titleKey: "tabs.about", subtitleKey: "subtitles.about" },
   "ai-agents": { titleKey: "tabs.aiAgents", subtitleKey: "subtitles.aiAgents" },
   debug: { titleKey: "tabs.debug", subtitleKey: "subtitles.debug" },
   logs: { titleKey: "tabs.logs", subtitleKey: "subtitles.logs" },
