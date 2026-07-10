@@ -17,35 +17,25 @@ import {
   loadDevicePairingStoreState,
   persistDevicePairingStoreState as persistState,
 } from "./device-pairing-store.js";
+import type {
+  DeviceAuthToken,
+  DevicePairingPendingRecord,
+  DevicePairingPendingRequest,
+  PairedDevice,
+  PairedDeviceApprovalKind,
+} from "./device-pairing.types.js";
 import { createAsyncLock, pruneExpiredPending } from "./pairing-files.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
-/** Pending device pairing request awaiting owner approval. */
-export type DevicePairingPendingRequest = {
-  requestId: string;
-  deviceId: string;
-  publicKey: string;
-  displayName?: string;
-  platform?: string;
-  deviceFamily?: string;
-  clientId?: string;
-  clientMode?: string;
-  role?: string;
-  roles?: string[];
-  scopes?: string[];
-  remoteIp?: string;
-  silent?: boolean;
-  isRepair?: boolean;
-  ts: number;
-};
-
-// Internal pending record. refreshedAtMs is a TTL keepalive stamped on refresh so an
-// actively retrying device keeps one pending request (and requestId) alive instead of
-// minting a new request every TTL window and flooding operator approval UIs. It never
-// crosses the protocol boundary, and ordering/--latest still use ts.
-export type DevicePairingPendingRecord = DevicePairingPendingRequest & {
-  refreshedAtMs?: number;
-};
+export type {
+  DeviceAuthToken,
+  DevicePairingPendingRecord,
+  DevicePairingPendingRequest,
+  PairedDevice,
+  PairedDeviceApprovalKind,
+  PairedDeviceNodeSurface,
+  PairedDevicePendingNodeSurface,
+} from "./device-pairing.types.js";
 
 /** Pending request summary returned when a replacement supersedes older requests. */
 export type DevicePairingSupersededRequest = Pick<
@@ -59,21 +49,6 @@ export type RequestDevicePairingResult = {
   request: DevicePairingPendingRequest;
   created: boolean;
   superseded?: DevicePairingSupersededRequest[];
-};
-
-/** Bearer token issued to one paired device role. */
-export type DeviceAuthToken = {
-  token: string;
-  role: string;
-  scopes: string[];
-  issuer?: {
-    kind: "shared-gateway-auth";
-    generation: string;
-  };
-  createdAtMs: number;
-  rotatedAtMs?: number;
-  revokedAtMs?: number;
-  lastUsedAtMs?: number;
 };
 
 /** Redacted token metadata safe for list/status responses. */
@@ -104,89 +79,6 @@ export type RevokeDeviceTokenDenyReason = "unknown-device-or-role" | "caller-mis
 export type RevokeDeviceTokenResult =
   | { ok: true; entry: DeviceAuthToken }
   | { ok: false; reason: RevokeDeviceTokenDenyReason; scope?: string };
-
-/**
- * How the latest pairing approval was granted. "silent" is a same-host local
- * policy approval and the only prune-eligible kind: local clients re-pair
- * silently and cannot collide with another machine's records. "trusted-cidr"
- * is also non-interactive but crosses hosts, so it is never pruned
- * automatically (display metadata is not a machine identity). "owner" and
- * "bootstrap" approvals required a user action and are never pruned.
- */
-export type PairedDeviceApprovalKind = "owner" | "silent" | "trusted-cidr" | "bootstrap";
-
-/**
- * Approved node capability surface for a node-role device. Device pairing
- * grants connection auth; this grants command/capability exposure (node
- * command gating). displayName here is the operator-facing node name set at
- * approval or via node.rename; it must not be clobbered by reconnect
- * metadata refreshes, which is why it lives apart from the device fields.
- */
-export type PairedDeviceNodeSurface = {
-  displayName?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-  modelIdentifier?: string;
-  caps?: string[];
-  commands?: string[];
-  permissions?: Record<string, boolean>;
-  bins?: string[];
-  createdAtMs: number;
-  approvedAtMs: number;
-  lastConnectedAtMs?: number;
-};
-
-/**
- * Pending node-surface approval awaiting an operator decision (one per
- * device). Carries its own metadata snapshot so approval UIs can show what
- * the node declared at request time. `revision` guards the reconnect-vs-
- * approve race: reconnect cleanup only deletes the revision it observed, so
- * a refreshed request survives concurrent approval flows.
- */
-export type PairedDevicePendingNodeSurface = {
-  requestId: string;
-  revision: string;
-  displayName?: string;
-  platform?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-  clientId?: string;
-  clientMode?: string;
-  deviceFamily?: string;
-  modelIdentifier?: string;
-  caps?: string[];
-  commands?: string[];
-  permissions?: Record<string, boolean>;
-  remoteIp?: string;
-  silent?: boolean;
-  ts: number;
-};
-
-/** Persisted approved device record, including durable approval and active role tokens. */
-export type PairedDevice = {
-  deviceId: string;
-  publicKey: string;
-  displayName?: string;
-  platform?: string;
-  deviceFamily?: string;
-  clientId?: string;
-  clientMode?: string;
-  role?: string;
-  roles?: string[];
-  scopes?: string[];
-  approvedScopes?: string[];
-  remoteIp?: string;
-  tokens?: Record<string, DeviceAuthToken>;
-  approvedVia?: PairedDeviceApprovalKind;
-  nodeSurface?: PairedDeviceNodeSurface;
-  pendingNodeSurface?: PairedDevicePendingNodeSurface;
-  createdAtMs: number;
-  approvedAtMs: number;
-  lastSeenAtMs?: number;
-  lastSeenReason?: string;
-};
 
 /** Metadata fields a device may refresh without changing approval or token state. */
 export type PairedDeviceMetadataPatch = Pick<

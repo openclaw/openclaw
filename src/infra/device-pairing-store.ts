@@ -16,15 +16,15 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import type { DeviceBootstrapTokenRecord } from "./device-bootstrap.js";
 import type {
   DeviceAuthToken,
+  DeviceBootstrapTokenRecord,
   DevicePairingPendingRecord,
   PairedDevice,
   PairedDeviceApprovalKind,
   PairedDeviceNodeSurface,
   PairedDevicePendingNodeSurface,
-} from "./device-pairing.js";
+} from "./device-pairing.types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 
 export type DevicePairingStoreState = {

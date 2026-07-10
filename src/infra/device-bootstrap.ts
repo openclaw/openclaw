@@ -18,24 +18,14 @@ import {
   loadDeviceBootstrapTokenRecords,
   persistDeviceBootstrapTokenRecords as persistState,
 } from "./device-pairing-store.js";
+import type { DeviceBootstrapTokenRecord } from "./device-pairing.types.js";
 import { createAsyncLock, pruneExpiredPending } from "./pairing-files.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 /** Bootstrap pairing tokens are short-lived bearer credentials for first device auth. */
 export const DEVICE_BOOTSTRAP_TOKEN_TTL_MS = 10 * 60 * 1000;
 
-/** Persisted bootstrap token state, including binding and role/scope redemption progress. */
-export type DeviceBootstrapTokenRecord = {
-  token: string;
-  ts: number;
-  deviceId?: string;
-  publicKey?: string;
-  profile?: DeviceBootstrapProfile;
-  redeemedProfile?: DeviceBootstrapProfile;
-  pendingProfile?: DeviceBootstrapProfile;
-  issuedAtMs: number;
-  lastUsedAtMs?: number;
-};
+export type { DeviceBootstrapTokenRecord } from "./device-pairing.types.js";
 
 type DeviceBootstrapStateFile = Record<string, DeviceBootstrapTokenRecord>;
 
