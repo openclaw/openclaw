@@ -24,6 +24,18 @@ function resolveBunGlobalNodeModules(): string {
   );
 }
 
+function resolveDirectNodeModulesRoot(root: string): string | null {
+  const parent = path.dirname(root);
+  if (path.basename(parent) === "node_modules") {
+    return parent;
+  }
+
+  const grandparent = path.dirname(parent);
+  return path.basename(parent).startsWith("@") && path.basename(grandparent) === "node_modules"
+    ? grandparent
+    : null;
+}
+
 function resolvePnpmNodeModulesRoot(root: string): string | null {
   const resolved = path.resolve(root);
   const parts = resolved.split(path.sep);
@@ -35,12 +47,15 @@ function resolvePnpmNodeModulesRoot(root: string): string | null {
       : path.join(layoutRoot, "node_modules");
   }
 
-  const parent = path.dirname(resolved);
-  return path.basename(parent) === "node_modules" ? parent : null;
+  return resolveDirectNodeModulesRoot(resolved);
 }
 
 async function isBunOwnedPackageRoot(root: string): Promise<boolean> {
-  return path.resolve(path.dirname(root)) === path.resolve(resolveBunGlobalNodeModules());
+  const nodeModulesRoot = resolveDirectNodeModulesRoot(path.resolve(root));
+  return (
+    nodeModulesRoot !== null &&
+    path.resolve(nodeModulesRoot) === path.resolve(resolveBunGlobalNodeModules())
+  );
 }
 
 async function isPnpmOwnedPackageRoot(root: string): Promise<boolean> {

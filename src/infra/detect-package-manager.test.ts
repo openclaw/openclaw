@@ -20,11 +20,11 @@ async function withPackageManagerRoot<T>(
   });
 }
 
-async function writePublishedOpenClawRoot(root: string): Promise<void> {
+async function writePublishedOpenClawRoot(root: string, name = "openclaw"): Promise<void> {
   await fs.mkdir(root, { recursive: true });
   await fs.writeFile(
     path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", packageManager: "pnpm@11.2.2" }),
+    JSON.stringify({ name, packageManager: "pnpm@11.2.2" }),
     "utf8",
   );
   await fs.writeFile(path.join(root, "npm-shrinkwrap.json"), "{}", "utf8");
@@ -104,6 +104,17 @@ describe("detectPackageManager", () => {
     });
   });
 
+  it("keeps pnpm-owned scoped direct package roots that ship npm-shrinkwrap", async () => {
+    await withTempDir({ prefix: "openclaw-detect-pm-pnpm-scoped-" }, async (base) => {
+      const nodeModulesRoot = path.join(base, "pnpm-global", "node_modules");
+      const packageRoot = path.join(nodeModulesRoot, "@scope", "tool");
+      await writePublishedOpenClawRoot(packageRoot, "@scope/tool");
+      await fs.writeFile(path.join(nodeModulesRoot, ".modules.yaml"), "layoutVersion: 5", "utf8");
+
+      await expect(detectPackageManager(packageRoot)).resolves.toBe("pnpm");
+    });
+  });
+
   it("keeps pnpm-owned virtual-store package roots that ship npm-shrinkwrap", async () => {
     await withTempDir({ prefix: "openclaw-detect-pm-pnpm-virtual-" }, async (base) => {
       const nodeModulesRoot = path.join(base, "project", "node_modules");
@@ -127,6 +138,25 @@ describe("detectPackageManager", () => {
       await withEnvAsync({ BUN_INSTALL: bunInstall }, async () => {
         const packageRoot = path.join(bunInstall, "install", "global", "node_modules", "openclaw");
         await writePublishedOpenClawRoot(packageRoot);
+
+        await expect(detectPackageManager(packageRoot)).resolves.toBe("bun");
+      });
+    });
+  });
+
+  it("keeps bun-owned scoped global package roots that ship npm-shrinkwrap", async () => {
+    await withTempDir({ prefix: "openclaw-detect-pm-bun-scoped-" }, async (base) => {
+      const bunInstall = path.join(base, "bun-home");
+      await withEnvAsync({ BUN_INSTALL: bunInstall }, async () => {
+        const packageRoot = path.join(
+          bunInstall,
+          "install",
+          "global",
+          "node_modules",
+          "@scope",
+          "tool",
+        );
+        await writePublishedOpenClawRoot(packageRoot, "@scope/tool");
 
         await expect(detectPackageManager(packageRoot)).resolves.toBe("bun");
       });
