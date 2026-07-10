@@ -527,7 +527,7 @@ describe("buildAuthHealthSummary", () => {
         "claude-cli:token": {
           type: "token" as const,
           provider: "claude-cli",
-          token: "fresh-setup-token",
+          token: "fake-token",
         },
       },
     };
