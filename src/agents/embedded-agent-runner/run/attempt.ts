@@ -378,6 +378,7 @@ import {
 } from "./attempt-tool-construction-plan.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush-cleanup.js";
 import {
+  NON_DELIVERABLE_TERMINAL_TURN_REASON,
   resolveAttemptTrajectoryTerminal,
   resolveTerminalAssistantTexts,
 } from "./attempt-trajectory-status.js";
@@ -5996,6 +5997,9 @@ export async function runEmbeddedAttempt(
         // truthiness predicates keep working without a `.length` check.
         clientToolCalls: completedClientToolCalls.length > 0 ? completedClientToolCalls : undefined,
         yieldDetected: yieldDetected || undefined,
+        nonDeliverableTerminalTurn:
+          attemptTrajectoryTerminal.terminalError === NON_DELIVERABLE_TERMINAL_TURN_REASON ||
+          undefined,
       };
     } finally {
       if (trajectoryRecorder && !trajectoryEndRecorded) {

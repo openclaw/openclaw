@@ -1449,7 +1449,11 @@ export function createFollowupRunner(params: {
           });
           replyOperation.fail("run_failed", exhaustionError);
           terminalRunFailed = true;
-        } else if (deferredLifecycleError || runResult.meta?.error) {
+        } else if (
+          deferredLifecycleError ||
+          runResult.meta?.error ||
+          runResult.meta?.nonDeliverableTerminalTurn
+        ) {
           const terminalError = new Error(terminalErrorMessage ?? "Agent run failed");
           emitSettledLifecycleError(terminalError, terminalMetadata);
           replyOperation.fail("run_failed", terminalError);
@@ -1559,7 +1563,8 @@ export function createFollowupRunner(params: {
       };
       const fallbackPayload = terminalRunFailed
         ? isInteractive &&
-          run.sourceReplyDeliveryMode !== "message_tool_only" &&
+          (run.sourceReplyDeliveryMode !== "message_tool_only" ||
+            runResult.meta?.nonDeliverableTerminalTurn === true) &&
           !hasCommittedDelivery
           ? buildTerminalAgentRunFailureReplyPayload({
               isHeartbeat: opts?.isHeartbeat,
@@ -1728,7 +1733,10 @@ export function createFollowupRunner(params: {
         }
       }
 
-      if (run.sourceReplyDeliveryMode === "message_tool_only") {
+      if (
+        run.sourceReplyDeliveryMode === "message_tool_only" &&
+        !runResult.meta?.nonDeliverableTerminalTurn
+      ) {
         logVerbose(
           "followup queue: automatic source delivery suppressed by sourceReplyDeliveryMode: message_tool_only",
         );

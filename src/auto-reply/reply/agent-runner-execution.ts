@@ -3189,7 +3189,10 @@ async function runAgentTurnWithFallbackInternal(
       const terminalErrorMessage =
         deferredLifecycleError ??
         userFacingErrorPayload ??
-        (embeddedError ? "Agent run failed" : undefined);
+        (embeddedError ? "Agent run failed" : undefined) ??
+        (runResult.meta?.nonDeliverableTerminalTurn
+          ? "The agent run failed before producing a reply."
+          : undefined);
       const emitSettledLifecycleError = (error: Error, extraData?: Record<string, unknown>) => {
         if (settledLifecycleTerminal) {
           settledLifecycleTerminal.emit("error", error, extraData);
@@ -3258,7 +3261,11 @@ async function runAgentTurnWithFallbackInternal(
         });
         params.replyOperation?.retainFailureUntilComplete();
         params.replyOperation?.fail("run_failed", exhaustionError);
-      } else if (deferredLifecycleError || embeddedError) {
+      } else if (
+        deferredLifecycleError ||
+        embeddedError ||
+        runResult.meta?.nonDeliverableTerminalTurn
+      ) {
         const terminalError = new Error(terminalErrorMessage ?? "Agent run failed");
         terminalRunFailed = true;
         emitSettledLifecycleError(terminalError, terminalMetadata);

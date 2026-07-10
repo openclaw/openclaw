@@ -5520,6 +5520,59 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
+  it("delivers non-deliverable terminal fallback through message-tool-only gate", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        meta: { nonDeliverableTerminalTurn: true },
+      },
+      queued: {
+        ...queued,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        currentInboundEventKind: "user_request",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    // The fallback payload must reach delivery even though sourceReplyDeliveryMode is
+    // message_tool_only.  Both message_tool_only gates in followup-runner are exempted
+    // when nonDeliverableTerminalTurn=true.
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const call = onBlockReply.mock.calls[0]?.[0] as { text?: string; isError?: boolean };
+    expect(call).toMatchObject({
+      text: "The agent run failed before producing a reply.",
+      isError: true,
+    });
+  });
+
+  it("keeps message-tool-only suppression intact for normal (non-terminal) turns", async () => {
+    // Regression: a normal successful reply must still be suppressed under message_tool_only.
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: "hello from agent" }],
+        meta: {},
+      },
+      queued: {
+        ...queued,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
   it("lets provider followup route hooks force dispatcher delivery", async () => {
     resolveProviderFollowupFallbackRouteMock.mockReturnValue({
       route: "dispatcher",
