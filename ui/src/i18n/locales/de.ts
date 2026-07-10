@@ -1859,6 +1859,20 @@ export const de: TranslationMap = {
       adminRequired:
         "Administratorzugriff ist erforderlich, um einen Worktree für dieses Projekt zu erstellen.",
     },
+    pullRequests: {
+      linkLabel: "Pull Request #{number}: {title}",
+      dismiss: "Pull Request #{number} ausblenden",
+      open: "Offen",
+      draft: "Entwurf",
+      merged: "Zusammengeführt",
+      closed: "Geschlossen",
+      checks: "CI",
+      checksPassing: "CI-Prüfungen erfolgreich",
+      checksFailing: "CI-Prüfungen fehlgeschlagen",
+      checksPending: "CI-Prüfungen werden ausgeführt",
+      rateLimited:
+        "GitHub API-Ratenlimit erreicht. Der Pull-Request-Status ist möglicherweise veraltet, bis das Limit zurückgesetzt wird.",
+    },
     refreshTitle: "Chat-Daten aktualisieren",
     settings: "Chat-Einstellungen",
     usageRemaining: "Verbleibende Nutzung",

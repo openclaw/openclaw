@@ -1850,6 +1850,20 @@ export const pl: TranslationMap = {
       adminRequired:
         "Dostęp administratora jest wymagany, aby utworzyć drzewo robocze z tego projektu.",
     },
+    pullRequests: {
+      linkLabel: "Pull request #{number}: {title}",
+      dismiss: "Odrzuć pull request #{number}",
+      open: "Otwarte",
+      draft: "Wersja robocza",
+      merged: "Scalono",
+      closed: "Zamknięte",
+      checks: "CI",
+      checksPassing: "Kontrole CI zakończone powodzeniem",
+      checksFailing: "Kontrole CI zakończone niepowodzeniem",
+      checksPending: "Kontrole CI w toku",
+      rateLimited:
+        "Osiągnięto limit żądań GitHub API. Status pull requesta może być nieaktualny do czasu zresetowania limitu.",
+    },
     refreshTitle: "Odśwież dane czatu",
     settings: "Ustawienia czatu",
     usageRemaining: "Pozostałe użycie",

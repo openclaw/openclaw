@@ -1841,6 +1841,20 @@ export const uk: TranslationMap = {
       adminRequired:
         "Для створення робочого дерева з цього проєкту потрібен доступ адміністратора.",
     },
+    pullRequests: {
+      linkLabel: "Pull request #{number}: {title}",
+      dismiss: "Відхилити pull request #{number}",
+      open: "Відкрито",
+      draft: "Чернетка",
+      merged: "Об’єднано",
+      closed: "Закрито",
+      checks: "CI",
+      checksPassing: "Перевірки CI пройдено",
+      checksFailing: "Перевірки CI не пройдено",
+      checksPending: "Перевірки CI виконуються",
+      rateLimited:
+        "Досягнуто обмеження швидкості GitHub API. Статус pull request може бути застарілим, доки обмеження не буде скинуто.",
+    },
     refreshTitle: "Оновити дані чату",
     settings: "Налаштування чату",
     usageRemaining: "Залишок використання",

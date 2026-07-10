@@ -1855,6 +1855,20 @@ export const ru: TranslationMap = {
       adminRequired:
         "Для создания рабочего дерева из этого проекта необходим доступ администратора.",
     },
+    pullRequests: {
+      linkLabel: "Pull request #{number}: {title}",
+      dismiss: "Скрыть pull request #{number}",
+      open: "Открыть",
+      draft: "Черновик",
+      merged: "Слит",
+      closed: "Закрыт",
+      checks: "CI",
+      checksPassing: "Проверки CI пройдены",
+      checksFailing: "Проверки CI не пройдены",
+      checksPending: "Проверки CI выполняются",
+      rateLimited:
+        "Достигнут лимит запросов к GitHub API. Статус pull request может быть устаревшим до сброса лимита.",
+    },
     refreshTitle: "Обновить данные чата",
     settings: "Настройки чата",
     usageRemaining: "Оставшееся использование",

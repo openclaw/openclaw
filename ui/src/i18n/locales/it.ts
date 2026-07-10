@@ -1856,6 +1856,20 @@ export const it: TranslationMap = {
       adminRequired:
         "È necessario l'accesso amministratore per creare un worktree da questo progetto.",
     },
+    pullRequests: {
+      linkLabel: "Pull request #{number}: {title}",
+      dismiss: "Ignora pull request #{number}",
+      open: "Aperta",
+      draft: "Bozza",
+      merged: "Unita",
+      closed: "Chiusa",
+      checks: "CI",
+      checksPassing: "Controlli CI superati",
+      checksFailing: "Controlli CI non superati",
+      checksPending: "Controlli CI in esecuzione",
+      rateLimited:
+        "Limite di frequenza dell'API GitHub raggiunto. Lo stato della pull request potrebbe non essere aggiornato finché il limite non viene reimpostato.",
+    },
     refreshTitle: "Aggiorna dati chat",
     settings: "Impostazioni chat",
     usageRemaining: "Utilizzo rimanente",
