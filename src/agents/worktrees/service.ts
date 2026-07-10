@@ -392,6 +392,8 @@ export class ManagedWorktreeService {
           repoRoot: repository.repoRoot,
           path: worktreePath,
           branch,
+          ...(params.ownerKind ? { ownerKind: params.ownerKind } : {}),
+          ...(params.ownerId ? { ownerId: params.ownerId } : {}),
         });
       }
       throw new Error(`branch already exists: ${branch}`);
@@ -816,6 +818,8 @@ export class ManagedWorktreeService {
     repoRoot: string;
     path: string;
     branch: string;
+    ownerKind?: ManagedWorktreeOwnerKind;
+    ownerId?: string;
   }): ManagedWorktreeRecord {
     const createdAt = this.now();
     const record: ManagedWorktreeRecord = {
@@ -826,7 +830,10 @@ export class ManagedWorktreeService {
       path: params.path,
       branch: params.branch,
       baseRef: "HEAD",
-      ownerKind: "manual",
+      // Mirrors create()'s owner defaulting so a retried create() keeps findLiveByOwner()
+      // lookups and idle-gc expiry working; gc-side adoption cannot recover an owner.
+      ownerKind: params.ownerKind ?? "manual",
+      ...(params.ownerId ? { ownerId: params.ownerId } : {}),
       createdAt,
       lastActiveAt: createdAt,
     };

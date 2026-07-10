@@ -697,15 +697,32 @@ describe("ManagedWorktreeService", () => {
   });
 
   it("adopts an orphaned worktree instead of throwing on a retried create() with the same name", async () => {
-    const created = await service.create({ repoRoot: repo, name: "orphan-retry" });
+    const created = await service.create({
+      repoRoot: repo,
+      name: "orphan-retry",
+      ownerKind: "workboard",
+      ownerId: "card-42",
+    });
     deleteRegistryWorktree(env, created.id);
 
-    const retried = await service.create({ repoRoot: repo, name: "orphan-retry" });
+    const retried = await service.create({
+      repoRoot: repo,
+      name: "orphan-retry",
+      ownerKind: "workboard",
+      ownerId: "card-42",
+    });
 
     expect(retried.path).toBe(created.path);
     expect(retried.branch).toBe(created.branch);
     expect(retried.id).not.toBe(created.id);
-    expect(getRegistryWorktree(env, retried.id)).toBeDefined();
+    // The retry's owner must survive adoption so findLiveByOwner() and idle-gc still apply.
+    expect(retried.ownerKind).toBe("workboard");
+    expect(retried.ownerId).toBe("card-42");
+    expect(getRegistryWorktree(env, retried.id)).toMatchObject({
+      ownerKind: "workboard",
+      ownerId: "card-42",
+    });
+    expect(service.findLiveByOwner("workboard", "card-42")?.id).toBe(retried.id);
     expect(await git(created.path, "branch", "--show-current")).toBe(created.branch);
   });
 
