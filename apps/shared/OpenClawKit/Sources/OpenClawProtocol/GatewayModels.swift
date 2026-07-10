@@ -2685,6 +2685,86 @@ public struct SessionsCreateResult: Codable, Sendable {
     }
 }
 
+public struct SessionsShareCreateParams: Codable, Sendable {
+    public let sessionkey: String
+    public let access: AnyCodable
+    public let invitedprincipal: [String: AnyCodable]?
+    public let expiresatms: Int?
+    public let replaypolicy: AnyCodable?
+
+    public init(
+        sessionkey: String,
+        access: AnyCodable,
+        invitedprincipal: [String: AnyCodable]?,
+        expiresatms: Int?,
+        replaypolicy: AnyCodable?)
+    {
+        self.sessionkey = sessionkey
+        self.access = access
+        self.invitedprincipal = invitedprincipal
+        self.expiresatms = expiresatms
+        self.replaypolicy = replaypolicy
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case access
+        case invitedprincipal = "invitedPrincipal"
+        case expiresatms = "expiresAtMs"
+        case replaypolicy = "replayPolicy"
+    }
+}
+
+public struct SessionsShareCreateResult: Codable, Sendable {
+    public let grantid: String
+    public let code: String
+    public let joinurl: String
+
+    public init(
+        grantid: String,
+        code: String,
+        joinurl: String)
+    {
+        self.grantid = grantid
+        self.code = code
+        self.joinurl = joinurl
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case grantid = "grantId"
+        case code
+        case joinurl = "joinUrl"
+    }
+}
+
+public struct SessionsShareListParams: Codable, Sendable {
+    public let sessionkey: String?
+
+    public init(
+        sessionkey: String?)
+    {
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct SessionsShareRevokeParams: Codable, Sendable {
+    public let grantid: String
+
+    public init(
+        grantid: String)
+    {
+        self.grantid = grantid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case grantid = "grantId"
+    }
+}
+
 public struct SessionsSendParams: Codable, Sendable {
     public let key: String
     public let agentid: String?
