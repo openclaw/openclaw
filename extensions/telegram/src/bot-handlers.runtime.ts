@@ -674,6 +674,7 @@ export const registerTelegramHandlers = ({
               ...spooledReplayOptions(spooledReplayParticipants),
             },
             dispatchDedupeKeys: last.dispatchDedupeKeys,
+            durableMediaReplay: spooledReplayParticipants.length > 0,
           });
           settleSpooledReplayParticipants(spooledReplayParticipants, result);
           return;
@@ -723,6 +724,7 @@ export const registerTelegramHandlers = ({
           dispatchDedupeKeys: mergeDispatchDedupeKeys(
             ...entries.map((entry) => entry.dispatchDedupeKeys),
           ),
+          durableMediaReplay: spooledReplayParticipants.length > 0,
         });
         settleSpooledReplayParticipants(spooledReplayParticipants, result);
       } catch (err) {
@@ -1084,8 +1086,12 @@ export const registerTelegramHandlers = ({
             ...mediaRuntimeWithAbort,
           });
         } catch (mediaErr) {
-          // A session abort invalidates the whole buffered album. Let the durable spool retry it.
-          if (mediaRuntimeWithAbort.abortSignal?.aborted) {
+          // Only durable ingress can replay an aborted album. Classic polling keeps
+          // its best-effort partial delivery so Telegram does not acknowledge a drop.
+          if (
+            mediaRuntimeWithAbort.abortSignal?.aborted &&
+            entry.spooledReplayParticipants.length > 0
+          ) {
             throw mediaErr;
           }
           if (!isRecoverableMediaGroupError(mediaErr)) {
@@ -1146,6 +1152,7 @@ export const registerTelegramHandlers = ({
           ...spooledReplayOptions(entry.spooledReplayParticipants),
         },
         dispatchDedupeKeys: entry.dispatchDedupeKeys,
+        durableMediaReplay: entry.spooledReplayParticipants.length > 0,
       });
       settleSpooledReplayParticipants(entry.spooledReplayParticipants, result);
     } catch (err) {
@@ -1205,6 +1212,7 @@ export const registerTelegramHandlers = ({
           ...spooledReplayOptions(entry.spooledReplayParticipants),
         },
         dispatchDedupeKeys: entry.dispatchDedupeKeys,
+        durableMediaReplay: entry.spooledReplayParticipants.length > 0,
       });
       settleSpooledReplayParticipants(entry.spooledReplayParticipants, result);
     } catch (err) {
@@ -1432,6 +1440,7 @@ export const registerTelegramHandlers = ({
     ctx: TelegramContext,
     chain: TelegramCachedMessageNode[],
     shouldHydrateMedia: (node: TelegramCachedMessageNode, index: number) => Promise<boolean>,
+    durableMediaReplay: boolean,
   ): Promise<{ replyMedia: TelegramMediaRef[]; replyChain: TelegramReplyChainEntry[] }> => {
     const replyMedia: TelegramMediaRef[] = [];
     const replyChain: TelegramReplyChainEntry[] = [];
@@ -1461,7 +1470,9 @@ export const registerTelegramHandlers = ({
               }
             : undefined;
         } catch (err) {
-          if (mediaRuntimeWithAbort.abortSignal?.aborted) {
+          // Only durable ingress can replay a reply-media abort. Live polling must
+          // preserve the current text instead of acknowledging it without dispatch.
+          if (mediaRuntimeWithAbort.abortSignal?.aborted && durableMediaReplay) {
             recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
             throw err;
           }
@@ -1487,11 +1498,15 @@ export const registerTelegramHandlers = ({
     storeAllowFrom: string[];
     options?: TelegramMessageContextOptions;
     dispatchDedupeKeys?: string[];
+    durableMediaReplay?: boolean;
   }): Promise<TelegramMessageProcessingResult> => {
     let dispatchDedupeCommitted = false;
     let dispatchDedupeRollbackAttempted = false;
-    const spooledReplay =
-      params.options?.spooledReplay === true || isTelegramSpooledReplayUpdate(params.ctx.update);
+    // Callback-submit retries also set options.spooledReplay without durable ingress.
+    // Media aborts retry only when the update frame or a buffered participant owns replay.
+    const durableMediaReplay =
+      params.durableMediaReplay === true || isTelegramSpooledReplayUpdate(params.ctx.update);
+    const spooledReplay = params.options?.spooledReplay === true || durableMediaReplay;
     const forgetCommittedDispatchDedupeKeys = async () => {
       dispatchDedupeRollbackAttempted = true;
       await forgetDispatchDedupeKeys(params.dispatchDedupeKeys ?? []);
@@ -1559,6 +1574,7 @@ export const registerTelegramHandlers = ({
         params.ctx,
         replyChainNodes,
         shouldHydrateReplyMedia,
+        durableMediaReplay,
       );
       const promptContextMediaByMessageId = new Map<string, TelegramMediaRef>();
       const currentMessageId =

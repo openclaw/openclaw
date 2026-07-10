@@ -3112,6 +3112,43 @@ describe("createTelegramBot", () => {
     expect(payload.Body).toContain("continue without the old image");
   });
 
+  it("dispatches the current text when classic polling aborts reply media", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    getFileSpy.mockClear();
+    const botShutdown = new AbortController();
+    getFileSpy.mockImplementationOnce(async () => {
+      botShutdown.abort();
+      throw Object.assign(new Error("aborted"), { name: "AbortError" });
+    });
+
+    createTelegramBot({ token: "tok", fetchAbortSignal: botShutdown.signal });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    const { result } = await runWithTelegramUpdateProcessingFrame(() =>
+      handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "continue after polling restart",
+          date: 1736380800,
+          reply_to_message: {
+            message_id: 9001,
+            photo: [{ file_id: "reply-photo-1" }],
+            from: { first_name: "Ada" },
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      }),
+    );
+
+    expect(result).toEqual({ kind: "completed" });
+    expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1", expect.any(AbortSignal));
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    expect(payload.Body).toContain("continue after polling restart");
+  });
+
   it("durably retries a spooled reply when shutdown aborts reply media", async () => {
     onSpy.mockClear();
     replySpy.mockClear();

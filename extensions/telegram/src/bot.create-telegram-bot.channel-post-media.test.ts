@@ -946,6 +946,50 @@ describe("createTelegramBot channel_post media", () => {
     }
   });
 
+  it("keeps live album delivery when classic polling aborts a download", async () => {
+    setOpenChannelPostConfig();
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+
+    const shutdown = new AbortController();
+    saveRemoteMedia
+      .mockImplementationOnce(async () => ({
+        path: "/tmp/classic-restart-first.jpg",
+        contentType: "image/jpeg",
+      }))
+      .mockImplementationOnce(async () => {
+        shutdown.abort();
+        throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      });
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      createTelegramBot({
+        token: "tok",
+        testTimings: TELEGRAM_TEST_TIMINGS,
+        fetchAbortSignal: shutdown.signal,
+      });
+      const handler = getOnHandler("channel_post") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+      await queueChannelPostAlbum(handler, {
+        caption: "classic restart album",
+        mediaGroupId: "classic-restart-album-1",
+        firstMessageId: 98081,
+        secondMessageId: 98082,
+      });
+      await flushChannelPostMediaGroup(setTimeoutSpy);
+      await waitForMockCalls(replySpy, 1);
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(replyPayload()).toMatchObject({
+        Body: expect.stringContaining("classic restart album"),
+        MediaPaths: ["/tmp/classic-restart-first.jpg"],
+      });
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("drops the media group when a non-recoverable media error occurs", async () => {
     replySpy.mockReset();
     setOpenChannelPostConfig();
