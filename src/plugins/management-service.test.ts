@@ -772,6 +772,44 @@ describe("plugin management service", () => {
     });
   });
 
+  it("suppresses hosted package-name-fallback entries once their package is installed", async () => {
+    // Hosted curated row without a declared runtime id: its catalog id falls
+    // back to the package name, which never matches the installed runtime id.
+    const hostedRow = {
+      id: "@openclaw/bluebubbles",
+      title: "BlueBubbles",
+      state: "available",
+      publisher: { id: "openclaw", trust: "official" },
+      openclaw: { catalog: { featured: true, order: 90 } },
+      install: {
+        candidates: [{ sourceRef: "public-clawhub", package: "@openclaw/bluebubbles" }],
+      },
+    };
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({
+        enabled: true,
+        id: "bluebubbles",
+        name: "BlueBubbles",
+        origin: "global",
+        installRecord: { source: "clawhub", installPath: "/tmp/extensions/bluebubbles" },
+      }),
+    );
+
+    const catalog = await listManagedPlugins({
+      config: {},
+      env: {},
+      officialCatalog: {
+        entries: overlayBundledOfficialPluginCatalogMetadata(
+          // Route through the hosted-feed normalizer used by loadOfficialCatalog.
+          [hostedRow] as never,
+          [],
+        ),
+      },
+    });
+
+    expect(catalog.plugins.map((plugin) => plugin.id)).toEqual(["bluebubbles"]);
+  });
+
   it("marks external installs removable and bundled plugins non-removable", async () => {
     mocks.metadata.mockReturnValue(
       metadataSnapshot({

@@ -365,11 +365,20 @@ export async function listManagedPlugins(params: {
     };
   });
   const installedIds = new Set(plugins.map((plugin) => plugin.id));
+  const installedPackageNames = new Set(
+    plugins.flatMap((plugin) => (plugin.packageName ? [plugin.packageName] : [])),
+  );
+  // Hosted rows without a declared runtime id fall back to their package name,
+  // so id matching alone would keep them visible after a successful install.
+  const entryPackageInstalled = (entry: OfficialExternalPluginCatalogEntry) =>
+    [...resolveCatalogPackageSourceIdentities(entry)].some((identity) =>
+      installedPackageNames.has(identity.slice(identity.indexOf(":") + 1)),
+    );
   for (const entry of officialCatalog.entries) {
     const pluginId = resolveOfficialExternalPluginId(entry);
     const manifest = getOfficialExternalPluginCatalogManifest(entry);
     const catalog = normalizeCatalogMetadata(manifest?.catalog);
-    if (!pluginId || !catalog || installedIds.has(pluginId)) {
+    if (!pluginId || !catalog || installedIds.has(pluginId) || entryPackageInstalled(entry)) {
       continue;
     }
     const kind = normalizeKinds(entry.kind);
