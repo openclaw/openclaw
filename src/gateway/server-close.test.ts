@@ -1759,6 +1759,26 @@ describe("createGatewayCloseHandler", () => {
 
     expect(armPostShutdownExitWatchdog).toHaveBeenCalledTimes(1);
   });
+
+  // ClawSweeper #88908 review P2: the forced-exit status must distinguish a
+  // clean stop (0) from failed-startup cleanup (nonzero), so a failure-only
+  // supervisor relaunches instead of reading a forced exit 0 as intentional.
+  it("threads the intended forced-exit status into the watchdog (0 clean, nonzero on startup failure)", async () => {
+    const armPostShutdownExitWatchdog = vi.fn<
+      (opts: { reason: string; shutdownDurationMs: number; exitCode?: number }) => {
+        cancel: () => void;
+      } | null
+    >(() => null);
+    const deps = createGatewayCloseTestDeps({ armPostShutdownExitWatchdog });
+    const close = createGatewayCloseHandler(deps);
+
+    await close({ reason: "gateway stopping" });
+    expect(armPostShutdownExitWatchdog.mock.calls[0]?.[0]?.exitCode).toBe(0);
+
+    armPostShutdownExitWatchdog.mockClear();
+    await close({ reason: "gateway startup failed", postShutdownExitCode: 1 });
+    expect(armPostShutdownExitWatchdog.mock.calls[0]?.[0]?.exitCode).toBe(1);
+  });
 });
 
 describe("armGatewayPostShutdownExitWatchdog", () => {
@@ -1774,6 +1794,22 @@ describe("armGatewayPostShutdownExitWatchdog", () => {
     expect(exitProcess).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(30);
     expect(exitProcess).toHaveBeenCalledWith(0);
+    handle.cancel();
+    vi.useRealTimers();
+  });
+
+  it("forces the provided nonzero exit status for a failed-startup cleanup", async () => {
+    vi.useFakeTimers();
+    const exitProcess = vi.fn();
+    const handle = armGatewayPostShutdownExitWatchdog({
+      timeoutMs: 25,
+      exitProcess,
+      reason: "gateway startup failed",
+      shutdownDurationMs: 5,
+      exitCode: 1,
+    });
+    await vi.advanceTimersByTimeAsync(30);
+    expect(exitProcess).toHaveBeenCalledWith(1);
     handle.cancel();
     vi.useRealTimers();
   });

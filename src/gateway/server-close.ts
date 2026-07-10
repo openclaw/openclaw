@@ -126,6 +126,11 @@ export function armGatewayPostShutdownExitWatchdog(opts?: {
   exitProcess?: (code: number) => void;
   reason?: string;
   shutdownDurationMs?: number;
+  // Terminal status for the forced exit. Defaults to 0 (clean shutdown). The
+  // startup-failure cleanup path passes nonzero so a failure-only supervisor
+  // (systemd Restart=on-failure, launchd KeepAlive.SuccessfulExit=false) still
+  // relaunches when the watchdog has to force-kill a wedged failed startup.
+  exitCode?: number;
 }): { cancel: () => void } {
   // Skip in vitest workers: any test that exercises the production close path
   // without mocking this dep would otherwise trip the watchdog and call
@@ -139,21 +144,23 @@ export function armGatewayPostShutdownExitWatchdog(opts?: {
   const exit = opts?.exitProcess ?? ((code: number) => process.exit(code));
   const reason = opts?.reason ?? "gateway stopping";
   const shutdownDurationMs = opts?.shutdownDurationMs;
+  const exitCode = opts?.exitCode ?? 0;
   const timer = setTimeout(() => {
     const handleSummary = summarizeActiveHandlesForZombieReport();
     shutdownLog.warn(
-      `gateway shutdown completed but node process still alive after ${timeoutMs}ms; forcing process.exit(0). Likely an unreleased handle (HTTP keep-alive, telegram fetch, plugin native handle). ${handleSummary}`,
+      `gateway shutdown completed but node process still alive after ${timeoutMs}ms; forcing process.exit(${exitCode}). Likely an unreleased handle (HTTP keep-alive, telegram fetch, plugin native handle). ${handleSummary}`,
     );
     const metrics: Array<readonly [string, string | number]> = [
       ["reason", reason],
       ["forcedExitAfterMs", timeoutMs],
+      ["exitCode", exitCode],
       ["handleSummary", handleSummary],
     ];
     if (typeof shutdownDurationMs === "number" && Number.isFinite(shutdownDurationMs)) {
       metrics.push(["shutdownDurationMs", shutdownDurationMs]);
     }
     recordGatewayRestartTrace("gateway.shutdown.zombie_detected", timeoutMs, metrics);
-    exit(0);
+    exit(exitCode);
   }, timeoutMs);
   // unref so this watchdog never blocks a healthy natural exit; we only want
   // it to fire when something else is keeping the loop alive.
@@ -830,6 +837,7 @@ export function createGatewayCloseHandler(
     armPostShutdownExitWatchdog?: (opts: {
       reason: string;
       shutdownDurationMs: number;
+      exitCode?: number;
     }) => { cancel: () => void } | null;
   } & RestartRunAbortParams,
 ) {
@@ -837,6 +845,10 @@ export function createGatewayCloseHandler(
     reason?: string;
     restartExpectedMs?: number | null;
     drainTimeoutMs?: number | null;
+    // Terminal status the post-shutdown watchdog forces if the process wedges.
+    // Defaults to 0; the startup-failure cleanup path passes nonzero so a
+    // failure-only supervisor still relaunches a force-killed failed startup.
+    postShutdownExitCode?: number;
   }): Promise<ShutdownResult> => {
     const start = Date.now();
     const warnings: string[] = [];
@@ -1193,7 +1205,11 @@ export function createGatewayCloseHandler(
     const armWatchdog = params.armPostShutdownExitWatchdog ?? armGatewayPostShutdownExitWatchdog;
     const isInProcessRestart = /\brestart(ing|ed)?\b/i.test(reason);
     if (!isInProcessRestart) {
-      armWatchdog({ reason, shutdownDurationMs: durationMs });
+      armWatchdog({
+        reason,
+        shutdownDurationMs: durationMs,
+        exitCode: opts?.postShutdownExitCode ?? 0,
+      });
     }
     return { durationMs, warnings };
   };
