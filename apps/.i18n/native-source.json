@@ -10075,7 +10075,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 910,
+      "line": 914,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Setup queued for the watch. Open OpenClaw before the code expires.",
       "surface": "apple",
@@ -10083,7 +10083,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 910,
+      "line": 914,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Setup sent. Open OpenClaw on the watch to connect.",
       "surface": "apple",
@@ -10091,7 +10091,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1066,
+      "line": 1070,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Configured",
       "surface": "apple",
@@ -10099,7 +10099,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1066,
+      "line": 1070,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Not configured",
       "surface": "apple",
@@ -10107,7 +10107,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1131,
+      "line": 1135,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Connect to the gateway.",
       "surface": "apple",
@@ -10115,7 +10115,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1131,
+      "line": 1135,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Gateway requests will appear here.",
       "surface": "apple",
@@ -10123,7 +10123,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1173,
+      "line": 1177,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "High",
       "surface": "apple",
@@ -10131,7 +10131,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1173,
+      "line": 1177,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Resolving",
       "surface": "apple",
@@ -10139,7 +10139,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1178,
+      "line": 1182,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "One-time approval",
       "surface": "apple",
@@ -10147,7 +10147,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1178,
+      "line": 1182,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Permission can be saved",
       "surface": "apple",
@@ -10155,7 +10155,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1180,
+      "line": 1184,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Medium",
       "surface": "apple",
@@ -10163,7 +10163,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1180,
+      "line": 1184,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Review",
       "surface": "apple",
@@ -10171,7 +10171,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1201,
+      "line": 1205,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "\\(diagnosticsIssueCount)",
       "surface": "apple",
