@@ -1630,16 +1630,22 @@ describe("doctor config flow", () => {
 
   it("does not refresh gateway before writing a config-only auth repair", async () => {
     runDoctorRepairSequenceMock.mockImplementation(
-      async (params: { state: { candidate: Record<string, unknown> } }) => ({
-        state: {
-          ...params.state,
-          candidate: { ...params.state.candidate, auth: { order: {} } },
-          pendingChanges: true,
-        },
-        changeNotes: ["Removed a stale configured auth order."],
-        warningNotes: [],
-        authProfilesRepaired: false,
-      }),
+      async (params: {
+        state: { cfg: Record<string, unknown>; candidate: Record<string, unknown> };
+      }) => {
+        const repaired = { ...params.state.candidate, auth: { order: {} } };
+        return {
+          state: {
+            ...params.state,
+            cfg: repaired,
+            candidate: repaired,
+            pendingChanges: true,
+          },
+          changeNotes: ["Removed a stale configured auth order."],
+          warningNotes: [],
+          authProfilesRepaired: false,
+        };
+      },
     );
 
     const result = await runDoctorConfigWithInput({
