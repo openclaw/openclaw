@@ -1077,6 +1077,102 @@ export const fr: TranslationMap = {
       submit: "Ask",
     },
   },
+  dashboard: {
+    tabs: {
+      label: "Espaces de travail",
+      hidden: "Masqués ({count})",
+    },
+    error: {
+      title: "Impossible de charger vos espaces de travail",
+      subtitle:
+        "Une erreur s'est produite lors du chargement de vos espaces de travail. Essayez de recharger.",
+      detailSummary: "Afficher les détails",
+    },
+    header: {
+      subtitle: "Organisez les widgets et les onglets de cet espace de travail.",
+    },
+    onboarding: {
+      title: "Créez votre premier onglet d'espace de travail",
+      primary: "Demandez à votre agent de créer un onglet.",
+      secondary: "Ou créez-en un depuis la ligne de commande :",
+    },
+    empty: {
+      onboardingTitle: "Aucun espace de travail pour le moment",
+      onboardingSubtitle:
+        "Demandez à votre agent de créer un tableau de bord, ou créez-en un depuis la ligne de commande.",
+      onboardingCommand: "openclaw dashboard tabs create main --title Main",
+      tabTitle: "Cet espace de travail est vide",
+      tabSubtitle: "Demandez à votre agent d'ajouter un widget, ou ajoutez-en un vous-même.",
+      noVisibleTabs:
+        "Tous les onglets d'espaces de travail sont masqués. Restaurez-en un depuis le menu masqué.",
+    },
+    widget: {
+      collapse: "Réduire le widget",
+      expand: "Développer le widget",
+      moveHandle: "Déplacer le widget",
+      resizeHandle: "Redimensionner le widget",
+      menuLabel: "Options du widget",
+      provenanceChip: "IA",
+      provenanceTooltip: "Créé par {agent}",
+      errorTitle: "Ce widget n'a pas pu charger",
+      errorHumane: "Ce widget a rencontré un problème lors de son rendu.",
+      errorDetailSummary: "Afficher les détails",
+      customPlaceholder: "Widget personnalisé — bientôt disponible.",
+      customLoading: "Chargement du widget personnalisé…",
+      approval: {
+        title: "Widget personnalisé en attente d'approbation",
+        byAgent: "Créé par {agent}",
+        byUnknown: "Créé par un agent inconnu",
+        approve: "Approuver",
+        reject: "Refuser",
+        unavailable:
+          "Ce widget personnalisé n'est pas disponible. Demandez à votre agent de le reconstruire ou supprimez-le.",
+      },
+      markdownEmpty: "Aucun contenu pour le moment.",
+      unknownKind: "Type de widget inconnu : {kind}",
+      editTitleTitle: "Modifier le titre du widget",
+      editTitleLabel: "Titre du widget",
+      moveToTabTitle: "Déplacer vers l'onglet",
+      moveToTabEmpty: "Il n'y a pas d'autres onglets où déplacer ce widget.",
+      menu: {
+        editTitle: "Modifier le titre",
+        moveToTab: "Déplacer vers l'onglet…",
+        hide: "Masquer",
+        remove: "Supprimer",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "Aucune ligne à afficher.",
+        more: "+{count} de plus",
+      },
+      sessions: {
+        empty: "Aucune session pour le moment.",
+      },
+      usage: {
+        cost: "Coût",
+        tokens: "Jetons",
+      },
+      cron: {
+        empty: "Aucune tâche planifiée.",
+        next: "Prochain {time}",
+        noNext: "Non planifié",
+      },
+      instances: {
+        empty: "Aucune instance connectée.",
+        idle: "Inactif depuis {duration}",
+      },
+      activity: {
+        empty: "Aucune activité récente.",
+      },
+      embed: {
+        missing: "Cet embed n'a pas encore d'URL.",
+        blockedExternal: "Les intégrations externes sont désactivées par votre stratégie Gateway.",
+        blockedScheme: "Cette URL d'embed utilise un schéma non pris en charge.",
+      },
+    },
+  },
   workboard: {
     disabledHelpStart: "Le tableau de travail est désactivé. Activez",
     enableConfigKey: "plugins.entries.workboard.enabled = true",

@@ -1059,6 +1059,99 @@ export const ko: TranslationMap = {
       submit: "Ask",
     },
   },
+  dashboard: {
+    tabs: {
+      label: "워크스페이스",
+      hidden: "숨김 ({count})",
+    },
+    error: {
+      title: "워크스페이스를 불러올 수 없습니다",
+      subtitle: "워크스페이스를 불러오는 중 문제가 발생했습니다. 다시 로드해 보세요.",
+      detailSummary: "세부 정보 표시",
+    },
+    header: {
+      subtitle: "이 워크스페이스의 위젯과 탭을 배치하세요.",
+    },
+    onboarding: {
+      title: "첫 번째 워크스페이스 탭 만들기",
+      primary: "에이전트에게 탭을 만들도록 요청하세요.",
+      secondary: "또는 명령줄에서 만드세요:",
+    },
+    empty: {
+      onboardingTitle: "아직 워크스페이스가 없습니다",
+      onboardingSubtitle: "에이전트에게 대시보드 생성을 요청하거나, 명령줄에서 직접 생성하세요.",
+      onboardingCommand: "openclaw dashboard tabs create main --title Main",
+      tabTitle: "이 워크스페이스는 비어 있습니다",
+      tabSubtitle: "에이전트에게 위젯 추가를 요청하거나, 직접 추가하세요.",
+      noVisibleTabs: "모든 워크스페이스 탭이 숨겨져 있습니다. 숨김 메뉴에서 복원하세요.",
+    },
+    widget: {
+      collapse: "위젯 접기",
+      expand: "위젯 펼치기",
+      moveHandle: "위젯 이동",
+      resizeHandle: "위젯 크기 조정",
+      menuLabel: "위젯 옵션",
+      provenanceChip: "AI",
+      provenanceTooltip: "{agent}이(가) 빌드함",
+      errorTitle: "위젯을 불러올 수 없습니다",
+      errorHumane: "위젯을 렌더링하는 중 오류가 발생했습니다.",
+      errorDetailSummary: "세부 정보 표시",
+      customPlaceholder: "사용자 지정 위젯 — 곧 출시 예정.",
+      customLoading: "사용자 지정 위젯을 불러오는 중…",
+      approval: {
+        title: "승인 대기 중인 사용자 지정 위젯",
+        byAgent: "{agent}이(가) 빌드함",
+        byUnknown: "알 수 없는 에이전트가 빌드함",
+        approve: "승인",
+        reject: "거부",
+        unavailable:
+          "사용자 지정 위젯을 사용할 수 없습니다. 에이전트에게 다시 빌드하도록 요청하거나 제거하세요.",
+      },
+      markdownEmpty: "아직 콘텐츠가 없습니다.",
+      unknownKind: "알 수 없는 위젯 유형: {kind}",
+      editTitleTitle: "위젯 제목 편집",
+      editTitleLabel: "위젯 제목",
+      moveToTabTitle: "탭으로 이동",
+      moveToTabEmpty: "이 위젯을 이동할 다른 탭이 없습니다.",
+      menu: {
+        editTitle: "제목 편집",
+        moveToTab: "탭으로 이동…",
+        hide: "숨기기",
+        remove: "제거",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "표시할 행이 없습니다.",
+        more: "+{count}개 더보기",
+      },
+      sessions: {
+        empty: "아직 세션이 없습니다.",
+      },
+      usage: {
+        cost: "비용",
+        tokens: "토큰",
+      },
+      cron: {
+        empty: "예약된 작업이 없습니다.",
+        next: "다음 {time}",
+        noNext: "예약되지 않음",
+      },
+      instances: {
+        empty: "연결된 인스턴스가 없습니다.",
+        idle: "{duration} 동안 유휴 상태입니다.",
+      },
+      activity: {
+        empty: "최근 활동이 없습니다.",
+      },
+      embed: {
+        missing: "이 임베드에는 아직 URL이 없습니다.",
+        blockedExternal: "외부 임베드는 Gateway 정책에 의해 비활성화되었습니다.",
+        blockedScheme: "이 임베드 URL은 지원되지 않는 스킴을 사용합니다.",
+      },
+    },
+  },
   workboard: {
     disabledHelpStart: "Workboard가 비활성화되어 있습니다. 활성화하려면",
     enableConfigKey: "plugins.entries.workboard.enabled = true",

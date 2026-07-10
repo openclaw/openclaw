@@ -1052,6 +1052,99 @@ export const ar: TranslationMap = {
       submit: "Ask",
     },
   },
+  dashboard: {
+    tabs: {
+      label: "مساحات العمل",
+      hidden: "مخفي ({count})",
+    },
+    error: {
+      title: "تعذر تحميل مساحات العمل الخاصة بك",
+      subtitle: "حدث خطأ ما أثناء تحميل مساحات العمل. حاول إعادة التحميل.",
+      detailSummary: "إظهار التفاصيل",
+    },
+    header: {
+      subtitle: "رتّب الأدوات وعلامات التبويب لهذه مساحة العمل.",
+    },
+    onboarding: {
+      title: "أنشئ علامة تبويب مساحة العمل الأولى الخاصة بك",
+      primary: "اطلب من وكيلك إنشاء علامة تبويب.",
+      secondary: "أو أنشئ أحدها من سطر الأوامر:",
+    },
+    empty: {
+      onboardingTitle: "لا توجد مساحات عمل حتى الآن",
+      onboardingSubtitle:
+        "اطلب من الوكيل الخاص بك إنشاء لوحة معلومات، أو قم بإنشاء واحدة من سطر الأوامر.",
+      onboardingCommand: "openclaw dashboard tabs create main --title Main",
+      tabTitle: "مساحة العمل هذه فارغة",
+      tabSubtitle: "اطلب من الوكيل الخاص بك إضافة أداة، أو أضف واحدة بنفسك.",
+      noVisibleTabs: "كل علامات تبويب مساحات العمل مخفية. قم باستعادة واحدة من القائمة المخفية.",
+    },
+    widget: {
+      collapse: "طي الأداة",
+      expand: "توسيع الأداة",
+      moveHandle: "تحريك الأداة",
+      resizeHandle: "تغيير حجم الأداة",
+      menuLabel: "خيارات الأداة",
+      provenanceChip: "AI",
+      provenanceTooltip: "تم الإنشاء بواسطة {agent}",
+      errorTitle: "تعذر تحميل هذه الأداة",
+      errorHumane: "واجهت هذه الأداة مشكلة أثناء العرض.",
+      errorDetailSummary: "إظهار التفاصيل",
+      customPlaceholder: "أداة مخصصة — قريباً.",
+      customLoading: "جارٍ تحميل أداة مخصصة…",
+      approval: {
+        title: "أداة مخصصة تنتظر الموافقة",
+        byAgent: "تم الإنشاء بواسطة {agent}",
+        byUnknown: "تم إنشاؤها بواسطة وكيل غير معروف",
+        approve: "موافقة",
+        reject: "رفض",
+        unavailable: "هذه الأداة المخصصة غير متوفرة. اطلب من وكيلك إعادة بنائها، أو احذفها.",
+      },
+      markdownEmpty: "لا يوجد محتوى حتى الآن.",
+      unknownKind: "نوع أداة غير معروف: {kind}",
+      editTitleTitle: "تعديل عنوان الأداة",
+      editTitleLabel: "عنوان الأداة",
+      moveToTabTitle: "نقل إلى علامة التبويب",
+      moveToTabEmpty: "لا توجد علامات تبويب أخرى لنقل هذا العنصر إليها.",
+      menu: {
+        editTitle: "تعديل العنوان",
+        moveToTab: "نقل إلى تبويب…",
+        hide: "إخفاء",
+        remove: "إزالة",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "لا توجد صفوف لعرضها.",
+        more: "+{count} أخرى",
+      },
+      sessions: {
+        empty: "لا توجد جلسات بعد.",
+      },
+      usage: {
+        cost: "التكلفة",
+        tokens: "الرموز",
+      },
+      cron: {
+        empty: "لا توجد مهام مجدولة.",
+        next: "التالي {time}",
+        noNext: "غير مجدول",
+      },
+      instances: {
+        empty: "لا توجد مثيلات متصلة.",
+        idle: "خامل لمدة {duration}",
+      },
+      activity: {
+        empty: "لا يوجد نشاط حديث.",
+      },
+      embed: {
+        missing: "هذا التضمين لا يحتوي على رابط URL بعد.",
+        blockedExternal: "تم تعطيل التضمينات الخارجية بواسطة سياسة الـ Gateway الخاصة بك.",
+        blockedScheme: "يستخدم عنوان URL لهذا التضمين مخططاً غير مدعوم.",
+      },
+    },
+  },
   workboard: {
     disabledHelpStart: "لوحة العمل معطّلة. فعّل",
     enableConfigKey: "plugins.entries.workboard.enabled = true",

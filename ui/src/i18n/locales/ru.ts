@@ -1065,6 +1065,101 @@ export const ru: TranslationMap = {
       submit: "Запрос",
     },
   },
+  dashboard: {
+    tabs: {
+      label: "Рабочие области",
+      hidden: "Скрытые ({count})",
+    },
+    error: {
+      title: "Не удалось загрузить рабочие области",
+      subtitle: "Что-то пошло не так при загрузке рабочих пространств. Попробуйте перезагрузить.",
+      detailSummary: "Показать подробности",
+    },
+    header: {
+      subtitle: "Расположите виджеты и вкладки для этого рабочего пространства.",
+    },
+    onboarding: {
+      title: "Создайте свою первую вкладку рабочего пространства",
+      primary: "Попросите агента создать вкладку.",
+      secondary: "Или создайте её из командной строки:",
+    },
+    empty: {
+      onboardingTitle: "Рабочих областей пока нет",
+      onboardingSubtitle:
+        "Попросите своего агента создать панель управления или создайте её из командной строки.",
+      onboardingCommand: "openclaw dashboard tabs create main --title Main",
+      tabTitle: "Эта рабочая область пуста",
+      tabSubtitle: "Попросите агента добавить виджет или добавьте его самостоятельно.",
+      noVisibleTabs:
+        "Все вкладки рабочих областей скрыты. Восстановите одну из них в меню скрытых.",
+    },
+    widget: {
+      collapse: "Свернуть виджет",
+      expand: "Развернуть виджет",
+      moveHandle: "Переместить виджет",
+      resizeHandle: "Изменить размер виджета",
+      menuLabel: "Параметры виджета",
+      provenanceChip: "ИИ",
+      provenanceTooltip: "Создано {agent}",
+      errorTitle: "Не удалось загрузить этот виджет",
+      errorHumane: "При отрисовке этого виджета возникла проблема.",
+      errorDetailSummary: "Показать подробности",
+      customPlaceholder: "Пользовательский виджет — скоро появится.",
+      customLoading: "Загрузка пользовательского виджета…",
+      approval: {
+        title: "Пользовательский виджет ожидает подтверждения",
+        byAgent: "Создано {agent}",
+        byUnknown: "Создано неизвестным агентом",
+        approve: "Одобрить",
+        reject: "Отклонить",
+        unavailable:
+          "Этот пользовательский виджет недоступен. Попросите агента пересоздать его или удалите его.",
+      },
+      markdownEmpty: "Контента пока нет.",
+      unknownKind: "Неизвестный тип виджета: {kind}",
+      editTitleTitle: "Изменить название виджета",
+      editTitleLabel: "Название виджета",
+      moveToTabTitle: "Переместить на вкладку",
+      moveToTabEmpty: "Нет других вкладок, куда можно переместить этот виджет.",
+      menu: {
+        editTitle: "Изменить название",
+        moveToTab: "Переместить на вкладку…",
+        hide: "Скрыть",
+        remove: "Удалить",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "Нет строк для отображения.",
+        more: "+{count} ещё",
+      },
+      sessions: {
+        empty: "Сессий пока нет.",
+      },
+      usage: {
+        cost: "Стоимость",
+        tokens: "Токены",
+      },
+      cron: {
+        empty: "Нет запланированных задач.",
+        next: "След. {time}",
+        noNext: "Не запланировано",
+      },
+      instances: {
+        empty: "Нет подключенных экземпляров.",
+        idle: "Бездействует {duration}",
+      },
+      activity: {
+        empty: "Недавней активности нет.",
+      },
+      embed: {
+        missing: "У этого встраивания пока нет URL.",
+        blockedExternal: "Внешние встраивания отключены политикой вашего Gateway.",
+        blockedScheme: "URL этого встраивания использует неподдерживаемую схему.",
+      },
+    },
+  },
   workboard: {
     disabledHelpStart: "Workboard отключен. Включите",
     enableConfigKey: "plugins.entries.workboard.enabled = true",

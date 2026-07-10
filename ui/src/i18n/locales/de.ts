@@ -1076,6 +1076,103 @@ export const de: TranslationMap = {
       submit: "Ask",
     },
   },
+  dashboard: {
+    tabs: {
+      label: "Arbeitsbereiche",
+      hidden: "Ausgeblendet ({count})",
+    },
+    error: {
+      title: "Ihre Arbeitsbereiche konnten nicht geladen werden",
+      subtitle:
+        "Beim Laden Ihrer Arbeitsbereiche ist ein Fehler aufgetreten. Versuchen Sie, neu zu laden.",
+      detailSummary: "Details anzeigen",
+    },
+    header: {
+      subtitle: "Widgets und Tabs für diesen Arbeitsbereich anordnen.",
+    },
+    onboarding: {
+      title: "Erstellen Sie Ihren ersten Arbeitsbereich-Tab",
+      primary: "Bitten Sie Ihren Agenten, einen Tab zu erstellen.",
+      secondary: "Oder erstellen Sie einen über die Befehlszeile:",
+    },
+    empty: {
+      onboardingTitle: "Noch keine Arbeitsbereiche",
+      onboardingSubtitle:
+        "Bitten Sie Ihren Agenten, ein Dashboard zu erstellen, oder erstellen Sie eines über die Befehlszeile.",
+      onboardingCommand: "openclaw dashboard tabs create main --title Main",
+      tabTitle: "Dieser Arbeitsbereich ist leer",
+      tabSubtitle:
+        "Bitten Sie Ihren Agenten, ein Widget hinzuzufügen, oder fügen Sie selbst eines hinzu.",
+      noVisibleTabs:
+        "Jeder Arbeitsbereich-Tab ist ausgeblendet. Stellen Sie einen über das Menü „Ausgeblendet“ wieder her.",
+    },
+    widget: {
+      collapse: "Widget einklappen",
+      expand: "Widget ausklappen",
+      moveHandle: "Widget verschieben",
+      resizeHandle: "Widgetgröße ändern",
+      menuLabel: "Widget-Optionen",
+      provenanceChip: "KI",
+      provenanceTooltip: "Erstellt von {agent}",
+      errorTitle: "Dieses Widget konnte nicht geladen werden",
+      errorHumane: "Bei diesem Widget ist während des Renderns ein Problem aufgetreten.",
+      errorDetailSummary: "Details anzeigen",
+      customPlaceholder: "Benutzerdefiniertes Widget – folgt in Kürze.",
+      customLoading: "Benutzerdefiniertes Widget wird geladen …",
+      approval: {
+        title: "Benutzerdefiniertes Widget wartet auf Genehmigung",
+        byAgent: "Erstellt von {agent}",
+        byUnknown: "Erstellt von einem unbekannten Agenten",
+        approve: "Genehmigen",
+        reject: "Ablehnen",
+        unavailable:
+          "Dieses benutzerdefinierte Widget ist nicht verfügbar. Bitten Sie Ihren Agenten, es neu zu erstellen, oder entfernen Sie es.",
+      },
+      markdownEmpty: "Noch kein Inhalt.",
+      unknownKind: "Unbekannter Widget-Typ: {kind}",
+      editTitleTitle: "Widget-Titel bearbeiten",
+      editTitleLabel: "Widget-Titel",
+      moveToTabTitle: "In Tab verschieben",
+      moveToTabEmpty: "Es gibt keine anderen Tabs, in die dieses Widget verschoben werden kann.",
+      menu: {
+        editTitle: "Titel bearbeiten",
+        moveToTab: "Auf Tab verschieben…",
+        hide: "Ausblenden",
+        remove: "Entfernen",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "Keine Zeilen zum Anzeigen.",
+        more: "+{count} weitere",
+      },
+      sessions: {
+        empty: "Noch keine Sitzungen.",
+      },
+      usage: {
+        cost: "Kosten",
+        tokens: "Tokens",
+      },
+      cron: {
+        empty: "Keine geplanten Aufgaben.",
+        next: "Nächste: {time}",
+        noNext: "Nicht geplant",
+      },
+      instances: {
+        empty: "Keine verbundenen Instanzen.",
+        idle: "Inaktiv für {duration}",
+      },
+      activity: {
+        empty: "Keine aktuellen Aktivitäten.",
+      },
+      embed: {
+        missing: "Dieser Embed hat noch keine URL.",
+        blockedExternal: "Externe Embeds sind durch Ihre Gateway-Richtlinie deaktiviert.",
+        blockedScheme: "Diese Embed-URL verwendet ein nicht unterstütztes Schema.",
+      },
+    },
+  },
   workboard: {
     disabledHelpStart: "Workboard ist deaktiviert. Aktivieren Sie",
     enableConfigKey: "plugins.entries.workboard.enabled = true",

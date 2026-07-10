@@ -1066,6 +1066,101 @@ export const ja_JP: TranslationMap = {
       submit: "Ask",
     },
   },
+  dashboard: {
+    tabs: {
+      label: "ワークスペース",
+      hidden: "非表示 ({count})",
+    },
+    error: {
+      title: "ワークスペースを読み込めませんでした",
+      subtitle: "ワークスペースの読み込み中に問題が発生しました。再読み込みしてください。",
+      detailSummary: "詳細を表示",
+    },
+    header: {
+      subtitle: "このワークスペースのウィジェットとタブを配置します。",
+    },
+    onboarding: {
+      title: "最初のワークスペースタブを作成する",
+      primary: "エージェントにタブの作成を依頼する",
+      secondary: "または、コマンドラインから作成します：",
+    },
+    empty: {
+      onboardingTitle: "まだワークスペースがありません",
+      onboardingSubtitle:
+        "エージェントにダッシュボードの作成を依頼するか、コマンドラインから作成してください。",
+      onboardingCommand: "openclaw dashboard tabs create main --title Main",
+      tabTitle: "このワークスペースは空です",
+      tabSubtitle: "エージェントにウィジェットの追加を依頼するか、自分で追加してください。",
+      noVisibleTabs:
+        "すべてのワークスペースタブが非表示になっています。非表示メニューから復元してください。",
+    },
+    widget: {
+      collapse: "ウィジェットを折りたたむ",
+      expand: "ウィジェットを展開する",
+      moveHandle: "ウィジェットを移動",
+      resizeHandle: "ウィジェットのサイズ変更",
+      menuLabel: "ウィジェットオプション",
+      provenanceChip: "AI",
+      provenanceTooltip: "{agent}による作成",
+      errorTitle: "このウィジェットを読み込めませんでした",
+      errorHumane: "このウィジェットのレンダリング中に問題が発生しました。",
+      errorDetailSummary: "詳細を表示",
+      customPlaceholder: "カスタムウィジェット — 近日公開。",
+      customLoading: "カスタムウィジェットを読み込み中…",
+      approval: {
+        title: "承認待ちのカスタムウィジェット",
+        byAgent: "{agent}による作成",
+        byUnknown: "不明なエージェントによって作成されました",
+        approve: "承認する",
+        reject: "拒否する",
+        unavailable:
+          "このカスタムウィジェットは利用できません。エージェントに再構築を依頼するか、削除してください。",
+      },
+      markdownEmpty: "まだコンテンツがありません。",
+      unknownKind: "不明なウィジェットタイプ: {kind}",
+      editTitleTitle: "ウィジェットのタイトルを編集",
+      editTitleLabel: "ウィジェットのタイトル",
+      moveToTabTitle: "タブに移動",
+      moveToTabEmpty: "移動先のタブがありません。",
+      menu: {
+        editTitle: "タイトルを編集",
+        moveToTab: "タブに移動…",
+        hide: "非表示",
+        remove: "削除",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "表示する行がありません。",
+        more: "+{count} 件",
+      },
+      sessions: {
+        empty: "まだセッションがありません。",
+      },
+      usage: {
+        cost: "コスト",
+        tokens: "トークン",
+      },
+      cron: {
+        empty: "スケジュールされたジョブはありません。",
+        next: "次回 {time}",
+        noNext: "スケジュールされていません",
+      },
+      instances: {
+        empty: "接続中のインスタンスはありません。",
+        idle: "{duration}間アイドル状態です",
+      },
+      activity: {
+        empty: "最近のアクティビティはありません。",
+      },
+      embed: {
+        missing: "この埋め込みにはまだURLがありません。",
+        blockedExternal: "Gatewayポリシーにより、外部埋め込みは無効になっています。",
+        blockedScheme: "この埋め込みURLは、サポートされていないスキームを使用しています。",
+      },
+    },
+  },
   workboard: {
     disabledHelpStart: "Workboard は無効になっています。有効にするには",
     enableConfigKey: "plugins.entries.workboard.enabled = true",

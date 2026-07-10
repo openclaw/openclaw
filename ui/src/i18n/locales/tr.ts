@@ -1070,6 +1070,100 @@ export const tr: TranslationMap = {
       submit: "Ask",
     },
   },
+  dashboard: {
+    tabs: {
+      label: "Çalışma Alanları",
+      hidden: "Gizli ({count})",
+    },
+    error: {
+      title: "Çalışma alanlarınız yüklenemedi",
+      subtitle: "Çalışma alanlarınız yüklenirken bir sorun oluştu. Yeniden yüklemeyi deneyin.",
+      detailSummary: "Detayları göster",
+    },
+    header: {
+      subtitle: "Bu çalışma alanı için widget'ları ve sekmeleri düzenleyin.",
+    },
+    onboarding: {
+      title: "İlk çalışma alanı sekmenizi oluşturun",
+      primary: "Ajanınıza bir sekme oluşturmasını isteyin.",
+      secondary: "Veya komut satırından bir tane oluşturun:",
+    },
+    empty: {
+      onboardingTitle: "Henüz çalışma alanı yok",
+      onboardingSubtitle:
+        "Ajanınızdan bir pano oluşturmasını isteyin veya komut satırından bir tane oluşturun.",
+      onboardingCommand: "openclaw dashboard tabs create main --title Main",
+      tabTitle: "Bu çalışma alanı boş",
+      tabSubtitle: "Ajanınızdan bir widget eklemesini isteyin veya kendiniz ekleyin.",
+      noVisibleTabs: "Tüm çalışma alanı sekmeleri gizli. Gizli menüden birini geri yükleyin.",
+    },
+    widget: {
+      collapse: "Widget'ı daralt",
+      expand: "Widget'ı genişlet",
+      moveHandle: "Widget'ı taşı",
+      resizeHandle: "Widget'ı yeniden boyutlandır",
+      menuLabel: "Widget seçenekleri",
+      provenanceChip: "Yapay Zeka",
+      provenanceTooltip: "{agent} tarafından oluşturuldu",
+      errorTitle: "Bu widget yüklenemedi",
+      errorHumane: "Bu widget, işlenirken bir sorunla karşılaştı.",
+      errorDetailSummary: "Detayları göster",
+      customPlaceholder: "Özel widget — yakında.",
+      customLoading: "Özel widget yükleniyor…",
+      approval: {
+        title: "Onay bekleyen özel widget",
+        byAgent: "{agent} tarafından oluşturuldu",
+        byUnknown: "Bilinmeyen bir ajan tarafından oluşturuldu",
+        approve: "Onayla",
+        reject: "Reddet",
+        unavailable:
+          "Bu özel widget kullanılamıyor. Ajanınıza yeniden oluşturmasını söyleyin veya kaldırın.",
+      },
+      markdownEmpty: "Henüz içerik yok.",
+      unknownKind: "Bilinmeyen widget türü: {kind}",
+      editTitleTitle: "Widget başlığını düzenle",
+      editTitleLabel: "Widget başlığı",
+      moveToTabTitle: "Sekmeye taşı",
+      moveToTabEmpty: "Bu widget'ı taşıyacak başka bir sekme yok.",
+      menu: {
+        editTitle: "Başlığı düzenle",
+        moveToTab: "Sekmeye taşı…",
+        hide: "Gizle",
+        remove: "Kaldır",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "Gösterilecek satır yok.",
+        more: "+{count} daha fazla",
+      },
+      sessions: {
+        empty: "Henüz oturum yok.",
+      },
+      usage: {
+        cost: "Maliyet",
+        tokens: "Tokenlar",
+      },
+      cron: {
+        empty: "Zamanlanmış iş yok.",
+        next: "Sonraki {time}",
+        noNext: "Zamanlanmadı",
+      },
+      instances: {
+        empty: "Bağlı örnek yok.",
+        idle: "{duration} süredir boşta.",
+      },
+      activity: {
+        empty: "Son etkinlik yok.",
+      },
+      embed: {
+        missing: "Bu gömülü içeriğin henüz URL'si yok.",
+        blockedExternal: "Harici gömülü içerikler gateway ilkeniz tarafından devre dışı bırakıldı.",
+        blockedScheme: "Bu gömülü URL desteklenmeyen bir şema kullanıyor.",
+      },
+    },
+  },
   workboard: {
     disabledHelpStart: "Workboard devre dışı. Etkinleştirin",
     enableConfigKey: "plugins.entries.workboard.enabled = true",

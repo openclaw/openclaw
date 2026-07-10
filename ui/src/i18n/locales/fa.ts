@@ -1057,6 +1057,99 @@ export const fa: TranslationMap = {
       submit: "Ask",
     },
   },
+  dashboard: {
+    tabs: {
+      label: "فضاهای کاری",
+      hidden: "مخفی ({count})",
+    },
+    error: {
+      title: "بارگذاری فضاهای کاری شما انجام نشد",
+      subtitle: "خطایی در بارگذاری فضاهای کاری شما رخ داد. لطفاً دوباره تلاش کنید.",
+      detailSummary: "نمایش جزئیات",
+    },
+    header: {
+      subtitle: "ویجت‌ها و تب‌های این فضای کاری را مرتب کنید.",
+    },
+    onboarding: {
+      title: "اولین تب فضای کاری خود را بسازید",
+      primary: "از عامل خود بخواهید تا یک تب بسازد.",
+      secondary: "یا از طریق خط فرمان یکی بسازید:",
+    },
+    empty: {
+      onboardingTitle: "هنوز فضای کاری وجود ندارد",
+      onboardingSubtitle: "از عامل خود بخواهید یک داشبورد بسازد، یا از خط فرمان یکی ایجاد کنید.",
+      onboardingCommand: "openclaw dashboard tabs create main --title Main",
+      tabTitle: "این فضای کاری خالی است",
+      tabSubtitle: "از عامل خود بخواهید یک ویجت اضافه کند، یا خودتان یکی اضافه کنید.",
+      noVisibleTabs: "همه تب‌های فضای کاری مخفی شده‌اند. از منوی مخفی‌ها یکی را بازیابی کنید.",
+    },
+    widget: {
+      collapse: "جمع کردن ویجت",
+      expand: "گسترش ویجت",
+      moveHandle: "جابجایی ویجت",
+      resizeHandle: "تغییر اندازه ویجت",
+      menuLabel: "گزینه‌های ویجت",
+      provenanceChip: "AI",
+      provenanceTooltip: "ساخته شده توسط {agent}",
+      errorTitle: "این ویجت بارگذاری نشد",
+      errorHumane: "هنگام رندر کردن این ویجت مشکلی پیش آمد.",
+      errorDetailSummary: "نمایش جزئیات",
+      customPlaceholder: "ویجت سفارشی — به زودی.",
+      customLoading: "در حال بارگذاری ویجت سفارشی…",
+      approval: {
+        title: "ویجت سفارشی در انتظار تأیید",
+        byAgent: "ساخته شده توسط {agent}",
+        byUnknown: "ساخته شده توسط یک عامل ناشناس",
+        approve: "تأیید",
+        reject: "رد",
+        unavailable:
+          "این ویجت سفارشی در دسترس نیست. از عامل خود بخواهید آن را دوباره بسازد یا آن را حذف کنید.",
+      },
+      markdownEmpty: "هنوز محتوایی وجود ندارد.",
+      unknownKind: "نوع ویجت ناشناخته: {kind}",
+      editTitleTitle: "ویرایش عنوان ویجت",
+      editTitleLabel: "عنوان ویجت",
+      moveToTabTitle: "انتقال به تب",
+      moveToTabEmpty: "هیچ زبانه دیگری برای جابه‌جایی این ویجت وجود ندارد.",
+      menu: {
+        editTitle: "ویرایش عنوان",
+        moveToTab: "انتقال به زبانه…",
+        hide: "مخفی کردن",
+        remove: "حذف",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "ردیفی برای نمایش وجود ندارد.",
+        more: "+{count} مورد دیگر",
+      },
+      sessions: {
+        empty: "هنوز نشستی وجود ندارد.",
+      },
+      usage: {
+        cost: "هزینه",
+        tokens: "توکن‌ها",
+      },
+      cron: {
+        empty: "هیچ کار زمان‌بندی شده‌ای وجود ندارد.",
+        next: "بعدی {time}",
+        noNext: "زمان‌بندی نشده",
+      },
+      instances: {
+        empty: "هیچ نمونه متصلی وجود ندارد.",
+        idle: "بیکار به مدت {duration}",
+      },
+      activity: {
+        empty: "فعالیت اخیری وجود ندارد.",
+      },
+      embed: {
+        missing: "این جاسازی هنوز URL ندارد.",
+        blockedExternal: "جاسازی‌های خارجی توسط خط‌مشی Gateway شما غیرفعال شده‌اند.",
+        blockedScheme: "این URL جاسازی از طرحی پشتیبانی نشده استفاده می‌کند.",
+      },
+    },
+  },
   workboard: {
     disabledHelpStart: "Workboard غیرفعال است. فعال کنید",
     enableConfigKey: "plugins.entries.workboard.enabled = true",

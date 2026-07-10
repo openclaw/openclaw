@@ -1060,6 +1060,101 @@ export const pt_BR: TranslationMap = {
       submit: "Ask",
     },
   },
+  dashboard: {
+    tabs: {
+      label: "Espaços de trabalho",
+      hidden: "Ocultos ({count})",
+    },
+    error: {
+      title: "Não foi possível carregar seus espaços de trabalho",
+      subtitle: "Ocorreu um erro ao carregar seus espaços de trabalho. Tente recarregar.",
+      detailSummary: "Mostrar detalhes",
+    },
+    header: {
+      subtitle: "Organize widgets e abas para este espaço de trabalho.",
+    },
+    onboarding: {
+      title: "Crie sua primeira aba de espaço de trabalho",
+      primary: "Peça ao seu agente para criar uma aba.",
+      secondary: "Ou crie uma pela linha de comando:",
+    },
+    empty: {
+      onboardingTitle: "Nenhum espaço de trabalho ainda",
+      onboardingSubtitle:
+        "Peça ao seu agente para criar um painel, ou crie um pela linha de comando.",
+      onboardingCommand: "openclaw dashboard tabs create main --title Main",
+      tabTitle: "Este espaço de trabalho está vazio",
+      tabSubtitle: "Peça ao seu agente para adicionar um widget, ou adicione um você mesmo.",
+      noVisibleTabs:
+        "Todas as abas de espaço de trabalho estão ocultas. Restaure uma no menu oculto.",
+    },
+    widget: {
+      collapse: "Recolher widget",
+      expand: "Expandir widget",
+      moveHandle: "Mover widget",
+      resizeHandle: "Redimensionar widget",
+      menuLabel: "Opções do widget",
+      provenanceChip: "IA",
+      provenanceTooltip: "Criado por {agent}",
+      errorTitle: "Não foi possível carregar este widget",
+      errorHumane: "Este widget encontrou um problema durante a renderização.",
+      errorDetailSummary: "Mostrar detalhes",
+      customPlaceholder: "Widget personalizado — em breve.",
+      customLoading: "Carregando widget personalizado…",
+      approval: {
+        title: "Widget personalizado aguardando aprovação",
+        byAgent: "Criado por {agent}",
+        byUnknown: "Criado por um agente desconhecido",
+        approve: "Aprovar",
+        reject: "Rejeitar",
+        unavailable:
+          "Este widget personalizado não está disponível. Peça ao seu agente para recriá-lo ou removê-lo.",
+      },
+      markdownEmpty: "Sem conteúdo ainda.",
+      unknownKind: "Tipo de widget desconhecido: {kind}",
+      editTitleTitle: "Editar título do widget",
+      editTitleLabel: "Título do widget",
+      moveToTabTitle: "Mover para aba",
+      moveToTabEmpty: "Não há outras abas para mover este widget.",
+      menu: {
+        editTitle: "Editar título",
+        moveToTab: "Mover para a aba...",
+        hide: "Ocultar",
+        remove: "Remover",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "Nenhuma linha para exibir.",
+        more: "+{count} mais",
+      },
+      sessions: {
+        empty: "Nenhuma sessão ainda.",
+      },
+      usage: {
+        cost: "Custo",
+        tokens: "Tokens",
+      },
+      cron: {
+        empty: "Nenhuma tarefa agendada.",
+        next: "Próximo {time}",
+        noNext: "Não agendado",
+      },
+      instances: {
+        empty: "Nenhuma instância conectada.",
+        idle: "Inativo por {duration}",
+      },
+      activity: {
+        empty: "Nenhuma atividade recente.",
+      },
+      embed: {
+        missing: "Este embed ainda não tem URL.",
+        blockedExternal: "Embeds externos estão desabilitados pela política do seu gateway.",
+        blockedScheme: "A URL deste embed usa um esquema não suportado.",
+      },
+    },
+  },
   workboard: {
     disabledHelpStart: "O Workboard está desativado. Ative",
     enableConfigKey: "plugins.entries.workboard.enabled = true",

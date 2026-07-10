@@ -1059,6 +1059,102 @@ export const uk: TranslationMap = {
       submit: "Ask",
     },
   },
+  dashboard: {
+    tabs: {
+      label: "Робочі простори",
+      hidden: "Приховані ({count})",
+    },
+    error: {
+      title: "Не вдалося завантажити робочі простори",
+      subtitle:
+        "Щось пішло не так під час завантаження робочих просторів. Спробуйте перезавантажити.",
+      detailSummary: "Показати деталі",
+    },
+    header: {
+      subtitle: "Упорядкуйте віджети та вкладки для цього робочого простору.",
+    },
+    onboarding: {
+      title: "Створіть свою першу вкладку робочого простору",
+      primary: "Попросіть свого агента створити вкладку.",
+      secondary: "Або створіть її з командного рядка:",
+    },
+    empty: {
+      onboardingTitle: "Ще немає робочих просторів",
+      onboardingSubtitle:
+        "Попросіть свого агента створити панель керування або створіть її з командного рядка.",
+      onboardingCommand: "openclaw dashboard tabs create main --title Main",
+      tabTitle: "Цей робочий простір порожній",
+      tabSubtitle: "Попросіть агента додати віджет або додайте його самостійно.",
+      noVisibleTabs:
+        "Усі вкладки робочих просторів приховано. Відновіть одну з них у меню прихованих.",
+    },
+    widget: {
+      collapse: "Згорнути віджет",
+      expand: "Розгорнути віджет",
+      moveHandle: "Перемістити віджет",
+      resizeHandle: "Змінити розмір віджета",
+      menuLabel: "Параметри віджета",
+      provenanceChip: "ШІ",
+      provenanceTooltip: "Створено {agent}",
+      errorTitle: "Не вдалося завантажити цей віджет",
+      errorHumane: "Під час відображення цього віджета виникла проблема.",
+      errorDetailSummary: "Показати деталі",
+      customPlaceholder: "Користувацький віджет — незабаром.",
+      customLoading: "Завантаження користувацького віджета…",
+      approval: {
+        title: "Користувацький віджет очікує на схвалення",
+        byAgent: "Створено {agent}",
+        byUnknown: "Створено невідомим агентом",
+        approve: "Схвалити",
+        reject: "Відхилити",
+        unavailable:
+          "Цей користувацький віджет недоступний. Попросіть агента перебудувати його або видаліть його.",
+      },
+      markdownEmpty: "Ще немає вмісту.",
+      unknownKind: "Невідомий тип віджета: {kind}",
+      editTitleTitle: "Редагувати назву віджета",
+      editTitleLabel: "Назва віджета",
+      moveToTabTitle: "Перемістити на вкладку",
+      moveToTabEmpty: "Немає інших вкладок, куди можна перемістити цей віджет.",
+      menu: {
+        editTitle: "Редагувати заголовок",
+        moveToTab: "Перемістити на вкладку…",
+        hide: "Приховати",
+        remove: "Видалити",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "Немає рядків для відображення.",
+        more: "+{count} більше",
+      },
+      sessions: {
+        empty: "Сесій ще не було.",
+      },
+      usage: {
+        cost: "Вартість",
+        tokens: "Токени",
+      },
+      cron: {
+        empty: "Немає запланованих завдань.",
+        next: "Наступний: {time}",
+        noNext: "Не заплановано",
+      },
+      instances: {
+        empty: "Немає підключених екземплярів.",
+        idle: "Неактивний {duration}",
+      },
+      activity: {
+        empty: "Немає недавньої активності.",
+      },
+      embed: {
+        missing: "Це вбудовування ще не має URL.",
+        blockedExternal: "Зовнішні вбудовування вимкнено політикою вашого Gateway.",
+        blockedScheme: "URL цього вбудовування використовує непідтримувану схему.",
+      },
+    },
+  },
   workboard: {
     disabledHelpStart: "Workboard вимкнено. Увімкніть",
     enableConfigKey: "plugins.entries.workboard.enabled = true",

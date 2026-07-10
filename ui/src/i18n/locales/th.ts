@@ -1047,6 +1047,98 @@ export const th: TranslationMap = {
       submit: "Ask",
     },
   },
+  dashboard: {
+    tabs: {
+      label: "พื้นที่ทำงาน",
+      hidden: "ซ่อน ({count})",
+    },
+    error: {
+      title: "ไม่สามารถโหลดพื้นที่ทำงานของคุณได้",
+      subtitle: "เกิดข้อผิดพลาดระหว่างโหลดพื้นที่ทำงานของคุณ ลองโหลดใหม่อีกครั้ง",
+      detailSummary: "แสดงรายละเอียด",
+    },
+    header: {
+      subtitle: "จัดเรียงวิดเจ็ตและแท็บสำหรับพื้นที่ทำงานนี้",
+    },
+    onboarding: {
+      title: "สร้างแท็บพื้นที่ทำงานแรกของคุณ",
+      primary: "ขอให้เอเจนต์สร้างแท็บ",
+      secondary: "หรือสร้างจากบรรทัดคำสั่ง:",
+    },
+    empty: {
+      onboardingTitle: "ยังไม่มีพื้นที่ทำงาน",
+      onboardingSubtitle: "ขอให้เอเจนต์สร้างแดชบอร์ด หรือสร้างจากบรรทัดคำสั่ง",
+      onboardingCommand: "openclaw dashboard tabs create main --title Main",
+      tabTitle: "พื้นที่ทำงานนี้ว่างเปล่า",
+      tabSubtitle: "ขอให้เอเจนต์เพิ่มวิดเจ็ต หรือเพิ่มเอง",
+      noVisibleTabs: "แท็บพื้นที่ทำงานทุกแท็บถูกซ่อนอยู่ เรียกคืนจากเมนูที่ซ่อนไว้",
+    },
+    widget: {
+      collapse: "ย่อวิดเจ็ต",
+      expand: "ขยายวิดเจ็ต",
+      moveHandle: "ย้ายวิดเจ็ต",
+      resizeHandle: "ปรับขนาดวิดเจ็ต",
+      menuLabel: "ตัวเลือกวิดเจ็ต",
+      provenanceChip: "AI",
+      provenanceTooltip: "สร้างโดย {agent}",
+      errorTitle: "โหลดวิดเจ็ตนี้ไม่ได้",
+      errorHumane: "วิดเจ็ตนี้พบปัญหาระหว่างการแสดงผล",
+      errorDetailSummary: "แสดงรายละเอียด",
+      customPlaceholder: "วิดเจ็ตแบบกำหนดเอง — มาเร็วๆ นี้",
+      customLoading: "กำลังโหลดวิดเจ็ตแบบกำหนดเอง…",
+      approval: {
+        title: "วิดเจ็ตแบบกำหนดเองที่รอการอนุมัติ",
+        byAgent: "สร้างโดย {agent}",
+        byUnknown: "สร้างโดยเอเจนต์ที่ไม่รู้จัก",
+        approve: "อนุมัติ",
+        reject: "ปฏิเสธ",
+        unavailable: "วิดเจ็ตแบบกำหนดเองนี้ไม่พร้อมใช้งาน ขอให้เอเจนต์สร้างใหม่ หรือลบออก",
+      },
+      markdownEmpty: "ยังไม่มีเนื้อหา",
+      unknownKind: "ประเภทวิดเจ็ตที่ไม่รู้จัก: {kind}",
+      editTitleTitle: "แก้ไขชื่อวิดเจ็ต",
+      editTitleLabel: "ชื่อวิดเจ็ต",
+      moveToTabTitle: "ย้ายไปยังแท็บ",
+      moveToTabEmpty: "ไม่มีแท็บอื่นให้ย้ายวิดเจ็ตนี้ไป",
+      menu: {
+        editTitle: "แก้ไขชื่อ",
+        moveToTab: "ย้ายไปยังแท็บ…",
+        hide: "ซ่อน",
+        remove: "ลบ",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "ไม่มีข้อมูล",
+        more: "+{count} รายการถัดไป",
+      },
+      sessions: {
+        empty: "ยังไม่มีเซสชัน",
+      },
+      usage: {
+        cost: "ค่าใช้จ่าย",
+        tokens: "โทเคน",
+      },
+      cron: {
+        empty: "ไม่มีงานที่กำหนดเวลาไว้",
+        next: "ถัดไป {time}",
+        noNext: "ไม่ได้กำหนดเวลาไว้",
+      },
+      instances: {
+        empty: "ไม่มีอินสแตนซ์ที่เชื่อมต่อ",
+        idle: "ว่างมาแล้ว {duration}",
+      },
+      activity: {
+        empty: "ไม่มีกิจกรรมล่าสุด",
+      },
+      embed: {
+        missing: "Embed นี้ยังไม่มี URL",
+        blockedExternal: "Embed ภายนอกถูกปิดใช้งานโดยนโยบาย Gateway ของคุณ",
+        blockedScheme: "URL ของ Embed นี้ใช้ scheme ที่ไม่รองรับ",
+      },
+    },
+  },
   workboard: {
     disabledHelpStart: "Workboard ถูกปิดใช้งาน เปิดใช้งาน",
     enableConfigKey: "plugins.entries.workboard.enabled = true",

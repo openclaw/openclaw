@@ -1051,6 +1051,98 @@ export const hi: TranslationMap = {
       submit: "पूछें",
     },
   },
+  dashboard: {
+    tabs: {
+      label: "कार्यक्षेत्र",
+      hidden: "छिपाए गए ({count})",
+    },
+    error: {
+      title: "आपके कार्यक्षेत्र लोड नहीं किए जा सके",
+      subtitle: "आपके वर्कस्पेस लोड करने में कुछ गलत हो गया। पुनः लोड करने का प्रयास करें।",
+      detailSummary: "विवरण दिखाएं",
+    },
+    header: {
+      subtitle: "इस वर्कस्पेस के लिए विजेट और टैब व्यवस्थित करें।",
+    },
+    onboarding: {
+      title: "अपना पहला वर्कस्पेस टैब बनाएं",
+      primary: "टैब बनाने के लिए अपने एजेंट से पूछें।",
+      secondary: "या कमांड लाइन से एक बनाएं:",
+    },
+    empty: {
+      onboardingTitle: "अभी तक कोई कार्यक्षेत्र नहीं",
+      onboardingSubtitle: "डैशबोर्ड बनाने के लिए अपने एजेंट से पूछें, या कमांड लाइन से खुद बनाएं।",
+      onboardingCommand: "openclaw dashboard tabs create main --title Main",
+      tabTitle: "यह कार्यक्षेत्र खाली है",
+      tabSubtitle: "विजेट जोड़ने के लिए अपने एजेंट से पूछें, या खुद जोड़ें।",
+      noVisibleTabs: "हर कार्यक्षेत्र टैब छिपा हुआ है। छिपी हुई मेनू से एक को पुनर्स्थापित करें।",
+    },
+    widget: {
+      collapse: "विजेट संक्षिप्त करें",
+      expand: "विजेट विस्तृत करें",
+      moveHandle: "विजेट स्थानांतरित करें",
+      resizeHandle: "विजेट का आकार बदलें",
+      menuLabel: "विजेट विकल्प",
+      provenanceChip: "AI",
+      provenanceTooltip: "{agent} द्वारा बनाया गया",
+      errorTitle: "यह विजेट लोड नहीं हो सका",
+      errorHumane: "रेंडर करते समय इस विजेट को कोई समस्या आई।",
+      errorDetailSummary: "विवरण दिखाएं",
+      customPlaceholder: "कस्टम विजेट — जल्द आ रहा है।",
+      customLoading: "कस्टम विजेट लोड हो रहा है…",
+      approval: {
+        title: "कस्टम विजेट स्वीकृति की प्रतीक्षा कर रहा है",
+        byAgent: "{agent} द्वारा बनाया गया",
+        byUnknown: "एक अज्ञात एजेंट द्वारा बनाया गया",
+        approve: "स्वीकृत करें",
+        reject: "अस्वीकार करें",
+        unavailable: "यह कस्टम विजेट उपलब्ध नहीं है। इसे पुनः बनाने के लिए अपने एजेंट से पूछें, या इसे हटा दें।",
+      },
+      markdownEmpty: "अभी तक कोई सामग्री नहीं।",
+      unknownKind: "अज्ञात विजेट प्रकार: {kind}",
+      editTitleTitle: "विजेट शीर्षक संपादित करें",
+      editTitleLabel: "विजेट शीर्षक",
+      moveToTabTitle: "टैब पर ले जाएं",
+      moveToTabEmpty: "इस विजेट को स्थानांतरित करने के लिए कोई अन्य टैब नहीं है।",
+      menu: {
+        editTitle: "शीर्षक संपादित करें",
+        moveToTab: "टैब में ले जाएं…",
+        hide: "छिपाएं",
+        remove: "हटाएँ",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "दिखाने के लिए कोई पंक्तियाँ नहीं हैं।",
+        more: "+{count} और",
+      },
+      sessions: {
+        empty: "अभी तक कोई सत्र नहीं है।",
+      },
+      usage: {
+        cost: "लागत",
+        tokens: "टोकन",
+      },
+      cron: {
+        empty: "कोई अनुसूचित कार्य नहीं।",
+        next: "अगला {time}",
+        noNext: "अनुसूचित नहीं",
+      },
+      instances: {
+        empty: "कोई कनेक्टेड इंस्टेंस नहीं है।",
+        idle: "{duration} के लिए निष्क्रिय",
+      },
+      activity: {
+        empty: "कोई हालिया गतिविधि नहीं है।",
+      },
+      embed: {
+        missing: "इस एम्बेड में अभी तक कोई URL नहीं है।",
+        blockedExternal: "आपकी Gateway पॉलिसी द्वारा बाहरी एम्बेड अक्षम हैं।",
+        blockedScheme: "यह एम्बेड URL एक असमर्थित स्कीम का उपयोग करता है।",
+      },
+    },
+  },
   workboard: {
     disabledHelpStart: "Workboard अक्षम है। सक्षम करें",
     enableConfigKey: "plugins.entries.workboard.enabled = true",

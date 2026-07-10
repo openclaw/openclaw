@@ -1046,6 +1046,98 @@ export const zh_CN: TranslationMap = {
       submit: "Ask",
     },
   },
+  dashboard: {
+    tabs: {
+      label: "工作区",
+      hidden: "已隐藏 ({count})",
+    },
+    error: {
+      title: "无法加载您的工作区",
+      subtitle: "加载工作区时出了点问题。请尝试重新加载。",
+      detailSummary: "显示详情",
+    },
+    header: {
+      subtitle: "整理此工作区的小组件和标签页。",
+    },
+    onboarding: {
+      title: "构建您的第一个工作区标签页",
+      primary: "让您的代理构建一个标签页。",
+      secondary: "或通过命令行创建：",
+    },
+    empty: {
+      onboardingTitle: "尚无工作区",
+      onboardingSubtitle: "请您的代理构建仪表盘，或者通过命令行创建一个。",
+      onboardingCommand: "openclaw dashboard tabs create main --title Main",
+      tabTitle: "此工作区为空",
+      tabSubtitle: "请您的代理添加小组件，或者自己添加一个。",
+      noVisibleTabs: "所有工作区标签页均已隐藏。请从隐藏菜单中恢复一个。",
+    },
+    widget: {
+      collapse: "收起小组件",
+      expand: "展开小组件",
+      moveHandle: "移动小组件",
+      resizeHandle: "调整小组件大小",
+      menuLabel: "小组件选项",
+      provenanceChip: "AI",
+      provenanceTooltip: "由 {agent} 构建",
+      errorTitle: "无法加载此小组件",
+      errorHumane: "此小组件在渲染时遇到了问题。",
+      errorDetailSummary: "显示详情",
+      customPlaceholder: "自定义小组件 — 即将推出。",
+      customLoading: "正在加载自定义小组件…",
+      approval: {
+        title: "自定义小组件等待批准",
+        byAgent: "由 {agent} 构建",
+        byUnknown: "由未知代理构建",
+        approve: "批准",
+        reject: "拒绝",
+        unavailable: "此自定义小组件不可用。请让您的代理重新构建，或将其移除。",
+      },
+      markdownEmpty: "尚无内容。",
+      unknownKind: "未知小组件类型：{kind}",
+      editTitleTitle: "编辑小组件标题",
+      editTitleLabel: "小组件标题",
+      moveToTabTitle: "移动到标签页",
+      moveToTabEmpty: "没有其他标签页可以移动此小组件。",
+      menu: {
+        editTitle: "编辑标题",
+        moveToTab: "移动到标签页…",
+        hide: "隐藏",
+        remove: "移除",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "没有可显示的行。",
+        more: "+{count} 项",
+      },
+      sessions: {
+        empty: "暂无会话。",
+      },
+      usage: {
+        cost: "费用",
+        tokens: "Tokens",
+      },
+      cron: {
+        empty: "没有定时任务。",
+        next: "下一次 {time}",
+        noNext: "未计划",
+      },
+      instances: {
+        empty: "没有已连接的实例。",
+        idle: "已空闲 {duration}",
+      },
+      activity: {
+        empty: "最近没有活动。",
+      },
+      embed: {
+        missing: "此嵌入尚未设置 URL。",
+        blockedExternal: "您的 Gateway 策略已禁用外部嵌入。",
+        blockedScheme: "此嵌入 URL 使用了不支持的协议。",
+      },
+    },
+  },
   workboard: {
     disabledHelpStart: "Workboard 已禁用。启用",
     enableConfigKey: "plugins.entries.workboard.enabled = true",

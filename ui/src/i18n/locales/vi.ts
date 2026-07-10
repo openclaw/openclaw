@@ -1059,6 +1059,101 @@ export const vi: TranslationMap = {
       submit: "Ask",
     },
   },
+  dashboard: {
+    tabs: {
+      label: "Không gian làm việc",
+      hidden: "Đã ẩn ({count})",
+    },
+    error: {
+      title: "Không thể tải không gian làm việc của bạn",
+      subtitle: "Đã xảy ra lỗi khi tải không gian làm việc của bạn. Hãy thử tải lại.",
+      detailSummary: "Hiển thị chi tiết",
+    },
+    header: {
+      subtitle: "Sắp xếp các tiện ích và thẻ cho không gian làm việc này.",
+    },
+    onboarding: {
+      title: "Xây dựng thẻ không gian làm việc đầu tiên của bạn",
+      primary: "Yêu cầu tác nhân của bạn xây dựng một thẻ.",
+      secondary: "Hoặc tạo từ dòng lệnh:",
+    },
+    empty: {
+      onboardingTitle: "Chưa có không gian làm việc nào",
+      onboardingSubtitle:
+        "Yêu cầu tác nhân của bạn xây dựng bảng điều khiển, hoặc tạo một cái từ dòng lệnh.",
+      onboardingCommand: "openclaw dashboard tabs create main --title Main",
+      tabTitle: "Không gian làm việc này đang trống",
+      tabSubtitle: "Yêu cầu tác nhân của bạn thêm tiện ích, hoặc tự thêm vào.",
+      noVisibleTabs:
+        "Tất cả các thẻ không gian làm việc đều đang ẩn. Hãy khôi phục một cái từ menu ẩn.",
+    },
+    widget: {
+      collapse: "Thu gọn tiện ích",
+      expand: "Mở rộng tiện ích",
+      moveHandle: "Di chuyển tiện ích",
+      resizeHandle: "Thay đổi kích thước tiện ích",
+      menuLabel: "Tùy chọn tiện ích",
+      provenanceChip: "AI",
+      provenanceTooltip: "Được tạo bởi {agent}",
+      errorTitle: "Tiện ích này không thể tải",
+      errorHumane: "Tiện ích này gặp sự cố trong khi hiển thị.",
+      errorDetailSummary: "Hiển thị chi tiết",
+      customPlaceholder: "Tiện ích tùy chỉnh — sắp ra mắt.",
+      customLoading: "Đang tải tiện ích tùy chỉnh…",
+      approval: {
+        title: "Tiện ích tùy chỉnh đang chờ phê duyệt",
+        byAgent: "Được tạo bởi {agent}",
+        byUnknown: "Được tạo bởi một tác nhân không xác định",
+        approve: "Phê duyệt",
+        reject: "Từ chối",
+        unavailable:
+          "Tiện ích tùy chỉnh này không khả dụng. Yêu cầu tác nhân của bạn xây dựng lại hoặc xóa nó.",
+      },
+      markdownEmpty: "Chưa có nội dung nào.",
+      unknownKind: "Loại tiện ích không xác định: {kind}",
+      editTitleTitle: "Chỉnh sửa tiêu đề tiện ích",
+      editTitleLabel: "Tiêu đề tiện ích",
+      moveToTabTitle: "Di chuyển đến thẻ",
+      moveToTabEmpty: "Không có thẻ nào khác để chuyển widget này đến.",
+      menu: {
+        editTitle: "Chỉnh sửa tiêu đề",
+        moveToTab: "Chuyển đến tab…",
+        hide: "Ẩn",
+        remove: "Xóa",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "Không có hàng nào để hiển thị.",
+        more: "+{count} thêm",
+      },
+      sessions: {
+        empty: "Chưa có phiên nào.",
+      },
+      usage: {
+        cost: "Chi phí",
+        tokens: "Token",
+      },
+      cron: {
+        empty: "Không có công việc định kỳ.",
+        next: "Tiếp theo {time}",
+        noNext: "Chưa lên lịch",
+      },
+      instances: {
+        empty: "Không có thực thể kết nối.",
+        idle: "Không hoạt động trong {duration}",
+      },
+      activity: {
+        empty: "Không có hoạt động gần đây.",
+      },
+      embed: {
+        missing: "Embed này chưa có URL.",
+        blockedExternal: "Các embed bên ngoài bị vô hiệu hóa theo chính sách Gateway của bạn.",
+        blockedScheme: "URL embed này sử dụng giao thức không được hỗ trợ.",
+      },
+    },
+  },
   workboard: {
     disabledHelpStart: "Workboard đã bị tắt. Bật",
     enableConfigKey: "plugins.entries.workboard.enabled = true",

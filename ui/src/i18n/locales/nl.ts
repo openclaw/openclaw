@@ -1065,6 +1065,101 @@ export const nl: TranslationMap = {
       submit: "Ask",
     },
   },
+  dashboard: {
+    tabs: {
+      label: "Werkruimtes",
+      hidden: "Verborgen ({count})",
+    },
+    error: {
+      title: "Je werkruimtes konden niet worden geladen",
+      subtitle: "Er is iets misgegaan bij het laden van je werkruimtes. Probeer opnieuw te laden.",
+      detailSummary: "Details weergeven",
+    },
+    header: {
+      subtitle: "Orden widgets en tabbladen voor deze werkruimte.",
+    },
+    onboarding: {
+      title: "Bouw je eerste werkruimtetabblad",
+      primary: "Vraag je agent om een tabblad te bouwen.",
+      secondary: "Of maak er een aan via de opdrachtregel:",
+    },
+    empty: {
+      onboardingTitle: "Nog geen werkruimtes",
+      onboardingSubtitle:
+        "Vraag je agent om een dashboard te bouwen, of maak er een aan via de opdrachtregel.",
+      onboardingCommand: "openclaw dashboard tabs create main --title Main",
+      tabTitle: "Deze werkruimte is leeg",
+      tabSubtitle: "Vraag je agent om een widget toe te voegen, of voeg er zelf een toe.",
+      noVisibleTabs:
+        "Alle werkruimte-tabbladen zijn verborgen. Herstel er een vanuit het verborgen menu.",
+    },
+    widget: {
+      collapse: "Widget samenvouwen",
+      expand: "Widget uitvouwen",
+      moveHandle: "Widget verplaatsen",
+      resizeHandle: "Grootte van widget wijzigen",
+      menuLabel: "Widget-opties",
+      provenanceChip: "AI",
+      provenanceTooltip: "Gebouwd door {agent}",
+      errorTitle: "Deze widget kon niet worden geladen",
+      errorHumane: "Er is een probleem opgetreden bij het weergeven van deze widget.",
+      errorDetailSummary: "Details weergeven",
+      customPlaceholder: "Aangepaste widget — binnenkort beschikbaar.",
+      customLoading: "Aangepaste widget laden…",
+      approval: {
+        title: "Aangepaste widget wacht op goedkeuring",
+        byAgent: "Gebouwd door {agent}",
+        byUnknown: "Gemaakt door een onbekende agent",
+        approve: "Goedkeuren",
+        reject: "Afwijzen",
+        unavailable:
+          "Deze aangepaste widget is niet beschikbaar. Vraag je agent om hem opnieuw te bouwen, of verwijder hem.",
+      },
+      markdownEmpty: "Nog geen inhoud.",
+      unknownKind: "Onbekend widgettype: {kind}",
+      editTitleTitle: "Widgettitel bewerken",
+      editTitleLabel: "Widgettitel",
+      moveToTabTitle: "Verplaatsen naar tabblad",
+      moveToTabEmpty: "Er zijn geen andere tabbladen om dit widget naar te verplaatsen.",
+      menu: {
+        editTitle: "Titel bewerken",
+        moveToTab: "Verplaatsen naar tabblad…",
+        hide: "Verbergen",
+        remove: "Verwijderen",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "Geen rijen om weer te geven.",
+        more: "+{count} meer",
+      },
+      sessions: {
+        empty: "Nog geen sessies.",
+      },
+      usage: {
+        cost: "Kosten",
+        tokens: "Tokens",
+      },
+      cron: {
+        empty: "Geen geplande taken.",
+        next: "Volgende {time}",
+        noNext: "Niet gepland",
+      },
+      instances: {
+        empty: "Geen verbonden instanties.",
+        idle: "Inactief voor {duration}",
+      },
+      activity: {
+        empty: "Geen recente activiteit.",
+      },
+      embed: {
+        missing: "Deze embed heeft nog geen URL.",
+        blockedExternal: "Externe embeds zijn uitgeschakeld door uw gatewaybeleid.",
+        blockedScheme: "Deze embed-URL gebruikt een niet-ondersteund schema.",
+      },
+    },
+  },
   workboard: {
     disabledHelpStart: "Workboard is uitgeschakeld. Schakel",
     enableConfigKey: "plugins.entries.workboard.enabled = true",

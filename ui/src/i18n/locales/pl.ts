@@ -1066,6 +1066,99 @@ export const pl: TranslationMap = {
       submit: "Ask",
     },
   },
+  dashboard: {
+    tabs: {
+      label: "Obszary robocze",
+      hidden: "Ukryte ({count})",
+    },
+    error: {
+      title: "Nie można załadować obszarów roboczych",
+      subtitle: "Wystąpił błąd podczas ładowania obszarów roboczych. Spróbuj ponownie załadować.",
+      detailSummary: "Pokaż szczegóły",
+    },
+    header: {
+      subtitle: "Układ widżetów i kart dla tego obszaru roboczego.",
+    },
+    onboarding: {
+      title: "Zbuduj swoją pierwszą kartę obszaru roboczego",
+      primary: "Poproś agenta o zbudowanie karty.",
+      secondary: "Lub utwórz ją z wiersza poleceń:",
+    },
+    empty: {
+      onboardingTitle: "Brak obszarów roboczych",
+      onboardingSubtitle: "Poproś agenta o utworzenie pulpitu lub utwórz go z wiersza poleceń.",
+      onboardingCommand: "openclaw dashboard tabs create main --title Main",
+      tabTitle: "Ten obszar roboczy jest pusty",
+      tabSubtitle: "Poproś agenta o dodanie widżetu lub dodaj go samodzielnie.",
+      noVisibleTabs: "Każda karta obszaru roboczego jest ukryta. Przywróć jedną z menu ukrytych.",
+    },
+    widget: {
+      collapse: "Zwiń widżet",
+      expand: "Rozwiń widżet",
+      moveHandle: "Przesuń widżet",
+      resizeHandle: "Zmień rozmiar widżetu",
+      menuLabel: "Opcje widżetu",
+      provenanceChip: "AI",
+      provenanceTooltip: "Utworzone przez {agent}",
+      errorTitle: "Nie można załadować tego widżetu",
+      errorHumane: "Ten widżet napotkał problem podczas renderowania.",
+      errorDetailSummary: "Pokaż szczegóły",
+      customPlaceholder: "Widżet niestandardowy — wkrótce.",
+      customLoading: "Ładowanie widżetu niestandardowego…",
+      approval: {
+        title: "Widżet niestandardowy oczekuje na zatwierdzenie",
+        byAgent: "Utworzone przez {agent}",
+        byUnknown: "Zbudowany przez nieznanego agenta",
+        approve: "Zatwierdź",
+        reject: "Odrzuć",
+        unavailable:
+          "Ten widżet niestandardowy nie jest dostępny. Poproś agenta o jego przebudowanie lub go usuń.",
+      },
+      markdownEmpty: "Brak treści.",
+      unknownKind: "Nieznany typ widżetu: {kind}",
+      editTitleTitle: "Edytuj tytuł widżetu",
+      editTitleLabel: "Tytuł widżetu",
+      moveToTabTitle: "Przenieś do karty",
+      moveToTabEmpty: "Nie ma innych kart, do których można przenieść ten widżet.",
+      menu: {
+        editTitle: "Edytuj tytuł",
+        moveToTab: "Przenieś do karty…",
+        hide: "Ukryj",
+        remove: "Usuń",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "Brak wierszy do wyświetlenia.",
+        more: "+{count} więcej",
+      },
+      sessions: {
+        empty: "Brak sesji.",
+      },
+      usage: {
+        cost: "Koszt",
+        tokens: "Tokeny",
+      },
+      cron: {
+        empty: "Brak zaplanowanych zadań.",
+        next: "Następny {time}",
+        noNext: "Nie zaplanowano",
+      },
+      instances: {
+        empty: "Brak połączonych instancji.",
+        idle: "Bezczynny przez {duration}",
+      },
+      activity: {
+        empty: "Brak ostatniej aktywności.",
+      },
+      embed: {
+        missing: "To osadzenie nie ma jeszcze adresu URL.",
+        blockedExternal: "Zewnętrzne osadzenia są wyłączone przez politykę Gateway.",
+        blockedScheme: "Ten URL osadzenia używa nieobsługiwanego schematu.",
+      },
+    },
+  },
   workboard: {
     disabledHelpStart: "Workboard jest wyłączony. Włącz",
     enableConfigKey: "plugins.entries.workboard.enabled = true",

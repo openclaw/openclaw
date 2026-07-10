@@ -1071,6 +1071,101 @@ export const it: TranslationMap = {
       submit: "Ask",
     },
   },
+  dashboard: {
+    tabs: {
+      label: "Aree di lavoro",
+      hidden: "Nascoste ({count})",
+    },
+    error: {
+      title: "Impossibile caricare le aree di lavoro",
+      subtitle:
+        "Si è verificato un errore durante il caricamento delle aree di lavoro. Prova a ricaricare.",
+      detailSummary: "Mostra dettagli",
+    },
+    header: {
+      subtitle: "Organizza widget e schede per questa area di lavoro.",
+    },
+    onboarding: {
+      title: "Crea la prima scheda dell'area di lavoro",
+      primary: "Chiedi al tuo agente di creare una scheda.",
+      secondary: "Oppure creane una dalla riga di comando:",
+    },
+    empty: {
+      onboardingTitle: "Ancora nessuna area di lavoro",
+      onboardingSubtitle:
+        "Chiedi al tuo agente di creare una dashboard, oppure creane una dalla riga di comando.",
+      onboardingCommand: "openclaw dashboard tabs create main --title Main",
+      tabTitle: "Questa area di lavoro è vuota",
+      tabSubtitle: "Chiedi al tuo agente di aggiungere un widget, oppure aggiungine uno tu.",
+      noVisibleTabs: "Ogni scheda dell'area di lavoro è nascosta. Ripristinala dal menu nascosto.",
+    },
+    widget: {
+      collapse: "Comprimi widget",
+      expand: "Espandi widget",
+      moveHandle: "Sposta widget",
+      resizeHandle: "Ridimensiona widget",
+      menuLabel: "Opzioni widget",
+      provenanceChip: "AI",
+      provenanceTooltip: "Creato da {agent}",
+      errorTitle: "Impossibile caricare questo widget",
+      errorHumane: "Questo widget ha riscontrato un problema durante il rendering.",
+      errorDetailSummary: "Mostra dettagli",
+      customPlaceholder: "Widget personalizzato — in arrivo.",
+      customLoading: "Caricamento widget personalizzato…",
+      approval: {
+        title: "Widget personalizzato in attesa di approvazione",
+        byAgent: "Creato da {agent}",
+        byUnknown: "Creato da un agente sconosciuto",
+        approve: "Approva",
+        reject: "Rifiuta",
+        unavailable:
+          "Questo widget personalizzato non è disponibile. Chiedi al tuo agente di ricrearlo oppure rimuovilo.",
+      },
+      markdownEmpty: "Nessun contenuto ancora.",
+      unknownKind: "Tipo di widget sconosciuto: {kind}",
+      editTitleTitle: "Modifica titolo widget",
+      editTitleLabel: "Titolo widget",
+      moveToTabTitle: "Sposta nella scheda",
+      moveToTabEmpty: "Non ci sono altre schede in cui spostare questo widget.",
+      menu: {
+        editTitle: "Modifica titolo",
+        moveToTab: "Sposta nella scheda…",
+        hide: "Nascondi",
+        remove: "Rimuovi",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "Nessuna riga da mostrare.",
+        more: "+{count} in più",
+      },
+      sessions: {
+        empty: "Nessuna sessione al momento.",
+      },
+      usage: {
+        cost: "Costo",
+        tokens: "Token",
+      },
+      cron: {
+        empty: "Nessun processo pianificato.",
+        next: "Prossimo {time}",
+        noNext: "Non pianificato",
+      },
+      instances: {
+        empty: "Nessuna istanza connessa.",
+        idle: "Inattivo da {duration}",
+      },
+      activity: {
+        empty: "Nessuna attività recente.",
+      },
+      embed: {
+        missing: "Questo embed non ha ancora un URL.",
+        blockedExternal: "Gli embed esterni sono disabilitati dalla politica del gateway.",
+        blockedScheme: "L'URL di questo embed utilizza uno schema non supportato.",
+      },
+    },
+  },
   workboard: {
     disabledHelpStart: "Workboard è disabilitata. Abilita",
     enableConfigKey: "plugins.entries.workboard.enabled = true",

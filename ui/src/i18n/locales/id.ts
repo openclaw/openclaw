@@ -1061,6 +1061,99 @@ export const id: TranslationMap = {
       submit: "Ask",
     },
   },
+  dashboard: {
+    tabs: {
+      label: "Ruang Kerja",
+      hidden: "Tersembunyi ({count})",
+    },
+    error: {
+      title: "Tidak dapat memuat ruang kerja Anda",
+      subtitle: "Terjadi kesalahan saat memuat ruang kerja Anda. Coba muat ulang.",
+      detailSummary: "Tampilkan detail",
+    },
+    header: {
+      subtitle: "Atur widget dan tab untuk ruang kerja ini.",
+    },
+    onboarding: {
+      title: "Buat tab ruang kerja pertama Anda",
+      primary: "Minta agen Anda untuk membuat tab.",
+      secondary: "Atau buat dari baris perintah:",
+    },
+    empty: {
+      onboardingTitle: "Belum ada ruang kerja",
+      onboardingSubtitle: "Minta agen Anda untuk membuat dasbor, atau buat dari baris perintah.",
+      onboardingCommand: "openclaw dashboard tabs create main --title Main",
+      tabTitle: "Ruang kerja ini kosong",
+      tabSubtitle: "Minta agen Anda untuk menambahkan widget, atau tambahkan sendiri.",
+      noVisibleTabs: "Semua tab ruang kerja disembunyikan. Pulihkan satu dari menu tersembunyi.",
+    },
+    widget: {
+      collapse: "Ciutkan widget",
+      expand: "Perluas widget",
+      moveHandle: "Pindahkan widget",
+      resizeHandle: "Ubah ukuran widget",
+      menuLabel: "Opsi widget",
+      provenanceChip: "AI",
+      provenanceTooltip: "Dibuat oleh {agent}",
+      errorTitle: "Widget ini tidak dapat dimuat",
+      errorHumane: "Widget ini mengalami masalah saat merender.",
+      errorDetailSummary: "Tampilkan detail",
+      customPlaceholder: "Widget kustom — segera hadir.",
+      customLoading: "Memuat widget kustom…",
+      approval: {
+        title: "Widget kustom menunggu persetujuan",
+        byAgent: "Dibuat oleh {agent}",
+        byUnknown: "Dibuat oleh agen yang tidak diketahui",
+        approve: "Setujui",
+        reject: "Tolak",
+        unavailable:
+          "Widget kustom ini tidak tersedia. Minta agen Anda untuk membangun ulang, atau hapus widget ini.",
+      },
+      markdownEmpty: "Belum ada konten.",
+      unknownKind: "Jenis widget tidak diketahui: {kind}",
+      editTitleTitle: "Edit judul widget",
+      editTitleLabel: "Judul widget",
+      moveToTabTitle: "Pindahkan ke tab",
+      moveToTabEmpty: "Tidak ada tab lain untuk memindahkan widget ini.",
+      menu: {
+        editTitle: "Edit judul",
+        moveToTab: "Pindahkan ke tab…",
+        hide: "Sembunyikan",
+        remove: "Hapus",
+      },
+      stat: {
+        empty: "—",
+      },
+      table: {
+        empty: "Tidak ada baris untuk ditampilkan.",
+        more: "+{count} lainnya",
+      },
+      sessions: {
+        empty: "Belum ada sesi.",
+      },
+      usage: {
+        cost: "Biaya",
+        tokens: "Token",
+      },
+      cron: {
+        empty: "Tidak ada tugas terjadwal.",
+        next: "Berikutnya {time}",
+        noNext: "Tidak dijadwalkan",
+      },
+      instances: {
+        empty: "Tidak ada instance yang terhubung.",
+        idle: "Diam selama {duration}",
+      },
+      activity: {
+        empty: "Tidak ada aktivitas terbaru.",
+      },
+      embed: {
+        missing: "Embed ini belum memiliki URL.",
+        blockedExternal: "Embed eksternal dinonaktifkan oleh kebijakan Gateway Anda.",
+        blockedScheme: "URL embed ini menggunakan skema yang tidak didukung.",
+      },
+    },
+  },
   workboard: {
     disabledHelpStart: "Workboard dinonaktifkan. Aktifkan",
     enableConfigKey: "plugins.entries.workboard.enabled = true",
