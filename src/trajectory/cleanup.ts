@@ -9,6 +9,12 @@ import {
   resolveTrajectoryPointerFilePath,
   safeTrajectorySessionFileName,
 } from "./paths.js";
+import {
+  bumpTrajectoryPathGeneration,
+  canonicalizeTrajectoryPath as canonicalizePathForComparison,
+  reassignTrajectoryPathOwner,
+  withTrajectoryPathLock,
+} from "./writer-lifecycle.js";
 
 type RemovedTrajectoryArtifact = {
   kind: "pointer" | "runtime";
@@ -18,15 +24,6 @@ type RemovedTrajectoryArtifact = {
 type TrajectoryPointer = {
   runtimeFile: string;
 };
-
-function canonicalizePathForComparison(filePath: string): string {
-  const resolved = path.resolve(filePath);
-  try {
-    return fs.realpathSync(resolved);
-  } catch {
-    return resolved;
-  }
-}
 
 function isPathWithinDir(parentDir: string, filePath: string): boolean {
   const resolvedParent = canonicalizePathForComparison(parentDir);
@@ -131,7 +128,13 @@ async function removeRegularFile(
   if (!isRegularNonSymlinkFile(filePath)) {
     return null;
   }
-  await fs.promises.rm(filePath, { force: true });
+  try {
+    await fs.promises.rm(filePath, { force: true });
+  } catch {
+    // Best-effort: a transiently busy/locked artifact should not block
+    // removal of the remaining candidates (runtime file vs. pointer).
+    return null;
+  }
   return { kind, path: path.resolve(filePath) };
 }
 
@@ -163,9 +166,9 @@ function mayRemoveRuntimeTarget(params: {
   if (canonicalizePathForComparison(params.defaultRuntimePath) === resolved) {
     return !params.restrictToStoreDir || withinStoreDir;
   }
-  if (params.restrictToStoreDir && withinStoreDir) {
-    return true;
-  }
+  // A pointer-declared path that merely sits inside the store dir is not proof
+  // it belongs to this session (a stale/forged pointer can name any sibling
+  // file there) — still require the basename+content match below.
   const expectedName = `${safeTrajectorySessionFileName(params.sessionId)}.jsonl`;
   if (path.basename(resolved) !== expectedName) {
     return false;
@@ -210,7 +213,17 @@ export async function removeSessionTrajectoryArtifacts(params: {
     ) {
       continue;
     }
-    const deleted = await removeRegularFile(runtimePath, "runtime");
+    const canonicalRuntimePath = canonicalizePathForComparison(runtimePath);
+    const deleted = await withTrajectoryPathLock(canonicalRuntimePath, async () => {
+      // Retire before unlinking, in the same locked turn: a writer's flush
+      // turn queued behind this one must observe "retired" and no-op instead
+      // of recreating the file we are about to remove (F1/F2/F5).
+      bumpTrajectoryPathGeneration(canonicalRuntimePath, {
+        retire: true,
+        ownerSessionId: params.sessionId,
+      });
+      return await removeRegularFile(runtimePath, "runtime");
+    });
     if (deleted) {
       removed.push(deleted);
     }
@@ -224,6 +237,39 @@ export async function removeSessionTrajectoryArtifacts(params: {
   }
 
   return removed;
+}
+
+/**
+ * Reassigns a reused trajectory path's registry ownership from the previous
+ * session id to the next one, without a generation bump: the file and any
+ * in-flight writer for it remain valid, only the logical owner changes
+ * (resetSessionEntryLifecycle's "reused transcript path" case, §3.6).
+ */
+export function reassignSessionTrajectoryPathOwner(params: {
+  previousSessionId: string;
+  previousSessionFile?: string;
+  nextSessionId: string;
+  nextSessionFile: string;
+}): void {
+  const previousCandidatePath = resolveTrajectoryFilePath({
+    sessionFile: params.previousSessionFile,
+    sessionId: params.previousSessionId,
+  });
+  const nextCandidatePath = resolveTrajectoryFilePath({
+    sessionFile: params.nextSessionFile,
+    sessionId: params.nextSessionId,
+  });
+  const previousCanonicalPath = canonicalizePathForComparison(previousCandidatePath);
+  if (previousCanonicalPath !== canonicalizePathForComparison(nextCandidatePath)) {
+    // Different canonical paths (e.g. an OPENCLAW_TRAJECTORY_DIR override
+    // keyed by sessionId): nothing to reassign, the next session's own
+    // recorder creation claims its path fresh.
+    return;
+  }
+  reassignTrajectoryPathOwner(previousCanonicalPath, {
+    from: params.previousSessionId,
+    to: params.nextSessionId,
+  });
 }
 
 export async function removeRemovedSessionTrajectoryArtifacts(params: {
