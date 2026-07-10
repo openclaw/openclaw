@@ -83,6 +83,7 @@ import {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
+  parseTransportRetryAfterHeaderSeconds,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
@@ -837,9 +838,7 @@ function createAnthropicMessagesClient(params: {
         });
         if (!response.ok) {
           const detail = await readAnthropicMessagesErrorBodySnippet(response);
-          throw new Error(
-            detail || `Anthropic Messages request failed with HTTP ${response.status}`,
-          );
+          throw createAnthropicMessagesHttpError(response, detail);
         }
         if (!response.body) {
           return;
@@ -848,6 +847,27 @@ function createAnthropicMessagesClient(params: {
       },
     },
   };
+}
+
+function createAnthropicMessagesHttpError(response: Response, detail: string): Error {
+  const error = new Error(
+    detail || `Anthropic Messages request failed with HTTP ${response.status}`,
+  ) as Error & {
+    status?: number;
+    httpStatus?: number;
+    retryAfterSeconds?: number;
+    errorBody?: string;
+  };
+  error.status = response.status;
+  error.httpStatus = response.status;
+  if (detail) {
+    error.errorBody = detail;
+  }
+  const retryAfterSeconds = parseTransportRetryAfterHeaderSeconds(response.headers);
+  if (retryAfterSeconds !== undefined) {
+    error.retryAfterSeconds = retryAfterSeconds;
+  }
+  return error;
 }
 
 async function readAnthropicMessagesErrorBodySnippet(response: Response): Promise<string> {

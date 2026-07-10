@@ -103,6 +103,29 @@ import { createLocalBashOperations } from "./tools/bash.js";
 import { createAllToolDefinitions } from "./tools/index.js";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.js";
 
+const MAX_AUTO_RETRY_AFTER_DELAY_MS = 60_000;
+
+export function resolveAutoRetryDelayMs(params: {
+  attempt: number;
+  baseDelayMs: number;
+  retryAfterSeconds?: number;
+}): number {
+  const exponentialDelayMs = params.baseDelayMs * 2 ** (params.attempt - 1);
+  const retryAfterSeconds = params.retryAfterSeconds;
+  if (
+    retryAfterSeconds === undefined ||
+    !Number.isFinite(retryAfterSeconds) ||
+    retryAfterSeconds < 0
+  ) {
+    return exponentialDelayMs;
+  }
+  const retryAfterDelayMs = Math.min(
+    MAX_AUTO_RETRY_AFTER_DELAY_MS,
+    Math.ceil(retryAfterSeconds * 1000),
+  );
+  return Math.max(exponentialDelayMs, retryAfterDelayMs);
+}
+
 function unwrapCoreResult<T>(result: { ok: true; value: T } | { ok: false; error: Error }): T {
   if (result.ok) {
     return result.value;
@@ -2672,7 +2695,11 @@ export class AgentSession {
       return false;
     }
 
-    const delayMs = settings.baseDelayMs * 2 ** (this.retryCount - 1);
+    const delayMs = resolveAutoRetryDelayMs({
+      attempt: this.retryCount,
+      baseDelayMs: settings.baseDelayMs,
+      retryAfterSeconds: message.retryAfterSeconds,
+    });
 
     this.emit({
       type: "auto_retry_start",

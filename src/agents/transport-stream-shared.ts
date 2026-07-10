@@ -1,3 +1,4 @@
+import { parseRetryAfterHttpDateMs } from "@openclaw/ai/internal/retry-after";
 /**
  * Shared transport-stream normalization helpers.
  *
@@ -30,7 +31,11 @@ type TransportOutputShape = {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  httpStatus?: number;
+  retryAfterSeconds?: number;
 };
+
+const MAX_SAFE_RETRY_AFTER_SECONDS = Math.floor(Number.MAX_SAFE_INTEGER / 1000);
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 /**
@@ -149,7 +154,66 @@ type TransportErrorDetails = {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  httpStatus?: number;
+  retryAfterSeconds?: number;
 };
+
+function readFiniteNumberProperty(value: unknown, key: string): number | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const raw = (value as Record<string, unknown>)[key];
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return raw;
+  }
+  if (typeof raw === "string" && /^\d+(?:\.\d+)?$/.test(raw.trim())) {
+    const parsed = Number(raw.trim());
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function normalizeHttpStatus(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isInteger(value)) {
+    return undefined;
+  }
+  return value >= 100 && value <= 599 ? value : undefined;
+}
+
+function normalizeRetryAfterSeconds(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return value <= MAX_SAFE_RETRY_AFTER_SECONDS ? value : undefined;
+}
+
+export function parseTransportRetryAfterSeconds(
+  value: string | null | undefined,
+): number | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (/^\d+$/.test(trimmed)) {
+    return normalizeRetryAfterSeconds(Number(trimmed));
+  }
+
+  const retryAtMs = parseRetryAfterHttpDateMs(trimmed);
+  if (retryAtMs === undefined) {
+    return undefined;
+  }
+  return normalizeRetryAfterSeconds(Math.max(0, (retryAtMs - Date.now()) / 1000));
+}
+
+export function parseTransportRetryAfterHeaderSeconds(headers: Headers): number | undefined {
+  const retryAfterMs = headers.get("retry-after-ms")?.trim();
+  if (retryAfterMs && /^\d+(?:\.\d+)?$/.test(retryAfterMs)) {
+    const milliseconds = Number(retryAfterMs);
+    return normalizeRetryAfterSeconds(milliseconds / 1000);
+  }
+  return parseTransportRetryAfterSeconds(headers.get("retry-after"));
+}
 
 function readStringLikeProperty(value: unknown, key: string): string | undefined {
   if (!value || typeof value !== "object") {
@@ -229,11 +293,26 @@ function extractTransportErrorDetails(error: unknown): TransportErrorDetails {
     normalizeTransportErrorBody(readStringLikeProperty(errorObject, "body")) ??
     normalizeTransportErrorBody(readObjectProperty(errorObject, "body")) ??
     normalizeTransportErrorBody(nestedError);
+  const httpStatus = normalizeHttpStatus(
+    readFiniteNumberProperty(errorObject, "httpStatus") ??
+      readFiniteNumberProperty(errorObject, "status") ??
+      readFiniteNumberProperty(errorObject, "statusCode") ??
+      readFiniteNumberProperty(nestedError, "status") ??
+      readFiniteNumberProperty(nestedError, "statusCode"),
+  );
+  const retryAfterSeconds = normalizeRetryAfterSeconds(
+    readFiniteNumberProperty(errorObject, "retryAfterSeconds") ??
+      readFiniteNumberProperty(errorObject, "retryAfter") ??
+      parseTransportRetryAfterSeconds(readStringLikeProperty(errorObject, "retry-after")) ??
+      readFiniteNumberProperty(nestedError, "retryAfterSeconds"),
+  );
 
   return {
     ...(errorCode ? { errorCode } : {}),
     ...(errorType ? { errorType } : {}),
     ...(errorBody ? { errorBody } : {}),
+    ...(httpStatus !== undefined ? { httpStatus } : {}),
+    ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
   };
 }
 

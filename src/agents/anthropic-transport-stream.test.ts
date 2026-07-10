@@ -870,6 +870,34 @@ describe("anthropic transport stream", () => {
     expect(cancelCount).toBe(1);
   });
 
+  it("projects HTTP status and Retry-After from Anthropic error responses", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          type: "error",
+          error: {
+            type: "rate_limit_error",
+            message: "Number of request tokens has exceeded your per-minute rate limit.",
+          },
+        }),
+        { status: 429, headers: { "retry-after": "30" } },
+      ),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.httpStatus).toBe(429);
+    expect(result.retryAfterSeconds).toBe(30);
+    expect(result.errorBody).toContain("rate_limit_error");
+  });
+
   it("aborts stalled streamed Anthropic error responses", async () => {
     vi.useFakeTimers();
     const encoder = new TextEncoder();
