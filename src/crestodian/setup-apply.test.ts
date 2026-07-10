@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   ensureWorkspace: vi.fn(),
   ensureGatewayService: vi.fn(),
   refreshPluginRegistry: vi.fn(),
+  updateExecApprovals: vi.fn(),
 }));
 
 vi.mock("../wizard/setup.shared.js", async (importOriginal) => ({
@@ -81,6 +82,10 @@ vi.mock("../wizard/setup.finalize.js", () => ({
 
 vi.mock("../plugins/registry-refresh.js", () => ({
   refreshPluginRegistryAfterConfigMutation: mocks.refreshPluginRegistry,
+}));
+
+vi.mock("../infra/exec-approvals.js", () => ({
+  updateExecApprovals: mocks.updateExecApprovals,
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -162,6 +167,7 @@ describe("applyCrestodianSetup transaction boundaries", () => {
     });
     mocks.ensureGatewayService.mockResolvedValue({ installDaemon: false });
     mocks.refreshPluginRegistry.mockResolvedValue(undefined);
+    mocks.updateExecApprovals.mockResolvedValue(undefined);
   });
 
   it.each([
@@ -279,8 +285,9 @@ describe("applyCrestodianSetup transaction boundaries", () => {
     expect(result.configPath).toBe("/tmp/openclaw.json");
   });
 
-  it("returns visible post-commit workspace, registry, and service failures", async () => {
+  it("returns visible post-commit workspace, approval, registry, and service failures", async () => {
     mocks.ensureWorkspace.mockRejectedValueOnce(new Error("workspace exploded"));
+    mocks.updateExecApprovals.mockRejectedValueOnce(new Error("approval exploded"));
     mocks.refreshPluginRegistry.mockRejectedValueOnce(new Error("registry exploded"));
     mocks.ensureGatewayService.mockRejectedValueOnce(new Error("service exploded"));
 
@@ -297,6 +304,7 @@ describe("applyCrestodianSetup transaction boundaries", () => {
     expect(result.lines).toEqual(
       expect.arrayContaining([
         "Workspace files: workspace exploded",
+        "Crestodian exec approval: approval exploded; local model harnesses may ask again.",
         "Plugin registry refresh failed: registry exploded",
         "Gateway service: service exploded",
       ]),
