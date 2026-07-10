@@ -223,11 +223,12 @@ export class VoiceCallWebhookServer {
     // consistent [voice-call] attribution so operational tooling can
     // identify voice-call messages on the shared plugin logger.
     const rawLogger = this.logger;
+    const rawDebug = rawLogger.debug;
     this.logger = {
       info: (msg: string) => rawLogger.info(`[voice-call] ${msg}`),
       warn: (msg: string) => rawLogger.warn(`[voice-call] ${msg}`),
       error: (msg: string) => rawLogger.error(`[voice-call] ${msg}`),
-      debug: rawLogger.debug ? (msg: string) => rawLogger.debug(`[voice-call] ${msg}`) : undefined,
+      debug: rawDebug ? (msg: string) => rawDebug(`[voice-call] ${msg}`) : undefined,
     };
   }
 
