@@ -91,39 +91,39 @@ describe("printCronList", () => {
     expectLogsToInclude(logs, "isolated");
   });
 
-  it("keeps truncated names from ending in a lone surrogate", () => {
+  it("truncates and aligns names by sanitized terminal display width", () => {
     const { logs, runtime } = createRuntimeLogCapture();
-    const name = `${"x".repeat(20)}🚀tail`;
-
-    printCronList([createBaseJob({ name })], runtime);
-
-    expectLogsToInclude(logs, `${"x".repeat(20)}...`);
-    expect(logs.join("\n")).not.toContain("\ud83d");
-  });
-
-  it("sizes CJK and emoji names by terminal display width", () => {
-    const { logs, runtime } = createRuntimeLogCapture();
-    const cjkName = `${"x".repeat(19)}表tail`;
-    const familyName = `${"x".repeat(20)}👨‍👩‍👧‍👦`;
+    const prefix19 = "x".repeat(19);
+    const prefix20 = "x".repeat(20);
+    const prefix21 = "x".repeat(21);
+    const cases = [
+      { name: `${prefix20}🚀tail`, expected: `${prefix20}...` },
+      { name: `${prefix21}Atail`, expected: `${prefix21}...` },
+      { name: `${prefix19}表tail`, expected: `${prefix19}表...` },
+      { name: `${prefix20}e\u0301tail`, expected: `${prefix20}e\u0301...` },
+      { name: `${prefix19}👨‍👩‍👧‍👦tail`, expected: `${prefix19}👨‍👩‍👧‍👦...` },
+      { name: `${prefix20}\u001B[31m🚀\u001B[0mtail`, expected: `${prefix20}...` },
+    ];
 
     printCronList(
-      [
-        createBaseJob({ id: "wide-name", name: cjkName }),
-        createBaseJob({ id: "family-name", name: familyName }),
-      ],
+      cases.map(({ name }, index) => createBaseJob({ id: `unicode-name-${index}`, name })),
       runtime,
     );
 
     const header = logs[0] ?? "";
     const rows = logs.slice(1);
     const scheduleColumn = visibleWidth(header.slice(0, header.indexOf("Schedule")));
-    for (const row of rows) {
+    expect(rows).toHaveLength(cases.length);
+    for (const [index, row] of rows.entries()) {
       const scheduleIndex = row.indexOf("at ");
       expect(scheduleIndex).toBeGreaterThan(-1);
       expect(visibleWidth(row.slice(0, scheduleIndex))).toBe(scheduleColumn);
+      expect(row).toContain(cases[index]?.expected);
     }
-    expectLogsToInclude(logs, `${"x".repeat(19)}表...`);
-    expectLogsToInclude(logs, familyName);
+    const output = logs.join("\n");
+    expect(Buffer.from(output, "utf8").toString("utf8")).toBe(output);
+    expect(output).not.toContain("\uFFFD");
+    expect(output).not.toContain("\u001B");
   });
 
   it("shows declaration metadata and existing run status", () => {

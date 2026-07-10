@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
@@ -343,6 +344,7 @@ const CRON_DELIVERY_PAD = 64;
 const CRON_AGENT_PAD = 10;
 const CRON_OWNER_PAD = 24;
 const CRON_MODEL_PAD = 20;
+const TRUNCATED_SUFFIX = "...";
 
 const stringifyCell = (value: unknown, fallback = "-") => {
   if (typeof value === "string") {
@@ -361,13 +363,14 @@ const pad = (value: unknown, width: number) => {
 };
 
 const truncate = (value: string, width: number) => {
-  if (visibleWidth(value) <= width) {
-    return value;
+  const sanitized = sanitizeTerminalText(value);
+  if (visibleWidth(sanitized) <= width) {
+    return sanitized;
   }
-  if (width <= 3) {
-    return truncateToVisibleWidth(value, width);
+  if (width <= TRUNCATED_SUFFIX.length) {
+    return truncateToVisibleWidth(sanitized, width);
   }
-  return `${truncateToVisibleWidth(value, width - 3)}...`;
+  return `${truncateToVisibleWidth(sanitized, width - TRUNCATED_SUFFIX.length)}${TRUNCATED_SUFFIX}`;
 };
 
 const formatIsoMinute = (iso: string) => {
