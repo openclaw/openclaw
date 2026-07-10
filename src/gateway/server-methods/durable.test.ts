@@ -105,7 +105,7 @@ describe("durable gateway methods", () => {
     try {
       const calls: unknown[][] = [];
       durableHandlers["durable.coordination.get"]?.({
-        params: { runtimeRunId: "wfr_disabled" },
+        params: { runtimeRunId: "rt_disabled" },
         respond: (...args: unknown[]) => calls.push(args),
       } as never);
 

@@ -591,7 +591,8 @@ context.
 Operator clients may inspect native Durable Runtime coordination state through a
 bounded projection instead of reading the shared OpenClaw state database
 directly. These methods are disabled unless `OPENCLAW_DURABLE_RUNTIME` is
-explicitly enabled.
+explicitly enabled. Disabled durable coordination RPCs reject the request before
+opening or migrating durable runtime state.
 
 - `durable.coordination.get` requires `operator.read`.
   - Params: `{ "runtimeRunId": string }`.

@@ -19,7 +19,7 @@ export const durableHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "Durable runtime are disabled."),
+        errorShape(ErrorCodes.INVALID_REQUEST, "Durable runtime is disabled."),
       );
       return;
     }

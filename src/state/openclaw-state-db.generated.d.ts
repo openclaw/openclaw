@@ -500,13 +500,6 @@ export interface DiagnosticStabilityBundles {
   reason: string;
 }
 
-export interface DurableSchemaMigrations {
-  applied_at: number;
-  metadata_json: string | null;
-  schema_name: string;
-  version: number;
-}
-
 export interface DurableRuntimeEvents {
   agent_invocation_id: string | null;
   causation_event_id: string | null;
@@ -520,9 +513,9 @@ export interface DurableRuntimeEvents {
   payload_hash: string | null;
   payload_json: string | null;
   recorded_at: number;
+  runtime_run_id: string;
   step_id: string | null;
   tool_invocation_id: string | null;
-  runtime_run_id: string;
 }
 
 export interface DurableRuntimeLinks {
@@ -530,8 +523,8 @@ export interface DurableRuntimeLinks {
   created_at: number;
   link_type: string;
   metadata_json: string | null;
-  parent_step_id: string;
   parent_runtime_run_id: string;
+  parent_step_id: string;
   status: string;
   updated_at: number;
 }
@@ -543,10 +536,10 @@ export interface DurableRuntimeRefs {
   metadata_json: string | null;
   ref_id: string;
   ref_kind: string;
+  runtime_run_id: string;
   step_id: string | null;
   storage_kind: string;
   storage_uri: string | null;
-  runtime_run_id: string;
 }
 
 export interface DurableRuntimeRuns {
@@ -562,8 +555,8 @@ export interface DurableRuntimeRuns {
   metadata_json: string | null;
   operation_kind: string;
   operation_version: Generated<string>;
-  parent_step_id: string | null;
   parent_runtime_run_id: string | null;
+  parent_step_id: string | null;
   recovery_state: Generated<string>;
   report_route_id: string | null;
   request_hash: string | null;
@@ -583,10 +576,10 @@ export interface DurableRuntimeSignals {
   metadata_json: string | null;
   payload_ref: string | null;
   received_at: number;
+  runtime_run_id: string;
   signal_id: string;
   signal_type: string;
   step_id: string | null;
-  runtime_run_id: string;
 }
 
 export interface DurableRuntimeSteps {
@@ -605,12 +598,12 @@ export interface DurableRuntimeSteps {
   output_ref: string | null;
   parent_step_id: string | null;
   recovery_state: string;
+  runtime_run_id: string;
   started_at: number | null;
   status: string;
   step_id: string;
   step_type: string;
   updated_at: number;
-  runtime_run_id: string;
 }
 
 export interface DurableRuntimeTimers {
@@ -619,11 +612,18 @@ export interface DurableRuntimeTimers {
   due_at: number;
   fired_at: number | null;
   metadata_json: string | null;
+  runtime_run_id: string;
   status: string;
   step_id: string | null;
   timer_id: string;
   timer_type: string;
-  runtime_run_id: string;
+}
+
+export interface DurableSchemaMigrations {
+  applied_at: number;
+  metadata_json: string | null;
+  schema_name: string;
+  version: number;
 }
 
 export interface ExecApprovalsConfig {
@@ -1213,7 +1213,6 @@ export interface DB {
   device_pairing_pending: DevicePairingPending;
   diagnostic_events: DiagnosticEvents;
   diagnostic_stability_bundles: DiagnosticStabilityBundles;
-  durable_schema_migrations: DurableSchemaMigrations;
   durable_runtime_events: DurableRuntimeEvents;
   durable_runtime_links: DurableRuntimeLinks;
   durable_runtime_refs: DurableRuntimeRefs;
@@ -1221,6 +1220,7 @@ export interface DB {
   durable_runtime_signals: DurableRuntimeSignals;
   durable_runtime_steps: DurableRuntimeSteps;
   durable_runtime_timers: DurableRuntimeTimers;
+  durable_schema_migrations: DurableSchemaMigrations;
   exec_approvals_config: ExecApprovalsConfig;
   flow_runs: FlowRuns;
   gateway_boot_lifecycle: GatewayBootLifecycle;

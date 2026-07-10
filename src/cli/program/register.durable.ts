@@ -69,7 +69,7 @@ export function registerDurableCommand(program: Command) {
     [
       "coordination",
       "coordination",
-      "Show durable coordination projection for task, TaskFlow, and Workboard",
+      "Show durable coordination projection for task/session runtime consumers",
     ],
     ["signals", "signals", "Show durable runtime signals for one run"],
     ["refs", "refs", "Show durable runtime state refs for one run"],

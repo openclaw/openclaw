@@ -1,4 +1,4 @@
-// Builds stable coordination projections for task, TaskFlow, and Workboard surfaces.
+// Builds stable durable runtime coordination projections for operator and integration surfaces.
 import type {
   DurableRecoveryState,
   DurableRuntimeLink,
@@ -23,7 +23,6 @@ export type DurableCoordinationExternalRefs = {
   reportRouteId?: string;
   taskId?: string;
   taskFlowId?: string;
-  workboardCardId?: string;
   sessionKey?: string;
   childSessionKey?: string;
   runId?: string;
@@ -269,7 +268,6 @@ export function extractDurableCoordinationExternalRefs(
   );
   const taskId = firstString(metadata.taskId, metadata.task_id);
   const taskFlowId = firstString(metadata.taskFlowId, metadata.flowId, metadata.parentFlowId);
-  const workboardCardId = firstString(metadata.workboardCardId, metadata.cardId);
   const sessionKey = firstString(
     metadata.sessionKey,
     run.sourceType === "agent_turn" ? run.sourceRef : undefined,
@@ -286,19 +284,12 @@ export function extractDurableCoordinationExternalRefs(
     ...(reportRouteId ? { reportRouteId } : {}),
     ...(taskId ? { taskId } : {}),
     ...(taskFlowId ? { taskFlowId } : {}),
-    ...(workboardCardId ? { workboardCardId } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(childSessionKey ? { childSessionKey } : {}),
     ...(runId ? { runId } : {}),
     ...(agentId ? { agentId } : {}),
     ...(requesterAgentId ? { requesterAgentId } : {}),
   };
-}
-
-function isTerminalRun(status: DurableRuntimeRunStatus): boolean {
-  return (
-    status === "succeeded" || status === "failed" || status === "cancelled" || status === "lost"
-  );
 }
 
 function extractRecoveryDiagnostic(
@@ -388,7 +379,6 @@ export function buildDurableCoordinationProjection(
   const childLinks = input.childLinks ?? [];
   const currentStep = latestOpenStep(steps) ?? latestStep(steps);
   const waitingReason = inferWaitingReason({ run: input.run, currentStep });
-  const terminal = isTerminalRun(input.run.status);
   const recovery = extractRecoveryDiagnostic(input.run);
   return {
     runtimeRunId: input.run.runtimeRunId,
@@ -411,27 +401,17 @@ export function buildDurableCoordinationProjection(
     external: extractDurableCoordinationExternalRefs(input.run),
     children: childCounts(childLinks),
     controls: {
-      canCancel: !terminal,
-      canRetry: terminal || input.run.recoveryState === "unknown_after_side_effect",
-      canResume:
-        !terminal &&
-        (input.run.status === "waiting" ||
-          input.run.status === "waiting_signal" ||
-          input.run.status === "waiting_timer" ||
-          input.run.status === "waiting_child" ||
-          input.run.status === "retry_scheduled"),
-      canSignal:
-        !terminal &&
-        (input.run.status === "waiting" ||
-          input.run.status === "waiting_signal" ||
-          input.run.recoveryState === "waiting_signal"),
+      canCancel: false,
+      canRetry: false,
+      canResume: false,
+      canSignal: false,
       canOpenTimeline: true,
     },
     ...(recovery ? { recovery } : {}),
   };
 }
 
-export function buildDurableTaskFlowStateProjection(
+export function buildDurableCoordinationMetadataProjection(
   projection: DurableCoordinationProjection,
 ): Record<string, unknown> {
   return {
@@ -446,27 +426,6 @@ export function buildDurableTaskFlowStateProjection(
     children: projection.children,
     ...(projection.recovery ? { recovery: projection.recovery } : {}),
     external: projection.external,
-    updatedAt: projection.updatedAt,
-  };
-}
-
-export function buildDurableWorkboardMetadataProjection(
-  projection: DurableCoordinationProjection,
-): Record<string, unknown> {
-  return {
-    runtimeRunId: projection.runtimeRunId,
-    operationKind: projection.operationKind,
-    operationVersion: projection.operationVersion,
-    status: projection.status,
-    recoveryState: projection.recoveryState,
-    ...(projection.workUnitId ? { workUnitId: projection.workUnitId } : {}),
-    ...(projection.reportRouteId ? { reportRouteId: projection.reportRouteId } : {}),
-    ...(projection.waitingReason ? { waitingReason: projection.waitingReason } : {}),
-    ...(projection.currentStepId ? { currentStepId: projection.currentStepId } : {}),
-    ...projection.external,
-    children: projection.children,
-    ...(projection.recovery ? { recovery: projection.recovery } : {}),
-    timelineCommand: `openclaw durable timeline ${projection.runtimeRunId}`,
     updatedAt: projection.updatedAt,
   };
 }
