@@ -680,6 +680,28 @@ describe("slackPlugin status", () => {
   });
 });
 
+describe("slackPlugin messaging targets", () => {
+  it("preserves API target case while folding comparison keys", () => {
+    const messaging = slackPlugin.messaging;
+    expect(messaging?.normalizeTarget?.("channel:C08GQH53EJM")).toBe("channel:c08gqh53ejm");
+    expect(messaging?.resolveDeliveryTarget?.({ conversationId: "C08GQH53EJM" })).toEqual({
+      to: "channel:C08GQH53EJM",
+    });
+    expect(
+      messaging?.resolveDeliveryTarget?.({
+        conversationId: "1712345678.123456",
+        parentConversationId: "C08GQH53EJM",
+      }),
+    ).toEqual({
+      to: "channel:C08GQH53EJM",
+      threadId: "1712345678.123456",
+    });
+    expect(messaging?.resolveSessionTarget?.({ kind: "channel", id: "C08GQH53EJM" })).toBe(
+      "channel:C08GQH53EJM",
+    );
+  });
+});
+
 describe("slackPlugin security", () => {
   it("normalizes dm allowlist entries with trimmed prefixes", () => {
     const resolveDmPolicy = slackPlugin.security?.resolveDmPolicy;

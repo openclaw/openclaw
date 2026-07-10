@@ -656,14 +656,15 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
     messaging: {
       targetPrefixes: ["slack"],
       normalizeTarget: normalizeSlackMessagingTarget,
+      // API-facing Slack IDs are opaque and case-sensitive; normalizeTarget owns lookup keys.
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
         const parent = parentConversationId?.trim();
         const child = conversationId.trim();
         return parent && parent !== child
           ? { to: `channel:${parent}`, threadId: child }
-          : { to: normalizeSlackMessagingTarget(`channel:${child}`) };
+          : { to: `channel:${child}` };
       },
-      resolveSessionTarget: ({ id }) => normalizeSlackMessagingTarget(`channel:${id}`),
+      resolveSessionTarget: ({ id }) => `channel:${id}`,
       inferTargetChatType: ({ to }) => resolveSlackRouteTarget(to)?.chatType,
       resolveOutboundSessionRoute: async (params) => await resolveSlackOutboundSessionRoute(params),
       transformReplyPayload: ({ payload, cfg, accountId }) =>
