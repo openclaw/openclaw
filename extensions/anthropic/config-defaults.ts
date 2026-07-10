@@ -377,7 +377,7 @@ export function applyAnthropicConfigDefaults(params: {
     );
     if (hasAnthropicApiKeyModel) {
       for (const ref of ANTHROPIC_API_KEY_DEFAULT_ALLOWLIST_REFS) {
-        if (ref in nextModels) {
+        if (Object.hasOwn(nextModels, ref)) {
           continue;
         }
         nextModels[ref] = { params: { cacheRetention: "short" } };
