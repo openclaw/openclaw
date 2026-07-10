@@ -2042,8 +2042,13 @@ jobs:
             actual_status_count="$(find "$status_dir" -maxdepth 1 -type f -name '*.env' | wc -l | tr -d '[:space:]')"
           fi
           if [[ "$actual_status_count" != "$expected_status_count" ]]; then
-            echo "::error::Expected ${expected_status_count} advisory status artifacts for run ${RELEASE_CHECK_RUN_ID} attempt ${RELEASE_CHECK_RUN_ATTEMPT}, found ${actual_status_count}."
-            failed=1
+            status_count_message="Expected ${expected_status_count} advisory status artifacts for run ${RELEASE_CHECK_RUN_ID} attempt ${RELEASE_CHECK_RUN_ATTEMPT}, found ${actual_status_count}."
+            if [[ "$tideclaw_alpha" == "true" ]]; then
+              echo "::warning::${status_count_message} Tideclaw alpha treats non-package-safety release-check lanes as advisory."
+            else
+              echo "::error::${status_count_message}"
+              failed=1
+            fi
           fi
           release_check_result() {
             local name="$1"

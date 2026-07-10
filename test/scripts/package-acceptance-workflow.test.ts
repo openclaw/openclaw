@@ -1,18 +1,10 @@
 // Package Acceptance Workflow tests cover package acceptance workflow script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const PACKAGE_ACCEPTANCE_WORKFLOW = ".github/workflows/package-acceptance.yml";
 const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
@@ -55,6 +47,7 @@ const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
 const SETUP_NODE_V6 = "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e";
 const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type WorkflowStep = {
   "continue-on-error"?: boolean | string;
@@ -204,9 +197,10 @@ function runNpmTelegramInputValidation(overrides: Record<string, string>) {
 }
 
 function runReleaseChecksSummary(params: {
-  artifactAttempt: string;
+  artifactAttempt?: string;
   currentAttempt: string;
   currentResult: "cancelled" | "skipped" | "success";
+  workflowRef?: string;
 }) {
   const summary = workflowJob(RELEASE_CHECKS_WORKFLOW, "summary");
   const script = workflowStep(summary, "Verify release check results").run;
@@ -215,56 +209,54 @@ function runReleaseChecksSummary(params: {
   }
   const runId = "123456";
   const targetSha = "a".repeat(40);
-  const workdir = mkdtempSync(join(tmpdir(), "openclaw-release-check-status-"));
+  const workdir = tempDirs.make("openclaw-release-check-status-");
   const statusDir = join(workdir, ".artifacts", "release-check-status");
-  mkdirSync(statusDir, { recursive: true });
-  writeFileSync(
-    join(statusDir, `qa_live_telegram_release_checks-${runId}-${params.artifactAttempt}.env`),
-    [
-      `run_id=${runId}`,
-      `run_attempt=${params.artifactAttempt}`,
-      `target_sha=${targetSha}`,
-      "job=qa_live_telegram_release_checks",
-      "variant=",
-      "status=success",
-      "job_status=success",
-      "step_outcomes=success success",
-      "",
-    ].join("\n"),
-  );
-  try {
-    return spawnSync("bash", ["-c", script], {
-      cwd: workdir,
-      encoding: "utf8",
-      env: {
-        CROSS_OS_RELEASE_CHECKS_RESULT: "success",
-        DOCKER_E2E_RELEASE_CHECKS_RESULT: "success",
-        GITHUB_RUN_ATTEMPT: params.currentAttempt,
-        GITHUB_RUN_ID: runId,
-        INSTALL_SMOKE_RELEASE_CHECKS_RESULT: "success",
-        LIVE_REPO_E2E_RELEASE_CHECKS_RESULT: "success",
-        MATURITY_SCORECARD_RELEASE_CHECKS_RESULT: "skipped",
-        PACKAGE_ACCEPTANCE_RELEASE_CHECKS_RESULT: "success",
-        PATH: process.env.PATH,
-        PREPARE_RELEASE_PACKAGE_RESULT: "success",
-        QA_LAB_PARITY_LANE_RELEASE_CHECKS_RESULT: "skipped",
-        QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT: "skipped",
-        QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT: "skipped",
-        QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT: "skipped",
-        QA_LIVE_MATRIX_RELEASE_CHECKS_RESULT: "skipped",
-        QA_LIVE_SLACK_RELEASE_CHECKS_RESULT: "skipped",
-        QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT: params.currentResult,
-        QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT: "skipped",
-        RELEASE_CHECK_RUN_ATTEMPT: params.currentAttempt,
-        RELEASE_CHECK_RUN_ID: runId,
-        RELEASE_CHECK_TARGET_SHA: targetSha,
-        RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT: "skipped",
-        WORKFLOW_REF: "refs/heads/release/2026.7.1",
-      },
-    });
-  } finally {
-    rmSync(workdir, { recursive: true, force: true });
+  if (params.artifactAttempt) {
+    mkdirSync(statusDir, { recursive: true });
+    writeFileSync(
+      join(statusDir, `qa_live_telegram_release_checks-${runId}-${params.artifactAttempt}.env`),
+      [
+        `run_id=${runId}`,
+        `run_attempt=${params.artifactAttempt}`,
+        `target_sha=${targetSha}`,
+        "job=qa_live_telegram_release_checks",
+        "variant=",
+        "status=success",
+        "job_status=success",
+        "step_outcomes=success success",
+        "",
+      ].join("\n"),
+    );
   }
+  return spawnSync("bash", ["-c", script], {
+    cwd: workdir,
+    encoding: "utf8",
+    env: {
+      CROSS_OS_RELEASE_CHECKS_RESULT: "success",
+      DOCKER_E2E_RELEASE_CHECKS_RESULT: "success",
+      GITHUB_RUN_ATTEMPT: params.currentAttempt,
+      GITHUB_RUN_ID: runId,
+      INSTALL_SMOKE_RELEASE_CHECKS_RESULT: "success",
+      LIVE_REPO_E2E_RELEASE_CHECKS_RESULT: "success",
+      MATURITY_SCORECARD_RELEASE_CHECKS_RESULT: "skipped",
+      PACKAGE_ACCEPTANCE_RELEASE_CHECKS_RESULT: "success",
+      PATH: process.env.PATH,
+      PREPARE_RELEASE_PACKAGE_RESULT: "success",
+      QA_LAB_PARITY_LANE_RELEASE_CHECKS_RESULT: "skipped",
+      QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT: "skipped",
+      QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT: "skipped",
+      QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT: "skipped",
+      QA_LIVE_MATRIX_RELEASE_CHECKS_RESULT: "skipped",
+      QA_LIVE_SLACK_RELEASE_CHECKS_RESULT: "skipped",
+      QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT: params.currentResult,
+      QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT: "skipped",
+      RELEASE_CHECK_RUN_ATTEMPT: params.currentAttempt,
+      RELEASE_CHECK_RUN_ID: runId,
+      RELEASE_CHECK_TARGET_SHA: targetSha,
+      RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT: "skipped",
+      WORKFLOW_REF: params.workflowRef ?? "refs/heads/release/2026.7.1",
+    },
+  });
 }
 
 describe("package acceptance workflow", () => {
@@ -2474,6 +2466,7 @@ describe("package artifact reuse", () => {
       'actual_job="$(status_field "$file" job)"',
       'actual_variant="$(status_field "$file" variant)"',
       "Expected ${expected_status_count} advisory status artifacts",
+      "::warning::${status_count_message} Tideclaw alpha treats non-package-safety release-check lanes as advisory.",
       'elif [[ "$fallback" != "success" && "$fallback" != "skipped" ]]; then',
       'elif [[ "$fallback" == "success" ]]; then',
       "advisory_status_override_allowed()",
@@ -2526,6 +2519,19 @@ describe("package artifact reuse", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
+  });
+
+  it("keeps missing current-attempt advisory status non-blocking for Tideclaw alpha", () => {
+    const result = runReleaseChecksSummary({
+      currentAttempt: "2",
+      currentResult: "cancelled",
+      workflowRef: "refs/heads/tideclaw/alpha/2026-07-10-1200Z",
+    });
+
+    expect(result.status).toBe(0);
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(output).toContain("Expected 1 advisory status artifacts");
+    expect(output).toContain("Tideclaw alpha");
   });
 
   it("summarizes queue time separately from execution time in full validation", () => {
