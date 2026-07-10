@@ -123,9 +123,9 @@ describe("chat page split layout host", () => {
     expect(panes.map((pane) => pane.active)).toEqual([false, true]);
     expect(dividers).toHaveLength(1);
     expect(dividers[0].orientation).toBe("vertical");
-    expect(page.querySelector(".chat-split-view__pane--active")).toBe(panes[1]);
-    expect(page.querySelectorAll(".chat-split-toolbar__pane")).toHaveLength(2);
-    expect(page.querySelector(".chat-split-toolbar__pane--active")).not.toBeNull();
+    expect(page.querySelector(".chat-split-view__cell--active")?.contains(panes[1])).toBe(true);
+    expect(page.querySelectorAll(".chat-pane__header")).toHaveLength(2);
+    expect(page.querySelector(".chat-pane__header--active")).not.toBeNull();
     expect(page.querySelector(".chat-open-split-view")).toBeNull();
   });
 
@@ -140,14 +140,16 @@ describe("chat page split layout host", () => {
     const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
     expect(panes.map((pane) => pane.paneId)).toEqual(["p2"]);
     expect(panes[0].active).toBe(true);
-    expect(page.querySelectorAll(".chat-split-toolbar__pane")).toHaveLength(1);
+    expect(page.querySelectorAll(".chat-pane__header")).toHaveLength(1);
     expect(page.querySelector("resizable-divider")).toBeNull();
   });
 
-  it("refreshes split toolbar sessions after the shared list loads", async () => {
+  it("refreshes split toolbar titles after the shared list loads", async () => {
     const page = new ChatPage();
     const cleanup = vi.fn();
-    const sessionsState: { result: { sessions: Array<{ key: string }> } | null } = {
+    const sessionsState: {
+      result: { sessions: Array<{ key: string; displayName?: string }> } | null;
+    } = {
       result: null,
     };
     let notify = () => {};
@@ -165,16 +167,24 @@ describe("chat page split layout host", () => {
     setLayout(page, createSplitLayout("main"));
     await page.updateComplete;
 
+    const titlesBefore = [...page.querySelectorAll(".chat-pane__session-title")];
+    expect(titlesBefore.map((title) => title.textContent?.trim())).toEqual([
+      "Main Session",
+      "Main Session",
+    ]);
+    // The pane header is intentionally a static, non-interactive title: a
+    // session picker there would fight pane focus. Sessions change via the
+    // sessions panel or drag-and-drop instead.
+    expect(page.querySelector(".chat-pane__header select")).toBeNull();
+
     sessionsState.result = {
-      sessions: [{ key: "agent:main:work" }, { key: "main" }],
+      sessions: [{ key: "main", displayName: "Main desk" }],
     };
     notify();
     await page.updateComplete;
 
-    const selects = [...page.querySelectorAll<HTMLSelectElement>(".chat-pane__session-select")];
-    expect(selects).toHaveLength(2);
-    expect(selects.map((select) => select.options.length)).toEqual([2, 2]);
-    expect(selects.map((select) => select.value)).toEqual(["main", "main"]);
+    const titles = [...page.querySelectorAll(".chat-pane__session-title")];
+    expect(titles.map((title) => title.textContent?.trim())).toEqual(["Main desk", "Main desk"]);
 
     page.remove();
     expect(cleanup).toHaveBeenCalledOnce();

@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { html, LitElement, nothing, svg } from "lit";
+import { html, nothing, svg } from "lit";
 import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
@@ -18,7 +18,8 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
-import { buildSessionUsageDateParams } from "../../lib/sessions/index.ts";
+import { buildSessionUsageDateParams, requestSessionsUsage } from "../../lib/sessions/index.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import {
   buildHeatmap,
   buildInsights,
@@ -84,11 +85,7 @@ function toErrorMessage(error: unknown): string {
   return typeof error === "string" ? error : "request failed";
 }
 
-class ProfilePage extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+export class ProfilePage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: false })
   private context!: ApplicationContext;
 
@@ -165,10 +162,6 @@ class ProfilePage extends LitElement {
     const requestId = ++this.requestId;
     this.loading = true;
     this.error = null;
-    // Day buckets use the browser's current fixed UTC offset — the same "local"
-    // semantics as the Usage page. Midnight-adjacent history from the opposite
-    // DST season can land on a neighboring day; DST-aware bucketing needs an
-    // IANA-timezone protocol parameter (tracked as a usage-wide follow-up).
     const dateParams = buildSessionUsageDateParams("local");
     try {
       const [costSummary, sessionsResult] = await Promise.all([
@@ -178,17 +171,15 @@ class ProfilePage extends LitElement {
           agentScope: "all",
           ...dateParams,
         }),
-        client
-          .request<SessionsUsageResult>("sessions.usage", {
-            range: "all",
-            agentScope: "all",
-            // Instance rows keep durations per transcript; family rollups would
-            // merge resets and inflate "Longest session" to the family lifespan.
-            groupBy: "instance",
-            limit: 1000,
-            ...dateParams,
-          })
-          .catch(() => null),
+        requestSessionsUsage(client, {
+          range: "all",
+          agentScope: "all",
+          // Instance rows keep durations per transcript; family rollups would
+          // merge resets and inflate "Longest session" to the family lifespan.
+          groupBy: "instance",
+          limit: 1000,
+          ...dateParams,
+        }).catch(() => null),
       ]);
       if (requestId !== this.requestId) {
         return;
@@ -549,4 +540,6 @@ class ProfilePage extends LitElement {
   }
 }
 
-customElements.define("openclaw-profile-page", ProfilePage);
+if (!customElements.get("openclaw-profile-page")) {
+  customElements.define("openclaw-profile-page", ProfilePage);
+}
