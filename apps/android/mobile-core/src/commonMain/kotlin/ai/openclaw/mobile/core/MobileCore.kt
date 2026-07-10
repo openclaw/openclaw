@@ -9,19 +9,16 @@ import kotlinx.serialization.json.JsonPrimitive
 
 private val coreJson = Json { ignoreUnknownKeys = true }
 
-/** Platform-preserving rules for decimal DNS-SD escapes. */
 enum class BonjourEscapePolicy {
   UTF8_BYTES,
   UNICODE_SCALARS,
 }
 
-/** Platform-preserving rules for custom gateway header values. */
 enum class HeaderValuePolicy {
   ASCII_PRINTABLE,
   NO_CONTROL_CHARACTERS,
 }
 
-/** Canonical device-auth payload serialization. */
 object DeviceAuthPayload {
   fun buildV2(
     deviceId: String,
