@@ -1,4 +1,5 @@
 // Redaction helpers scrub secrets and sensitive identifiers from log output.
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { readLoggingConfig } from "./config.js";
@@ -354,8 +355,8 @@ function maskToken(token: string): string {
   if (token.length < DEFAULT_REDACT_MIN_LENGTH) {
     return "***";
   }
-  const start = token.slice(0, DEFAULT_REDACT_KEEP_START);
-  const end = token.slice(-DEFAULT_REDACT_KEEP_END);
+  const start = sliceUtf16Safe(token, 0, DEFAULT_REDACT_KEEP_START);
+  const end = sliceUtf16Safe(token, -DEFAULT_REDACT_KEEP_END);
   return `${start}…${end}`;
 }
 

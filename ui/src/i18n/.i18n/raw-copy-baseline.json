@@ -2610,7 +2610,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/quick.ts",
-      "text": "Stores a Control UI override. Clear it to return to IDENTITY.md."
+      "text": "Stores a Control UI override. Clear it to return to the configured avatar."
     },
     {
       "count": 1,
