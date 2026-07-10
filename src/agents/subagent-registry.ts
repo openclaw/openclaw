@@ -1774,24 +1774,12 @@ export function releaseSubagentRun(runId: string) {
 }
 
 export async function finalizeInterruptedSubagentRun(params: {
-  runId?: string;
-  childSessionKey?: string;
+  runId: string;
   error: string;
   endedAt?: number;
 }): Promise<number> {
-  const runIds = new Set<string>();
-  if (typeof params.runId === "string" && params.runId.trim()) {
-    runIds.add(params.runId.trim());
-  }
-  if (typeof params.childSessionKey === "string" && params.childSessionKey.trim()) {
-    const childSessionKey = params.childSessionKey.trim();
-    for (const [runId, entry] of subagentRuns.entries()) {
-      if (entry.childSessionKey === childSessionKey) {
-        runIds.add(runId);
-      }
-    }
-  }
-  if (runIds.size === 0) {
+  const runId = params.runId.trim();
+  if (!runId) {
     return 0;
   }
 
@@ -1799,32 +1787,28 @@ export async function finalizeInterruptedSubagentRun(params: {
     typeof params.endedAt === "number" && Number.isFinite(params.endedAt)
       ? params.endedAt
       : Date.now();
-  let updated = 0;
-  for (const runId of runIds) {
-    clearPendingLifecycleError(runId);
-    clearPendingLifecycleTimeout(runId);
-    const entry = subagentRuns.get(runId);
-    if (!entry || typeof entry.cleanupCompletedAt === "number") {
-      continue;
-    }
-    await completeSubagentRunWithRecovery(
-      {
-        runId,
-        endedAt,
-        outcome: {
-          status: "error",
-          error: params.error,
-        },
-        reason: SUBAGENT_ENDED_REASON_ERROR,
-        sendFarewell: true,
-        accountId: entry.requesterOrigin?.accountId,
-        triggerCleanup: true,
-      },
-      "explicit-failed-mark",
-    );
-    updated += 1;
+  clearPendingLifecycleError(runId);
+  clearPendingLifecycleTimeout(runId);
+  const entry = subagentRuns.get(runId);
+  if (!entry || typeof entry.cleanupCompletedAt === "number") {
+    return 0;
   }
-  return updated;
+  await completeSubagentRunWithRecovery(
+    {
+      runId,
+      endedAt,
+      outcome: {
+        status: "error",
+        error: params.error,
+      },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      sendFarewell: true,
+      accountId: entry.requesterOrigin?.accountId,
+      triggerCleanup: true,
+    },
+    "explicit-failed-mark",
+  );
+  return 1;
 }
 
 export function resolveRequesterForChildSession(childSessionKey: string): {

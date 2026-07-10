@@ -21,6 +21,7 @@ import { recoverOrphanedSubagentSessions } from "./subagent-orphan-recovery.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
+  listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
   testing,
 } from "./subagent-registry.js";
@@ -168,5 +169,59 @@ describe("subagent orphan recovery — faithful restart path", () => {
       .mock.calls.filter((args) => (args[0] as { method?: string })?.method === "agent");
     expect(agentCalls).toHaveLength(1);
     expect(result.recovered).toBe(1);
+  });
+
+  it("finalizes only a stale predecessor when a fresh generation shares its child session", async () => {
+    const now = Date.now();
+    const childSessionKey = "agent:main:subagent:shared-generation";
+    await writeSubagentSessionEntry({
+      stateDir: tempStateDir!,
+      agentId: "main",
+      sessionKey: childSessionKey,
+      sessionId: "sess-shared-generation",
+      updatedAt: now,
+      abortedLastRun: true,
+      defaultSessionId: "sess-shared-generation",
+    });
+    const staleRecord = makeRunRecord({
+      runId: "run-stale-generation",
+      childSessionKey,
+      generation: 1,
+      createdAt: now - 3 * 60 * 60 * 1_000,
+      startedAt: now - 3 * 60 * 60 * 1_000,
+      sessionStartedAt: now - 3 * 60 * 60 * 1_000,
+    });
+    const freshRecord = makeRunRecord({
+      runId: "run-fresh-generation",
+      childSessionKey,
+      generation: 2,
+      createdAt: now - 60_000,
+      startedAt: now - 55_000,
+      sessionStartedAt: now - 60_000,
+    });
+    addSubagentRunForTests(staleRecord);
+    addSubagentRunForTests(freshRecord);
+
+    const result = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () =>
+        new Map([
+          [staleRecord.runId, staleRecord],
+          [freshRecord.runId, freshRecord],
+        ]),
+    });
+
+    const agentCalls = vi
+      .mocked(callGateway)
+      .mock.calls.filter((args) => (args[0] as { method?: string })?.method === "agent");
+    const runs = listSubagentRunsForRequester("agent:main:main");
+    const resumedAfter = runs.find((entry) => entry.runId === "resumed-run-id");
+    expect(result).toMatchObject({ recovered: 1, failed: 0, skipped: 1 });
+    expect(agentCalls).toHaveLength(1);
+    expect(staleRecord.outcome?.status).toBe("error");
+    expect(freshRecord.outcome).toBeUndefined();
+    expect(runs.some((entry) => entry.runId === staleRecord.runId)).toBe(false);
+    expect(resumedAfter).toBeDefined();
+    expect(resumedAfter?.endedAt).toBeUndefined();
+    expect(resumedAfter?.outcome).toBeUndefined();
   });
 });

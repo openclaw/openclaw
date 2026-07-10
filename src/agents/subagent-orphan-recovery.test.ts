@@ -210,11 +210,13 @@ describe("subagent-orphan-recovery", () => {
 
   it("finalizes stale aborted runs instead of resuming them", async () => {
     mockSingleAbortedSession();
-    const staleStartedAt = Date.now() - 3 * 60 * 60 * 1_000;
+    const now = Date.now();
+    const staleSessionStartedAt = now - 3 * 60 * 60 * 1_000;
     const activeRuns = createActiveRuns(
       createTestRunRecord({
-        createdAt: staleStartedAt,
-        startedAt: staleStartedAt,
+        createdAt: staleSessionStartedAt,
+        startedAt: now - 60_000,
+        sessionStartedAt: staleSessionStartedAt,
       }),
     );
 
@@ -234,9 +236,10 @@ describe("subagent-orphan-recovery", () => {
       ),
       "stale finalize params",
     );
-    expect(finalizeParams.runId).toBe("run-1");
-    expect(finalizeParams.childSessionKey).toBe("agent:main:subagent:test-session-1");
-    expect(finalizeParams.error).toContain("stale aborted subagent run not resumed");
+    expect(finalizeParams).toEqual({
+      runId: "run-1",
+      error: "stale aborted subagent run not resumed (10800s old, exceeds stale-run window)",
+    });
   });
 
   it("reports stale finalization failures for scheduler retry", async () => {
@@ -732,10 +735,11 @@ describe("subagent-orphan-recovery", () => {
       ),
       "interrupted run finalization params",
     );
-    expect(finalizeParams.runId).toBe("run-1");
-    expect(finalizeParams.childSessionKey).toBe("agent:main:subagent:test-session-1");
-    expect(finalizeParams.error).toContain("Automatic recovery failed after 2 attempts");
-    expect(finalizeParams.error).toContain("service restart");
+    expect(finalizeParams).toEqual({
+      runId: "run-1",
+      error:
+        "Subagent run was interrupted by a gateway restart or connection loss. Automatic recovery failed after 2 attempts. Please retry. (service restart)",
+    });
   });
 
   it("waits for suspension to reopen before mutating an orphaned session", async () => {

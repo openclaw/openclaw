@@ -37,6 +37,7 @@ import {
 } from "./subagent-registry-steer-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
+import { getSubagentSessionStartedAt } from "./subagent-session-metrics.js";
 
 const log = createSubsystemLogger("subagent-interrupted-resume");
 
@@ -266,14 +267,12 @@ export async function recoverOrphanedSubagentSessions(params: {
         // so they don't remain in an unended state. The scheduler only
         // retries failedRuns; a plain skip would leave the run orphaned.
         if (isStaleUnendedSubagentRun(runRecord, now)) {
-          const staleAgeSeconds = Math.round(
-            (now - (runRecord.startedAt ?? runRecord.createdAt ?? now)) / 1000,
-          );
+          const staleStartedAt = getSubagentSessionStartedAt(runRecord) ?? now;
+          const staleAgeSeconds = Math.round((now - staleStartedAt) / 1000);
           const staleError = `stale aborted subagent run not resumed (${staleAgeSeconds}s old, exceeds stale-run window)`;
           try {
             const updated = await finalizeInterruptedSubagentRun({
               runId,
-              childSessionKey,
               error: staleError,
             });
             if (updated === 0) {
@@ -499,7 +498,6 @@ export function scheduleOrphanRecovery(params: {
           result.failedRuns.map((run) =>
             finalizeInterruptedSubagentRun({
               runId: run.runId,
-              childSessionKey: run.childSessionKey,
               error: buildRecoveryFailureMessage({
                 attempts,
                 error: run.error,
