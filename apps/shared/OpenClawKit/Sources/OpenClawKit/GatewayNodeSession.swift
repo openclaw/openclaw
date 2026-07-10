@@ -411,7 +411,8 @@ public actor GatewayNodeSession {
         extraHeadersProvider: (@Sendable () -> [String: String])? = nil,
         onConnected: @escaping @Sendable () async -> Void,
         onDisconnected: @escaping @Sendable (String) async -> Void,
-        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse) async throws
+        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse,
+        onRouteInvalidated: (@Sendable () async -> Void)? = nil) async throws
     {
         try await self.connect(
             url: url,
@@ -424,7 +425,8 @@ public actor GatewayNodeSession {
             extraHeadersProvider: extraHeadersProvider,
             onConnected: onConnected,
             onDisconnected: onDisconnected,
-            onInvoke: onInvoke)
+            onInvoke: onInvoke,
+            onRouteInvalidated: onRouteInvalidated)
     }
 
     public func disconnect() async {
