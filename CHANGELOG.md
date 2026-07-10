@@ -25,6 +25,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **OpenCode Go MiMo catalog:** stop exposing the deprecated `mimo-v2-omni` and `mimo-v2-pro` aliases that reject agent requests, and keep release validation on the active MiMo V2.5 routes. (#103311, #103329) Thanks @krissding.
 - **OpenAI-compatible streamed tool calls:** execute complete native tool calls from streams that end with SSE `data: [DONE]` but omit `finish_reason`, while keeping transport EOF and visible-text cases fail-closed. (#98124, #97994) Thanks @SunnyShu0925.
 - **Doctor state isolation:** prevent automated update and Gateway watch repair from importing and archiving default-home exec or plugin-binding approvals when `OPENCLAW_STATE_DIR` points elsewhere, keep implicit CLI preflight notice-only, and reserve cross-state imports for direct operator doctor runs. (#103247, #103317)
 - **Doctor clean-state guidance:** stop suggesting `openclaw doctor --fix` after a clean run with no config changes while preserving targeted repair hints. (#103233)
