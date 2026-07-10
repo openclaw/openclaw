@@ -9,6 +9,13 @@ const TOKEN = "activation-secret";
 const SIGNALS = ["SIGTERM", "SIGINT", "SIGUSR1"] as const;
 type ParkingSignal = (typeof SIGNALS)[number];
 
+function deferredActivationEnv(port: number) {
+  return {
+    OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: String(port),
+    OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: TOKEN,
+  };
+}
+
 async function reserveLoopbackPort(): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
     const server = createServer();
@@ -46,6 +53,39 @@ async function postActivate(port: number, token: string, body: unknown) {
     },
     body: JSON.stringify(body),
   });
+}
+
+async function waitForParkedGateway(port: number): Promise<{
+  waiting: ReturnType<typeof waitForDeferredGatewayActivation>;
+}> {
+  const waiting = waitForDeferredGatewayActivation({
+    env: deferredActivationEnv(port),
+  });
+  await waitForHttp(`http://127.0.0.1:${port}/healthz`);
+  return { waiting };
+}
+
+async function expectLoopbackListenerClosed(port: number): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      await fetch(`http://127.0.0.1:${port}/healthz`);
+    } catch {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`expected loopback listener on ${port} to close`);
+}
+
+async function expectFreshProcessEquivalentCanReuseControlPort(
+  port: number,
+  activationId: string,
+): Promise<void> {
+  await resetDeferredGatewayActivationForTest();
+  const { waiting } = await waitForParkedGateway(port);
+  expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
+  expect((await postActivate(port, TOKEN, { activationId })).status).toBe(202);
+  await expect(waiting).resolves.toEqual({ mode: "activated", activationId });
 }
 
 function captureSignalListeners() {
@@ -113,13 +153,7 @@ describe("waitForDeferredGatewayActivation", () => {
 
   it("parks until one authenticated bounded activation", async () => {
     const port = await reserveLoopbackPort();
-    const waiting = waitForDeferredGatewayActivation({
-      env: {
-        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: String(port),
-        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: TOKEN,
-      },
-    });
-    await waitForHttp(`http://127.0.0.1:${port}/healthz`);
+    const { waiting } = await waitForParkedGateway(port);
 
     expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
     expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(503);
@@ -140,13 +174,8 @@ describe("waitForDeferredGatewayActivation", () => {
     ["id too large", { activationId: "a".repeat(257) }, 400],
   ])("rejects %s activation ids and remains parked", async (_name, body, status) => {
     const port = await reserveLoopbackPort();
-    const waiting = waitForDeferredGatewayActivation({
-      env: {
-        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: String(port),
-        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: TOKEN,
-      },
-    });
-    await waitForHttp(`http://127.0.0.1:${port}/healthz`);
+    const { waiting } = await waitForParkedGateway(port);
+
     expect((await postActivate(port, TOKEN, body)).status).toBe(status);
     expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
     expect((await postActivate(port, TOKEN, { activationId: "cleanup" })).status).toBe(202);
@@ -155,13 +184,8 @@ describe("waitForDeferredGatewayActivation", () => {
 
   it("rejects a body over 16 KiB and remains parked", async () => {
     const port = await reserveLoopbackPort();
-    const waiting = waitForDeferredGatewayActivation({
-      env: {
-        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: String(port),
-        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: TOKEN,
-      },
-    });
-    await waitForHttp(`http://127.0.0.1:${port}/healthz`);
+    const { waiting } = await waitForParkedGateway(port);
+
     const response = await fetch(`http://127.0.0.1:${port}/activate`, {
       method: "POST",
       headers: {
@@ -178,13 +202,7 @@ describe("waitForDeferredGatewayActivation", () => {
 
   it("accepts only one concurrent activation request", async () => {
     const port = await reserveLoopbackPort();
-    const waiting = waitForDeferredGatewayActivation({
-      env: {
-        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: String(port),
-        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: TOKEN,
-      },
-    });
-    await waitForHttp(`http://127.0.0.1:${port}/healthz`);
+    const { waiting } = await waitForParkedGateway(port);
 
     const requests = await Promise.allSettled([
       postActivate(port, TOKEN, { activationId: "activation-1" }),
@@ -209,32 +227,31 @@ describe("waitForDeferredGatewayActivation", () => {
     });
   });
 
-  it("rejects parking on SIGTERM and removes temporary signal handlers", async () => {
-    const signalListeners = captureSignalListeners();
-    const port = await reserveLoopbackPort();
-    const waiting = waitForDeferredGatewayActivation({
-      env: {
-        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_CONTROL_PORT: String(port),
-        OPENCLAW_GATEWAY_DEFERRED_ACTIVATION_TOKEN: TOKEN,
-      },
-    });
-    await waitForHttp(`http://127.0.0.1:${port}/healthz`);
+  it.each(SIGNALS)(
+    "rejects parking on %s, removes temporary handlers, and allows same-port reuse",
+    async (signal) => {
+      const signalListeners = captureSignalListeners();
+      const port = await reserveLoopbackPort();
+      const { waiting } = await waitForParkedGateway(port);
 
-    expect(countAddedSignalListeners(signalListeners)).toEqual({
-      SIGTERM: 1,
-      SIGINT: 1,
-      SIGUSR1: 1,
-    });
+      expect(countAddedSignalListeners(signalListeners)).toEqual({
+        SIGTERM: 1,
+        SIGINT: 1,
+        SIGUSR1: 1,
+      });
 
-    const sigterm = findAddedSignalListener("SIGTERM", signalListeners.SIGTERM);
-    expect(sigterm).not.toBeNull();
-    sigterm?.();
+      const addedSignalListener = findAddedSignalListener(signal, signalListeners[signal]);
+      expect(addedSignalListener).not.toBeNull();
+      addedSignalListener?.();
 
-    await expect(waiting).rejects.toThrow("deferred activation interrupted by SIGTERM");
-    expect(countAddedSignalListeners(signalListeners)).toEqual({
-      SIGTERM: 0,
-      SIGINT: 0,
-      SIGUSR1: 0,
-    });
-  });
+      await expect(waiting).rejects.toThrow(`deferred activation interrupted by ${signal}`);
+      expect(countAddedSignalListeners(signalListeners)).toEqual({
+        SIGTERM: 0,
+        SIGINT: 0,
+        SIGUSR1: 0,
+      });
+      await expectLoopbackListenerClosed(port);
+      await expectFreshProcessEquivalentCanReuseControlPort(port, `restart-${signal}`);
+    },
+  );
 });
