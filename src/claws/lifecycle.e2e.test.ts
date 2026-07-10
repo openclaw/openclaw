@@ -258,6 +258,67 @@ describe("claws lifecycle cli e2e", () => {
     expect(config.agents).toEqual({});
   });
 
+  it("exports an installed agent as a self-contained grouped package", async () => {
+    const added = await runOpenClaw([
+      "claws",
+      "add",
+      "src/claws/fixtures/workspace-agent.claw.json",
+      "--yes",
+      "--json",
+    ]);
+    const outputDirectory = join(added.stateDir, "exported-claw");
+    const exported = await runOpenClaw(
+      ["claws", "export", "workspace-agent", "--out", outputDirectory, "--json"],
+      { stateDir: added.stateDir },
+    );
+    expect(parseJson(exported.stdout)).toMatchObject({
+      schemaVersion: "openclaw.clawExportResult.v1",
+      stability: "experimental",
+      agentId: "workspace-agent",
+      outputDirectory,
+      manifest: {
+        schemaVersion: 1,
+        agent: { id: "workspace-agent" },
+        workspace: {
+          bootstrapFiles: {
+            "SOUL.md": { source: "workspace/SOUL.md" },
+            "HEARTBEAT.md": { source: "workspace/HEARTBEAT.md" },
+          },
+          files: [
+            {
+              source: "workspace/reference/policy.md",
+              path: "reference/policy.md",
+            },
+          ],
+        },
+      },
+    });
+    expect(JSON.parse(await readFile(join(outputDirectory, "package.json"), "utf8"))).toMatchObject(
+      {
+        name: "openclaw-claw-workspace-agent",
+        version: "0.0.0-development",
+        type: "module",
+      },
+    );
+    const inspected = await runOpenClaw(["claws", "inspect", outputDirectory, "--json"]);
+    expect(parseJson(inspected.stdout)).toMatchObject({
+      valid: true,
+      source: { kind: "package" },
+      manifest: { agent: { id: "workspace-agent" } },
+    });
+    const roundTrip = await runOpenClaw(["claws", "add", outputDirectory, "--yes", "--json"]);
+    expect(parseJson(roundTrip.stdout)).toMatchObject({
+      status: "complete",
+      claw: { kind: "package" },
+      agent: { finalId: "workspace-agent" },
+      workspaceFiles: [
+        expect.objectContaining({ path: "SOUL.md" }),
+        expect.objectContaining({ path: "HEARTBEAT.md" }),
+        expect.objectContaining({ path: join("reference", "policy.md") }),
+      ],
+    });
+  });
+
   it("blocks mutation when declared components need later lifecycle slices", async () => {
     const preview = await runOpenClaw(["claws", "add", manifestPath, "--dry-run", "--json"], {
       expectFailure: true,

@@ -1,0 +1,258 @@
+import { mkdir, rm } from "node:fs/promises";
+import { dirname, resolve, sep } from "node:path";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { root as fsSafeRoot } from "../infra/fs-safe.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { readClawStatus, type ClawStatusResult } from "./lifecycle-state.js";
+import { parseClawManifest } from "./schema.js";
+import {
+  CLAW_BOOTSTRAP_FILE_NAMES,
+  CLAW_OUTPUT_STABILITY,
+  CLAW_SCHEMA_VERSION,
+  type ClawAgent,
+  type ClawBootstrapFileName,
+  type ClawManifest,
+} from "./types.js";
+
+export const CLAW_EXPORT_RESULT_SCHEMA_VERSION = "openclaw.clawExportResult.v1" as const;
+const MAX_EXPORT_FILE_BYTES = 1024 * 1024;
+
+type AgentConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+
+export type ClawExportResult = {
+  schemaVersion: typeof CLAW_EXPORT_RESULT_SCHEMA_VERSION;
+  stability: typeof CLAW_OUTPUT_STABILITY;
+  agentId: string;
+  outputDirectory: string;
+  manifest: ClawManifest;
+  filesWritten: string[];
+};
+
+export class ClawExportError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ClawExportError";
+  }
+}
+
+function portableAgent(agent: AgentConfig): ClawAgent {
+  return {
+    id: agent.id,
+    ...(agent.name ? { name: agent.name } : {}),
+    ...(agent.description ? { description: agent.description } : {}),
+    ...(agent.identity
+      ? {
+          identity: {
+            ...(agent.identity.name ? { name: agent.identity.name } : {}),
+            ...(agent.identity.theme ? { theme: agent.identity.theme } : {}),
+            ...(agent.identity.emoji ? { emoji: agent.identity.emoji } : {}),
+            ...(agent.identity.avatar ? { avatar: agent.identity.avatar } : {}),
+          },
+        }
+      : {}),
+    ...(agent.groupChat?.mentionPatterns
+      ? { groupChat: { mentionPatterns: agent.groupChat.mentionPatterns } }
+      : {}),
+    ...(agent.sandbox
+      ? {
+          sandbox: {
+            ...(agent.sandbox.mode ? { mode: agent.sandbox.mode } : {}),
+            ...(agent.sandbox.scope ? { scope: agent.sandbox.scope } : {}),
+            ...(agent.sandbox.workspaceAccess
+              ? { workspaceAccess: agent.sandbox.workspaceAccess }
+              : {}),
+          },
+        }
+      : {}),
+    ...(agent.tools
+      ? {
+          tools: {
+            ...(agent.tools.allow ? { allow: agent.tools.allow } : {}),
+            ...(agent.tools.deny ? { deny: agent.tools.deny } : {}),
+          },
+        }
+      : {}),
+    ...(agent.heartbeat
+      ? {
+          heartbeat: {
+            ...(agent.heartbeat.every ? { every: agent.heartbeat.every } : {}),
+            ...(agent.heartbeat.activeHours
+              ? {
+                  activeHours: {
+                    ...(agent.heartbeat.activeHours.start
+                      ? { start: agent.heartbeat.activeHours.start }
+                      : {}),
+                    ...(agent.heartbeat.activeHours.end
+                      ? { end: agent.heartbeat.activeHours.end }
+                      : {}),
+                    ...(agent.heartbeat.activeHours.timezone
+                      ? { timezone: agent.heartbeat.activeHours.timezone }
+                      : {}),
+                  },
+                }
+              : {}),
+            ...(agent.heartbeat.lightContext !== undefined
+              ? { lightContext: agent.heartbeat.lightContext }
+              : {}),
+            ...(agent.heartbeat.isolatedSession !== undefined
+              ? { isolatedSession: agent.heartbeat.isolatedSession }
+              : {}),
+            ...(agent.heartbeat.skipWhenBusy !== undefined
+              ? { skipWhenBusy: agent.heartbeat.skipWhenBusy }
+              : {}),
+            ...(agent.heartbeat.timeoutSeconds !== undefined
+              ? { timeoutSeconds: agent.heartbeat.timeoutSeconds }
+              : {}),
+          },
+        }
+      : {}),
+    ...(agent.humanDelay
+      ? {
+          humanDelay: {
+            ...(agent.humanDelay.mode ? { mode: agent.humanDelay.mode } : {}),
+            ...(agent.humanDelay.minMs !== undefined ? { minMs: agent.humanDelay.minMs } : {}),
+            ...(agent.humanDelay.maxMs !== undefined ? { maxMs: agent.humanDelay.maxMs } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function normalizedRelativePath(value: string): string {
+  return value.split(sep).join("/");
+}
+
+function exportedPackageName(record: ClawStatusResult["records"][number]): string {
+  return record.install.claw.kind === "package"
+    ? record.install.claw.name
+    : `openclaw-claw-${record.install.agentId}`;
+}
+
+export async function exportClawAgent(
+  agentId: string,
+  outputDirectory: string,
+  options: OpenClawStateDatabaseOptions & { config: OpenClawConfig },
+): Promise<ClawExportResult> {
+  const status = await readClawStatus(agentId, options);
+  const record = status.records.find((candidate) => candidate.install.agentId === agentId);
+  if (!record) {
+    throw new ClawExportError(
+      "claw_not_found",
+      `No installed Claw agent matches ${JSON.stringify(agentId)}.`,
+    );
+  }
+  const agent = options.config.agents?.list?.find((candidate) => candidate.id === agentId);
+  if (!agent) {
+    throw new ClawExportError(
+      "agent_missing",
+      `Installed Claw agent ${JSON.stringify(agentId)} is missing from config.`,
+    );
+  }
+  const unavailable = record.workspaceFiles.filter(
+    (file) => file.state === "missing" || file.state === "unsafe",
+  );
+  if (unavailable.length > 0) {
+    throw new ClawExportError(
+      "workspace_files_unavailable",
+      `Cannot export unavailable managed files: ${unavailable.map((file) => file.path).join(", ")}.`,
+    );
+  }
+
+  const workspace = await fsSafeRoot(record.install.workspace, {
+    hardlinks: "reject",
+    maxBytes: MAX_EXPORT_FILE_BYTES,
+    symlinks: "reject",
+  });
+  const contents = await Promise.all(
+    record.workspaceFiles.map(async (file) => ({
+      path: normalizedRelativePath(file.path),
+      content: await workspace.readBytes(file.path, { maxBytes: MAX_EXPORT_FILE_BYTES }),
+    })),
+  );
+  const bootstrapFiles: ClawManifest["workspace"]["bootstrapFiles"] = {};
+  const files: ClawManifest["workspace"]["files"] = [];
+  for (const file of contents) {
+    const source = `workspace/${file.path}`;
+    if (CLAW_BOOTSTRAP_FILE_NAMES.includes(file.path as ClawBootstrapFileName)) {
+      bootstrapFiles[file.path as ClawBootstrapFileName] = { source };
+    } else {
+      files.push({ source, path: file.path });
+    }
+  }
+  const manifest: ClawManifest = {
+    schemaVersion: CLAW_SCHEMA_VERSION,
+    agent: portableAgent(agent),
+    workspace: { bootstrapFiles, files },
+    packages: record.packages
+      .map((pkg) => ({ kind: pkg.kind, source: pkg.source, ref: pkg.ref, version: pkg.version }))
+      .toSorted((left, right) =>
+        `${left.kind}:${left.ref}`.localeCompare(`${right.kind}:${right.ref}`),
+      ),
+    mcpServers: {},
+    cronJobs: [],
+  };
+  const parsed = parseClawManifest(manifest);
+  if (!parsed.ok) {
+    throw new ClawExportError(
+      "export_manifest_invalid",
+      parsed.diagnostics.map((diagnostic) => diagnostic.message).join("; "),
+    );
+  }
+
+  const target = resolve(outputDirectory);
+  await mkdir(dirname(target), { recursive: true });
+  try {
+    await mkdir(target);
+  } catch (error) {
+    throw new ClawExportError(
+      "output_collision",
+      `Export directory ${JSON.stringify(target)} must not already exist: ${(error as Error).message}`,
+    );
+  }
+  const filesWritten: string[] = [];
+  try {
+    const output = await fsSafeRoot(target, {
+      hardlinks: "reject",
+      maxBytes: MAX_EXPORT_FILE_BYTES,
+      symlinks: "reject",
+    });
+    for (const file of contents) {
+      const path = `workspace/${file.path}`;
+      await output.write(path, file.content, { mkdir: true, overwrite: false });
+      filesWritten.push(path);
+    }
+    const packageJson = {
+      name: exportedPackageName(record),
+      version: record.install.claw.version,
+      type: "module",
+      openclaw: { claw: "openclaw.claw.json" },
+    };
+    await output.write("package.json", Buffer.from(`${JSON.stringify(packageJson, null, 2)}\n`), {
+      overwrite: false,
+    });
+    filesWritten.push("package.json");
+    await output.write(
+      "openclaw.claw.json",
+      Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`),
+      { overwrite: false },
+    );
+    filesWritten.push("openclaw.claw.json");
+  } catch (error) {
+    await rm(target, { recursive: true, force: true }).catch(() => undefined);
+    throw new ClawExportError(
+      "export_write_failed",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+  return {
+    schemaVersion: CLAW_EXPORT_RESULT_SCHEMA_VERSION,
+    stability: CLAW_OUTPUT_STABILITY,
+    agentId,
+    outputDirectory: target,
+    manifest,
+    filesWritten,
+  };
+}
