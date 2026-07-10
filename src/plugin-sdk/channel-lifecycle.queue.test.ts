@@ -85,6 +85,44 @@ describe("createChannelRunQueue", () => {
     expect(onError).toHaveBeenCalledWith(taskError);
   });
 
+  it("keeps the oldest run start while a newer concurrent task completes", async () => {
+    vi.useFakeTimers();
+    try {
+      const first = createDeferred();
+      const second = createDeferred();
+      const setStatus = vi.fn();
+      const queue = createChannelRunQueue({ setStatus });
+
+      vi.setSystemTime(1_000);
+      queue.enqueue("first", async () => {
+        await first.promise;
+      });
+      await flushAsyncWork();
+
+      vi.setSystemTime(2_000);
+      queue.enqueue("second", async () => {
+        await second.promise;
+      });
+      await flushAsyncWork();
+
+      second.resolve?.();
+      await second.promise;
+      await flushAsyncWork();
+
+      expect(setStatus.mock.calls.at(-1)?.[0]).toMatchObject({
+        activeRuns: 1,
+        busy: true,
+        activeRunStartedAt: 1_000,
+      });
+
+      queue.deactivate();
+      first.resolve?.();
+      await first.promise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("contains reporting hook errors", async () => {
     const taskError = new Error("boom");
     const onError = vi.fn(() => {
