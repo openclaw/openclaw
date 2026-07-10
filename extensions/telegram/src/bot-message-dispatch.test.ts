@@ -6000,6 +6000,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     // a later superseding peer (authorized explicit command) cannot abort it.
     await adoptTurn?.();
     expect(firstAbortSignal?.aborted).toBe(false);
+    expect(supersedeTelegramReplyFence("agent:main:telegram:group:-100123")).toBe(false);
 
     await dispatchWithContext({
       context: createGroupContext(100, "/export-trajectory bundle"),
@@ -6008,6 +6009,61 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(firstAbortSignal?.aborted).toBe(false);
     releaseFirst?.();
     await firstPromise;
+  });
+
+  it("keeps supersession latched when it arrives during adoption", async () => {
+    const sessionKey = "agent:main:telegram:direct:adoption-race";
+    let adoptionStarted: (() => void) | undefined;
+    const adoptionStartGate = new Promise<void>((resolve) => {
+      adoptionStarted = resolve;
+    });
+    let releaseAdoption: (() => void) | undefined;
+    const adoptionGate = new Promise<void>((resolve) => {
+      releaseAdoption = resolve;
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onTurnAdopted?.();
+        await dispatcherOptions.deliver({ text: "stale final" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const dispatchPromise = dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: sessionKey,
+          ChatType: "direct",
+          MessageSid: "101",
+          RawBody: "long turn",
+          BodyForAgent: "long turn",
+          CommandBody: "long turn",
+          CommandAuthorized: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: 123, type: "private" },
+          message_id: 101,
+          text: "long turn",
+        } as unknown as TelegramMessageContext["msg"],
+        chatId: 123,
+        isGroup: false,
+        threadSpec: { id: undefined, scope: "none" },
+      }),
+      streamMode: "off",
+      onTurnAdopted: async () => {
+        adoptionStarted?.();
+        await adoptionGate;
+      },
+    });
+    await adoptionStartGate;
+
+    const { supersedeTelegramReplyFence } = await import("./telegram-reply-fence.js");
+    expect(supersedeTelegramReplyFence(sessionKey)).toBe(true);
+    releaseAdoption?.();
+    await dispatchPromise;
+
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("lets authorized /stop kill an adopted run without the released fence controller", async () => {
@@ -6328,11 +6384,29 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const historyKey = "telegram:group:-100123";
     const groupHistories = new Map([[historyKey, []]]);
     let roomEventAbortSignal: AbortSignal | undefined;
-    let queuedLifecycle: { onEnqueued?: () => void; onComplete?: () => void } | undefined;
+    let queuedLifecycle:
+      | {
+          onEnqueued?: () => void;
+          onAdmitted?: () => Promise<void> | void;
+          onComplete?: () => void;
+        }
+      | undefined;
+    let deliverQueuedRoomEvent:
+      | DispatchReplyWithBufferedBlockDispatcherArgs["dispatcherOptions"]["deliver"]
+      | undefined;
+    let adoptionStarted: (() => void) | undefined;
+    const adoptionStartGate = new Promise<void>((resolve) => {
+      adoptionStarted = resolve;
+    });
+    let releaseAdoption: (() => void) | undefined;
+    const adoptionGate = new Promise<void>((resolve) => {
+      releaseAdoption = resolve;
+    });
     dispatchReplyWithBufferedBlockDispatcher
-      .mockImplementationOnce(async ({ replyOptions }) => {
+      .mockImplementationOnce(async ({ dispatcherOptions, replyOptions }) => {
         roomEventAbortSignal = replyOptions?.abortSignal;
         queuedLifecycle = replyOptions?.queuedFollowupLifecycle;
+        deliverQueuedRoomEvent = dispatcherOptions.deliver;
         queuedLifecycle?.onEnqueued?.();
         return {
           queuedFinal: false,
@@ -6379,8 +6453,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({
       context: createGroupContext("room_event", 99, "ambient chatter"),
       streamMode: "off",
+      onTurnAdopted: async () => {
+        adoptionStarted?.();
+        await adoptionGate;
+      },
     });
     expect(roomEventAbortSignal?.aborted).toBe(false);
+
+    const admissionPromise = queuedLifecycle?.onAdmitted?.();
+    await adoptionStartGate;
 
     await dispatchWithContext({
       context: createGroupContext("user_request", 100, "@bot answer now"),
@@ -6388,6 +6469,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(roomEventAbortSignal?.aborted).toBe(true);
+    releaseAdoption?.();
+    await admissionPromise;
+    await deliverQueuedRoomEvent?.({ text: "stale ambient answer" }, { kind: "final" });
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
     queuedLifecycle?.onComplete?.();
   });
 
@@ -6468,9 +6553,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       onTurnDeferred: vi.fn(),
       onTurnAbandoned: onRejectedTurnAbandoned,
     });
-    await expect(captures[2]?.lifecycle?.onAdmitted?.()).rejects.toThrow(
-      "durable adoption failed",
-    );
+    await expect(captures[2]?.lifecycle?.onAdmitted?.()).rejects.toThrow("durable adoption failed");
     expect(supersedeTelegramReplyFence(rejectedKey)).toBe(true);
     expect(captures[2]?.abortSignal?.aborted).toBe(true);
     captures[2]?.lifecycle?.onComplete?.();
