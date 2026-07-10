@@ -724,7 +724,7 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
       authDir,
     });
 
-    await api.sendMessage("19999990000@s.whatsapp.net", "hello");
+    await api.sendMessage("+19999990000", "hello");
 
     expect(sendMessage).toHaveBeenCalledWith("444555@lid", { text: "hello" });
     expect(fs.readFileSync(path.join(authDir, "lid-mapping-19999990000.json"), "utf8")).toBe(

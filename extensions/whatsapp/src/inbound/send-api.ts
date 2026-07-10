@@ -193,20 +193,21 @@ async function resolveOutboundJidWithUsync(params: {
   authDir?: string;
   recipient: string;
 }): Promise<string> {
+  const pnJid = toWhatsappJid(params.recipient);
   const localJid = params.authDir
     ? toWhatsappJidWithLid(params.recipient, { authDir: params.authDir })
-    : toWhatsappJid(params.recipient);
-  const phoneDigits = localJid.match(DIRECT_PN_SEND_JID_RE)?.[1];
+    : pnJid;
+  const phoneDigits = pnJid.match(DIRECT_PN_SEND_JID_RE)?.[1];
   if (!params.authDir || !phoneDigits) {
     return localJid;
   }
   try {
-    const lidJid = normalizeDirectLidJid(await params.sock.getLIDForPN?.(localJid));
+    const lidJid = normalizeDirectLidJid(await params.sock.getLIDForPN?.(pnJid));
     if (lidJid) {
       return await persistAndResolveOutboundLidMapping({
         authDir: params.authDir,
         recipient: params.recipient,
-        localJid,
+        localJid: pnJid,
         phoneDigits,
         lidJid,
         source: "Baileys LID mapping",
@@ -224,7 +225,7 @@ async function resolveOutboundJidWithUsync(params: {
       .withMode("query")
       .withContactProtocol()
       .withLIDProtocol()
-      .withUser(new USyncUser().withId(localJid));
+      .withUser(new USyncUser().withId(pnJid));
     const result = await params.sock.executeUSyncQuery(query);
     const lidJid = findUsyncLidJid(result, phoneDigits);
     if (!lidJid) {
@@ -233,7 +234,7 @@ async function resolveOutboundJidWithUsync(params: {
     return await persistAndResolveOutboundLidMapping({
       authDir: params.authDir,
       recipient: params.recipient,
-      localJid,
+      localJid: pnJid,
       phoneDigits,
       lidJid,
       source: "USync",
