@@ -40,7 +40,16 @@ function parseGeneratedEnvValue(value: string): string {
   if (!trimmed.startsWith("'") || !trimmed.endsWith("'")) {
     return trimmed;
   }
-  return trimmed.slice(1, -1).replaceAll("'\\''", "'");
+  const unquoted = trimmed.slice(1, -1).replaceAll("'\\''", "'");
+  // Self-heal values that carried a stray JSON quote pair inside the shell
+  // quotes (export AWS_REGION='"us-east-1"'). Preserving them verbatim made
+  // the corruption permanent across every re-stage: the value round-tripped
+  // back into the regenerated file and broke consumers like the AWS SDK
+  // region check (#103804).
+  if (unquoted.length >= 2 && unquoted.startsWith('"') && unquoted.endsWith('"')) {
+    return unquoted.slice(1, -1);
+  }
+  return unquoted;
 }
 
 function includesGeneratedEnvironmentPathToken(value: string | undefined, token: string): boolean {
