@@ -218,7 +218,7 @@ describe("GatewayClient", () => {
     }
   }, 4000);
 
-  test("lets pending requests own their timeout when ticks are missing", async () => {
+  test("lets finite pending requests own their timeout when ticks are missing", async () => {
     vi.useFakeTimers();
     try {
       const client = new GatewayClient({
@@ -243,7 +243,7 @@ describe("GatewayClient", () => {
         resolve: vi.fn(),
         reject: vi.fn(),
         expectFinal: false,
-        timeout: null,
+        timeout: setTimeout(() => undefined, 10_000),
       });
 
       (
@@ -257,6 +257,44 @@ describe("GatewayClient", () => {
 
       pending.clear();
       await vi.advanceTimersByTimeAsync(5);
+
+      expect(close).toHaveBeenCalledWith(4000, "tick timeout");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("closes when an unbounded request stops receiving ticks", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({ tickWatchMinIntervalMs: 5 });
+      const close = vi.fn();
+      const pending = (client as unknown as { pending: Map<string, unknown> }).pending;
+      Object.assign(
+        client as unknown as { ws: unknown; tickIntervalMs: number; lastTick: number },
+        {
+          ws: {
+            readyState: WebSocket.OPEN,
+            send: vi.fn(),
+            close,
+          },
+          tickIntervalMs: 5,
+          lastTick: Date.now(),
+        },
+      );
+      pending.set("long-running-rpc", {
+        resolve: vi.fn(),
+        reject: vi.fn(),
+        expectFinal: true,
+        timeout: null,
+      });
+
+      (
+        client as unknown as {
+          startTickWatch: () => void;
+        }
+      ).startTickWatch();
+      await vi.advanceTimersByTimeAsync(20);
 
       expect(close).toHaveBeenCalledWith(4000, "tick timeout");
     } finally {

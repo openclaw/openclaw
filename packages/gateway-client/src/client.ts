@@ -1537,7 +1537,13 @@ export class GatewayClient {
       if (!this.lastTick) {
         return;
       }
-      if (this.pending.size > 0) {
+      // Requests with a finite timeout can decide their own outcome. An
+      // expectFinal or explicitly unbounded request must not mask a dead
+      // connection forever: it still needs ticks to make progress.
+      if (
+        this.pending.size > 0 &&
+        [...this.pending.values()].every((pending) => pending.timeout !== null)
+      ) {
         return;
       }
       const gap = Date.now() - this.lastTick;
