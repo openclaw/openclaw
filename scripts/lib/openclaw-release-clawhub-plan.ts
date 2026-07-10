@@ -24,6 +24,7 @@ type ClawHubDispatchTarget = {
 
 type OpenClawReleaseClawHubPlanArgs = {
   releaseTag: string;
+  releaseSha: string;
   releasePublishBranch: string;
   releasePublishRunId: string;
   pluginPublishScope: PluginReleaseSelectionMode;
@@ -86,6 +87,14 @@ function optionalArg(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function requireCommitSha(value: string | undefined, label: string): string {
+  const sha = requireArg(value, label);
+  if (!/^[a-f0-9]{40}$/u.test(sha)) {
+    throw new Error(`${label} must be a full 40-character lowercase commit SHA.`);
+  }
+  return sha;
+}
+
 function runUrl(repository: string, runId: string): string {
   return `https://github.com/${repository}/actions/runs/${runId}`;
 }
@@ -110,6 +119,7 @@ function createDispatchTarget(params: {
   releasePublishRunId: string;
   releasePublishBranch: string;
   includePublishScope: boolean;
+  targetRef?: string;
 }): ClawHubDispatchTarget {
   if (params.packages.length === 0) {
     return {
@@ -129,6 +139,7 @@ function createDispatchTarget(params: {
     packages: [...params.packages],
     inputs: {
       ...(params.includePublishScope ? { publish_scope: "selected" } : {}),
+      ...(params.targetRef ? { ref: params.targetRef } : {}),
       plugins,
       release_publish_run_id: params.releasePublishRunId,
       release_publish_branch: params.releasePublishBranch,
@@ -194,6 +205,7 @@ export function parseOpenClawReleaseClawHubPlanArgs(
   }
 
   let releaseTag: string | undefined;
+  let releaseSha: string | undefined;
   let releasePublishBranch: string | undefined;
   let releasePublishRunId: string | undefined;
   let pluginPublishScope: PluginReleaseSelectionMode | undefined;
@@ -214,6 +226,9 @@ export function parseOpenClawReleaseClawHubPlanArgs(
     switch (arg) {
       case "--release-tag":
         releaseTag = next();
+        break;
+      case "--release-sha":
+        releaseSha = next();
         break;
       case "--release-publish-branch":
         releasePublishBranch = next();
@@ -246,6 +261,7 @@ export function parseOpenClawReleaseClawHubPlanArgs(
 
   return {
     releaseTag: requireArg(releaseTag, "--release-tag"),
+    releaseSha: requireCommitSha(releaseSha, "--release-sha"),
     releasePublishBranch: requireArg(releasePublishBranch, "--release-publish-branch"),
     releasePublishRunId: requireArg(releasePublishRunId, "--release-publish-run-id"),
     pluginPublishScope: resolvedPluginPublishScope,
@@ -262,6 +278,7 @@ export async function buildOpenClawReleaseClawHubPlan(
   } = {},
 ): Promise<OpenClawReleaseClawHubPlan> {
   const releaseTag = requireArg(args.releaseTag, "releaseTag");
+  const releaseSha = requireCommitSha(args.releaseSha, "releaseSha");
   const releasePublishBranch = requireArg(args.releasePublishBranch, "releasePublishBranch");
   const releasePublishRunId = requireArg(args.releasePublishRunId, "releasePublishRunId");
   const plan = await collectPluginClawHubReleasePlan({
@@ -293,11 +310,12 @@ export async function buildOpenClawReleaseClawHubPlan(
     }),
     bootstrap: createDispatchTarget({
       workflow: "plugin-clawhub-new.yml",
-      ref: releaseTag,
+      ref: "main",
       packages: bootstrapPackages,
       releasePublishRunId,
       releasePublishBranch,
       includePublishScope: false,
+      targetRef: releaseSha,
     }),
     summary: {
       normalCount: normalPackages.length,

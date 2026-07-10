@@ -605,7 +605,10 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
   ],
   [
     ".github/workflows/plugin-clawhub-new.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts"],
+    [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/plugin-clawhub-new-workflow.test.ts",
+    ],
   ],
   [
     ".github/workflows/plugin-clawhub-release.yml",
@@ -1326,6 +1329,16 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/release-check.test.ts", "test/scripts/test-install-sh-docker.test.ts"],
   ],
   ["scripts/lib/openclaw-release-clawhub-plan.ts", ["test/plugin-clawhub-release.test.ts"]],
+  [
+    "scripts/lib/clawhub-bootstrap-artifact.mjs",
+    ["test/scripts/clawhub-bootstrap-artifact.test.ts"],
+  ],
+  [
+    "scripts/verify-clawhub-published-artifact.mjs",
+    ["test/scripts/verify-clawhub-published-artifact.test.ts"],
+  ],
+  ["scripts/plugin-clawhub-publish.sh", ["test/plugin-clawhub-release.test.ts"]],
+  ["scripts/lib/release-beta-verifier.ts", ["test/scripts/release-beta-verifier.test.ts"]],
   [
     "scripts/lib/plugin-clawhub-release.ts",
     ["test/plugin-clawhub-release.test.ts", "test/plugin-npm-release.test.ts"],

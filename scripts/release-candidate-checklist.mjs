@@ -31,6 +31,8 @@ const DEFAULT_TELEGRAM_PROVIDER_MODE = "mock-openai";
 const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
 const DEFAULT_GITHUB_API_RESPONSE_BODY_MAX_BYTES = 16 * 1024 * 1024;
 const COMMAND_CAPTURE_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+const TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN =
+  /^tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$/u;
 const WINDOWS_NODE_TAG_PATTERN = /^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$/u;
 const WINDOWS_NODE_REPO = "openclaw/openclaw-windows-node";
 const WINDOWS_NODE_REQUIRED_ASSETS = [
@@ -48,7 +50,7 @@ OpenClaw Release Publish command only after everything is green.
 
 Options:
   --tag <tag>                         Release tag to validate.
-  --workflow-ref <ref>                Workflow branch/ref. Default: current branch.
+  --workflow-ref <ref>                Trusted workflow ref. Default: main; matching Tideclaw branch required for alpha.
   --repo <owner/repo>                 GitHub repo. Default: ${DEFAULT_REPO}
   --full-release-run <id>             Reuse successful Full Release Validation run.
   --npm-preflight-run <id>            Reuse successful OpenClaw NPM Release preflight run.
@@ -179,6 +181,18 @@ export function parseArgs(argv) {
   }
   if (!options.tag) {
     throw new Error("--tag is required");
+  }
+  if (options.tag.includes("-alpha.")) {
+    if (!TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN.test(options.workflowRef)) {
+      throw new Error(
+        "--workflow-ref must be the matching tideclaw/alpha/YYYY-MM-DD-HHMMZ branch for alpha release candidates",
+      );
+    }
+  } else {
+    options.workflowRef ||= "main";
+  }
+  if (!options.tag.includes("-alpha.") && options.workflowRef !== "main") {
+    throw new Error("--workflow-ref must be main for regular beta and stable release candidates");
   }
   options.releaseProfile ||=
     options.tag.includes("-alpha.") || options.tag.includes("-beta.") ? "beta" : "stable";
@@ -346,10 +360,6 @@ export async function validateWindowsSourceRelease(tag, options = {}) {
     url: release.html_url,
     assets,
   };
-}
-
-function currentBranch() {
-  return run("git", ["branch", "--show-current"], { capture: true }).trim();
 }
 
 function gitRevParse(ref) {
@@ -857,6 +867,12 @@ function shellQuote(value) {
  * Builds the final release publish workflow command once validation evidence is ready.
  */
 export function buildPublishCommand(options) {
+  const workflowRef = options.tag.includes("-alpha.") ? options.workflowRef : "main";
+  if (options.tag.includes("-alpha.") && !TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN.test(workflowRef)) {
+    throw new Error(
+      "alpha release publish requires a matching tideclaw/alpha/YYYY-MM-DD-HHMMZ workflow ref",
+    );
+  }
   const fields = [
     ["tag", options.tag],
     ["preflight_run_id", options.npmPreflightRunId],
@@ -888,7 +904,7 @@ export function buildPublishCommand(options) {
     "--repo",
     options.repo,
     "--ref",
-    options.workflowRef,
+    workflowRef,
     ...fields.flatMap(([key, value]) => ["-f", `${key}=${value}`]),
   ]
     .map(shellQuote)
@@ -1030,7 +1046,6 @@ async function runTelegramIfNeeded(options, artifactName) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  options.workflowRef ||= currentBranch();
   options.outputDir ||= join(".artifacts", "release-candidate", options.tag);
   const targetSha = gitRevParse(`${options.tag}^{}`);
   validateCandidateCheckout({

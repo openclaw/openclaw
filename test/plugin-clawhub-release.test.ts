@@ -1,5 +1,6 @@
 // Plugin ClawHub release tests validate plugin release metadata and artifacts.
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -9,6 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { delimiter, join } from "node:path";
+import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildOpenClawReleaseClawHubPlan,
@@ -36,6 +38,48 @@ const tempDirs: string[] = [];
 afterEach(() => {
   cleanupTempDirs(tempDirs);
 });
+
+function writeTarField(header: Buffer, offset: number, length: number, value: string) {
+  const bytes = Buffer.from(value);
+  if (bytes.byteLength > length) {
+    throw new Error(`tar field exceeds ${length} bytes`);
+  }
+  bytes.copy(header, offset);
+}
+
+function createClawPackBytes(
+  packageName: string,
+  version: string,
+  options: { duplicateNormalizedPackageJson?: boolean } = {},
+) {
+  function entry(name: string, contents: string, prefix = "") {
+    const bytes = Buffer.from(contents);
+    const header = Buffer.alloc(512);
+    writeTarField(header, 0, 100, name);
+    writeTarField(header, 124, 12, `${bytes.byteLength.toString(8).padStart(11, "0")}\0`);
+    header[156] = "0".charCodeAt(0);
+    writeTarField(header, 257, 6, "ustar");
+    writeTarField(header, 263, 2, "00");
+    writeTarField(header, 345, 155, prefix);
+    const padding = Buffer.alloc((512 - (bytes.byteLength % 512)) % 512);
+    return Buffer.concat([header, bytes, padding]);
+  }
+
+  const packageJson = JSON.stringify({ name: packageName, version });
+  const packageJsonEntries = options.duplicateNormalizedPackageJson
+    ? [
+        entry(" package.json ", packageJson, " package "),
+        entry("package/package.json", packageJson),
+      ]
+    : [entry("package/package.json", packageJson)];
+  return gzipSync(
+    Buffer.concat([
+      ...packageJsonEntries,
+      entry("package/openclaw.plugin.json", JSON.stringify({ id: "demo-plugin" })),
+      Buffer.alloc(1024),
+    ]),
+  );
+}
 
 describe("resolveChangedClawHubPublishablePluginPackages", () => {
   const publishablePlugins: PublishablePluginPackage[] = [
@@ -426,9 +470,7 @@ describe("collectPluginClawHubReleasePlan", () => {
       registryBaseUrl: "https://clawhub.ai",
     });
 
-    expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual([
-      "@openclaw/demo-plugin",
-    ]);
+    expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual(["@openclaw/demo-plugin"]);
   });
 
   it("fails closed when npm latest cannot be resolved", async () => {
@@ -1015,6 +1057,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
     const plan = await buildOpenClawReleaseClawHubPlan(
       {
         releaseTag: "v2026.4.1-beta.1",
+        releaseSha: "a".repeat(40),
         releasePublishBranch: "main",
         releasePublishRunId: "12345",
         pluginPublishScope: "all-publishable",
@@ -1043,10 +1086,11 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
     });
     expect(plan.bootstrap).toEqual({
       workflow: "plugin-clawhub-new.yml",
-      ref: "v2026.4.1-beta.1",
+      ref: "main",
       shouldDispatch: true,
       packages: ["@openclaw/demo-two", "@openclaw/demo-three"],
       inputs: {
+        ref: "a".repeat(40),
         plugins: "@openclaw/demo-two,@openclaw/demo-three",
         release_publish_run_id: "12345",
         release_publish_branch: "main",
@@ -1094,6 +1138,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
     const plan = await buildOpenClawReleaseClawHubPlan(
       {
         releaseTag: "v2026.4.1-beta.1",
+        releaseSha: "b".repeat(40),
         releasePublishBranch: "release/2026.4.1",
         releasePublishRunId: "12345",
         pluginPublishScope: "selected",
@@ -1109,10 +1154,11 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
     expect(plan.normal.shouldDispatch).toBe(false);
     expect(plan.bootstrap).toMatchObject({
       workflow: "plugin-clawhub-new.yml",
-      ref: "v2026.4.1-beta.1",
+      ref: "main",
       shouldDispatch: true,
       packages: ["@openclaw/demo-plugin"],
       inputs: {
+        ref: "b".repeat(40),
         plugins: "@openclaw/demo-plugin",
         release_publish_run_id: "12345",
         release_publish_branch: "release/2026.4.1",
@@ -1132,6 +1178,8 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
       parseOpenClawReleaseClawHubPlanArgs([
         "--release-tag",
         "v2026.4.1-beta.1",
+        "--release-sha",
+        "c".repeat(40),
         "--release-publish-branch",
         "main",
         "--release-publish-run-id",
@@ -1142,6 +1190,23 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
         "@openclaw/demo-plugin",
       ]),
     ).toThrow("plugin-publish-scope=all-publishable must not be combined with --plugins.");
+  });
+
+  it("requires an exact lowercase release SHA for bootstrap targeting", () => {
+    const baseArgs = [
+      "--release-tag",
+      "v2026.4.1-beta.1",
+      "--release-publish-branch",
+      "release/2026.4.1",
+      "--release-publish-run-id",
+      "12345",
+    ];
+    expect(() => parseOpenClawReleaseClawHubPlanArgs(baseArgs)).toThrow(
+      "--release-sha is required.",
+    );
+    expect(() =>
+      parseOpenClawReleaseClawHubPlanArgs([...baseArgs, "--release-sha", "ABCDEF"]),
+    ).toThrow("--release-sha must be a full 40-character lowercase commit SHA.");
   });
 });
 
@@ -1291,6 +1356,25 @@ describe("buildOpenClawReleaseClawHubRuntimeState", () => {
 });
 
 describe("plugin-clawhub-publish.sh", () => {
+  it("rejects ambiguous packed identities before invoking the pinned ClawHub CLI", () => {
+    const source = readFileSync("scripts/plugin-clawhub-publish.sh", "utf8");
+    const localIdentityIndex = source.indexOf("clawhub-bootstrap-artifact.mjs");
+    const clawHubDryRunIndex = source.indexOf("local dry_run_json");
+
+    expect(localIdentityIndex).toBeGreaterThan(0);
+    expect(localIdentityIndex).toBeLessThan(clawHubDryRunIndex);
+  });
+
+  it("probes GNU timeout capabilities and leaves pack-only mode portable", () => {
+    const source = readFileSync("scripts/plugin-clawhub-publish.sh", "utf8");
+    const packExitIndex = source.indexOf('if [[ "${mode}" == "--pack" ]]');
+    const timeoutProbeIndex = source.indexOf("for timeout_candidate in timeout gtimeout");
+
+    expect(timeoutProbeIndex).toBeGreaterThan(packExitIndex);
+    expect(source).toContain("--signal=TERM --kill-after=1s 1s true");
+    expect(source).toContain("with --signal and --kill-after support is required");
+  });
+
   it("prints help before package or ClawHub checks", () => {
     const output = execFileSync(
       "bash",
@@ -1301,7 +1385,10 @@ describe("plugin-clawhub-publish.sh", () => {
     );
 
     expect(output.trim()).toBe(
-      "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir>",
+      [
+        "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir>",
+        "       bash scripts/plugin-clawhub-publish.sh [--validate-packed|--publish-packed] <clawpack.tgz>",
+      ].join("\n"),
     );
   });
 
@@ -1525,6 +1612,176 @@ exit 0
     const invocations = readFileSync(markerPath, "utf8");
     expect(invocations).toContain("package pack ");
     expect(invocations).not.toContain("package publish ");
+  });
+
+  it("rejects duplicate normalized paths before invoking the ClawHub CLI", () => {
+    const repoDir = createTempPluginRepo();
+    const binDir = join(repoDir, "bin");
+    const markerPath = join(repoDir, "clawhub-invoked");
+    const tgzPath = join(repoDir, "ambiguous.tgz");
+    const tgzBytes = createClawPackBytes("@openclaw/demo-plugin", "2026.4.1", {
+      duplicateNormalizedPackageJson: true,
+    });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(tgzPath, tgzBytes);
+    writeFileSync(
+      join(binDir, "clawhub"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+touch ${JSON.stringify(markerPath)}
+exit 99
+`,
+    );
+    chmodSync(join(binDir, "clawhub"), 0o755);
+
+    expect(() =>
+      execFileSync(
+        "bash",
+        [join(process.cwd(), "scripts/plugin-clawhub-publish.sh"), "--validate-packed", tgzPath],
+        {
+          cwd: repoDir,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            EXPECTED_CLAWHUB_ARTIFACT_SHA256: createHash("sha256").update(tgzBytes).digest("hex"),
+            EXPECTED_CLAWHUB_ARTIFACT_SIZE: String(tgzBytes.byteLength),
+            EXPECTED_CLAWHUB_PACKAGE_NAME: "@openclaw/demo-plugin",
+            EXPECTED_CLAWHUB_PACKAGE_VERSION: "2026.4.1",
+            PACKAGE_DIR: "extensions/demo-plugin",
+            PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+          },
+        },
+      ),
+    ).toThrow("duplicate normalized path: package.json");
+    expect(existsSync(markerPath)).toBe(false);
+  });
+
+  it("publishes the exact validated tgz and retries transient failures", () => {
+    const repoDir = createTempPluginRepo();
+    const binDir = join(repoDir, "bin");
+    const markerPath = join(repoDir, "clawhub-invoked");
+    const attemptsPath = join(repoDir, "publish-attempts");
+    const tgzPath = join(repoDir, "immutable.tgz");
+    const tgzBytes = createClawPackBytes("@openclaw/demo-plugin", "2026.4.1");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(tgzPath, tgzBytes);
+    writeFileSync(
+      join(binDir, "sleep"),
+      `#!/usr/bin/env bash
+exit 0
+`,
+    );
+    chmodSync(join(binDir, "sleep"), 0o755);
+    writeFileSync(
+      join(binDir, "clawhub"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> ${JSON.stringify(markerPath)}
+if [[ "\${1:-}" == "--workdir" ]]; then
+  shift 2
+fi
+if [[ " $* " == *" --dry-run "* ]]; then
+  printf '{"name":"@openclaw/demo-plugin","version":"2026.4.1"}\\n'
+  exit 0
+fi
+attempts=0
+if [[ -f ${JSON.stringify(attemptsPath)} ]]; then
+  attempts="$(cat ${JSON.stringify(attemptsPath)})"
+fi
+attempts=$((attempts + 1))
+printf '%s' "$attempts" > ${JSON.stringify(attemptsPath)}
+if [[ "$attempts" == "1" ]]; then
+  echo "HTTP 503 temporarily unavailable" >&2
+  exit 1
+fi
+exit 0
+`,
+    );
+    chmodSync(join(binDir, "clawhub"), 0o755);
+
+    execFileSync(
+      "bash",
+      [join(process.cwd(), "scripts/plugin-clawhub-publish.sh"), "--publish-packed", tgzPath],
+      {
+        cwd: repoDir,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          EXPECTED_CLAWHUB_ARTIFACT_SHA256: createHash("sha256").update(tgzBytes).digest("hex"),
+          EXPECTED_CLAWHUB_ARTIFACT_SIZE: String(tgzBytes.byteLength),
+          EXPECTED_CLAWHUB_PACKAGE_NAME: "@openclaw/demo-plugin",
+          EXPECTED_CLAWHUB_PACKAGE_VERSION: "2026.4.1",
+          OPENCLAW_CLAWHUB_PUBLISH_ATTEMPTS: "2",
+          OPENCLAW_CLAWHUB_PUBLISH_RETRY_DELAY_SECONDS: "1",
+          PACKAGE_DIR: "extensions/demo-plugin",
+          PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+        },
+      },
+    );
+
+    const invocations = readFileSync(markerPath, "utf8");
+    expect(invocations).not.toContain("package pack");
+    expect(invocations.match(/immutable\.tgz/gu)).toHaveLength(3);
+    expect(readFileSync(attemptsPath, "utf8")).toBe("2");
+  });
+
+  it("bounds each packed publish attempt and retries a timed-out CLI", () => {
+    const repoDir = createTempPluginRepo();
+    const binDir = join(repoDir, "bin");
+    const attemptsPath = join(repoDir, "publish-attempts");
+    const tgzPath = join(repoDir, "immutable.tgz");
+    const tgzBytes = createClawPackBytes("@openclaw/demo-plugin", "2026.4.1");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(tgzPath, tgzBytes);
+    writeFileSync(
+      join(binDir, "clawhub"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${1:-}" == "--workdir" ]]; then
+  shift 2
+fi
+if [[ " $* " == *" --dry-run "* ]]; then
+  printf '{"name":"@openclaw/demo-plugin","version":"2026.4.1"}\\n'
+  exit 0
+fi
+attempts=0
+if [[ -f ${JSON.stringify(attemptsPath)} ]]; then
+  attempts="$(cat ${JSON.stringify(attemptsPath)})"
+fi
+attempts=$((attempts + 1))
+printf '%s' "$attempts" > ${JSON.stringify(attemptsPath)}
+if [[ "$attempts" == "1" ]]; then
+  sleep 60
+fi
+exit 0
+`,
+    );
+    chmodSync(join(binDir, "clawhub"), 0o755);
+
+    const startedAt = Date.now();
+    execFileSync(
+      "bash",
+      [join(process.cwd(), "scripts/plugin-clawhub-publish.sh"), "--publish-packed", tgzPath],
+      {
+        cwd: repoDir,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          EXPECTED_CLAWHUB_ARTIFACT_SHA256: createHash("sha256").update(tgzBytes).digest("hex"),
+          EXPECTED_CLAWHUB_ARTIFACT_SIZE: String(tgzBytes.byteLength),
+          EXPECTED_CLAWHUB_PACKAGE_NAME: "@openclaw/demo-plugin",
+          EXPECTED_CLAWHUB_PACKAGE_VERSION: "2026.4.1",
+          OPENCLAW_CLAWHUB_PUBLISH_ATTEMPTS: "2",
+          OPENCLAW_CLAWHUB_PUBLISH_ATTEMPT_TIMEOUT_SECONDS: "1",
+          OPENCLAW_CLAWHUB_PUBLISH_RETRY_DELAY_SECONDS: "1",
+          PACKAGE_DIR: "extensions/demo-plugin",
+          PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+        },
+      },
+    );
+
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(readFileSync(attemptsPath, "utf8")).toBe("2");
   });
 });
 

@@ -427,6 +427,31 @@ describe("release candidate checklist", () => {
     );
   });
 
+  it("uses trusted main for regular release workflow tooling", () => {
+    expect(parseArgs(["--tag", "v2026.5.14-beta.3"]).workflowRef).toBe("main");
+    expect(() =>
+      parseArgs(["--tag", "v2026.5.14-beta.3", "--workflow-ref", "release/2026.5.14"]),
+    ).toThrow("--workflow-ref must be main");
+  });
+
+  it("preserves the matching Tideclaw alpha workflow source", () => {
+    const workflowRef = "tideclaw/alpha/2026-07-10-1200Z";
+    const options = parseArgs([
+      "--tag",
+      "v2026.7.1-alpha.3",
+      "--workflow-ref",
+      workflowRef,
+      "--npm-dist-tag",
+      "alpha",
+    ]);
+
+    expect(options.workflowRef).toBe(workflowRef);
+    expect(buildPublishCommand(options)).toContain(`'--ref' '${workflowRef}'`);
+    expect(() => parseArgs(["--tag", "v2026.7.1-alpha.3"])).toThrow(
+      "--workflow-ref must be the matching tideclaw/alpha/",
+    );
+  });
+
   it("rejects duplicate release candidate CLI options", () => {
     const requiredArgs = ["--tag", "v2026.5.14-beta.3"];
     const duplicateOption = (
@@ -561,14 +586,14 @@ describe("release candidate checklist", () => {
         "--tag",
         "v2026.5.14-beta.3",
         "--workflow-ref",
-        "release/2026.5.14",
+        "main",
         "--full-release-run",
         "111",
         "--npm-preflight-run",
         "222",
         "--skip-dispatch",
       ]),
-      workflowRef: "release/2026.5.14",
+      workflowRef: "main",
       fullReleaseRunAttempt: 2,
     };
 
@@ -578,6 +603,7 @@ describe("release candidate checklist", () => {
     expect(command).toContain("'preflight_run_id=222'");
     expect(command).toContain("'tag=v2026.5.14-beta.3'");
     expect(command).toContain("'plugin_publish_scope=all-publishable'");
+    expect(command).toContain("'--ref' 'main'");
     expect(command).not.toContain("windows_node_tag=");
 
     const workflow = parse(
@@ -606,9 +632,9 @@ describe("release candidate checklist", () => {
         "--windows-node-tag",
         "v0.6.3",
         "--workflow-ref",
-        "release/2026.5.14",
+        "main",
       ]),
-      workflowRef: "release/2026.5.14",
+      workflowRef: "main",
       windowsNodeInstallerDigests: JSON.stringify({
         "OpenClawCompanion-Setup-x64.exe": `sha256:${"a".repeat(64)}`,
         "OpenClawCompanion-Setup-arm64.exe": `sha256:${"b".repeat(64)}`,
@@ -727,14 +753,14 @@ describe("release candidate checklist", () => {
         "--tag",
         "v2026.5.14-beta.3",
         "--workflow-ref",
-        "release/2026.5.14",
+        "main",
         "--full-release-run",
         "111",
         "--npm-preflight-run",
         "222",
         "--skip-dispatch",
       ]),
-      workflowRef: "release/2026.5.14",
+      workflowRef: "main",
       npmTelegramRunId: "333",
     };
 
