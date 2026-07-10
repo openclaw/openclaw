@@ -73,6 +73,39 @@ export type DurableRuntimeLinkStatus =
 export type DurableRuntimeTimerStatus = "pending" | "fired" | "cancelled";
 export type DurableRuntimeSignalStatus = "pending" | "consumed";
 
+export type DurableParentWakeStatus = "pending" | "delivered" | "acked" | "failed" | "superseded";
+
+export type DurableParentWakeReason =
+  | "child_terminal"
+  | "fan_in_incomplete"
+  | "restart_interrupted"
+  | "delivery_unknown"
+  | "side_effect_uncertain"
+  | "no_handler"
+  | "operator_requested";
+
+export type DurableSideEffectUncertaintyKind =
+  | "unknown_after_side_effect"
+  | "interrupted_during_tool"
+  | "lost_after_dispatch"
+  | "delivery_unknown"
+  | "requires_parent_decision";
+
+export type DurableSideEffectUncertaintyStatus = "open" | "resolved" | "superseded";
+
+export type DurableContinuationCleanupTargetKind =
+  | "timer"
+  | "signal"
+  | "result_mailbox"
+  | "wake"
+  | "continuation_cursor";
+
+export type DurableContinuationCleanupStatus = "superseded" | "noop";
+
+export type DurableDedupeScope = "wake" | "wake_delivery" | "result_mailbox" | "recovery_pass";
+
+export type DurableDedupeLedgerStatus = "recorded" | "applied" | "conflict" | "superseded";
+
 export type DurableRuntimeRun = {
   runtimeRunId: string;
   operationKind: string;
@@ -198,6 +231,97 @@ export type DurableRuntimeEvent = {
   causationEventId?: string;
   correlationId?: string;
   recordedAt: number;
+};
+
+export type DurableParentWake = {
+  wakeId: string;
+  parentRunId?: string;
+  parentSessionKey?: string;
+  targetAgent?: string;
+  targetSession?: string;
+  targetChannel?: string;
+  reason: DurableParentWakeReason;
+  factsRef?: string;
+  sourceRunId?: string;
+  dedupeKey: string;
+  attemptCount: number;
+  lastAttemptAt?: number;
+  ackedAt?: number;
+  failedReason?: string;
+  status: DurableParentWakeStatus;
+  metadata?: Record<string, unknown>;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type DurableSideEffectUncertaintyFact = {
+  factId: string;
+  kind: DurableSideEffectUncertaintyKind;
+  sourceRunId?: string;
+  stepId?: string;
+  eventId?: string;
+  refId?: string;
+  factsRef?: string;
+  dedupeKey?: string;
+  facts?: Record<string, unknown>;
+  status: DurableSideEffectUncertaintyStatus;
+  resolutionKind?: string;
+  resolutionRef?: string;
+  resolvedAt?: number;
+  metadata?: Record<string, unknown>;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type DurableContinuationCleanupAudit = {
+  cleanupId: string;
+  targetKind: DurableContinuationCleanupTargetKind;
+  targetId: string;
+  runtimeRunId?: string;
+  stepId?: string;
+  supersededByRef?: string;
+  reason?: string;
+  requestedBy?: string;
+  dedupeKey: string;
+  status: DurableContinuationCleanupStatus;
+  metadata?: Record<string, unknown>;
+  createdAt: number;
+};
+
+export type DurableDedupeLedgerEntry = {
+  ledgerId: string;
+  scope: DurableDedupeScope;
+  dedupeKey: string;
+  subjectRef?: string;
+  operationKind?: string;
+  status: DurableDedupeLedgerStatus;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  hitCount: number;
+  metadata?: Record<string, unknown>;
+};
+
+export type DurableUnresolvedObligationKind =
+  | "pending_wake"
+  | "unresolved_uncertainty"
+  | "open_child"
+  | "expired_run_claim"
+  | "expired_step_claim"
+  | "pending_result_mailbox";
+
+export type DurableUnresolvedObligation = {
+  obligationId: string;
+  kind: DurableUnresolvedObligationKind;
+  runtimeRunId?: string;
+  stepId?: string;
+  wakeId?: string;
+  uncertaintyFactId?: string;
+  subjectRef?: string;
+  reason?: string;
+  status: string;
+  createdAt: number;
+  updatedAt: number;
+  metadata?: Record<string, unknown>;
 };
 
 export type CreateDurableRuntimeRunInput = {
@@ -355,6 +479,81 @@ export type CreateDurableRuntimeSignalInput = {
   now?: number;
 };
 
+export type CreateDurableParentWakeInput = {
+  wakeId?: string;
+  parentRunId?: string;
+  parentSessionKey?: string;
+  targetAgent?: string;
+  targetSession?: string;
+  targetChannel?: string;
+  reason: DurableParentWakeReason;
+  factsRef?: string;
+  sourceRunId?: string;
+  dedupeKey: string;
+  metadata?: Record<string, unknown>;
+  now?: number;
+};
+
+export type UpdateDurableParentWakeInput = {
+  wakeId: string;
+  status: DurableParentWakeStatus;
+  attemptCount?: number;
+  lastAttemptAt?: number | null;
+  ackedAt?: number | null;
+  failedReason?: string | null;
+  metadata?: Record<string, unknown>;
+  now?: number;
+};
+
+export type CreateDurableSideEffectUncertaintyFactInput = {
+  factId?: string;
+  kind: DurableSideEffectUncertaintyKind;
+  sourceRunId?: string;
+  stepId?: string;
+  eventId?: string;
+  refId?: string;
+  factsRef?: string;
+  dedupeKey?: string;
+  facts?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  now?: number;
+};
+
+export type ResolveDurableSideEffectUncertaintyFactInput = {
+  factId: string;
+  status: Extract<DurableSideEffectUncertaintyStatus, "resolved" | "superseded">;
+  resolutionKind?: string;
+  resolutionRef?: string;
+  metadata?: Record<string, unknown>;
+  now?: number;
+};
+
+export type RecordDurableContinuationCleanupInput = {
+  cleanupId?: string;
+  targetKind: DurableContinuationCleanupTargetKind;
+  targetId: string;
+  runtimeRunId?: string;
+  stepId?: string;
+  supersededByRef?: string;
+  reason?: string;
+  requestedBy?: string;
+  dedupeKey: string;
+  status?: DurableContinuationCleanupStatus;
+  metadata?: Record<string, unknown>;
+  now?: number;
+};
+
+export type RecordDurableDedupeLedgerInput = {
+  ledgerId?: string;
+  scope: DurableDedupeScope;
+  dedupeKey: string;
+  subjectRef?: string;
+  operationKind?: string;
+  status?: DurableDedupeLedgerStatus;
+  metadata?: Record<string, unknown>;
+  now?: number;
+};
+
 export type ClaimDurableRuntimeRunInput = {
   operationKind?: string;
   workerId: string;
@@ -377,6 +576,8 @@ export type DurableRuntimeStoreStats = {
   events: number;
   steps: number;
   openRuns: number;
+  pendingWakes: number;
+  unresolvedUncertaintyFacts: number;
 };
 
 export type DurableRuntimeTimelineOptions = {
@@ -434,6 +635,44 @@ export type DurableRuntimeStore = {
   consumeSignal(input: { signalId: string; now?: number }): DurableRuntimeSignal | undefined;
   listPendingSignals(options?: { limit?: number }): DurableRuntimeSignal[];
   listSignals(runtimeRunId: string): DurableRuntimeSignal[];
+  createParentWake(input: CreateDurableParentWakeInput): DurableParentWake;
+  updateParentWake(input: UpdateDurableParentWakeInput): DurableParentWake | undefined;
+  getParentWake(wakeId: string): DurableParentWake | undefined;
+  listParentWakes(options?: {
+    parentRunId?: string;
+    parentSessionKey?: string;
+    status?: DurableParentWakeStatus;
+    limit?: number;
+  }): DurableParentWake[];
+  recordSideEffectUncertaintyFact(
+    input: CreateDurableSideEffectUncertaintyFactInput,
+  ): DurableSideEffectUncertaintyFact;
+  resolveSideEffectUncertaintyFact(
+    input: ResolveDurableSideEffectUncertaintyFactInput,
+  ): DurableSideEffectUncertaintyFact | undefined;
+  listSideEffectUncertaintyFacts(options?: {
+    sourceRunId?: string;
+    status?: DurableSideEffectUncertaintyStatus;
+    limit?: number;
+  }): DurableSideEffectUncertaintyFact[];
+  recordContinuationCleanup(
+    input: RecordDurableContinuationCleanupInput,
+  ): DurableContinuationCleanupAudit;
+  listContinuationCleanupAudit(options?: {
+    runtimeRunId?: string;
+    targetKind?: DurableContinuationCleanupTargetKind;
+    limit?: number;
+  }): DurableContinuationCleanupAudit[];
+  recordDedupeLedgerEntry(input: RecordDurableDedupeLedgerInput): DurableDedupeLedgerEntry;
+  listDedupeLedgerEntries(options?: {
+    scope?: DurableDedupeScope;
+    status?: DurableDedupeLedgerStatus;
+    limit?: number;
+  }): DurableDedupeLedgerEntry[];
+  listUnresolvedObligations(options?: {
+    now?: number;
+    limit?: number;
+  }): DurableUnresolvedObligation[];
   getTimeline(runtimeRunId: string, options?: DurableRuntimeTimelineOptions): DurableRuntimeEvent[];
   compactTerminalRun(input: CompactDurableRuntimeRunInput): CompactDurableRuntimeRunResult;
   getStats(): DurableRuntimeStoreStats;

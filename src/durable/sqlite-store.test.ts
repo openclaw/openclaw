@@ -10,13 +10,17 @@ import { resolveDurableRuntimeSqlitePath } from "./config.js";
 import { openDurableRuntimeSqliteStore } from "./sqlite-store.js";
 
 const DURABLE_TABLES = [
+  "durable_runtime_continuation_cleanup",
+  "durable_runtime_dedupe_ledger",
   "durable_runtime_events",
   "durable_runtime_links",
+  "durable_runtime_parent_wakes",
   "durable_runtime_refs",
   "durable_runtime_runs",
   "durable_runtime_signals",
   "durable_runtime_steps",
   "durable_runtime_timers",
+  "durable_runtime_uncertainty_facts",
 ] as const;
 
 describe("durable runtime sqlite store", () => {
@@ -215,7 +219,10 @@ describe("durable runtime sqlite store", () => {
         workUnitId: "wu:legacy",
         reportRouteId: "discord:legacy-main",
       });
-      expect(store.getStats()).toMatchObject({ runs: 1, schemaVersion: 1 });
+      expect(store.getStats()).toMatchObject({
+        runs: 1,
+        schemaVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
     } finally {
       store.close();
     }
@@ -417,6 +424,281 @@ describe("durable runtime sqlite store", () => {
       expect(database.db.isOpen).toBe(false);
     } finally {
       vi.doUnmock("../infra/kysely-sync.js");
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("records parent wakes idempotently and keeps terminal wake states immutable", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
+    const store = openDurableRuntimeSqliteStore({
+      path: path.join(dir, "openclaw.sqlite"),
+    });
+    try {
+      const parent = store.createRun({
+        runtimeRunId: "run_parent",
+        operationKind: "test.parent",
+        status: "waiting_child",
+        recoveryState: "waiting_child",
+        now: 100,
+      });
+      const wake = store.createParentWake({
+        parentRunId: parent.runtimeRunId,
+        parentSessionKey: "agent:parent:session",
+        targetAgent: "parent-agent",
+        targetSession: "session-1",
+        targetChannel: "discord",
+        reason: "child_terminal",
+        factsRef: "event:child.done",
+        sourceRunId: "run_child",
+        dedupeKey: "wake:child-terminal:run_child",
+        metadata: { evidence: "child terminal" },
+        now: 110,
+      });
+      const duplicate = store.createParentWake({
+        parentRunId: parent.runtimeRunId,
+        reason: "child_terminal",
+        dedupeKey: "wake:child-terminal:run_child",
+        now: 120,
+      });
+      expect(duplicate.wakeId).toBe(wake.wakeId);
+      expect(duplicate).toMatchObject({
+        parentRunId: parent.runtimeRunId,
+        parentSessionKey: "agent:parent:session",
+        status: "pending",
+        attemptCount: 0,
+        metadata: { evidence: "child terminal" },
+      });
+
+      expect(
+        store.updateParentWake({
+          wakeId: wake.wakeId,
+          status: "delivered",
+          attemptCount: 1,
+          lastAttemptAt: 130,
+          now: 130,
+        }),
+      ).toMatchObject({
+        status: "delivered",
+        attemptCount: 1,
+        lastAttemptAt: 130,
+        updatedAt: 130,
+      });
+      expect(
+        store.updateParentWake({
+          wakeId: wake.wakeId,
+          status: "acked",
+          ackedAt: 140,
+          now: 140,
+        }),
+      ).toMatchObject({
+        status: "acked",
+        ackedAt: 140,
+      });
+      expect(
+        store.updateParentWake({
+          wakeId: wake.wakeId,
+          status: "failed",
+          failedReason: "parent unavailable",
+          now: 150,
+        }),
+      ).toBeUndefined();
+      expect(
+        store.updateParentWake({
+          wakeId: wake.wakeId,
+          status: "acked",
+          attemptCount: 1,
+          lastAttemptAt: 130,
+          ackedAt: 140,
+          now: 160,
+        }),
+      ).toMatchObject({
+        wakeId: wake.wakeId,
+        status: "acked",
+        updatedAt: 140,
+      });
+      expect(store.listParentWakes({ parentRunId: parent.runtimeRunId })).toHaveLength(1);
+      expect(store.listParentWakes({ status: "acked" })).toMatchObject([{ wakeId: wake.wakeId }]);
+
+      const failedWake = store.createParentWake({
+        parentRunId: parent.runtimeRunId,
+        reason: "no_handler",
+        dedupeKey: "wake:no-handler:1",
+        now: 170,
+      });
+      expect(
+        store.updateParentWake({
+          wakeId: failedWake.wakeId,
+          status: "failed",
+          failedReason: "no parent route",
+          now: 180,
+        }),
+      ).toMatchObject({ status: "failed" });
+      expect(
+        store.updateParentWake({
+          wakeId: failedWake.wakeId,
+          status: "acked",
+          ackedAt: 190,
+          now: 190,
+        }),
+      ).toBeUndefined();
+    } finally {
+      store.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("records uncertainty facts, cleanup audit, dedupe evidence, and unresolved obligations", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-store-"));
+    const store = openDurableRuntimeSqliteStore({
+      path: path.join(dir, "openclaw.sqlite"),
+    });
+    try {
+      const run = store.createRun({
+        runtimeRunId: "run_obligations",
+        operationKind: "test.runtime",
+        status: "queued",
+        recoveryState: "claimed",
+        now: 100,
+      });
+      store.claimNextRunnableRun({
+        operationKind: "test.runtime",
+        workerId: "worker-old",
+        claimTtlMs: 10,
+        now: 110,
+      });
+      const step = store.createStep({
+        runtimeRunId: run.runtimeRunId,
+        stepId: "tool_1",
+        stepType: "tool",
+        status: "queued",
+        recoveryState: "runnable",
+        now: 120,
+      });
+      store.claimNextRunnableStep({
+        operationKind: "test.runtime",
+        workerId: "worker-step",
+        claimTtlMs: 10,
+        now: 121,
+      });
+      store.createStep({
+        runtimeRunId: run.runtimeRunId,
+        stepId: "result_mailbox:child",
+        stepType: "result_mailbox",
+        status: "pending",
+        recoveryState: "waiting_child",
+        idempotencyKey: "result-mailbox:v1:child",
+        now: 125,
+      });
+      const wake = store.createParentWake({
+        parentRunId: run.runtimeRunId,
+        reason: "delivery_unknown",
+        factsRef: "channel:delivery:1",
+        sourceRunId: run.runtimeRunId,
+        dedupeKey: "wake:delivery:1",
+        now: 130,
+      });
+      const fact = store.recordSideEffectUncertaintyFact({
+        kind: "lost_after_dispatch",
+        sourceRunId: run.runtimeRunId,
+        stepId: step.stepId,
+        factsRef: "tool:dispatch:1",
+        dedupeKey: "uncertain:dispatch:1",
+        facts: { providerRequestId: "req-1" },
+        metadata: { preview: "redacted" },
+        now: 140,
+      });
+      const duplicateFact = store.recordSideEffectUncertaintyFact({
+        kind: "lost_after_dispatch",
+        sourceRunId: run.runtimeRunId,
+        dedupeKey: "uncertain:dispatch:1",
+        now: 150,
+      });
+      expect(duplicateFact.factId).toBe(fact.factId);
+      expect(store.listSideEffectUncertaintyFacts({ status: "open" })).toMatchObject([
+        {
+          factId: fact.factId,
+          kind: "lost_after_dispatch",
+          facts: { providerRequestId: "req-1" },
+        },
+      ]);
+
+      const cleanup = store.recordContinuationCleanup({
+        targetKind: "wake",
+        targetId: wake.wakeId,
+        runtimeRunId: run.runtimeRunId,
+        supersededByRef: "event:newer-fact",
+        reason: "newer fact superseded stale wake",
+        requestedBy: "operator:test",
+        dedupeKey: "cleanup:wake:1",
+        now: 160,
+      });
+      expect(
+        store.recordContinuationCleanup({
+          targetKind: "wake",
+          targetId: wake.wakeId,
+          dedupeKey: "cleanup:wake:1",
+          now: 170,
+        }),
+      ).toEqual(cleanup);
+      expect(store.listContinuationCleanupAudit({ runtimeRunId: run.runtimeRunId })).toMatchObject([
+        {
+          cleanupId: cleanup.cleanupId,
+          targetKind: "wake",
+          status: "superseded",
+        },
+      ]);
+
+      expect(
+        store.recordDedupeLedgerEntry({
+          scope: "recovery_pass",
+          dedupeKey: "recovery:scan:1",
+          subjectRef: run.runtimeRunId,
+          operationKind: "test.runtime",
+          now: 180,
+        }),
+      ).toMatchObject({ hitCount: 1, firstSeenAt: 180, lastSeenAt: 180 });
+      expect(
+        store.recordDedupeLedgerEntry({
+          scope: "recovery_pass",
+          dedupeKey: "recovery:scan:1",
+          now: 190,
+        }),
+      ).toMatchObject({ hitCount: 2, firstSeenAt: 180, lastSeenAt: 190 });
+
+      expect(
+        store
+          .listUnresolvedObligations({ now: 200 })
+          .map((obligation) => [obligation.kind, obligation.status]),
+      ).toEqual(
+        expect.arrayContaining([
+          ["pending_wake", "pending"],
+          ["unresolved_uncertainty", "open"],
+          ["expired_run_claim", "queued"],
+          ["expired_step_claim", "queued"],
+          ["pending_result_mailbox", "pending"],
+        ]),
+      );
+      expect(
+        store.resolveSideEffectUncertaintyFact({
+          factId: fact.factId,
+          status: "resolved",
+          resolutionKind: "parent_ack",
+          resolutionRef: wake.wakeId,
+          now: 210,
+        }),
+      ).toMatchObject({
+        status: "resolved",
+        resolutionKind: "parent_ack",
+        resolutionRef: wake.wakeId,
+        resolvedAt: 210,
+      });
+      expect(store.listSideEffectUncertaintyFacts({ status: "open" })).toEqual([]);
+      expect(store.getStats()).toMatchObject({
+        pendingWakes: 1,
+        unresolvedUncertaintyFacts: 0,
+      });
+    } finally {
+      store.close();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

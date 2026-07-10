@@ -22,11 +22,21 @@ import type {
   CompactDurableRuntimeRunInput,
   CompactDurableRuntimeRunResult,
   CreateDurableRuntimeLinkInput,
+  CreateDurableParentWakeInput,
   CreateDurableRuntimeRefInput,
   CreateDurableRuntimeRunInput,
   CreateDurableRuntimeSignalInput,
   CreateDurableRuntimeStepInput,
   CreateDurableRuntimeTimerInput,
+  CreateDurableSideEffectUncertaintyFactInput,
+  DurableContinuationCleanupAudit,
+  DurableContinuationCleanupStatus,
+  DurableContinuationCleanupTargetKind,
+  DurableDedupeLedgerEntry,
+  DurableDedupeLedgerStatus,
+  DurableDedupeScope,
+  DurableParentWake,
+  DurableParentWakeStatus,
   DurableRuntimeLink,
   DurableRuntimeLinkStatus,
   DurableRuntimeLinkType,
@@ -45,8 +55,15 @@ import type {
   DurableRuntimeTimelineOptions,
   DurableRuntimeTimer,
   DurableRuntimeTimerStatus,
+  DurableSideEffectUncertaintyFact,
+  DurableSideEffectUncertaintyStatus,
+  DurableUnresolvedObligation,
   UpdateDurableRuntimeRunInput,
   UpdateDurableRuntimeLinkInput,
+  RecordDurableContinuationCleanupInput,
+  RecordDurableDedupeLedgerInput,
+  ResolveDurableSideEffectUncertaintyFactInput,
+  UpdateDurableParentWakeInput,
   UpdateDurableRuntimeStepInput,
   UpdateDurableRuntimeTimerInput,
 } from "./types.js";
@@ -170,16 +187,103 @@ type DurableRuntimeSignalRow = {
   metadata_json: string | null;
 };
 
+type DurableParentWakeRow = {
+  wake_id: string;
+  parent_run_id: string | null;
+  parent_session_key: string | null;
+  target_agent: string | null;
+  target_session: string | null;
+  target_channel: string | null;
+  reason: DurableParentWake["reason"];
+  facts_ref: string | null;
+  source_run_id: string | null;
+  dedupe_key: string;
+  attempt_count: number | bigint;
+  last_attempt_at: number | bigint | null;
+  acked_at: number | bigint | null;
+  failed_reason: string | null;
+  status: DurableParentWakeStatus;
+  created_at: number | bigint;
+  updated_at: number | bigint;
+  metadata_json: string | null;
+};
+
+type DurableSideEffectUncertaintyFactRow = {
+  fact_id: string;
+  kind: DurableSideEffectUncertaintyFact["kind"];
+  source_run_id: string | null;
+  step_id: string | null;
+  event_id: string | null;
+  ref_id: string | null;
+  facts_ref: string | null;
+  dedupe_key: string | null;
+  facts_json: string | null;
+  status: DurableSideEffectUncertaintyStatus;
+  resolution_kind: string | null;
+  resolution_ref: string | null;
+  resolved_at: number | bigint | null;
+  created_at: number | bigint;
+  updated_at: number | bigint;
+  metadata_json: string | null;
+};
+
+type DurableContinuationCleanupAuditRow = {
+  cleanup_id: string;
+  target_kind: DurableContinuationCleanupTargetKind;
+  target_id: string;
+  runtime_run_id: string | null;
+  step_id: string | null;
+  superseded_by_ref: string | null;
+  reason: string | null;
+  requested_by: string | null;
+  dedupe_key: string;
+  status: DurableContinuationCleanupStatus;
+  created_at: number | bigint;
+  metadata_json: string | null;
+};
+
+type DurableDedupeLedgerEntryRow = {
+  ledger_id: string;
+  scope: DurableDedupeScope;
+  dedupe_key: string;
+  subject_ref: string | null;
+  operation_kind: string | null;
+  status: DurableDedupeLedgerStatus;
+  first_seen_at: number | bigint;
+  last_seen_at: number | bigint;
+  hit_count: number | bigint;
+  metadata_json: string | null;
+};
+
+type DurableUnresolvedObligationRow = {
+  obligation_id: string;
+  kind: DurableUnresolvedObligation["kind"];
+  runtime_run_id: string | null;
+  step_id: string | null;
+  wake_id: string | null;
+  uncertainty_fact_id: string | null;
+  subject_ref: string | null;
+  reason: string | null;
+  status: string;
+  created_at: number | bigint;
+  updated_at: number | bigint;
+  metadata_json: string | null;
+};
+
 type CountRow = { count: number | bigint };
 type DurableRuntimeDatabase = Pick<
   OpenClawStateKyselyDatabase,
+  | "durable_runtime_continuation_cleanup"
+  | "durable_runtime_dedupe_ledger"
   | "durable_runtime_events"
   | "durable_runtime_links"
+  | "durable_runtime_parent_wakes"
   | "durable_runtime_refs"
   | "durable_runtime_runs"
   | "durable_runtime_signals"
   | "durable_runtime_steps"
   | "durable_runtime_timers"
+  | "durable_runtime_uncertainty_facts"
 >;
 type SyncQuery<Row> = Parameters<typeof executeSqliteQuerySync<Row>>[1];
 
@@ -338,6 +442,105 @@ function rowToSignal(row: DurableRuntimeSignalRow): DurableRuntimeSignal {
   };
 }
 
+function rowToParentWake(row: DurableParentWakeRow): DurableParentWake {
+  return {
+    wakeId: row.wake_id,
+    ...(row.parent_run_id ? { parentRunId: row.parent_run_id } : {}),
+    ...(row.parent_session_key ? { parentSessionKey: row.parent_session_key } : {}),
+    ...(row.target_agent ? { targetAgent: row.target_agent } : {}),
+    ...(row.target_session ? { targetSession: row.target_session } : {}),
+    ...(row.target_channel ? { targetChannel: row.target_channel } : {}),
+    reason: row.reason,
+    ...(row.facts_ref ? { factsRef: row.facts_ref } : {}),
+    ...(row.source_run_id ? { sourceRunId: row.source_run_id } : {}),
+    dedupeKey: row.dedupe_key,
+    attemptCount: Number(row.attempt_count),
+    ...(row.last_attempt_at == null ? {} : { lastAttemptAt: Number(row.last_attempt_at) }),
+    ...(row.acked_at == null ? {} : { ackedAt: Number(row.acked_at) }),
+    ...(row.failed_reason ? { failedReason: row.failed_reason } : {}),
+    status: row.status,
+    ...(row.metadata_json ? { metadata: parseJsonRecord(row.metadata_json) } : {}),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+  };
+}
+
+function rowToUncertaintyFact(
+  row: DurableSideEffectUncertaintyFactRow,
+): DurableSideEffectUncertaintyFact {
+  return {
+    factId: row.fact_id,
+    kind: row.kind,
+    ...(row.source_run_id ? { sourceRunId: row.source_run_id } : {}),
+    ...(row.step_id ? { stepId: row.step_id } : {}),
+    ...(row.event_id ? { eventId: row.event_id } : {}),
+    ...(row.ref_id ? { refId: row.ref_id } : {}),
+    ...(row.facts_ref ? { factsRef: row.facts_ref } : {}),
+    ...(row.dedupe_key ? { dedupeKey: row.dedupe_key } : {}),
+    ...(row.facts_json ? { facts: parseJsonRecord(row.facts_json) } : {}),
+    status: row.status,
+    ...(row.resolution_kind ? { resolutionKind: row.resolution_kind } : {}),
+    ...(row.resolution_ref ? { resolutionRef: row.resolution_ref } : {}),
+    ...(row.resolved_at == null ? {} : { resolvedAt: Number(row.resolved_at) }),
+    ...(row.metadata_json ? { metadata: parseJsonRecord(row.metadata_json) } : {}),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+  };
+}
+
+function rowToContinuationCleanupAudit(
+  row: DurableContinuationCleanupAuditRow,
+): DurableContinuationCleanupAudit {
+  return {
+    cleanupId: row.cleanup_id,
+    targetKind: row.target_kind,
+    targetId: row.target_id,
+    ...(row.runtime_run_id ? { runtimeRunId: row.runtime_run_id } : {}),
+    ...(row.step_id ? { stepId: row.step_id } : {}),
+    ...(row.superseded_by_ref ? { supersededByRef: row.superseded_by_ref } : {}),
+    ...(row.reason ? { reason: row.reason } : {}),
+    ...(row.requested_by ? { requestedBy: row.requested_by } : {}),
+    dedupeKey: row.dedupe_key,
+    status: row.status,
+    ...(row.metadata_json ? { metadata: parseJsonRecord(row.metadata_json) } : {}),
+    createdAt: Number(row.created_at),
+  };
+}
+
+function rowToDedupeLedgerEntry(row: DurableDedupeLedgerEntryRow): DurableDedupeLedgerEntry {
+  return {
+    ledgerId: row.ledger_id,
+    scope: row.scope,
+    dedupeKey: row.dedupe_key,
+    ...(row.subject_ref ? { subjectRef: row.subject_ref } : {}),
+    ...(row.operation_kind ? { operationKind: row.operation_kind } : {}),
+    status: row.status,
+    firstSeenAt: Number(row.first_seen_at),
+    lastSeenAt: Number(row.last_seen_at),
+    hitCount: Number(row.hit_count),
+    ...(row.metadata_json ? { metadata: parseJsonRecord(row.metadata_json) } : {}),
+  };
+}
+
+function rowToUnresolvedObligation(
+  row: DurableUnresolvedObligationRow,
+): DurableUnresolvedObligation {
+  return {
+    obligationId: row.obligation_id,
+    kind: row.kind,
+    ...(row.runtime_run_id ? { runtimeRunId: row.runtime_run_id } : {}),
+    ...(row.step_id ? { stepId: row.step_id } : {}),
+    ...(row.wake_id ? { wakeId: row.wake_id } : {}),
+    ...(row.uncertainty_fact_id ? { uncertaintyFactId: row.uncertainty_fact_id } : {}),
+    ...(row.subject_ref ? { subjectRef: row.subject_ref } : {}),
+    ...(row.reason ? { reason: row.reason } : {}),
+    status: row.status,
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+    ...(row.metadata_json ? { metadata: parseJsonRecord(row.metadata_json) } : {}),
+  };
+}
+
 function queryRows<Row>(db: DatabaseSync, query: SyncQuery<Row>): Row[] {
   return executeSqliteQuerySync(db, query).rows as Row[];
 }
@@ -392,7 +595,33 @@ function isTerminalStepRow(row: DurableRuntimeStepRow): boolean {
   );
 }
 
-function isSameSqlValue(left: string | number | null, right: string | number | null): boolean {
+function isTerminalWakeStatus(status: DurableParentWakeStatus): boolean {
+  return status === "acked" || status === "superseded";
+}
+
+function isAllowedWakeStatusTransition(
+  current: DurableParentWakeStatus,
+  next: DurableParentWakeStatus,
+): boolean {
+  if (current === next) {
+    return true;
+  }
+  if (current === "pending") {
+    return next === "delivered" || next === "acked" || next === "failed" || next === "superseded";
+  }
+  if (current === "delivered") {
+    return next === "acked" || next === "failed" || next === "superseded";
+  }
+  if (current === "failed") {
+    return next === "superseded";
+  }
+  return false;
+}
+
+function isSameSqlValue(
+  left: string | number | bigint | null,
+  right: string | number | bigint | null,
+): boolean {
   return left === right;
 }
 
@@ -1405,6 +1634,615 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
       return rows.map(rowToSignal);
     },
 
+    createParentWake(input: CreateDurableParentWakeInput): DurableParentWake {
+      const parentRunId = optionalText(input.parentRunId);
+      const parentSessionKey = optionalText(input.parentSessionKey);
+      if (!parentRunId && !parentSessionKey) {
+        throw new Error("Durable parent wake requires parentRunId or parentSessionKey");
+      }
+      const dedupeKey = optionalText(input.dedupeKey);
+      if (!dedupeKey) {
+        throw new Error("Durable parent wake requires a dedupeKey");
+      }
+      const now = input.now ?? Date.now();
+      const wakeId = input.wakeId ?? `wake_${randomUUID()}`;
+      return runSqliteImmediateTransactionSync(db, () => {
+        const existing = queryFirst<DurableParentWakeRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_parent_wakes")
+            .selectAll()
+            .where("dedupe_key", "=", dedupeKey),
+        );
+        if (existing) {
+          return rowToParentWake(existing);
+        }
+        executeQuery(
+          db,
+          durableDb.insertInto("durable_runtime_parent_wakes").values({
+            wake_id: wakeId,
+            parent_run_id: parentRunId,
+            parent_session_key: parentSessionKey,
+            target_agent: optionalText(input.targetAgent),
+            target_session: optionalText(input.targetSession),
+            target_channel: optionalText(input.targetChannel),
+            reason: input.reason,
+            facts_ref: optionalText(input.factsRef),
+            source_run_id: optionalText(input.sourceRunId),
+            dedupe_key: dedupeKey,
+            attempt_count: 0,
+            last_attempt_at: null,
+            acked_at: null,
+            failed_reason: null,
+            status: "pending",
+            created_at: now,
+            updated_at: now,
+            metadata_json: serializeJson(input.metadata),
+          }),
+        );
+        const row = queryFirst<DurableParentWakeRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_parent_wakes")
+            .selectAll()
+            .where("wake_id", "=", wakeId),
+        );
+        return rowToParentWake(row!);
+      });
+    },
+
+    updateParentWake(input: UpdateDurableParentWakeInput): DurableParentWake | undefined {
+      const now = input.now ?? Date.now();
+      return runSqliteImmediateTransactionSync(db, () => {
+        const current = queryFirst<DurableParentWakeRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_parent_wakes")
+            .selectAll()
+            .where("wake_id", "=", input.wakeId),
+        );
+        if (!current) {
+          return undefined;
+        }
+        const nextAttemptCount = input.attemptCount ?? current.attempt_count;
+        const nextLastAttemptAt =
+          input.lastAttemptAt === undefined ? current.last_attempt_at : input.lastAttemptAt;
+        const nextAckedAt = input.ackedAt === undefined ? current.acked_at : input.ackedAt;
+        const nextFailedReason =
+          input.failedReason === undefined
+            ? current.failed_reason
+            : optionalText(input.failedReason ?? undefined);
+        const nextMetadataJson =
+          input.metadata === undefined ? current.metadata_json : serializeJson(input.metadata);
+        if (isTerminalWakeStatus(current.status)) {
+          const isNoOp =
+            input.status === current.status &&
+            isSameSqlValue(nextAttemptCount, current.attempt_count) &&
+            isSameSqlValue(nextLastAttemptAt, current.last_attempt_at) &&
+            isSameSqlValue(nextAckedAt, current.acked_at) &&
+            isSameSqlValue(nextFailedReason, current.failed_reason) &&
+            isSameSqlValue(nextMetadataJson, current.metadata_json);
+          return isNoOp ? rowToParentWake(current) : undefined;
+        }
+        if (!isAllowedWakeStatusTransition(current.status, input.status)) {
+          return undefined;
+        }
+        executeQuery(
+          db,
+          durableDb
+            .updateTable("durable_runtime_parent_wakes")
+            .set({
+              status: input.status,
+              attempt_count: Number(nextAttemptCount),
+              last_attempt_at: nextLastAttemptAt == null ? null : Number(nextLastAttemptAt),
+              acked_at: nextAckedAt == null ? null : Number(nextAckedAt),
+              failed_reason: nextFailedReason,
+              updated_at: now,
+              metadata_json: nextMetadataJson,
+            })
+            .where("wake_id", "=", input.wakeId),
+        );
+        const row = queryFirst<DurableParentWakeRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_parent_wakes")
+            .selectAll()
+            .where("wake_id", "=", input.wakeId),
+        );
+        return rowToParentWake(row!);
+      });
+    },
+
+    getParentWake(wakeId: string): DurableParentWake | undefined {
+      const row = queryFirst<DurableParentWakeRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_parent_wakes")
+          .selectAll()
+          .where("wake_id", "=", wakeId),
+      );
+      return row ? rowToParentWake(row) : undefined;
+    },
+
+    listParentWakes(options?: {
+      parentRunId?: string;
+      parentSessionKey?: string;
+      status?: DurableParentWakeStatus;
+      limit?: number;
+    }): DurableParentWake[] {
+      const parentRunId = optionalText(options?.parentRunId);
+      const parentSessionKey = optionalText(options?.parentSessionKey);
+      const rows = queryRows<DurableParentWakeRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_parent_wakes")
+          .selectAll()
+          .$if(Boolean(parentRunId), (qb) => qb.where("parent_run_id", "=", parentRunId!))
+          .$if(Boolean(parentSessionKey), (qb) =>
+            qb.where("parent_session_key", "=", parentSessionKey!),
+          )
+          .$if(Boolean(options?.status), (qb) => qb.where("status", "=", options!.status!))
+          .orderBy("updated_at", "desc")
+          .orderBy("wake_id", "desc")
+          .limit(normalizeQueryLimit(options?.limit, 500)),
+      );
+      return rows.map(rowToParentWake);
+    },
+
+    recordSideEffectUncertaintyFact(
+      input: CreateDurableSideEffectUncertaintyFactInput,
+    ): DurableSideEffectUncertaintyFact {
+      const now = input.now ?? Date.now();
+      const factId = input.factId ?? `uncertain_${randomUUID()}`;
+      const dedupeKey = optionalText(input.dedupeKey);
+      return runSqliteImmediateTransactionSync(db, () => {
+        const existing =
+          dedupeKey &&
+          queryFirst<DurableSideEffectUncertaintyFactRow>(
+            db,
+            durableDb
+              .selectFrom("durable_runtime_uncertainty_facts")
+              .selectAll()
+              .where("dedupe_key", "=", dedupeKey),
+          );
+        if (existing) {
+          return rowToUncertaintyFact(existing);
+        }
+        executeQuery(
+          db,
+          durableDb.insertInto("durable_runtime_uncertainty_facts").values({
+            fact_id: factId,
+            kind: input.kind,
+            source_run_id: optionalText(input.sourceRunId),
+            step_id: optionalText(input.stepId),
+            event_id: optionalText(input.eventId),
+            ref_id: optionalText(input.refId),
+            facts_ref: optionalText(input.factsRef),
+            dedupe_key: dedupeKey,
+            facts_json: serializeJson(input.facts),
+            status: "open",
+            resolution_kind: null,
+            resolution_ref: null,
+            resolved_at: null,
+            created_at: now,
+            updated_at: now,
+            metadata_json: serializeJson(input.metadata),
+          }),
+        );
+        const row = queryFirst<DurableSideEffectUncertaintyFactRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_uncertainty_facts")
+            .selectAll()
+            .where("fact_id", "=", factId),
+        );
+        return rowToUncertaintyFact(row!);
+      });
+    },
+
+    resolveSideEffectUncertaintyFact(
+      input: ResolveDurableSideEffectUncertaintyFactInput,
+    ): DurableSideEffectUncertaintyFact | undefined {
+      const now = input.now ?? Date.now();
+      return runSqliteImmediateTransactionSync(db, () => {
+        const current = queryFirst<DurableSideEffectUncertaintyFactRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_uncertainty_facts")
+            .selectAll()
+            .where("fact_id", "=", input.factId),
+        );
+        if (!current) {
+          return undefined;
+        }
+        if (current.status !== "open") {
+          const isNoOp =
+            input.status === current.status &&
+            isSameSqlValue(optionalText(input.resolutionKind), current.resolution_kind) &&
+            isSameSqlValue(optionalText(input.resolutionRef), current.resolution_ref) &&
+            isSameSqlValue(
+              input.metadata === undefined ? current.metadata_json : serializeJson(input.metadata),
+              current.metadata_json,
+            );
+          return isNoOp ? rowToUncertaintyFact(current) : undefined;
+        }
+        executeQuery(
+          db,
+          durableDb
+            .updateTable("durable_runtime_uncertainty_facts")
+            .set({
+              status: input.status,
+              resolution_kind: optionalText(input.resolutionKind),
+              resolution_ref: optionalText(input.resolutionRef),
+              resolved_at: now,
+              updated_at: now,
+              metadata_json:
+                input.metadata === undefined
+                  ? current.metadata_json
+                  : serializeJson(input.metadata),
+            })
+            .where("fact_id", "=", input.factId),
+        );
+        const row = queryFirst<DurableSideEffectUncertaintyFactRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_uncertainty_facts")
+            .selectAll()
+            .where("fact_id", "=", input.factId),
+        );
+        return rowToUncertaintyFact(row!);
+      });
+    },
+
+    listSideEffectUncertaintyFacts(options?: {
+      sourceRunId?: string;
+      status?: DurableSideEffectUncertaintyStatus;
+      limit?: number;
+    }): DurableSideEffectUncertaintyFact[] {
+      const sourceRunId = optionalText(options?.sourceRunId);
+      const rows = queryRows<DurableSideEffectUncertaintyFactRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_uncertainty_facts")
+          .selectAll()
+          .$if(Boolean(sourceRunId), (qb) => qb.where("source_run_id", "=", sourceRunId!))
+          .$if(Boolean(options?.status), (qb) => qb.where("status", "=", options!.status!))
+          .orderBy("updated_at", "desc")
+          .orderBy("fact_id", "desc")
+          .limit(normalizeQueryLimit(options?.limit, 500)),
+      );
+      return rows.map(rowToUncertaintyFact);
+    },
+
+    recordContinuationCleanup(
+      input: RecordDurableContinuationCleanupInput,
+    ): DurableContinuationCleanupAudit {
+      const now = input.now ?? Date.now();
+      const cleanupId = input.cleanupId ?? `cleanup_${randomUUID()}`;
+      const dedupeKey = optionalText(input.dedupeKey);
+      if (!dedupeKey) {
+        throw new Error("Durable continuation cleanup requires a dedupeKey");
+      }
+      return runSqliteImmediateTransactionSync(db, () => {
+        const existing = queryFirst<DurableContinuationCleanupAuditRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_continuation_cleanup")
+            .selectAll()
+            .where("dedupe_key", "=", dedupeKey),
+        );
+        if (existing) {
+          return rowToContinuationCleanupAudit(existing);
+        }
+        executeQuery(
+          db,
+          durableDb.insertInto("durable_runtime_continuation_cleanup").values({
+            cleanup_id: cleanupId,
+            target_kind: input.targetKind,
+            target_id: input.targetId,
+            runtime_run_id: optionalText(input.runtimeRunId),
+            step_id: optionalText(input.stepId),
+            superseded_by_ref: optionalText(input.supersededByRef),
+            reason: optionalText(input.reason),
+            requested_by: optionalText(input.requestedBy),
+            dedupe_key: dedupeKey,
+            status: input.status ?? "superseded",
+            created_at: now,
+            metadata_json: serializeJson(input.metadata),
+          }),
+        );
+        const row = queryFirst<DurableContinuationCleanupAuditRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_continuation_cleanup")
+            .selectAll()
+            .where("cleanup_id", "=", cleanupId),
+        );
+        return rowToContinuationCleanupAudit(row!);
+      });
+    },
+
+    listContinuationCleanupAudit(options?: {
+      runtimeRunId?: string;
+      targetKind?: DurableContinuationCleanupTargetKind;
+      limit?: number;
+    }): DurableContinuationCleanupAudit[] {
+      const runtimeRunId = optionalText(options?.runtimeRunId);
+      const rows = queryRows<DurableContinuationCleanupAuditRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_continuation_cleanup")
+          .selectAll()
+          .$if(Boolean(runtimeRunId), (qb) => qb.where("runtime_run_id", "=", runtimeRunId!))
+          .$if(Boolean(options?.targetKind), (qb) =>
+            qb.where("target_kind", "=", options!.targetKind!),
+          )
+          .orderBy("created_at", "desc")
+          .orderBy("cleanup_id", "desc")
+          .limit(normalizeQueryLimit(options?.limit, 500)),
+      );
+      return rows.map(rowToContinuationCleanupAudit);
+    },
+
+    recordDedupeLedgerEntry(input: RecordDurableDedupeLedgerInput): DurableDedupeLedgerEntry {
+      const now = input.now ?? Date.now();
+      const ledgerId = input.ledgerId ?? `dedupe_${randomUUID()}`;
+      const dedupeKey = optionalText(input.dedupeKey);
+      if (!dedupeKey) {
+        throw new Error("Durable dedupe ledger requires a dedupeKey");
+      }
+      return runSqliteImmediateTransactionSync(db, () => {
+        const existing = queryFirst<DurableDedupeLedgerEntryRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_dedupe_ledger")
+            .selectAll()
+            .where("scope", "=", input.scope)
+            .where("dedupe_key", "=", dedupeKey),
+        );
+        if (existing) {
+          executeQuery(
+            db,
+            durableDb
+              .updateTable("durable_runtime_dedupe_ledger")
+              .set({ last_seen_at: now, hit_count: Number(existing.hit_count) + 1 })
+              .where("ledger_id", "=", existing.ledger_id),
+          );
+          const row = queryFirst<DurableDedupeLedgerEntryRow>(
+            db,
+            durableDb
+              .selectFrom("durable_runtime_dedupe_ledger")
+              .selectAll()
+              .where("ledger_id", "=", existing.ledger_id),
+          );
+          return rowToDedupeLedgerEntry(row!);
+        }
+        executeQuery(
+          db,
+          durableDb.insertInto("durable_runtime_dedupe_ledger").values({
+            ledger_id: ledgerId,
+            scope: input.scope,
+            dedupe_key: dedupeKey,
+            subject_ref: optionalText(input.subjectRef),
+            operation_kind: optionalText(input.operationKind),
+            status: input.status ?? "recorded",
+            first_seen_at: now,
+            last_seen_at: now,
+            hit_count: 1,
+            metadata_json: serializeJson(input.metadata),
+          }),
+        );
+        const row = queryFirst<DurableDedupeLedgerEntryRow>(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_dedupe_ledger")
+            .selectAll()
+            .where("ledger_id", "=", ledgerId),
+        );
+        return rowToDedupeLedgerEntry(row!);
+      });
+    },
+
+    listDedupeLedgerEntries(options?: {
+      scope?: DurableDedupeScope;
+      status?: DurableDedupeLedgerStatus;
+      limit?: number;
+    }): DurableDedupeLedgerEntry[] {
+      const rows = queryRows<DurableDedupeLedgerEntryRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_dedupe_ledger")
+          .selectAll()
+          .$if(Boolean(options?.scope), (qb) => qb.where("scope", "=", options!.scope!))
+          .$if(Boolean(options?.status), (qb) => qb.where("status", "=", options!.status!))
+          .orderBy("last_seen_at", "desc")
+          .orderBy("ledger_id", "desc")
+          .limit(normalizeQueryLimit(options?.limit, 500)),
+      );
+      return rows.map(rowToDedupeLedgerEntry);
+    },
+
+    listUnresolvedObligations(options?: {
+      now?: number;
+      limit?: number;
+    }): DurableUnresolvedObligation[] {
+      const now = options?.now ?? Date.now();
+      const limit = normalizeQueryLimit(options?.limit, 500);
+      const wakeRows = queryRows<DurableParentWakeRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_parent_wakes")
+          .selectAll()
+          .where("status", "in", ["pending", "delivered", "failed"])
+          .orderBy("updated_at", "desc")
+          .orderBy("wake_id", "desc")
+          .limit(limit),
+      ).map(
+        (row): DurableUnresolvedObligationRow => ({
+          obligation_id: `wake:${row.wake_id}`,
+          kind: "pending_wake",
+          runtime_run_id: row.source_run_id,
+          step_id: null,
+          wake_id: row.wake_id,
+          uncertainty_fact_id: null,
+          subject_ref: row.facts_ref ?? row.dedupe_key,
+          reason: row.reason,
+          status: row.status,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+          metadata_json: row.metadata_json,
+        }),
+      );
+      const uncertaintyRows = queryRows<DurableSideEffectUncertaintyFactRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_uncertainty_facts")
+          .selectAll()
+          .where("status", "=", "open")
+          .orderBy("updated_at", "desc")
+          .orderBy("fact_id", "desc")
+          .limit(limit),
+      ).map(
+        (row): DurableUnresolvedObligationRow => ({
+          obligation_id: `uncertainty:${row.fact_id}`,
+          kind: "unresolved_uncertainty",
+          runtime_run_id: row.source_run_id,
+          step_id: row.step_id,
+          wake_id: null,
+          uncertainty_fact_id: row.fact_id,
+          subject_ref: row.facts_ref ?? row.ref_id ?? row.event_id ?? row.dedupe_key,
+          reason: row.kind,
+          status: row.status,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+          metadata_json: row.metadata_json,
+        }),
+      );
+      const childRows = queryRows<DurableRuntimeLinkRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_links")
+          .selectAll()
+          .where("status", "in", ["pending", "running"])
+          .orderBy("updated_at", "desc")
+          .orderBy("child_runtime_run_id", "desc")
+          .limit(limit),
+      ).map(
+        (row): DurableUnresolvedObligationRow => ({
+          obligation_id: `child:${row.parent_runtime_run_id}:${row.parent_step_id}:${row.child_runtime_run_id}`,
+          kind: "open_child",
+          runtime_run_id: row.parent_runtime_run_id,
+          step_id: row.parent_step_id,
+          wake_id: null,
+          uncertainty_fact_id: null,
+          subject_ref: row.child_runtime_run_id,
+          reason: row.link_type,
+          status: row.status,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+          metadata_json: row.metadata_json,
+        }),
+      );
+      const expiredRunClaimRows = queryRows<DurableRuntimeRunRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_runs")
+          .selectAll()
+          .where("claimed_by", "is not", null)
+          .where("claim_expires_at", "is not", null)
+          .where("claim_expires_at", "<=", now)
+          .where("status", "not in", ["succeeded", "failed", "cancelled", "lost"])
+          .orderBy("updated_at", "desc")
+          .orderBy("runtime_run_id", "desc")
+          .limit(limit),
+      ).map(
+        (row): DurableUnresolvedObligationRow => ({
+          obligation_id: `run-claim:${row.runtime_run_id}`,
+          kind: "expired_run_claim",
+          runtime_run_id: row.runtime_run_id,
+          step_id: null,
+          wake_id: null,
+          uncertainty_fact_id: null,
+          subject_ref: row.claimed_by,
+          reason: row.recovery_state,
+          status: row.status,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+          metadata_json: row.metadata_json,
+        }),
+      );
+      const expiredStepClaimRows = queryRows<DurableRuntimeStepRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_steps")
+          .selectAll()
+          .where("claimed_by", "is not", null)
+          .where("claim_expires_at", "is not", null)
+          .where("claim_expires_at", "<=", now)
+          .where("status", "not in", ["succeeded", "failed", "cancelled", "lost", "skipped"])
+          .orderBy("updated_at", "desc")
+          .orderBy("runtime_run_id", "desc")
+          .orderBy("step_id", "desc")
+          .limit(limit),
+      ).map(
+        (row): DurableUnresolvedObligationRow => ({
+          obligation_id: `step-claim:${row.runtime_run_id}:${row.step_id}`,
+          kind: "expired_step_claim",
+          runtime_run_id: row.runtime_run_id,
+          step_id: row.step_id,
+          wake_id: null,
+          uncertainty_fact_id: null,
+          subject_ref: row.claimed_by,
+          reason: row.recovery_state,
+          status: row.status,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+          metadata_json: row.metadata_json,
+        }),
+      );
+      const resultMailboxRows = queryRows<DurableRuntimeStepRow>(
+        db,
+        durableDb
+          .selectFrom("durable_runtime_steps")
+          .selectAll()
+          .where("step_type", "=", "result_mailbox")
+          .where("status", "not in", ["succeeded", "failed", "cancelled", "lost", "skipped"])
+          .orderBy("updated_at", "desc")
+          .orderBy("runtime_run_id", "desc")
+          .orderBy("step_id", "desc")
+          .limit(limit),
+      ).map(
+        (row): DurableUnresolvedObligationRow => ({
+          obligation_id: `result-mailbox:${row.runtime_run_id}:${row.step_id}`,
+          kind: "pending_result_mailbox",
+          runtime_run_id: row.runtime_run_id,
+          step_id: row.step_id,
+          wake_id: null,
+          uncertainty_fact_id: null,
+          subject_ref: row.idempotency_key,
+          reason: row.step_type,
+          status: row.status,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+          metadata_json: row.metadata_json,
+        }),
+      );
+      return [
+        ...wakeRows,
+        ...uncertaintyRows,
+        ...childRows,
+        ...expiredRunClaimRows,
+        ...expiredStepClaimRows,
+        ...resultMailboxRows,
+      ]
+        .sort((left, right) => {
+          const updated = Number(right.updated_at) - Number(left.updated_at);
+          return updated === 0 ? right.obligation_id.localeCompare(left.obligation_id) : updated;
+        })
+        .slice(0, limit)
+        .map(rowToUnresolvedObligation);
+    },
+
     getTimeline(
       runtimeRunId: string,
       timelineOptions?: DurableRuntimeTimelineOptions,
@@ -1558,6 +2396,20 @@ export function openDurableRuntimeSqliteStore(storeOptions?: {
             .selectFrom("durable_runtime_runs")
             .select((eb) => eb.fn.countAll<number>().as("count"))
             .where("status", "not in", ["succeeded", "failed", "cancelled", "lost"]),
+        ),
+        pendingWakes: count(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_parent_wakes")
+            .select((eb) => eb.fn.countAll<number>().as("count"))
+            .where("status", "in", ["pending", "delivered", "failed"]),
+        ),
+        unresolvedUncertaintyFacts: count(
+          db,
+          durableDb
+            .selectFrom("durable_runtime_uncertainty_facts")
+            .select((eb) => eb.fn.countAll<number>().as("count"))
+            .where("status", "=", "open"),
         ),
       };
     },
