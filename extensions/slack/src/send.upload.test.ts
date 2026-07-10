@@ -17,36 +17,33 @@ const loadOutboundMediaFromUrlMock = vi.hoisted(() =>
     fileName: "screenshot.png",
   })),
 );
-const GUARDED_FETCH_TEST_TIMEOUT_MS = 250;
-const uploadTimeoutCleanup = vi.hoisted(() => vi.fn());
+const cleanupUploadTimeout = vi.hoisted(() => vi.fn());
+const uploadTimeoutControllers = vi.hoisted(() => [] as AbortController[]);
 const buildTimeoutAbortSignal = vi.hoisted(() =>
   vi.fn((params: { timeoutMs?: number }) => {
     if (!Number.isFinite(params.timeoutMs) || (params.timeoutMs ?? 0) <= 0) {
       throw new Error("Slack upload timeout requires a finite budget");
     }
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-      const error = new Error("request timed out");
-      error.name = "TimeoutError";
-      controller.abort(error);
-    }, GUARDED_FETCH_TEST_TIMEOUT_MS);
+    uploadTimeoutControllers.push(controller);
     return {
       signal: controller.signal,
       cleanup: () => {
-        clearTimeout(timeoutId);
-        uploadTimeoutCleanup();
+        const index = uploadTimeoutControllers.indexOf(controller);
+        if (index >= 0) {
+          uploadTimeoutControllers.splice(index, 1);
+        }
+        cleanupUploadTimeout();
       },
       refresh: () => {},
     };
   }),
 );
 const fetchWithSsrFGuard = vi.fn(
-  async (params: { url: string; init?: RequestInit; signal?: AbortSignal; timeoutMs?: number }) => {
-    const signal =
-      params.signal ??
-      (Number.isFinite(params.timeoutMs) && (params.timeoutMs ?? 0) > 0
-        ? AbortSignal.timeout(GUARDED_FETCH_TEST_TIMEOUT_MS)
-        : undefined);
+  async (
+    params: Parameters<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>[0],
+  ) => {
+    const signal = params.signal;
     if (!signal) {
       throw new Error("guarded Slack upload fetch requires a finite timeout signal");
     }
@@ -61,19 +58,16 @@ const fetchWithSsrFGuard = vi.fn(
   },
 );
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: (...args: unknown[]) =>
-    fetchWithSsrFGuard(
-      ...(args as [
-        params: {
-          url: string;
-          init?: RequestInit;
-          signal?: AbortSignal;
-          timeoutMs?: number;
-        },
-      ]),
-    ),
-}));
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+    "openclaw/plugin-sdk/ssrf-runtime",
+  );
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (...args: unknown[]) =>
+      fetchWithSsrFGuard(...(args as [params: Parameters<typeof actual.fetchWithSsrFGuard>[0]])),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/extension-shared", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/extension-shared")>(
@@ -202,7 +196,7 @@ function createUploadTestClient(): UploadTestClient {
     files: {
       getUploadURLExternal: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({
         ok: true,
-        upload_url: "https://uploads.slack.test/upload",
+        upload_url: "https://uploads.slack.com/upload",
         file_id: "F001",
       })),
       completeUploadExternal: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({
@@ -221,7 +215,8 @@ describe("sendMessageSlack file upload with user IDs", () => {
     ) as unknown as typeof fetch;
     fetchWithSsrFGuard.mockClear();
     buildTimeoutAbortSignal.mockClear();
-    uploadTimeoutCleanup.mockClear();
+    cleanupUploadTimeout.mockClear();
+    uploadTimeoutControllers.length = 0;
     loadOutboundMediaFromUrlMock.mockClear();
     clearSlackDmChannelCache();
     clearSlackThreadParticipationCache();
@@ -433,19 +428,35 @@ describe("sendMessageSlack file upload with user IDs", () => {
     const fetchCalls = (globalThis.fetch as unknown as MockCalls).mock.calls;
     expect(fetchCalls).toHaveLength(1);
     const [fetchUrl, fetchInit] = fetchCalls[0] ?? [];
-    expect(fetchUrl).toBe("https://uploads.slack.test/upload");
+    expect(fetchUrl).toBe("https://uploads.slack.com/upload");
     expectFields(requireRecord(fetchInit, "fetch init"), { method: "POST" });
     expectOnlyCallFirstArg(buildTimeoutAbortSignal, {
       timeoutMs: 120_000,
       operation: "slack-upload-file",
-      url: "https://uploads.slack.test",
+      url: "https://uploads.slack.com",
     });
     expectOnlyCallFirstArg(fetchWithSsrFGuard, {
-      url: "https://uploads.slack.test/upload",
+      url: "https://uploads.slack.com/upload",
       mode: "trusted_env_proxy",
       signal: expect.any(AbortSignal),
+      requireHttps: true,
+      policy: {
+        hostnameAllowlist: [
+          "slack.com",
+          "*.slack.com",
+          "slack-edge.com",
+          "*.slack-edge.com",
+          "slack-files.com",
+          "*.slack-files.com",
+          "slack-gov.com",
+          "*.slack-gov.com",
+        ],
+        allowRfc2544BenchmarkRange: true,
+      },
       auditContext: "slack-upload-file",
     });
+    expect(cleanupUploadTimeout).toHaveBeenCalledOnce();
+    expect(uploadTimeoutControllers).toHaveLength(0);
     expectCompletedUpload({
       client,
       expected: {
@@ -462,7 +473,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
     const client = createUploadTestClient();
     client.files.getUploadURLExternal.mockResolvedValueOnce({
       ok: true,
-      upload_url: "https://uploads.slack.test/upload/v1/secret-capability",
+      upload_url: "https://uploads.slack.com/upload/v1/secret-capability",
       file_id: "F001",
     });
 
@@ -476,11 +487,72 @@ describe("sendMessageSlack file upload with user IDs", () => {
     expectOnlyCallFirstArg(buildTimeoutAbortSignal, {
       timeoutMs: 120_000,
       operation: "slack-upload-file",
-      url: "https://uploads.slack.test",
+      url: "https://uploads.slack.com",
     });
     expectOnlyCallFirstArg(fetchWithSsrFGuard, {
-      url: "https://uploads.slack.test/upload/v1/secret-capability",
+      url: "https://uploads.slack.com/upload/v1/secret-capability",
     });
+  });
+
+  it("allows GovSlack upload destinations through the real hostname guard", async () => {
+    const client = createUploadTestClient();
+    client.files.getUploadURLExternal.mockResolvedValueOnce({
+      ok: true,
+      upload_url: "https://files.slack-gov.com/upload/v1/gov-capability",
+      file_id: "F001",
+    });
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+      "openclaw/plugin-sdk/ssrf-runtime",
+    );
+    const networkFetch = vi.fn(async () => new Response("ok", { status: 200 }));
+    fetchWithSsrFGuard.mockImplementationOnce(async (params) =>
+      actual.fetchWithSsrFGuard({ ...params, fetchImpl: networkFetch }),
+    );
+
+    await sendMessageSlack("channel:C123CHAN", "caption", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/gov-slack.png",
+    });
+
+    expect(networkFetch).toHaveBeenCalledOnce();
+    expectCompletedUpload({ client, expected: { channel_id: "C123CHAN" } });
+    expect(cleanupUploadTimeout).toHaveBeenCalledOnce();
+    expect(uploadTimeoutControllers).toHaveLength(0);
+  });
+
+  it.each([
+    ["public non-Slack", "https://example.com/upload/v1/not-slack", /not in allowlist/i],
+    ["plaintext Slack", "http://files.slack.com/upload/v1/plaintext", /must use https/i],
+  ])("rejects %s upload destinations before network access", async (_label, uploadUrl, error) => {
+    const client = createUploadTestClient();
+    client.files.getUploadURLExternal.mockResolvedValueOnce({
+      ok: true,
+      upload_url: uploadUrl,
+      file_id: "F001",
+    });
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+      "openclaw/plugin-sdk/ssrf-runtime",
+    );
+    const networkFetch = vi.fn(async () => new Response("unexpected"));
+    fetchWithSsrFGuard.mockImplementationOnce(async (params) =>
+      actual.fetchWithSsrFGuard({ ...params, fetchImpl: networkFetch }),
+    );
+
+    await expect(
+      sendMessageSlack("channel:C123CHAN", "caption", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        mediaUrl: "/tmp/non-slack.png",
+      }),
+    ).rejects.toThrow(error);
+
+    expect(networkFetch).not.toHaveBeenCalled();
+    expect(cleanupUploadTimeout).toHaveBeenCalledOnce();
+    expect(uploadTimeoutControllers).toHaveLength(0);
+    expect(client.files.completeUploadExternal).not.toHaveBeenCalled();
   });
 
   it("times out a hanging presigned URL upload", async () => {
@@ -493,6 +565,15 @@ describe("sendMessageSlack file upload with user IDs", () => {
         const route = `${req.method ?? "GET"} ${req.url ?? "/"}`;
         res.on("close", () => closedResponses(route));
         if (route === "POST /upload") {
+          // Fire the mocked deadline only after the request reaches the server,
+          // keeping the cancellation regression deterministic under CI load.
+          const controller = uploadTimeoutControllers.at(-1);
+          if (!controller) {
+            throw new Error("missing Slack upload timeout controller");
+          }
+          const error = new Error("request timed out");
+          error.name = "TimeoutError";
+          controller.abort(error);
           return;
         }
         res.statusCode = 500;
@@ -522,6 +603,8 @@ describe("sendMessageSlack file upload with user IDs", () => {
           url: baseUrl,
         });
         expectOnlyCallFirstArg(fetchWithSsrFGuard, { signal: expect.any(AbortSignal) });
+        expect(cleanupUploadTimeout).toHaveBeenCalledOnce();
+        expect(uploadTimeoutControllers).toHaveLength(0);
         expect(client.files.completeUploadExternal).not.toHaveBeenCalled();
       },
     );
@@ -565,7 +648,8 @@ describe("sendMessageSlack file upload with user IDs", () => {
     });
 
     await completionStarted;
-    expect(uploadTimeoutCleanup).toHaveBeenCalledOnce();
+    expect(cleanupUploadTimeout).toHaveBeenCalledOnce();
+    expect(uploadTimeoutControllers).toHaveLength(0);
     await expect(
       Promise.race([
         sendPromise.then(

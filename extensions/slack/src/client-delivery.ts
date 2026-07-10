@@ -24,7 +24,18 @@ import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { truncateSlackText } from "./truncate.js";
 
 const SLACK_UPLOAD_SSRF_POLICY = {
-  allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
+  // Slack negotiates the capability URL, but file bytes must still stay on
+  // Slack-owned hosts if that control-plane response is ever compromised.
+  hostnameAllowlist: [
+    "slack.com",
+    "*.slack.com",
+    "slack-edge.com",
+    "*.slack-edge.com",
+    "slack-files.com",
+    "*.slack-files.com",
+    "slack-gov.com",
+    "*.slack-gov.com",
+  ],
   allowRfc2544BenchmarkRange: true,
 };
 const SLACK_UPLOAD_POST_TIMEOUT_MS = 120_000;
@@ -77,6 +88,8 @@ function delaySlackDnsRetry(attempt: number): Promise<void> {
 }
 
 function resolveSlackUploadTimeoutLogUrl(url: string): string | undefined {
+  // Slack puts the upload capability in the URL path. Timeout diagnostics may
+  // name the origin, but must not retain that capability-bearing path.
   try {
     return new URL(url).origin;
   } catch {
@@ -207,6 +220,7 @@ export async function uploadSlackFile(params: {
           body: new Uint8Array(buffer) as BodyInit,
         },
         signal: uploadTimeoutSignal,
+        requireHttps: true,
         policy: SLACK_UPLOAD_SSRF_POLICY,
         auditContext: params.auditContext ?? "slack-upload-file",
       }),
