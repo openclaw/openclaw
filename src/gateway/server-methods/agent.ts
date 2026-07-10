@@ -47,10 +47,6 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
 import {
-  resolveAgentAvatar,
-  resolvePublicAgentAvatarSource,
-} from "../../agents/identity-avatar.js";
-import {
   AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
   hasGeneratedMediaCompletionEvent,
 } from "../../agents/internal-event-contract.js";
@@ -162,7 +158,7 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
-import { resolveAssistantIdentity } from "../assistant-identity.js";
+import { resolvePublicAssistantIdentity } from "../assistant-identity.js";
 import {
   type ChatAbortControllerEntry,
   registerChatAbortController,
@@ -174,7 +170,6 @@ import {
   parseMessageWithAttachments,
   resolveChatAttachmentMaxBytes,
 } from "../chat-attachments.js";
-import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   emitGatewaySessionEndPluginHook,
@@ -3975,25 +3970,12 @@ export const agentHandlers: GatewayRequestHandlers = {
       agentId = resolved;
     }
     const cfg = context.getRuntimeConfig();
-    const identity = resolveAssistantIdentity({ cfg, agentId });
-    const avatarValue =
-      resolveAssistantAvatarUrl({
-        avatar: identity.avatar,
-        agentId: identity.agentId,
-        basePath: cfg.gateway?.controlUi?.basePath,
-      }) ?? identity.avatar;
-    const avatarResolution = resolveAgentAvatar(cfg, identity.agentId, { includeUiOverride: true });
-    respond(
-      true,
-      {
-        ...identity,
-        avatar: avatarValue,
-        avatarSource: resolvePublicAgentAvatarSource(avatarResolution),
-        avatarStatus: avatarResolution.kind,
-        avatarReason: avatarResolution.kind === "none" ? avatarResolution.reason : undefined,
-      },
-      undefined,
-    );
+    const identity = resolvePublicAssistantIdentity({
+      cfg,
+      agentId,
+      basePath: cfg.gateway?.controlUi?.basePath,
+    });
+    respond(true, identity, undefined);
   },
   "agent.wait": async ({ params, respond, context }) => {
     if (!validateAgentWaitParams(params)) {

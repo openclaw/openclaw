@@ -1687,22 +1687,38 @@ describe("package artifact reuse", () => {
 
   it("requires QA live evidence artifacts when lanes run", () => {
     const cases = [
-      ["run_mock_parity", "Upload parity artifacts"],
-      ["run_live_runtime_token_efficiency", "Upload live runtime token-efficiency artifacts"],
-      ["run_live_matrix", "Upload Matrix QA artifacts"],
-      ["run_live_matrix_sharded", "Upload Matrix QA shard artifacts"],
-      ["run_live_telegram", "Upload Telegram QA artifacts"],
-      ["run_live_discord", "Upload Discord QA artifacts"],
-      ["run_live_whatsapp", "Upload WhatsApp QA artifacts"],
-      ["run_live_slack", "Upload Slack QA artifacts"],
+      ["run_mock_parity", "Upload parity artifacts", "always()"],
+      [
+        "run_live_runtime_token_efficiency",
+        "Upload live runtime token-efficiency artifacts",
+        "always() && steps.run_lane.outputs.output_dir != ''",
+      ],
+      ["run_live_matrix", "Upload Matrix QA artifacts", "always()"],
+      ["run_live_matrix_sharded", "Upload Matrix QA shard artifacts", "always()"],
+      ["run_live_telegram", "Upload Telegram QA artifacts", "always()"],
+      ["run_live_discord", "Upload Discord QA artifacts", "always()"],
+      ["run_live_whatsapp", "Upload WhatsApp QA artifacts", "always()"],
+      ["run_live_slack", "Upload Slack QA artifacts", "always()"],
     ];
 
-    for (const [jobName, stepName] of cases) {
+    for (const [jobName, stepName, uploadCondition] of cases) {
       const uploadStep = workflowStep(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, jobName), stepName);
 
-      expect(uploadStep.if, jobName).toBe("always()");
+      expect(uploadStep.if, jobName).toBe(uploadCondition);
       expect(uploadStep.with?.["if-no-files-found"], jobName).toBe("error");
     }
+  });
+
+  it("preserves the primary runtime token-efficiency failure", () => {
+    const job = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_runtime_token_efficiency");
+    const runStep = workflowStep(job, "Run live runtime parity lane");
+    const reportStep = workflowStep(job, "Generate live runtime token-efficiency report");
+
+    expect(runStep.run).toContain('mkdir -p "${output_dir}"');
+    expect(runStep.run).toContain(
+      "printf 'Runtime token-efficiency lane started.\\n' > \"${output_dir}/runtime-lane-started.txt\"",
+    );
+    expect(reportStep.if).toBe("steps.run_lane.outcome == 'success'");
   });
 
   it("requires release-check QA evidence artifacts when lanes run", () => {
@@ -2332,7 +2348,7 @@ describe("package artifact reuse", () => {
       "\n            create_or_update_github_release\n",
     );
     const promoteWindowsCall = releaseWorkflow.lastIndexOf(
-      "\n            if ! promote_windows_release_assets; then\n",
+      "\n              if promote_windows_release_assets; then\n",
     );
     const publishReleaseCall = releaseWorkflow.lastIndexOf(
       "\n              publish_github_release\n",
@@ -2468,7 +2484,7 @@ describe("package artifact reuse", () => {
       "\n            create_or_update_github_release\n",
     );
     const promoteAndroidCall = releaseWorkflow.lastIndexOf(
-      "\n            if ! promote_android_release_asset; then\n",
+      "\n              if promote_android_release_asset; then\n",
     );
     const publishReleaseCall = releaseWorkflow.lastIndexOf(
       "\n              publish_github_release\n",
@@ -2689,9 +2705,21 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain(
       "already has a public GitHub release page without complete postpublish evidence",
     );
+    expect(releaseWorkflow).toContain("resolve_openclaw_npm_publish_state");
+    expect(releaseWorkflow).toContain(
+      "already published on npm with this tag's preflight tarball; skipping the core npm dispatch and resuming the remaining publish stages",
+    );
+    expect(releaseWorkflow).toContain("Cut a correction tag instead of resuming this publish.");
+    expect(
+      releaseWorkflow.match(/assets already promoted and verified; skipping dispatch/g),
+    ).toHaveLength(2);
     expect(releaseWorkflow).toContain("registry tarball");
     expect(releaseWorkflow).toContain("openclawNpmTarball");
-    expect(releaseWorkflow).not.toContain('npm view "openclaw@${release_version}" dist.tarball');
+    // The release proof must cite the verified evidence tarball; the only
+    // direct registry tarball query is the resume identity check.
+    expect(
+      releaseWorkflow.match(/npm view "openclaw@\$\{release_version\}" dist\.tarball/g),
+    ).toHaveLength(1);
     expect(releaseWorkflow).toContain("release SHA");
     expect(clawHubReleasePlanScript).toContain("not awaited by this proof");
     expect(releaseWorkflow).toContain("wait_for_job_success");
@@ -2817,11 +2845,14 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain(
       "has failed jobs before the workflow completed: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}",
     );
-    expect(releaseWorkflow.lastIndexOf("verify_published_release")).toBeLessThan(
-      releaseWorkflow.lastIndexOf("create_or_update_github_release"),
-    );
     expect(releaseWorkflow.lastIndexOf("create_or_update_github_release")).toBeLessThan(
+      releaseWorkflow.lastIndexOf("verify_published_release"),
+    );
+    expect(releaseWorkflow.lastIndexOf("verify_published_release")).toBeLessThan(
       releaseWorkflow.lastIndexOf("append_release_proof_to_github_release"),
+    );
+    expect(releaseWorkflow.lastIndexOf("append_release_proof_to_github_release")).toBeLessThan(
+      releaseWorkflow.lastIndexOf("publish_github_release"),
     );
     expect(releaseWorkflow).toContain("finished with ${conclusion} in ${duration_label}");
   });
