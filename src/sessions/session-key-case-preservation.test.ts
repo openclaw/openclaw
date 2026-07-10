@@ -35,7 +35,9 @@ describe("isCasePreservingPeer", () => {
     expect(isCasePreservingPeer("signal", "group")).toBe(true);
     expect(isCasePreservingPeer("signal", "direct")).toBe(false);
     expect(isCasePreservingPeer("telegram", "group")).toBe(false);
-    expect(isCasePreservingPeer("slack", "channel")).toBe(false);
+    expect(isCasePreservingPeer("slack", "channel")).toBe(true);
+    expect(isCasePreservingPeer("slack", "group")).toBe(true);
+    expect(isCasePreservingPeer("slack", "direct")).toBe(false);
   });
 
   it("is case-insensitive on the channel/peerKind labels", () => {
@@ -243,10 +245,14 @@ describe("normalizeSessionKeyPreservingOpaquePeerIds (store canonicalization)", 
     expect(
       normalizeSessionKeyPreservingOpaquePeerIds("agent:main:qa:channel:thread:QA-Room/Thread-1"),
     ).toBe("agent:main:qa:channel:thread:qa-room/thread-1");
-    // Explicit Slack channel key with a thread suffix stays lowercased.
+  });
+
+  it("preserves enrolled Slack channel/group IDs but folds thread suffixes", () => {
+    // Slack channel IDs are now case-preserving (#102800); the channel ID segment
+    // stays verbatim while the :thread: suffix (non-enrolled) gets lowercased.
     expect(
       normalizeSessionKeyPreservingOpaquePeerIds("agent:main:slack:channel:C1:thread:ABC"),
-    ).toBe("agent:main:slack:channel:c1:thread:abc");
+    ).toBe("agent:main:slack:channel:C1:thread:abc");
   });
 
   // KNOWN RESIDUAL (documented follow-up): a thread key built off a `main` base has no

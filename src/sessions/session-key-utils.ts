@@ -62,6 +62,9 @@ const CASE_PRESERVING_PEERS: readonly CasePreservingPeerDescriptor[] = [
   { channel: "signal", peerKinds: new Set(["group"]), span: "segment", unscoped: true },
   // #75670 — Matrix room IDs (opaque, embedded `:server`) plus thread event suffix.
   { channel: "matrix", peerKinds: new Set(["channel", "group"]), span: "tail", unscoped: true },
+  // #102800 — Slack channel/group IDs are case-sensitive; the delete/react APIs reject
+  // lowercased variants with "Unknown channel".
+  { channel: "slack", peerKinds: new Set(["channel", "group"]), span: "segment", unscoped: false },
 ];
 
 /** True when (channel, peerKind) owns a case-sensitive opaque peer ID. */
