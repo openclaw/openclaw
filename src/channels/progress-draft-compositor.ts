@@ -298,8 +298,8 @@ export function createChannelProgressDraftCompositor(params: {
           Boolean(normalizeChannelProgressDraftLineIdentity(line)),
         );
         if (hasFallbackLines) {
-          const text = formatDraftText();
-          if (text) {
+          const fallbackDraftText = formatDraftText();
+          if (fallbackDraftText) {
             return await render();
           }
         }
