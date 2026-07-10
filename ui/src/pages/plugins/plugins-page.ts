@@ -711,37 +711,40 @@ class PluginsPage extends OpenClawLightDomElement {
       this.setMessage(params.busyKey, null);
     }
     this.mcpMessage = null;
+    // Failures surface where the action started: on the triggering card when
+    // one exists (Discover connectors), otherwise in the MCP section.
+    const fail = (text: string) => {
+      if (params.busyKey) {
+        this.setMessage(params.busyKey, { kind: "error", text });
+      } else {
+        this.mcpMessage = { kind: "error", text };
+      }
+      return false;
+    };
     try {
       await runtimeConfig.ensureLoaded();
       const base = resolveEditableSnapshotConfig(runtimeConfig.state.configSnapshot);
       if (!base) {
-        this.mcpMessage = { kind: "error", text: t("pluginsPage.mcpConfigUnavailable") };
-        return false;
+        return fail(t("pluginsPage.mcpConfigUnavailable"));
       }
       const servers = asRecord(asRecord(base.mcp)?.servers) ?? {};
       const built = params.buildPatch(servers);
       if ("error" in built) {
-        this.mcpMessage = { kind: "error", text: built.error };
-        return false;
+        return fail(built.error);
       }
       const patched = await runtimeConfig.patch({
         raw: { mcp: { servers: built.patch } },
         note: params.note,
       });
       if (!patched) {
-        this.mcpMessage = {
-          kind: "error",
-          text: runtimeConfig.state.lastError ?? t("pluginsPage.mcpConfigUnavailable"),
-        };
-        return false;
+        return fail(runtimeConfig.state.lastError ?? t("pluginsPage.mcpConfigUnavailable"));
       }
       await runtimeConfig.refresh();
       this.syncMcpServers();
       this.mcpMessage = { kind: "success", text: params.successText };
       return true;
     } catch (error) {
-      this.mcpMessage = { kind: "error", text: errorMessage(error) };
-      return false;
+      return fail(errorMessage(error));
     } finally {
       this.mcpBusy = false;
       if (params.busyKey) {

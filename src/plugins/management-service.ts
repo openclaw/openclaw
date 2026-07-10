@@ -476,6 +476,18 @@ function resolveOfficialEntryById(
   return entries.find((entry) => resolveOfficialExternalPluginId(entry) === pluginId);
 }
 
+/** Explicitly declared runtime id, ignoring the entry-id fallback used for display. */
+function resolveDeclaredOfficialPluginId(
+  entry: OfficialExternalPluginCatalogEntry,
+): string | undefined {
+  const manifest = getOfficialExternalPluginCatalogManifest(entry);
+  return (
+    normalizeOptionalString(manifest?.plugin?.id) ??
+    normalizeOptionalString(manifest?.channel?.id) ??
+    normalizeOptionalString(manifest?.providers?.[0]?.id)
+  );
+}
+
 function resolveOfficialEntryByClawHubPackage(
   entries: readonly OfficialExternalPluginCatalogEntry[],
   config: OpenClawConfig,
@@ -653,10 +665,10 @@ async function installFromClawHub(params: {
     params.snapshot.config,
     packageName,
   );
-  const resolvedOfficialId = official ? resolveOfficialExternalPluginId(official) : undefined;
-  // Hosted feed entries without a declared runtime id fall back to their
-  // package name; pinning that would reject every legitimate install.
-  const expectedPluginId = resolvedOfficialId !== packageName ? resolvedOfficialId : undefined;
+  // Pin the runtime id only when the catalog entry declares one; the entry-id
+  // fallback is just the package name and would reject legitimate installs,
+  // while a declared id must stay enforced even if it equals the package name.
+  const expectedPluginId = official ? resolveDeclaredOfficialPluginId(official) : undefined;
   const hostedOfficial = resolveHostedOfficialEntryByClawHubPackage(
     params.officialEntries,
     params.snapshot.config,

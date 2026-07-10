@@ -742,6 +742,49 @@ describe("PluginsPage", () => {
     expect(patchArgs.raw).toEqual({ mcp: { servers: { github: null } } });
   });
 
+  it("shows connector add failures on the connector card", async () => {
+    const { client } = createClient(async () => createResult());
+    const gatewayHarness = createGateway(client);
+    const configHarness = createRuntimeConfigHarness(
+      vi.fn(async () => undefined),
+      { configFormDirty: false, lastError: null, configSnapshot: { sourceConfig: {}, hash: "h" } },
+    );
+    configHarness.runtimeConfig.patch.mockImplementation(async () => {
+      configHarness.runtimeConfig.state.lastError = "rate limit exceeded for config.patch";
+      return false;
+    });
+    const { page } = await mountPage(
+      createContext(
+        gatewayHarness.gateway,
+        configHarness.runtimeConfig.refresh,
+        configHarness.runtimeConfig.state,
+        configHarness,
+      ),
+      {
+        gateway: gatewayHarness.gateway,
+        gatewaySnapshot: gatewayHarness.gateway.snapshot,
+        result: createResult(),
+        error: null,
+      },
+    );
+
+    page.querySelector<HTMLButtonElement>("#plugins-tab-discover")?.click();
+    await page.updateComplete;
+    page
+      .querySelector<HTMLButtonElement>(
+        '[data-connector-id="context7"] .plugins-card__footer button',
+      )
+      ?.click();
+
+    await vi.waitFor(() =>
+      expect(
+        page.querySelector('[data-connector-id="context7"] [role="alert"]')?.textContent,
+      ).toContain("rate limit exceeded"),
+    );
+    // The MCP-section message stays clear; the failure belongs to the card.
+    expect(page.querySelector("#plugins-group-mcp")).toBeNull();
+  });
+
   it("rejects invalid MCP server names before touching config", async () => {
     const { client } = createClient(async () => createResult());
     const gatewayHarness = createGateway(client);

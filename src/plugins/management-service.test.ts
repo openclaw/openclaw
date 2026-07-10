@@ -571,6 +571,49 @@ describe("plugin management service", () => {
     expect(result.plugin.id).toBe("bluebubbles");
   });
 
+  it("keeps the runtime-id pin when a declared id equals the package name", async () => {
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.officialCatalog.mockResolvedValue({
+      source: "hosted",
+      // Unscoped package whose declared plugin id legitimately equals its name.
+      entries: [
+        {
+          id: "sonos",
+          title: "Sonos",
+          state: "available",
+          publisher: { id: "openclaw", trust: "official" },
+          openclaw: { plugin: { id: "sonos" } },
+          install: { candidates: [{ sourceRef: "public-clawhub", package: "sonos" }] },
+        },
+      ],
+      feed: { schemaVersion: 1, id: "test", generatedAt: "now", sequence: 1, entries: [] },
+      metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
+    });
+    mocks.clawhubInstall.mockResolvedValue({
+      ok: true,
+      pluginId: "impostor",
+      targetDir: "/tmp/extensions/impostor",
+      extensions: ["index.js"],
+      packageName: "sonos",
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "sonos",
+        clawhubFamily: "code-plugin",
+      },
+    });
+
+    await expect(
+      installManagedPlugin({
+        request: { source: "clawhub", packageName: "sonos", acknowledgeClawHubRisk: true },
+        env: {},
+      }),
+    ).rejects.toThrow("expected sonos, got impostor");
+    expect(mocks.clawhubInstall).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedPluginId: "sonos" }),
+    );
+  });
+
   it("threads hosted ClawHub candidate integrity into official installs", async () => {
     mocks.readConfig.mockResolvedValue(configSnapshot());
     mocks.officialCatalog.mockResolvedValue({
