@@ -334,14 +334,21 @@ describe("runMessageAction plugin dispatch", () => {
       capabilities: { chatTypes: ["direct", "channel"] },
       config: createAlwaysConfiguredPluginConfig(),
       messaging: {
+        targetPrefixes: ["actionhub", "actionhub-alias"],
+        normalizeTarget: (raw) => raw.replace(/^actionhub-alias:/i, "actionhub:"),
         targetResolver: {
           looksLikeId: () => true,
         },
       },
       actions: {
-        describeMessageTool: () => ({ actions: ["pin", "list-pins", "member-info"] }),
+        describeMessageTool: () => ({
+          actions: ["pin", "list-pins", "member-info", "channel-info"],
+        }),
         supportsAction: ({ action }) =>
-          action === "pin" || action === "list-pins" || action === "member-info",
+          action === "pin" ||
+          action === "list-pins" ||
+          action === "member-info" ||
+          action === "channel-info",
         handleAction,
       },
     };
@@ -565,6 +572,78 @@ describe("runMessageAction plugin dispatch", () => {
           currentChannelProvider: "actionhub",
         },
         "trusted plugin tool context",
+      );
+    });
+
+    it("canonicalizes channelId-backed execution targets after host authorization", async () => {
+      await runMessageAction({
+        cfg: {
+          channels: {
+            actionhub: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "channel-info",
+        params: {
+          channel: "actionhub",
+          target: "actionhub-alias:current",
+        },
+        defaultAccountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelId: "actionhub:current",
+          currentChannelProvider: "actionhub",
+          currentChatType: "channel",
+        },
+        dryRun: false,
+      });
+
+      const call = readFirstPluginCall(handleAction);
+      expectRecordFields(
+        readRecordField(call, "params", "normalized plugin params"),
+        {
+          target: "actionhub:current",
+          channelId: "actionhub:current",
+        },
+        "normalized plugin params",
+      );
+    });
+
+    it("canonicalizes the execution target only after host authorization", async () => {
+      await runMessageAction({
+        cfg: {
+          channels: {
+            actionhub: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "pin",
+        params: {
+          channel: "actionhub",
+          target: "actionhub-alias:current",
+          messageId: "om_123",
+        },
+        defaultAccountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelId: "actionhub:current",
+          currentChannelProvider: "actionhub",
+        },
+        dryRun: false,
+      });
+
+      const call = readFirstPluginCall(handleAction);
+      expectRecordFields(
+        readRecordField(call, "params", "normalized plugin params"),
+        {
+          target: "actionhub:current",
+          to: "actionhub:current",
+        },
+        "normalized plugin params",
       );
     });
 

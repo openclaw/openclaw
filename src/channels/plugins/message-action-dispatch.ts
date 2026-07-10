@@ -5,6 +5,7 @@
  */
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import { normalizeOptionalAccountId, normalizeAccountId } from "../../routing/account-id.js";
+import { normalizeChatType, type ChatType } from "../chat-type.js";
 import { normalizeConversationReadInvocationOrigin } from "./conversation-read-origin.js";
 import { resolveChannelPluginRegistration } from "./registry.js";
 import type {
@@ -62,11 +63,38 @@ type HostConversationTarget = {
   kind?: HostConversationTargetKind;
 };
 
+const HOST_TARGET_KIND_PREFIXES = new Set<HostConversationTargetKind>([
+  "user",
+  "channel",
+  "room",
+  "chat",
+  "group",
+  "dm",
+  "conversation",
+]);
+
+function stripHostProviderPrefix(params: {
+  value: string;
+  channel: string;
+  providerPrefixes?: readonly string[];
+}): string {
+  const prefixes = [params.channel, ...(params.providerPrefixes ?? [])]
+    .map((prefix) => prefix.trim().toLowerCase())
+    .filter(
+      (prefix): prefix is string =>
+        Boolean(prefix) && !HOST_TARGET_KIND_PREFIXES.has(prefix as HostConversationTargetKind),
+    );
+  const lowered = params.value.toLowerCase();
+  const prefix = prefixes.find((candidate) => lowered.startsWith(`${candidate}:`));
+  return prefix ? params.value.slice(prefix.length + 1).trim() : params.value;
+}
+
 function normalizeHostConversationTarget(params: {
   value: unknown;
   channel: string;
   impliedKind?: HostConversationTargetKind;
   normalizeTarget?: (raw: string) => string | undefined;
+  providerPrefixes?: readonly string[];
 }): HostConversationTarget | undefined {
   if (typeof params.value !== "string") {
     return undefined;
@@ -76,11 +104,11 @@ function normalizeHostConversationTarget(params: {
   if (!value) {
     return undefined;
   }
-  const providerPrefixPattern = new RegExp(
-    `^${params.channel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:`,
-    "i",
-  );
-  const withoutProvider = value.replace(providerPrefixPattern, "").trim();
+  const withoutProvider = stripHostProviderPrefix({
+    value,
+    channel: params.channel,
+    providerPrefixes: params.providerPrefixes,
+  });
   if (!withoutProvider) {
     return undefined;
   }
@@ -131,7 +159,9 @@ function hasConflictingTargetKinds(targets: HostConversationTarget[]): boolean {
 
 function currentTargetsMatchRequested(params: {
   currentTargets: HostConversationTarget[];
+  requestedTargets: HostConversationTarget[];
   requestedTarget: HostConversationTarget;
+  currentChatType?: ChatType;
 }): boolean {
   const sameId = params.currentTargets.filter(
     (currentTarget) => currentTarget.id === params.requestedTarget.id,
@@ -141,6 +171,22 @@ function currentTargetsMatchRequested(params: {
   }
   const typedCurrentTargets = sameId.filter((currentTarget) => currentTarget.kind);
   if (typedCurrentTargets.length === 0) {
+    const hasCanonicalSibling = params.requestedTargets.some(
+      (requestedTarget) =>
+        requestedTarget.id === params.requestedTarget.id && !requestedTarget.kind,
+    );
+    if (!hasCanonicalSibling) {
+      return false;
+    }
+    if (params.currentChatType === "direct") {
+      return params.requestedTarget.kind === "user" || params.requestedTarget.kind === "dm";
+    }
+    if (params.currentChatType === "group") {
+      return params.requestedTarget.kind === "group" || params.requestedTarget.kind === "room";
+    }
+    if (params.currentChatType === "channel") {
+      return params.requestedTarget.kind === "channel";
+    }
     return false;
   }
   return typedCurrentTargets.some(
@@ -194,6 +240,7 @@ function isExactCurrentConversation(params: {
   }
   const normalizeTarget =
     params.pluginOrigin === "bundled" ? params.plugin.messaging?.normalizeTarget : undefined;
+  const providerPrefixes = params.plugin.messaging?.targetPrefixes;
   const aliasSpec =
     params.pluginOrigin === "bundled"
       ? params.plugin.actions?.messageActionTargetAliases?.[params.ctx.action]
@@ -216,6 +263,7 @@ function isExactCurrentConversation(params: {
       channel: params.ctx.channel,
       impliedKind,
       normalizeTarget,
+      providerPrefixes,
     });
     if (hasTargetInput(rawTarget) && !normalizedTarget) {
       return false;
@@ -233,6 +281,7 @@ function isExactCurrentConversation(params: {
       value: resolvedAliasTarget,
       channel: params.ctx.channel,
       normalizeTarget,
+      providerPrefixes,
     });
     if (
       (hasDeliveryAliasInput && !resolvedAliasTarget) ||
@@ -265,6 +314,7 @@ function isExactCurrentConversation(params: {
         value,
         channel: params.ctx.channel,
         normalizeTarget,
+        providerPrefixes,
       }),
     );
   }
@@ -275,10 +325,13 @@ function isExactCurrentConversation(params: {
   if (requestedTargetList.length === 0) {
     return false;
   }
+  const currentChatType = normalizeChatType(params.ctx.toolContext?.currentChatType);
   const matchesCurrentTarget = (requestedTarget: HostConversationTarget) =>
     currentTargetsMatchRequested({
       currentTargets: currentTargetList,
+      requestedTargets: requestedTargetList,
       requestedTarget,
+      currentChatType,
     });
   if (requestedTargetList.every(matchesCurrentTarget)) {
     return true;
@@ -336,6 +389,29 @@ function assertConversationReadAllowed(params: {
   );
 }
 
+function canonicalizeExternalExactCurrentTarget(params: {
+  ctx: ChannelMessageActionContext;
+  pluginOrigin: string | undefined;
+}): void {
+  if (
+    params.pluginOrigin === "bundled" ||
+    normalizeConversationReadInvocationOrigin(params.ctx.conversationReadOrigin) ===
+      "direct-operator" ||
+    !READ_DEPENDENT_ACTIONS.has(params.ctx.action)
+  ) {
+    return;
+  }
+  const target = params.ctx.params.target;
+  const resolvedTarget = [params.ctx.params.to, params.ctx.params.channelId].find(
+    (value): value is string => typeof value === "string" && Boolean(value.trim()),
+  );
+  if (typeof target === "string" && target.trim() && resolvedTarget) {
+    // Authorization used the raw spelling. Plugin execution receives the
+    // resolved destination so it cannot reinterpret an accepted kind alias.
+    params.ctx.params.target = resolvedTarget;
+  }
+}
+
 function requiresTrustedRequesterSender(
   ctx: ChannelMessageActionContext,
   plugin: ChannelPlugin,
@@ -368,6 +444,10 @@ export async function dispatchChannelMessageAction(
   assertConversationReadAllowed({
     ctx,
     plugin,
+    pluginOrigin: registration.origin,
+  });
+  canonicalizeExternalExactCurrentTarget({
+    ctx,
     pluginOrigin: registration.origin,
   });
   // Some plugin actions depend on the sender identity to enforce channel-local

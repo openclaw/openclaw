@@ -8,9 +8,9 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { dispatchChannelMessageAction } from "./message-action-dispatch.js";
-import type { ChannelPlugin } from "./types.js";
+import type { ChannelMessageActionContext, ChannelPlugin } from "./types.js";
 
-const handleAction = vi.fn(async () => jsonResult({ ok: true }));
+const handleAction = vi.fn(async (_ctx: ChannelMessageActionContext) => jsonResult({ ok: true }));
 
 const emptyRegistry = createTestRegistry([]);
 
@@ -91,6 +91,7 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     origin?: string;
     strayPolicy?: string;
     normalizeTarget?: (raw: string) => string | undefined;
+    targetPrefixes?: readonly string[];
     messageActionTargetAliases?: NonNullable<
       NonNullable<ChannelPlugin["actions"]>["messageActionTargetAliases"]
     >;
@@ -105,10 +106,11 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
           listAccountIds: () => ["default"],
         },
       }),
-      ...(params?.normalizeTarget
+      ...(params?.normalizeTarget || params?.targetPrefixes
         ? {
             messaging: {
               normalizeTarget: params.normalizeTarget,
+              targetPrefixes: params.targetPrefixes,
             },
           }
         : {}),
@@ -492,6 +494,125 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
       }),
     ).rejects.toThrow("requires the exact current conversation and account");
     expect(normalizeTarget).not.toHaveBeenCalled();
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it.each(["nextcloud-talk:current", "nc-talk:current", "nc:current", "room:current"])(
+    "allows the external exact-current provider spelling %s",
+    async (target) => {
+      const normalizeTarget = vi.fn(() => "nextcloud-talk:other");
+      setReadPlugin({
+        channel: "nextcloud-talk",
+        origin: "workspace",
+        targetPrefixes: ["nextcloud-talk", "nc-talk", "nc"],
+        normalizeTarget,
+      });
+
+      await dispatchChannelMessageAction({
+        channel: "nextcloud-talk",
+        action: "read",
+        cfg: {} as OpenClawConfig,
+        params: {
+          target,
+          to: "nextcloud-talk:current",
+        },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "nextcloud-talk",
+          currentChannelId: "nextcloud-talk:current",
+          currentChatType: "group",
+        },
+      });
+
+      expect(normalizeTarget).not.toHaveBeenCalled();
+      expect(handleAction.mock.calls[0]?.[0].params.target).toBe("nextcloud-talk:current");
+      expect(handleAction).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not let an external provider prefix erase a conflicting target kind", async () => {
+    setReadPlugin({
+      channel: "nextcloud-talk",
+      origin: "workspace",
+      targetPrefixes: ["user"],
+    });
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "nextcloud-talk",
+        action: "read",
+        cfg: {} as OpenClawConfig,
+        params: {
+          target: "user:current",
+          to: "nextcloud-talk:current",
+        },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "nextcloud-talk",
+          currentChannelId: "nextcloud-talk:current",
+          currentChatType: "group",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("requires a canonical sibling before accepting a typed external room target", async () => {
+    setReadPlugin({
+      channel: "nextcloud-talk",
+      origin: "workspace",
+    });
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "nextcloud-talk",
+        action: "read",
+        cfg: {} as OpenClawConfig,
+        params: {
+          target: "room:current",
+        },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "nextcloud-talk",
+          currentChannelId: "nextcloud-talk:current",
+          currentChatType: "group",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("does not confuse group and channel targets that share an identifier", async () => {
+    setReadPlugin({
+      channel: "nextcloud-talk",
+      origin: "workspace",
+    });
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "nextcloud-talk",
+        action: "read",
+        cfg: {} as OpenClawConfig,
+        params: {
+          target: "group:current",
+          to: "nextcloud-talk:current",
+        },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "nextcloud-talk",
+          currentChannelId: "nextcloud-talk:current",
+          currentChatType: "channel",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
     expect(handleAction).not.toHaveBeenCalled();
   });
 
