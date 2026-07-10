@@ -156,6 +156,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
+      const notices: string[] = [];
       for (const storageRootDir of await collectLegacyMatrixStateRoots(
         params.stateDir,
         MATRIX_STORAGE_META_FILENAME,
@@ -168,7 +169,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           openMatrixStorageMetaStoreOptions(storageRootDir),
         );
         if (await hasMatrixStorageMetaStateInStore({ store })) {
-          warnings.push(
+          notices.push(
             `Skipped Matrix storage metadata import for ${storageRootDir} because SQLite already has metadata`,
           );
           await archiveLegacyMatrixStateFile({
@@ -190,7 +191,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           warnings,
         });
       }
-      return { changes, warnings };
+      return { changes, warnings, notices };
     },
   },
   {
@@ -210,6 +211,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
+      const notices: string[] = [];
       for (const storageRootDir of await collectLegacySyncCacheRoots(params.stateDir)) {
         const persisted = await readLegacyMatrixSyncCacheState(storageRootDir);
         if (!persisted) {
@@ -219,7 +221,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           openMatrixSyncCacheStoreOptions(storageRootDir),
         );
         if (await hasMatrixSyncCacheStateInStore({ storageRootDir, store })) {
-          warnings.push(
+          notices.push(
             `Skipped Matrix sync cache import for ${storageRootDir} because SQLite already has sync cache state`,
           );
           await archiveLegacySyncCache({ storageRootDir, changes, warnings });
@@ -233,7 +235,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         changes.push(`Migrated Matrix sync cache JSON to SQLite for ${storageRootDir}`);
         await archiveLegacySyncCache({ storageRootDir, changes, warnings });
       }
-      return { changes, warnings };
+      return { changes, warnings, notices };
     },
   },
   {
@@ -255,6 +257,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
+      const notices: string[] = [];
       for (const storageRootDir of await collectLegacyMatrixStateRoots(
         params.stateDir,
         MATRIX_RECOVERY_KEY_FILENAME,
@@ -267,7 +270,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           openMatrixRecoveryKeyStoreOptions(storageRootDir),
         );
         if (await hasMatrixRecoveryKeyStateInStore({ store })) {
-          warnings.push(
+          notices.push(
             `Skipped Matrix recovery-key import for ${storageRootDir} because SQLite already has recovery-key state`,
           );
           await archiveLegacyMatrixStateFile({
@@ -289,7 +292,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           warnings,
         });
       }
-      return { changes, warnings };
+      return { changes, warnings, notices };
     },
   },
   {
@@ -312,6 +315,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
+      const notices: string[] = [];
       for (const storageRootDir of await collectLegacyMatrixStateRoots(
         params.stateDir,
         MATRIX_IDB_SNAPSHOT_FILENAME,
@@ -324,7 +328,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           openMatrixIdbSnapshotStoreOptions(storageRootDir),
         );
         if (await hasMatrixIdbSnapshotStateInStore({ store })) {
-          warnings.push(
+          notices.push(
             `Skipped Matrix IndexedDB snapshot import for ${storageRootDir} because SQLite already has snapshot state`,
           );
           await archiveLegacyMatrixStateFile({
@@ -350,7 +354,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           warnings,
         });
       }
-      return { changes, warnings };
+      return { changes, warnings, notices };
     },
   },
   {
@@ -374,6 +378,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
+      const notices: string[] = [];
       for (const storageRootDir of await collectLegacyMatrixStateRoots(
         params.stateDir,
         MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
@@ -386,7 +391,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           openMatrixLegacyCryptoMigrationStoreOptions(storageRootDir),
         );
         if (await hasMatrixLegacyCryptoMigrationStateInStore({ store })) {
-          warnings.push(
+          notices.push(
             `Skipped Matrix legacy crypto migration import for ${storageRootDir} because SQLite already has migration state`,
           );
           await archiveLegacyMatrixStateFile({
@@ -410,7 +415,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           warnings,
         });
       }
-      return { changes, warnings };
+      return { changes, warnings, notices };
     },
   },
 ];
