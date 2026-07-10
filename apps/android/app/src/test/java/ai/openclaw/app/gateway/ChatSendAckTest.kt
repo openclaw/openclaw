@@ -11,8 +11,8 @@ class ChatSendAckTest {
   private val json = Json { ignoreUnknownKeys = true }
 
   @Test
-  fun parseChatSendAckPreservesNonTerminalAdmissionStatuses() {
-    for (status in listOf("accepted", "started", "in_flight")) {
+  fun parseChatSendAckPreservesNonTerminalPublicAdmissionStatuses() {
+    for (status in listOf("started", "in_flight")) {
       val ack = parseChatSendAck(json, """{"runId":"run-1","status":"$status"}""")
 
       assertEquals("run-1", ack.runId)

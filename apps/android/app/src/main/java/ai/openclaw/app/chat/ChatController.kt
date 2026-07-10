@@ -1493,7 +1493,7 @@ class ChatController internal constructor(
             .firstOrNull { it.status == ChatOutboxStatus.Queued } ?: break
         when (sendOutboxItem(outbox, next, flushScope)) {
           OutboxSendOutcome.Sent -> flushedAny = true
-          OutboxSendOutcome.Skipped -> {}
+          OutboxSendOutcome.Continue -> {}
           OutboxSendOutcome.Stop -> break
         }
       }
@@ -1507,9 +1507,11 @@ class ChatController internal constructor(
     }
   }
 
-  // Sent: acked and removed. Skipped: row vanished (user delete).
-  // Stop: flush must halt; the row's queued or failed state is already durable.
-  private enum class OutboxSendOutcome { Sent, Skipped, Stop }
+  // Sent: acked and removed. Continue: row vanished or failed after a gateway response.
+  // Stop: transport state is unknown; the row's queued or failed state is already durable.
+  private enum class OutboxSendOutcome { Sent, Continue, Stop }
+
+  private enum class GatewayResponseState { Received, Unknown }
 
   private sealed interface OutboxSendResult {
     data object Accepted : OutboxSendResult
@@ -1520,7 +1522,9 @@ class ChatController internal constructor(
     ) : OutboxSendResult
 
     /** Dispatch may have succeeded, so only explicit user intent may retry the command. */
-    data object DeliveryUnconfirmed : OutboxSendResult
+    data class DeliveryUnconfirmed(
+      val gatewayResponse: GatewayResponseState,
+    ) : OutboxSendResult
   }
 
   private suspend fun sendOutboxItem(
@@ -1529,10 +1533,11 @@ class ChatController internal constructor(
     flushScope: ChatCacheScope,
   ): OutboxSendOutcome {
     // Claim the row before sending: 0 updated rows means it was deleted since the load, and a
-    // deleted command must never be sent. Skipped (like Failed) lets the flush continue.
+    // deleted command must never be sent. Continue (like an acknowledged failure) lets the
+    // flush advance to younger rows without replaying this one.
     val claimed = runCatching { outbox.updateStatus(item.id, ChatOutboxStatus.Sending, item.retryCount, item.lastError) }.getOrDefault(0)
     publishOutbox()
-    if (claimed == 0) return OutboxSendOutcome.Skipped
+    if (claimed == 0) return OutboxSendOutcome.Continue
     return when (val result = attemptOutboxSend(item, flushScope.gatewayId)) {
       OutboxSendResult.Accepted -> {
         // Ack received: delete the row so the flushed history copy is the only bubble left.
@@ -1547,7 +1552,7 @@ class ChatController internal constructor(
         _healthOk.value = false
         OutboxSendOutcome.Stop
       }
-      OutboxSendResult.DeliveryUnconfirmed -> {
+      is OutboxSendResult.DeliveryUnconfirmed -> {
         // Every transmitted failure is ambiguous: gateway error responses can be cached after
         // agent dispatch, and gateway dedupe is process-local and time-bounded.
         runCatching {
@@ -1559,8 +1564,12 @@ class ChatController internal constructor(
           )
         }
         publishOutbox()
-        _healthOk.value = false
-        OutboxSendOutcome.Stop
+        if (result.gatewayResponse == GatewayResponseState.Unknown) {
+          _healthOk.value = false
+          OutboxSendOutcome.Stop
+        } else {
+          OutboxSendOutcome.Continue
+        }
       }
     }
   }
@@ -1597,12 +1606,23 @@ class ChatController internal constructor(
       val ack = parseChatSendAck(json, requestGatewayBound(gatewayId, "chat.send", params.toString()))
       val hasLegacyRunIdOnlyAck = ack.isStatusMissing && !ack.runId.isNullOrBlank()
       when (ack.normalizedStatus) {
+        // The RPC response id already correlates terminal success to this exact request.
+        // Nonterminal admission still needs the gateway's run identity.
         "ok" -> OutboxSendResult.Accepted
-        "timeout", "error" -> OutboxSendResult.DeliveryUnconfirmed
-        "" -> if (hasLegacyRunIdOnlyAck) OutboxSendResult.Accepted else OutboxSendResult.DeliveryUnconfirmed
-        "accepted", "started", "in_flight" ->
-          if (ack.runId.isNullOrBlank()) OutboxSendResult.DeliveryUnconfirmed else OutboxSendResult.Accepted
-        else -> OutboxSendResult.DeliveryUnconfirmed
+        "started", "in_flight" ->
+          if (ack.runId.isNullOrBlank()) {
+            OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
+          } else {
+            OutboxSendResult.Accepted
+          }
+        "timeout", "error" -> OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
+        "" ->
+          if (hasLegacyRunIdOnlyAck) {
+            OutboxSendResult.Accepted
+          } else {
+            OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
+          }
+        else -> OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
       }
     } catch (err: CancellationException) {
       // Teardown must not be recorded as a send failure; the row stays 'sending' and the
@@ -1612,11 +1632,11 @@ class ChatController internal constructor(
       OutboxSendResult.NotDispatched(err.message ?: "send failed")
     } catch (_: GatewayRequestDefinitiveFailure) {
       // An ok:false response proves transmission, not that this idempotency key was never run.
-      OutboxSendResult.DeliveryUnconfirmed
+      OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
     } catch (_: GatewayRequestOutcomeUnknown) {
-      OutboxSendResult.DeliveryUnconfirmed
+      OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Unknown)
     } catch (_: Throwable) {
-      OutboxSendResult.DeliveryUnconfirmed
+      OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Unknown)
     }
 
   private suspend fun recoverInterruptedOutboxSends(outbox: ChatCommandOutbox): Boolean =

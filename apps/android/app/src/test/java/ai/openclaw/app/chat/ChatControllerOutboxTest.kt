@@ -269,7 +269,7 @@ class ChatControllerOutboxTest {
   @Test
   fun knownAdmissionAcksWithRunIdsRemoveRows() =
     runTest {
-      for (status in listOf("accepted", "started", "in_flight")) {
+      for (status in listOf("started", "in_flight", "ok")) {
         val gateway = FakeGateway()
         val outbox = FakeCommandOutbox()
         val chat = controller(this, gateway, outbox)
@@ -470,12 +470,42 @@ class ChatControllerOutboxTest {
         assertEquals(0, failed.retryCount)
         assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, failed.lastError)
         assertEquals(1, gateway.sentMessages.size)
-        assertFalse(chat.healthOk.value)
+        assertTrue(chat.healthOk.value)
 
         chat.handleGatewayEvent("health", null)
         advanceUntilIdle()
         assertEquals(1, gateway.sentMessages.size)
       }
+    }
+
+  @Test
+  fun acknowledgedFailureKeepsGatewayOnlineAndFlushesLaterRows() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val chat = controller(this, gateway, outbox)
+      chat.load("main")
+      advanceUntilIdle()
+      chat.sendMessageAwaitAcceptance(message = "fails", thinkingLevel = "off", attachments = emptyList())
+      chat.sendMessageAwaitAcceptance(message = "continues", thinkingLevel = "off", attachments = emptyList())
+
+      gateway.online = true
+      gateway.sendResponse = { key ->
+        if (gateway.sentMessages.size == 1) {
+          """{"runId":"$key","status":"error"}"""
+        } else {
+          """{"runId":"$key","status":"started"}"""
+        }
+      }
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertTrue(chat.healthOk.value)
+      assertEquals(listOf("fails", "continues"), gateway.sentMessages)
+      val failed = chat.outboxItems.value.single()
+      assertEquals("fails", failed.text)
+      assertEquals(ChatOutboxStatus.Failed, failed.status)
+      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, failed.lastError)
     }
 
   @Test
@@ -501,6 +531,7 @@ class ChatControllerOutboxTest {
       assertEquals(0, ambiguous.retryCount)
       assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, ambiguous.lastError)
       assertEquals(1, gateway.sentMessages.size)
+      assertTrue(first.healthOk.value)
       processJob.cancel()
 
       gateway.sendFailureAfterDispatch = null
@@ -654,8 +685,10 @@ class ChatControllerOutboxTest {
       val responses =
         listOf<(String) -> String>(
           { key -> """{"runId":"$key","status":"mystery"}""" },
+          { key -> """{"runId":"$key","status":"accepted"}""" },
           { _ -> """{"status":"accepted"}""" },
           { _ -> """{"status":"started"}""" },
+          { _ -> """{"status":"in_flight"}""" },
           { key -> """{"runId":"$key","status":42}""" },
           { key -> """{"runId":"$key","status":null}""" },
           { key -> """{"runId":"$key","status":" "}""" },
@@ -680,7 +713,7 @@ class ChatControllerOutboxTest {
         assertEquals(0, failed.retryCount)
         assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, failed.lastError)
         assertEquals(1, gateway.sentMessages.size)
-        assertFalse(chat.healthOk.value)
+        assertTrue(chat.healthOk.value)
 
         chat.handleGatewayEvent("health", null)
         advanceUntilIdle()
@@ -705,6 +738,7 @@ class ChatControllerOutboxTest {
 
       assertEquals(listOf("completed ack"), gateway.sentMessages)
       assertTrue(chat.outboxItems.value.isEmpty())
+      assertTrue(chat.healthOk.value)
     }
 
   @Test
