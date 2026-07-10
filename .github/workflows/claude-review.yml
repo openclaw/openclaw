@@ -10,7 +10,19 @@ on:
 permissions: {}
 
 concurrency:
-  group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  # claude[bot]'s own "I'll analyze this and get back to you" placeholder
+  # comment is itself an issue_comment:created event, which re-enters this
+  # workflow. If that re-entry shared the PR-keyed group below, cancel-in-progress
+  # would cancel the very run that just posted the placeholder before it could
+  # produce a real review — every run would self-cancel. Give claude[bot]'s own
+  # comments a run-unique group so they can never contend for the shared slot;
+  # real triggers (pushes, human "@claude review" comments) still dedupe normally.
+  group: >-
+    ${{
+      (github.event_name == 'issue_comment' && github.event.comment.user.login == 'claude[bot]')
+      && format('claude-review-noop-{0}', github.run_id)
+      || format('claude-review-{0}', github.event.pull_request.number || github.event.issue.number)
+    }}
   cancel-in-progress: true
 
 jobs:
