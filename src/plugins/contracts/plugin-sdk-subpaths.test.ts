@@ -6,9 +6,7 @@ import type {
   BaseProbeResult as ContractBaseProbeResult,
   BaseTokenResolution as ContractBaseTokenResolution,
   ChannelAgentTool as ContractChannelAgentTool,
-  ChannelAccountStatus as ContractChannelAccountStatus,
   ChannelAccountSnapshot as ContractChannelAccountSnapshot,
-  ChannelAccountSnapshotInput as ContractChannelAccountSnapshotInput,
   ChannelGroupContext as ContractChannelGroupContext,
   ChannelMessageActionAdapter as ContractChannelMessageActionAdapter,
   ChannelMessageActionContext as ContractChannelMessageActionContext,
@@ -35,9 +33,7 @@ import type {
   BaseProbeResult,
   BaseTokenResolution,
   ChannelAgentTool,
-  ChannelAccountStatus,
   ChannelAccountSnapshot,
-  ChannelAccountSnapshotInput,
   ChannelGroupContext,
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
@@ -1293,9 +1289,7 @@ describe("plugin-sdk subpath exports", () => {
     expectTypeOf<ContractBaseProbeResult>().toMatchTypeOf<BaseProbeResult>();
     expectTypeOf<ContractBaseTokenResolution>().toMatchTypeOf<BaseTokenResolution>();
     expectTypeOf<ContractChannelAgentTool>().toMatchTypeOf<ChannelAgentTool>();
-    expectTypeOf<ContractChannelAccountStatus>().toMatchTypeOf<ChannelAccountStatus>();
     expectTypeOf<ContractChannelAccountSnapshot>().toMatchTypeOf<ChannelAccountSnapshot>();
-    expectTypeOf<ContractChannelAccountSnapshotInput>().toMatchTypeOf<ChannelAccountSnapshotInput>();
     expectTypeOf<ContractChannelGroupContext>().toMatchTypeOf<ChannelGroupContext>();
     expectTypeOf<ContractChannelMessageActionAdapter>().toMatchTypeOf<ChannelMessageActionAdapter>();
     expectTypeOf<ContractChannelMessageActionContext>().toMatchTypeOf<ChannelMessageActionContext>();
