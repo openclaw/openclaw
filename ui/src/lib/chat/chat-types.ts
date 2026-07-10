@@ -30,6 +30,7 @@ export type ChatQueueItem = {
     | "waiting-model"
     | "waiting-idle"
     | "executing-command"
+    | "steering"
     | "sending"
     | "waiting-reconnect"
     | "unconfirmed"

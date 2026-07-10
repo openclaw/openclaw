@@ -3171,17 +3171,31 @@ describe("chat queue", () => {
         { id: "queued-1", text: "tighten the plan", createdAt: 1 },
         { id: "steered-1", text: "already sent", createdAt: 2, kind: "steered" },
         { id: "local-1", text: "/status", createdAt: 3, localCommandName: "status" },
+        {
+          id: "waiting-idle-1",
+          text: "queued during the run",
+          createdAt: 4,
+          sendState: "waiting-idle",
+        },
+        {
+          id: "steering-1",
+          text: "already steering",
+          createdAt: 5,
+          sendState: "steering",
+        },
       ],
     });
 
     const steerButtons = container.querySelectorAll<HTMLButtonElement>(".chat-queue__steer");
-    expect(steerButtons).toHaveLength(1);
+    expect(steerButtons).toHaveLength(2);
     expect(steerButtons[0].textContent?.trim()).toBe("Steer");
     expect(container.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe("Steered");
 
     steerButtons[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onQueueSteer).toHaveBeenCalledWith("queued-1");
+    steerButtons[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onQueueSteer).toHaveBeenCalledWith("waiting-idle-1");
 
     const inactiveContainer = renderQueue({
       canAbort: false,

@@ -42,12 +42,15 @@ import {
 import { loadChatHistory, type ChatHistoryResult, type ChatState } from "./chat-history.ts";
 import {
   admitQueuedMessageForSession,
+  clearTransientQueuedMessageProjection,
   enqueueChatMessage,
   excludeComposerAttachments,
   readQueuedMessageById,
   removeQueuedMessageWithoutReleasing,
   removeVisibleOrScopedQueuedMessageWithoutReleasing,
+  replacePendingQueuedMessageProjection,
   syncChatQueueFromStoredOutbox,
+  setTransientQueuedMessageProjection,
   updateQueuedMessage,
   updateQueuedMessageForSession,
 } from "./chat-queue.ts";
@@ -363,6 +366,7 @@ async function sendChatMessageWithGeneratedRunId(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
+  canApplyError: () => boolean = () => true,
 ): Promise<ChatSendAck | null> {
   if (!state.client || !state.connected) {
     return null;
@@ -372,12 +376,16 @@ async function sendChatMessageWithGeneratedRunId(
   if (!msg && !hasAttachments) {
     return null;
   }
-  setChatError(state, null);
+  if (canApplyError()) {
+    setChatError(state, null);
+  }
   const runId = generateUUID();
   try {
     return await requestChatSend(state, { message: msg, attachments, runId });
   } catch (err) {
-    setChatError(state, formatConnectError(err));
+    if (canApplyError()) {
+      setChatError(state, formatConnectError(err));
+    }
     return null;
   }
 }
@@ -565,6 +573,8 @@ const OFFLINE_QUEUE_STORAGE_ERROR =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
 const UNCONFIRMED_CHAT_SEND_ERROR =
   "Delivery could not be confirmed after reconnect. Check the conversation before retrying.";
+const UNCONFIRMED_STEER_ERROR =
+  "Steer delivery could not be confirmed. Check the active run before retrying.";
 const STORED_OUTBOX_RETRY_DEFAULT_MS = 500;
 const STORED_OUTBOX_RETRY_MIN_MS = 100;
 const STORED_OUTBOX_RETRY_MAX_MS = 30_000;
@@ -1228,11 +1238,16 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
   }
   const activeRunId = host.chatRunId;
   const item = host.chatQueue.find(
-    (entry) => entry.id === id && !entry.pendingRunId && !entry.localCommandName,
+    (entry) =>
+      entry.id === id &&
+      !entry.pendingRunId &&
+      !entry.localCommandName &&
+      (entry.sendState === undefined || entry.sendState === "waiting-idle"),
   );
   if (!item) {
     return;
   }
+  const itemSessionKey = item.sessionKey ?? host.sessionKey;
   const message = item.text.trim();
   const attachments = item.attachments ?? [];
   const hasAttachments = attachments.length > 0;
@@ -1240,30 +1255,120 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
     return;
   }
 
-  host.chatQueue = host.chatQueue.map((entry) =>
-    entry.id === id ? { ...entry, kind: "steered", pendingRunId: activeRunId } : entry,
+  // Claim the durable row before transport so a crash or ambiguous ACK cannot
+  // replay the original queued turn after the steer may already be accepted.
+  const claimed = updateQueuedMessage(host, id, (entry) => ({
+    ...entry,
+    sendError: UNCONFIRMED_STEER_ERROR,
+    sendState: "unconfirmed",
+  }));
+  if (!claimed) {
+    setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+    return;
+  }
+  const pendingIndicator: ChatQueueItem = {
+    id: item.id,
+    text: item.text,
+    createdAt: item.createdAt,
+    kind: "steered",
+    ...(item.attachments?.length ? { attachments: item.attachments } : {}),
+    pendingRunId: activeRunId,
+  };
+  const hasTransientProjection = setTransientQueuedMessageProjection(
+    host,
+    itemSessionKey,
+    {
+      ...claimed,
+      kind: "steered",
+      sendError: undefined,
+      sendState: "steering",
+    },
+    item.agentId,
   );
-  const ack = await sendSteerChatMessage(
+  if (!hasTransientProjection) {
+    const restored = updateQueuedMessage(host, id, () => item);
+    if (!restored) {
+      host.chatQueue = host.chatQueue.map((entry) => (entry.id === id ? item : entry));
+    }
+    setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+    return;
+  }
+  host.chatQueue = host.chatQueue.map((entry) => (entry.id === id ? pendingIndicator : entry));
+  const ack = await sendChatMessageWithGeneratedRunId(
     host as unknown as ChatState,
     message,
     hasAttachments ? attachments : undefined,
+    () => visibleSessionMatches(host, itemSessionKey, item.agentId),
   );
-  if (!ack || isTerminalFailureChatSendAck(ack)) {
-    host.chatQueue = host.chatQueue.map((entry) => (entry.id === id ? item : entry));
-    if (isTerminalFailureChatSendAck(ack)) {
-      setChatError(host, formatTerminalChatSendAckError(ack, "steer"));
+  const pendingStillVisible = host.chatQueue.some(
+    (entry) => entry.id === id && entry.pendingRunId === activeRunId,
+  );
+  replacePendingQueuedMessageProjection(
+    host,
+    itemSessionKey,
+    id,
+    activeRunId,
+    claimed,
+    item.agentId,
+  );
+  clearTransientQueuedMessageProjection(host, itemSessionKey, id, item.agentId);
+  const itemStillVisible = visibleSessionMatches(host, itemSessionKey, item.agentId);
+  if (!ack) {
+    // A transport failure does not prove the steer was rejected. Keep the
+    // durable row parked so reconnect cannot replay it as a separate turn.
+    if (itemStillVisible) {
+      setChatError(host, UNCONFIRMED_STEER_ERROR);
     }
     return;
   }
-  if (ack.status === "ok") {
-    removeQueuedMessageWithoutReleasing(host, id, host.sessionKey);
+  if (isTerminalFailureChatSendAck(ack)) {
+    const restored = updateQueuedMessage(host, id, (entry) => ({
+      ...item,
+      ...(entry.attachments?.length ? { attachments: entry.attachments } : {}),
+    }));
+    if (!restored) {
+      if (itemStillVisible) {
+        setChatError(host, UNCONFIRMED_STEER_ERROR);
+      }
+    } else {
+      if (itemStillVisible) {
+        setChatError(host, formatTerminalChatSendAckError(ack, "steer"));
+      }
+      const restoredOutbox = listStoredChatOutboxes(host).find((outbox) =>
+        outbox.queue.some((entry) => entry.id === id),
+      );
+      if (!host.chatRunId && restoredOutbox) {
+        void scheduleStoredChatOutboxDrain(host, restoredOutbox);
+      }
+    }
+    return;
   }
-  releaseChatAttachmentPayloads(attachments);
-  setLastActiveSessionKey(
-    host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
-    host.sessionKey,
-  );
-  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+  const removed = removeQueuedMessageWithoutReleasing(host, id, itemSessionKey, item.agentId);
+  if (!removed) {
+    if (itemStillVisible) {
+      setChatError(host, UNCONFIRMED_STEER_ERROR);
+    }
+    return;
+  }
+  if (
+    ack.status !== "ok" &&
+    pendingStillVisible &&
+    host.chatRunId === activeRunId &&
+    itemStillVisible
+  ) {
+    host.chatQueue = [...host.chatQueue, pendingIndicator].toSorted(
+      (left, right) => left.createdAt - right.createdAt,
+    );
+  } else {
+    releaseChatAttachmentPayloads(attachments);
+  }
+  if (itemStillVisible) {
+    setLastActiveSessionKey(
+      host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
+      itemSessionKey,
+    );
+    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+  }
 }
 
 type StoredChatOutboxDrainResult = "blocked" | "empty";
@@ -1356,7 +1461,17 @@ function readStoredChatOutbox(
 }
 
 function nextAutomaticStoredChatQueueItem(outbox: StoredChatOutbox): ChatQueueItem | undefined {
-  return outbox.queue.find((item) => item.sendState !== "failed" || Boolean(item.localCommandName));
+  for (const item of outbox.queue) {
+    if (item.sendState !== "failed") {
+      return item;
+    }
+    // A failed command may have changed session state before reporting an
+    // error. Preserve FIFO until the user explicitly retries or removes it.
+    if (item.localCommandName) {
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueItem): boolean {
@@ -1371,6 +1486,9 @@ function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueItem): b
 }
 
 function historyContainsQueuedSend(history: ChatHistoryResult, item: ChatQueueItem): boolean {
+  if (!item.sendRunId) {
+    return false;
+  }
   const messages = Array.isArray(history.messages) ? history.messages : [];
   return messages.some((message) => {
     if (!message || typeof message !== "object" || Array.isArray(message)) {
@@ -1776,6 +1894,7 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
     !item ||
     item.pendingRunId ||
     item.sendState === "executing-command" ||
+    item.sendState === "steering" ||
     item.sendState === "sending" ||
     item.sendState === "waiting-model"
   ) {
@@ -2090,11 +2209,26 @@ export async function handleSendChat(
       host.sessionKey !== submittedSessionKey ||
       !visibleSessionMatches(host, submittedSessionKey, queued.agentId)
     ) {
-      updateQueuedMessageForSession(host, submittedSessionKey, queued.id, (item) => ({
-        ...item,
-        sendError: undefined,
-        sendState: host.connected && host.client ? "waiting-idle" : "waiting-reconnect",
-      }));
+      const parked = updateQueuedMessageForSession(
+        host,
+        submittedSessionKey,
+        queued.id,
+        (item) => ({
+          ...item,
+          sendError: undefined,
+          sendState: host.connected && host.client ? "waiting-idle" : "waiting-reconnect",
+        }),
+      );
+      if (!parked) {
+        setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+        return;
+      }
+      const outbox = listStoredChatOutboxes(host).find((candidate) =>
+        candidate.queue.some((item) => item.id === queued.id),
+      );
+      if (outbox) {
+        await scheduleStoredChatOutboxDrain(host, outbox);
+      }
       return;
     }
 

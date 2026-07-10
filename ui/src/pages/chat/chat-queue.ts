@@ -38,6 +38,63 @@ type ChatQueueSessionHost = ChatQueueStoreHost &
 type ChatQueueScopedSessionHost = ChatQueueSessionHost & SessionScopeHost;
 
 const chatOutboxProjectionHosts = new Set<ChatQueueScopedSessionHost>();
+// Durable rows use crash-safe states. Overlay live work process-wide so panes
+// attached mid-operation cannot retry or remove it before the owner settles.
+const transientQueueProjections = new Map<string, ChatQueueItem>();
+// A failed row may exist only in one pane when storage admission fails. Track
+// that provenance so projection keeps it without resurrecting removed durable rows.
+const localRecoveryItemIds = new WeakMap<ChatQueueScopedSessionHost, Set<string>>();
+
+function markLocalRecoveryItem(host: ChatQueueScopedSessionHost, id: string): void {
+  const ids = localRecoveryItemIds.get(host) ?? new Set<string>();
+  ids.add(id);
+  localRecoveryItemIds.set(host, ids);
+}
+
+function clearLocalRecoveryItem(host: ChatQueueScopedSessionHost, id: string): void {
+  const ids = localRecoveryItemIds.get(host);
+  ids?.delete(id);
+  if (ids?.size === 0) {
+    localRecoveryItemIds.delete(host);
+  }
+}
+
+function queueProjectionGatewayKey(host: ChatComposerScope): string {
+  return host.settings?.gatewayUrl?.trim() || "default";
+}
+
+function transientQueueProjectionKey(
+  host: ChatComposerScope,
+  scope: StoredChatOutboxScope,
+  id: string,
+): string {
+  return `${queueProjectionGatewayKey(host)}\u0000${storedChatOutboxScopeKey(scope)}\u0000${id}`;
+}
+
+function transientQueueProjection(
+  host: ChatComposerScope,
+  outbox: StoredChatOutbox,
+  id: string,
+): ChatQueueItem | undefined {
+  return transientQueueProjections.get(transientQueueProjectionKey(host, outbox, id));
+}
+
+function isProcessLiveQueueProjection(item: ChatQueueItem): boolean {
+  return item.sendState === "sending" || item.sendState === "executing-command";
+}
+
+function updateProcessLiveQueueProjection(
+  host: ChatComposerScope,
+  scope: StoredChatOutboxScope,
+  item: ChatQueueItem,
+): void {
+  const key = transientQueueProjectionKey(host, scope, item.id);
+  if (isProcessLiveQueueProjection(item)) {
+    transientQueueProjections.set(key, item);
+  } else {
+    transientQueueProjections.delete(key);
+  }
+}
 
 function storedOutboxContainingItem(
   host: ChatComposerScope,
@@ -46,7 +103,7 @@ function storedOutboxContainingItem(
   return listStoredChatOutboxes(host).find((outbox) => outbox.queue.some((item) => item.id === id));
 }
 
-function sameStoredOutboxScope(left: StoredChatOutbox, right: StoredChatOutbox): boolean {
+function sameStoredOutboxScope(left: StoredChatOutboxScope, right: StoredChatOutboxScope): boolean {
   return left.sessionKey === right.sessionKey && left.agentId === right.agentId;
 }
 
@@ -63,18 +120,32 @@ function outboxAfterMutation(host: ChatComposerScope, before: StoredChatOutbox):
 export function syncChatQueueFromStoredOutbox(
   host: ChatQueueScopedSessionHost,
   outbox: StoredChatOutbox,
+  options: { requestUpdate?: boolean } = {},
 ) {
   const visible = visibleSessionMatches(host, outbox.sessionKey, outbox.agentId);
   const scopeKey = storedChatOutboxScopeKey(outbox);
   const current = visible ? host.chatQueue : (host.chatQueueByScope?.[scopeKey] ?? []);
   const ephemeral = current.filter((item) => item.pendingRunId);
+  const ephemeralById = new Map(ephemeral.map((item) => [item.id, item]));
   const storedIds = new Set(outbox.queue.map((item) => item.id));
   // Storage failures can leave a manual-retry row in memory only. Projection
   // must not erase that last recoverable copy while another send is active.
   const localRecovery = current.filter(
-    (item) => item.sendState === "failed" && !item.pendingRunId && !storedIds.has(item.id),
+    (item) =>
+      item.sendState === "failed" &&
+      !item.pendingRunId &&
+      !storedIds.has(item.id) &&
+      localRecoveryItemIds.get(host)?.has(item.id),
   );
   const projected = outbox.queue.map((item) => {
+    const ephemeralItem = ephemeralById.get(item.id);
+    if (ephemeralItem) {
+      return ephemeralItem;
+    }
+    const transientItem = transientQueueProjection(host, outbox, item.id);
+    if (transientItem) {
+      return transientItem;
+    }
     const local = current.find(
       (candidate) => candidate.id === item.id && candidate.sendRunId === item.sendRunId,
     );
@@ -104,7 +175,8 @@ export function syncChatQueueFromStoredOutbox(
         : {}),
     };
   });
-  const queue = [...projected, ...localRecovery, ...ephemeral].toSorted(
+  const detachedEphemeral = ephemeral.filter((item) => !storedIds.has(item.id));
+  const queue = [...projected, ...localRecovery, ...detachedEphemeral].toSorted(
     (left, right) => left.createdAt - right.createdAt,
   );
   if (visible) {
@@ -118,7 +190,21 @@ export function syncChatQueueFromStoredOutbox(
     }
     host.chatQueueByScope = queueByScope;
   }
-  host.requestUpdate?.();
+  if (options.requestUpdate !== false) {
+    host.requestUpdate?.();
+  }
+}
+
+export function syncVisibleChatQueueProjection(
+  host: ChatQueueScopedSessionHost,
+  options: { requestUpdate?: boolean } = {},
+): void {
+  const outbox = listStoredChatOutboxes(host).find((candidate) =>
+    visibleSessionMatches(host, candidate.sessionKey, candidate.agentId),
+  );
+  if (outbox) {
+    syncChatQueueFromStoredOutbox(host, outbox, options);
+  }
 }
 
 function publishStoredOutbox(source: ChatQueueScopedSessionHost, outbox: StoredChatOutbox) {
@@ -138,8 +224,60 @@ function publishStoredOutbox(source: ChatQueueScopedSessionHost, outbox: StoredC
   }
 }
 
+function storedOutboxForProjection(
+  host: ChatQueueScopedSessionHost,
+  scope: StoredChatOutboxScope,
+): StoredChatOutbox {
+  return (
+    listStoredChatOutboxes(host).find((outbox) => sameStoredOutboxScope(outbox, scope)) ?? {
+      ...scope,
+      queue: [],
+    }
+  );
+}
+
+export function setTransientQueuedMessageProjection(
+  host: ChatQueueScopedSessionHost,
+  sessionKey: string,
+  item: ChatQueueItem,
+  agentId?: string,
+): boolean {
+  const scope = resolveStoredChatOutboxScope(host, sessionKey, agentId);
+  const outbox = storedOutboxForProjection(host, scope);
+  if (!outbox.queue.some((entry) => entry.id === item.id)) {
+    return false;
+  }
+  transientQueueProjections.set(transientQueueProjectionKey(host, scope, item.id), item);
+  syncChatQueueFromStoredOutbox(host, outbox);
+  publishStoredOutbox(host, outbox);
+  return true;
+}
+
+export function clearTransientQueuedMessageProjection(
+  host: ChatQueueScopedSessionHost,
+  sessionKey: string,
+  id: string,
+  agentId?: string,
+) {
+  const scope = resolveStoredChatOutboxScope(host, sessionKey, agentId);
+  transientQueueProjections.delete(transientQueueProjectionKey(host, scope, id));
+  const outbox = storedOutboxForProjection(host, scope);
+  syncChatQueueFromStoredOutbox(host, outbox);
+  publishStoredOutbox(host, outbox);
+}
+
 export function subscribeChatOutboxProjection(host: ChatQueueScopedSessionHost): () => void {
   chatOutboxProjectionHosts.add(host);
+  for (const outbox of listStoredChatOutboxes(host)) {
+    const visible = visibleSessionMatches(host, outbox.sessionKey, outbox.agentId);
+    const hasCachedScope = Object.hasOwn(
+      host.chatQueueByScope ?? {},
+      storedChatOutboxScopeKey(outbox),
+    );
+    if (visible || hasCachedScope) {
+      syncChatQueueFromStoredOutbox(host, outbox);
+    }
+  }
   return () => chatOutboxProjectionHosts.delete(host);
 }
 
@@ -203,6 +341,29 @@ export function readChatQueueForScope(
   return visibleSessionMatches(host, scope.sessionKey, scope.agentId)
     ? host.chatQueue
     : (host.chatQueueByScope?.[storedChatOutboxScopeKey(scope)] ?? []);
+}
+
+export function replacePendingQueuedMessageProjection(
+  host: ChatQueueScopedSessionHost,
+  sessionKey: string,
+  id: string,
+  pendingRunId: string,
+  replacement: ChatQueueItem,
+  agentId?: string,
+): boolean {
+  const queue = readChatQueueForScope(host, sessionKey, agentId);
+  if (!queue.some((item) => item.id === id && item.pendingRunId === pendingRunId)) {
+    return false;
+  }
+  writeChatQueueForScope(
+    host,
+    sessionKey,
+    queue.map((item) =>
+      item.id === id && item.pendingRunId === pendingRunId ? replacement : item,
+    ),
+    agentId,
+  );
+  return true;
 }
 
 function writeChatQueueForScope(
@@ -314,9 +475,15 @@ export function updateQueuedMessageForSession(
       stored.agentId ?? current.agentId ?? nextItem.agentId,
     )
   ) {
-    syncChatQueueFromStoredOutbox(host, outboxAfterMutation(host, stored));
+    if (!isProcessLiveQueueProjection(nextItem)) {
+      updateProcessLiveQueueProjection(host, scope, nextItem);
+    }
+    const persisted = outboxAfterMutation(host, stored);
+    syncChatQueueFromStoredOutbox(host, persisted);
+    publishStoredOutbox(host, persisted);
     return null;
   }
+  updateProcessLiveQueueProjection(host, scope, nextItem);
   const nextQueue = queue.map((item) => (item.id === id ? nextItem : item));
   if (location) {
     writeLocatedChatQueue(host, location, nextQueue);
@@ -339,8 +506,12 @@ export function admitQueuedMessageForSession(
   item: ChatQueueItem,
 ): boolean {
   if (!admitStoredChatComposerQueueItem(host, sessionKey, item, item.agentId)) {
+    if (item.sendState === "failed") {
+      markLocalRecoveryItem(host, item.id);
+    }
     return false;
   }
+  clearLocalRecoveryItem(host, item.id);
   const stored = storedOutboxContainingItem(host, item.id);
   if (!stored) {
     return false;
@@ -375,8 +546,13 @@ export function removeQueuedMessageWithoutReleasing(
       stored.agentId ?? item.agentId,
     )
   ) {
-    syncChatQueueFromStoredOutbox(host, outboxAfterMutation(host, stored));
+    const persisted = outboxAfterMutation(host, stored);
+    syncChatQueueFromStoredOutbox(host, persisted);
+    publishStoredOutbox(host, persisted);
     return null;
+  }
+  if (item) {
+    transientQueueProjections.delete(transientQueueProjectionKey(host, scope, item.id));
   }
   const nextQueue = queue.filter((entry) => entry.id !== id);
   if (location) {
@@ -386,6 +562,9 @@ export function removeQueuedMessageWithoutReleasing(
   }
   if (stored) {
     publishStoredOutbox(host, outboxAfterMutation(host, stored));
+  }
+  if (item) {
+    clearLocalRecoveryItem(host, id);
   }
   return item;
 }

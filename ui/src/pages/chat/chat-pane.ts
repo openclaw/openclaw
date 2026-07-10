@@ -829,6 +829,9 @@ class ChatPane extends OpenClawLightDomElement {
       pageState.requestUpdate?.();
     };
     this.state = pageState;
+    if (this.sessionKey) {
+      this.setPaneSessionKey(this.sessionKey);
+    }
     chatState.attach(pageState);
     const mediaDevices = globalThis.navigator?.mediaDevices;
     if (mediaDevices?.addEventListener) {
@@ -837,9 +840,6 @@ class ChatPane extends OpenClawLightDomElement {
       chatState.addCleanup(() =>
         mediaDevices.removeEventListener("devicechange", handleDeviceChange),
       );
-    }
-    if (this.sessionKey) {
-      this.setPaneSessionKey(this.sessionKey);
     }
     chatState.restoreComposer({ preserveCurrent: true });
     chatState.startComposerPersistence();

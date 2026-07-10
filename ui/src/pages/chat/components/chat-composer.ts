@@ -931,6 +931,8 @@ function sendStateLabel(item: ChatQueueItem): string | null {
       return "Waiting for current run";
     case "executing-command":
       return "Running command";
+    case "steering":
+      return "Steering";
     case "waiting-reconnect":
       return "Waiting for reconnect";
     case "unconfirmed":
@@ -988,7 +990,7 @@ export function renderChatQueue(props: ChatQueueProps) {
                 ${props.canAbort &&
                 props.onQueueSteer &&
                 item.kind !== "steered" &&
-                !item.sendState &&
+                (item.sendState === undefined || item.sendState === "waiting-idle") &&
                 !item.localCommandName
                   ? html`
                       <button
@@ -1002,7 +1004,7 @@ export function renderChatQueue(props: ChatQueueProps) {
                       </button>
                     `
                   : nothing}
-                ${item.sendState === "executing-command"
+                ${item.sendState === "executing-command" || item.sendState === "steering"
                   ? nothing
                   : html`
                       <openclaw-tooltip content="Remove queued message">
