@@ -20,6 +20,7 @@ import {
   loadBundledPluginPublicArtifactModuleSync,
   loadPluginPublicArtifactModuleSync,
 } from "./public-surface-loader.js";
+import { isBundledPluginDirName } from "./public-surface-runtime.js";
 
 const PROVIDER_POLICY_ARTIFACT_CANDIDATES = ["provider-policy-api.js"] as const;
 const providerPolicySurfaceByPluginId = new Map<string, BundledProviderPolicySurface | null>();
@@ -86,6 +87,13 @@ function resolveCachedProviderPolicySurface(params: {
 export function resolveDirectBundledProviderPolicySurface(
   pluginId: string,
 ): BundledProviderPolicySurface | null {
+  // Provider ids reach this on request paths (sessions.list, spawn, model
+  // routes). Custom providers and mis-parsed `provider:org/model` refs are not
+  // bundled plugin dirs; resolve them to "no surface" instead of letting the
+  // path-like dir name crash the loader and the request (#103744).
+  if (!isBundledPluginDirName(pluginId)) {
+    return null;
+  }
   return resolveCachedProviderPolicySurface({
     cacheKey: `${resolveBundledPluginsDir() ?? ""}\0${pluginId}`,
     loadModule: (artifactBasename) =>

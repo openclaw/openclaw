@@ -52,6 +52,15 @@ describe("provider public artifacts", () => {
     vi.resetModules();
   });
 
+  it("returns null instead of throwing for provider ids that cannot be bundled dir names", () => {
+    // Custom providers and mis-parsed `provider:org/model` refs reach policy
+    // lookup on request paths like sessions.list; a path-like provider id must
+    // resolve to "no bundled surface", not crash the request (#103744).
+    expect(resolveBundledProviderPolicySurface("my-ngc:nvidia")).toBeNull();
+    expect(resolveBundledProviderPolicySurface("z-ai/glm-5.2")).toBeNull();
+    expect(resolveBundledProviderPolicySurface("..")).toBeNull();
+  });
+
   it("loads a lightweight bundled provider policy artifact smoke", () => {
     const surface = resolveBundledProviderPolicySurface("openai");
     expect(surface?.normalizeConfig).toBeTypeOf("function");
