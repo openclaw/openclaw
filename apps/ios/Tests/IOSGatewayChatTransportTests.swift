@@ -61,6 +61,19 @@ struct IOSGatewayChatTransportTests {
         #expect(completion.completed)
     }
 
+    @Test func `model patch result decodes authoritative Luna thinking state`() throws {
+        let data = Data(
+            #"{"entry":{"thinkingLevel":"ultra"},"resolved":{"modelProvider":"openai","model":"gpt-5.6-luna","thinkingLevel":"max","thinkingLevels":[{"id":"off","label":"off"},{"id":"max","label":"max"}]}}"#
+                .utf8)
+
+        let result = try IOSGatewayChatTransport.decodeModelPatchResult(data)
+
+        #expect(result.modelProvider == "openai")
+        #expect(result.model == "gpt-5.6-luna")
+        #expect(result.thinkingLevel == "max")
+        #expect(result.thinkingLevels?.map(\.id) == ["off", "max"])
+    }
+
     @Test func `routing contract decodes gateway main semantics`() throws {
         let data = Data(#"{"defaultId":"Ops","mainKey":"Work","scope":"global","agents":[]}"#.utf8)
         #expect(try IOSGatewayChatTransport.decodeSessionRoutingContract(data) == "global|work|ops")
@@ -416,6 +429,30 @@ struct IOSGatewayChatTransportTests {
         default:
             Issue.record("expected .sessionMessage from session.message event, got \(String(describing: mapped))")
         }
+    }
+
+    @Test func `maps sessions changed event to authoritative refresh signal`() {
+        let payload = AnyCodable([
+            "sessionKey": AnyCodable("agent:main:main"),
+            "agentId": AnyCodable("main"),
+            "reason": AnyCodable("command-metadata"),
+        ])
+        let frame = EventFrame(
+            type: "event",
+            event: "sessions.changed",
+            payload: payload,
+            seq: 1,
+            stateversion: nil)
+
+        let mapped = IOSGatewayChatTransport.mapEventFrame(frame)
+        guard case let .sessionsChanged(change) = mapped else {
+            Issue.record("expected .sessionsChanged, got \(String(describing: mapped))")
+            return
+        }
+        #expect(change == .init(
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            reason: "command-metadata"))
     }
 
     @Test func `maps chat event to chat`() {
