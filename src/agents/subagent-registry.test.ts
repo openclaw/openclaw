@@ -5659,6 +5659,64 @@ describe("subagent registry seam flow", () => {
     }
   });
 
+  const completeTerminalOutcome = {
+    status: "error" as const,
+    error: "existing failure",
+    startedAt: 1,
+    endedAt: 2,
+    elapsedMs: 1,
+  };
+  const completeTerminalEvidence = {
+    endedAt: 2,
+    outcome: completeTerminalOutcome,
+    endedReason: SUBAGENT_ENDED_REASON_ERROR,
+    execution: {
+      status: "terminal" as const,
+      startedAt: 1,
+      endedAt: 2,
+      outcome: completeTerminalOutcome,
+    },
+  };
+  it.each([
+    ["missing-ended-at", 0, { ...completeTerminalEvidence, endedAt: undefined }, undefined],
+    ["missing-outcome", 0, { ...completeTerminalEvidence, outcome: undefined }, undefined],
+    ["missing-ended-reason", 0, { ...completeTerminalEvidence, endedReason: undefined }, undefined],
+    ["missing-execution", 0, { ...completeTerminalEvidence, execution: undefined }, undefined],
+    ["cleanup-complete", 1, completeTerminalEvidence, 2],
+    ["cleanup-partial", 0, { ...completeTerminalEvidence, execution: undefined }, 2],
+  ])(
+    "%s terminal evidence returns %i",
+    async (scenario, expected, evidence, cleanupCompletedAt) => {
+      const runId = `run-interrupted-${scenario}`;
+      const entry = {
+        runId,
+        childSessionKey: `agent:main:subagent:interrupted-${scenario}`,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "preserve existing terminal evidence",
+        cleanup: "keep" as const,
+        createdAt: 1,
+        startedAt: 1,
+        cleanupCompletedAt,
+        ...evidence,
+      };
+      mod.addSubagentRunForTests(entry);
+      const original = structuredClone(entry);
+
+      await expect(
+        mod.finalizeInterruptedSubagentRun({
+          runId,
+          error: "restart interrupted run",
+          endedAt: 3,
+        }),
+      ).resolves.toBe(expected);
+
+      expect(
+        mod.listSubagentRunsForRequester("agent:main:main").find((run) => run.runId === runId),
+      ).toEqual(original);
+    },
+  );
+
   it("removes attachments for released delete-mode runs", async () => {
     const attachmentsRootDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-release-attachments-"),

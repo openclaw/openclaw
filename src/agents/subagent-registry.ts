@@ -1781,6 +1781,17 @@ export function releaseSubagentRun(runId: string) {
   subagentRunManager.releaseSubagentRun(runId);
 }
 
+function hasCompleteSubagentTerminalState(entry: SubagentRunRecord | undefined): boolean {
+  return (
+    entry !== undefined &&
+    typeof entry.endedAt === "number" &&
+    Number.isFinite(entry.endedAt) &&
+    entry.outcome !== undefined &&
+    entry.endedReason !== undefined &&
+    entry.execution?.status === "terminal"
+  );
+}
+
 export async function finalizeInterruptedSubagentRun(params: {
   runId: string;
   error: string;
@@ -1798,11 +1809,14 @@ export async function finalizeInterruptedSubagentRun(params: {
   clearPendingLifecycleError(runId);
   clearPendingLifecycleTimeout(runId);
   const entry = subagentRuns.get(runId);
-  if (
-    !entry ||
-    (typeof entry.cleanupCompletedAt === "number" && entry.terminalOwner !== "interrupted-recovery")
-  ) {
+  if (!entry) {
     return 0;
+  }
+  if (
+    typeof entry.cleanupCompletedAt === "number" &&
+    entry.terminalOwner !== "interrupted-recovery"
+  ) {
+    return hasCompleteSubagentTerminalState(entry) ? 1 : 0;
   }
   try {
     await completeSubagentRun({
@@ -1818,7 +1832,12 @@ export async function finalizeInterruptedSubagentRun(params: {
       triggerCleanup: true,
       recoverInterrupted: true,
     });
-    return 1;
+    // A successfully finalized stale generation can be retired once a newer
+    // generation owns the session; the captured exact row still has its result.
+    const finalized = subagentRuns.get(runId) ?? entry;
+    // Recovery preserves partial terminal evidence instead of overwriting it.
+    // Keep scheduler retries alive until the exact row is fully terminal.
+    return hasCompleteSubagentTerminalState(finalized) ? 1 : 0;
   } catch (error) {
     log.warn("failed to durably finalize interrupted subagent run", {
       runId,
