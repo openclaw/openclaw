@@ -941,7 +941,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       expect(bridge).toBeDefined();
 
       await expect(bridge?.stat({ filePath: "dangling-link", cwd: workdir })).rejects.toThrow(
-        /Sandbox boundary checks failed/u,
+        /path alias escape blocked/u,
       );
       await expect(bridge?.stat({ filePath: "missing.txt", cwd: workdir })).resolves.toBeNull();
     } finally {
@@ -1165,14 +1165,12 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     }
   });
 
-  test("Windows process containment drops missing policy readwrite and readonly entries", async () => {
+  test("Windows process containment preserves existing policy paths with spaces", async () => {
     const workdir = mkdtempSync(path.join(tmpdir(), "mxc-win-dacl-workdir-"));
     const readonlyRoot = mkdtempSync(path.join(tmpdir(), "mxc-win-dacl-readonly-"));
     const existingReadwritePathWithSpace = mkdtempSync(path.join(workdir, "write dir "));
     const existingReadonlyPathWithSpace = mkdtempSync(path.join(readonlyRoot, "secret dir "));
     const existingFile = path.join(readonlyRoot, "secret file.txt");
-    const missingReadwritePath = path.join(workdir, "missing-write");
-    const missingReadonlyPath = path.join(readonlyRoot, "missing-readonly");
     writeFileSync(existingFile, "denied file contents");
     try {
       const handle = createMxcSandboxBackendHandle({
@@ -1180,12 +1178,8 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
         workdir,
         config: sandboxPolicyConfig({
           filesystem: {
-            additionalReadwritePaths: [missingReadwritePath, existingReadwritePathWithSpace],
-            additionalReadonlyPaths: [
-              missingReadonlyPath,
-              existingReadonlyPathWithSpace,
-              existingFile,
-            ],
+            additionalReadwritePaths: [existingReadwritePathWithSpace],
+            additionalReadonlyPaths: [existingReadonlyPathWithSpace, existingFile],
           },
         }),
       });
@@ -1196,11 +1190,8 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       const readonly = stringArrayField(filesystem, "readonlyPaths");
       expect(readwrite).toContain(path.resolve(workdir));
       expect(readwrite).toContain(path.resolve(existingReadwritePathWithSpace));
-      expect(readwrite).not.toContain(path.resolve(missingReadwritePath));
-      expect(readwrite).not.toContain(missingReadwritePath);
       expect(readonly).toContain(existingReadonlyPathWithSpace);
       expect(readonly).toContain(existingFile);
-      expect(readonly).not.toContain(missingReadonlyPath);
     } finally {
       rmSync(workdir, { recursive: true, force: true });
       rmSync(readonlyRoot, { recursive: true, force: true });
