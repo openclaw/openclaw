@@ -45,6 +45,17 @@ export interface LineGroupConfig {
   enabled?: boolean;
   allowFrom?: Array<string | number>;
   requireMention?: boolean;
+  /**
+   * When true (and requireMention is also true for this group), non-text
+   * messages (image/video/audio/file/sticker/location) participate in the
+   * mention gate instead of always bypassing it. Opt-in; default false.
+   */
+  requireMentionForNonText?: boolean;
+  /**
+   * Max number of skipped photo/video/audio/file messages retained per group
+   * while waiting for a later @mention. Defaults to 3 when unset.
+   */
+  pendingMediaLimit?: number;
   systemPrompt?: string;
   skills?: string[];
 }
