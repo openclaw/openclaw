@@ -1,9 +1,8 @@
 // Release Beta Verifier script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { readPublicationArtifactArchive, sha256Digest } from "./actions-artifact-archive.mjs";
 import { readBoundedResponseText } from "./bounded-response.ts";
 import { collectClawHubPublishablePluginPackages } from "./plugin-clawhub-release.ts";
 import {
@@ -73,9 +72,10 @@ type WorkflowRunSummary = {
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_CLAWHUB_REGISTRY = "https://clawhub.ai";
 const CLAWHUB_BOOTSTRAP_WORKFLOW_PATH = ".github/workflows/plugin-clawhub-new.yml";
+const CLAWHUB_BOOTSTRAP_READBACK_FILE = "clawhub-bootstrap-readback.json";
 const CLAWHUB_REQUEST_TIMEOUT_MS = 20_000;
 const CLAWHUB_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
-const GITHUB_ARTIFACT_ARCHIVE_MAX_BYTES = 150 * 1024 * 1024;
+const CLAWHUB_BOOTSTRAP_READBACK_ARCHIVE_MAX_BYTES = 2 * 1024 * 1024;
 const COMMIT_SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const POSITIVE_INTEGER_PATTERN = /^[1-9][0-9]*$/u;
@@ -106,14 +106,6 @@ function runCommand(command: string, args: string[], options: { cwd?: string } =
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
-}
-
-function runCommandBuffer(command: string, args: string[]): Buffer {
-  return execFileSync(command, args, {
-    encoding: null,
-    maxBuffer: GITHUB_ARTIFACT_ARCHIVE_MAX_BYTES,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
 }
 
 function runCommandInherited(command: string, args: string[]): void {
@@ -629,6 +621,15 @@ function requirePositiveIntegerString(value: unknown, label: string): string {
   return stringValue;
 }
 
+function requirePositiveSafeInteger(value: unknown, label: string): number {
+  const stringValue = requirePositiveIntegerString(value, label);
+  const numberValue = Number(stringValue);
+  if (!Number.isSafeInteger(numberValue)) {
+    throw new Error(`${label} must be a positive safe integer.`);
+  }
+  return numberValue;
+}
+
 function requireCommitSha(value: unknown, label: string): string {
   const sha = requireString(value, label);
   if (!COMMIT_SHA_PATTERN.test(sha)) {
@@ -688,6 +689,90 @@ function requireArtifactWorkflowRun(
   if (requireString(workflowRun.head_branch, `${params.label} workflow head branch`) !== "main") {
     throw new Error(`${params.label} was not produced by trusted main.`);
   }
+}
+
+function requireClawHubBootstrapRunBinding(
+  run: unknown,
+  expectedRunId: string,
+): {
+  headSha: string;
+  run: JsonRecord;
+  runAttempt: number;
+  runId: number;
+  terminalRunAttempt: string;
+  workflowPath: string;
+} {
+  if (!isRecord(run)) {
+    throw new Error("Plugin ClawHub New run metadata is invalid.");
+  }
+  const runId = requirePositiveSafeInteger(run.id, "Plugin ClawHub New run id");
+  if (String(runId) !== expectedRunId) {
+    throw new Error(`Plugin ClawHub New run id is ${runId}, expected ${expectedRunId}.`);
+  }
+  if (run.name !== "Plugin ClawHub New") {
+    throw new Error("Plugin ClawHub New run has an unexpected workflow name.");
+  }
+  if (run.event !== "workflow_dispatch") {
+    throw new Error("Plugin ClawHub New run was not workflow_dispatch.");
+  }
+  if (run.head_branch !== "main") {
+    throw new Error("Plugin ClawHub New run was not dispatched from trusted main.");
+  }
+  const headSha = requireCommitSha(run.head_sha, "Plugin ClawHub New head SHA");
+  const runAttempt = requirePositiveSafeInteger(run.run_attempt, "Plugin ClawHub New run attempt");
+  const workflowPath = requireString(run.path, "Plugin ClawHub New workflow path").replace(
+    /@.*$/u,
+    "",
+  );
+  if (workflowPath !== CLAWHUB_BOOTSTRAP_WORKFLOW_PATH) {
+    throw new Error("Plugin ClawHub New run has an unexpected workflow path.");
+  }
+  if (run.status !== "completed" || run.conclusion !== "success") {
+    throw new Error("Plugin ClawHub New run is not completed/success.");
+  }
+  return {
+    headSha,
+    run,
+    runAttempt,
+    runId,
+    terminalRunAttempt: String(runAttempt),
+    workflowPath,
+  };
+}
+
+function requireClawHubReadbackArtifactBinding(
+  artifact: unknown,
+  run: ReturnType<typeof requireClawHubBootstrapRunBinding>,
+): {
+  artifactDigest: string;
+  artifactId: number;
+  artifactName: string;
+  artifactSizeBytes: number;
+} {
+  if (!isRecord(artifact)) {
+    throw new Error("Plugin ClawHub New readback artifact metadata is invalid.");
+  }
+  const artifactName = `clawhub-bootstrap-readback-${run.runId}-${run.terminalRunAttempt}`;
+  if (artifact.name !== artifactName) {
+    throw new Error("Plugin ClawHub New readback artifact name does not bind the run attempt.");
+  }
+  requireArtifactWorkflowRun(artifact, {
+    label: "Plugin ClawHub New readback artifact",
+    runId: String(run.runId),
+    headSha: run.headSha,
+  });
+  return {
+    artifactDigest: `sha256:${requireArtifactDigest(
+      artifact.digest,
+      "Plugin ClawHub New readback artifact digest",
+    )}`,
+    artifactId: requirePositiveSafeInteger(artifact.id, "Plugin ClawHub New readback artifact id"),
+    artifactName,
+    artifactSizeBytes: requirePositiveSafeInteger(
+      artifact.size_in_bytes,
+      "Plugin ClawHub New readback artifact size",
+    ),
+  };
 }
 
 function validateBootstrapPackageEvidence(
@@ -761,56 +846,16 @@ export function validateClawHubBootstrapEvidence(params: {
   packageArtifact: unknown;
   evidence: unknown;
 }): WorkflowRunSummary {
-  if (!isRecord(params.run)) {
-    throw new Error("Plugin ClawHub New run metadata is invalid.");
-  }
-  const runId = requirePositiveIntegerString(params.run.id, "Plugin ClawHub New run id");
-  if (runId !== params.runId) {
-    throw new Error(`Plugin ClawHub New run id is ${runId}, expected ${params.runId}.`);
-  }
-  if (params.run.name !== "Plugin ClawHub New") {
-    throw new Error("Plugin ClawHub New run has an unexpected workflow name.");
-  }
-  if (params.run.event !== "workflow_dispatch") {
-    throw new Error("Plugin ClawHub New run was not workflow_dispatch.");
-  }
-  if (params.run.head_branch !== "main") {
-    throw new Error("Plugin ClawHub New run was not dispatched from trusted main.");
-  }
-  const headSha = requireCommitSha(params.run.head_sha, "Plugin ClawHub New head SHA");
-  const terminalRunAttempt = requirePositiveIntegerString(
-    params.run.run_attempt,
-    "Plugin ClawHub New run attempt",
+  const runBinding = requireClawHubBootstrapRunBinding(params.run, params.runId);
+  const { headSha, terminalRunAttempt, workflowPath } = runBinding;
+  const runId = String(runBinding.runId);
+  const readbackBinding = requireClawHubReadbackArtifactBinding(
+    params.readbackArtifact,
+    runBinding,
   );
-  const workflowPath = requireString(params.run.path, "Plugin ClawHub New workflow path").replace(
-    /@.*$/u,
-    "",
-  );
-  if (workflowPath !== CLAWHUB_BOOTSTRAP_WORKFLOW_PATH) {
-    throw new Error("Plugin ClawHub New run has an unexpected workflow path.");
-  }
-  if (params.run.status !== "completed" || params.run.conclusion !== "success") {
-    throw new Error("Plugin ClawHub New run is not completed/success.");
-  }
-
-  if (!isRecord(params.readbackArtifact)) {
-    throw new Error("Plugin ClawHub New readback artifact metadata is invalid.");
-  }
-  const expectedReadbackName = `clawhub-bootstrap-readback-${runId}-${terminalRunAttempt}`;
-  if (params.readbackArtifact.name !== expectedReadbackName) {
-    throw new Error("Plugin ClawHub New readback artifact name does not bind the run attempt.");
-  }
-  requireArtifactWorkflowRun(params.readbackArtifact, {
-    label: "Plugin ClawHub New readback artifact",
-    runId,
-    headSha,
-  });
-  const readbackArtifactId = requirePositiveIntegerString(
-    params.readbackArtifact.id,
-    "Plugin ClawHub New readback artifact id",
-  );
+  const readbackArtifactId = String(readbackBinding.artifactId);
   const readbackArtifactDigest = requireArtifactDigest(
-    params.readbackArtifact.digest,
+    readbackBinding.artifactDigest,
     "Plugin ClawHub New readback artifact digest",
   );
   if (
@@ -939,14 +984,14 @@ export function validateClawHubBootstrapEvidence(params: {
     );
   }
 
-  const createdAt = readString(params.run.created_at);
-  const updatedAt = readString(params.run.updated_at);
+  const createdAt = readString(runBinding.run.created_at);
+  const updatedAt = readString(runBinding.run.updated_at);
   const createdMs = createdAt === undefined ? Number.NaN : Date.parse(createdAt);
   const updatedMs = updatedAt === undefined ? Number.NaN : Date.parse(updatedAt);
   return {
     id: runId,
     label: "Plugin ClawHub New",
-    url: readString(params.run.html_url),
+    url: readString(runBinding.run.html_url),
     durationSeconds:
       Number.isFinite(createdMs) && Number.isFinite(updatedMs)
         ? Math.max(0, Math.round((updatedMs - createdMs) / 1000))
@@ -970,62 +1015,101 @@ function readGitHubApiJson(repo: string, endpoint: string, label: string): unkno
   return parseJson(runCommand("gh", ["api", `repos/${repo}/${endpoint}`]), label);
 }
 
-function downloadGitHubArtifactJson(params: {
-  repo: string;
-  artifactId: string;
-  fileName: string;
-}): { value: unknown; archiveSha256: string } {
-  const archive = runCommandBuffer("gh", [
-    "api",
-    "-H",
-    "Accept: application/vnd.github+json",
-    `repos/${params.repo}/actions/artifacts/${params.artifactId}/zip`,
-  ]);
-  if (archive.byteLength > GITHUB_ARTIFACT_ARCHIVE_MAX_BYTES) {
-    throw new Error("Plugin ClawHub New readback artifact archive is too large.");
-  }
-  const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-clawhub-readback-"));
-  try {
-    const archivePath = join(tempRoot, "artifact.zip");
-    writeFileSync(archivePath, archive);
-    const inventory = runCommand("unzip", ["-Z1", archivePath])
-      .split("\n")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-    if (inventory.length !== 1 || inventory[0] !== params.fileName) {
-      throw new Error(
-        `Plugin ClawHub New readback artifact inventory mismatch: ${inventory.join(",")}.`,
-      );
-    }
-    const raw = runCommand("unzip", ["-p", archivePath, params.fileName]);
-    return {
-      value: parseJson(raw, "Plugin ClawHub New readback artifact"),
-      archiveSha256: createHash("sha256").update(archive).digest("hex"),
-    };
-  } finally {
-    rmSync(tempRoot, { recursive: true, force: true });
-  }
+function readGitHubToken(): string {
+  return requireString(
+    process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN ?? runCommand("gh", ["auth", "token"]),
+    "GitHub token",
+  );
 }
 
-function verifyClawHubBootstrapRun(params: {
+function decodeUtf8Exact(bytes: Uint8Array, label: string): string {
+  let value: string;
+  try {
+    value = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (error) {
+    throw new Error(`${label} is not valid UTF-8.`, { cause: error });
+  }
+  if (!Buffer.from(value, "utf8").equals(bytes)) {
+    throw new Error(`${label} is not canonically encoded UTF-8.`);
+  }
+  return value;
+}
+
+export async function downloadClawHubBootstrapReadback(params: {
+  repo: string;
+  runId: string;
+  run: unknown;
+  readbackArtifact: unknown;
+  token: string;
+  fetchImpl?: typeof fetch;
+  retryAttempts?: number;
+  retryDelayMs?: number;
+  timeoutMs?: number;
+}): Promise<{ value: unknown; archiveSha256: string }> {
+  const runBinding = requireClawHubBootstrapRunBinding(params.run, params.runId);
+  const artifactBinding = requireClawHubReadbackArtifactBinding(
+    params.readbackArtifact,
+    runBinding,
+  );
+  const downloaded = await readPublicationArtifactArchive({
+    archivePolicy: {
+      expectedEntries: [CLAWHUB_BOOTSTRAP_READBACK_FILE],
+      maxArchiveBytes: CLAWHUB_BOOTSTRAP_READBACK_ARCHIVE_MAX_BYTES,
+      maxExpandedBytes: CLAWHUB_RESPONSE_BODY_MAX_BYTES,
+      maxCompressedEntryBytes: () => CLAWHUB_BOOTSTRAP_READBACK_ARCHIVE_MAX_BYTES,
+      maxEntryBytes: () => CLAWHUB_RESPONSE_BODY_MAX_BYTES,
+    },
+    expected: {
+      artifactDigest: artifactBinding.artifactDigest,
+      artifactId: artifactBinding.artifactId,
+      artifactName: artifactBinding.artifactName,
+      artifactSizeBytes: artifactBinding.artifactSizeBytes,
+      repository: params.repo,
+      runStatePolicy: "completed-success",
+      runAttempt: runBinding.runAttempt,
+      runId: runBinding.runId,
+      workflowEvent: "workflow_dispatch",
+      workflowHeadBranch: "main",
+      workflowPath: runBinding.workflowPath,
+      workflowSha: runBinding.headSha,
+    },
+    fetchImpl: params.fetchImpl,
+    maxArchiveBytes: CLAWHUB_BOOTSTRAP_READBACK_ARCHIVE_MAX_BYTES,
+    retryAttempts: params.retryAttempts,
+    retryDelayMs: params.retryDelayMs,
+    timeoutMs: params.timeoutMs,
+    token: params.token,
+  });
+  const bytes = downloaded.files.get(CLAWHUB_BOOTSTRAP_READBACK_FILE);
+  if (!bytes) {
+    throw new Error("Plugin ClawHub New readback artifact is missing its evidence file.");
+  }
+  return {
+    value: parseJson(
+      decodeUtf8Exact(bytes, "Plugin ClawHub New readback artifact"),
+      "Plugin ClawHub New readback artifact",
+    ),
+    archiveSha256: requireArtifactDigest(
+      sha256Digest(downloaded.archiveBytes),
+      "Downloaded Plugin ClawHub New readback artifact digest",
+    ),
+  };
+}
+
+async function verifyClawHubBootstrapRun(params: {
   repo: string;
   runId: string;
   releaseSha: string;
   version: string;
   expectedPackages: string[];
-}): WorkflowRunSummary {
+}): Promise<WorkflowRunSummary> {
   const run = readGitHubApiJson(
     params.repo,
     `actions/runs/${params.runId}`,
     "Plugin ClawHub New run",
   );
-  if (!isRecord(run)) {
-    throw new Error("Plugin ClawHub New run metadata is invalid.");
-  }
-  const terminalRunAttempt = requirePositiveIntegerString(
-    run.run_attempt,
-    "Plugin ClawHub New run attempt",
-  );
+  const runBinding = requireClawHubBootstrapRunBinding(run, params.runId);
+  const terminalRunAttempt = runBinding.terminalRunAttempt;
   const readbackName = `clawhub-bootstrap-readback-${params.runId}-${terminalRunAttempt}`;
   const artifactList = readGitHubApiJson(
     params.repo,
@@ -1044,14 +1128,12 @@ function verifyClawHubBootstrapRun(params: {
     );
   }
   const readbackArtifact = readbackArtifacts[0];
-  const readbackArtifactId = requirePositiveIntegerString(
-    readbackArtifact.id,
-    "Plugin ClawHub New readback artifact id",
-  );
-  const downloaded = downloadGitHubArtifactJson({
+  const downloaded = await downloadClawHubBootstrapReadback({
     repo: params.repo,
-    artifactId: readbackArtifactId,
-    fileName: "clawhub-bootstrap-readback.json",
+    runId: params.runId,
+    run,
+    readbackArtifact,
+    token: readGitHubToken(),
   });
   if (!isRecord(downloaded.value)) {
     throw new Error("Plugin ClawHub New readback evidence is invalid.");
@@ -1228,7 +1310,7 @@ export async function verifyBetaRelease(
   }
   if (args.workflowRuns.pluginClawHubBootstrap !== undefined) {
     workflowRuns.push(
-      verifyClawHubBootstrapRun({
+      await verifyClawHubBootstrapRun({
         repo: args.repo,
         runId: args.workflowRuns.pluginClawHubBootstrap,
         releaseSha: requireCommitSha(args.releaseSha, "release SHA"),

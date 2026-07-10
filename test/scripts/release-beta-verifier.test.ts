@@ -1,6 +1,8 @@
 // Release Beta Verifier tests cover release beta verifier script behavior.
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  downloadClawHubBootstrapReadback,
   fetchJsonWithRetry,
   fetchStatusWithRetry,
   parseNpmViewFields,
@@ -9,6 +11,64 @@ import {
   runNpmViewWithRetry,
   validateClawHubBootstrapEvidence,
 } from "../../scripts/lib/release-beta-verifier.ts";
+
+function sha256(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function createStoredZip(files: Array<{ name: string; bytes: Buffer }>): Buffer {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let localOffset = 0;
+  for (const file of files) {
+    const name = Buffer.from(file.name, "utf8");
+    const checksum = crc32(file.bytes);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0, 6);
+    local.writeUInt16LE(0, 8);
+    local.writeUInt32LE(checksum, 14);
+    local.writeUInt32LE(file.bytes.length, 18);
+    local.writeUInt32LE(file.bytes.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    localParts.push(local, name, file.bytes);
+
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(0x0314, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0, 8);
+    central.writeUInt16LE(0, 10);
+    central.writeUInt32LE(checksum, 16);
+    central.writeUInt32LE(file.bytes.length, 20);
+    central.writeUInt32LE(file.bytes.length, 24);
+    central.writeUInt16LE(name.length, 28);
+    central.writeUInt32LE((0o100600 * 0x10000) >>> 0, 38);
+    central.writeUInt32LE(localOffset, 42);
+    centralParts.push(central, name);
+    localOffset += local.length + name.length + file.bytes.length;
+  }
+  const centralDirectory = Buffer.concat(centralParts);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(files.length, 8);
+  end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(centralDirectory.length, 12);
+  end.writeUInt32LE(localOffset, 16);
+  return Buffer.concat([...localParts, centralDirectory, end]);
+}
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -149,6 +209,7 @@ describe("validateClawHubBootstrapEvidence", () => {
     id: 45,
     name: "clawhub-bootstrap-readback-34-2",
     digest: `sha256:${readbackSha}`,
+    size_in_bytes: 1,
     expired: false,
     workflow_run: workflowRun,
   };
@@ -310,6 +371,151 @@ describe("validateClawHubBootstrapEvidence", () => {
         },
       }),
     ).toThrow("artifact metadata does not match downloaded bytes");
+  });
+});
+
+describe("downloadClawHubBootstrapReadback", () => {
+  const workflowSha = "b".repeat(40);
+  const run = {
+    id: 34,
+    name: "Plugin ClawHub New",
+    event: "workflow_dispatch",
+    head_branch: "main",
+    head_sha: workflowSha,
+    path: ".github/workflows/plugin-clawhub-new.yml@refs/heads/main",
+    run_attempt: 2,
+    status: "completed",
+    conclusion: "success",
+  };
+  const workflowAttempt = {
+    id: 34,
+    run_attempt: 2,
+    head_sha: workflowSha,
+    head_branch: "main",
+    event: "workflow_dispatch",
+    path: ".github/workflows/plugin-clawhub-new.yml",
+    status: "completed",
+    conclusion: "success",
+    repository: { full_name: "openclaw/openclaw" },
+  };
+
+  function createFixture(
+    archive: Buffer,
+    overrides: {
+      artifactMetadata?: Record<string, unknown>;
+      workflowAttempt?: Record<string, unknown>;
+    } = {},
+  ) {
+    const readbackArtifact = {
+      id: 45,
+      name: "clawhub-bootstrap-readback-34-2",
+      digest: `sha256:${sha256(archive)}`,
+      size_in_bytes: archive.length,
+      expired: false,
+      workflow_run: {
+        id: 34,
+        head_branch: "main",
+        head_sha: workflowSha,
+      },
+    };
+    const artifactMetadata = {
+      ...readbackArtifact,
+      ...overrides.artifactMetadata,
+    };
+    const attemptMetadata = {
+      ...workflowAttempt,
+      ...overrides.workflowAttempt,
+    };
+    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/actions/artifacts/45")) {
+        return Response.json(artifactMetadata);
+      }
+      if (url.endsWith("/actions/runs/34/attempts/2")) {
+        return Response.json(attemptMetadata);
+      }
+      if (url.endsWith("/actions/artifacts/45/zip")) {
+        return new Response(archive, {
+          headers: { "content-length": String(archive.length) },
+        });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    return { fetchImpl, readbackArtifact };
+  }
+
+  async function download(
+    archive: Buffer,
+    overrides?: Parameters<typeof createFixture>[1],
+  ): Promise<{
+    result: Awaited<ReturnType<typeof downloadClawHubBootstrapReadback>>;
+    requests: number;
+  }> {
+    const fixture = createFixture(archive, overrides);
+    const result = await downloadClawHubBootstrapReadback({
+      repo: "openclaw/openclaw",
+      runId: "34",
+      run,
+      readbackArtifact: fixture.readbackArtifact,
+      token: "test-token",
+      fetchImpl: fixture.fetchImpl,
+      retryAttempts: 1,
+      retryDelayMs: 1,
+      timeoutMs: 1_000,
+    });
+    return { result, requests: fixture.fetchImpl.mock.calls.length };
+  }
+
+  it("downloads one exact readback file from the bound successful main attempt", async () => {
+    const evidence = { schemaVersion: 2, targetSha: "a".repeat(40) };
+    const archive = createStoredZip([
+      {
+        name: "clawhub-bootstrap-readback.json",
+        bytes: Buffer.from(JSON.stringify(evidence)),
+      },
+    ]);
+
+    await expect(download(archive)).resolves.toEqual({
+      result: {
+        value: evidence,
+        archiveSha256: sha256(archive),
+      },
+      requests: 3,
+    });
+  });
+
+  it("rejects stale live artifact and workflow-attempt metadata", async () => {
+    const archive = createStoredZip([
+      {
+        name: "clawhub-bootstrap-readback.json",
+        bytes: Buffer.from("{}"),
+      },
+    ]);
+
+    await expect(
+      download(archive, {
+        artifactMetadata: { digest: `sha256:${"c".repeat(64)}` },
+      }),
+    ).rejects.toThrow("artifact metadata does not match the immutable publication tuple");
+    await expect(
+      download(archive, {
+        workflowAttempt: { run_attempt: 1 },
+      }),
+    ).rejects.toThrow("workflow run does not match the immutable publication tuple");
+  });
+
+  it("rejects hostile or expanded readback inventories through the shared ZIP policy", async () => {
+    const hostileArchives = [
+      createStoredZip([{ name: "../clawhub-bootstrap-readback.json", bytes: Buffer.from("{}") }]),
+      createStoredZip([
+        { name: "clawhub-bootstrap-readback.json", bytes: Buffer.from("{}") },
+        { name: "extra.json", bytes: Buffer.from("{}") },
+      ]),
+    ];
+
+    for (const archive of hostileArchives) {
+      await expect(download(archive)).rejects.toThrow(/(?:Unsafe ZIP entry|Actions artifact ZIP)/u);
+    }
   });
 });
 
