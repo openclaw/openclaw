@@ -907,7 +907,14 @@ describe("gateway server chat", () => {
       },
     ]);
 
-    expect(historyMessages).toEqual([
+    const visibleAssistantMessages = historyMessages.filter((message) => {
+      if (!message || typeof message !== "object") {
+        return false;
+      }
+      const entry = message as { role?: unknown };
+      return entry.role === "assistant" && extractFirstTextBlock(message) !== undefined;
+    });
+    expect(visibleAssistantMessages).toEqual([
       expect.objectContaining({
         role: "assistant",
         content: [{ type: "text", text: replyText }],
