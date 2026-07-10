@@ -42,6 +42,10 @@ import { consumeReplyUsageState } from "./reply/reply-usage-state.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 import type { ReplyPayload } from "./types.js";
 
+/** Maximum time a single beforeDeliver hook may block the chain.
+ *  A hung hook is treated as a silent cancellation (#103684). */
+const BEFORE_DELIVER_HOOK_TIMEOUT_MS = 30_000;
+
 type InternalDispatchReplyOptions = Omit<InternalGetReplyOptions, "onBlockReply">;
 
 type ForegroundReplyFenceState = {
@@ -446,7 +450,8 @@ function markReplyPayloadSendingBeforeDeliverInstalled(
   }
 }
 
-function combineBeforeDeliverHooks(
+// Exported for real-behavior proof (scripts/proof/).
+export function combineBeforeDeliverHooks(
   ...hooks: Array<ReplyDispatchBeforeDeliver | undefined>
 ): ReplyDispatchBeforeDeliver | undefined {
   const activeHooks = hooks.filter((hook): hook is ReplyDispatchBeforeDeliver => Boolean(hook));
@@ -460,8 +465,17 @@ function combineBeforeDeliverHooks(
       if (!current) {
         return null;
       }
-      const next = await hook(current, info);
-      current = next ? copyReplyPayloadMetadata(current, next) : null;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const result: ReplyPayload | null = await Promise.race([
+        hook(current, info),
+        new Promise<ReplyPayload | null>((resolve) => {
+          timer = setTimeout(resolve, BEFORE_DELIVER_HOOK_TIMEOUT_MS, null);
+        }),
+      ]);
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+      current = result ? copyReplyPayloadMetadata(current, result) : null;
     }
     return current;
   };
