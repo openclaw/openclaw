@@ -6,7 +6,7 @@
  */
 
 import type { Server } from "node:http";
-import { extractProviderErrorDetail } from "../../../agents/provider-http-errors.js";
+import { assertOkOrThrowProviderError } from "../../../agents/provider-http-errors.js";
 import { toErrorObject } from "../../../infra/errors.js";
 import { readResponseWithLimit } from "../../../infra/http-body.js";
 import {
@@ -248,20 +248,14 @@ async function postJson(
     signal: buildOAuthRequestSignal({ signal: options.signal, timeoutMs }),
   });
 
+  if (!response.ok) {
+    await assertOkOrThrowProviderError(response, "Anthropic OAuth request");
+  }
+
   const buffer = await readResponseWithLimit(response, OAUTH_RESPONSE_MAX_BYTES, {
     onOverflow: ({ size }) => new Error(`Anthropic OAuth response too large: ${size} bytes`),
   });
-  const responseBody = new TextDecoder().decode(buffer);
-
-  if (!response.ok) {
-    const detail = await extractProviderErrorDetail(response);
-    throw new Error(
-      `Anthropic OAuth request failed with status ${response.status}` +
-        (detail ? `: ${detail}` : ""),
-    );
-  }
-
-  return responseBody;
+  return new TextDecoder().decode(buffer);
 }
 
 async function exchangeAuthorizationCode(

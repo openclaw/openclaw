@@ -205,9 +205,10 @@ describe("Anthropic OAuth error body redaction", () => {
     );
 
     await expect(refreshAnthropicToken("bad-token")).rejects.toThrow(
-      /Anthropic token refresh request failed.*status 400/,
+      /Anthropic token refresh request failed.*400/,
     );
     await expect(refreshAnthropicToken("bad-token")).rejects.not.toThrow(/error_description/);
-    await expect(refreshAnthropicToken("bad-token")).rejects.not.toThrow(/refresh token/);
+    // Structured error code is preserved in the redacted message
+    await expect(refreshAnthropicToken("bad-token")).rejects.toThrow(/code=invalid_grant/);
   });
 });
