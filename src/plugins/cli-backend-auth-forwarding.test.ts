@@ -9,7 +9,7 @@ const context = {
   credential: {
     type: "oauth" as const,
     provider: "example-provider",
-    access: "raw-access-token",
+    profileId: "example-provider:user@example.com",
   },
 };
 
@@ -29,6 +29,42 @@ describe("CLI backend auth forwarding contract", () => {
     ).resolves.toEqual({ status: "not-supported" });
   });
 
+  it("rejects mismatched input identity before invoking the resolver", async () => {
+    const providerResolver = vi.fn();
+    await expect(
+      resolveCliBackendAuthForwarding({
+        policy,
+        context: {
+          ...context,
+          credential: { ...context.credential, provider: "other-provider" },
+        },
+        resolver: providerResolver,
+      }),
+    ).resolves.toEqual({
+      status: "credential-provider-mismatch",
+      selectedProvider: "example-provider",
+      credentialProvider: "other-provider",
+    });
+    expect(providerResolver).not.toHaveBeenCalled();
+
+    const profileResolver = vi.fn();
+    await expect(
+      resolveCliBackendAuthForwarding({
+        policy,
+        context: {
+          ...context,
+          credential: { ...context.credential, profileId: "other-profile" },
+        },
+        resolver: profileResolver,
+      }),
+    ).resolves.toEqual({
+      status: "credential-profile-mismatch",
+      selectedProfileId: "example-provider:user@example.com",
+      credentialProfileId: "other-profile",
+    });
+    expect(profileResolver).not.toHaveBeenCalled();
+  });
+
   it("fails closed when the selected provider is not allowlisted", async () => {
     await expect(
       resolveCliBackendAuthForwarding({
@@ -42,7 +78,7 @@ describe("CLI backend auth forwarding contract", () => {
     });
   });
 
-  it("fails closed when the raw credential kind is not allowlisted", async () => {
+  it("fails closed when the credential kind is not allowlisted", async () => {
     await expect(
       resolveCliBackendAuthForwarding({
         policy: { ...policy, credentialKinds: ["api_key"] },
@@ -56,9 +92,9 @@ describe("CLI backend auth forwarding contract", () => {
   });
 
   it("distinguishes a missing resolver from an explicit decline", async () => {
-    await expect(
-      resolveCliBackendAuthForwarding({ policy, context }),
-    ).resolves.toEqual({ status: "resolver-missing" });
+    await expect(resolveCliBackendAuthForwarding({ policy, context })).resolves.toEqual({
+      status: "resolver-missing",
+    });
 
     await expect(
       resolveCliBackendAuthForwarding({
@@ -69,12 +105,13 @@ describe("CLI backend auth forwarding contract", () => {
     ).resolves.toEqual({ status: "resolver-declined" });
   });
 
-  it("forwards only a resolver-owned minimal envelope", async () => {
+  it("forwards only a resolver-owned closed execution envelope", async () => {
     const forwarded = {
       kind: "oauth" as const,
       providerId: "example-provider",
       profileId: "example-provider:user@example.com",
-      userDataDir: "/tmp/example-profile",
+      env: { EXAMPLE_CLI_TOKEN_FILE: "/tmp/example-profile/token.json" },
+      clearEnv: ["EXAMPLE_API_KEY"],
     };
 
     await expect(
