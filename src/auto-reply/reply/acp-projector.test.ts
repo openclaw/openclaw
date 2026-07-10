@@ -807,6 +807,7 @@ describe("createAcpReplyProjector", () => {
       {
         kind: "tool",
         text: prefixSystemMessage(`${"a".repeat(62)}…`),
+        isStatusNotice: true,
       },
     ]);
   });
