@@ -1,0 +1,9 @@
+{
+  "id": "node-skills",
+  "enabledByDefault": true,
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Node Skills",
+  "description": "Expose local skill context as read-only node-hosted tools."
+}

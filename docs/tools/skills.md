@@ -545,6 +545,17 @@ aligned.
     answering bin probes, OpenClaw clears its cached bin matches.
 
   </Accordion>
+  <Accordion title="Connected-node skill context tools">
+    Nodes that run the bundled `node-skills` plugin publish read-only skill
+    context tools through the Gateway's node-hosted plugin tool inventory:
+    `node_skills_list` and `node_skills_read`.
+
+    These tools are visible only while the node is connected. They expose local
+    skill metadata/text as user-authored context and never execute referenced
+    browser, file, shell, MCP, or plugin actions. Follow-up local actions still
+    require separate governed tool calls.
+
+  </Accordion>
 </AccordionGroup>
 
 ## Token impact
