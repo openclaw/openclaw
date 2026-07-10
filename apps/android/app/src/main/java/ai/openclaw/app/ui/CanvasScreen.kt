@@ -59,7 +59,8 @@ fun CanvasScreen(
 /**
  * Retained shell host whose WebView child can be replaced after renderer death.
  */
-@SuppressLint("SetJavaScriptEnabled")
+// Compose creates this host directly; XML inflation cannot supply its controller and callbacks.
+@SuppressLint("SetJavaScriptEnabled", "ViewConstructor")
 @Suppress("DEPRECATION")
 internal class CanvasHostView(
   context: Context,

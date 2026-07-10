@@ -71,7 +71,6 @@ private fun CanvasLifecycleTestContent(
     AndroidView(
       factory = { context ->
         Button(context).apply {
-          text = "Underlying shell control"
           setOnClickListener { onUnderlayClick() }
         }
       },
