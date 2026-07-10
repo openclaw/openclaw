@@ -610,6 +610,90 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
     });
   });
 
+  it("does not return a private final written after a message-tool delivery mirror", async () => {
+    callGatewayMock.mockResolvedValueOnce({ status: "ok" }).mockResolvedValueOnce({
+      messages: [
+        {
+          role: "assistant",
+          provenance: {
+            kind: "inter_session",
+            sourceSessionKey: "agent:main:source",
+            sourceTool: "sessions_send",
+          },
+          content: [{ type: "text", text: "forwarded request" }],
+          timestamp: 41,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "already delivered source reply" }],
+          openclawMessageToolMirror: {
+            toolName: "message",
+            toolCallId: "call-message-send",
+          },
+          timestamp: 42,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Done" }],
+          timestamp: 43,
+        },
+      ],
+    });
+
+    const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+      runId: "run-source-reply-with-private-final",
+      sessionKey: "agent:main:child",
+      timeoutMs: 1_000,
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      replyText: undefined,
+    });
+  });
+
+  it("does not let an older turn's message-tool mirror suppress a fresh reply", async () => {
+    callGatewayMock.mockResolvedValueOnce({ status: "ok" }).mockResolvedValueOnce({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "older delivered reply" }],
+          openclawMessageToolMirror: {
+            toolName: "message",
+            toolCallId: "call-older-message-send",
+          },
+          timestamp: 40,
+        },
+        {
+          role: "assistant",
+          provenance: {
+            kind: "inter_session",
+            sourceSessionKey: "agent:main:source",
+            sourceTool: "sessions_send",
+          },
+          content: [{ type: "text", text: "new forwarded request" }],
+          timestamp: 41,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "fresh reply" }],
+          timestamp: 42,
+        },
+      ],
+    });
+
+    const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+      runId: "run-after-older-source-reply",
+      sessionKey: "agent:main:child",
+      timeoutMs: 1_000,
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      replyText: "fresh reply",
+    });
+  });
+
   it("does not resurrect an older reply when only a delivery mirror is newer", async () => {
     callGatewayMock
       .mockResolvedValueOnce({

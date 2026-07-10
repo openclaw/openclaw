@@ -30,11 +30,6 @@ import {
 
 const log = createSubsystemLogger("agents/sessions-send");
 
-const INCOMPLETE_TURN_FALLBACK_REPLIES = new Set([
-  "\u26a0\ufe0f Agent couldn't generate a response. Please try again.",
-  "\u26a0\ufe0f Agent couldn't generate a response. Note: some tool actions may have already been executed \u2014 please verify before retrying.",
-]);
-
 type GatewayCaller = <T = unknown>(opts: CallGatewayOptions) => Promise<T>;
 
 const defaultSessionsSendA2ADeps = {
@@ -85,13 +80,6 @@ async function deliverAnnounceReply(params: {
       error: formatErrorMessage(err),
     });
   }
-}
-
-function isNonDeliverableA2AReply(text: string | undefined): boolean {
-  return (
-    isNonDeliverableSessionsReply(text) ||
-    Boolean(text && INCOMPLETE_TURN_FALLBACK_REPLIES.has(text.trim()))
-  );
 }
 
 export async function runSessionsSendA2AFlow(params: {
@@ -154,7 +142,7 @@ export async function runSessionsSendA2AFlow(params: {
     if (!latestReply) {
       return;
     }
-    if (isNonDeliverableA2AReply(latestReply)) {
+    if (isNonDeliverableSessionsReply(latestReply)) {
       return;
     }
 
@@ -218,7 +206,7 @@ export async function runSessionsSendA2AFlow(params: {
             nextSessionKey === params.requesterSessionKey ? params.requesterChannel : targetChannel,
           sourceTool: "sessions_send",
         });
-        if (!replyText || isReplySkip(replyText) || isNonDeliverableA2AReply(replyText)) {
+        if (!replyText || isReplySkip(replyText) || isNonDeliverableSessionsReply(replyText)) {
           break;
         }
         latestReply = replyText;
@@ -254,7 +242,7 @@ export async function runSessionsSendA2AFlow(params: {
       announceReply &&
       announceReply.trim() &&
       !isAnnounceSkip(announceReply) &&
-      !isNonDeliverableA2AReply(announceReply)
+      !isNonDeliverableSessionsReply(announceReply)
     ) {
       await deliverAnnounceReply({
         announceTarget,

@@ -227,31 +227,6 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 
-  it.each([
-    "\u26a0\ufe0f Agent couldn't generate a response. Please try again.",
-    "\u26a0\ufe0f Agent couldn't generate a response. Note: some tool actions may have already been executed \u2014 please verify before retrying.",
-  ])("does not announce generated incomplete-turn fallback text", async (fallbackText) => {
-    vi.mocked(readLatestAssistantReplySnapshot).mockResolvedValueOnce({
-      text: fallbackText,
-      fingerprint: "incomplete-turn-fallback",
-    });
-
-    await runSessionsSendA2AFlow({
-      targetSessionKey: "agent:main:discord:channel:target-room",
-      displayKey: "agent:main:discord:channel:target-room",
-      message: "Test message",
-      announceTimeoutMs: 10_000,
-      maxPingPongTurns: 2,
-      waitRunId: "run-incomplete-turn",
-    });
-
-    expect(firstMockArg(vi.mocked(waitForAgentRun), "agent run wait").runId).toBe(
-      "run-incomplete-turn",
-    );
-    expect(runAgentStep).not.toHaveBeenCalled();
-    expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
-  });
-
   it("delivers a legitimate reply that quotes incomplete-turn text", async () => {
     const reply = 'The log says "Agent couldn\'t generate a response", but the retry succeeded.';
 

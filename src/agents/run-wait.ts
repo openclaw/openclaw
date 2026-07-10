@@ -185,14 +185,25 @@ function isInterSessionInputMessage(message: unknown): boolean {
   );
 }
 
+function isWaitedReplyTurnBoundary(message: unknown): boolean {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return false;
+  }
+  return (message as { role?: unknown }).role === "user" || isInterSessionInputMessage(message);
+}
+
 function resolveLatestAssistantReplySnapshot(
   messages: unknown[],
   opts?: { stopAtTranscriptArtifact?: boolean },
 ): AssistantReplySnapshot {
+  let latestReply: AssistantReplySnapshot = {};
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const candidate = messages[i];
     if (!candidate || typeof candidate !== "object") {
       continue;
+    }
+    if (opts?.stopAtTranscriptArtifact === true && isWaitedReplyTurnBoundary(candidate)) {
+      return latestReply;
     }
     if ((candidate as { role?: unknown }).role !== "assistant") {
       continue;
@@ -213,9 +224,15 @@ function resolveLatestAssistantReplySnapshot(
     } catch {
       fingerprint = text;
     }
-    return { text, fingerprint };
+    const snapshot = { text, fingerprint };
+    if (opts?.stopAtTranscriptArtifact !== true) {
+      return snapshot;
+    }
+    if (!latestReply.text) {
+      latestReply = snapshot;
+    }
   }
-  return {};
+  return latestReply;
 }
 
 export function hasUpdatedAssistantReplySnapshot(
