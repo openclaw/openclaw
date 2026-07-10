@@ -1622,6 +1622,7 @@
                     "pages": [
                       "gateway/gateway-lock",
                       "gateway/background-process",
+                      "gateway/agent-runtime-boundary",
                       "gateway/multiple-gateways"
                     ]
                   },
