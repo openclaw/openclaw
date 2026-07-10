@@ -25,6 +25,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **OpenCode Go MiMo catalog:** stop exposing the deprecated `mimo-v2-omni` and `mimo-v2-pro` aliases that reject agent requests, and keep release validation on the active MiMo V2.5 routes. (#103311)
 - **OpenCode Zen model catalog:** refresh the provider-owned static seed for Claude Sonnet 5, Grok 4.5, Hy3 Free, Kimi K2.7 Code, and MiniMax M3 with verified routing, pricing, limits, and input capabilities, remove retired free-tier rows, and expose the same catalog through unauthenticated model listing. (#103184)
 - **Managed browser launch:** surface asynchronous Chrome bootstrap and runtime spawn failures as browser errors while keeping Gateway alive, and retain process error handling through later lifecycle failures.
 - **Gateway startup migrations:** release the shared migration lease before exiting when the selected config changes during startup, allowing immediate retries instead of blocking readiness until the five-minute lease expires. (#103145)

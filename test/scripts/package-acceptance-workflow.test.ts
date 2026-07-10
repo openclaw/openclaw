@@ -1058,7 +1058,11 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,minimax");
     expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=openai,openrouter,xai");
     expect(workflow).toContain("suite_group: native-live-src-gateway-profiles-opencode-go");
-    expect(workflow).toContain("opencode-go/mimo-v2-omni");
+    expect(workflow).toContain(
+      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2.5,opencode-go/mimo-v2.5-pro",
+    );
+    expect(workflow).not.toContain("opencode-go/mimo-v2-omni");
+    expect(workflow).not.toContain("opencode-go/mimo-v2-pro");
     expect(workflow).toContain(
       "inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic'",
     );
