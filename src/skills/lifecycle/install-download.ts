@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
@@ -115,13 +115,24 @@ async function downloadFile(params: {
     const readable = isNodeReadableStream(body)
       ? body
       : Readable.fromWeb(body as NodeReadableStream);
-    await pipeline(readable, file);
-    const tempStat = await fs.promises.stat(tempPath);
-    if (tempStat.size > SKILL_DOWNLOAD_MAX_BYTES) {
-      throw new Error(
-        `Skill download exceeds ${SKILL_DOWNLOAD_MAX_BYTES} bytes (${tempStat.size} bytes received)`,
-      );
-    }
+    let downloadedBytes = 0;
+    const counter = new Transform({
+      transform(chunk: unknown, _encoding, callback) {
+        const buf = chunk as Buffer;
+        downloadedBytes += buf.length;
+        if (downloadedBytes > SKILL_DOWNLOAD_MAX_BYTES) {
+          const err = new Error(
+            `Skill download exceeds ${SKILL_DOWNLOAD_MAX_BYTES} bytes ` +
+              `(${downloadedBytes} bytes received)`,
+          );
+          file.destroy(err);
+          callback(err);
+          return;
+        }
+        callback(null, buf);
+      },
+    });
+    await pipeline(readable, counter, file);
     const root = await fsRoot(params.rootDir);
     await root.copyIn(params.relativePath, tempPath);
     const stat = await fs.promises.stat(destPath);
