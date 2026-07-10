@@ -66,7 +66,8 @@ function rejectWhenAborted(init?: RequestInit): Promise<Response> {
     return Promise.reject(new Error("missing OAuth request signal"));
   }
   return new Promise((_, reject) => {
-    const rejectWithReason = () => reject(signal.reason);
+    const rejectWithReason = () =>
+      reject(signal.reason instanceof Error ? signal.reason : new Error("OAuth request aborted"));
     if (signal.aborted) {
       rejectWithReason();
       return;
