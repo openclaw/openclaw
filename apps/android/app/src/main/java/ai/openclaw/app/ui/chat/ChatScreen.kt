@@ -10,6 +10,8 @@ import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatThinkingLevelOption
+import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.MessageSpeechPhase
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.VoiceNoteRecorderState
@@ -150,6 +152,7 @@ fun ChatScreen(
   val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
   val gatewayAgents by viewModel.gatewayAgents.collectAsState()
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
+  val thinkingLevelSelection by viewModel.chatThinkingLevelSelection.collectAsState()
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
@@ -172,7 +175,11 @@ fun ChatScreen(
   val micCooldown by viewModel.micCooldown.collectAsState()
   val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
   val talkModeListening by viewModel.talkModeListening.collectAsState()
-  val thinkingSupported = thinkingSupportedForSelection(selectedModelRef, modelCatalog)
+  val thinkingSupported =
+    chatThinkingSupported(
+      selection = thinkingLevelSelection,
+      fallbackSupported = thinkingSupportedForSelection(selectedModelRef, modelCatalog),
+    )
   val contextUsage = resolveChatContextUsage(sessionKey = sessionKey, mainSessionKey = mainSessionKey, sessions = sessions)
   val gatewayAddress = gatewayDiagnosticsEndpoint(remoteAddress = remoteAddress, manualHost = manualHost, manualPort = manualPort, manualTls = manualTls)
   val gatewayProblemMessage = gatewayConnectionDisplay.problem?.message?.takeIf { it.isNotBlank() }
@@ -357,6 +364,7 @@ fun ChatScreen(
       onValueChange = { input = it },
       attachments = attachments,
       thinkingLevel = thinkingLevel,
+      thinkingOptions = thinkingLevelSelection.options,
       thinkingSupported = thinkingSupported,
       contextUsage = contextUsage,
       selectedModelLabel = selectedModelLabel,
@@ -1099,6 +1107,7 @@ private fun ChatComposer(
   onValueChange: (String) -> Unit,
   attachments: List<PendingAttachment>,
   thinkingLevel: String,
+  thinkingOptions: List<ChatThinkingLevelOption>,
   thinkingSupported: Boolean,
   contextUsage: ChatContextUsage,
   selectedModelLabel: String,
@@ -1170,14 +1179,13 @@ private fun ChatComposer(
     }
 
     if (thinkingSelectorExpanded && thinkingSupported) {
-      ClawSegmentedControl(
-        options = listOf("Off", "Low", "Medium", "High"),
-        selected = contextMeterThinkingLabel(thinkingLevel).replaceFirstChar { it.uppercase() },
-        onSelect = { selected ->
-          onThinkingLevelChange(selected.lowercase(Locale.US))
+      ChatThinkingLevelSelector(
+        options = thinkingOptions,
+        selectedId = thinkingLevel,
+        onSelect = { selectedId ->
+          onThinkingLevelChange(selectedId)
           thinkingSelectorExpanded = false
         },
-        modifier = Modifier.fillMaxWidth(),
       )
     }
 
@@ -1248,6 +1256,37 @@ private fun ChatComposer(
           }
         }
       }
+    }
+  }
+}
+
+@Composable
+private fun ChatThinkingLevelSelector(
+  options: List<ChatThinkingLevelOption>,
+  selectedId: String,
+  onSelect: (String) -> Unit,
+) {
+  val rows = remember(options) { chatThinkingOptionRows(options) }
+  val normalizedSelected = selectedId.trim().lowercase(Locale.US)
+  val selectedLabel =
+    options
+      .firstOrNull { it.id.trim().lowercase(Locale.US) == normalizedSelected }
+      ?.let(::chatThinkingOptionLabel)
+      .orEmpty()
+  Column(
+    modifier = Modifier.fillMaxWidth(),
+    verticalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    rows.forEach { row ->
+      val labels = row.map(::chatThinkingOptionLabel)
+      ClawSegmentedControl(
+        options = labels,
+        selected = selectedLabel,
+        onSelect = { selected ->
+          row.firstOrNull { chatThinkingOptionLabel(it) == selected }?.let { onSelect(it.id) }
+        },
+        modifier = Modifier.fillMaxWidth(),
+      )
     }
   }
 }
@@ -1783,12 +1822,28 @@ internal fun contextMeterLabel(
   return if (thinkingSupported) "$contextLabel · ${contextMeterThinkingLabel(thinkingLevel)}" else contextLabel
 }
 
-internal fun contextMeterThinkingLabel(value: String): String =
-  when (value.lowercase(Locale.US)) {
-    "low" -> "low"
-    "medium" -> "medium"
-    "high" -> "high"
-    else -> "off"
+internal fun contextMeterThinkingLabel(value: String): String = value.trim().lowercase(Locale.US).ifEmpty { "off" }
+
+internal fun chatThinkingSupported(
+  selection: ChatThinkingLevelSelection,
+  fallbackSupported: Boolean,
+): Boolean =
+  if (selection.isGatewayProvided) {
+    selection.options.any { it.id.trim().lowercase(Locale.US) != "off" }
+  } else {
+    fallbackSupported
   }
+
+internal fun chatThinkingOptionRows(options: List<ChatThinkingLevelOption>): List<List<ChatThinkingLevelOption>> {
+  if (options.isEmpty()) return emptyList()
+  if (options.size <= 4) return listOf(options)
+  return options.chunked((options.size + 1) / 2)
+}
+
+internal fun chatThinkingOptionLabel(option: ChatThinkingLevelOption): String =
+  option.label
+    .trim()
+    .ifEmpty { option.id.trim() }
+    .replaceFirstChar { it.uppercase() }
 
 private fun formatChatTimestamp(timestampMs: Long): String = DateFormat.getTimeInstance(DateFormat.SHORT, Locale.getDefault()).format(Date(timestampMs))
