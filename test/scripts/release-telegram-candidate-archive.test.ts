@@ -354,6 +354,13 @@ with tarfile.open(sys.argv[1], "w", format=tarfile.PAX_FORMAT) as archive:
 }
 
 function probeTarInfoCache(tarPath: string) {
+  const launcher = String.raw`
+import subprocess
+import sys
+
+completed = subprocess.run([sys.executable, "-c", sys.argv[1], *sys.argv[2:]])
+raise SystemExit(completed.returncode)
+`;
   const python = String.raw`
 import importlib.util
 import json
@@ -386,7 +393,7 @@ print(json.dumps({
     "residentKiB": resident_kib,
 }))
 `;
-  return spawnSync("python3", ["-c", python, SCRIPT, tarPath], {
+  return spawnSync("python3", ["-c", launcher, python, SCRIPT, tarPath], {
     encoding: "utf8",
     maxBuffer: 1024 * 1024,
   });
