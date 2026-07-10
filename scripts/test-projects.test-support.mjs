@@ -632,6 +632,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   [".crabbox.yaml", ["test/scripts/package-acceptance-workflow.test.ts"]],
   [".github/actions/detect-docs-changes/action.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
+  [
+    ".github/actions/create-generated-pr-tokens/action.yml",
+    ["test/scripts/ci-workflow-guards.test.ts"],
+  ],
   [".github/actions/publish-generated-pr/action.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [
     ".github/actions/docker-e2e-plan/action.yml",

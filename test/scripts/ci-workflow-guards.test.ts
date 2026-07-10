@@ -28,6 +28,7 @@ const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
 const OPENGREP_FULL_WORKFLOW = ".github/workflows/opengrep-precise-full.yml";
 const CONTROL_UI_LOCALE_REFRESH_WORKFLOW = ".github/workflows/control-ui-locale-refresh.yml";
 const NATIVE_APP_LOCALE_REFRESH_WORKFLOW = ".github/workflows/native-app-locale-refresh.yml";
+const CREATE_GENERATED_PR_TOKENS_ACTION = ".github/actions/create-generated-pr-tokens/action.yml";
 const PUBLISH_GENERATED_PR_ACTION = ".github/actions/publish-generated-pr/action.yml";
 
 function readCiWorkflow() {
@@ -201,7 +202,7 @@ function runGeneratedPublisherScenario(
       'while [[ "$#" -gt 0 ]]; do',
       '  case "$1" in',
       "    --signal=*|--kill-after=*) shift ;;",
-      '    [0-9]*s) shift; break ;;',
+      "    [0-9]*s) shift; break ;;",
       "    *) break ;;",
       "  esac",
       "done",
@@ -369,6 +370,8 @@ describe("ci workflow guards", () => {
     const workflow = parse(readFileSync(NATIVE_APP_LOCALE_REFRESH_WORKFLOW, "utf8"));
     const controlUiResolveBase = controlUiWorkflow.jobs["resolve-base"];
     const nativeResolveBase = workflow.jobs["resolve-base"];
+    const controlUiPreflight = controlUiWorkflow.jobs["publisher-preflight"];
+    const nativePreflight = workflow.jobs["publisher-preflight"];
     const refresh = workflow.jobs.refresh;
     const nativeFinalize = workflow.jobs.finalize;
     const controlUiFinalize = controlUiWorkflow.jobs.finalize;
@@ -385,12 +388,18 @@ describe("ci workflow guards", () => {
       (step: { name?: string }) => step.name === "Refresh control UI locale files",
     );
 
-    expect(refresh.if).toBe("needs.resolve-base.result == 'success'");
+    expect(refresh.if).toBe(
+      "needs.resolve-base.result == 'success' && needs.publisher-preflight.result == 'success'",
+    );
     expect(refresh.strategy.matrix.locale).toEqual(NATIVE_I18N_LOCALES);
     expect(controlUiWorkflow.concurrency["cancel-in-progress"]).toBe(false);
-    expect(controlUiWorkflow.concurrency.group).toBe("control-ui-locale-refresh");
+    expect(controlUiWorkflow.concurrency.group.replace(/\s+/gu, " ")).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && inputs.token_preflight_only && format('control-ui-locale-token-preflight-{0}', github.ref) || 'control-ui-locale-refresh' }}",
+    );
     expect(controlUiWorkflow.jobs.plan).toBeUndefined();
-    expect(controlUiWorkflow.jobs.refresh.if).toBe("needs.resolve-base.result == 'success'");
+    expect(controlUiWorkflow.jobs.refresh.if).toBe(
+      "needs.resolve-base.result == 'success' && needs.publisher-preflight.result == 'success' && !(github.event_name == 'workflow_dispatch' && inputs.token_preflight_only)",
+    );
     expect(controlUiWorkflow.jobs.refresh.strategy.matrix.locale).toEqual(
       SUPPORTED_LOCALES.filter((locale) => locale !== "en"),
     );
@@ -398,6 +407,22 @@ describe("ci workflow guards", () => {
     expect(workflow.concurrency.group).toBe("native-app-locale-refresh");
     expect(controlUiResolveBase.if).not.toContain("chore(ui): refresh control ui locales");
     expect(nativeResolveBase.if).not.toContain("chore(i18n): refresh native locales");
+    const controlResolveCondition = controlUiResolveBase.if.replace(/\s+/gu, " ");
+    expect(controlResolveCondition).toBe(
+      "github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')",
+    );
+    expect(controlResolveCondition).not.toContain("inputs.token_preflight_only");
+    expect(controlResolveCondition).not.toContain("github.ref_type");
+    expect(nativeResolveBase.if).toBe(
+      "github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')",
+    );
+    expect(controlUiWorkflow.on.workflow_dispatch.inputs.token_preflight_only).toEqual({
+      description: "Verify generated PR App permissions without running locale generation.",
+      required: false,
+      default: false,
+      type: "boolean",
+    });
+    expect(workflow.on.workflow_dispatch?.inputs).toBeUndefined();
     expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native/**");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native-source.json");
@@ -425,10 +450,15 @@ describe("ci workflow guards", () => {
     expect(controlUiRefreshStep.env.OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL).toBe("0");
 
     for (const ownerWorkflow of [controlUiWorkflow, workflow]) {
+      expect(ownerWorkflow.on.push.paths).toContain(CREATE_GENERATED_PR_TOKENS_ACTION);
       expect(ownerWorkflow.on.push.paths).toContain(PUBLISH_GENERATED_PR_ACTION);
       const resolveBase = ownerWorkflow.jobs["resolve-base"];
       const resolveStep = resolveBase.steps.find(
-        (step: { name?: string }) => step.name === "Resolve default branch head",
+        (step: { name?: string }) =>
+          step.name ===
+          (ownerWorkflow === controlUiWorkflow
+            ? "Resolve source commit"
+            : "Resolve default branch head"),
       );
       expect(resolveBase.outputs.sha).toBe("${{ steps.base.outputs.sha }}");
       expect(resolveStep.env.GH_TOKEN).toBe("${{ github.token }}");
@@ -448,41 +478,84 @@ describe("ci workflow guards", () => {
       }
     }
 
-    const publishAction = parse(readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8"));
-    const primaryTokenStep = publishAction.runs.steps.find(
+    const controlUiResolveStep = controlUiResolveBase.steps.find(
+      (step: { name?: string }) => step.name === "Resolve source commit",
+    );
+    expect(controlUiResolveStep.env.TOKEN_PREFLIGHT_ONLY).toContain("inputs.token_preflight_only");
+    expect(controlUiResolveStep.env.WORKFLOW_SHA).toBe("${{ github.workflow_sha }}");
+    expect(controlUiResolveStep.run).toContain(
+      'if [[ "${TOKEN_PREFLIGHT_ONLY}" == "true" ]]; then',
+    );
+    expect(controlUiResolveStep.run).toContain('sha="${WORKFLOW_SHA}"');
+
+    for (const preflight of [controlUiPreflight, nativePreflight]) {
+      expect(preflight.needs).toBe("resolve-base");
+      expect(preflight.if).toBe("needs.resolve-base.result == 'success'");
+      expect(preflight.strategy).toBeUndefined();
+      expect(preflight.steps).toHaveLength(2);
+      const checkoutStep = preflight.steps.find(
+        (step: { uses?: string }) => step.uses === CHECKOUT_V6,
+      );
+      const tokensStep = preflight.steps.find(
+        (step: { name?: string }) => step.name === "Create generated PR tokens",
+      );
+      expect(checkoutStep.with).toMatchObject({
+        ref: "${{ needs.resolve-base.outputs.sha }}",
+        "persist-credentials": false,
+      });
+      expect(tokensStep.uses).toBe("./.github/actions/create-generated-pr-tokens");
+      expect(tokensStep.with).toEqual({
+        "contents-client-id": "Iv23liOECG0slfuhz093",
+        "contents-private-key": "${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}",
+        "pull-request-app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
+        "pull-request-private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
+      });
+    }
+
+    const tokenAction = parse(readFileSync(CREATE_GENERATED_PR_TOKENS_ACTION, "utf8"));
+    const tokenActionSource = readFileSync(CREATE_GENERATED_PR_TOKENS_ACTION, "utf8");
+    const contentsTokenStep = tokenAction.runs.steps.find(
       (step: { name?: string }) => step.name === "Create generated branch app token",
     );
-    const fallbackTokenStep = publishAction.runs.steps.find(
-      (step: { name?: string }) => step.name === "Create generated branch fallback app token",
-    );
-    const pullRequestTokenStep = publishAction.runs.steps.find(
+    const pullRequestTokenStep = tokenAction.runs.steps.find(
       (step: { name?: string }) => step.name === "Create generated PR app token",
+    );
+    const publishAction = parse(readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8"));
+    const publishActionSource = readFileSync(PUBLISH_GENERATED_PR_ACTION, "utf8");
+    const createTokensStep = publishAction.runs.steps.find(
+      (step: { name?: string }) => step.name === "Create generated PR tokens",
     );
     const actionPublishStep = publishAction.runs.steps.find(
       (step: { name?: string }) => step.name === "Publish generated pull request",
     );
 
-    expect(primaryTokenStep).toMatchObject({
+    expect(tokenAction.runs.steps).toHaveLength(2);
+    for (const input of [
+      "contents-client-id",
+      "contents-private-key",
+      "pull-request-app-id",
+      "pull-request-private-key",
+    ]) {
+      expect(tokenAction.inputs[input].required).toBe(true);
+      expect(publishAction.inputs[input].required).toBe(true);
+    }
+    expect(`${tokenActionSource}\n${publishActionSource}`).not.toMatch(
+      /2729701|2971289|primary-private-key|fallback-private-key/u,
+    );
+    expect(contentsTokenStep).toEqual({
+      name: "Create generated branch app token",
       id: "contents-token",
-      "continue-on-error": true,
       uses: CREATE_GITHUB_APP_TOKEN_V3,
       with: {
-        "app-id": "2729701",
-        "private-key": "${{ inputs.primary-private-key }}",
+        "client-id": "${{ inputs.contents-client-id }}",
+        "private-key": "${{ inputs.contents-private-key }}",
+        owner: "${{ github.repository_owner }}",
+        repositories: "${{ github.event.repository.name }}",
         "permission-contents": "write",
       },
     });
-    expect(fallbackTokenStep).toMatchObject({
-      id: "contents-token-fallback",
-      if: "steps.contents-token.outcome == 'failure'",
-      uses: CREATE_GITHUB_APP_TOKEN_V3,
-      with: {
-        "app-id": "2971289",
-        "private-key": "${{ inputs.fallback-private-key }}",
-        "permission-contents": "write",
-      },
-    });
-    expect(pullRequestTokenStep).toMatchObject({
+    expect(pullRequestTokenStep).toEqual({
+      name: "Create generated PR app token",
       id: "pull-request-token",
       uses: CREATE_GITHUB_APP_TOKEN_V3,
       with: {
@@ -493,13 +566,30 @@ describe("ci workflow guards", () => {
         "permission-pull-requests": "write",
       },
     });
-    expect(actionPublishStep.env.CONTENTS_TOKEN).toBe(
-      "${{ steps.contents-token.outputs.token || steps.contents-token-fallback.outputs.token }}",
+    expect(tokenAction.outputs["contents-token"].value).toBe(
+      "${{ steps.contents-token.outputs.token }}",
     );
-    expect(actionPublishStep.env.GH_TOKEN).toBe("${{ steps.pull-request-token.outputs.token }}");
-    expect(actionPublishStep.env.INVALIDATION_PATHS).toBe(
-      "${{ inputs.invalidation-paths }}",
+    expect(tokenAction.outputs["pull-request-token"].value).toBe(
+      "${{ steps.pull-request-token.outputs.token }}",
     );
+    expect(createTokensStep).toMatchObject({
+      id: "tokens",
+      uses: "./.github/actions/create-generated-pr-tokens",
+      with: {
+        "contents-client-id": "${{ inputs.contents-client-id }}",
+        "contents-private-key": "${{ inputs.contents-private-key }}",
+        "pull-request-app-id": "${{ inputs.pull-request-app-id }}",
+        "pull-request-private-key": "${{ inputs.pull-request-private-key }}",
+      },
+    });
+    expect(
+      publishAction.runs.steps.filter(
+        (step: { uses?: string }) => step.uses === CREATE_GITHUB_APP_TOKEN_V3,
+      ),
+    ).toEqual([]);
+    expect(actionPublishStep.env.CONTENTS_TOKEN).toBe("${{ steps.tokens.outputs.contents-token }}");
+    expect(actionPublishStep.env.GH_TOKEN).toBe("${{ steps.tokens.outputs.pull-request-token }}");
+    expect(actionPublishStep.env.INVALIDATION_PATHS).toBe("${{ inputs.invalidation-paths }}");
     expect(actionPublishStep.run).toContain("GIT_TERMINAL_PROMPT=0");
     expect(actionPublishStep.run).toContain(
       'git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${git_auth}"',
@@ -527,12 +617,8 @@ describe("ci workflow guards", () => {
     expect(actionPublishStep.run).toContain(
       'gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls"',
     );
-    expect(actionPublishStep.run).toContain(
-      '-f "head=${GITHUB_REPOSITORY_OWNER}:${HEAD_BRANCH}"',
-    );
-    expect(actionPublishStep.run).toContain(
-      ".head.repo.full_name == env.GITHUB_REPOSITORY",
-    );
+    expect(actionPublishStep.run).toContain('-f "head=${GITHUB_REPOSITORY_OWNER}:${HEAD_BRANCH}"');
+    expect(actionPublishStep.run).toContain(".head.repo.full_name == env.GITHUB_REPOSITORY");
     expect(actionPublishStep.run).toContain(".head.ref == env.HEAD_BRANCH");
     expect(actionPublishStep.run).toContain(".head.sha");
     expect(actionPublishStep.run).not.toContain("gh pr list");
@@ -564,9 +650,7 @@ describe("ci workflow guards", () => {
     expect(actionPublishStep.run).toContain(
       '[[ "${current_remote_head}" != "${published_commit}" ]]',
     );
-    expect(actionPublishStep.run).toContain(
-      '[[ "${final_pr_head}" != "${published_commit}" ]]',
-    );
+    expect(actionPublishStep.run).toContain('[[ "${final_pr_head}" != "${published_commit}" ]]');
     expect(actionPublishStep.run).toContain("gh pr edit");
     expect(actionPublishStep.run).toContain("gh pr create");
     expect(actionPublishStep.run).toContain('--base "${BASE_BRANCH}"');
@@ -613,10 +697,13 @@ describe("ci workflow guards", () => {
       );
 
       expect(ownerWorkflow.permissions.contents).toBe("read");
-      expect(refreshJob.needs).toBe("resolve-base");
-      expect(finalizeJob.needs).toEqual(["resolve-base", "refresh"]);
+      expect(refreshJob.needs).toEqual(["resolve-base", "publisher-preflight"]);
+      expect(finalizeJob.needs).toEqual(["resolve-base", "publisher-preflight", "refresh"]);
+      const isNative = automationBranch.includes("native");
       expect(finalizeJob.if).toBe(
-        "needs.resolve-base.result == 'success' && needs.refresh.result == 'success'",
+        isNative
+          ? "needs.resolve-base.result == 'success' && needs.publisher-preflight.result == 'success' && needs.refresh.result == 'success'"
+          : "needs.resolve-base.result == 'success' && needs.publisher-preflight.result == 'success' && needs.refresh.result == 'success' && !(github.event_name == 'workflow_dispatch' && inputs.token_preflight_only)",
       );
       expect(uploadStep.uses).toBe(UPLOAD_ARTIFACT_V7);
       expect(downloadStep.uses).toBe(DOWNLOAD_ARTIFACT_V8);
@@ -626,8 +713,8 @@ describe("ci workflow guards", () => {
       expect(checkoutStep.with["fetch-depth"]).toBe(0);
       expect(publishStep.uses).toBe("./.github/actions/publish-generated-pr");
       expect(publishStep.with).toMatchObject({
-        "primary-private-key": "${{ secrets.GH_APP_PRIVATE_KEY }}",
-        "fallback-private-key": "${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}",
+        "contents-client-id": "Iv23liOECG0slfuhz093",
+        "contents-private-key": "${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}",
         "pull-request-app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
         "pull-request-private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
         "base-branch": "${{ github.event.repository.default_branch }}",
@@ -642,6 +729,9 @@ describe("ci workflow guards", () => {
         automationBranch.includes("native")
           ? "apps/android/app/src/main"
           : "ui/src/i18n/locales/en.ts",
+      );
+      expect(publishStep.with["invalidation-paths"]).toContain(
+        ".github/actions/create-generated-pr-tokens/action.yml",
       );
       expect(publishStep.with["invalidation-paths"]).toContain(
         ".github/actions/publish-generated-pr/action.yml",
