@@ -569,6 +569,12 @@ describe("stuck session diagnostics threshold", () => {
           }),
         },
       );
+      // Keep diagnostic work "open" throughout so this exercises the plain
+      // cooldown throttle, not the idle-liveness sustained-stall escalation
+      // path (covered separately below) — that path forces an extra,
+      // earlier emission once the streak crosses its own threshold, which
+      // would otherwise change the counts asserted here.
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
 
       vi.advanceTimersByTime(30_000);
       vi.advanceTimersByTime(90_000);
@@ -580,6 +586,141 @@ describe("stuck session diagnostics threshold", () => {
     }
 
     expect(events.filter((event) => event === "diagnostic.liveness.warning")).toHaveLength(2);
+  });
+
+  it("escalates a sustained idle-liveness stall to a warning after repeated ticks (#34)", () => {
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+        },
+      },
+      {
+        emitMemorySample: createEmitMemorySampleMock(),
+        sampleLiveness: () => ({
+          reasons: ["event_loop_delay", "cpu"],
+          intervalMs: 30_000,
+          eventLoopDelayP99Ms: 1_500,
+          eventLoopDelayMaxMs: 2_000,
+          cpuCoreRatio: 0.95,
+        }),
+      },
+    );
+
+    // First tick: a single idle-liveness blip stays quiet (debug), matching
+    // "records idle liveness samples without warning in the gateway log".
+    vi.advanceTimersByTime(30_000);
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    // Second tick: still below the 3-tick escalation threshold, and the
+    // normal 120s cooldown (started by tick 1's debug sample) has not
+    // elapsed yet either, so nothing new is reported.
+    vi.advanceTimersByTime(30_000);
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    // Third tick: the streak has now persisted for exactly the configured
+    // DEFAULT_LIVENESS_IDLE_STALL_ESCALATE_TICKS (3) — the moment it first
+    // becomes "sustained" per #34's signature. This must be visible
+    // immediately, not delayed until the unrelated 120s cooldown clock
+    // (started by the first debug-level sample) happens to elapse — that
+    // gap was the bug: the escalation was only ever observable ~150s in,
+    // not at the documented 90s / 3-tick mark.
+    vi.advanceTimersByTime(30_000);
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("liveness warning:"));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("sustainedIdleStallTicks=3"));
+    expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toContainEqual(
+      expect.objectContaining({
+        type: "diagnostic.liveness.warning",
+        level: "warning",
+        active: 0,
+        waiting: 0,
+        queued: 0,
+      }),
+    );
+
+    // The forced warning above bypassed the normal cooldown gate, so it must
+    // also restart that gate's clock — otherwise the next cooldown-based
+    // sample (still counting from tick 1's earlier debug sample) fires only
+    // ~60s later at tick 5 (t=150s) instead of a full 120s after this
+    // warning (t=210s).
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(30_000); // tick 4, t=120s
+    vi.advanceTimersByTime(30_000); // tick 5, t=150s — old bug fired here
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(60_000); // tick 7, t=210s — full cooldown since t=90s
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    expect(warnSpy).toHaveBeenLastCalledWith(expect.stringContaining("sustainedIdleStallTicks=7"));
+  });
+
+  it("counts a single very-delayed heartbeat tick as multiple stall ticks (#34)", () => {
+    // If the event loop itself is blocked, the 30s heartbeat interval can't
+    // fire on schedule either — it resumes once, late, with a large
+    // intervalMs. A stall long enough to blow past the escalation window in
+    // one shot must be recognized immediately rather than only counting as
+    // a single tick (which would then reset before ever reaching the
+    // threshold once the process recovers).
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+        },
+      },
+      {
+        emitMemorySample: createEmitMemorySampleMock(),
+        sampleLiveness: () => ({
+          reasons: ["event_loop_delay", "cpu"],
+          // A block lasting 4x the nominal 30s tick surfaces as a single
+          // heartbeat callback firing 120s late.
+          intervalMs: 120_000,
+          eventLoopDelayP99Ms: 15_000,
+          eventLoopDelayMaxMs: 20_000,
+          cpuCoreRatio: 0.98,
+        }),
+      },
+    );
+
+    vi.advanceTimersByTime(30_000);
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("liveness warning:"));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("sustainedIdleStallTicks=4"));
+  });
+
+  it("does not round a modestly-delayed tick up into an extra stall tick (#34)", () => {
+    // A heartbeat firing ~1.5x late (45s instead of 30s) is ordinary timer
+    // jitter, not a multi-tick block — rounding that up to 2 implied ticks
+    // would let two such jittery ticks cross the 3-tick escalation threshold
+    // after only ~75s, undermining the noise gate this escalation exists to
+    // preserve. It must floor to 1 implied tick, same as an on-time tick.
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+        },
+      },
+      {
+        emitMemorySample: createEmitMemorySampleMock(),
+        sampleLiveness: () => ({
+          reasons: ["event_loop_delay"],
+          intervalMs: 45_000,
+          eventLoopDelayP99Ms: 1_500,
+          eventLoopDelayMaxMs: 2_000,
+        }),
+      },
+    );
+
+    vi.advanceTimersByTime(30_000); // tick 1 (reported late as 45s): 1 implied tick
+    vi.advanceTimersByTime(30_000); // tick 2: 2 implied ticks total — still below threshold
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(30_000); // tick 3: 3 implied ticks — now sustained
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("sustainedIdleStallTicks=3"));
   });
 
   it("does not start the heartbeat when diagnostics are disabled by config", () => {
