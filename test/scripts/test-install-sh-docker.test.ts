@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -237,9 +238,14 @@ function extractEnsureLocalUpdateDistImportClosure(): string {
   return match[1];
 }
 
-function runRestoreLocalDistFixture(options: { failAiSwap?: boolean } = {}) {
+type RestorePathEscape = "packages" | "ai";
+
+function runRestoreLocalDistFixture(
+  options: { failAiSwap?: boolean; symlinkEscape?: RestorePathEscape } = {},
+) {
   const fixtureRoot = tempDirs.make("openclaw-install-restore-root-");
   const imageRoot = tempDirs.make("openclaw-install-restore-image-");
+  let externalSentinel = "";
   for (const [relativePath, contents] of [
     ["dist/root.txt", "old-root"],
     ["packages/ai/dist/ai.txt", "old-ai"],
@@ -258,6 +264,23 @@ function runRestoreLocalDistFixture(options: { failAiSwap?: boolean } = {}) {
     writeFileSync(target, contents);
   }
 
+  if (options.symlinkEscape) {
+    const escapeRoot = tempDirs.make("openclaw-install-restore-escape-");
+    const externalAiRoot =
+      options.symlinkEscape === "packages" ? join(escapeRoot, "packages", "ai") : escapeRoot;
+    externalSentinel = join(externalAiRoot, "dist", "ai.txt");
+    mkdirSync(path.dirname(externalSentinel), { recursive: true });
+    writeFileSync(join(externalAiRoot, "package.json"), "{}");
+    writeFileSync(externalSentinel, "external-ai");
+    if (options.symlinkEscape === "packages") {
+      rmSync(join(fixtureRoot, "packages"), { force: true, recursive: true });
+      symlinkSync(join(escapeRoot, "packages"), join(fixtureRoot, "packages"), "dir");
+    } else {
+      rmSync(join(fixtureRoot, "packages", "ai"), { force: true, recursive: true });
+      symlinkSync(externalAiRoot, join(fixtureRoot, "packages", "ai"), "dir");
+    }
+  }
+
   return spawnSync(
     "bash",
     [
@@ -269,6 +292,7 @@ REPO_ROOT="$FIXTURE_REPO"
 ROOT_DIR="$FIXTURE_ROOT"
 IMAGE_ROOT="$FIXTURE_IMAGE"
 docker_e2e_docker_cmd() {
+  printf 'docker-call=%s\\n' "$1" >&2
   case "$1" in
     create)
       printf "fixture"
@@ -285,7 +309,7 @@ docker_e2e_docker_cmd() {
   esac
 }
 mv() {
-  if [[ "$FAIL_AI_SWAP" == "1" && "$1" == */ai-dist && "$2" == "$ROOT_DIR/packages/ai/dist" ]]; then
+  if [[ "$FAIL_AI_SWAP" == "1" && "$1" == */ai-dist && "$2" == */packages/ai/dist ]]; then
     return 1
   fi
   command mv "$@"
@@ -296,6 +320,9 @@ docker_e2e_restore_package_dist_from_image fixture-image || status=$?
 printf 'status=%s\\n' "$status"
 printf 'root=%s\\n' "$(cat "$ROOT_DIR/dist/root.txt")"
 printf 'ai=%s\\n' "$(cat "$ROOT_DIR/packages/ai/dist/ai.txt")"
+if [[ -n "$EXTERNAL_SENTINEL" ]]; then
+  printf 'external=%s\\n' "$(cat "$EXTERNAL_SENTINEL")"
+fi
 `,
     ],
     {
@@ -303,6 +330,7 @@ printf 'ai=%s\\n' "$(cat "$ROOT_DIR/packages/ai/dist/ai.txt")"
       env: {
         ...process.env,
         FAIL_AI_SWAP: options.failAiSwap ? "1" : "0",
+        EXTERNAL_SENTINEL: externalSentinel,
         FIXTURE_IMAGE: imageRoot,
         FIXTURE_REPO: process.cwd(),
         FIXTURE_ROOT: fixtureRoot,
@@ -457,12 +485,12 @@ describe("test-install-sh-docker", () => {
     );
     expect(packageHelper).toContain('"${container_id}:/app/node_modules/@openclaw/ai/dist"');
     expect(packageHelper).toContain('"$temp_dir/ai-dist"');
-    expect(packageHelper).toContain('mv "$temp_dir/ai-dist" "$ROOT_DIR/packages/ai/dist"');
+    expect(packageHelper).toContain('mv "$temp_dir/ai-dist" "$ai_dist_dir"');
     expect(packageHelper).toContain("cleanup_restore_package_dist() {");
-    expect(packageHelper).toContain('mv "$ROOT_DIR/dist" "$backup_dir"');
-    expect(packageHelper).toContain('mv "$temp_dir/dist" "$ROOT_DIR/dist"');
-    expect(packageHelper).toContain('rm -rf "$ROOT_DIR/dist" >/dev/null 2>&1 || true');
-    expect(packageHelper).toContain('mv "$backup_dir" "$ROOT_DIR/dist"');
+    expect(packageHelper).toContain('mv "$restore_root/dist" "$backup_dir"');
+    expect(packageHelper).toContain('mv "$temp_dir/dist" "$restore_root/dist"');
+    expect(packageHelper).toContain('rm -rf "$restore_root/dist" >/dev/null 2>&1 || true');
+    expect(packageHelper).toContain('mv "$backup_dir" "$restore_root/dist"');
     expect(packageHelper).toContain('docker_e2e_docker_cmd rm -f "$container_id"');
     expect(script).not.toContain('container_id="$(docker create "$image")"');
     expect(script).not.toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
@@ -498,6 +526,21 @@ describe("test-install-sh-docker", () => {
     expect(result.stdout).toContain("root=old-root");
     expect(result.stdout).toContain("ai=old-ai");
   });
+
+  it.each(["packages", "ai"] as const)(
+    "rejects a symlinked %s path before restoring artifacts",
+    (symlinkEscape) => {
+      const result = runRestoreLocalDistFixture({ symlinkEscape });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("status=1");
+      expect(result.stdout).toContain("root=old-root");
+      expect(result.stdout).toContain("ai=external-ai");
+      expect(result.stdout).toContain("external=external-ai");
+      expect(result.stderr).not.toContain("docker-call=");
+      expect(result.stderr).toContain("refusing package artifact restore through a symlinked");
+    },
+  );
 
   it("fails closed when exact image artifacts fail import closure", () => {
     const result = spawnSync(
@@ -1056,13 +1099,13 @@ describe("bun global install smoke", () => {
     );
     expect(packageHelper).toContain('"${container_id}:/app/node_modules/@openclaw/ai/dist"');
     expect(packageHelper).toContain('"$temp_dir/ai-dist"');
-    expect(packageHelper).toContain('mv "$temp_dir/ai-dist" "$ROOT_DIR/packages/ai/dist"');
+    expect(packageHelper).toContain('mv "$temp_dir/ai-dist" "$ai_dist_dir"');
     expect(packageHelper).toContain("cleanup_restore_package_dist() {");
-    expect(packageHelper).toContain('mv "$ROOT_DIR/dist" "$backup_dir"');
-    expect(packageHelper).toContain('mv "$temp_dir/dist" "$ROOT_DIR/dist"');
-    expect(packageHelper).toContain('mktemp -d "$ROOT_DIR/.package-dist.XXXXXX"');
-    expect(packageHelper).toContain('rm -rf "$ROOT_DIR/dist" >/dev/null 2>&1 || true');
-    expect(packageHelper).toContain('mv "$backup_dir" "$ROOT_DIR/dist"');
+    expect(packageHelper).toContain('mv "$restore_root/dist" "$backup_dir"');
+    expect(packageHelper).toContain('mv "$temp_dir/dist" "$restore_root/dist"');
+    expect(packageHelper).toContain('mktemp -d "$restore_root/.package-dist.XXXXXX"');
+    expect(packageHelper).toContain('rm -rf "$restore_root/dist" >/dev/null 2>&1 || true');
+    expect(packageHelper).toContain('mv "$backup_dir" "$restore_root/dist"');
     expect(packageHelper).toContain('docker_e2e_docker_cmd rm -f "$container_id"');
     expect(script).not.toContain('container_id="$(docker create "$image")"');
     expect(script).not.toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
