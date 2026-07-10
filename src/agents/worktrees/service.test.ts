@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { getRegistryWorktree } from "./registry.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
@@ -52,16 +52,30 @@ async function addRemote(root: string, repo: string): Promise<string> {
 }
 
 describe("ManagedWorktreeService", () => {
+  let templateRoot: string;
+  let templateRepo: string;
   let root: string;
   let repo: string;
   let env: NodeJS.ProcessEnv;
   let now: number;
   let service: ManagedWorktreeService;
 
+  beforeAll(async () => {
+    const tempRoot = await fs.realpath(os.tmpdir());
+    templateRoot = await fs.mkdtemp(path.join(tempRoot, "openclaw-managed-worktrees-template-"));
+    templateRepo = await initializeRepository(templateRoot);
+  });
+
+  afterAll(async () => {
+    await fs.rm(templateRoot, { recursive: true, force: true });
+  });
+
   beforeEach(async () => {
     const tempRoot = await fs.realpath(os.tmpdir());
     root = await fs.mkdtemp(path.join(tempRoot, "openclaw-managed-worktrees-"));
-    repo = await initializeRepository(root);
+    repo = path.join(root, "repo");
+    await fs.cp(templateRepo, repo, { recursive: true });
+    repo = await fs.realpath(repo);
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "openclaw-state") };
     now = 1_700_000_000_000;
     service = new ManagedWorktreeService({ env, now: () => now });

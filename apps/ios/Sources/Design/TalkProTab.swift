@@ -323,7 +323,7 @@ struct TalkProTab: View {
     private func startTalk() {
         guard !self.appModel.isAppleReviewDemoModeEnabled else { return }
         self.talkEnabled = true
-        self.appModel.talkMode.updateMainSessionKey(self.appModel.chatSessionKey)
+        self.appModel.synchronizeTalkSessionKey()
         self.appModel.setTalkEnabled(true)
     }
 

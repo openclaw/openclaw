@@ -12787,7 +12787,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3042,
+      "line": 3265,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Action required",
       "surface": "apple",
@@ -12795,7 +12795,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3042,
+      "line": 3265,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval needed",
       "surface": "apple",
@@ -12803,7 +12803,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3643,
+      "line": 3912,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting…",
       "surface": "apple",
@@ -12811,7 +12811,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3643,
+      "line": 3912,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting…",
       "surface": "apple",
@@ -12819,7 +12819,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3647,
+      "line": 3916,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -12827,7 +12827,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3647,
+      "line": 3916,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting...",
       "surface": "apple",
@@ -12835,7 +12835,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3959,
+      "line": 4235,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connected",
       "surface": "apple",
@@ -12843,7 +12843,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3959,
+      "line": 4235,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Offline",
       "surface": "apple",
@@ -14267,7 +14267,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 295,
+      "line": 1284,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Offline",
       "surface": "apple",
@@ -14275,7 +14275,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 295,
+      "line": 1284,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Ready",
       "surface": "apple",
@@ -14283,7 +14283,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 975,
+      "line": 1468,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Listening",
       "surface": "apple",
@@ -14291,7 +14291,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 975,
+      "line": 1468,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Speech error: \\(msg)",
       "surface": "apple",
@@ -14299,7 +14299,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1182,
+      "line": 1811,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Aborted",
       "surface": "apple",
@@ -14307,7 +14307,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1182,
+      "line": 1811,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Chat error",
       "surface": "apple",
@@ -14315,7 +14315,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3056,
+      "line": 3870,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native",
       "surface": "apple",
@@ -14323,7 +14323,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3056,
+      "line": 3870,
       "path": "apps/ios/Sources/Voice/TalkModeManager.swift",
       "source": "Native WebRTC",
       "surface": "apple",
@@ -14443,7 +14443,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 284,
+      "line": 311,
       "path": "apps/ios/Sources/Voice/VoiceWakeManager.swift",
       "source": "Off",
       "surface": "apple",
@@ -14451,7 +14451,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 284,
+      "line": 311,
       "path": "apps/ios/Sources/Voice/VoiceWakeManager.swift",
       "source": "Paused",
       "surface": "apple",
@@ -23253,9 +23253,9 @@
       "kind": "ui-localized-call",
       "line": 158,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/VoiceNoteRecorder.swift",
-      "source": "Push-to-talk is using the microphone.",
+      "source": "Another feature is using the microphone.",
       "surface": "apple",
-      "id": "native.apple.246c877ad41b4062"
+      "id": "native.apple.6d9fb086956fe48a"
     },
     {
       "kind": "ui-localized-call",
