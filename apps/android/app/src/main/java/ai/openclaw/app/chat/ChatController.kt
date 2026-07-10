@@ -1595,10 +1595,12 @@ class ChatController internal constructor(
           put("idempotencyKey", JsonPrimitive(item.id))
         }
       val ack = parseChatSendAck(json, requestGatewayBound(gatewayId, "chat.send", params.toString()))
+      val hasLegacyRunIdOnlyAck = ack.isStatusMissing && !ack.runId.isNullOrBlank()
       when (ack.normalizedStatus) {
         "ok" -> OutboxSendResult.Accepted
         "timeout", "error" -> OutboxSendResult.DeliveryUnconfirmed
-        "", "started", "in_flight" ->
+        "" -> if (hasLegacyRunIdOnlyAck) OutboxSendResult.Accepted else OutboxSendResult.DeliveryUnconfirmed
+        "started", "in_flight" ->
           if (ack.runId.isNullOrBlank()) OutboxSendResult.DeliveryUnconfirmed else OutboxSendResult.Accepted
         else -> OutboxSendResult.DeliveryUnconfirmed
       }

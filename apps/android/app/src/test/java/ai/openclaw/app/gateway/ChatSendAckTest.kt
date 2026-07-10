@@ -20,6 +20,22 @@ class ChatSendAckTest {
   }
 
   @Test
+  fun parseChatSendAckDistinguishesMissingAndMalformedStatus() {
+    val missing = parseChatSendAck(json, """{"runId":"legacy"}""")
+    val malformed =
+      listOf(
+        parseChatSendAck(json, """{"runId":"number","status":42}"""),
+        parseChatSendAck(json, """{"runId":"null","status":null}"""),
+        parseChatSendAck(json, """{"runId":"blank","status":" "}"""),
+        parseChatSendAck(json, "not-json"),
+      )
+
+    assertTrue(missing.isStatusMissing)
+    assertEquals("", missing.normalizedStatus)
+    assertTrue(malformed.all { !it.isStatusMissing && it.normalizedStatus.isEmpty() })
+  }
+
+  @Test
   fun parseChatSendAckMarksOkAsTerminalSuccess() {
     val ack = parseChatSendAck(json, """{"runId":"run-ok","status":" ok "}""")
 
@@ -61,6 +77,7 @@ class ChatSendAckTest {
 
     assertNull(ack.runId)
     assertEquals("", ack.normalizedStatus)
+    assertFalse(ack.isStatusMissing)
     assertFalse(ack.isTerminal)
     assertFalse(ack.isTerminalSuccess)
     assertFalse(ack.isTerminalFailure)

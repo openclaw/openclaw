@@ -5,12 +5,27 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
+internal sealed interface ChatSendAckStatus {
+  data object Missing : ChatSendAckStatus
+
+  data object Malformed : ChatSendAckStatus
+
+  data class Value(
+    val raw: String,
+  ) : ChatSendAckStatus
+}
+
 internal data class ChatSendAck(
   val runId: String?,
-  val status: String?,
+  val status: ChatSendAckStatus,
 ) {
+  constructor(runId: String?, status: String) : this(runId, ChatSendAckStatus.Value(status))
+
   val normalizedStatus: String
-    get() = status?.trim()?.lowercase().orEmpty()
+    get() = (status as? ChatSendAckStatus.Value)?.raw?.trim()?.lowercase().orEmpty()
+
+  val isStatusMissing: Boolean
+    get() = status == ChatSendAckStatus.Missing
 
   val isTerminalSuccess: Boolean
     get() = normalizedStatus == "ok"
@@ -33,13 +48,23 @@ internal fun parseChatSendAck(
 ): ChatSendAck =
   try {
     val obj = json.parseToJsonElement(responseJson).asObjectOrNull()
-    ChatSendAck(
-      runId = obj?.get("runId").asStringOrNull(),
-      status = obj?.get("status").asStringOrNull(),
-    )
+    if (obj == null) {
+      ChatSendAck(runId = null, status = ChatSendAckStatus.Malformed)
+    } else {
+      ChatSendAck(
+        runId = obj["runId"].asStringOrNull(),
+        status = obj.parseStatus(),
+      )
+    }
   } catch (_: Throwable) {
-    ChatSendAck(runId = null, status = null)
+    ChatSendAck(runId = null, status = ChatSendAckStatus.Malformed)
   }
+
+private fun JsonObject.parseStatus(): ChatSendAckStatus {
+  if (!containsKey("status")) return ChatSendAckStatus.Missing
+  val value = get("status")
+  return value.asStringOrNull()?.let { ChatSendAckStatus.Value(it) } ?: ChatSendAckStatus.Malformed
+}
 
 private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
 

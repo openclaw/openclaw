@@ -594,6 +594,9 @@ class ChatControllerOutboxTest {
         listOf<(String) -> String>(
           { key -> """{"runId":"$key","status":"mystery"}""" },
           { _ -> """{"status":"started"}""" },
+          { key -> """{"runId":"$key","status":42}""" },
+          { key -> """{"runId":"$key","status":null}""" },
+          { key -> """{"runId":"$key","status":" "}""" },
           { _ -> "not-json" },
         )
 
@@ -616,6 +619,10 @@ class ChatControllerOutboxTest {
         assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, failed.lastError)
         assertEquals(1, gateway.sentMessages.size)
         assertFalse(chat.healthOk.value)
+
+        chat.handleGatewayEvent("health", null)
+        advanceUntilIdle()
+        assertEquals(1, gateway.sentMessages.size)
       }
     }
 
