@@ -191,15 +191,18 @@ class ChatController internal constructor(
   val outboxItems: StateFlow<List<ChatOutboxItem>> = _outboxItems.asStateFlow()
 
   private val outboxFlushInFlight = AtomicBoolean(false)
+  private val outboxRecoveryMutex = Mutex()
+  private var outboxRecoveryComplete = false
 
   private val outboxRecoveryJob =
     commandOutbox?.let { outbox ->
       scope.launch {
         // A killed process can lose the local delete after the gateway accepted a command.
         // Keep that delivery ambiguous and user-visible instead of replaying it automatically.
-        runCatching { outbox.failSendingAfterRestart() }
-        currentCacheScope()?.let { outboxScope ->
-          runCatching { outbox.expireStale(outboxScope.gatewayId, System.currentTimeMillis()) }
+        if (recoverInterruptedOutboxSends(outbox)) {
+          currentCacheScope()?.let { outboxScope ->
+            runCatching { outbox.expireStale(outboxScope.gatewayId, System.currentTimeMillis()) }
+          }
         }
         publishOutbox()
       }
@@ -1465,9 +1468,14 @@ class ChatController internal constructor(
    */
   private suspend fun flushOutbox() {
     val outbox = commandOutbox ?: return
-    // The recovery sweep is unscoped, so it must finish before this process can claim a new row.
-    // Otherwise it could park a live send as failed while the request is still in flight.
+    // The unscoped recovery sweep must succeed before this process claims a row. A transient
+    // storage failure stays retryable, but never lets younger queued work bypass an ambiguous send.
     outboxRecoveryJob?.join()
+    if (!recoverInterruptedOutboxSends(outbox)) {
+      _healthOk.value = false
+      publishOutbox()
+      return
+    }
     if (!outboxFlushInFlight.compareAndSet(false, true)) return
     var flushedAny = false
     try {
@@ -1632,14 +1640,11 @@ class ChatController internal constructor(
           put("idempotencyKey", JsonPrimitive(item.id))
         }
       val ack = parseChatSendAck(json, requestGatewayBound(gatewayId, "chat.send", params.toString()))
-      if (ack.runId.isNullOrBlank()) {
-        OutboxSendResult.DeliveryUnconfirmed
-      } else {
-        when (ack.normalizedStatus) {
-          "", "started", "in_flight", "ok" -> OutboxSendResult.Accepted
-          "timeout", "error" -> OutboxSendResult.Rejected("Chat failed before the run started")
-          else -> OutboxSendResult.DeliveryUnconfirmed
-        }
+      when (ack.normalizedStatus) {
+        "timeout", "error" -> OutboxSendResult.Rejected("Chat failed before the run started")
+        "", "started", "in_flight", "ok" ->
+          if (ack.runId.isNullOrBlank()) OutboxSendResult.DeliveryUnconfirmed else OutboxSendResult.Accepted
+        else -> OutboxSendResult.DeliveryUnconfirmed
       }
     } catch (err: CancellationException) {
       // Teardown must not be recorded as a send failure; the row stays 'sending' and the
@@ -1653,6 +1658,20 @@ class ChatController internal constructor(
       OutboxSendResult.DeliveryUnconfirmed
     } catch (_: Throwable) {
       OutboxSendResult.DeliveryUnconfirmed
+    }
+
+  private suspend fun recoverInterruptedOutboxSends(outbox: ChatCommandOutbox): Boolean =
+    outboxRecoveryMutex.withLock {
+      if (outboxRecoveryComplete) return@withLock true
+      try {
+        outbox.failSendingAfterRestart()
+        outboxRecoveryComplete = true
+        true
+      } catch (err: CancellationException) {
+        throw err
+      } catch (_: Throwable) {
+        false
+      }
     }
 
   private fun handleChatEvent(payloadJson: String) {
