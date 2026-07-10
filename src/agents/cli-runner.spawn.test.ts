@@ -103,6 +103,28 @@ function mockSuccessfulClaudeJsonlRun() {
   );
 }
 
+function createCancelableLiveRunLifecycle() {
+  let resolveExit!: (exit: RunExit) => void;
+  const exited = new Promise<RunExit>((resolve) => {
+    resolveExit = resolve;
+  });
+  return {
+    wait: vi.fn(() => exited),
+    cancel: vi.fn((_reason?: string) => {
+      resolveExit({
+        reason: "manual-cancel",
+        exitCode: null,
+        exitSignal: null,
+        durationMs: 1,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    }),
+  };
+}
+
 function buildPreparedCliRunContext(params: {
   provider: "claude-cli" | "codex-cli" | "google-gemini-cli";
   model: string;
@@ -2700,6 +2722,7 @@ ${JSON.stringify({
       }),
       end: vi.fn(),
     };
+    const liveRunLifecycle = createCancelableLiveRunLifecycle();
     supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
       const input = (args[0] ?? {}) as {
         env?: Record<string, string>;
@@ -2712,8 +2735,7 @@ ${JSON.stringify({
         pid: 3061,
         startedAtMs: Date.now(),
         stdin,
-        wait: vi.fn(() => new Promise(() => {})),
-        cancel: vi.fn(),
+        ...liveRunLifecycle,
       };
     });
     const context = buildPreparedCliRunContext({
@@ -2742,6 +2764,7 @@ ${JSON.stringify({
         deniedReason: "plugin-approval",
       },
     ]);
+    expect(liveRunLifecycle.cancel).toHaveBeenCalledWith("manual-cancel");
   });
 
   it("keeps identical parallel Claude live tool outcomes explicitly unknown", async () => {
@@ -2822,6 +2845,7 @@ ${JSON.stringify({
       }),
       end: vi.fn(),
     };
+    const liveRunLifecycle = createCancelableLiveRunLifecycle();
     supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
       const input = (args[0] ?? {}) as {
         env?: Record<string, string>;
@@ -2834,8 +2858,7 @@ ${JSON.stringify({
         pid: 3062,
         startedAtMs: Date.now(),
         stdin,
-        wait: vi.fn(() => new Promise(() => {})),
-        cancel: vi.fn(),
+        ...liveRunLifecycle,
       };
     });
     const context = buildPreparedCliRunContext({
@@ -2870,6 +2893,7 @@ ${JSON.stringify({
         errorCode: "tool_outcome_unknown",
       },
     ]);
+    expect(liveRunLifecycle.cancel).toHaveBeenCalledWith("manual-cancel");
   });
 
   it.each([

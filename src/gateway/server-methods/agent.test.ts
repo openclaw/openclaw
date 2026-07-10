@@ -1,6 +1,8 @@
 // Agent method tests cover run/steer/reset/wait behavior, task/subagent state,
 // approval followups, lifecycle hooks, and emitted gateway events.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
@@ -29,6 +31,7 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { AVATAR_MAX_BYTES } from "../../shared/avatar-policy.js";
 import {
   getDetachedTaskLifecycleRuntime,
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -49,6 +52,11 @@ import { expectSubagentFollowupReactivation } from "./subagent-followup.test-hel
 import type { GatewayRequestContext } from "./types.js";
 
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+const REAL_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64",
+);
+const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("base64")}`;
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -619,6 +627,22 @@ function operatorWriteGatewayClient(): AgentHandlerArgs["client"] {
         version: "test",
         platform: "test",
         mode: "ui",
+      },
+      scopes: ["operator.write"],
+    },
+  } as AgentHandlerArgs["client"];
+}
+
+function operatorWriteCliClient(): AgentHandlerArgs["client"] {
+  return {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: {
+        id: "cli",
+        version: "test",
+        platform: "test",
+        mode: "cli",
       },
       scopes: ["operator.write"],
     },
@@ -3814,6 +3838,11 @@ describe("gateway agent handler", () => {
     for (const params of [
       { sessionEffects: "internal" as const, idempotencyKey: "test-public-internal-effects" },
       { suppressPromptPersistence: true, idempotencyKey: "test-public-prompt-suppress" },
+      {
+        modelRun: true,
+        suppressPromptPersistence: true,
+        idempotencyKey: "test-model-run-public-prompt-suppress",
+      },
     ]) {
       const respond = await invokeAgent(
         {
@@ -4072,6 +4101,75 @@ describe("gateway agent handler", () => {
     expect(callArgs.message).not.toContain("[Inter-session message]");
 
     resetTimeConfig();
+  });
+
+  it("keeps CLI model runs out of durable and visible gateway state", async () => {
+    const sessionId = "model-run-123e4567-e89b-12d3-a456-426614174000";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: undefined,
+      canonicalKey: sessionKey,
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "pong" }],
+      meta: { durationMs: 100 },
+    });
+    mocks.updateSessionStore.mockClear();
+    mocks.registerAgentRunContext.mockClear();
+    mocks.getLatestSubagentRunByChildSessionKey.mockClear();
+    mocks.replaceSubagentRunAfterSteer.mockClear();
+
+    const defaultRuntime = getDetachedTaskLifecycleRuntime();
+    const createRunningTaskRunSpy = vi.fn(
+      (...args: Parameters<typeof defaultRuntime.createRunningTaskRun>) =>
+        defaultRuntime.createRunningTaskRun(...args),
+    );
+    setDetachedTaskLifecycleRuntime({
+      ...defaultRuntime,
+      createRunningTaskRun: createRunningTaskRunSpy,
+    });
+
+    const context = makeContext();
+    context.getSessionEventSubscriberConnIds = () => new Set(["conn-1"]);
+    await invokeAgent(
+      {
+        message: "Reply exactly: pong",
+        agentId: "main",
+        sessionId,
+        sessionKey,
+        modelRun: true,
+        promptMode: "none",
+        idempotencyKey: "test-stateless-model-run",
+      },
+      {
+        reqId: "stateless-model-run",
+        client: operatorWriteCliClient(),
+        context,
+      },
+    );
+
+    const callArgs = await waitForAgentCommandCall<{
+      modelRun?: boolean;
+      promptMode?: string;
+      sessionEffects?: string;
+    }>();
+    expectRecordFields(callArgs, {
+      modelRun: true,
+      promptMode: "none",
+      sessionEffects: "internal",
+    });
+    expect(mocks.updateSessionStore).not.toHaveBeenCalled();
+    expect(context.addChatRun).not.toHaveBeenCalled();
+    expect(createRunningTaskRunSpy).not.toHaveBeenCalled();
+    expect(context.broadcastToConnIds).not.toHaveBeenCalled();
+    expect(mocks.getLatestSubagentRunByChildSessionKey).not.toHaveBeenCalled();
+    expect(mocks.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
+    expect(mocks.registerAgentRunContext).toHaveBeenCalledWith("test-stateless-model-run", {
+      isControlUiVisible: false,
+      lifecycleGeneration: "test-generation",
+    });
   });
 
   it("respects explicit bestEffortDeliver=false for main session runs", async () => {
@@ -7593,11 +7691,208 @@ describe("gateway agent handler", () => {
     expect(mockCallArg(respond)).toBe(true);
     expectRecordFields(mockCallArg(respond, 0, 1), {
       agentId: "main",
+      avatar: "A",
       avatarSource: undefined,
       avatarStatus: "none",
       avatarReason: "outside_workspace",
     });
     expect(mockCallArg(respond, 0, 2)).toBeUndefined();
+  });
+
+  it("returns workspace-relative avatars as data URLs in agent.identity.get", async () => {
+    await withTempDir({ prefix: "openclaw-agent-avatar-" }, async (workspace) => {
+      await fs.mkdir(path.join(workspace, "avatars"), { recursive: true });
+      await fs.writeFile(path.join(workspace, "avatars", "main.png"), "avatar", "utf8");
+      mocks.loadConfigReturn = {
+        agents: {
+          defaults: { workspace },
+          list: [{ id: "main", identity: { avatar: "avatars/main.png" } }],
+        },
+      };
+
+      const respond = await invokeAgentIdentityGet(
+        { sessionKey: "agent:main:main" },
+        { reqId: "5-avatar-data" },
+      );
+
+      expectRecordFields(mockCallArg(respond, 0, 1), {
+        agentId: "main",
+        avatar: `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
+        avatarSource: "avatars/main.png",
+        avatarStatus: "local",
+      });
+    });
+  });
+
+  it.each([
+    ["remote", "https://example.com/avatar.png"],
+    ["data", "data:image/png;base64,aaaa"],
+    ["text", "PS"],
+  ] as const)("preserves %s avatar values in agent.identity.get", async (_kind, avatar) => {
+    mocks.loadConfigReturn = { ui: { assistant: { avatar } } };
+
+    const respond = await invokeAgentIdentityGet(
+      { sessionKey: "agent:main:main" },
+      { reqId: `5-avatar-${_kind}` },
+    );
+
+    expect((mockCallArg(respond, 0, 1) as { avatar?: unknown }).avatar).toBe(avatar);
+  });
+
+  it("prefixes same-origin avatar routes in agent.identity.get when Control UI has a base path", async () => {
+    mocks.loadConfigReturn = {
+      gateway: { controlUi: { basePath: "/openclaw" } },
+      ui: { assistant: { avatar: "/avatar/main" } },
+    };
+
+    const respond = await invokeAgentIdentityGet(
+      { sessionKey: "agent:main:main" },
+      { reqId: "5-avatar-route-base-path" },
+    );
+
+    expect((mockCallArg(respond, 0, 1) as { avatar?: unknown }).avatar).toBe(
+      "/openclaw/avatar/main",
+    );
+  });
+
+  it("replaces rejected local avatar paths with the default instead of a protected route", async () => {
+    await withTempDir({ prefix: "openclaw-agent-avatar-missing-" }, async (workspace) => {
+      mocks.loadConfigReturn = {
+        agents: {
+          defaults: { workspace },
+          list: [{ id: "main", identity: { avatar: "avatars/missing.png" } }],
+        },
+      };
+
+      const respond = await invokeAgentIdentityGet(
+        { sessionKey: "agent:main:main" },
+        { reqId: "5-avatar-missing" },
+      );
+
+      expectRecordFields(mockCallArg(respond, 0, 1), {
+        avatar: "A",
+        avatarSource: "avatars/missing.png",
+        avatarStatus: "none",
+        avatarReason: "missing",
+      });
+    });
+  });
+
+  it("inlines a workspace-local avatar in agent.identity.get (#97602)", async () => {
+    await withTempDir({ prefix: "openclaw-agent-identity-avatar-" }, async (workspace) => {
+      await fs.writeFile(`${workspace}/avatar.png`, REAL_PNG);
+      mocks.loadConfigReturn = {
+        agents: {
+          defaults: { workspace },
+          list: [{ id: "main", workspace, identity: { avatar: "avatar.png" } }],
+        },
+      };
+
+      const respond = await invokeAgentIdentityGet(
+        { sessionKey: "agent:main:main" },
+        { reqId: "5-local-avatar" },
+      );
+
+      expect(mockCallArg(respond)).toBe(true);
+      expectRecordFields(mockCallArg(respond, 0, 1), {
+        agentId: "main",
+        avatar: REAL_PNG_DATA_URL,
+        avatarSource: "avatar.png",
+        avatarStatus: "local",
+      });
+      expect(mockCallArg(respond, 0, 2)).toBeUndefined();
+    });
+  });
+
+  it("reports a hardlinked avatar as unreadable in agent.identity.get", async () => {
+    await withTempDir({ prefix: "openclaw-agent-identity-hardlink-" }, async (workspace) => {
+      await fs.writeFile(`${workspace}/original.png`, REAL_PNG);
+      await fs.link(`${workspace}/original.png`, `${workspace}/avatar.png`);
+      mocks.loadConfigReturn = {
+        agents: {
+          defaults: { workspace },
+          list: [{ id: "main", workspace, identity: { avatar: "avatar.png" } }],
+        },
+      };
+
+      const respond = await invokeAgentIdentityGet(
+        { sessionKey: "agent:main:main" },
+        { reqId: "5-hardlinked-avatar" },
+      );
+
+      expect(mockCallArg(respond)).toBe(true);
+      expectRecordFields(mockCallArg(respond, 0, 1), {
+        agentId: "main",
+        avatar: "A",
+        avatarSource: "avatar.png",
+        avatarStatus: "none",
+        avatarReason: "unreadable",
+      });
+    });
+  });
+
+  it("bounds an agent.identity.get avatar that grows after its descriptor is pinned", async () => {
+    await withTempDir({ prefix: "openclaw-agent-identity-growth-" }, async (workspace) => {
+      const avatarPath = `${workspace}/avatar.png`;
+      await fs.writeFile(avatarPath, REAL_PNG);
+      mocks.loadConfigReturn = {
+        agents: {
+          defaults: { workspace },
+          list: [{ id: "main", workspace, identity: { avatar: "avatar.png" } }],
+        },
+      };
+      const originalFstatSync = fsSync.fstatSync;
+      const fstatSync = vi.spyOn(fsSync, "fstatSync").mockImplementationOnce((fd) => {
+        const stat = originalFstatSync(fd);
+        fsSync.appendFileSync(avatarPath, Buffer.alloc(AVATAR_MAX_BYTES));
+        return stat;
+      });
+
+      try {
+        const respond = await invokeAgentIdentityGet(
+          { sessionKey: "agent:main:main" },
+          { reqId: "5-growing-avatar" },
+        );
+
+        expect(mockCallArg(respond)).toBe(true);
+        expectRecordFields(mockCallArg(respond, 0, 1), {
+          agentId: "main",
+          avatar: "A",
+          avatarSource: "avatar.png",
+          avatarStatus: "none",
+          avatarReason: "unreadable",
+        });
+      } finally {
+        fstatSync.mockRestore();
+      }
+    });
+  });
+
+  it("keeps configured emoji precedence free of file metadata in agent.identity.get", async () => {
+    await withTempDir({ prefix: "openclaw-agent-identity-emoji-" }, async (workspace) => {
+      await fs.writeFile(`${workspace}/identity.png`, REAL_PNG);
+      await fs.writeFile(`${workspace}/IDENTITY.md`, "- Avatar: identity.png\n");
+      mocks.loadConfigReturn = {
+        agents: {
+          defaults: { workspace },
+          list: [{ id: "main", workspace, identity: { emoji: "🦞" } }],
+        },
+      };
+
+      const respond = await invokeAgentIdentityGet(
+        { sessionKey: "agent:main:main" },
+        { reqId: "5-emoji-avatar" },
+      );
+
+      expect(mockCallArg(respond)).toBe(true);
+      expectRecordFields(mockCallArg(respond, 0, 1), {
+        agentId: "main",
+        avatar: "🦞",
+        avatarSource: undefined,
+        avatarStatus: undefined,
+        avatarReason: undefined,
+      });
+    });
   });
 
   it("allows non-delivery agent invocations when sendPolicy is deny", async () => {
@@ -8350,6 +8645,8 @@ describe("gateway agent handler chat.abort integration", () => {
       sessionId: "existing-session-id",
       model: "vision-model",
       modelProvider: "test",
+      providerOverride: "test",
+      modelOverride: "vision-model",
     });
     mocks.updateSessionStore.mockResolvedValue(undefined);
     mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
@@ -8446,6 +8743,8 @@ describe("gateway agent handler chat.abort integration", () => {
       updatedAt: Date.now(),
       model: "vision-model",
       modelProvider: "test",
+      providerOverride: "test",
+      modelOverride: "vision-model",
     };
     let deleted = false;
     mocks.loadSessionEntry.mockImplementation(() => ({
@@ -8514,6 +8813,8 @@ describe("gateway agent handler chat.abort integration", () => {
       updatedAt: Date.now(),
       model: "vision-model",
       modelProvider: "test",
+      providerOverride: "test",
+      modelOverride: "vision-model",
     };
     let currentEntry = persistedEntry;
     mocks.loadSessionEntry.mockImplementation(() => ({
@@ -8585,6 +8886,8 @@ describe("gateway agent handler chat.abort integration", () => {
         updatedAt: Date.now(),
         modelProvider: "test",
         model: "vision-model",
+        providerOverride: "test",
+        modelOverride: "vision-model",
       },
       canonicalKey: "global",
     });

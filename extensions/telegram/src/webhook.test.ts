@@ -575,6 +575,41 @@ describe("startTelegramWebhook", () => {
     );
   });
 
+  it("aborts bot media fetches when the webhook stops", async () => {
+    const callerAbort = new AbortController();
+    const started = await startTelegramWebhook({
+      token: TELEGRAM_TOKEN,
+      secret: TELEGRAM_SECRET,
+      port: 0,
+      abortSignal: callerAbort.signal,
+      path: TELEGRAM_WEBHOOK_PATH,
+      spoolDir: requireWebhookSpoolDir(),
+    });
+
+    try {
+      const botParams = requireRecord(
+        requireMockCall(createTelegramBotSpy, 0, "createTelegramBot")[0],
+        "createTelegramBot params",
+      );
+      const fetchAbortSignal = botParams.fetchAbortSignal;
+      expect(fetchAbortSignal).toBeInstanceOf(AbortSignal);
+      if (!(fetchAbortSignal instanceof AbortSignal)) {
+        throw new Error("expected bot fetch abort signal");
+      }
+      const aborted = new Promise<void>((resolve) => {
+        fetchAbortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+
+      await started.stop();
+
+      await expect(aborted).resolves.toBeUndefined();
+      expect(callerAbort.signal.aborted).toBe(false);
+    } finally {
+      await started.stop();
+      callerAbort.abort();
+    }
+  });
+
   it("keeps local listener alive and retries when setWebhook has a recoverable startup failure", async () => {
     const runtimeLog = vi.fn();
     const runtimeError = vi.fn();

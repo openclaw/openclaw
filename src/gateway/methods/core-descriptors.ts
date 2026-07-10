@@ -194,6 +194,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "device.pair.approve", scope: "operator.pairing" },
   { name: "device.pair.reject", scope: "operator.pairing" },
   { name: "device.pair.remove", scope: "operator.pairing" },
+  { name: "device.pair.rename", scope: "operator.pairing" },
   { name: "device.token.rotate", scope: "operator.pairing" },
   { name: "device.token.revoke", scope: "operator.pairing" },
   { name: "device.pair.setupCode", scope: "operator.admin", advertise: false },
@@ -272,6 +273,11 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "agents.workspace.list", scope: "operator.read" },
   { name: "agents.workspace.get", scope: "operator.read" },
   { name: "tts.speak", scope: "operator.write" },
+  { name: "plugins.list", scope: "operator.read" },
+  { name: "plugins.search", scope: "operator.read" },
+  { name: "plugins.install", scope: "operator.admin", controlPlaneWrite: true },
+  { name: "plugins.setEnabled", scope: "operator.admin", controlPlaneWrite: true },
+  { name: "plugins.uninstall", scope: "operator.admin", controlPlaneWrite: true },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(
