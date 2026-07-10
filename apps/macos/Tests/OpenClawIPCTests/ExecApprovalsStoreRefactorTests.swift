@@ -1194,7 +1194,7 @@ struct ExecApprovalsStoreRefactorTests {
                 Issue.record("expected revoked approval checkpoint to fail")
                 return
             }
-            #expect(ExecApprovalsStore.loadFile().agents?["main"]?.allowlist?.isEmpty == true)
+            #expect((ExecApprovalsStore.loadFile().agents?["main"]?.allowlist ?? []).isEmpty)
         }
     }
 
@@ -1677,9 +1677,15 @@ extension ExecApprovalsStoreRefactorTests {
             let file = ExecApprovalsStore.ensureFile()
             let targetURL = ExecApprovalsStore.fileURL()
 
-            #expect(targetURL.path == stateDir.appendingPathComponent("exec-approvals.json").path)
+            let expectedFileURL = stateDir
+                .appendingPathComponent("exec-approvals.json")
+                .standardizedFileURL
+            let expectedSocketURL = stateDir
+                .appendingPathComponent("exec-approvals.sock")
+                .standardizedFileURL
+            #expect(targetURL.path == expectedFileURL.path)
             #expect(FileManager().fileExists(atPath: targetURL.path))
-            #expect(file.socket?.path == stateDir.appendingPathComponent("exec-approvals.sock").path)
+            #expect(file.socket?.path == expectedSocketURL.path)
             #expect(file.socket?.token == "legacy-token")
             #expect(file.defaults?.security == .deny)
             #expect(file.defaults?.ask == .always)

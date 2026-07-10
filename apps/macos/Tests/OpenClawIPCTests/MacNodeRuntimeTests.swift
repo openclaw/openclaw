@@ -312,6 +312,7 @@ struct MacNodeRuntimeTests {
             let params = OpenClawSystemRunParams(
                 command: ["/bin/sh", "-lc", "printf ok"],
                 rawCommand: "printf ok",
+                approvalDecision: ExecApprovalDecision.deny.rawValue,
                 sessionKey: "agent:main:main",
                 runId: "gateway-run-1")
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
