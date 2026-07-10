@@ -11,6 +11,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveProviderRefOwnership } from "../../plugins/providers.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveGroupToolPolicy } from "../agent-tools.policy.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
@@ -196,6 +197,10 @@ function selectAgentHarnessDecision(params: {
         modelId: params.modelId,
         requestedRuntime: runtime,
         config: params.config,
+        providerOwnership: resolveProviderRefOwnership({
+          provider: params.provider,
+          config: params.config,
+        }),
       });
       const support = forced.supports(supportContext);
       if (support.supported) {
@@ -262,6 +267,10 @@ function selectAgentHarnessDecision(params: {
             modelId: params.modelId,
             requestedRuntime: runtime,
             config: params.config,
+            providerOwnership: resolveProviderRefOwnership({
+              provider: params.provider,
+              config: params.config,
+            }),
           });
           return pluginHarnesses.map((harness) => ({
             harness,

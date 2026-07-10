@@ -1,8 +1,11 @@
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveProviderRefOwnership } from "../../plugins/providers.js";
 import { listRegisteredAgentHarnesses } from "./registry.js";
 import type { AgentHarness, AgentHarnessSupport, AgentHarnessSupportContext } from "./types.js";
+
+type HarnessProviderOwnership =
+  | { status: "unowned" }
+  | { status: "owned" | "ambiguous"; pluginIds: readonly string[] };
 
 /** Builds the provider/model facts passed to registered harness support probes. */
 export function buildAgentHarnessSupportContext(params: {
@@ -10,11 +13,9 @@ export function buildAgentHarnessSupportContext(params: {
   modelId?: string;
   requestedRuntime: AgentHarnessSupportContext["requestedRuntime"];
   config?: OpenClawConfig;
+  /** Prepared selection fact; read-only projections omit it to avoid plugin metadata discovery. */
+  providerOwnership?: HarnessProviderOwnership;
 }): AgentHarnessSupportContext {
-  const providerOwnership = resolveProviderRefOwnership({
-    provider: params.provider,
-    config: params.config,
-  });
   const providerConfig = findNormalizedProviderValue(
     params.config?.models?.providers,
     params.provider,
@@ -36,9 +37,13 @@ export function buildAgentHarnessSupportContext(params: {
         }
       : undefined,
     requestedRuntime: params.requestedRuntime,
-    providerOwnerStatus: providerOwnership.status,
-    providerOwnerPluginIds:
-      providerOwnership.status === "unowned" ? [] : providerOwnership.pluginIds,
+    ...(params.providerOwnership
+      ? {
+          providerOwnerStatus: params.providerOwnership.status,
+          providerOwnerPluginIds:
+            params.providerOwnership.status === "unowned" ? [] : params.providerOwnership.pluginIds,
+        }
+      : {}),
   };
 }
 

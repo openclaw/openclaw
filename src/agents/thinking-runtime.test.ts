@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   clearAgentHarnesses,
@@ -66,11 +66,13 @@ describe("resolveEffectiveAgentRuntime", () => {
   });
 
   it("resolves residual auto through a registered Codex harness", () => {
+    const supports = vi.fn<AgentHarness["supports"]>(({ provider }) =>
+      provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+    );
     const codexHarness: AgentHarness = {
       id: "codex",
       label: "Codex",
-      supports: ({ provider }) =>
-        provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+      supports,
       runAttempt: async () => {
         throw new Error("not exercised");
       },
@@ -93,6 +95,12 @@ describe("resolveEffectiveAgentRuntime", () => {
         modelId: "gpt-5.6-luna",
       }),
     ).toBe("codex");
+    expect(supports).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        providerOwnerStatus: expect.anything(),
+        providerOwnerPluginIds: expect.anything(),
+      }),
+    );
   });
 
   it("prefers explicit session overrides and treats legacy harness ids as observational", () => {
