@@ -79,6 +79,9 @@ function escapeForCmdExe(arg) {
   if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
     throw new Error(`unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}`);
   }
+  if (arg === "") {
+    return '""';
+  }
   const escaped = arg.replace(/\^/g, "^^");
   if (!escaped.includes(" ") && !escaped.includes('"')) {
     return escaped;
