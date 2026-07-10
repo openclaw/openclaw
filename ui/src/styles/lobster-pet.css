@@ -4,7 +4,8 @@
    ============================================ */
 
 /* The footer bar is the pet's ledge. */
-.sidebar-shell__footer {
+.sidebar-shell__footer,
+.sidebar-panel__footer {
   position: relative;
 }
 
@@ -20,11 +21,6 @@ openclaw-lobster-pet {
   height: 52px;
   overflow: hidden;
   pointer-events: none;
-}
-
-/* The collapsed rail has no room for a pet. */
-.sidebar--collapsed openclaw-lobster-pet {
-  display: none;
 }
 
 /* Bar anchor: the pet stands inside the footer bar's free stretch, between
@@ -656,6 +652,62 @@ openclaw-lobster-pet[data-spot="bar"] .lobster-pet {
   openclaw-lobster-pet .lobster-pet * {
     animation: none !important;
     transition: none !important;
+  }
+}
+
+/* ---- Pass-through visitors ---- */
+
+/* Passers cross the whole ledge once; left/right position comes from the
+   crossing keyframes, not the perch variable. */
+.lobster-pet--passer {
+  pointer-events: none;
+  cursor: default;
+  bottom: 0;
+}
+
+.lobster-pet--passer .lobster-pet__body {
+  animation: lobster-pet-waddle 0.32s ease-in-out infinite;
+}
+
+.lobster-pet--passer-ltr {
+  animation: lobster-pet-cross-ltr 11s linear forwards;
+}
+
+.lobster-pet--passer-rtl {
+  animation: lobster-pet-cross-rtl 11s linear forwards;
+}
+
+/* The crab walks sideways by definition: it crosses while facing you and
+   feels no need to explain itself. */
+.lobster-pet--crab .lobster-pet__body {
+  animation: lobster-pet-crab-scuttle 0.24s ease-in-out infinite;
+}
+
+@keyframes lobster-pet-cross-ltr {
+  from {
+    left: -6%;
+  }
+  to {
+    left: 106%;
+  }
+}
+
+@keyframes lobster-pet-cross-rtl {
+  from {
+    left: 106%;
+  }
+  to {
+    left: -6%;
+  }
+}
+
+@keyframes lobster-pet-crab-scuttle {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8%);
   }
 }
 
