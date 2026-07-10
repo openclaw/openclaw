@@ -6691,7 +6691,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 339,
+      "line": 350,
       "path": "apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift",
       "source": "\\\"\\(trimmed)\\\"",
       "surface": "apple",
@@ -6699,7 +6699,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 339,
+      "line": 350,
       "path": "apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift",
       "source": "that request",
       "surface": "apple",
@@ -22947,7 +22947,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1067,
+      "line": 1184,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
       "source": "Remove attachments or wait for delivery to resolve before switching chats.",
       "surface": "apple",
@@ -22955,7 +22955,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1123,
+      "line": 1240,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
       "source": "Remove attachments or wait for delivery to resolve before starting a new chat.",
       "surface": "apple",

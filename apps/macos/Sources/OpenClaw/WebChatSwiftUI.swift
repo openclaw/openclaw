@@ -168,12 +168,28 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     }
 
     func setSessionModel(sessionKey: String, model: String?) async throws {
-        var params = self.sessionParams(for: sessionKey)
+        let target = self.sessionTarget(for: sessionKey)
+        _ = try await self.patchSessionModel(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID,
+            model: model)
+    }
+
+    func patchSessionModel(
+        sessionKey: String,
+        agentID: String?,
+        model: String?) async throws -> OpenClawChatModelPatchResult?
+    {
+        var params = ["key": AnyCodable(sessionKey)]
+        if let agentID {
+            params["agentId"] = AnyCodable(agentID)
+        }
         params["model"] = model.map(AnyCodable.init) ?? AnyCodable(NSNull())
-        _ = try await GatewayConnection.shared.request(
+        let data = try await GatewayConnection.shared.request(
             method: "sessions.patch",
             params: params,
             timeoutMs: 15000)
+        return try JSONDecoder().decode(OpenClawChatModelPatchResult.self, from: data)
     }
 
     func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws {
@@ -450,6 +466,15 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
                 return .health(ok: ok)
             case "tick":
                 return .tick
+            case "sessions.changed":
+                guard let payload = evt.payload else { return nil }
+                guard let change = try? JSONDecoder().decode(
+                    OpenClawChatSessionsChangedEvent.self,
+                    from: JSONEncoder().encode(payload))
+                else {
+                    return nil
+                }
+                return .sessionsChanged(change)
             case "chat":
                 guard let payload = evt.payload else { return nil }
                 guard let chat = try? JSONDecoder().decode(
@@ -749,11 +774,13 @@ final class WebChatSwiftUIWindowController {
         OverlayPanelFactory.clearGlobalEventMonitor(&self.dismissMonitor)
     }
 
-    private static func persistedThinkingLevel() -> String? {
-        let stored = UserDefaults.standard.string(forKey: webChatThinkingLevelDefaultsKey)?
+    static func persistedThinkingLevel(defaults: UserDefaults = .standard) -> String? {
+        let stored = defaults.string(forKey: webChatThinkingLevelDefaultsKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-        guard let stored, ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"].contains(stored) else {
+        guard let stored,
+              ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"].contains(stored)
+        else {
             return nil
         }
         return stored

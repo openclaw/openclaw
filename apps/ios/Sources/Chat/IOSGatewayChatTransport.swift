@@ -493,12 +493,28 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     }
 
     func setSessionModel(sessionKey: String, model: String?) async throws {
-        let target = self.sessionTarget(for: sessionKey)
+        _ = try await self.patchSessionModel(sessionKey: sessionKey, agentID: nil, model: model)
+    }
+
+    func patchSessionModel(
+        sessionKey: String,
+        agentID: String?,
+        model: String?) async throws -> OpenClawChatModelPatchResult?
+    {
+        let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
         let json = try Self.makeSessionPatchModelParamsJSON(
             sessionKey: target.sessionKey,
             agentId: target.agentID,
             model: model)
-        _ = try await self.gateway.request(method: "sessions.patch", paramsJSON: json, timeoutSeconds: 15)
+        let response = try await self.gateway.request(
+            method: "sessions.patch",
+            paramsJSON: json,
+            timeoutSeconds: 15)
+        return try Self.decodeModelPatchResult(response)
+    }
+
+    static func decodeModelPatchResult(_ data: Data) throws -> OpenClawChatModelPatchResult {
+        try JSONDecoder().decode(OpenClawChatModelPatchResult.self, from: data)
     }
 
     func patchSession(
@@ -809,6 +825,15 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         switch evt.event {
         case "tick":
             return .tick
+        case "sessions.changed":
+            guard let payload = evt.payload else { return nil }
+            guard let change = try? GatewayPayloadDecoding.decode(
+                payload,
+                as: OpenClawChatSessionsChangedEvent.self)
+            else {
+                return nil
+            }
+            return .sessionsChanged(change)
         case "seqGap":
             return .seqGap
         case "health":

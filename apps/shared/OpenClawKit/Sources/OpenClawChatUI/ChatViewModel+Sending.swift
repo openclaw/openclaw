@@ -474,7 +474,7 @@ extension OpenClawChatViewModel {
     private func beginLiveSend(_ draft: SendDraft) -> LiveSendAttempt {
         self.errorText = nil
         let runId = UUID().uuidString
-        let storedThinkingLevel = self.thinkingLevel
+        let storedThinkingLevel = self.preferredThinkingLevel
         self.pendingRuns.insert(runId)
         self.armPendingRunTimeout(runId: runId)
         self.logDiagnostic(
