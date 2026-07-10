@@ -572,13 +572,15 @@ export async function runSetupMigrationImport(params: {
 
   const reportDir = buildMigrationReportDir(providerId, stateDir);
   const backupPath = await createPreMigrationBackup({});
-  // Commit base wizard metadata before applying migrations so generated reports
-  // can reference a concrete OpenClaw config target.
+  // Apply wizard metadata to the in-memory config so the apply context
+  // references a concrete target, but defer the disk commit until after
+  // the migration provider succeeds. Committing before apply would leave
+  // a wizard-stamped config on disk when apply fails, permanently blocking
+  // the next retry behind the fresh-setup gate (#103262).
   targetConfig = onboardHelpers.applyWizardMetadata(targetConfig, {
     command: "onboard",
     mode: "local",
   });
-  targetConfig = await params.commitConfigFile(targetConfig);
   const applyCtx = {
     ...ctx,
     config: targetConfig,
@@ -592,6 +594,9 @@ export async function runSetupMigrationImport(params: {
     reportDir: result.reportDir ?? reportDir,
   };
   assertApplySucceeded(withReport);
+  // Commit the config to disk only after apply succeeds, so a failed apply
+  // does not leave wizard metadata on disk that blocks retry.
+  targetConfig = await params.commitConfigFile(targetConfig);
   await params.prompter.note(
     formatMigrationResult(withReport).join("\n"),
     t("wizard.migration.appliedTitle"),
