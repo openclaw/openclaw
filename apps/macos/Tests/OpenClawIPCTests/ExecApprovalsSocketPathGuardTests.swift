@@ -1,9 +1,18 @@
+import Darwin
 import Foundation
 import Testing
 @testable import OpenClaw
 
 @Suite(.serialized)
 struct ExecApprovalsSocketPathGuardTests {
+    private static func canonicalPath(_ url: URL) throws -> String {
+        guard let resolved = realpath(url.path, nil) else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
     @Test
     func `ancestor safety requires root or current owner`() {
         #expect(ExecApprovalsSocketPathGuard.ancestorDirectoryIsSafe(
@@ -35,6 +44,116 @@ struct ExecApprovalsSocketPathGuardTests {
         #expect(!ExecApprovalsSocketPathGuard.symlinkOwnerIsSafe(
             owner: 502,
             expectedOwner: 501))
+    }
+
+    @Test
+    func `harden parent rejects parent traversal before normalization`() throws {
+        let root = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-socket-traversal-\(UUID().uuidString)", isDirectory: true)
+        let socketPath = "\(root.path)/missing/../escape/approvals.sock"
+
+        do {
+            try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: socketPath)
+            Issue.record("Expected dot path traversal rejection")
+        } catch let error as ExecApprovalsSocketPathGuardError {
+            guard case let .parentPathInvalid(path, kind) = error else {
+                Issue.record("Unexpected error: \(error)")
+                return
+            }
+            #expect(path == socketPath)
+            #expect(kind == .other)
+        }
+        #expect(!FileManager().fileExists(atPath: root.path))
+    }
+
+    @Test
+    func `harden parent accepts current directory components`() throws {
+        let root = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-socket-dot-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
+
+        try ExecApprovalsSocketPathGuard.hardenParentDirectory(
+            for: "\(root.path)/./approvals.sock")
+    }
+
+    @Test
+    func `harden parent validates directories hidden behind nested symlinks`() throws {
+        let root = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-socket-nested-link-\(UUID().uuidString)", isDirectory: true)
+        let victim = root.appendingPathComponent("victim", isDirectory: true)
+        let unsafe = root.appendingPathComponent("unsafe", isDirectory: true)
+        let redirect = unsafe.appendingPathComponent("redirect", isDirectory: true)
+        let outer = root.appendingPathComponent("outer", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+        try FileManager().createDirectory(at: victim, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: unsafe, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o777], ofItemAtPath: unsafe.path)
+        try FileManager().createSymbolicLink(at: redirect, withDestinationURL: victim)
+        try FileManager().createSymbolicLink(at: outer, withDestinationURL: redirect)
+
+        do {
+            try ExecApprovalsSocketPathGuard.hardenParentDirectory(
+                for: outer.appendingPathComponent("approvals.sock").path)
+            Issue.record("Expected hidden unsafe directory rejection")
+        } catch let error as ExecApprovalsSocketPathGuardError {
+            guard case let .parentPermissionsUnsafe(path, _) = error else {
+                Issue.record("Unexpected error: \(error)")
+                return
+            }
+            #expect(path == try Self.canonicalPath(unsafe))
+        }
+    }
+
+    @Test
+    func `harden parent rejects mutating extended ACL`() throws {
+        let parent = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-socket-acl-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: parent) }
+        try FileManager().createDirectory(at: parent, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o700], ofItemAtPath: parent.path)
+
+        let chmod = Process()
+        chmod.executableURL = URL(fileURLWithPath: "/bin/chmod")
+        chmod.arguments = ["+a", "group:everyone allow add_file,delete_child", parent.path]
+        try chmod.run()
+        chmod.waitUntilExit()
+        #expect(chmod.terminationStatus == 0)
+
+        do {
+            try ExecApprovalsSocketPathGuard.hardenParentDirectory(
+                for: parent.appendingPathComponent("approvals.sock").path)
+            Issue.record("Expected mutating ACL rejection")
+        } catch let error as ExecApprovalsSocketPathGuardError {
+            guard case let .parentACLUnsafe(path) = error else {
+                Issue.record("Unexpected error: \(error)")
+                return
+            }
+            #expect(path == try Self.canonicalPath(parent))
+        }
+    }
+
+    @Test
+    func `harden parent accepts mutating ACL for current user`() throws {
+        let parent = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-socket-owner-acl-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: parent) }
+        try FileManager().createDirectory(at: parent, withIntermediateDirectories: true)
+        try FileManager().setAttributes([.posixPermissions: 0o700], ofItemAtPath: parent.path)
+
+        let chmod = Process()
+        chmod.executableURL = URL(fileURLWithPath: "/bin/chmod")
+        chmod.arguments = [
+            "+a",
+            "user:\(NSUserName()) allow add_file,delete_child",
+            parent.path,
+        ]
+        try chmod.run()
+        chmod.waitUntilExit()
+        #expect(chmod.terminationStatus == 0)
+
+        try ExecApprovalsSocketPathGuard.hardenParentDirectory(
+            for: parent.appendingPathComponent("approvals.sock").path)
     }
 
     @Test
@@ -104,7 +223,7 @@ struct ExecApprovalsSocketPathGuardTests {
                 Issue.record("Unexpected error: \(error)")
                 return
             }
-            #expect(path == root.resolvingSymlinksInPath().path)
+            #expect(path == try Self.canonicalPath(root))
         }
     }
 
