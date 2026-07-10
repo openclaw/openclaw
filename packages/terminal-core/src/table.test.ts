@@ -161,6 +161,72 @@ describe("renderTable", () => {
     }
   });
 
+  it("does not split BEL-terminated OSC-8 links when wrapping", () => {
+    const link = "\x1b]8;;https://openclaw.ai\x07OpenClaw\x1b]8;;\x07";
+    const out = renderTable({
+      width: 24,
+      columns: [
+        { key: "K", header: "K", minWidth: 3 },
+        { key: "V", header: "V", flex: true, minWidth: 10 },
+      ],
+      rows: [{ K: "X", V: link }],
+    });
+
+    // The OSC-8 open/close sequences must stay intact; no dangling ESC bytes.
+    const osc8Token = new RegExp(String.raw`\]8;;.*?|\]8;;.*?\\`, "gs");
+    let escapeIndex = out.indexOf("");
+    while (escapeIndex >= 0) {
+      osc8Token.lastIndex = escapeIndex;
+      const match = osc8Token.exec(out);
+      expect(match?.index).toBe(escapeIndex);
+      escapeIndex = out.indexOf("", escapeIndex + 1);
+    }
+  });
+
+  it("does not split C1 CSI SGR sequences when wrapping", () => {
+    const red = "\x9b31m";
+    const reset = "\x9b0m";
+    const out = renderTable({
+      width: 24,
+      columns: [
+        { key: "K", header: "K", minWidth: 3 },
+        { key: "V", header: "V", flex: true, minWidth: 10 },
+      ],
+      rows: [{ K: "X", V: `${red}${"a".repeat(80)}${reset}` }],
+    });
+
+    const lines = out.split("\n").filter((line) => line.includes("a"));
+    expect(lines.length).toBeGreaterThan(1);
+    for (const line of lines) {
+      const resetIndex = line.lastIndexOf(reset);
+      const lastSep = Math.max(line.lastIndexOf("│"), line.lastIndexOf("|"));
+      expect(resetIndex).toBeGreaterThan(-1);
+      expect(lastSep).toBeGreaterThan(resetIndex);
+    }
+  });
+
+  it("does not split C1 OSC-8 links when wrapping", () => {
+    const link = "\x9d8;;https://openclaw.ai\x9cOpenClaw\x9d8;;\x9c";
+    const out = renderTable({
+      width: 24,
+      columns: [
+        { key: "K", header: "K", minWidth: 3 },
+        { key: "V", header: "V", flex: true, minWidth: 10 },
+      ],
+      rows: [{ K: "X", V: link }],
+    });
+
+    // C1 OSC-8 open/close sequences must stay intact.
+    const osc8Token = new RegExp(String.raw`8;;.*?`, "gs");
+    let oscIndex = out.indexOf("");
+    while (oscIndex >= 0) {
+      osc8Token.lastIndex = oscIndex;
+      const match = osc8Token.exec(out);
+      expect(match?.index).toBe(oscIndex);
+      oscIndex = out.indexOf("", oscIndex + 1);
+    }
+  });
+
   it("respects explicit newlines in cell values", () => {
     const out = renderTable({
       width: 48,

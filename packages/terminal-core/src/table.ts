@@ -78,64 +78,102 @@ function wrapLine(text: string, width: number): string[] {
   // Table cells are padded and bordered per physical line, so wrapped lines
   // must not leak styling into padding while the next continuation keeps it.
   const ESC = "\u001b";
+  const C1_CSI = "\u009b";
+  const C1_OSC = "\u009d";
+  const BEL = "\u0007";
+  const C1_ST = "\u009c";
   const SGR_RESET = `${ESC}[0m`;
+
+  // Find the end of an OSC-8 sequence starting at `start` (index after the
+  // "8;;" prefix). ST may be ESC \, BEL, or C1 ST.
+  const findOsc8End = (start: number): number => {
+    for (let k = start; k < text.length; k += 1) {
+      const ch = text[k];
+      if (ch === ESC && text[k + 1] === "\\") {
+        return k + 2;
+      }
+      if (ch === BEL || ch === C1_ST) {
+        return k + 1;
+      }
+    }
+    return -1;
+  };
 
   type Token = { kind: "ansi" | "char"; value: string };
   const tokens: Token[] = [];
-  for (let i = 0; i < text.length;) {
-    if (text[i] === ESC) {
-      // SGR: ESC [ ... m
-      if (text[i + 1] === "[") {
-        let j = i + 2;
-        while (j < text.length) {
-          const ch = text[j];
-          if (ch === "m") {
-            break;
-          }
-          if (ch && ch >= "0" && ch <= "9") {
-            j += 1;
-            continue;
-          }
-          if (ch === ";") {
-            j += 1;
-            continue;
-          }
+  for (let i = 0; i < text.length; ) {
+    const ch0 = text[i];
+    const isEsc = ch0 === ESC;
+    const isC1Csi = ch0 === C1_CSI;
+
+    // SGR: ESC [ ... m  or  C1 CSI ... m
+    if ((isEsc || isC1Csi) && (!isEsc || text[i + 1] === "[")) {
+      const paramStart = isEsc ? i + 2 : i + 1;
+      let j = paramStart;
+      while (j < text.length) {
+        const ch = text[j];
+        if (ch === "m") {
           break;
         }
-        if (text[j] === "m") {
-          tokens.push({ kind: "ansi", value: text.slice(i, j + 1) });
-          i = j + 1;
+        if (ch && ch >= "0" && ch <= "9") {
+          j += 1;
           continue;
         }
+        if (ch === ";") {
+          j += 1;
+          continue;
+        }
+        break;
       }
-
-      // OSC-8 link open/close: ESC ] 8 ; ; ... ST (ST = ESC \)
-      if (text[i + 1] === "]" && text.slice(i + 2, i + 5) === "8;;") {
-        const st = text.indexOf(`${ESC}\\`, i + 5);
-        if (st >= 0) {
-          tokens.push({ kind: "ansi", value: text.slice(i, st + 2) });
-          i = st + 2;
-          continue;
-        }
+      if (text[j] === "m") {
+        tokens.push({ kind: "ansi", value: text.slice(i, j + 1) });
+        i = j + 1;
+        continue;
       }
     }
 
-    let nextEsc = text.indexOf(ESC, i);
-    if (nextEsc < 0) {
-      nextEsc = text.length;
+    // OSC-8 link open/close: ESC ] 8 ; ; ... ST  or  C1 OSC 8 ; ; ... ST
+    // ST can be ESC \, BEL, or C1 ST.
+    if (
+      (isEsc && text[i + 1] === "]" && text.slice(i + 2, i + 5) === "8;;") ||
+      (ch0 === C1_OSC && text.slice(i + 1, i + 4) === "8;;")
+    ) {
+      const payloadStart = isEsc ? i + 5 : i + 4;
+      const end = findOsc8End(payloadStart);
+      if (end >= 0) {
+        tokens.push({ kind: "ansi", value: text.slice(i, end) });
+        i = end;
+        continue;
+      }
     }
-    if (nextEsc === i) {
+
+    // Find the next potential ANSI introducer (ESC, C1 CSI, or C1 OSC).
+    const nextEsc = text.indexOf(ESC, i);
+    const nextC1Csi = text.indexOf(C1_CSI, i);
+    const nextC1Osc = text.indexOf(C1_OSC, i);
+    let nextSpecial = text.length;
+    if (nextEsc >= 0) {
+      nextSpecial = Math.min(nextSpecial, nextEsc);
+    }
+    if (nextC1Csi >= 0) {
+      nextSpecial = Math.min(nextSpecial, nextC1Csi);
+    }
+    if (nextC1Osc >= 0) {
+      nextSpecial = Math.min(nextSpecial, nextC1Osc);
+    }
+
+    if (nextSpecial === i) {
       // Consume unsupported escape bytes as plain characters so wrapping
       // cannot stall on unknown ANSI/control sequences.
-      tokens.push({ kind: "char", value: ESC });
-      i += ESC.length;
+      tokens.push({ kind: "char", value: text[i] ?? "" });
+      i += 1;
       continue;
     }
-    const plainChunk = text.slice(i, nextEsc);
+    const plainChunk = text.slice(i, nextSpecial);
     for (const grapheme of splitGraphemes(plainChunk)) {
       tokens.push({ kind: "char", value: grapheme });
     }
-    i = nextEsc;
+    i = nextSpecial;
   }
 
   const firstCharIndex = tokens.findIndex((t) => t.kind === "char");
@@ -177,10 +215,13 @@ function wrapLine(text: string, width: number): string[] {
     slice.reduce((acc, t) => acc + (t.kind === "char" ? visibleWidth(t.value) : 0), 0);
 
   const parseSgrParams = (value: string): number[] | null => {
-    if (!value.startsWith(`${ESC}[`) || !value.endsWith("m")) {
+    const isEscSgr = value.startsWith(`${ESC}[`) && value.endsWith("m");
+    const isC1Sgr = value.startsWith(C1_CSI) && value.endsWith("m");
+    if (!isEscSgr && !isC1Sgr) {
       return null;
     }
-    const raw = value.slice(2, -1);
+    const prefixLen = isEscSgr ? 2 : 1;
+    const raw = value.slice(prefixLen, -1);
     if (!raw) {
       return [0];
     }
