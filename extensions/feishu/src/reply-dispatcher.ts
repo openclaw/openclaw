@@ -279,7 +279,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let hasStreamingFinalText = false;
   const deliveredFinalTexts = new Set<string>();
   let sentIndependentBlockText = false;
-  let partialUpdateQueue: Promise<void> = Promise.resolve();
+  let pendingStreamingUpdate: string | null = null;
+  let streamingUpdateDrainPromise: Promise<void> | null = null;
   let streamingStartPromise: Promise<void> | null = null;
   let streamingClosedForReply = false;
   let streamingCloseErroredForReply = false;
@@ -320,15 +321,59 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return parts.join("");
   };
 
-  const flushStreamingCardUpdate = (combined: string) => {
-    partialUpdateQueue = partialUpdateQueue.then(async () => {
-      if (streamingStartPromise) {
-        await streamingStartPromise;
+  const startStreamingUpdateDrain = (): Promise<void> => {
+    if (streamingUpdateDrainPromise) {
+      return streamingUpdateDrainPromise;
+    }
+
+    const drainPromise = (async () => {
+      while (pendingStreamingUpdate !== null) {
+        const combined = pendingStreamingUpdate;
+        pendingStreamingUpdate = null;
+        try {
+          if (streamingStartPromise) {
+            await streamingStartPromise;
+          }
+          if (streaming?.isActive()) {
+            await streaming.update(combined);
+          }
+        } catch (error) {
+          params.runtime.error?.(
+            `feishu[${account.accountId}]: streaming update failed: ${String(error)}`,
+          );
+        }
       }
-      if (streaming?.isActive()) {
-        await streaming.update(combined);
+    })().finally(() => {
+      if (streamingUpdateDrainPromise === drainPromise) {
+        streamingUpdateDrainPromise = null;
+      }
+      // A snapshot can arrive after the loop's final check but before this
+      // promise settles. Restart here so that boundary update is not dropped.
+      if (pendingStreamingUpdate !== null) {
+        void startStreamingUpdateDrain();
       }
     });
+
+    streamingUpdateDrainPromise = drainPromise;
+    return drainPromise;
+  };
+
+  const flushStreamingCardUpdate = (combined: string) => {
+    pendingStreamingUpdate = combined;
+    void startStreamingUpdateDrain();
+  };
+
+  const runWhenStreamingUpdatesQuiescent = async (action: () => Promise<void>): Promise<void> => {
+    for (;;) {
+      const drainPromise = streamingUpdateDrainPromise;
+      if (!drainPromise && pendingStreamingUpdate === null) {
+        break;
+      }
+      await (drainPromise ?? startStreamingUpdateDrain());
+    }
+    // Invoke the lifecycle action in the same turn as the final quiescence
+    // check, leaving no promise boundary where a new snapshot could be lost.
+    await action();
   };
 
   const queueStreamingUpdate = (
@@ -434,7 +479,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const resetStreamingState = () => {
     streaming = null;
     streamingStartPromise = null;
-    partialUpdateQueue = Promise.resolve();
+    pendingStreamingUpdate = null;
+    streamingUpdateDrainPromise = null;
     streamText = "";
     lastPartial = "";
     reasoningText = "";
@@ -449,25 +495,26 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (streamingStartPromise) {
         await streamingStartPromise;
       }
-      await partialUpdateQueue;
-      if (streaming?.isActive()) {
-        statusLine = "";
-        const text = buildCombinedStreamText(reasoningText, streamText);
-        const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-        const contentVisible = await streaming.close(text, { note: finalNote });
-        // Track the raw streamed text so the duplicate-final check in deliver()
-        // can skip the redundant text delivery that arrives after onIdle closes
-        // the streaming card.
-        if (contentVisible) {
-          markVisibleReplySent();
-        }
-        if (contentVisible && streamText) {
-          deliveredFinalTexts.add(streamText);
-          if (options?.markClosedForReply !== false && !streamingCloseErroredForReply) {
-            streamingClosedForReply = true;
+      await runWhenStreamingUpdatesQuiescent(async () => {
+        if (streaming?.isActive()) {
+          statusLine = "";
+          const text = buildCombinedStreamText(reasoningText, streamText);
+          const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+          const contentVisible = await streaming.close(text, { note: finalNote });
+          // Track the raw streamed text so the duplicate-final check in deliver()
+          // can skip the redundant text delivery that arrives after onIdle closes
+          // the streaming card.
+          if (contentVisible) {
+            markVisibleReplySent();
+          }
+          if (contentVisible && streamText) {
+            deliveredFinalTexts.add(streamText);
+            if (options?.markClosedForReply !== false && !streamingCloseErroredForReply) {
+              streamingClosedForReply = true;
+            }
           }
         }
-      }
+      });
     } finally {
       resetStreamingState();
     }
@@ -478,10 +525,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (streamingStartPromise) {
         await streamingStartPromise;
       }
-      await partialUpdateQueue;
-      if (streaming?.isActive()) {
-        await streaming.discard();
-      }
+      await runWhenStreamingUpdatesQuiescent(async () => {
+        if (streaming?.isActive()) {
+          await streaming.discard();
+        }
+      });
     } finally {
       resetStreamingState();
     }
