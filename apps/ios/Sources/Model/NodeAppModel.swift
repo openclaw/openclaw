@@ -3039,6 +3039,8 @@ extension NodeAppModel {
         // A target awaiting TLS trust must not retain a reconnect route to the previous gateway.
         invalidateExecApprovalSurfacesForGatewayChange()
         self.invalidateGatewayConnectAttempts()
+        self.chatSessionRoutingRestoreTask?.cancel()
+        self.chatSessionRoutingRestoreTask = nil
         self.disableGatewayAutoReconnect()
         self.activeGatewayConnectConfig = nil
         ShareGatewayRelaySettings.clearConfig()

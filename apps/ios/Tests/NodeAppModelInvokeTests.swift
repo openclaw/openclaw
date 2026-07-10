@@ -1200,6 +1200,41 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(talkMode.isUsingMainSessionKey(appModel.chatSessionKey))
     }
 
+    @Test @MainActor func `cancelled routing restore cannot apply after SQLite load`() async throws {
+        let appModel = NodeAppModel()
+        let barrier = TalkPreparationBarrier()
+        let stableID = "cancelled-routing-restore-\(UUID().uuidString)"
+        let databaseURL = try #require(NodeAppModel.chatTranscriptCacheDatabaseURL(gatewayID: stableID))
+        let identity = try #require(OpenClawChatSessionRoutingIdentity(
+            scope: "per-sender",
+            mainSessionKey: "stale-main",
+            defaultAgentID: "main"))
+        let store = OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: stableID)
+        await store.storeSessionRoutingIdentity(identity)
+        await store.retire()
+        appModel._test_setConnectedGatewayID(stableID)
+        appModel._test_setChatSessionRoutingRestoreHandler {
+            await barrier.suspendFirstPreparation()
+        }
+        defer {
+            barrier.release()
+            appModel._test_setChatSessionRoutingRestoreHandler(nil)
+            OpenClawChatSQLiteTranscriptCache.removeDatabaseFiles(at: databaseURL)
+            appModel.voiceWake.stop()
+        }
+
+        let restore = Task { @MainActor in
+            await appModel.restoreChatSessionRoutingIdentityIfNeeded()
+        }
+        await barrier.waitUntilEntered()
+        restore.cancel()
+        barrier.release()
+        await restore.value
+
+        #expect(appModel.chatSessionRoutingContract == nil)
+        await appModel.purgeChatTranscriptCache(gatewayID: stableID)
+    }
+
     @Test @MainActor func `gateway main key refresh preserves focused Talk session`() {
         let talkMode = TalkModeManager(allowSimulatorCapture: true)
         let appModel = NodeAppModel(talkMode: talkMode)
