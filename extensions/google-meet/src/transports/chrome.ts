@@ -55,6 +55,7 @@ export const testing = {
   meetStatusScriptForTest: meetStatusScript,
   parseMeetBrowserStatusForTest: parseMeetBrowserStatus,
   resolveBrowserGatewayTimeoutMsForTest: resolveBrowserGatewayTimeoutMs,
+  openMeetWithBrowserRequestForTest: openMeetWithBrowserRequest,
 };
 
 function isGoogleMeetTalkBackMode(mode: GoogleMeetMode): boolean {

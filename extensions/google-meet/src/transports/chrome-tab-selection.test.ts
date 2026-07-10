@@ -1,0 +1,167 @@
+// Test for openMeetWithBrowserRequest tab selection logic (regression #103385)
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import type { GoogleMeetConfig, GoogleMeetMode } from "../config.js";
+import type { BrowserTab } from "./chrome-browser-proxy.js";
+
+describe("openMeetWithBrowserRequest tab selection (regression #103385)", () => {
+  let callBrowser: ReturnType<typeof vi.fn>;
+  const meetingCode = "abc-defg-hij";
+  const englishUrl = `https://meet.google.com/${meetingCode}?hl=en`;
+  const japaneseUrl = `https://meet.google.com/${meetingCode}?hl=ja`;
+
+  beforeEach(() => {
+    callBrowser = vi.fn();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("skips localized tab and opens new English-pinned tab", async () => {
+    const japaneseTab: BrowserTab = {
+      targetId: "jp-tab-123",
+      url: japaneseUrl,
+      title: "Google Meet",
+    };
+
+    callBrowser.mockImplementation(async (params: { method: string; path: string }) => {
+      if (params.method === "GET" && params.path === "/tabs") {
+        return { tabs: [japaneseTab] };
+      }
+      if (params.method === "POST" && params.path === "/tabs/open") {
+        return { targetId: "new-en-tab-456", url: englishUrl };
+      }
+      if (params.method === "POST" && params.path === "/tabs/focus") {
+        return { ok: true };
+      }
+      return {};
+    });
+
+    const config: GoogleMeetConfig = {
+      chrome: {
+        launch: true,
+        reuseExistingTab: true,
+        guestName: "Test",
+        joinTimeoutMs: 5000,
+      },
+    } as any;
+
+    const { testing } = await import("./chrome.js");
+    await testing.openMeetWithBrowserRequestForTest({
+      callBrowser,
+      config,
+      mode: "transcribe" as GoogleMeetMode,
+      url: `https://meet.google.com/${meetingCode}`,
+    });
+
+    // Should NOT have focused the Japanese tab
+    const focusCalls = callBrowser.mock.calls.filter(
+      (call: any) => call[0].method === "POST" && call[0].path === "/tabs/focus",
+    );
+    expect(focusCalls).toHaveLength(0);
+
+    // Should have opened a new tab with hl=en
+    const openCalls = callBrowser.mock.calls.filter(
+      (call: any) => call[0].method === "POST" && call[0].path === "/tabs/open",
+    );
+    expect(openCalls).toHaveLength(1);
+    expect(openCalls[0][0].body.url).toContain("hl=en");
+  });
+
+  it("reuses existing English tab without opening new one", async () => {
+    const englishTab: BrowserTab = {
+      targetId: "en-tab-789",
+      url: englishUrl,
+      title: "Google Meet",
+    };
+
+    callBrowser.mockImplementation(async (params: { method: string; path: string }) => {
+      if (params.method === "GET" && params.path === "/tabs") {
+        return { tabs: [englishTab] };
+      }
+      if (params.method === "POST" && params.path === "/tabs/focus") {
+        return { ok: true };
+      }
+      return {};
+    });
+
+    const config: GoogleMeetConfig = {
+      chrome: {
+        launch: true,
+        reuseExistingTab: true,
+        guestName: "Test",
+        joinTimeoutMs: 5000,
+      },
+    } as any;
+
+    const { testing } = await import("./chrome.js");
+    await testing.openMeetWithBrowserRequestForTest({
+      callBrowser,
+      config,
+      mode: "transcribe" as GoogleMeetMode,
+      url: `https://meet.google.com/${meetingCode}`,
+    });
+
+    // Should have focused the English tab
+    const focusCalls = callBrowser.mock.calls.filter(
+      (call: any) => call[0].method === "POST" && call[0].path === "/tabs/focus",
+    );
+    expect(focusCalls).toHaveLength(1);
+    expect(focusCalls[0][0].body.targetId).toBe("en-tab-789");
+
+    // Should NOT have opened a new tab
+    const openCalls = callBrowser.mock.calls.filter(
+      (call: any) => call[0].method === "POST" && call[0].path === "/tabs/open",
+    );
+    expect(openCalls).toHaveLength(0);
+  });
+
+  it("prefers English tab when both exist", async () => {
+    const japaneseTab: BrowserTab = {
+      targetId: "jp-tab-111",
+      url: japaneseUrl,
+      title: "Google Meet",
+    };
+
+    const englishTab: BrowserTab = {
+      targetId: "en-tab-222",
+      url: englishUrl,
+      title: "Google Meet",
+    };
+
+    callBrowser.mockImplementation(async (params: { method: string; path: string }) => {
+      if (params.method === "GET" && params.path === "/tabs") {
+        // Japanese first (should be skipped)
+        return { tabs: [japaneseTab, englishTab] };
+      }
+      if (params.method === "POST" && params.path === "/tabs/focus") {
+        return { ok: true };
+      }
+      return {};
+    });
+
+    const config: GoogleMeetConfig = {
+      chrome: {
+        launch: true,
+        reuseExistingTab: true,
+        guestName: "Test",
+        joinTimeoutMs: 5000,
+      },
+    } as any;
+
+    const { testing } = await import("./chrome.js");
+    await testing.openMeetWithBrowserRequestForTest({
+      callBrowser,
+      config,
+      mode: "transcribe" as GoogleMeetMode,
+      url: `https://meet.google.com/${meetingCode}`,
+    });
+
+    // Should have focused the English tab
+    const focusCalls = callBrowser.mock.calls.filter(
+      (call: any) => call[0].method === "POST" && call[0].path === "/tabs/focus",
+    );
+    expect(focusCalls).toHaveLength(1);
+    expect(focusCalls[0][0].body.targetId).toBe("en-tab-222");
+  });
+});
