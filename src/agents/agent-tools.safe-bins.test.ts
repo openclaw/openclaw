@@ -172,6 +172,7 @@ vi.mock("../infra/exec-approvals.js", async () => {
     ...mod,
     loadExecApprovals: () => approvals.file,
     resolveExecApprovals: () => approvals,
+    resolveExecApprovalsLocked: async () => approvals,
   };
 });
 

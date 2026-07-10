@@ -214,7 +214,9 @@ describe("gateway server chat", () => {
     await withMainSessionStore(async () => {
       let subordinateAdmissionClosed: boolean | undefined;
       dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
         const suspension = tryBeginGatewaySuspendAdmission(() => {});
         expect(suspension).not.toBeNull();
         try {
@@ -796,8 +798,8 @@ describe("gateway server chat", () => {
       });
       const subscribeRes = await rpcReq(ws, "sessions.subscribe", {});
       expect(subscribeRes.ok).toBe(true);
-      const rejectDispatch = createDeferred<void>();
-      const releasePersistence = createDeferred<void>();
+      const rejectDispatch = createDeferred();
+      const releasePersistence = createDeferred();
       let dispatchStarted = false;
       let persistenceEntered = false;
       const persistLifecycleEvent = sessionLifecycleState.persistGatewaySessionLifecycleEvent;

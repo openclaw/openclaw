@@ -243,10 +243,13 @@ See [Full release validation](/reference/full-release-validation) for the
 stage matrix, exact workflow job names, profile differences, artifacts, and
 focused rerun handles.
 
-`OpenClaw Release Publish` is the manual mutating release workflow. Dispatch it
-from `release/YYYY.M.PATCH` or `main` after the release tag exists and after the
-OpenClaw npm preflight has succeeded (the preflight runs `pnpm plugins:sync:check`
-among its checks). It requires the saved `preflight_run_id` and a successful
+`OpenClaw Release Publish` is the manual mutating release workflow. Dispatch
+regular beta and stable publishes from trusted `main` after the release tag
+exists and after the OpenClaw npm preflight has succeeded (the preflight runs
+`pnpm plugins:sync:check` among its checks). The tag still selects the exact
+release commit, including a commit on `release/YYYY.M.PATCH`; Tideclaw alpha
+publishes keep using their matching alpha branch. It requires the saved
+`preflight_run_id` and a successful
 `full_release_validation_run_id` and its exact
 `full_release_validation_run_attempt`, dispatches `Plugin NPM Release` for all
 publishable plugin packages, dispatches `Plugin ClawHub Release` for the same
@@ -259,7 +262,7 @@ and checksum contract before publishing the GitHub release draft.
 
 ```bash
 gh workflow run openclaw-release-publish.yml \
-  --ref release/YYYY.M.PATCH \
+  --ref main \
   -f tag=vYYYY.M.PATCH-beta.N \
   -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
   -f full_release_validation_run_id=<successful-full-release-validation-run-id> \
