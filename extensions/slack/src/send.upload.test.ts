@@ -534,9 +534,15 @@ describe("sendMessageSlack file upload with user IDs", () => {
           upload_url: `${baseUrl}/upload/v1/capability`,
           file_id: "F001",
         });
-        fetchWithSsrFGuard.mockImplementationOnce(async (params) =>
-          actual.fetchWithSsrFGuard({ ...params, fetchImpl: originalFetch }),
-        );
+        fetchWithSsrFGuard.mockImplementationOnce(async (params) => {
+          const mockedFetch = globalThis.fetch;
+          globalThis.fetch = originalFetch;
+          try {
+            return await actual.fetchWithSsrFGuard(params);
+          } finally {
+            globalThis.fetch = mockedFetch;
+          }
+        });
 
         await sendMessageSlack("channel:C123CHAN", "caption", {
           token: "xoxb-test",
