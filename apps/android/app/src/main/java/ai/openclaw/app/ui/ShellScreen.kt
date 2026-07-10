@@ -332,7 +332,12 @@ private fun CanvasOverlay(
 ) {
   BackHandler(enabled = visible, onBack = onClose)
   Box(modifier = Modifier.fillMaxSize()) {
-    CanvasScreen(viewModel = viewModel, visible = visible, modifier = Modifier.fillMaxSize())
+    // The shell owns system-bar avoidance; arbitrary Canvas pages cannot know Android insets.
+    CanvasScreen(
+      viewModel = viewModel,
+      visible = visible,
+      modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing),
+    )
     if (visible) {
       ClawIconButton(
         icon = Icons.Default.Close,
