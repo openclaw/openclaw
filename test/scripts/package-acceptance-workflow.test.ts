@@ -3580,6 +3580,12 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).not.toContain("resolve_openclaw_npm_publish_state");
     expect(releaseWorkflow).not.toContain("openclaw_npm_already_published");
     expect(releaseWorkflow).toContain(
+      'openclaw_npm_run_id="$(dispatch_workflow openclaw-npm-release.yml',
+    );
+    expect(releaseWorkflow).toContain(
+      'if [[ -n "${openclaw_npm_run_id}" && "${openclaw_failed}" == "0" ]]; then',
+    );
+    expect(releaseWorkflow).toContain(
       "The child run publishes missing packages or verifies the exact",
     );
     expect(
