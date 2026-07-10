@@ -341,7 +341,7 @@ describe("listChannelCatalogEntries", () => {
     ).toBeUndefined();
   });
 
-  it("does not trust a matching official package without affirmative ClawHub provenance", async () => {
+  it("trusts a catalog-backed legacy ClawHub record without authority metadata", async () => {
     const { module } = await loadWithMocks({});
     const rootDir = "/tmp/openclaw-test-matrix";
     const candidate = {
@@ -371,7 +371,7 @@ describe("listChannelCatalogEntries", () => {
         },
         discovery: { candidates: [candidate], diagnostics: [] },
       })[0]?.trustedSourceLinkedOfficialInstall,
-    ).toBeUndefined();
+    ).toBe(true);
   });
 
   it("does not trust official identity without a matching install path", async () => {

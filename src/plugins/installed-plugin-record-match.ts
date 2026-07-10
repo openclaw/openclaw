@@ -54,7 +54,7 @@ export function matchesInstalledPluginRecord(params: {
       (candidatePath) =>
         candidatePath === trackedPath ||
         isPathInside(trackedPath, candidatePath) ||
-        isPathInside(candidatePath, trackedPath),
+        (!params.installPathOnly && isPathInside(candidatePath, trackedPath)),
     ),
   );
 }
