@@ -5,6 +5,7 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import net from "node:net";
 import { URL } from "node:url";
+import { decodeTextPrefix } from "@openclaw/normalization-core";
 import { ensureDebugProxyCa } from "./ca.js";
 import type { DebugProxySettings } from "./env.js";
 import { getDebugProxyCaptureStore } from "./store.sqlite.js";
@@ -138,7 +139,9 @@ function finishBodyPreviewCapture(capture: BodyPreviewCapture): {
   metaJson?: string;
 } {
   return {
-    dataText: Buffer.concat(capture.chunks, capture.previewBytes).toString("utf8"),
+    dataText: decodeTextPrefix(Buffer.concat(capture.chunks, capture.previewBytes), {
+      truncated: capture.truncated,
+    }),
     metaJson: capture.truncated
       ? JSON.stringify({
           bodyBytes: capture.totalBytes,
