@@ -2152,6 +2152,9 @@ async function runAgentTurnWithFallbackInternal(
                   runParams: {
                     sessionId: params.followupRun.run.sessionId,
                     sessionKey: params.sessionKey,
+                    runtimePolicySessionKey:
+                      params.followupRun.run.runtimePolicySessionKey ??
+                      params.runtimePolicySessionKey,
                     agentId: params.followupRun.run.agentId,
                     trigger: params.isHeartbeat ? "heartbeat" : "user",
                     sessionFile: params.followupRun.run.sessionFile,
@@ -2170,7 +2173,10 @@ async function runAgentTurnWithFallbackInternal(
                     currentInboundEventKind: params.followupRun.currentInboundEventKind,
                     currentInboundContext: params.followupRun.currentInboundContext,
                     inputProvenance: params.followupRun.run.inputProvenance,
+                    modelProvider: provider,
                     provider: cliExecutionProvider,
+                    execOverrides: params.followupRun.run.execOverrides,
+                    bashElevated: params.followupRun.run.bashElevated,
                     model,
                     thinkLevel: candidateThinkLevel,
                     fastMode: candidateFastMode.fastMode,
@@ -2212,6 +2218,13 @@ async function runAgentTurnWithFallbackInternal(
                       params.sessionCtx.OriginatingTo ??
                       params.sessionCtx.To,
                     senderId: params.followupRun.run.senderId,
+                    senderName: params.followupRun.run.senderName,
+                    senderUsername: params.followupRun.run.senderUsername,
+                    senderE164: params.followupRun.run.senderE164,
+                    groupId: params.followupRun.run.groupId,
+                    groupChannel: params.followupRun.run.groupChannel,
+                    groupSpace: params.followupRun.run.groupSpace,
+                    spawnedBy: params.followupRun.run.spawnedBy,
                     chatId: params.followupRun.originatingChatId,
                     channelContext: params.followupRun.run.channelContext,
                     currentThreadTs:
