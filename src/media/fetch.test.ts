@@ -69,6 +69,12 @@ function makeLookupFn(): LookupFn {
   return vi.fn(async () => ({ address: "149.154.167.220", family: 4 })) as unknown as LookupFn;
 }
 
+function abortReasonError(signal?: AbortSignal): Error {
+  return signal?.reason instanceof Error
+    ? signal.reason
+    : new Error("request aborted", { cause: signal?.reason });
+}
+
 function requireFetchGuardRequest(): unknown {
   const [call] = fetchWithSsrFGuardMock.mock.calls;
   if (!call) {
@@ -403,7 +409,7 @@ describe("readRemoteMediaBuffer", () => {
         async (_input: RequestInfo | URL, init?: RequestInit) =>
           await new Promise<Response>((_resolve, reject) => {
             const signal = init?.signal;
-            const rejectForAbort = () => reject(signal?.reason);
+            const rejectForAbort = () => reject(abortReasonError(signal));
             if (signal?.aborted) {
               rejectForAbort();
               return;
@@ -481,7 +487,7 @@ describe("readRemoteMediaBuffer", () => {
       async (_input: RequestInfo | URL, init?: RequestInit) =>
         await new Promise<Response>((_resolve, reject) => {
           const signal = init?.signal;
-          const rejectForAbort = () => reject(signal?.reason);
+          const rejectForAbort = () => reject(abortReasonError(signal));
           if (signal?.aborted) {
             rejectForAbort();
             return;

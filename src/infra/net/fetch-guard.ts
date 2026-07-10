@@ -4,6 +4,7 @@ import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import { createAbortError } from "../abort-signal.js";
+import { toErrorObject } from "../errors.js";
 import {
   normalizeHeadersInitForFetch,
   normalizeRequestInitHeadersForFetch,
@@ -141,7 +142,12 @@ async function runAbortablePreflight<T>(run: () => Promise<T>, signal?: AbortSig
     };
     const onAbort = () =>
       settle(() =>
-        reject(signal.reason ?? createAbortError("Guarded fetch aborted during network preflight")),
+        reject(
+          toErrorObject(
+            signal.reason ?? createAbortError("Guarded fetch aborted during network preflight"),
+            "Guarded fetch aborted during network preflight",
+          ),
+        ),
       );
     signal.addEventListener("abort", onAbort, { once: true });
     if (signal.aborted) {
@@ -150,7 +156,7 @@ async function runAbortablePreflight<T>(run: () => Promise<T>, signal?: AbortSig
     }
     void run().then(
       (value) => settle(() => resolve(value)),
-      (error: unknown) => settle(() => reject(error)),
+      (error: unknown) => settle(() => reject(toErrorObject(error, "Network preflight failed"))),
     );
   });
 }
