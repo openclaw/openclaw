@@ -1384,6 +1384,32 @@ export async function resetSessionEntryLifecycle(params: {
         sessionFile: nextSessionFile,
         sessionId: nextEntry.sessionId,
       });
+      if (previousSessionId && previousSessionId !== nextEntry.sessionId) {
+        const { reassignSessionTrajectoryPathOwner } = await loadTrajectoryCleanupRuntime();
+        reassignSessionTrajectoryPathOwner({
+          previousSessionId,
+          previousSessionFile,
+          nextSessionId: nextEntry.sessionId,
+          nextSessionFile,
+        });
+      }
+    } else if (previousSessionId) {
+      // The previous path is genuinely abandoned (different transcript path):
+      // retire it exactly like a delete, unless another row still points at it.
+      const referencedSessionIds = new Set(
+        Object.values(store)
+          .map((entry) => entry?.sessionId)
+          .filter((sessionId): sessionId is string => Boolean(sessionId)),
+      );
+      if (!referencedSessionIds.has(previousSessionId)) {
+        const { removeRemovedSessionTrajectoryArtifacts } = await loadTrajectoryCleanupRuntime();
+        await removeRemovedSessionTrajectoryArtifacts({
+          removedSessionFiles: [[previousSessionId, previousSessionFile]],
+          referencedSessionIds,
+          storePath: params.storePath,
+          restrictToStoreDir: true,
+        });
+      }
     }
     const result: ResetSessionEntryLifecycleResult = {
       ...mutation,
