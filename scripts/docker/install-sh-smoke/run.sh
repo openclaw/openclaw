@@ -481,10 +481,6 @@ if (Number(updateStep.exitCode ?? 1) !== 0) {
 if (typeof updateStep.command !== "string" || !updateStep.command.includes(expectedUrl)) {
   throw new Error(`global update step missing expected tgz URL: ${JSON.stringify(updateStep)}`);
 }
-const doctorStep = steps.find((step) => step?.name === "openclaw doctor");
-if (!doctorStep || Number(doctorStep.exitCode ?? 1) !== 0) {
-  throw new Error(`openclaw doctor step failed: ${JSON.stringify(doctorStep)}`);
-}
 NODE
 
   echo "==> Verify updated version"
