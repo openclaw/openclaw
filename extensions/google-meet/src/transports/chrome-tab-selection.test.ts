@@ -24,17 +24,17 @@ describe("openMeetWithBrowserRequest tab selection (regression #103385)", () => 
       title: "Google Meet",
     };
 
-    callBrowser.mockImplementation(async (params: { method: string; path: string }) => {
+    callBrowser.mockImplementation((params: { method: string; path: string }) => {
       if (params.method === "GET" && params.path === "/tabs") {
-        return { tabs: [japaneseTab] };
+        return Promise.resolve({ tabs: [japaneseTab] });
       }
       if (params.method === "POST" && params.path === "/tabs/open") {
-        return { targetId: "new-en-tab-456", url: englishUrl };
+        return Promise.resolve({ targetId: "new-en-tab-456", url: englishUrl });
       }
       if (params.method === "POST" && params.path === "/tabs/focus") {
-        return { ok: true };
+        return Promise.resolve({ ok: true });
       }
-      return {};
+      return Promise.resolve({});
     });
 
     const config: GoogleMeetConfig = {
@@ -75,14 +75,14 @@ describe("openMeetWithBrowserRequest tab selection (regression #103385)", () => 
       title: "Google Meet",
     };
 
-    callBrowser.mockImplementation(async (params: { method: string; path: string }) => {
+    callBrowser.mockImplementation((params: { method: string; path: string }) => {
       if (params.method === "GET" && params.path === "/tabs") {
-        return { tabs: [englishTab] };
+        return Promise.resolve({ tabs: [englishTab] });
       }
       if (params.method === "POST" && params.path === "/tabs/focus") {
-        return { ok: true };
+        return Promise.resolve({ ok: true });
       }
-      return {};
+      return Promise.resolve({});
     });
 
     const config: GoogleMeetConfig = {
@@ -129,15 +129,15 @@ describe("openMeetWithBrowserRequest tab selection (regression #103385)", () => 
       title: "Google Meet",
     };
 
-    callBrowser.mockImplementation(async (params: { method: string; path: string }) => {
+    callBrowser.mockImplementation((params: { method: string; path: string }) => {
       if (params.method === "GET" && params.path === "/tabs") {
         // Japanese first (should be skipped)
-        return { tabs: [japaneseTab, englishTab] };
+        return Promise.resolve({ tabs: [japaneseTab, englishTab] });
       }
       if (params.method === "POST" && params.path === "/tabs/focus") {
-        return { ok: true };
+        return Promise.resolve({ ok: true });
       }
-      return {};
+      return Promise.resolve({});
     });
 
     const config: GoogleMeetConfig = {
