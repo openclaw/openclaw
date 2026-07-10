@@ -723,6 +723,10 @@ jobs:
 
       - name: Check CLI startup memory
         shell: bash
+        env:
+          # GitHub-hosted Linux reports a higher RSS baseline than Blacksmith for
+          # the same built CLI. Keep the tighter Blacksmith regression ceiling.
+          OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '350' }}
         run: |
           set +e
           pnpm test:startup:memory
@@ -1165,6 +1169,10 @@ jobs:
         with:
           go-version-file: scripts/docs-i18n/go.mod
           cache-dependency-path: scripts/docs-i18n/go.sum
+
+      - name: Verify docs i18n Go toolchain
+        if: matrix.requires_go == true
+        run: test "$(go env GOVERSION)" = "go1.25.12"
 
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
