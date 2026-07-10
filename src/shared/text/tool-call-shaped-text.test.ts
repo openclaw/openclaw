@@ -43,4 +43,10 @@ describe("detectToolCallShapedText", () => {
     expect(detectToolCallShapedText("Use tool_call tags only in examples.")).toBeNull();
     expect(detectToolCallShapedText("Use <tool_call> to invoke tools.")).toBeNull();
   });
+
+  it("does not break on surrogate pairs at the scan boundary", () => {
+    // Emoji near MAX_SCAN_CHARS should not cause scan failure
+    const input = `${"x".repeat(19_998)}🚀{ "name": "test" }`;
+    expect(() => detectToolCallShapedText(input)).not.toThrow();
+  });
 });
