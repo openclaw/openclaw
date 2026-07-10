@@ -714,10 +714,10 @@ export default {
 };
 ```
 
-Precedence is:
+Within the active `direct` or `groups` map, precedence is:
 
-1. specific account conversation entry
-2. account wildcard entry
+1. specific conversation entry
+2. wildcard entry
 3. existing WhatsApp channel debounce default
 
 Account-scoped `direct` and `groups` maps replace the matching root maps for
