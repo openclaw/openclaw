@@ -57,7 +57,6 @@ type SourceMigrationResult = {
   archived: boolean;
   importedKeys: number;
   warning?: string;
-  notice?: string;
 };
 
 // Keep the doctor contract graph independent from the full Codex runtime.
@@ -427,20 +426,15 @@ async function migrateSource(
           return retain(`canonical plugin state changed at ${entry.key}`);
         }
       }
-      if (!owner) {
-        return {
-          archived: false,
-          importedKeys,
-          notice: `Left Codex binding sidecar in place after importing its conversation binding because its session owner could not be resolved: ${source.sidecarPath}`,
-        };
-      }
-      const ownershipWarning = await recordSessionOwner(owner);
-      if (ownershipWarning) {
-        return retain(ownershipWarning);
-      }
-      for (const entry of entries) {
-        if (!hasExpected(await store.lookup(entry.key), entry.value)) {
-          return retain(`canonical plugin state changed at ${entry.key}`);
+      if (owner) {
+        const ownershipWarning = await recordSessionOwner(owner);
+        if (ownershipWarning) {
+          return retain(ownershipWarning);
+        }
+        for (const entry of entries) {
+          if (!hasExpected(await store.lookup(entry.key), entry.value)) {
+            return retain(`canonical plugin state changed at ${entry.key}`);
+          }
         }
       }
       await archiveBindingSidecar(source.sidecarPath);
@@ -567,7 +561,6 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
-      const notices: string[] = [];
       const { sources, surfaces } = await collectLegacyBindingSources(params);
       if (sources.length === 0) {
         return { changes, warnings };
@@ -587,9 +580,6 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         if (result.warning) {
           warnings.push(result.warning);
         }
-        if (result.notice) {
-          notices.push(result.notice);
-        }
         if (result.archived) {
           migrated++;
         } else {
@@ -606,7 +596,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           `Migrated ${partialImports} safe Codex app-server binding row(s) to plugin state; retained legacy sidecars needing review`,
         );
       }
-      return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
+      return { changes, warnings };
     },
   },
 ];

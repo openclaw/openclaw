@@ -231,7 +231,7 @@ describe("codex doctor contract", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
-  it("reports unresolved-owner binding sidecars as notices after importing conversation binding", async () => {
+  it("archives unresolved-owner binding sidecars after importing conversation binding", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-doctor-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
@@ -265,17 +265,14 @@ describe("codex doctor contract", () => {
       throw new Error("missing Codex binding migration");
     }
 
-    const result = await migration.migrateLegacyState(params);
-    const canonicalSidecarPath = await fs.realpath(sidecarPath);
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.notices).toStrictEqual([
-      `Left Codex binding sidecar in place after importing its conversation binding because its session owner could not be resolved: ${canonicalSidecarPath}`,
-    ]);
-    expect(result.changes).toContain(
-      "Migrated 1 safe Codex app-server binding row(s) to plugin state; retained legacy sidecars needing review",
-    );
-    await expect(fs.access(sidecarPath)).resolves.toBeUndefined();
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [
+        "Migrated 1 Codex app-server binding sidecar(s) to plugin state and archived the legacy sources",
+      ],
+      warnings: [],
+    });
+    await expect(fs.access(sidecarPath)).rejects.toThrow();
+    await expect(fs.access(`${sidecarPath}.migrated`)).resolves.toBeUndefined();
     const store = createDoctorContext(env).openPluginStateKeyedStore<StoredCodexAppServerBinding>({
       namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
       maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -289,6 +286,11 @@ describe("codex doctor contract", () => {
         }),
       ),
     ).resolves.toMatchObject({ state: "active", binding: { threadId: "thread-orphan" } });
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
 
     await fs.rm(stateDir, { recursive: true, force: true });
   });
