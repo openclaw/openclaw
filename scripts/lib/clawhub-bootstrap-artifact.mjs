@@ -240,8 +240,8 @@ function requireExactKeys(value, expected, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     fail(`${label} must be an object.`);
   }
-  const actual = Object.keys(value).toSorted();
-  if (JSON.stringify(actual) !== JSON.stringify([...expected].toSorted())) {
+  const actual = Object.keys(value).toSorted(compareCodeUnits);
+  if (JSON.stringify(actual) !== JSON.stringify([...expected].toSorted(compareCodeUnits))) {
     fail(`${label} keys are invalid: ${actual.join(",")}.`);
   }
 }
@@ -416,7 +416,7 @@ function validateBootstrapArchiveInventory(files, expectedBinding) {
   const actual = new Set(files.keys());
   if (actual.size !== expected.size || [...actual].some((path) => !expected.has(path))) {
     fail(
-      `Bootstrap Actions artifact inventory mismatch: expected ${[...expected].toSorted().join(",")}, found ${[...actual].toSorted().join(",")}.`,
+      `Bootstrap Actions artifact inventory mismatch: expected ${[...expected].toSorted(compareCodeUnits).join(",")}, found ${[...actual].toSorted(compareCodeUnits).join(",")}.`,
     );
   }
   return { entries, manifest, requestedPlugins };

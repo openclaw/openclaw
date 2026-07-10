@@ -28,6 +28,7 @@ const DOCKER_E2E_PLAN_ACTION = ".github/actions/docker-e2e-plan/action.yml";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const RELEASE_TELEGRAM_QA_WORKFLOW = ".github/workflows/openclaw-release-telegram-qa.yml";
 const RELEASE_PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
+const PLUGIN_CLAWHUB_RELEASE_WORKFLOW = ".github/workflows/plugin-clawhub-release.yml";
 const ANDROID_RELEASE_WORKFLOW = ".github/workflows/android-release.yml";
 const STABLE_MAIN_CLOSEOUT_WORKFLOW = ".github/workflows/openclaw-stable-main-closeout.yml";
 const WINDOWS_NODE_RELEASE_WORKFLOW = ".github/workflows/windows-node-release.yml";
@@ -3264,6 +3265,31 @@ describe("package artifact reuse", () => {
     expect(clawHubWorkflow).toContain("verify_published_clawhub_package:");
     expect(clawHubWorkflow).toContain("inputs.dry_run != true");
     expect(clawHubWorkflow).toContain("Verify published ClawHub package");
+    const clawHubVerifier = workflowJob(
+      PLUGIN_CLAWHUB_RELEASE_WORKFLOW,
+      "verify_published_clawhub_package",
+    );
+    expect(clawHubVerifier["timeout-minutes"]).toBe(45);
+    expect(clawHubVerifier.permissions).toMatchObject({ actions: "read", contents: "read" });
+    expect(workflowStep(clawHubVerifier, "Download published package input")).toMatchObject({
+      uses: DOWNLOAD_ARTIFACT_V8,
+      with: {
+        name: "${{ matrix.plugin.artifactName }}",
+        path: "${{ runner.temp }}/clawhub-package-artifact",
+      },
+    });
+    const clawHubVerifyRun = workflowStep(clawHubVerifier, "Verify published ClawHub package").run;
+    expectTextToIncludeAll(clawHubVerifyRun, [
+      "scripts/verify-clawhub-published-artifact.mjs",
+      '--expected-artifact-dir "${RUNNER_TEMP}/clawhub-package-artifact"',
+      '--package-name "${PACKAGE_NAME}"',
+      '--package-version "${PACKAGE_VERSION}"',
+      '--publish-tag "${PACKAGE_TAG}"',
+      '--registry "${CLAWHUB_REGISTRY}"',
+    ]);
+    expect(clawHubVerifyRun).not.toContain("fetchWithRetry");
+    expect(clawHubVerifyRun).not.toContain(".json()");
+    expect(clawHubVerifyRun).not.toContain('method: "HEAD"');
     expect(clawHubWorkflow).not.toContain("bash scripts/plugin-clawhub-publish.sh --publish");
     expect(clawHubWorkflow).not.toContain("Write ClawHub token config");
     expect(clawHubWorkflow).not.toContain("Checkout ClawHub CLI source");

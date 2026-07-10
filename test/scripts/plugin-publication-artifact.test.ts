@@ -1253,6 +1253,40 @@ describe("plugin publication artifact", () => {
     );
   });
 
+  it.each([
+    { path: " package.json", prefix: "package", field: "name" },
+    { path: "package.json", prefix: " package", field: "prefix" },
+  ])("rejects whitespace-bearing USTAR $field fields before manifest selection", (entry) => {
+    const root = tempDir();
+    const artifactDir = path.join(root, "artifact");
+    const markerPath = path.join(root, "marker");
+    mkdirSync(artifactDir, { recursive: true });
+    writeFileSync(
+      path.join(artifactDir, TARBALL_NAME),
+      createTarball([
+        { path: "package/", type: "5" },
+        {
+          content: metaPackageJson(markerPath, {
+            scripts: {
+              postinstall: `node -e "require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'smuggled')"`,
+            },
+          }),
+          path: entry.path,
+          prefix: entry.prefix,
+        },
+        { content: metaPackageJson(markerPath), path: "package/package.json" },
+      ]),
+    );
+
+    expect(() => createPluginPublicationArtifact(publicationParams(artifactDir))).toThrow(
+      new RegExp(
+        `tar entry ${entry.field} changes under the pinned ClawHub path normalization`,
+        "u",
+      ),
+    );
+    expect(existsSync(markerPath)).toBe(false);
+  });
+
   it("rejects V7 headers whose prefix bytes disagree with node-tar path semantics", () => {
     const root = tempDir();
     const artifactDir = path.join(root, "artifact");

@@ -32,18 +32,21 @@ function assertPositiveInteger(value, label) {
   return value;
 }
 
-function assertNonNegativeInteger(value, label) {
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`${label} must be a non-negative safe integer.`);
-  }
-  return value;
-}
-
 function assertTrimmedString(value, label) {
   if (typeof value !== "string" || value.length === 0 || value.trim() !== value) {
     throw new Error(`${label} must be a non-empty trimmed string.`);
   }
   return value;
+}
+
+function hasControlCharacters(value) {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint <= 0x1f || codePoint === 0x7f) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function boundedLimit(value, fallback, label) {
@@ -85,7 +88,7 @@ function assertSafeArchivePath(value, label) {
     value.includes("\\") ||
     value.includes("\0") ||
     value.normalize("NFC") !== value ||
-    /[\u0000-\u001f\u007f]/u.test(value)
+    hasControlCharacters(value)
   ) {
     throw new Error(`Unsafe ${label}: ${JSON.stringify(value)}`);
   }
@@ -124,7 +127,7 @@ function assertWorkflowPath(value) {
   const workflowPath = assertTrimmedString(value, "workflow path");
   if (
     !/^\.github\/workflows\/[A-Za-z0-9][A-Za-z0-9_.-]*\.ya?ml$/u.test(workflowPath) ||
-    /[\u0000-\u001f\u007f]/u.test(workflowPath)
+    hasControlCharacters(workflowPath)
   ) {
     throw new Error(`Invalid workflow path: ${workflowPath}`);
   }
@@ -197,7 +200,7 @@ export function readBoundedRegularFile(path, params) {
     return bytes;
   } catch (error) {
     if (error && typeof error === "object" && error.code === "ELOOP") {
-      throw new Error(`${params.label} must be a regular file.`);
+      throw new Error(`${params.label} must be a regular file.`, { cause: error });
     }
     throw error;
   } finally {
@@ -585,8 +588,8 @@ export function inspectActionsArtifactZipWithPolicy(inputBytes, inputPolicy) {
   const { centralOffset, records } = inspectCentralDirectory(bytes, eocd, policy);
   const files = inspectLocalRecords(bytes, centralOffset, records, policy);
   if (policy.expectedEntries) {
-    const actual = [...files.keys()].toSorted();
-    const expected = [...policy.expectedEntries].toSorted();
+    const actual = [...files.keys()].toSorted(compareCodeUnits);
+    const expected = [...policy.expectedEntries].toSorted(compareCodeUnits);
     if (
       actual.length !== expected.length ||
       actual.some((name, index) => name !== expected[index])
@@ -846,7 +849,9 @@ async function runBoundedRetry(label, operation, params) {
       if (attempt === params.attempts) {
         break;
       }
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, params.delayMs));
+      await new Promise((resolvePromise) => {
+        setTimeout(resolvePromise, params.delayMs);
+      });
     }
   }
   throw new Error(
@@ -873,6 +878,7 @@ async function fetchBoundedJson(url, request, params) {
   } catch (error) {
     throw new Error(
       `${params.label} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) {

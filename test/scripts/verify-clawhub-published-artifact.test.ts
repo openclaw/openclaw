@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -10,7 +11,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { verifyPublishedClawHubArtifacts } from "../../scripts/verify-clawhub-published-artifact.mjs";
+import {
+  verifyPublishedClawHubArtifacts,
+  verifyPublishedClawHubPackage,
+} from "../../scripts/verify-clawhub-published-artifact.mjs";
 
 const tempDirs: string[] = [];
 const clawhubToolchainSha256 = "d".repeat(64);
@@ -80,6 +84,15 @@ function writeManifest(mode: "publish" | "configure-only", artifact: Uint8Array,
   return path;
 }
 
+function writeExpectedArtifact(artifact: Uint8Array) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-clawhub-oidc-readback-"));
+  tempDirs.push(root);
+  const artifactDir = join(root, "artifact");
+  mkdirSync(artifactDir);
+  writeFileSync(join(artifactDir, "openclaw-meta-2026.7.1-beta.3.tgz"), artifact);
+  return artifactDir;
+}
+
 function artifactResponse(artifact: Uint8Array, body: BodyInit = artifact) {
   const artifactIdentity = identity(artifact);
   return new Response(body, {
@@ -117,6 +130,7 @@ function registryFetch(artifact: Uint8Array) {
     if (url.endsWith("/trusted-publisher")) {
       return Response.json({
         trustedPublisher: {
+          provider: "github-actions",
           repository: "openclaw/openclaw",
           workflowFilename: "plugin-clawhub-release.yml",
           environment: null,
@@ -143,6 +157,98 @@ describe("ClawHub published artifact verification", () => {
     expect(source).toContain("readBoundedBytes(response, url, MAX_JSON_BYTES)");
     expect(source).toContain("readBoundedBytes(response, url, MAX_ARTIFACT_BYTES)");
     expect(source).toContain("AbortSignal.timeout(timeoutMs)");
+  });
+
+  it("verifies normal OIDC publication against the exact prepared artifact bytes", async () => {
+    const artifact = new TextEncoder().encode("exact oidc tgz bytes");
+    const fetchImpl = registryFetch(artifact);
+    const evidence = await verifyPublishedClawHubPackage({
+      expectedArtifactDir: writeExpectedArtifact(artifact),
+      packageName: "@openclaw/meta",
+      packageVersion: "2026.7.1-beta.3",
+      publishTag: "beta",
+      registry: "https://clawhub.example",
+      retryOptions: { fetchImpl, attempts: 1, delayMs: 1 },
+    });
+
+    expect(evidence).toMatchObject({
+      schemaVersion: 1,
+      verificationMode: "oidc-postpublish",
+      expectedArtifact: identity(artifact),
+      package: {
+        packageName: "@openclaw/meta",
+        registrySha256: identity(artifact).sha256,
+        registrySize: artifact.byteLength,
+      },
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it("rejects a non-GitHub Actions trusted publisher", async () => {
+    const artifact = new TextEncoder().encode("exact oidc tgz bytes");
+    const fetchImpl = registryFetch(artifact);
+    fetchImpl
+      .mockResolvedValueOnce(
+        Response.json({
+          package: { tags: { beta: "2026.7.1-beta.3" } },
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          trustedPublisher: {
+            provider: "other",
+            repository: "openclaw/openclaw",
+            workflowFilename: "plugin-clawhub-release.yml",
+            environment: null,
+          },
+        }),
+      );
+
+    await expect(
+      verifyPublishedClawHubPackage({
+        expectedArtifactDir: writeExpectedArtifact(artifact),
+        packageName: "@openclaw/meta",
+        packageVersion: "2026.7.1-beta.3",
+        publishTag: "beta",
+        registry: "https://clawhub.example",
+        retryOptions: { fetchImpl, attempts: 1, delayMs: 1 },
+      }),
+    ).rejects.toThrow("trusted publisher provider mismatch");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects ambiguous or symlinked normal OIDC artifacts before registry access", async () => {
+    const artifact = new TextEncoder().encode("exact oidc tgz bytes");
+    const fetchImpl = registryFetch(artifact);
+    const ambiguous = writeExpectedArtifact(artifact);
+    writeFileSync(join(ambiguous, "second.tgz"), artifact);
+    await expect(
+      verifyPublishedClawHubPackage({
+        expectedArtifactDir: ambiguous,
+        packageName: "@openclaw/meta",
+        packageVersion: "2026.7.1-beta.3",
+        publishTag: "beta",
+        retryOptions: { fetchImpl, attempts: 1, delayMs: 1 },
+      }),
+    ).rejects.toThrow("exactly one root .tgz regular file");
+
+    const root = mkdtempSync(join(tmpdir(), "openclaw-clawhub-oidc-symlink-"));
+    tempDirs.push(root);
+    const artifactDir = join(root, "artifact");
+    const target = join(root, "target.tgz");
+    mkdirSync(artifactDir);
+    writeFileSync(target, artifact);
+    symlinkSync(target, join(artifactDir, "linked.tgz"));
+    await expect(
+      verifyPublishedClawHubPackage({
+        expectedArtifactDir: artifactDir,
+        packageName: "@openclaw/meta",
+        packageVersion: "2026.7.1-beta.3",
+        publishTag: "beta",
+        retryOptions: { fetchImpl, attempts: 1, delayMs: 1 },
+      }),
+    ).rejects.toThrow("exactly one root .tgz regular file");
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("requires exact bytes and complete artifact metadata", async () => {
@@ -246,6 +352,7 @@ describe("ClawHub published artifact verification", () => {
       if (url.endsWith("/trusted-publisher")) {
         return Response.json({
           trustedPublisher: {
+            provider: "github-actions",
             repository: "openclaw/openclaw",
             workflowFilename: "plugin-clawhub-release.yml",
             environment: null,

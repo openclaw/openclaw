@@ -117,12 +117,22 @@ function assertBooleanString(value, label) {
   throw new Error(`${label} must be true or false.`);
 }
 
+function hasControlCharacters(value) {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint <= 0x1f || codePoint === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function normalizeManualOverrideReason(value) {
   if (value === undefined || value === null || value === "") {
     return null;
   }
   const reason = assertString(value, "manual override reason");
-  if (reason.length > 500 || /[\u0000-\u001f\u007f]/u.test(reason)) {
+  if (reason.length > 500 || hasControlCharacters(reason)) {
     throw new Error(
       "Manual override reason must be at most 500 characters and contain no control characters.",
     );
@@ -153,7 +163,7 @@ function assertSafeArchivePath(value, label) {
     raw.includes("\\") ||
     raw.includes("\0") ||
     raw.normalize("NFC") !== raw ||
-    /[\u0000-\u001f\u007f]/u.test(raw)
+    hasControlCharacters(raw)
   ) {
     throw new Error(`Unsafe ${label}: ${JSON.stringify(raw)}`);
   }
@@ -170,7 +180,7 @@ function assertSafeArchivePath(value, label) {
 
 function normalizePublicationReason(value) {
   const reason = assertString(value, "publication reason");
-  if (reason.length > 500 || /[\u0000-\u001f\u007f]/u.test(reason)) {
+  if (reason.length > 500 || hasControlCharacters(reason)) {
     throw new Error(
       "Publication reason must be at most 500 characters and contain no control characters.",
     );
@@ -188,17 +198,17 @@ function normalizePublisherPolicy(value) {
   }
   const schema = assertString(value.schema, "publisher policy schema");
   const policyId = assertString(value.policyId, "publisher policy id");
-  const sha256 = assertString(value.sha256, "publisher policy SHA-256");
+  const policySha256 = assertString(value.sha256, "publisher policy SHA-256");
   if (
     schema.length > 200 ||
     policyId.length > 200 ||
-    /[\u0000-\u001f\u007f]/u.test(schema) ||
-    /[\u0000-\u001f\u007f]/u.test(policyId) ||
-    !SHA256_RE.test(sha256)
+    hasControlCharacters(schema) ||
+    hasControlCharacters(policyId) ||
+    !SHA256_RE.test(policySha256)
   ) {
     throw new Error("Publisher policy identity is invalid.");
   }
-  return { policyId, schema, sha256 };
+  return { policyId, schema, sha256: policySha256 };
 }
 
 function boundedTarLimit(value, fallback, label) {
@@ -303,11 +313,12 @@ function parseCanonicalTarNumber(bytes, label, options = {}) {
     throw new Error(`${label} must not be empty.`);
   }
   const raw = bytes.toString("ascii");
-  const canonical = new RegExp(`^[0-7]{${bytes.length - 2}} \0$`, "u").test(raw);
+  const canonicalDigits = new RegExp(`^[0-7]{${bytes.length - 2}}$`, "u");
+  const canonical = canonicalDigits.test(raw.slice(0, -2)) && raw.endsWith(" \0");
   if (!canonical) {
     throw new Error(`${label} is not canonically encoded.`);
   }
-  const octal = raw.replace(/[ \0]+$/u, "");
+  const octal = raw.slice(0, -2);
   const value = Number.parseInt(octal, 8);
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error(`Invalid ${label}: ${JSON.stringify(octal)}`);
@@ -368,6 +379,7 @@ function parsePackedJson(bytes, label) {
   } catch (error) {
     throw new Error(
       `${label} is invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -940,6 +952,7 @@ function parseBoundedJsonFile(path, label, maxBytes = MAX_MANIFEST_BYTES) {
   } catch (error) {
     throw new Error(
       `${label} is invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
   }
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -1050,6 +1063,7 @@ export function verifyPluginPublicationArtifact(params) {
   } catch (error) {
     throw new Error(
       `Plugin publication manifest is invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
   }
   const manifestSourcePackageJsonSha256 = manifest?.package?.sourcePackageJsonSha256;
