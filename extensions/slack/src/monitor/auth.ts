@@ -493,6 +493,7 @@ export async function authorizeSlackSystemEventSender(params: {
    *  and applies interactive-only owner allowFrom checks without changing the
    *  open-by-default channel behavior when no allowlists are configured. */
   interactiveEvent?: boolean;
+  eventScope?: SlackEventScope;
 }): Promise<SlackSystemEventAuthorization> {
   const senderId = params.senderId?.trim();
   if (!senderId) {
@@ -510,7 +511,11 @@ export async function authorizeSlackSystemEventSender(params: {
   }
 
   const channelId = params.channelId?.trim();
-  let channelType = normalizeSlackChannelType(params.channelType, channelId);
+  let channelType = normalizeSlackChannelType(
+    params.channelType ??
+      (channelId ? params.ctx.recallSlackChannelType(channelId, params.eventScope) : undefined),
+    channelId,
+  );
   let channelName: string | undefined;
   if (channelId) {
     const info: {
@@ -518,7 +523,10 @@ export async function authorizeSlackSystemEventSender(params: {
       type?: "im" | "mpim" | "channel" | "group";
     } = await params.ctx.resolveChannelName(channelId).catch(() => ({}));
     channelName = info.name;
-    const resolvedTypeSource = params.channelType ?? info.type;
+    const resolvedTypeSource =
+      params.channelType ??
+      info.type ??
+      params.ctx.recallSlackChannelType(channelId, params.eventScope);
     channelType = normalizeSlackChannelType(resolvedTypeSource, channelId);
     if (
       !params.ctx.isChannelAllowed({
@@ -599,6 +607,12 @@ export async function authorizeSlackSystemEventSender(params: {
     interactiveEvent: params.interactiveEvent === true,
   });
   if (decision.decision === "allow") {
+    // Remember the resolved channel type so later system events (e.g.
+    // message_changed, message_deleted) in the same mpDM room key the
+    // same session family as ordinary messages (#102676).
+    if (channelType && channelId) {
+      params.ctx.rememberSlackChannelType(channelId, channelType, params.eventScope);
+    }
     return {
       allowed: true,
       channelType,

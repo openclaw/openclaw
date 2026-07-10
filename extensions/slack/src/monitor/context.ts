@@ -252,20 +252,18 @@ export function createSlackMonitorContext(params: {
   const channelHistories = new Map<string, HistoryEntry[]>();
   const logger = getChildLogger({ module: "slack-auto-reply" });
 
-  const channelCache = new Map<
-    string,
-    {
-      name?: string;
-      type?: SlackMessageEvent["channel_type"];
-      topic?: string;
-      purpose?: string;
-    }
-  >();
-  /** Remembers authoritative channel types from explicit event data so
-   *  later messages in the same channel that lack channel_type (e.g.
-   *  bot-authored mpDM messages) can reuse the correct classification
-   *  instead of falling back to C-prefix → "channel" inference. */
-  const channelTypeMemory = new Map<string, SlackMessageEvent["channel_type"]>();
+  const channelCache = new Map<string, ChannelCacheEntry>();
+  /** observedType tracks authoritative channel types from explicit event
+   *  channel_type data, stored in the same cache entry so classification
+   *  does not drift between API-fetched metadata and event-observed types.
+   *  See #102676. */
+  interface ChannelCacheEntry {
+    name?: string;
+    type?: SlackMessageEvent["channel_type"];
+    topic?: string;
+    purpose?: string;
+    observedType?: SlackMessageEvent["channel_type"];
+  }
   const userCache = new Map<string, { name?: string }>();
   const seenMessages = createDedupeCache({ ttlMs: 60_000, maxSize: 500 });
   const assistantThreadContexts = new Map<string, SlackAssistantThreadContext>();
@@ -288,14 +286,17 @@ export function createSlackMonitorContext(params: {
     type: SlackMessageEvent["channel_type"],
     eventScope?: SlackEventScope,
   ) => {
-    channelTypeMemory.set(scopedKey(channelId, eventScope), type);
+    const key = scopedKey(channelId, eventScope);
+    const existing = channelCache.get(key) ?? {};
+    existing.observedType = type;
+    channelCache.set(key, existing);
   };
 
   const recallSlackChannelType = (
     channelId: string,
     eventScope?: SlackEventScope,
   ): SlackMessageEvent["channel_type"] | undefined => {
-    return channelTypeMemory.get(scopedKey(channelId, eventScope));
+    return channelCache.get(scopedKey(channelId, eventScope))?.observedType;
   };
 
   const markMessageSeen = (

@@ -125,4 +125,36 @@ describe("createSlackMonitorContext resolveSlackSystemEventSessionKey", () => {
       }),
     ).toBe("agent:main:slack:direct:u_shortcut");
   });
+
+  it("uses recallSlackChannelType for system events missing channel_type (#102676)", () => {
+    const ctx = createTestContext({ groupDmEnabled: true });
+
+    // First, remember the mpDM type via the normal recall/remember path
+    ctx.rememberSlackChannelType("C0MPDM42", "mpim");
+
+    // Then resolve a system event (message_changed/message_deleted) that
+    // omits channel_type — recall must supply the remembered "mpim" so
+    // the session key is slack:group: instead of slack:channel:.
+    const key = ctx.resolveSlackSystemEventSessionKey({
+      channelId: "C0MPDM42",
+      channelType: undefined,
+      senderId: "U_BOT",
+    });
+
+    expect(key).toMatch(/^agent:main:slack:group:/);
+  });
+
+  it("falls back to C-prefix inference when recall has not been primed (#102676)", () => {
+    const ctx = createTestContext();
+
+    // No rememberSlackChannelType call — recall returns undefined,
+    // so the session key falls through to C-prefix inference → "channel".
+    const key = ctx.resolveSlackSystemEventSessionKey({
+      channelId: "C0MPDM42",
+      channelType: undefined,
+      senderId: "U_BOT",
+    });
+
+    expect(key).toMatch(/^agent:main:slack:channel:/);
+  });
 });

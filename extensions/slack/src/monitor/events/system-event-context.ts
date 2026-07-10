@@ -3,6 +3,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
+import type { SlackEventScope } from "../event-scope.js";
 
 type SlackAuthorizedSystemEventContext = {
   channelLabel: string;
@@ -15,13 +16,15 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
   channelId?: string;
   channelType?: string | null;
   eventKind: string;
+  eventScope?: SlackEventScope;
 }): Promise<SlackAuthorizedSystemEventContext | undefined> {
-  const { ctx, senderId, channelId, channelType, eventKind } = params;
+  const { ctx, senderId, channelId, channelType, eventKind, eventScope } = params;
   const auth = await authorizeSlackSystemEventSender({
     ctx,
     senderId,
     channelId,
     channelType,
+    eventScope,
   });
   if (!auth.allowed) {
     logVerbose(
