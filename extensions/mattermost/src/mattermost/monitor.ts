@@ -1266,9 +1266,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
           agentId: route.agentId,
         });
-        const currentAgentSessionId =
-          normalizeOptionalString(getSessionEntry({ storePath, sessionKey })?.sessionId) ??
-          sessionKey;
+        const currentAgentSessionId = normalizeOptionalString(
+          getSessionEntry({ storePath, sessionKey })?.sessionId,
+        );
 
         const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
         const wasMentioned =
@@ -1392,12 +1392,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         // after a successful turn does not make same-session follow-ups fetch.
         //
         // Best-effort — never blocks inbound dispatch.
-        const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
-          agentId: route.agentId,
-        });
-        const currentAgentSessionId = normalizeOptionalString(
-          getSessionEntry({ storePath, sessionKey })?.sessionId,
-        );
         const backfillSessionMarker = currentAgentSessionId
           ? `session:${currentAgentSessionId}`
           : `pending:${sessionKey}`;
