@@ -221,6 +221,24 @@ describe("live model turn probes", () => {
     expect(retries).toEqual([]);
   });
 
+  it("does not retry provider errors", async () => {
+    const attempts: Array<1 | 2> = [];
+    const retries: string[] = [];
+    const run = async (attempt: 1 | 2): Promise<string> => {
+      attempts.push(attempt);
+      throw new Error("boom");
+    };
+
+    await expect(
+      runLiveModelImageProbeWithRetry({
+        run,
+        onRetry: (firstText) => retries.push(firstText),
+      }),
+    ).rejects.toThrow("boom");
+    expect(attempts).toEqual([1]);
+    expect(retries).toEqual([]);
+  });
+
   it("fails when the image retry also does not match", async () => {
     const { attempts, run } = createImageProbeRunner(["blue", '" or "Reply with exactly']);
 
@@ -238,10 +256,12 @@ describe("live model turn probes", () => {
     );
   });
 
-  it("retains the empty-response skip only after two empty attempts", async () => {
+  it("fails after two empty image replies", async () => {
     const { attempts, run } = createImageProbeRunner(["", ""]);
 
-    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: () => {} })).resolves.toBe("");
+    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: () => {} })).rejects.toThrow(
+      "attempt 1: <empty>; attempt 2: <empty>",
+    );
     expect(attempts).toEqual([1, 2]);
   });
 
@@ -251,5 +271,15 @@ describe("live model turn probes", () => {
     await expect(runLiveModelImageProbeWithRetry({ run, onRetry: () => {} })).rejects.toThrow(
       "attempt 1: <empty>",
     );
+  });
+
+  it("redacts nonmatching image replies from failure diagnostics", async () => {
+    const { run } = createImageProbeRunner(["first private reply", "second private reply"]);
+
+    const error = await runLiveModelImageProbeWithRetry({ run, onRetry: () => {} }).catch(
+      (cause: unknown) => String(cause),
+    );
+    expect(error).toContain("<non-matching response:");
+    expect(error).not.toContain("private reply");
   });
 });

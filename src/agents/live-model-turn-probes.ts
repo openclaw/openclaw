@@ -164,8 +164,7 @@ function formatImageProbeText(text: string): string {
   if (!normalized) {
     return "<empty>";
   }
-  const clipped = normalized.length > 160 ? `${normalized.slice(0, 157)}...` : normalized;
-  return JSON.stringify(clipped);
+  return `<non-matching response: ${normalized.length} chars>`;
 }
 
 /** Retries one ambiguous image reply without weakening the strict OK matcher. */
@@ -184,10 +183,6 @@ export async function runLiveModelImageProbeWithRetry(params: {
     return retryText;
   }
 
-  // Preserve the existing empty-response skip only when neither attempt produced a signal.
-  if (firstText.length === 0 && retryText.length === 0) {
-    return retryText;
-  }
   throw new Error(
     "image probe did not return ok after retry " +
       `(attempt 1: ${formatImageProbeText(firstText)}; ` +

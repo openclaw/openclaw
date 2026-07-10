@@ -1688,7 +1688,7 @@ async function runExtraTurnProbes(params: {
     return;
   }
 
-  const imageText = await runLiveModelImageProbeWithRetry({
+  await runLiveModelImageProbeWithRetry({
     run: async (attempt) => {
       const attemptLabel = `${params.progressLabel}: image probe attempt ${attempt}/2`;
       logProgress(attemptLabel);
@@ -1699,8 +1699,12 @@ async function runExtraTurnProbes(params: {
         params.timeoutMs,
         attemptLabel,
       );
-      if (image.stopReason === "error") {
-        throw new Error(image.errorMessage || `${attemptLabel} returned error with no message`);
+      if (image.stopReason === "error" || image.stopReason === "aborted") {
+        const fallback =
+          image.stopReason === "aborted"
+            ? `${attemptLabel} was aborted`
+            : `${attemptLabel} returned error with no message`;
+        throw new Error(image.errorMessage || fallback);
       }
       return extractAssistantText(image);
     },
@@ -1709,9 +1713,6 @@ async function runExtraTurnProbes(params: {
       logProgress(`${params.progressLabel}: image probe attempt 1/2 ${reason}; retrying once`);
     },
   });
-  if (imageText.length === 0) {
-    logProgress(`${params.progressLabel}: image probe skipped (two empty responses)`);
-  }
 }
 
 describeLive("live models (profile keys)", () => {
