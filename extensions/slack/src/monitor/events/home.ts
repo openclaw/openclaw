@@ -6,7 +6,7 @@ import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackAppHomeOpenedEvent } from "../types.js";
 
-export function buildSlackHomeView(): HomeView {
+export function buildSlackHomeView(slashCommandName = "openclaw"): HomeView {
   return {
     type: "home",
     callback_id: "openclaw:home",
@@ -22,7 +22,7 @@ export function buildSlackHomeView(): HomeView {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: "Send a DM, mention OpenClaw in a channel, or use `/openclaw` to start a session.",
+          text: `Send a DM, mention OpenClaw in a channel, or use \`/${slashCommandName}\` to start a session.`,
         },
       },
       {
@@ -61,7 +61,7 @@ export function registerSlackHomeEvents(params: {
         await ctx.app.client.views.publish({
           token: ctx.botToken,
           user_id: payload.user,
-          view: buildSlackHomeView(),
+          view: buildSlackHomeView(ctx.slashCommand.name),
         });
       } catch (err) {
         ctx.runtime.error?.(danger(`slack app home handler failed: ${formatErrorMessage(err)}`));

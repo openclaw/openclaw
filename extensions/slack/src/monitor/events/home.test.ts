@@ -8,6 +8,7 @@ let createSlackSystemEventTestHarness: typeof import("./system-event-test-harnes
 type HomeHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 
 function createHomeContext(params?: {
+  slashCommandName?: string;
   trackEvent?: () => void;
   shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
 }) {
@@ -16,6 +17,12 @@ function createHomeContext(params?: {
   if (params?.shouldDropMismatchedSlackEvent) {
     harness.ctx.shouldDropMismatchedSlackEvent = params.shouldDropMismatchedSlackEvent;
   }
+  harness.ctx.slashCommand = {
+    enabled: true,
+    name: params?.slashCommandName ?? "openclaw",
+    sessionPrefix: "slack:slash",
+    ephemeral: true,
+  };
   harness.ctx.botToken = "xoxb-test";
   (harness.ctx.app as unknown as { client: { views: { publish: typeof publish } } }).client = {
     views: { publish },
@@ -62,6 +69,32 @@ describe("registerSlackHomeEvents", () => {
       token: "xoxb-test",
       user_id: "U123",
       view: buildSlackHomeView(),
+    });
+  });
+
+  it("publishes the configured slash command name", async () => {
+    const { publish, getHomeHandler } = createHomeContext({ slashCommandName: "acme" });
+
+    await getHomeHandler()!({
+      event: {
+        type: "app_home_opened",
+        user: "U123",
+        channel: "D123",
+        tab: "home",
+      },
+      body: {},
+    });
+
+    expect(publish).toHaveBeenCalledWith({
+      token: "xoxb-test",
+      user_id: "U123",
+      view: buildSlackHomeView("acme"),
+    });
+    expect(buildSlackHomeView("acme").blocks[1]).toMatchObject({
+      type: "section",
+      text: {
+        text: "Send a DM, mention OpenClaw in a channel, or use `/acme` to start a session.",
+      },
     });
   });
 
