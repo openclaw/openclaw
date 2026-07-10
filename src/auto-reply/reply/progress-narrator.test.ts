@@ -154,6 +154,11 @@ describe("createProgressNarrator", () => {
       phase: "start",
       args: { command: "cat /etc/hosts" },
     });
+    narrator.noteToolStart({
+      name: "shell",
+      phase: "start",
+      args: { command: "cat /etc/hosts" },
+    });
     await flushNarrations();
     narrator.noteCommandOutput({
       name: "exec",

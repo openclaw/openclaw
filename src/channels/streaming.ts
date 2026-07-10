@@ -384,7 +384,8 @@ function itemKindToToolName(kind: string | undefined): string | undefined {
   }
 }
 
-function isCommandToolName(name: string | undefined): boolean {
+/** Tools whose detail is raw command text; commandText policy applies to these. */
+export function isCommandToolName(name: string | undefined): boolean {
   const normalized = normalizeOptionalLowercaseString(name);
   return normalized === "exec" || normalized === "shell" || normalized === "bash";
 }

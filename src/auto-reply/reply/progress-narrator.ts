@@ -7,7 +7,7 @@ import {
   prepareSimpleCompletionModelForAgent,
 } from "../../agents/simple-completion-runtime.js";
 import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display.js";
-import { isChannelProgressDraftWorkToolName } from "../../channels/streaming.js";
+import { isChannelProgressDraftWorkToolName, isCommandToolName } from "../../channels/streaming.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import type { TextContent } from "../../llm/types.js";
@@ -188,10 +188,6 @@ async function prepareNarrationModel(params: { cfg: OpenClawConfig; agentId: str
   }
 }
 
-// Command text carries the most user-sensitive detail; these tools follow the
-// channel's commandText display policy (see streaming.progress.commandText).
-const COMMAND_TEXT_TOOL_NAMES = new Set(["exec", "bash"]);
-
 export function createProgressNarrator(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -319,8 +315,8 @@ export function createProgressNarrator(params: {
         return;
       }
       const display = resolveToolDisplay({ name: payload.name, args: payload.args });
-      const hideDetail =
-        params.hideCommandText === true && COMMAND_TEXT_TOOL_NAMES.has(display.name);
+      // Same command-tool set the draft formatter uses for commandText policy.
+      const hideDetail = params.hideCommandText === true && isCommandToolName(display.name);
       addNote(formatToolSummary(hideDetail ? { ...display, detail: undefined } : display));
     },
     noteCommandOutput(payload) {
