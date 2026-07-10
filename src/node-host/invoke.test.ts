@@ -462,7 +462,7 @@ describe("node host invoke", () => {
       await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
         saveExecApprovals({
           version: 1,
-          defaults: { security: "full", ask: "off", askFallback: "deny" },
+          defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
         });
         const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
         await handleInvoke(
@@ -472,6 +472,8 @@ describe("node host invoke", () => {
             command: "system.run",
             paramsJSON: JSON.stringify({
               command: [process.execPath, "-e", ""],
+              approved: true,
+              approvalDecision: "allow-once",
               suppressNotifyOnExit: true,
             }),
           },
@@ -479,15 +481,13 @@ describe("node host invoke", () => {
           { current: async () => [] },
         );
 
-        await vi.waitFor(() => {
-          const event = request.mock.calls.find(
-            ([method, params]) =>
-              method === "node.event" &&
-              (params as { event?: string } | undefined)?.event === "exec.finished",
-          )?.[1] as { payloadJSON?: string | null } | undefined;
-          expect(JSON.parse(event?.payloadJSON ?? "{}")).toMatchObject({
-            suppressNotifyOnExit: true,
-          });
+        const event = request.mock.calls.find(
+          ([method, params]) =>
+            method === "node.event" &&
+            (params as { event?: string } | undefined)?.event === "exec.finished",
+        )?.[1] as { payloadJSON?: string | null } | undefined;
+        expect(JSON.parse(event?.payloadJSON ?? "{}")).toMatchObject({
+          suppressNotifyOnExit: true,
         });
       });
     } finally {
