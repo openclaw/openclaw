@@ -1,5 +1,18 @@
 # OpenClaw iOS Changelog
 
+## 2026.7.1 - 2026-07-08
+
+- Added multi-gateway pairing and switching with gateway-scoped credentials, TLS trust, cached chats, push registration, and custom proxy headers.
+- Added voice-note recording, a slash-command picker, durable offline sending, and read-only offline session and transcript access.
+- Added session search, archived browsing, groups, unread state, rename/delete actions, and new-session creation in managed worktrees.
+- Improved chat rendering with syntax-highlighted code, native tables, inline and display math, expandable link previews, streaming prose animation, and Markdown export.
+- Added model favorites and recents, working model switching, and reasoning controls that adapt to model capabilities.
+- Added Listen and Stop controls for assistant messages, using configured Gateway speech with an on-device fallback.
+- Added a read-only Files browser for agent workspaces and an authenticated Gateway terminal destination.
+- Added Apple Watch voice turns and made pairing, activation, and queued replies more reliable.
+- Refreshed the native iOS design with branded typography, denser controls, an animated mascot, and a redesigned About screen.
+- Fixed permission prompts, onboarding and QR handoff, reconnect recovery, screen-recording finalization, Voice Wake startup, and contact creation.
+
 ## 2026.6.11 - 2026-07-01
 
 Maintenance update for the current OpenClaw release.

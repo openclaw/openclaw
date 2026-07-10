@@ -1499,6 +1499,10 @@ export const NATIVE_TOOLS_FULL_SET = [
   "AskUserQuestion",
   "ScheduleWakeup",
   "Workflow",
+  "Artifact",
+  "Projects",
+  "ReportFindings",
+  "ShowOnboardingRolePicker",
   // Automation / scheduling
   "CronCreate",
   "CronDelete",
@@ -1509,6 +1513,7 @@ export const NATIVE_TOOLS_FULL_SET = [
   // MCP introspection
   "ListMcpResources",
   "ReadMcpResource",
+  "ReadMcpResourceDir",
 ];
 
 function computeNativeDisallowedTools(params: EmbeddedRunAttemptParams): string[] {

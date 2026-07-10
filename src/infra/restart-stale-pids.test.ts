@@ -312,6 +312,28 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(psCall?.[2]).toEqual({ timeout: 2000, encoding: "utf8" });
     });
 
+    it("skips malformed lsof pid tokens with trailing garbage", () => {
+      const stalePid = process.pid + 102;
+      mockSpawnSync.mockImplementation((command: unknown) => {
+        if (command === "ps") {
+          return {
+            error: null,
+            status: 0,
+            stdout: "node /opt/openclaw/dist/entry.js gateway\n",
+            stderr: "",
+          };
+        }
+        return {
+          error: null,
+          status: 0,
+          stdout: ["p111abc", "cnode", `p${stalePid}`, "cnode", ""].join("\n"),
+          stderr: "",
+        };
+      });
+
+      expect(findGatewayPidsOnPortSync(18789)).toEqual([stalePid]);
+    });
+
     it("excludes ancestor pids so a sidecar cannot kill its parent gateway — regression for #68451", () => {
       // Regression: openclaw-weixin sidecar (child of the gateway) invoked
       // cleanStaleGatewayProcessesSync during init. lsof reported the parent
@@ -690,14 +712,27 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(events).toContain("free-poll");
     });
 
+    it("keeps polling when status 0 contains a malformed pid record", () => {
+      const stalePid = process.pid + 502;
+      const getCallCount = installInitialBusyPoll(stalePid, (call) =>
+        call === 2
+          ? createLsofResult({ stdout: "p111abc\ncopenclaw-gateway\n" })
+          : createLsofResult({ status: 1 }),
+      );
+
+      vi.spyOn(process, "kill").mockReturnValue(true);
+      expect(cleanStaleGatewayProcessesSync()).toContain(stalePid);
+      expect(getCallCount()).toBe(3);
+    });
+
     it("does not make a second lsof call when the first returns status 0", () => {
       // The bug: pollPortOnce previously called findGatewayPidsOnPortSync as a
       // second probe after getting status===0 from the first lsof. That second
       // call collapses any error/timeout back into [], which maps to free:true —
       // silently misclassifying an inconclusive result as "port is free".
       //
-      // The fix: pollPortOnce now parses res.stdout directly from the first
-      // spawnSync call. Exactly ONE lsof invocation per poll cycle.
+      // The fix: pollPortOnce treats status 0 from the first spawnSync call as
+      // occupied without a second lsof or PID parse.
       const stalePid = process.pid + 400;
       const getCallCount = installInitialBusyPoll(stalePid, (call) => {
         if (call === 2) {
@@ -705,7 +740,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
           return createOpenClawBusyResult(stalePid);
         }
         // Port free on third call
-        return createLsofResult();
+        return createLsofResult({ status: 1 });
       });
 
       vi.spyOn(process, "kill").mockReturnValue(true);
@@ -789,7 +824,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
 
     it("sends SIGTERM to stale pids and returns them", () => {
       const stalePid = process.pid + 100;
-      installInitialBusyPoll(stalePid, () => createLsofResult());
+      installInitialBusyPoll(stalePid, () => createLsofResult({ status: 1 }));
 
       const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
       const result = cleanStaleGatewayProcessesSync();
@@ -837,7 +872,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
             stderr: "",
           };
         }
-        return { error: null, status: 0, stdout: "", stderr: "" };
+        return createLsofResult({ status: 1 });
       });
 
       const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
@@ -877,7 +912,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
           };
         }
         events.push("port-free");
-        return { error: null, status: 0, stdout: "", stderr: "" };
+        return createLsofResult({ status: 1 });
       });
 
       vi.spyOn(process, "kill").mockReturnValue(true);
@@ -1269,9 +1304,9 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(result).toContain(stalePid);
     });
 
-    it("ignores a p-line with an invalid (non-positive) PID — ternary false branch", () => {
-      // Exercises the `Number.isFinite(parsed) && parsed > 0 ? parsed : undefined`
-      // false branch: a malformed 'p' line (e.g. 'p0' or 'pNaN') must not corrupt
+    it("ignores a p-line with an invalid (non-positive) PID — parse false branch", () => {
+      // Exercises the parseStrictPositiveInteger failure branch: a malformed
+      // 'p' line (e.g. 'p0' or 'pNaN') must not corrupt
       // currentPid and must not end up in the returned pids array.
       const stalePid = process.pid + 703;
       // p0 is invalid (not > 0); the following valid openclaw entry must still be found.
@@ -1298,30 +1333,26 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
   });
 
   // -------------------------------------------------------------------------
-  // pollPortOnce branch — status 1 + non-empty stdout with zero openclaw pids
+  // pollPortOnce branch — status 1 + non-empty stdout
   // -------------------------------------------------------------------------
-  describe("pollPortOnce — status 1 + non-empty non-openclaw stdout (line 145)", () => {
-    it("treats status 1 + non-openclaw stdout as port-free (not an openclaw process)", () => {
-      // status 1 + non-empty stdout where no openclaw pids are present:
-      // the port may be held by an unrelated process. From our perspective
-      // (we only kill openclaw pids) it is effectively free.
+  describe("pollPortOnce — status 1 + non-empty stdout", () => {
+    it("keeps polling when status 1 includes a non-openclaw listener record", () => {
       const stalePid = process.pid + 800;
-      const getCallCount = installInitialBusyPoll(stalePid, () => {
-        // status 1 + non-openclaw output — should be treated as free:true for our purposes
-        return createLsofResult({
-          status: 1,
-          stdout: lsofOutput([{ pid: process.pid + 801, cmd: "caddy" }]),
-        });
+      const getCallCount = installInitialBusyPoll(stalePid, (call) => {
+        if (call === 2) {
+          return createLsofResult({
+            status: 1,
+            stdout: lsofOutput([{ pid: process.pid + 801, cmd: "caddy" }]),
+          });
+        }
+        return createLsofResult({ status: 1 });
       });
       vi.spyOn(process, "kill").mockReturnValue(true);
-      // No openclaw pids in status-1 output means the port is free for this cleanup.
       expect(cleanStaleGatewayProcessesSync()).toContain(stalePid);
-      // Completed with one initial lsof and one status-1 poll lsof. The
-      // separate `ps` argv verification is intentionally not counted here.
-      expect(getCallCount()).toBe(2);
+      expect(getCallCount()).toBe(3);
     });
 
-    it("uses the short poll timeout for macOS ancestor ps probes", () => {
+    it("does not run macOS process argv probes while polling occupancy", () => {
       const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
       const stalePid = process.pid + 810;
       const gatewayParentPid = process.pid + 811;
@@ -1337,9 +1368,11 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
             if (lsofCall === 1) {
               return createOpenClawBusyResult(stalePid);
             }
-            return createLsofResult({
-              stdout: lsofOutput([{ pid: gatewayParentPid, cmd: "openclaw-gateway" }]),
-            });
+            return lsofCall === 2
+              ? createLsofResult({
+                  stdout: lsofOutput([{ pid: gatewayParentPid, cmd: "openclaw-gateway" }]),
+                })
+              : createLsofResult({ status: 1 });
           }
           return createLsofResult();
         });
@@ -1354,7 +1387,8 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
           )
           .map((call) => (call[2] as { timeout?: number } | undefined)?.timeout);
         expect(ancestorPsTimeouts).toContain(2000);
-        expect(ancestorPsTimeouts).toContain(400);
+        expect(ancestorPsTimeouts).not.toContain(400);
+        expect(lsofCall).toBe(3);
       } finally {
         if (origDescriptor) {
           Object.defineProperty(process, "platform", origDescriptor);

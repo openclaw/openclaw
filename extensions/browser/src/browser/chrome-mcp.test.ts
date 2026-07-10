@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -27,9 +28,21 @@ type ToolCall = {
 };
 type ToolCallMock = {
   mock: {
-    calls: Array<[ToolCall]>;
+    calls: Array<[ToolCall, unknown?, { signal?: AbortSignal; timeout?: number }?]>;
   };
 };
+
+function createSdkTimeoutCallTool() {
+  return vi.fn(
+    async (_call: ToolCall, _resultSchema?: unknown, options?: { timeout?: number }) =>
+      await new Promise<never>((_resolve, reject) => {
+        setTimeout(
+          () => reject(new McpError(ErrorCode.RequestTimeout, "Request timed out")),
+          options?.timeout,
+        );
+      }),
+  );
+}
 
 type ChromeMcpSessionFactory = Exclude<
   Parameters<typeof setChromeMcpSessionFactoryForTest>[0],
@@ -1195,20 +1208,29 @@ describe("chrome MCP page parsing", () => {
 
   it("times out a stuck click and recovers on the next call", async () => {
     let factoryCalls = 0;
+    let forwardedTimeout: number | undefined;
     const factory: ChromeMcpSessionFactory = async () => {
       factoryCalls += 1;
       const session = createFakeSession();
-      const callTool = vi.fn(async ({ name }: ToolCall) => {
-        if (name === "click") {
-          return await new Promise(() => {});
-        }
-        if (name === "list_pages") {
-          return {
-            content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
-          };
-        }
-        throw new Error(`unexpected tool ${name}`);
-      });
+      const callTool = vi.fn(
+        async ({ name }: ToolCall, _resultSchema?: unknown, options?: { timeout?: number }) => {
+          if (name === "click") {
+            forwardedTimeout = options?.timeout;
+            return await new Promise((_, reject) => {
+              setTimeout(
+                () => reject(new McpError(ErrorCode.RequestTimeout, "Request timed out")),
+                options?.timeout,
+              );
+            });
+          }
+          if (name === "list_pages") {
+            return {
+              content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
+            };
+          }
+          throw new Error(`unexpected tool ${name}`);
+        },
+      );
       session.client.callTool = callTool as typeof session.client.callTool;
       return session;
     };
@@ -1223,9 +1245,59 @@ describe("chrome MCP page parsing", () => {
       }),
     ).rejects.toThrow(/timed out/i);
 
+    expect(forwardedTimeout).toBe(25);
     const tabs = await listChromeMcpTabs("chrome-live");
     expect(factoryCalls).toBe(2);
     expect(tabs).toHaveLength(1);
+  });
+
+  it("cancels a stuck evaluate through the SDK signal and reconnects", async () => {
+    let factoryCalls = 0;
+    let forwardedSignal: AbortSignal | undefined;
+    let notifyToolStarted: (() => void) | undefined;
+    const toolStarted = new Promise<void>((resolve) => {
+      notifyToolStarted = resolve;
+    });
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      const session = createFakeSession();
+      if (factoryCalls === 1) {
+        session.client.callTool = vi.fn(
+          async (_call: ToolCall, _resultSchema?: unknown, options?: { signal?: AbortSignal }) =>
+            await new Promise((_resolve, reject) => {
+              const signal = options?.signal;
+              forwardedSignal = signal;
+              notifyToolStarted?.();
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
+                },
+                {
+                  once: true,
+                },
+              );
+            }),
+        ) as typeof session.client.callTool;
+      }
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+    const ctrl = new AbortController();
+    const evaluatePromise = evaluateChromeMcpScript({
+      profileName: "chrome-live",
+      targetId: "1",
+      fn: "() => window.location.href",
+      signal: ctrl.signal,
+    });
+
+    await toolStarted;
+    expect(forwardedSignal).toBe(ctrl.signal);
+    ctrl.abort(new Error("target browser crashed"));
+
+    await expect(evaluatePromise).rejects.toThrow(/target browser crashed/i);
+    await expect(listChromeMcpTabs("chrome-live")).resolves.toHaveLength(2);
+    expect(factoryCalls).toBe(2);
   });
 
   it("does not dispatch a click when the signal is already aborted", async () => {
@@ -1403,11 +1475,7 @@ describe("chrome MCP page parsing", () => {
       factoryCalls += 1;
       const session = createFakeSession();
       if (factoryCalls === 1) {
-        // First session: all tool calls hang — simulates a Chrome MCP subprocess that is
-        // completely blocked (e.g., stuck waiting for a slow navigation to complete).
-        session.client.callTool = vi.fn(
-          async () => new Promise<never>(() => {}),
-        ) as typeof session.client.callTool;
+        session.client.callTool = createSdkTimeoutCallTool() as typeof session.client.callTool;
       }
       return session;
     };
@@ -1437,12 +1505,10 @@ describe("chrome MCP page parsing", () => {
     expect(tabs).toHaveLength(2);
   });
 
-  it("forwards an explicit timeoutMs to take_snapshot via the callTool race", async () => {
+  it("forwards an explicit timeoutMs to take_snapshot through the SDK", async () => {
     vi.useFakeTimers();
     const session = createFakeSession();
-    session.client.callTool = vi.fn(
-      async () => new Promise<never>(() => {}),
-    ) as typeof session.client.callTool;
+    session.client.callTool = createSdkTimeoutCallTool() as typeof session.client.callTool;
     setChromeMcpSessionFactoryForTest(async () => session);
 
     const snapshotPromise = takeChromeMcpSnapshot({

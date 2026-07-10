@@ -10,7 +10,9 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
+  type AgentWaitResult,
   type AssistantReplySnapshot,
+  isRecoverableAgentWaitError,
   readLatestAssistantReplySnapshot,
   waitForAgentRun,
 } from "../run-wait.js";
@@ -39,6 +41,13 @@ const defaultSessionsSendA2ADeps = {
 let sessionsSendA2ADeps: {
   callGateway: GatewayCaller;
 } = defaultSessionsSendA2ADeps;
+
+function isDeliveryFailureWait(wait: AgentWaitResult): boolean {
+  return (
+    (wait.status === "error" && !isRecoverableAgentWaitError(wait.error)) ||
+    (wait.status === "timeout" && wait.pendingError === true)
+  );
+}
 
 async function deliverAnnounceReply(params: {
   announceTarget: AnnounceTarget;
@@ -83,6 +92,7 @@ export async function runSessionsSendA2AFlow(params: {
   baseline?: AssistantReplySnapshot;
   roundOneReply?: string;
   waitRunId?: string;
+  notifyRequesterOnWaitFailure?: boolean;
 }) {
   const runContextId = params.waitRunId ?? "unknown";
   try {
@@ -106,6 +116,28 @@ export async function runSessionsSendA2AFlow(params: {
             ? latestSnapshot.text
             : undefined;
         latestReply = primaryReply;
+      } else {
+        if (
+          params.notifyRequesterOnWaitFailure === true &&
+          params.requesterSessionKey &&
+          isDeliveryFailureWait(wait)
+        ) {
+          const error =
+            typeof wait.error === "string" && wait.error.trim() ? `: ${wait.error.trim()}` : "";
+          await runAgentStep({
+            sessionKey: params.requesterSessionKey,
+            message:
+              `sessions_send delivery to ${params.displayKey} failed${error}. ` +
+              "The target may not have received the message; retry or report the failure instead of assuming delivery succeeded.",
+            extraSystemPrompt:
+              "A previous sessions_send delivery failed after it was accepted. Decide whether to retry, use another route, or report the failure. Do not assume the target received the message.",
+            timeoutMs: params.announceTimeoutMs,
+            lane: resolveNestedAgentLaneForSession(params.requesterSessionKey),
+            sourceSessionKey: params.targetSessionKey,
+            sourceTool: "sessions_send",
+          });
+        }
+        return;
       }
     }
     if (!latestReply) {

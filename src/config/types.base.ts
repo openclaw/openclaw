@@ -340,6 +340,15 @@ export type DiagnosticsCacheTraceConfig = {
   includeSystem?: boolean;
 };
 
+export type AuditConfig = {
+  /**
+   * Record metadata-only audit events (agent runs and tool actions) into the
+   * shared state database. Content is never stored. Default: true. Disabling
+   * stops new writes; existing records stay readable until they expire.
+   */
+  enabled?: boolean;
+};
+
 export type DiagnosticsConfig = {
   enabled?: boolean;
   /** Optional ad-hoc diagnostics flags (e.g. "telegram.http"). */

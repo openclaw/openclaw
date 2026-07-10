@@ -7,6 +7,7 @@ import {
   formatValidationErrors,
   validateToolsEffectiveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { buildEffectiveToolInventoryGroups } from "../../agents/tools-effective-inventory-groups.js";
 import type {
   EffectiveToolInventoryNotice,
@@ -377,16 +378,19 @@ function filterMcpTools(params: {
   return applyFinalEffectiveToolPolicy({
     bundledTools: params.mcpTools,
     config: params.context.cfg,
-    sessionKey: params.context.sessionKey,
-    agentId: params.context.agentId,
-    modelProvider: params.context.modelProvider,
-    modelId: params.context.modelId,
-    messageProvider: params.context.messageProvider,
-    agentAccountId: params.context.accountId,
-    groupId: params.context.groupId,
-    groupChannel: params.context.groupChannel,
-    groupSpace: params.context.groupSpace,
-    spawnedBy: params.context.spawnedBy,
+    conversationCapabilityProfile: resolveConversationCapabilityProfile({
+      config: params.context.cfg,
+      sessionKey: params.context.sessionKey,
+      agentId: params.context.agentId,
+      modelProvider: params.context.modelProvider,
+      modelId: params.context.modelId,
+      messageProvider: params.context.messageProvider,
+      agentAccountId: params.context.accountId,
+      groupId: params.context.groupId,
+      groupChannel: params.context.groupChannel,
+      groupSpace: params.context.groupSpace,
+      spawnedBy: params.context.spawnedBy,
+    }),
     warn: logWarn,
   });
 }

@@ -100,65 +100,13 @@ function createSlackMediaFetch(): FetchLike {
   };
 }
 
-function resolveSlackFetchForRuntime(): typeof fetch {
-  return isMockedFetch(globalThis.fetch) ? globalThis.fetch : fetchWithRuntimeDispatcher;
-}
-
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
-}
-
-/**
- * Fetches a URL with Authorization header while keeping same-origin redirects
- * authenticated and dropping auth once the redirect crosses origins.
- */
-export async function fetchWithSlackAuth(url: string, token: string): Promise<Response> {
-  const parsed = assertSlackFileUrl(url);
-  const authHeaders = createSlackAuthHeaders(token);
-  const fetchImpl = resolveSlackFetchForRuntime();
-
-  const initialRes = await fetchImpl(parsed.href, {
-    headers: authHeaders,
-    redirect: "manual",
-  });
-
-  if (initialRes.status < 300 || initialRes.status >= 400) {
-    return initialRes;
-  }
-
-  const redirectUrl = initialRes.headers.get("location");
-  if (!redirectUrl) {
-    return initialRes;
-  }
-
-  let resolvedUrl: URL;
-  try {
-    resolvedUrl = new URL(redirectUrl, parsed.href);
-  } catch {
-    return initialRes;
-  }
-  if (resolvedUrl.protocol !== "https:") {
-    return initialRes;
-  }
-  await cancelUnreadResponseBody(initialRes);
-  if (resolvedUrl.origin === parsed.origin) {
-    return fetchImpl(resolvedUrl.toString(), {
-      headers: authHeaders,
-      redirect: "follow",
-    });
-  }
-  return fetchImpl(resolvedUrl.toString(), { redirect: "follow" });
-}
-
 const SLACK_MEDIA_SSRF_POLICY = {
   allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
   hostnameAllowlist: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
   allowRfc2544BenchmarkRange: true,
 };
 export const SLACK_MEDIA_READ_IDLE_TIMEOUT_MS = 60_000;
-export const SLACK_MEDIA_TOTAL_TIMEOUT_MS = 120_000;
+const SLACK_MEDIA_TOTAL_TIMEOUT_MS = 120_000;
 type SlackSaveRemoteMediaOptions = Parameters<typeof saveRemoteMedia>[0];
 
 function mergeAbortSignals(signals: Array<AbortSignal | undefined>): AbortSignal | undefined {

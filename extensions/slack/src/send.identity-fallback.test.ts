@@ -42,6 +42,12 @@ function buildMissingScopeError(overrides?: {
   return err;
 }
 
+function buildInvalidIdentityError(): SlackMissingScopeError {
+  const err = new Error("An API error occurred: invalid_arguments") as SlackMissingScopeError;
+  err.data = { error: "invalid_arguments" };
+  return err;
+}
+
 function readPostMessagePayload(
   client: ReturnType<typeof createSlackSendTestClient>,
   index: number,
@@ -136,7 +142,7 @@ describe("sendMessageSlack customize-scope fallback", () => {
       unfurl_links: false,
     });
     expect(vi.mocked(logVerbose)).toHaveBeenCalledWith(
-      "slack send: missing chat:write.customize, retrying without custom identity",
+      "slack send: custom identity rejected, retrying without custom identity",
     );
     expect(result.messageId).toBe("171234.567");
   });
@@ -160,7 +166,7 @@ describe("sendMessageSlack customize-scope fallback", () => {
     const secondCall = readPostMessagePayload(client, 1);
     expect(secondCall).not.toHaveProperty("icon_emoji");
     expect(vi.mocked(logVerbose)).toHaveBeenCalledWith(
-      "slack send: missing chat:write.customize, retrying without custom identity",
+      "slack send: custom identity rejected, retrying without custom identity",
     );
   });
 
@@ -179,8 +185,86 @@ describe("sendMessageSlack customize-scope fallback", () => {
 
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
     expect(vi.mocked(logVerbose)).toHaveBeenCalledWith(
-      "slack send: missing chat:write.customize, retrying without custom identity",
+      "slack send: custom identity rejected, retrying without custom identity",
     );
+  });
+
+  it("preserves the username when Slack rejects the custom icon", async () => {
+    const client = createSlackSendTestClient();
+    vi.mocked(client.chat.postMessage)
+      .mockRejectedValueOnce(buildInvalidIdentityError())
+      .mockResolvedValueOnce({ ts: "171234.567" });
+
+    await sendMessageSlack("channel:C123", "hello", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      identity: { username: "Pulse", iconEmoji: "📟" },
+    });
+
+    expect(readPostMessagePayload(client, 0)).toMatchObject({
+      username: "Pulse",
+      icon_emoji: "📟",
+    });
+    expect(readPostMessagePayload(client, 1)).toEqual({
+      channel: "C123",
+      text: "hello",
+      username: "Pulse",
+      unfurl_links: false,
+    });
+    expect(vi.mocked(logVerbose)).toHaveBeenCalledWith(
+      "slack send: custom icon rejected, retrying with username only",
+    );
+  });
+
+  it("drops the full identity only when Slack also rejects the username-only retry", async () => {
+    const client = createSlackSendTestClient();
+    vi.mocked(client.chat.postMessage)
+      .mockRejectedValueOnce(buildInvalidIdentityError())
+      .mockRejectedValueOnce(buildInvalidIdentityError())
+      .mockResolvedValueOnce({ ts: "171234.567" });
+
+    await sendMessageSlack("channel:C123", "hello", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      identity: { username: "Pulse", iconEmoji: "📟" },
+    });
+
+    expect(readPostMessagePayload(client, 1)).toMatchObject({ username: "Pulse" });
+    expect(readPostMessagePayload(client, 1)).not.toHaveProperty("icon_emoji");
+    expect(readPostMessagePayload(client, 2)).toEqual({
+      channel: "C123",
+      text: "hello",
+      unfurl_links: false,
+    });
+    expect(vi.mocked(logVerbose)).toHaveBeenCalledWith(
+      "slack send: custom identity rejected, retrying without custom identity",
+    );
+  });
+
+  it("reuses the downgraded identity for later chunks", async () => {
+    const client = createSlackSendTestClient();
+    vi.mocked(client.chat.postMessage)
+      .mockRejectedValueOnce(buildInvalidIdentityError())
+      .mockResolvedValue({ ts: "171234.567" });
+
+    await sendMessageSlack("channel:C123", "alpha beta", {
+      token: "xoxb-test",
+      cfg: { channels: { slack: { botToken: "xoxb-test", textChunkLimit: 5 } } },
+      client,
+      identity: { username: "Pulse", iconEmoji: "📟" },
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(3);
+    expect(readPostMessagePayload(client, 0)).toMatchObject({
+      username: "Pulse",
+      icon_emoji: "📟",
+    });
+    for (const index of [1, 2]) {
+      expect(readPostMessagePayload(client, index)).toMatchObject({ username: "Pulse" });
+      expect(readPostMessagePayload(client, index)).not.toHaveProperty("icon_emoji");
+    }
   });
 
   it("rethrows missing_scope errors that reference a different scope", async () => {

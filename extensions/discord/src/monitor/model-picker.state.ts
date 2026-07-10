@@ -1,5 +1,6 @@
 // Discord plugin module implements model picker.state behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictInteger, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
@@ -105,14 +106,9 @@ export type DiscordModelPickerModelPage = DiscordModelPickerPage<string> & {
   provider: string;
 };
 
-let modelsProviderRuntimePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/models-provider-runtime")>
-  | undefined;
-
-async function loadModelsProviderRuntime() {
-  modelsProviderRuntimePromise ??= import("openclaw/plugin-sdk/models-provider-runtime");
-  return await modelsProviderRuntimePromise;
-}
+const loadModelsProviderRuntime = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/models-provider-runtime"),
+);
 
 function encodeCustomIdValue(value: string): string {
   return encodeURIComponent(value);
@@ -458,7 +454,7 @@ function chunkBucketsByCount(sortedItems: string[]): DiscordModelPickerBucket[] 
  * "bad customId → reset to defaults" semantics already used for other
  * state fields.
  */
-export function resolveBucket(
+function resolveBucket(
   buckets: DiscordModelPickerBucket[],
   id: string | undefined,
 ): DiscordModelPickerBucket | null {

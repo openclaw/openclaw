@@ -79,6 +79,17 @@ describe("shouldPrepareUpdatedInstallRestart", () => {
     ).toBe(false);
   });
 
+  it("does not prepare package restart for a service owned by another root", () => {
+    expect(
+      shouldPrepareUpdatedInstallRestart({
+        updateMode: "npm",
+        serviceInstalled: true,
+        serviceLoaded: true,
+        serviceMatchesMutationRoot: false,
+      }),
+    ).toBe(false);
+  });
+
   it("keeps non-package updates tied to the matching loaded service state", () => {
     expect(
       shouldPrepareUpdatedInstallRestart({

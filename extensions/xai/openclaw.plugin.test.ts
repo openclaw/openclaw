@@ -4,6 +4,9 @@ import { describe, expect, it } from "vitest";
 const manifest = JSON.parse(
   readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
 ) as {
+  modelIdNormalization?: {
+    providers?: Record<string, { aliases?: Record<string, string> }>;
+  };
   modelCatalog?: {
     suppressions?: Array<{ provider?: string; model?: string }>;
   };
@@ -20,6 +23,12 @@ const XAI_MULTI_AGENT_MODELS = [
 ] as const;
 
 describe("xAI plugin manifest", () => {
+  it("normalizes the Grok Build latest alias to Grok 4.5", () => {
+    expect(manifest.modelIdNormalization?.providers?.xai?.aliases?.["grok-build-latest"]).toBe(
+      "grok-4.5",
+    );
+  });
+
   it("suppresses the unsupported multi-agent model aliases", () => {
     const suppressionRefs = new Set(
       (manifest.modelCatalog?.suppressions ?? []).map(

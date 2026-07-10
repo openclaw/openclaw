@@ -78,13 +78,10 @@ function installCanvasNodePolicyForTest() {
     throw new Error("active plugin registry is required for canvas node command tests");
   }
   if (
-    (registry.nodeInvokePolicies ?? []).some((entry) =>
-      entry.policy.commands.includes("canvas.snapshot"),
-    )
+    registry.nodeInvokePolicies.some((entry) => entry.policy.commands.includes("canvas.snapshot"))
   ) {
     return;
   }
-  registry.nodeInvokePolicies ??= [];
   registry.nodeInvokePolicies.push({
     pluginId: "canvas",
     pluginName: "Canvas",

@@ -648,6 +648,20 @@ describe("listThinkingLevels", () => {
       }),
     ).toBe("high");
   });
+
+  it("clamps a below-range request down to the cheapest level on a no-off profile", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+    });
+
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "demo-noff",
+        model: "demo-model",
+        level: "off",
+      }),
+    ).toBe("low");
+  });
 });
 
 describe("listThinkingLevelLabels", () => {

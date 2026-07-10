@@ -2,12 +2,14 @@
  * Runs model and image fallback chains across provider/model candidates.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE } from "../../packages/agent-core/src/errors.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isCronTerminalAbortReasonText } from "../cron/service/execution-errors.js";
 import { emitFailoverEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -31,6 +33,7 @@ import { isActiveUnusableWindow } from "./auth-profiles/usage-state.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { isLikelyContextOverflowError } from "./embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "./embedded-agent-helpers/types.js";
+import { isOpenClawAbortableWrapper } from "./embedded-agent-runner/run/abortable.js";
 import {
   FailoverError,
   buildFailoverRemediationHint,
@@ -39,6 +42,7 @@ import {
   describeFailoverError,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
+  resolveModelFallbackError,
 } from "./failover-error.js";
 import {
   shouldAllowCooldownProbeForReason,
@@ -75,7 +79,7 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection-resolve.js";
-import { isAgentRunRestartAbortReason } from "./run-termination.js";
+import { isAgentRunDirectAbortReason, isAgentRunRestartAbortReason } from "./run-termination.js";
 import {
   resolveSessionSuspensionReason,
   runWithDeferredSessionSuspension,
@@ -84,6 +88,14 @@ import {
 } from "./session-suspension.js";
 
 const log = createSubsystemLogger("model-fallback");
+
+function isTranscriptNotContinuableError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const code = (err as { code?: unknown }).code;
+  return code === TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE;
+}
 
 function hasExactConfiguredProviderModel(params: {
   cfg?: OpenClawConfig;
@@ -165,7 +177,7 @@ export function isFallbackSummaryError(err: unknown): err is FallbackSummaryErro
   return err instanceof FallbackSummaryError;
 }
 
-export type ModelFallbackRunOptions = {
+type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;
 };
@@ -188,21 +200,74 @@ type ModelFallbackRunFn<T> = (
   options?: ModelFallbackRunOptions,
 ) => Promise<T>;
 
+function isTerminalAbortReasonString(reason: string): boolean {
+  return isCronTerminalAbortReasonText(reason);
+}
+
+function getErrorCauseCandidates(err: Error): unknown[] {
+  const candidates: unknown[] = [];
+  if ("cause" in err && err.cause !== undefined) {
+    candidates.push(err.cause);
+    if (err.cause instanceof Error && "cause" in err.cause && err.cause.cause !== undefined) {
+      candidates.push(err.cause.cause);
+    }
+  }
+  return candidates;
+}
+
+function isTerminalAbortCandidate(candidate: unknown): boolean {
+  if (typeof candidate === "string") {
+    return isTerminalAbortReasonString(candidate);
+  }
+  if (!(candidate instanceof Error)) {
+    return false;
+  }
+  if (isAgentRunRestartAbortReason(candidate)) {
+    return true;
+  }
+  if (candidate.name === "TimeoutError") {
+    return true;
+  }
+  if (candidate.name === "ClientDisconnectError") {
+    return true;
+  }
+  return isTerminalAbortReasonString(candidate.message);
+}
+
 function isTerminalAbort(signal: AbortSignal | undefined): boolean {
   if (!signal?.aborted) {
     return false;
   }
   const reason = signal.reason;
-  if (!(reason instanceof Error)) {
+
+  if (reason instanceof Error) {
+    const candidates: unknown[] = [reason, ...getErrorCauseCandidates(reason)];
+    return candidates.some(isTerminalAbortCandidate);
+  }
+
+  return isTerminalAbortCandidate(reason);
+}
+
+function isTerminalAbortFromError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
     return false;
   }
-  if (isAgentRunRestartAbortReason(reason)) {
+  if (isAgentRunRestartAbortReason(err)) {
     return true;
   }
-  if (reason.name === "TimeoutError") {
-    return true;
+  const causeCandidates = getErrorCauseCandidates(err);
+  if (err.name !== "AbortError") {
+    return false;
   }
-  return reason.name === "ClientDisconnectError";
+  for (const candidate of causeCandidates) {
+    if (isAgentRunRestartAbortReason(candidate)) {
+      return true;
+    }
+  }
+  if (!isOpenClawAbortableWrapper(err)) {
+    return false;
+  }
+  return causeCandidates.some(isTerminalAbortCandidate);
 }
 
 function isCallerAbortSignal(signal: AbortSignal | undefined): boolean {
@@ -348,24 +413,28 @@ async function runFallbackCandidate<T>(params: {
     if (isCommandLaneTaskTimeoutError(err)) {
       throw err;
     }
-    if (isNonProviderRuntimeCoordinationError(err)) {
-      throw err;
-    }
-    if (isTerminalAbort(params.abortSignal) || isCallerAbortSignal(params.abortSignal)) {
-      throw err;
-    }
-    if (isAgentRunRestartAbortReason(err)) {
-      throw err;
-    }
-    // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
-    // so they become FailoverErrors and continue the fallback loop instead of aborting.
-    const normalizedFailover = coerceToFailoverError(err, {
+    const fallbackError = resolveModelFallbackError(err, {
       provider: params.provider,
       model: params.model,
       sessionId: params.attribution?.sessionId,
       lane: params.attribution?.lane,
     });
-    return { ok: false, error: normalizedFailover ?? err };
+    if (fallbackError.kind === "coordination") {
+      throw err;
+    }
+    if (isTerminalAbort(params.abortSignal) || isCallerAbortSignal(params.abortSignal)) {
+      throw err;
+    }
+    if (isAgentRunDirectAbortReason(err) || isAgentRunRestartAbortReason(err)) {
+      throw err;
+    }
+    if (isTerminalAbortFromError(err)) {
+      throw err;
+    }
+    return {
+      ok: false,
+      error: fallbackError.kind === "failover" ? fallbackError.error : err,
+    };
   }
 }
 
@@ -809,6 +878,7 @@ export const testing = {
   resolveImageFallbackCandidates,
   resolveCooldownDecision,
   resolveSessionSuspensionReason,
+  shouldDiscardDeferredSessionSuspension,
 } as const;
 
 export function resolveModelCandidateChain(
@@ -1308,9 +1378,12 @@ function shouldDiscardDeferredSessionSuspension(params: {
   return (
     isTerminalAbort(params.abortSignal) ||
     isCallerAbortSignal(params.abortSignal) ||
+    isAgentRunDirectAbortReason(params.error) ||
     isAgentRunRestartAbortReason(params.error) ||
+    isTerminalAbortFromError(params.error) ||
     isCommandLaneTaskTimeoutError(params.error) ||
     isNonProviderRuntimeCoordinationError(params.error) ||
+    isTranscriptNotContinuableError(params.error) ||
     isLikelyContextOverflowError(formatErrorMessage(params.error))
   );
 }
@@ -1377,11 +1450,28 @@ async function runWithModelFallbackInternal<T>(
   ) => {
     if (!params.onFallbackStep && !isModelFallbackDecisionLogEnabled()) {
       appendFailedCandidateAttempt(failedAttempt);
-      return;
+    } else {
+      const fallbackStep = recordFailedCandidateAttempt(failedAttempt);
+      if (fallbackStep) {
+        await params.onFallbackStep?.(fallbackStep);
+      }
     }
-    const fallbackStep = recordFailedCandidateAttempt(failedAttempt);
-    if (fallbackStep) {
-      await params.onFallbackStep?.(fallbackStep);
+    // Emit only real candidate-to-candidate transitions. Terminal candidates
+    // have no destination; cooldown suspension has its own diagnostic path.
+    if (params.sessionId && failedAttempt.nextCandidate) {
+      const described = describeFailoverError(failedAttempt.error);
+      emitFailoverEvent({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        lane: params.lane,
+        fromProvider: failedAttempt.candidate.provider,
+        fromModel: failedAttempt.candidate.model,
+        toProvider: failedAttempt.nextCandidate.provider,
+        toModel: failedAttempt.nextCandidate.model,
+        reason: described.reason ?? "unknown",
+        cascadeDepth: failedAttempt.attempt - 1,
+        suspended: false,
+      });
     }
   };
 
@@ -1704,6 +1794,9 @@ async function runWithModelFallbackInternal<T>(
       // the same local condition and surfacing a misleading "All models
       // failed" summary. See #83510.
       if (isNonProviderRuntimeCoordinationError(err)) {
+        throw err;
+      }
+      if (isTranscriptNotContinuableError(err)) {
         throw err;
       }
       if (transientProbeProviderForAttempt) {

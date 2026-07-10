@@ -7,6 +7,7 @@ export const XAI_DEFAULT_IMAGE_MODEL = "grok-imagine-image";
 export const XAI_IMAGE_MODELS = ["grok-imagine-image", "grok-imagine-image-quality"] as const;
 export const XAI_DEFAULT_CONTEXT_WINDOW = 1_000_000;
 const XAI_LARGE_CONTEXT_WINDOW = 2_000_000;
+const XAI_GROK_45_CONTEXT_WINDOW = 500_000;
 const XAI_GROK_4_CONTEXT_WINDOW = 256_000;
 const XAI_CODE_CONTEXT_WINDOW = 256_000;
 export const XAI_DEFAULT_MAX_TOKENS = 64_000;
@@ -54,6 +55,13 @@ const XAI_GROK_43_COST = {
   cacheWrite: 0,
 } satisfies XaiCost;
 
+const XAI_GROK_45_COST = {
+  input: 2,
+  output: 6,
+  cacheRead: 0.5,
+  cacheWrite: 0,
+} satisfies XaiCost;
+
 const XAI_GROK_BUILD_COST = {
   input: 1,
   output: 2,
@@ -69,6 +77,15 @@ const XAI_CODE_FAST_COST = {
 } satisfies XaiCost;
 
 const XAI_MODEL_CATALOG = [
+  {
+    id: "grok-4.5",
+    name: "Grok 4.5",
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: XAI_GROK_45_CONTEXT_WINDOW,
+    maxTokens: XAI_DEFAULT_MAX_TOKENS,
+    cost: XAI_GROK_45_COST,
+  },
   {
     id: "grok-build-0.1",
     name: "Grok Build 0.1",
@@ -197,6 +214,7 @@ const XAI_MODEL_CATALOG = [
 ] as const satisfies readonly XaiCatalogEntry[];
 
 const XAI_SELECTABLE_MODEL_IDS = new Set<string>([
+  "grok-4.5",
   "grok-build-0.1",
   "grok-4.3",
   "grok-4.20-beta-latest-reasoning",
@@ -216,6 +234,9 @@ const XAI_RETIRED_BUILTIN_MODEL_IDS = new Set<string>(
 function normalizeXaiCatalogModelId(modelId: string): string {
   const lower = normalizeOptionalLowercaseString(modelId) ?? "";
   const unprefixed = lower.startsWith("xai/") ? lower.slice("xai/".length) : lower;
+  if (unprefixed === "grok-build-latest") {
+    return "grok-4.5";
+  }
   if (XAI_GROK_BUILD_ALIASES.has(unprefixed)) {
     return "grok-build-0.1";
   }
@@ -310,6 +331,7 @@ export function resolveXaiCatalogEntry(modelId: string) {
     });
   }
   if (
+    lower.startsWith("grok-4.5") ||
     lower.startsWith("grok-4.3") ||
     lower.startsWith("grok-4.20") ||
     lower.startsWith("grok-4-1") ||
@@ -320,15 +342,22 @@ export function resolveXaiCatalogEntry(modelId: string) {
       name: trimmed,
       reasoning: !lower.includes("non-reasoning"),
       input: ["text", "image"],
-      contextWindow: lower.startsWith("grok-4.3")
-        ? XAI_DEFAULT_CONTEXT_WINDOW
-        : XAI_LARGE_CONTEXT_WINDOW,
-      maxTokens: lower.startsWith("grok-4.3") ? XAI_DEFAULT_MAX_TOKENS : 30_000,
-      cost: lower.startsWith("grok-4.3")
-        ? XAI_GROK_43_COST
-        : lower.startsWith("grok-4.20")
-          ? XAI_GROK_420_COST
-          : XAI_FAST_COST,
+      contextWindow: lower.startsWith("grok-4.5")
+        ? XAI_GROK_45_CONTEXT_WINDOW
+        : lower.startsWith("grok-4.3")
+          ? XAI_DEFAULT_CONTEXT_WINDOW
+          : XAI_LARGE_CONTEXT_WINDOW,
+      maxTokens:
+        lower.startsWith("grok-4.5") || lower.startsWith("grok-4.3")
+          ? XAI_DEFAULT_MAX_TOKENS
+          : 30_000,
+      cost: lower.startsWith("grok-4.5")
+        ? XAI_GROK_45_COST
+        : lower.startsWith("grok-4.3")
+          ? XAI_GROK_43_COST
+          : lower.startsWith("grok-4.20")
+            ? XAI_GROK_420_COST
+            : XAI_FAST_COST,
     });
   }
   if (lower.startsWith("grok-4")) {

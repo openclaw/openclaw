@@ -1659,7 +1659,7 @@ describe("runCopilotAttempt", () => {
       };
       expect(cfg.systemMessage?.mode).toBe("append");
       expect(cfg.systemMessage?.content).toBe(
-        "## Group Chat Context\nTool and file actions are disabled for this sender.",
+        "## Conversation Context\nTool and file actions are disabled for this sender.",
       );
     });
 
@@ -1747,7 +1747,7 @@ describe("runCopilotAttempt", () => {
         systemMessage?: { mode?: string; content?: string };
       };
       expect(cfg.systemMessage?.content).toBe(
-        `${rendered}\n\n## Group Chat Context\nOnly answer in the current group thread.`,
+        `${rendered}\n\n## Conversation Context\nOnly answer in the current group thread.`,
       );
     });
 
@@ -2681,7 +2681,11 @@ describe("runCopilotAttempt", () => {
       await runCopilotAttempt(makeParams(), { pool });
 
       const args = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls[0]?.[0] as {
-        messages: Array<{ role: string; __openclaw?: { mirrorIdentity?: string } }>;
+        messages: Array<{
+          role: string;
+          idempotencyKey?: string;
+          __openclaw?: { mirrorIdentity?: string };
+        }>;
       };
       for (const [index, message] of args.messages.entries()) {
         if (
@@ -2692,12 +2696,12 @@ describe("runCopilotAttempt", () => {
           continue;
         }
         const identity = message["__openclaw"]?.mirrorIdentity ?? "";
-        // The terminal assistant carries the turn-stable
-        // `${runId}:assistant:final` identity attached by attempt.ts.
+        // The current user and terminal assistant carry turn-stable identities.
         // Caller-passed history without an identity falls through to
         // the positional `${scope}:role:idx`.
-        // fingerprint that the existing tagging map applies.
-        if (message.role === "assistant" && index === args.messages.length - 1) {
+        if (message.role === "user" && message.idempotencyKey === "run-1:user") {
+          expect(identity).toBe("run-1:prompt");
+        } else if (message.role === "assistant" && index === args.messages.length - 1) {
           expect(identity).toMatch(/:assistant:final$/u);
           expect(identity).toContain("run-1");
         } else {
@@ -2753,12 +2757,14 @@ describe("runCopilotAttempt", () => {
         messages: Array<{
           role: string;
           content: unknown;
+          idempotencyKey?: string;
           __openclaw?: { mirrorIdentity?: string };
         }>;
       };
       expect(args.messages.length).toBe(2);
       expect(args.messages[0]?.role).toBe("user");
       expect(args.messages[0]?.content).toBe("what's my name?");
+      expect(args.messages[0]?.idempotencyKey).toBe("run-A:user");
       expect(args.messages[0]?.["__openclaw"]?.mirrorIdentity).toBe("run-A:prompt");
       expect(args.messages[1]?.role).toBe("assistant");
       expect(args.messages[1]?.["__openclaw"]?.mirrorIdentity).toBe("run-A:assistant:final");
@@ -2778,10 +2784,13 @@ describe("runCopilotAttempt", () => {
       await runCopilotAttempt(makeParams(), { pool });
 
       const args = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls[0]?.[0] as {
-        messages: Array<{ role: string }>;
+        messages: Array<{ role: string; idempotencyKey?: string }>;
       };
       const userCount = args.messages.filter((m) => m.role === "user").length;
       expect(userCount).toBe(1);
+      expect(args.messages.find((message) => message.role === "user")?.idempotencyKey).toBe(
+        "run-1:user",
+      );
     });
 
     it("prefers transcriptPrompt over prompt for the synthetic user body", async () => {

@@ -316,7 +316,7 @@ OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for *
 
 ### Node.js Version
 
-OpenClaw requires **Node.js 22.19.0 or later** (LTS). Node 24 is the recommended default runtime for new installs. The minimum version includes important security patches:
+OpenClaw requires **Node.js 22.19+, Node.js 23.11+, or Node.js 24+**. Node 24 is the recommended default runtime for new installs. The minimum supported Node 22 version includes important security patches:
 
 - CVE-2025-59466: async_hooks DoS vulnerability
 - CVE-2026-21636: Permission model bypass vulnerability
@@ -324,7 +324,7 @@ OpenClaw requires **Node.js 22.19.0 or later** (LTS). Node 24 is the recommended
 Verify your Node.js version:
 
 ```bash
-node --version  # Should be v22.19.0 or later
+node --version  # Should be v22.19+, v23.11+, or v24+
 ```
 
 ### Docker Security

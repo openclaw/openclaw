@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Memory Core plugin entrypoint registers its OpenClaw integration.
 import {
   jsonResult,
@@ -20,7 +21,6 @@ import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { buildPromptSection } from "./src/prompt-section.js";
 
 type MemoryToolsModule = typeof import("./src/tools.js");
-type RuntimeProviderModule = typeof import("./src/runtime-provider.js");
 
 type MemoryToolOptions = {
   config?: OpenClawConfig;
@@ -31,18 +31,11 @@ type MemoryToolOptions = {
   oneShotCliRun?: boolean;
 };
 
-let memoryToolsModulePromise: Promise<MemoryToolsModule> | undefined;
-let runtimeProviderModulePromise: Promise<RuntimeProviderModule> | undefined;
+const loadMemoryToolsModule = createLazyRuntimeModule(() => import("./src/tools.js"));
 
-function loadMemoryToolsModule(): Promise<MemoryToolsModule> {
-  memoryToolsModulePromise ??= import("./src/tools.js");
-  return memoryToolsModulePromise;
-}
-
-function loadRuntimeProviderModule(): Promise<RuntimeProviderModule> {
-  runtimeProviderModulePromise ??= import("./src/runtime-provider.js");
-  return runtimeProviderModulePromise;
-}
+const loadRuntimeProviderModule = createLazyRuntimeModule(
+  () => import("./src/runtime-provider.js"),
+);
 
 function getToolConfig(options: MemoryToolOptions): OpenClawConfig | undefined {
   return options.getConfig?.() ?? options.config;

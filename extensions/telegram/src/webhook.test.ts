@@ -632,6 +632,50 @@ describe("startTelegramWebhook", () => {
     expectMockMessageContains(runtimeError, "telegram setWebhook failed: unauthorized");
   });
 
+  it("stops local listener and bot when retry loop encounters a non-recoverable error", async () => {
+    const runtimeError = vi.fn();
+    const setStatus = vi.fn();
+    const unauthorizedError = Object.assign(new Error("unauthorized"), { error_code: 401 });
+    setWebhookSpy
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(unauthorizedError);
+
+    const started = await startTelegramWebhook({
+      token: TELEGRAM_TOKEN,
+      port: 0,
+      secret: TELEGRAM_SECRET,
+      path: TELEGRAM_WEBHOOK_PATH,
+      spoolDir: requireWebhookSpoolDir(),
+      runtime: { log: vi.fn(), error: runtimeError, exit: vi.fn() },
+      setStatus,
+      webhookRegistrationRetryPolicy: {
+        initialMs: 0,
+        maxMs: 0,
+        factor: 1,
+        jitter: 0,
+      },
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(started.server.listening).toBe(false);
+        expect(stopSpy).toHaveBeenCalledTimes(1);
+        expect(transportCloseSpies[0]).toHaveBeenCalledTimes(1);
+      });
+      expect(setStatus).toHaveBeenLastCalledWith({ mode: "webhook", connected: false });
+      expectMockMessageContains(
+        runtimeError,
+        "telegram setWebhook retry stopped after non-recoverable error",
+      );
+
+      await started.stop();
+      expect(stopSpy).toHaveBeenCalledTimes(1);
+      expect(transportCloseSpies[0]).toHaveBeenCalledTimes(1);
+    } finally {
+      await started.stop();
+    }
+  });
+
   it("retries transient getMe startup init failures before starting the account", async () => {
     const runtimeLog = vi.fn();
     initSpy.mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValueOnce(undefined);
@@ -780,6 +824,7 @@ describe("startTelegramWebhook", () => {
   });
 
   it("durably retries a webhook update after acknowledging Telegram", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     const runtimeLog = vi.fn();
     const seenUpdates: unknown[] = [];
     handleUpdateSpy.mockImplementation(async (update: unknown) => {
@@ -790,39 +835,47 @@ describe("startTelegramWebhook", () => {
     });
     const payload = JSON.stringify({ update_id: 3, message: { text: "boom" } });
 
-    await withStartedWebhook(
-      {
-        secret: TELEGRAM_SECRET,
-        path: TELEGRAM_WEBHOOK_PATH,
-        runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
-      },
-      async ({ port }) => {
-        const response = await postWebhookJson({
-          url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
-          payload,
+    try {
+      await withStartedWebhook(
+        {
           secret: TELEGRAM_SECRET,
-        });
+          path: TELEGRAM_WEBHOOK_PATH,
+          runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
+        },
+        async ({ port }) => {
+          const response = await postWebhookJson({
+            url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
+            payload,
+            secret: TELEGRAM_SECRET,
+          });
 
-        expect(response.status).toBe(200);
-        expect(await response.text()).toBe("");
-        await vi.waitFor(() => expect(seenUpdates).toEqual([JSON.parse(payload)]));
-        await vi.waitFor(async () =>
-          expect(
-            (await listTelegramSpooledUpdates({ spoolDir: requireWebhookSpoolDir() })).length,
-          ).toBe(1),
-        );
-        expectMockMessageContains(runtimeLog, "webhook spooled update 3 failed; keeping for retry");
-        await sleep(1_100);
-        await vi.waitFor(() =>
-          expect(seenUpdates).toEqual([JSON.parse(payload), JSON.parse(payload)]),
-        );
-        await vi.waitFor(async () =>
-          expect(await listTelegramSpooledUpdates({ spoolDir: requireWebhookSpoolDir() })).toEqual(
-            [],
-          ),
-        );
-      },
-    );
+          expect(response.status).toBe(200);
+          expect(await response.text()).toBe("");
+          await vi.waitFor(() => expect(seenUpdates).toEqual([JSON.parse(payload)]));
+          await vi.waitFor(async () =>
+            expect(
+              (await listTelegramSpooledUpdates({ spoolDir: requireWebhookSpoolDir() })).length,
+            ).toBe(1),
+          );
+          expectMockMessageContains(
+            runtimeLog,
+            "webhook spooled update 3 failed; keeping for retry",
+          );
+          vi.setSystemTime(Date.now() + 1_100);
+          await vi.advanceTimersByTimeAsync(500);
+          await vi.waitFor(() =>
+            expect(seenUpdates).toEqual([JSON.parse(payload), JSON.parse(payload)]),
+          );
+          await vi.waitFor(async () =>
+            expect(
+              await listTelegramSpooledUpdates({ spoolDir: requireWebhookSpoolDir() }),
+            ).toEqual([]),
+          );
+        },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps a timed-out webhook lane guarded until replay settles", async () => {

@@ -90,18 +90,3 @@ export function resolveXaiTransport(params: {
     baseUrl: readStringValue(params.baseUrl),
   };
 }
-
-export function resolveXaiBaseUrl(baseUrlOrConfig?: unknown): string {
-  let candidate = baseUrlOrConfig;
-  if (
-    baseUrlOrConfig &&
-    typeof baseUrlOrConfig === "object" &&
-    !Array.isArray(baseUrlOrConfig) &&
-    "cfg" in baseUrlOrConfig
-  ) {
-    candidate =
-      (baseUrlOrConfig as { cfg?: { models?: { providers?: { xai?: { baseUrl?: unknown } } } } })
-        .cfg?.models?.providers?.xai?.baseUrl ?? baseUrlOrConfig;
-  }
-  return readStringValue(candidate) || "https://api.x.ai/v1";
-}

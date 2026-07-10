@@ -9,13 +9,13 @@ scenario:
     secondary:
       - channels.qa-channel
       - tools.message
-  objective: Reproduce #85714 — under messages.visibleReplies=message_tool a long private final reply that never calls the message tool is kept private (no outbound), and the gateway emits the private-final WARN.
+  objective: Reproduce #85714 — under messages.visibleReplies=message_tool a long private final reply that never calls the message tool is never delivered, and the gateway emits the private-final WARN.
   gatewayConfigPatch:
     messages:
       visibleReplies: message_tool
   successCriteria:
     - The mock provider returns a long normal final answer and does not plan the message tool.
-    - Under message_tool_only delivery the reply is kept private, so the direct conversation receives no outbound message.
+    - Under message_tool_only delivery the private final is absent from the complete outbound event history, and any progress lifecycle output is deleted.
     - The gateway logs the private-final WARN from source-reply/private-final.
   docsRefs:
     - docs/channels/qa-channel.md
@@ -25,9 +25,10 @@ scenario:
     - src/auto-reply/reply/dispatch-from-config.ts
   execution:
     kind: flow
-    summary: Send a direct message_tool_only turn whose model reply omits the message tool, and verify a substantive private final warns without outbound delivery.
+    summary: Send a direct message_tool_only turn whose model reply omits the message tool, and verify the private final never reaches outbound event history.
     config:
       requiredProviderMode: mock-openai
+      requiredChannelDriver: qa-channel
       conversationId: qa-stranded-dm
       promptSnippet: qa private final reply warning check
       prompt: "qa private final reply warning check. Reply to me directly in two complete sentences with `QA-STRANDED-85714` in the first sentence and a short explanation in the second sentence. Do NOT call any tool. Do NOT use the message tool."
@@ -50,6 +51,12 @@ flow:
             - ref: env
             - 60000
         - call: reset
+        - set: eventStartIndex
+          value:
+            expr: state.getSnapshot().events.length
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - set: logCursor
           value:
             expr: markGatewayLogCursor()
@@ -65,9 +72,32 @@ flow:
             senderName: Alice
             text:
               expr: config.prompt
-        - waitForNoOutbound:
-            quietMs:
-              expr: liveTurnTimeoutMs(env, 30000)
+        - call: waitForCondition
+          args:
+            - lambda:
+                expr: "String(readGatewayLogs() ?? '').slice(logCursor).includes(config.privateFinalLogNeedle) ? true : undefined"
+            - expr: liveTurnTimeoutMs(env, 30000)
+            - 100
+        - call: sleep
+          args:
+            - expr: liveTurnTimeoutMs(env, 30000)
+        - set: scenarioOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex)"
+        - set: scenarioOutboundEvents
+          value:
+            expr: "state.getSnapshot().events.slice(eventStartIndex).filter((event) => ['outbound-message', 'message-edited', 'message-deleted'].includes(event.kind) && event.message?.direction === 'outbound')"
+        - set: survivingOutbound
+          value:
+            expr: "scenarioOutbound.filter((message) => message.deleted !== true)"
+        - assert:
+            expr: "scenarioOutboundEvents.every((event) => !String(event.message?.text ?? '').includes(config.expectedMarker))"
+            message:
+              expr: "`private final marker escaped into outbound event history: ${JSON.stringify(scenarioOutboundEvents.map((event) => ({ kind: event.kind, text: event.message?.text ?? '' })))} `"
+        - assert:
+            expr: survivingOutbound.length === 0
+            message:
+              expr: "`expected no surviving outbound messages, saw ${JSON.stringify(survivingOutbound.map((message) => message.text))}`"
         - set: scenarioRequests
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : []"
@@ -88,4 +118,4 @@ flow:
             expr: "privateFinalLog.includes(config.privateFinalLogNeedle)"
             message:
               expr: "`expected the gateway to log ${config.privateFinalLogNeedle} after a substantive private message_tool_only reply, but it was absent`"
-      detailsExpr: "`no-outbound private final; WARN logged=${privateFinalLog.includes(config.privateFinalLogNeedle)}; mock requests=${scenarioRequests.length}; gateway log: ${privateFinalLine}`"
+      detailsExpr: "`private final absent from ${scenarioOutboundEvents.length} outbound lifecycle events; transient deleted=${scenarioOutbound.filter((message) => message.deleted === true).length}; WARN logged=${privateFinalLog.includes(config.privateFinalLogNeedle)}; mock requests=${scenarioRequests.length}; gateway log: ${privateFinalLine}`"

@@ -29,11 +29,12 @@ private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
                 {"type":"event","event":"connect.challenge","payload":{"nonce":"test-nonce"}}
                 """)
             }
-            if let request = self.latestUnrespondedRequest() {
+            if let request = latestUnrespondedRequest() {
                 self.respondedRequestIds.insert(request.id)
                 if request.method == "connect" {
                     return .string("""
-                    {"type":"res","id":"\(request.id)","ok":true,"payload":{"type":"hello","protocol":3,"server":{},"features":{},"snapshot":{"presence":[],"health":{},"stateVersion":{"presence":0,"health":0},"uptimeMs":0},"auth":{},"policy":{}}}
+                    {"type":"res","id":"\(request
+                        .id)","ok":true,"payload":{"type":"hello","protocol":3,"server":{},"features":{},"snapshot":{"presence":[],"health":{},"stateVersion":{"presence":0,"health":0},"uptimeMs":0},"auth":{},"policy":{}}}
                     """)
                 }
                 return .string("""
@@ -75,7 +76,11 @@ private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
 private final class FakeWebSocketSession: WebSocketSessioning, @unchecked Sendable {
     let task = FakeWebSocketTask()
 
-    func makeWebSocketTask(url _: URL) -> WebSocketTaskBox {
+    func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
+        self.makeWebSocketTask(request: URLRequest(url: url))
+    }
+
+    func makeWebSocketTask(request _: URLRequest) -> WebSocketTaskBox {
         WebSocketTaskBox(task: self.task)
     }
 }
@@ -177,7 +182,7 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
         #expect(params?["voiceWakeTrigger"] as? String == "")
     }
 
-    @Test func `chat send omits thinking when inheriting session default`() async throws {
+    @Test func `chat send carries routing precondition and omits inherited thinking`() async throws {
         let recorder = WebSocketMessageRecorder()
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
@@ -198,6 +203,7 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
 
         _ = try await connection.chatSend(
             sessionKey: "main",
+            expectedSessionRoutingContract: "per-sender|main|main",
             message: "hello",
             thinking: nil,
             idempotencyKey: "chat-1",
@@ -222,6 +228,15 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
         let json = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
         let params = json?["params"] as? [String: Any]
         #expect(params?["thinking"] == nil)
+        #expect(params?["expectedSessionRoutingContract"] as? String == "per-sender|main|main")
+    }
+
+    @Test func `routing identity decodes agent and contract from one response`() throws {
+        let data = Data(#"{"defaultId":"Work","mainKey":"Primary","scope":"global","agents":[]}"#.utf8)
+        let identity = try GatewayConnection.decodeSessionRoutingIdentity(data)
+
+        #expect(identity.defaultAgentID == "Work")
+        #expect(identity.contract == "global|primary|work")
     }
 
     private static func messageData(_ message: URLSessionWebSocketTask.Message) -> Data? {

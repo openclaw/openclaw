@@ -35,7 +35,7 @@ import {
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "./runtime-api.js";
 import { isMattermostId, resolveMattermostOpaqueTarget } from "./target-resolution.js";
 
-export type MattermostSendOpts = {
+type MattermostSendOpts = {
   cfg: OpenClawConfig;
   botToken?: string;
   baseUrl?: string;
@@ -56,7 +56,7 @@ export type MattermostSendOpts = {
   onDmChannelResolution?: (resolution: PromiseLike<unknown>) => void;
 };
 
-export type MattermostSendResult = {
+type MattermostSendResult = {
   messageId: string;
   channelId: string;
   receipt: MessageReceipt;

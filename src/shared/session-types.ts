@@ -32,6 +32,7 @@ export type GatewayAgentRow = {
   name?: string;
   identity?: GatewayAgentIdentity;
   workspace?: string;
+  workspaceGit?: boolean;
   model?: GatewayAgentModel;
   agentRuntime?: GatewayAgentRuntime;
   thinkingLevels?: GatewayThinkingLevelOption[];

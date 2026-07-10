@@ -21,9 +21,11 @@ describe("session store lifecycle mutations", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("resets an entry while archiving the old transcript and creating the new header", async () => {
+  it("creates the new header before notifying observers and archiving the old transcript", async () => {
     const oldTranscriptPath = path.join(tempDir, "old-session.jsonl");
     const nextTranscriptPath = path.join(tempDir, "next-session.jsonl");
+    let nextTranscriptAtMutation: string | undefined;
+    let oldTranscriptExistsAtMutation = false;
     const now = Date.now();
     fs.writeFileSync(oldTranscriptPath, '{"type":"session","id":"old-session"}\n', "utf-8");
     await saveSessionStore(
@@ -57,16 +59,66 @@ describe("session store lifecycle mutations", () => {
         systemSent: false,
         abortedLastRun: false,
       }),
+      afterEntryMutation: () => {
+        nextTranscriptAtMutation = fs.readFileSync(nextTranscriptPath, "utf-8");
+        oldTranscriptExistsAtMutation = fs.existsSync(oldTranscriptPath);
+      },
     });
 
     const store = loadSessionStore(storePath, { skipCache: true });
     expect(store["agent:main:room"]?.sessionId).toBe("next-session");
     expect(store["Agent:Main:Room"]).toBeUndefined();
     expect(result.previousSessionId).toBe("old-session");
+    expect(nextTranscriptAtMutation).toContain('"id":"next-session"');
+    expect(oldTranscriptExistsAtMutation).toBe(true);
     expect(result.archivedTranscripts).toHaveLength(1);
     expect(result.archivedTranscripts[0]?.archivedPath).toContain(".jsonl.reset.");
     expect(fs.existsSync(oldTranscriptPath)).toBe(false);
     expect(fs.readFileSync(nextTranscriptPath, "utf-8")).toContain('"id":"next-session"');
+  });
+
+  it("preserves a successor header when a custom transcript path is reused", async () => {
+    const sessionKey = "agent:main:custom";
+    const transcriptPath = path.join(tempDir, "custom-transcript.jsonl");
+    const oldSessionId = "11111111-1111-4111-8111-111111111111";
+    const nextSessionId = "22222222-2222-4222-8222-222222222222";
+    fs.writeFileSync(transcriptPath, `{"type":"session","id":"${oldSessionId}"}\n`, "utf-8");
+    await saveSessionStore(
+      storePath,
+      {
+        [sessionKey]: {
+          sessionFile: transcriptPath,
+          sessionId: oldSessionId,
+          updatedAt: 1,
+        },
+      },
+      { skipMaintenance: true },
+    );
+
+    await resetSessionEntryLifecycle({
+      storePath,
+      target: {
+        canonicalKey: sessionKey,
+        storeKeys: [sessionKey],
+      },
+      buildNextEntry: ({ currentEntry }): SessionEntry => ({
+        ...currentEntry,
+        sessionFile: transcriptPath,
+        sessionId: nextSessionId,
+        updatedAt: 2,
+      }),
+    });
+
+    const archivedTranscript = fs
+      .readdirSync(tempDir)
+      .find((name) => name.startsWith("custom-transcript.jsonl.deleted."));
+    if (!archivedTranscript) {
+      throw new Error("expected the previous custom transcript to be archived");
+    }
+    expect(fs.readFileSync(path.join(tempDir, archivedTranscript), "utf-8")).toContain(
+      `"id":"${oldSessionId}"`,
+    );
+    expect(fs.readFileSync(transcriptPath, "utf-8")).toContain(`"id":"${nextSessionId}"`);
   });
 
   it("deletes an entry while archiving its transcript in the same lifecycle operation", async () => {
@@ -107,5 +159,101 @@ describe("session store lifecycle mutations", () => {
     expect(store["agent:main:delete"]).toBeUndefined();
     expect(store["agent:main:keep"]?.sessionId).toBe("keep-session");
     expect(fs.existsSync(transcriptPath)).toBe(false);
+  });
+
+  it("keeps a row that changed before guarded deletion acquired the writer lock", async () => {
+    const sessionKey = "agent:main:delete";
+    await saveSessionStore(
+      storePath,
+      {
+        [sessionKey]: {
+          label: "new revision",
+          sessionId: "delete-session",
+          updatedAt: 2,
+        },
+      },
+      { skipMaintenance: true },
+    );
+
+    const result = await deleteSessionEntryLifecycle({
+      archiveTranscript: false,
+      expectedSessionId: "delete-session",
+      expectedUpdatedAt: 1,
+      storePath,
+      target: {
+        canonicalKey: sessionKey,
+        storeKeys: [sessionKey],
+      },
+    });
+
+    expect(result).toMatchObject({ deleted: false, expectedEntryMismatch: true });
+    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toMatchObject({
+      label: "new revision",
+      updatedAt: 2,
+    });
+  });
+
+  it("does not cache alias promotion when guarded deletion is rejected", async () => {
+    const canonicalKey = "agent:main:room";
+    const aliasKey = "Agent:Main:Room";
+    await saveSessionStore(
+      storePath,
+      {
+        [canonicalKey]: {
+          label: "canonical",
+          sessionId: "canonical-session",
+          updatedAt: 1,
+        },
+        [aliasKey]: {
+          label: "fresh alias",
+          sessionId: "alias-session",
+          updatedAt: 2,
+        },
+      },
+      { skipMaintenance: true },
+    );
+
+    const result = await deleteSessionEntryLifecycle({
+      archiveTranscript: false,
+      expectedSessionId: "stale-session",
+      storePath,
+      target: {
+        canonicalKey,
+        storeKeys: [canonicalKey, aliasKey],
+      },
+    });
+
+    expect(result).toMatchObject({ deleted: false, expectedEntryMismatch: true });
+    expect(loadSessionStore(storePath)).toMatchObject({
+      [canonicalKey]: { label: "canonical", sessionId: "canonical-session" },
+      [aliasKey]: { label: "fresh alias", sessionId: "alias-session" },
+    });
+  });
+
+  it("deletes only the exact row snapshot supplied after lifecycle cleanup", async () => {
+    const sessionKey = "agent:main:delete";
+    const expectedEntry = {
+      label: "cleanup-owned revision",
+      lifecycleRevision: "run-revision",
+      sessionId: "delete-session",
+      updatedAt: 2,
+    } satisfies SessionEntry;
+    await saveSessionStore(storePath, { [sessionKey]: expectedEntry }, { skipMaintenance: true });
+
+    const result = await deleteSessionEntryLifecycle({
+      archiveTranscript: false,
+      expectedEntry,
+      expectedLifecycleRevision: expectedEntry.lifecycleRevision,
+      expectedSessionId: expectedEntry.sessionId,
+      expectedUpdatedAt: expectedEntry.updatedAt,
+      storePath,
+      target: {
+        canonicalKey: sessionKey,
+        storeKeys: [sessionKey],
+      },
+    });
+
+    expect(result.deleted).toBe(true);
+    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
   });
 });

@@ -2,13 +2,41 @@ import Foundation
 import OpenClawProtocol
 
 public enum GatewayDeviceAuthPayload {
+    public static func buildConnectCompatibilityPayload(
+        deviceId: String,
+        clientId: String,
+        clientMode: String,
+        role: String,
+        scopes: [String],
+        signedAtMs: Int64,
+        token: String?,
+        nonce: String) -> String
+    {
+        // Managed gateways deployed before v3 metadata payload support still
+        // verify v2 signatures. Swift connect signers temporarily omit signed
+        // metadata until managed and supported self-managed gateways verify v3.
+        let scopeString = scopes.joined(separator: ",")
+        let authToken = token ?? ""
+        return [
+            "v2",
+            deviceId,
+            clientId,
+            clientMode,
+            role,
+            scopeString,
+            String(signedAtMs),
+            authToken,
+            nonce,
+        ].joined(separator: "|")
+    }
+
     public static func buildV3(
         deviceId: String,
         clientId: String,
         clientMode: String,
         role: String,
         scopes: [String],
-        signedAtMs: Int,
+        signedAtMs: Int64,
         token: String?,
         nonce: String,
         platform: String?,
@@ -57,7 +85,7 @@ public enum GatewayDeviceAuthPayload {
     public static func signedDeviceDictionary(
         payload: String,
         identity: DeviceIdentity,
-        signedAtMs: Int,
+        signedAtMs: Int64,
         nonce: String) -> [String: OpenClawProtocol.AnyCodable]?
     {
         guard let signature = DeviceIdentityStore.signPayload(payload, identity: identity),

@@ -92,6 +92,30 @@ describe("validateProviderConfig", () => {
   });
 
   describe("twilio provider", () => {
+    it("accepts supported Twilio Regions and rejects unknown ones", () => {
+      const baseConfig = {
+        enabled: true,
+        provider: "twilio",
+        fromNumber: "+15550001234",
+        twilio: {
+          accountSid: "AC123",
+          authToken: "secret",
+        },
+      } as const;
+
+      const regional = VoiceCallConfigSchema.parse({
+        ...baseConfig,
+        twilio: { ...baseConfig.twilio, region: "ie1" },
+      });
+      expect(regional.twilio?.region).toBe("ie1");
+      expect(
+        VoiceCallConfigSchema.safeParse({
+          ...baseConfig,
+          twilio: { ...baseConfig.twilio, region: "de1" },
+        }).success,
+      ).toBe(false);
+    });
+
     it("accepts SecretRef-backed auth tokens before runtime resolution", () => {
       const config = VoiceCallConfigSchema.parse({
         enabled: true,
@@ -262,8 +286,18 @@ describe("validateProviderConfig", () => {
       const result = validateProviderConfig(config);
 
       expect(result.errors).not.toContain(
-        'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
+        'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", or "mock" when realtime.enabled is true',
       );
+    });
+
+    it("accepts realtime.enabled with provider=mock", () => {
+      const config = createBaseConfig("mock");
+      config.realtime.enabled = true;
+      config.inboundPolicy = "allowlist";
+
+      const result = validateProviderConfig(config);
+
+      expect(result).toEqual({ valid: true, errors: [] });
     });
 
     it("rejects realtime.enabled with providers that do not support it yet", () => {
@@ -275,7 +309,7 @@ describe("validateProviderConfig", () => {
 
       expect(result.valid).toBe(false);
       expect(result.errors).toContain(
-        'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
+        'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", or "mock" when realtime.enabled is true',
       );
     });
   });

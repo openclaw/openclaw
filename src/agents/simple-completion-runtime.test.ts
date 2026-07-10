@@ -3,6 +3,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
+import {
+  looksLikeSecretSentinel,
+  mintSecretSentinel,
+  resolveSecretSentinel,
+} from "../secrets/sentinel.js";
 
 // Hoisted mocks keep Vitest module replacement stable while the implementation
 // under test imports auth, model resolution, and transport helpers at module load.
@@ -32,6 +37,7 @@ vi.mock("./simple-completion-transport.js", () => ({
 }));
 
 vi.mock("./model-auth.js", () => ({
+  applySecretRefHeaderSentinels: (model: unknown) => model,
   formatMissingAuthError: vi.fn(
     (auth: { source: string; mode: string }, provider: string) =>
       `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
@@ -240,6 +246,7 @@ describe("prepareSimpleCompletionModel", () => {
 
     expect(hoisted.resolveCopilotApiTokenMock).toHaveBeenCalledWith({
       githubToken: "ghu_test",
+      config: undefined,
     });
     expect(hoisted.setRuntimeApiKeyMock).toHaveBeenCalledWith(
       "github-copilot",
@@ -279,6 +286,37 @@ describe("prepareSimpleCompletionModel", () => {
     // original GitHub token is broader auth material and must not leave prep.
     expect(result.auth.apiKey).toBe("copilot-runtime-token");
     expect(result.auth.apiKey).not.toBe("ghu_original_github_token");
+  });
+
+  it("keeps an exchanged Copilot token opaque when its source is a sentinel", async () => {
+    const sourceSecret = "github-source-secret";
+    const sourceSentinel = mintSecretSentinel(sourceSecret, {
+      label: "model-auth:github-copilot",
+    });
+    hoisted.resolveModelMock.mockReturnValueOnce({
+      model: { provider: "github-copilot", id: "gpt-4.1" },
+      authStorage: { setRuntimeApiKey: hoisted.setRuntimeApiKeyMock },
+      modelRegistry: {},
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: sourceSentinel,
+      source: "profile:github-copilot:default",
+      mode: "token",
+    });
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "github-copilot",
+      modelId: "gpt-4.1",
+    });
+
+    expect(hoisted.resolveCopilotApiTokenMock).toHaveBeenCalledWith({
+      githubToken: sourceSecret,
+      config: undefined,
+    });
+    expectPreparedModelResult(result);
+    expect(looksLikeSecretSentinel(result.auth.apiKey ?? "")).toBe(true);
+    expect(resolveSecretSentinel(result.auth.apiKey ?? "")).toBe("copilot-runtime-token");
   });
 
   it("applies exchanged copilot baseUrl to returned model", async () => {
@@ -763,6 +801,53 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
         messages: [{ role: "user", content: "pong", timestamp: 1 }],
       },
       {
+        apiKey: "sk-test",
+      },
+    );
+  });
+
+  it("preserves explicit off for a prepared Claude Sonnet 5 alias", async () => {
+    const model = {
+      provider: "anthropic",
+      id: "production-sonnet",
+      name: "Production Sonnet",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      params: { canonicalModelId: "claude-sonnet-5" },
+    } satisfies Model<"anthropic-messages">;
+    const preparedModel = {
+      ...model,
+      api: "openclaw-provider-simple:anthropic:production-sonnet",
+    } satisfies Model;
+    hoisted.prepareModelForSimpleCompletionMock.mockReturnValueOnce(preparedModel);
+
+    await completeWithPreparedSimpleCompletionModel({
+      model,
+      auth: {
+        apiKey: "sk-test",
+        source: "env:ANTHROPIC_API_KEY",
+        mode: "api-key",
+      },
+      context: {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      options: {
+        reasoning: "off",
+      },
+    });
+
+    expect(hoisted.completeMock).toHaveBeenCalledWith(
+      preparedModel,
+      {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      {
+        reasoning: "off",
         apiKey: "sk-test",
       },
     );

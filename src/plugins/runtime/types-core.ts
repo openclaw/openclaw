@@ -86,6 +86,11 @@ type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
 type RuntimeUpsertSessionEntryParams = RuntimeSessionStoreReadParams & {
   entry: RuntimeSessionEntry;
 };
+type RuntimeSessionWorkAdmissionParams = {
+  storePath: string;
+  sessionKey: string;
+  signal?: AbortSignal;
+};
 type RuntimeSessionStoreEntryUpdateParams = {
   storePath: string;
   sessionKey: string;
@@ -250,6 +255,10 @@ export type PluginRuntimeCore = {
         params: RuntimeSessionStoreEntryPatchParams,
       ) => Promise<RuntimeSessionEntry | null>;
       upsertSessionEntry: (params: RuntimeUpsertSessionEntryParams) => Promise<void>;
+      runWithWorkAdmission: <T>(
+        params: RuntimeSessionWorkAdmissionParams,
+        run: (signal: AbortSignal) => Promise<T>,
+      ) => Promise<T>;
       /**
        * @deprecated Use getSessionEntry/listSessionEntries for reads and
        * patchSessionEntry/upsertSessionEntry for writes. This whole-store

@@ -1,6 +1,12 @@
 // Coverage for embedded run auth initialization and runtime credential refresh.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { isSecretValueRegisteredForRedaction } from "../../../logging/secret-redaction-registry.js";
+import {
+  looksLikeSecretSentinel,
+  mintSecretSentinel,
+  resolveSecretSentinel,
+} from "../../../secrets/sentinel.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { FailoverError } from "../../failover-error.js";
 import type { RuntimeAuthState } from "./helpers.js";
@@ -207,6 +213,87 @@ describe("createEmbeddedRunAuthController", () => {
     expect(harness.runtimeAuthState?.sourceApiKey).toBe("source-api-key");
     expect(harness.runtimeAuthState?.authMode).toBe("api-key");
     expect(harness.runtimeAuthState?.profileId).toBe("default");
+  });
+
+  it("unwraps a sentinel for runtime auth exchange but keeps auth storage opaque", async () => {
+    const harness = createMutableAuthControllerHarness();
+    const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+    const secret = "runtime-exchange-source-secret";
+    const sentinel = mintSecretSentinel(secret, { label: "model-auth:custom-openai" });
+    mocks.getApiKeyForModel.mockResolvedValue({
+      apiKey: sentinel,
+      mode: "api-key",
+      source: "profile:custom-openai:default",
+    });
+    mocks.prepareProviderRuntimeAuth.mockResolvedValue({
+      apiKey: "runtime-exchange-token",
+      request: {
+        auth: {
+          mode: "header",
+          headerName: "api-key",
+          value: "runtime-header-token",
+        },
+      },
+    });
+
+    const controller = createMutableEmbeddedRunAuthController({ harness, setRuntimeApiKey });
+    await controller.initializeAuthProfile();
+
+    expect(mocks.getApiKeyForModel).toHaveBeenCalledWith(
+      expect.objectContaining({ secretSentinels: true }),
+    );
+    expect(mocks.prepareProviderRuntimeAuth).toHaveBeenCalledWith(
+      expect.objectContaining({ context: expect.objectContaining({ apiKey: secret }) }),
+    );
+    const storedApiKey = setRuntimeApiKey.mock.calls[0]?.[1];
+    expect(storedApiKey && looksLikeSecretSentinel(storedApiKey)).toBe(true);
+    expect(storedApiKey && resolveSecretSentinel(storedApiKey)).toBe("runtime-exchange-token");
+    const storedHeader = harness.runtimeModel.headers?.["api-key"];
+    expect(storedHeader && looksLikeSecretSentinel(storedHeader)).toBe(true);
+    expect(storedHeader && resolveSecretSentinel(storedHeader)).toBe("runtime-header-token");
+  });
+
+  it("preserves an empty runtime-auth result for fallback validation", async () => {
+    const harness = createMutableAuthControllerHarness();
+    const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+    const sentinel = mintSecretSentinel("runtime-source-secret", {
+      label: "model-auth:custom-openai",
+    });
+    mocks.getApiKeyForModel.mockResolvedValue({
+      apiKey: sentinel,
+      mode: "api-key",
+      source: "profile:custom-openai:default",
+    });
+    mocks.prepareProviderRuntimeAuth.mockResolvedValue({ apiKey: "" });
+
+    const controller = createMutableEmbeddedRunAuthController({ harness, setRuntimeApiKey });
+    await controller.initializeAuthProfile();
+
+    expect(setRuntimeApiKey).toHaveBeenCalledWith("custom-openai", sentinel);
+  });
+
+  it("registers exchanged credentials when sentinels are disabled", async () => {
+    vi.stubEnv("OPENCLAW_SECRET_SENTINELS", "off");
+    const harness = createMutableAuthControllerHarness();
+    const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+    const source = mintSecretSentinel("kill-switch-source-secret", {
+      label: "model-auth:custom-openai",
+    });
+    mocks.getApiKeyForModel.mockResolvedValue({
+      apiKey: source,
+      mode: "api-key",
+      source: "profile:custom-openai:default",
+    });
+    mocks.prepareProviderRuntimeAuth.mockResolvedValue({ apiKey: "kill-switch-runtime-token" });
+
+    try {
+      const controller = createMutableEmbeddedRunAuthController({ harness, setRuntimeApiKey });
+      await controller.initializeAuthProfile();
+      expect(setRuntimeApiKey).toHaveBeenCalledWith("custom-openai", "kill-switch-runtime-token");
+      expect(isSecretValueRegisteredForRedaction("kill-switch-runtime-token")).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("includes the checked credential source when an api key is missing", async () => {

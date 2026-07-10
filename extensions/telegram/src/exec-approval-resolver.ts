@@ -3,7 +3,7 @@ import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
-export type ResolveTelegramExecApprovalParams = {
+type ResolveTelegramExecApprovalParams = {
   cfg: OpenClawConfig;
   approvalId: string;
   decision: ExecApprovalReplyDecision;

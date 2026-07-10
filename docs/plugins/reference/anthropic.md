@@ -16,7 +16,7 @@ Adds Anthropic model provider support to OpenClaw.
 
 ## Surface
 
-providers: anthropic; contracts: mediaUnderstandingProviders
+providers: anthropic; contracts: mediaUnderstandingProviders, usageProviders
 
 ## Related docs
 

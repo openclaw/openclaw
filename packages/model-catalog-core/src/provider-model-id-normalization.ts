@@ -1,4 +1,5 @@
 // Model Catalog Core module implements provider model id normalization behavior.
+import { parseModelCatalogRef } from "./model-catalog-refs.js";
 import { normalizeLowercaseStringOrEmpty } from "./provider-id.js";
 import {
   normalizeGooglePreviewModelId,
@@ -138,6 +139,8 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       "opus-4.8": "claude-opus-4-8",
       opus: "claude-opus-4-8",
       "opus-4.6": "claude-opus-4-6",
+      "sonnet-5": "claude-sonnet-5",
+      sonnet: "claude-sonnet-5",
       "sonnet-4.6": "claude-sonnet-4-6",
     };
     const anthropicPrefix = "anthropic/";
@@ -150,6 +153,8 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
   if (normalizedProvider === "vercel-ai-gateway") {
     const vercelAliases: Record<string, string> = {
       "opus-4.6": "claude-opus-4-6",
+      "sonnet-5": "claude-sonnet-5",
+      sonnet: "claude-sonnet-4-6",
       "sonnet-4.6": "claude-sonnet-4-6",
     };
     const aliased = vercelAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;
@@ -220,17 +225,17 @@ export function normalizeConfiguredProviderCatalogModelId(
 export function normalizeConfiguredProviderCatalogModelRef(providerModel: string): string {
   const googlePrefix = "google/";
   if (!providerModel.startsWith(googlePrefix)) {
-    const slash = providerModel.indexOf("/");
-    if (slash <= 0 || slash >= providerModel.length - 1) {
+    const parsed = parseModelCatalogRef(providerModel);
+    if (!parsed) {
       return providerModel;
     }
-    const prefix = providerModel.slice(0, slash + 1);
-    const suffix = providerModel.slice(slash + 1);
-    if (!suffix.startsWith(googlePrefix)) {
+    if (!parsed.modelId.startsWith(googlePrefix)) {
       return providerModel;
     }
-    const normalizedSuffix = normalizeGooglePreviewModelId(suffix);
-    return normalizedSuffix === suffix ? providerModel : `${prefix}${normalizedSuffix}`;
+    const normalizedModelId = normalizeGooglePreviewModelId(parsed.modelId);
+    return normalizedModelId === parsed.modelId
+      ? providerModel
+      : `${parsed.provider}/${normalizedModelId}`;
   }
   const modelId = providerModel.slice(googlePrefix.length);
   const normalizedModelId = normalizeGooglePreviewModelId(modelId);

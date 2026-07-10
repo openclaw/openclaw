@@ -453,6 +453,84 @@ describe("createTelegramBot channel_post media", () => {
     }
   });
 
+  it("warns instead of dispatching a placeholder when Telegram getFile fails (#100000)", async () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 1234, type: "private" },
+        message_id: 100000,
+        date: 1736380800,
+        document: { file_id: "doc-100000", file_name: "report.pdf" },
+        from: { id: 55, is_bot: false, first_name: "u" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => {
+        throw new Error("Network request for 'getFile' failed!");
+      },
+    });
+
+    await waitForMockCalls(sendMessageSpy, 1);
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      1234,
+      "⚠️ Failed to download media. Please try again.",
+      expect.objectContaining({
+        reply_parameters: expect.objectContaining({ message_id: 100000 }),
+      }),
+    );
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(saveRemoteMedia).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { mediaMaxMb: 100, expectedLimitMb: 20 },
+    { mediaMaxMb: 10, expectedLimitMb: 10 },
+  ])(
+    "reports the effective $expectedLimitMb MB limit for Telegram Bot API failures (#100000)",
+    async ({ mediaMaxMb, expectedLimitMb }) => {
+      loadConfig.mockReturnValue({
+        channels: { telegram: { dmPolicy: "open", allowFrom: ["*"], mediaMaxMb } },
+      });
+      sendMessageSpy.mockClear();
+      replySpy.mockClear();
+
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 1234, type: "private" },
+          message_id: 100001,
+          date: 1736380800,
+          document: { file_id: "doc-100001", file_name: "large.bin" },
+          from: { id: 55, is_bot: false, first_name: "u" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => {
+          throw new Error("Bad Request: file is too big");
+        },
+      });
+
+      await waitForMockCalls(sendMessageSpy, 1);
+      expect(sendMessageSpy).toHaveBeenCalledWith(
+        1234,
+        `⚠️ File too large. Maximum size is ${expectedLimitMb}MB.`,
+        expect.objectContaining({
+          reply_parameters: expect.objectContaining({ message_id: 100001 }),
+        }),
+      );
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(saveRemoteMedia).not.toHaveBeenCalled();
+    },
+  );
+
   it("durably retries a spooled-replay shutdown-abort document fetch without warning (#98076)", async () => {
     loadConfig.mockReturnValue({
       channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },

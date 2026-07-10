@@ -17,7 +17,7 @@ export type AgentRunSessionTarget = {
 };
 
 /** File-backed target resolved from the storage-neutral run identity. */
-export type ResolvedAgentRunSessionTarget = SessionTranscriptRuntimeTarget;
+type ResolvedAgentRunSessionTarget = SessionTranscriptRuntimeTarget;
 
 /** Resolves the active file-backed target used by current run/session internals. */
 export async function resolveAgentRunSessionTarget(params: {

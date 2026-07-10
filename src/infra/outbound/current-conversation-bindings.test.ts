@@ -104,6 +104,28 @@ function setMinimalCurrentConversationRegistry(): void {
           },
         },
       },
+      {
+        pluginId: "forum",
+        source: "test",
+        plugin: {
+          id: "forum",
+          meta: { aliases: [] },
+          conversationBindings: {
+            supportsCurrentConversationBinding: true,
+          },
+        },
+      },
+      {
+        pluginId: "googlechat",
+        source: "test",
+        plugin: {
+          id: "googlechat",
+          meta: { aliases: [] },
+          conversationBindings: {
+            supportsCurrentConversationBinding: true,
+          },
+        },
+      },
     ]),
   );
 }

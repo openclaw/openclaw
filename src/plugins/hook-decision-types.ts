@@ -46,7 +46,7 @@ export function resolveBlockMessage(
 }
 
 /** Outcome severity for most-restrictive-wins merging. Higher = more restrictive. */
-export const HOOK_DECISION_SEVERITY: Record<HookDecision["outcome"], number> = {
+const HOOK_DECISION_SEVERITY: Record<HookDecision["outcome"], number> = {
   pass: 0,
   block: 2,
 };

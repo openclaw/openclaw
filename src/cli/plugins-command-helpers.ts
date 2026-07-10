@@ -2,6 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { HOOK_INSTALL_ERROR_CODE } from "../hooks/install.js";
 import type { PluginKind } from "../plugins/plugin-kind.types.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
@@ -169,10 +170,10 @@ export function enableInternalHookEntries(
 
 export function formatPluginInstallWithHookFallbackError(
   pluginError: string,
-  hookError: string,
+  hookFallback: { error: string; code?: string },
 ): string {
   const formattedPluginError = formatPluginInstallAttemptError(pluginError);
-  const formattedHookError = formatPluginInstallAttemptError(hookError);
+  const formattedHookError = formatPluginInstallAttemptError(hookFallback.error);
   if (/plugin already exists: .+ \(delete it first\)/.test(pluginError)) {
     return `${formattedPluginError}\nUse \`openclaw plugins update <id-or-npm-spec>\` to upgrade the tracked plugin, or rerun install with \`--force\` to replace it.`;
   }
@@ -180,6 +181,9 @@ export function formatPluginInstallWithHookFallbackError(
     pluginError.startsWith("Invalid extensions directory:") ||
     pluginError === "Invalid path: must stay within extensions directory"
   ) {
+    return formattedPluginError;
+  }
+  if (hookFallback.code === HOOK_INSTALL_ERROR_CODE.MISSING_OPENCLAW_HOOKS) {
     return formattedPluginError;
   }
   return `${formattedPluginError}\nAlso not a valid hook pack: ${formattedHookError}`;

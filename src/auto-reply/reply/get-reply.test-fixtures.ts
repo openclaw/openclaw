@@ -1,6 +1,7 @@
 // Shared get-reply test fixtures for sessions, directives, and mocked runtimes.
 import { expect, vi, type Mock } from "vitest";
 import type { MsgContext } from "../templating.js";
+import type { ReasoningLevel, ThinkLevel } from "../thinking.js";
 
 export function buildGetReplyCtx(overrides: Partial<MsgContext> = {}): MsgContext {
   return {
@@ -89,6 +90,8 @@ export function createGetReplyContinueDirectivesResult(params: {
   resetHookTriggered: boolean;
   provider?: string;
   model?: string;
+  resolvedThinkLevel?: ThinkLevel;
+  resolvedReasoningLevel?: ReasoningLevel;
 }) {
   return {
     kind: "continue" as const,
@@ -117,9 +120,9 @@ export function createGetReplyContinueDirectivesResult(params: {
       elevatedAllowed: false,
       elevatedFailures: [],
       defaultActivation: "always",
-      resolvedThinkLevel: undefined,
+      resolvedThinkLevel: params.resolvedThinkLevel,
       resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
+      resolvedReasoningLevel: params.resolvedReasoningLevel ?? "off",
       resolvedElevatedLevel: "off",
       execOverrides: undefined,
       blockStreamingEnabled: false,

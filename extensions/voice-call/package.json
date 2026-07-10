@@ -8,8 +8,8 @@
   },
   "type": "module",
   "dependencies": {
-    "commander": "14.0.3",
-    "typebox": "1.1.39",
+    "commander": "15.0.0",
+    "typebox": "1.3.3",
     "ws": "8.21.0",
     "zod": "4.4.3"
   },

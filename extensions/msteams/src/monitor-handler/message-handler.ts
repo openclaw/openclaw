@@ -23,16 +23,17 @@ import {
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { serializeMSTeamsAdaptiveCardActionValue } from "../adaptive-card-submit.js";
 import {
-  buildMSTeamsAttachmentPlaceholder,
   buildMSTeamsMediaPayload,
-  type MSTeamsAttachmentLike,
+  resolveMSTeamsInboundAttachmentPresentation,
   summarizeMSTeamsHtmlAttachments,
+  type MSTeamsAttachmentLike,
 } from "../attachments.js";
-import { isRecord } from "../attachments/shared.js";
+import { extractHtmlFromAttachment } from "../attachments/shared.js";
 import { tryNormalizeBotFrameworkServiceUrl } from "../bot-framework-service-url.js";
 import type { StoredConversationReference } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import {
+  fetchChatMessageText,
   fetchThreadReplies,
   formatThreadContext,
   resolveTeamGroupId,
@@ -58,18 +59,7 @@ import {
 
 function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): string {
   for (const attachment of attachments) {
-    if (attachment.contentType !== "text/html") {
-      continue;
-    }
-    const content = attachment.content;
-    const raw =
-      typeof content === "string"
-        ? content
-        : isRecord(content) && typeof content.text === "string"
-          ? content.text
-          : isRecord(content) && typeof content.body === "string"
-            ? content.body
-            : "";
+    const raw = extractHtmlFromAttachment(attachment);
     if (!raw) {
       continue;
     }
@@ -101,7 +91,7 @@ import {
   wasMSTeamsMessageSentWithPersistence,
 } from "../sent-message-cache.js";
 import { resolveMSTeamsSenderAccess } from "./access.js";
-import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
+import { resolveMSTeamsInboundMedia, resolveMSTeamsInboundMediaBody } from "./inbound-media.js";
 import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 
 function formatMSTeamsSenderReason(params: {
@@ -231,10 +221,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const rawText = params.rawText;
     const text = params.text;
     const attachments = params.attachments;
-    const attachmentPlaceholder = buildMSTeamsAttachmentPlaceholder(attachments, {
+    const attachmentPresentation = resolveMSTeamsInboundAttachmentPresentation(attachments, {
       maxInlineBytes: mediaMaxBytes,
       maxInlineTotalBytes: mediaMaxBytes,
     });
+    const attachmentPlaceholder = attachmentPresentation.placeholder;
     const rawBody = text || attachmentPlaceholder;
     const quoteInfo = extractMSTeamsQuoteInfo(attachments);
     let quoteSenderId: string | undefined;
@@ -599,6 +590,27 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       }
     }
 
+    // The inbound Teams blockquote only carries a truncated `preview` snippet for
+    // quote replies. When we have the quoted message id, fetch the complete text
+    // via the app-only `GET /chats/{chatId}/messages/{id}` endpoint (allowed with
+    // Chat.Read.All). Restricted to 1:1 DMs on purpose: in a group chat an
+    // allowlisted sender could quote a non-allowlisted member, and the fetched
+    // full body would bypass the supplemental-quote visibility allowlist applied
+    // below. DMs have only two participants, so there is no third-party exposure.
+    // Group/channel quotes keep the (now-surfaced) truncated preview from fix 1.
+    // Any failure degrades to that preview, so message handling never breaks.
+    let quoteBodyFull: string | undefined;
+    if (quoteInfo?.id && isDirectMessage && graphConversationId.startsWith("19:")) {
+      try {
+        const graphToken = await tokenProvider.getAccessToken("https://graph.microsoft.com");
+        quoteBodyFull = await fetchChatMessageText(graphToken, graphConversationId, quoteInfo.id);
+      } catch (err) {
+        log.debug?.("failed to fetch full quoted message text", {
+          error: formatUnknownError(err),
+        });
+      }
+    }
+
     const mediaList = await resolveMSTeamsInboundMedia({
       attachments,
       htmlSummary: htmlSummary ?? undefined,
@@ -621,6 +633,16 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     });
 
     const mediaPayload = buildMSTeamsMediaPayload(mediaList);
+    const materializedMediaPlaceholder = resolveMSTeamsInboundAttachmentPresentation(
+      mediaList.map((media) => ({ contentType: media.contentType, name: media.path })),
+    ).placeholder;
+    const agentBody = resolveMSTeamsInboundMediaBody({
+      body: rawBody,
+      mediaPlaceholder: attachmentPlaceholder,
+      materializedMediaPlaceholder,
+      expectedMediaCount: attachmentPresentation.expectedMediaCount,
+      mediaCount: mediaList.length,
+    });
 
     // Fetch thread history when the message is a reply inside a Teams channel thread.
     // This is a best-effort enhancement; errors are logged and do not block the reply.
@@ -717,7 +739,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       timestamp,
       previousTimestamp,
       envelope: envelopeOptions,
-      body: rawBody,
+      body: agentBody,
     });
     let combinedBody = body;
     const isRoomish = !isDirectMessage;
@@ -760,8 +782,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         : true;
     // Prepend thread history to the agent body so the agent has full thread context.
     const bodyForAgent = threadContext
-      ? `[Thread history]\n${threadContext}\n[/Thread history]\n\n${rawBody}`
-      : rawBody;
+      ? `[Thread history]\n${threadContext}\n[/Thread history]\n\n${agentBody}`
+      : agentBody;
 
     // For Teams *channel* messages (not group chats / DMs), preserve the
     // `teamId/channelId` pair on NativeChannelId so downstream action handlers
@@ -776,8 +798,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       supplemental: {
         quote: quoteInfo
           ? {
-              id: activity.replyToId ?? undefined,
-              body: quoteInfo.body,
+              id: quoteInfo.id ?? activity.replyToId ?? undefined,
+              body: quoteBodyFull ?? quoteInfo.body,
               sender: quoteInfo.sender,
               senderAllowed: quoteSenderAllowed,
               isQuote: true,

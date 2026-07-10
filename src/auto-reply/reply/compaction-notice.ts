@@ -2,13 +2,19 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReplyPayload } from "../types.js";
 
-export type CompactionNoticePhase = "start" | "end" | "incomplete" | "skipped";
+export type CompactionNoticePhase =
+  | "start"
+  | "end"
+  | "incomplete"
+  | "skipped"
+  | "memory_flush_degraded";
 
 const COMPACTION_NOTICE_TEXT: Record<CompactionNoticePhase, string> = {
   start: "🧹 Compacting context...",
   end: "🧹 Compaction complete",
   incomplete: "🧹 Compaction incomplete",
   skipped: "🧹 Compaction not needed",
+  memory_flush_degraded: "⚠️ Memory maintenance temporarily failed; continuing your reply.",
 };
 
 export function shouldNotifyUserAboutCompaction(cfg?: OpenClawConfig): boolean {

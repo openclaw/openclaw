@@ -46,16 +46,24 @@ function getToolFunction(tool: Record<string, unknown>): Record<string, unknown>
 
 function resolveLiveXaiModel() {
   return {
-    id: "grok-4.3",
-    name: "Grok 4.3",
+    id: "grok-4.5",
+    name: "Grok 4.5",
     api: "openai-responses",
     provider: "xai",
     baseUrl: "https://api.x.ai/v1",
     reasoning: true,
     input: ["text", "image"],
-    cost: { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
-    contextWindow: 1_000_000,
+    cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+    contextWindow: 500_000,
     maxTokens: 64_000,
+    thinkingLevelMap: {
+      off: null,
+      minimal: "low",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "high",
+    },
   } satisfies Model<"openai-responses">;
 }
 
@@ -103,7 +111,7 @@ async function collectDoneMessage(
 
 describeLive("xai live", () => {
   it(
-    "returns assistant text for Grok 4.3",
+    "returns assistant text for Grok 4.5",
     async () => {
       await runXaiLiveCase("complete", async () => {
         const model = requireLiveValue(resolveLiveXaiModel(), "xAI model");
@@ -148,6 +156,7 @@ describeLive("xai live", () => {
         {
           apiKey: XAI_KEY,
           maxTokens: 128,
+          reasoning: "low",
           onPayload: (payload) => {
             capturedPayload = payload as Record<string, unknown>;
           },
@@ -159,6 +168,7 @@ describeLive("xai live", () => {
       );
       expect(Array.isArray(doneMessage.content)).toBe(true);
       const payload = requireLiveValue(capturedPayload, "captured xAI payload");
+      expect(payload.reasoning).toMatchObject({ effort: "low" });
       if ("tool_stream" in payload) {
         expect(payload.tool_stream).toBe(true);
       }

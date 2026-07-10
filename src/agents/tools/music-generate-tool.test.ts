@@ -119,7 +119,10 @@ const musicGenerateBackgroundMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("../../config/config.js", () => configMocks);
+vi.mock("../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/config.js")>()),
+  ...configMocks,
+}));
 vi.mock("../../media/store.js", () => mediaStoreMocks);
 vi.mock("../../media/web-media.js", async () => {
   const actual = await vi.importActual<typeof import("../../media/web-media.js")>(

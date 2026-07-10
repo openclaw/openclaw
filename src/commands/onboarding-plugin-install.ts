@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveBundledInstallPlanForCatalogEntry } from "../cli/plugin-install-plan.js";
 import { invalidatePluginRuntimeDiscoveryAfterConfigMutation } from "../cli/plugins-registry-refresh.js";
@@ -381,7 +382,11 @@ function resolveInstallDefaultChoice(params: {
   if (updateChannel === "dev") {
     return "local";
   }
-  if (updateChannel === "stable" || updateChannel === "beta") {
+  if (
+    updateChannel === "stable" ||
+    updateChannel === "extended-stable" ||
+    updateChannel === "beta"
+  ) {
     return remoteDefault();
   }
   if (entryDefault === "local") {
@@ -533,8 +538,10 @@ function summarizeInstallError(message: string): string {
   if (!cleaned) {
     return "Unknown install failure";
   }
-  return cleaned.length > 180 ? `${cleaned.slice(0, 179)}…` : cleaned;
+  return cleaned.length > 180 ? `${truncateUtf16Safe(cleaned, 179)}…` : cleaned;
 }
+
+export const testing = { summarizeInstallError };
 
 function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && error.message === "timeout";
@@ -1137,6 +1144,10 @@ export async function ensureOnboardingPluginInstalled(params: {
     ? resolveNpmInstallSpecsForUpdateChannel({
         spec: npmSpec,
         updateChannel,
+        officialPackageName: entry.trustedSourceLinkedOfficialInstall
+          ? parseRegistryNpmSpec(npmSpec)?.name
+          : undefined,
+        coreVersion: VERSION,
       })
     : null;
   const clawhubInstallSpec = clawhubSpecs?.installSpec ?? clawhubSpec;
@@ -1383,7 +1394,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       spec: resolveNpmInstallRecordSpec({
         requestedSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
         resolution: result.npmResolution,
-        pinResolvedRegistrySpec: entry.trustedSourceLinkedOfficialInstall === true,
+        pinResolvedRegistrySpec: false,
       }),
       installPath: result.targetDir,
       version: result.version,
