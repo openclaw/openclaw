@@ -700,11 +700,15 @@ export async function startTelegramWebhook(opts: {
     closeTransportPromise ??= telegramTransport.close();
     return closeTransportPromise;
   };
+  const botAbortController = new AbortController();
+  const botFetchAbortSignal = opts.abortSignal
+    ? AbortSignal.any([opts.abortSignal, botAbortController.signal])
+    : botAbortController.signal;
   const bot = createTelegramBot({
     token: opts.token,
     runtime,
     proxyFetch: opts.fetch,
-    fetchAbortSignal: opts.abortSignal,
+    fetchAbortSignal: botFetchAbortSignal,
     config: opts.config,
     accountId: opts.accountId,
     telegramTransport,
@@ -717,6 +721,7 @@ export async function startTelegramWebhook(opts: {
       retryPolicy: webhookRegistrationRetryPolicy,
     });
   } catch (err) {
+    botAbortController.abort();
     await bot.stop();
     await closeTransportOnce();
     throw err;
@@ -977,6 +982,7 @@ export async function startTelegramWebhook(opts: {
     if (shutDown) {
       return;
     }
+    botAbortController.abort();
     shutDown = true;
     if (drainTimer) {
       clearInterval(drainTimer);

@@ -461,11 +461,7 @@ function webhookUrl(port: number, webhookPath: string): string {
 
 async function withStartedWebhook<T>(
   options: StartWebhookOptions,
-  run: (ctx: {
-    server: StartedWebhook["server"];
-    port: number;
-    abortSignal: AbortSignal;
-  }) => Promise<T>,
+  run: (ctx: { server: StartedWebhook["server"]; port: number }) => Promise<T>,
 ): Promise<T> {
   const abort = new AbortController();
   const started = await startTelegramWebhook({
@@ -476,11 +472,7 @@ async function withStartedWebhook<T>(
     ...options,
   });
   try {
-    return await run({
-      server: started.server,
-      port: getServerPort(started.server),
-      abortSignal: abort.signal,
-    });
+    return await run({ server: started.server, port: getServerPort(started.server) });
   } finally {
     await started.stop();
     abort.abort();
@@ -534,7 +526,7 @@ async function runNearLimitPayloadTestAndExpectUpdate(
 }
 
 describe("startTelegramWebhook", () => {
-  it("starts server, wires shutdown into media fetches, registers webhook, and serves health", async () => {
+  it("starts server, registers webhook, and serves health", async () => {
     initSpy.mockClear();
     createTelegramBotSpy.mockClear();
     const runtimeLog = vi.fn();
@@ -548,7 +540,7 @@ describe("startTelegramWebhook", () => {
         runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
         setStatus,
       },
-      async ({ port, abortSignal }) => {
+      async ({ port }) => {
         const botParams = requireRecord(
           requireMockCall(createTelegramBotSpy, 0, "createTelegramBot")[0],
           "createTelegramBot params",
@@ -556,7 +548,6 @@ describe("startTelegramWebhook", () => {
         expect(botParams.accountId).toBe("opie");
         expect(requireRecord(botParams.config, "telegram config").bindings).toEqual([]);
         expect(botParams.telegramTransport).toBeDefined();
-        expect(botParams.fetchAbortSignal).toBe(abortSignal);
         const health = await fetch(`http://127.0.0.1:${port}/healthz`);
         expect(health.status).toBe(200);
         expect(initSpy).toHaveBeenCalledTimes(1);
@@ -582,6 +573,41 @@ describe("startTelegramWebhook", () => {
         expect(connectedStatus.lastError).toBeNull();
       },
     );
+  });
+
+  it("aborts bot media fetches when the webhook stops", async () => {
+    const callerAbort = new AbortController();
+    const started = await startTelegramWebhook({
+      token: TELEGRAM_TOKEN,
+      secret: TELEGRAM_SECRET,
+      port: 0,
+      abortSignal: callerAbort.signal,
+      path: TELEGRAM_WEBHOOK_PATH,
+      spoolDir: requireWebhookSpoolDir(),
+    });
+
+    try {
+      const botParams = requireRecord(
+        requireMockCall(createTelegramBotSpy, 0, "createTelegramBot")[0],
+        "createTelegramBot params",
+      );
+      const fetchAbortSignal = botParams.fetchAbortSignal;
+      expect(fetchAbortSignal).toBeInstanceOf(AbortSignal);
+      if (!(fetchAbortSignal instanceof AbortSignal)) {
+        throw new Error("expected bot fetch abort signal");
+      }
+      const aborted = new Promise<void>((resolve) => {
+        fetchAbortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+
+      await started.stop();
+
+      await expect(aborted).resolves.toBeUndefined();
+      expect(callerAbort.signal.aborted).toBe(false);
+    } finally {
+      await started.stop();
+      callerAbort.abort();
+    }
   });
 
   it("keeps local listener alive and retries when setWebhook has a recoverable startup failure", async () => {
