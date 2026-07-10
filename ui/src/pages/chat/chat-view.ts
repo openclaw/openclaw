@@ -188,6 +188,7 @@ export function renderChat(props: ChatProps) {
     queue: props.queue,
     showThinking: props.showThinking,
     showToolCalls: props.showToolCalls,
+    runActive: Boolean(props.canAbort),
     sessions: props.sessions,
     assistantName: props.assistantName,
     assistantAvatar: props.assistantAvatar,

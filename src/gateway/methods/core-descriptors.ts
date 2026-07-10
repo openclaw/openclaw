@@ -288,6 +288,9 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // Session PR chips read the session's own checkout metadata, matching the
   // sessions.files.* trusted-operator read domain.
   { name: "controlUi.sessionPullRequests", scope: "operator.read" },
+  // Spends utility-model tokens on cache misses, so it needs write scope
+  // despite being a read-shaped lookup.
+  { name: "chat.toolTitles", scope: "operator.write" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

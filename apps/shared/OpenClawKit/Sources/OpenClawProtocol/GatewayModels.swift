@@ -9429,6 +9429,42 @@ public struct ChatMessageGetResult: Codable, Sendable {
     }
 }
 
+public struct ChatToolTitlesParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let items: [[String: AnyCodable]]
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        items: [[String: AnyCodable]])
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.items = items
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case items
+    }
+}
+
+public struct ChatToolTitlesResult: Codable, Sendable {
+    public let titles: [String: AnyCodable]
+
+    public init(
+        titles: [String: AnyCodable])
+    {
+        self.titles = titles
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case titles
+    }
+}
+
 public struct ChatSendParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?

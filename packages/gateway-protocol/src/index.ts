@@ -165,6 +165,10 @@ import {
   type ChatInjectParams,
   ChatInjectParamsSchema,
   ChatSendParamsSchema,
+  type ChatToolTitlesParams,
+  type ChatToolTitlesResult,
+  ChatToolTitlesParamsSchema,
+  ChatToolTitlesResultSchema,
   type ConfigApplyParams,
   ConfigApplyParamsSchema,
   type ConfigGetParams,
@@ -1188,6 +1192,9 @@ export const validateTerminalEvent = lazyCompile<TerminalEvent>(TerminalEventSch
 export const validateChatHistoryParams = lazyCompile(ChatHistoryParamsSchema);
 export const validateChatMetadataParams = lazyCompile<ChatMetadataParams>(ChatMetadataParamsSchema);
 export const validateChatMessageGetParams = lazyCompile(ChatMessageGetParamsSchema);
+export const validateChatToolTitlesParams = lazyCompile<ChatToolTitlesParams>(
+  ChatToolTitlesParamsSchema,
+);
 export const validateChatSendParams = lazyCompile(ChatSendParamsSchema);
 export const validateChatAbortParams = lazyCompile<ChatAbortParams>(ChatAbortParamsSchema);
 export const validateChatInjectParams = lazyCompile<ChatInjectParams>(ChatInjectParamsSchema);
@@ -1549,6 +1556,8 @@ export {
   ChatMetadataParamsSchema,
   ChatSendParamsSchema,
   ChatInjectParamsSchema,
+  ChatToolTitlesParamsSchema,
+  ChatToolTitlesResultSchema,
   UpdateRunParamsSchema,
   TickEventSchema,
   ShutdownEventSchema,
@@ -1695,6 +1704,8 @@ export type {
   AgentsListParams,
   AgentsListResult,
   ChatMetadataParams,
+  ChatToolTitlesParams,
+  ChatToolTitlesResult,
   CommandsListParams,
   CommandsListResult,
   CommandEntry,

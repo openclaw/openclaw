@@ -94,7 +94,7 @@ describe("tool-cards", () => {
     container.remove();
   });
 
-  it("renders expanded cards with inline input and output sections", () => {
+  it("renders expanded cards with key-value args and an output section", () => {
     const container = document.createElement("div");
     const toggle = vi.fn();
     render(
@@ -111,14 +111,18 @@ describe("tool-cards", () => {
       container,
     );
 
+    // Simple object args render as key-value rows instead of a raw JSON block.
+    const kvRows = Array.from(container.querySelectorAll(".chat-tool-kv__row"));
+    expect(kvRows).toHaveLength(1);
+    expect(kvRows[0]?.querySelector(".chat-tool-kv__key")?.textContent).toBe("url:");
+    expect(kvRows[0]?.querySelector(".chat-tool-kv__value")?.textContent).toBe(
+      "https://example.com",
+    );
     const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
     expect(
       blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
-    ).toEqual(["Tool input", "Tool output"]);
-    expect(blocks.map((block) => block.querySelector("code")?.textContent)).toEqual([
-      '{\n  "url": "https://example.com"\n}',
-      "Opened page",
-    ]);
+    ).toEqual(["Tool output"]);
+    expect(blocks[0]?.querySelector("code")?.textContent).toBe("Opened page");
   });
 
   it("does not repeat the tool identity in expanded details", () => {
@@ -142,9 +146,11 @@ describe("tool-cards", () => {
     );
 
     expect(container.textContent?.match(/Skill Workshop/g)).toHaveLength(1);
-    const bodyText = container.querySelector(".chat-tool-msg-body")?.textContent ?? "";
-    expect(bodyText).not.toContain("Skill Workshop");
-    expect(bodyText).toContain('"action": "create"');
+    const body = container.querySelector(".chat-tool-msg-body");
+    expect(body?.textContent).not.toContain("Skill Workshop");
+    const kvRow = body?.querySelector(".chat-tool-kv__row");
+    expect(kvRow?.querySelector(".chat-tool-kv__key")?.textContent).toBe("action:");
+    expect(kvRow?.querySelector(".chat-tool-kv__value")?.textContent).toBe("create");
     expect(container.querySelector(".chat-tool-card__action-btn")).toBeInstanceOf(
       HTMLButtonElement,
     );
@@ -165,13 +171,18 @@ describe("tool-cards", () => {
       container,
     );
 
-    const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
+    // No raw blocks: simple args render as key-value rows and there is no output.
+    expect(container.querySelector(".chat-tool-card__block")).toBeNull();
+    const kvRows = Array.from(container.querySelectorAll(".chat-tool-kv__row"));
     expect(
-      blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
-    ).toEqual(["Tool input"]);
-    expect(blocks[0]?.querySelector("code")?.textContent).toBe(
-      '{\n  "mode": "session",\n  "thread": true\n}',
-    );
+      kvRows.map((row) => [
+        row.querySelector(".chat-tool-kv__key")?.textContent,
+        row.querySelector(".chat-tool-kv__value")?.textContent,
+      ]),
+    ).toEqual([
+      ["mode:", "session"],
+      ["thread:", "true"],
+    ]);
   });
 
   it("labels collapsed tool calls with the display summary", () => {
