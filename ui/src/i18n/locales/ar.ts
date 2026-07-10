@@ -532,6 +532,7 @@ export const ar: TranslationMap = {
     on: "تشغيل",
     off: "متوقف",
     full: "كامل",
+    commentary: "تعليق",
     stream: "تدفّق",
     customOption: "{value} (مخصّص)",
     manual: "يدوي",

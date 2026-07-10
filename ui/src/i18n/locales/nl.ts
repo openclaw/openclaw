@@ -537,6 +537,7 @@ export const nl: TranslationMap = {
     on: "aan",
     off: "uit",
     full: "volledig",
+    commentary: "commentaar",
     stream: "stream",
     customOption: "{value} (aangepast)",
     manual: "handmatig",

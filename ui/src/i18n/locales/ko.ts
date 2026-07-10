@@ -533,6 +533,7 @@ export const ko: TranslationMap = {
     on: "켜짐",
     off: "꺼짐",
     full: "전체",
+    commentary: "해설",
     stream: "스트림",
     customOption: "{value}(사용자 지정)",
     manual: "수동",

@@ -541,6 +541,7 @@ export const fr: TranslationMap = {
     on: "activé",
     off: "désactivé",
     full: "complet",
+    commentary: "commentaire",
     stream: "flux",
     customOption: "{value} (personnalisé)",
     manual: "manuel",

@@ -1,9 +1,10 @@
-// Implements TUI session actions such as switching, forking, and resuming.
 import type { TUI } from "@earendil-works/pi-tui";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
+// Implements TUI session actions such as switching, forking, and resuming.
+import { resolveVerboseKinds } from "../auto-reply/thinking.js";
 import {
   agentSessionKeysMatchByRequestKey,
   normalizeAgentId,
@@ -482,7 +483,9 @@ export function createSessionActions(context: SessionActionContext) {
       if (!sessionInfo) {
         await refreshSessionInfo();
       }
-      const showTools = (state.sessionInfo.verboseLevel ?? "off") !== "off";
+      // History replay must match live rendering: only the toolSummaries
+      // lane shows tool results ("commentary" hides them in both places).
+      const showTools = resolveVerboseKinds(state.sessionInfo.verboseLevel)?.toolSummaries === true;
       const historyUsers: Array<{ text: string; timestamp?: number | null }> = [];
       chatLog.clearAll({ preservePendingUsers: true });
       btw.clear();

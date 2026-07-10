@@ -535,6 +535,7 @@ export const fa: TranslationMap = {
     on: "روشن",
     off: "خاموش",
     full: "کامل",
+    commentary: "تفسیر",
     stream: "جریان",
     customOption: "{value} (سفارشی)",
     manual: "دستی",

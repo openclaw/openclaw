@@ -537,6 +537,7 @@ export const ru: TranslationMap = {
     on: "вкл.",
     off: "выкл.",
     full: "полный",
+    commentary: "комментарий",
     stream: "поток",
     customOption: "{value} (пользовательское)",
     manual: "ручной",

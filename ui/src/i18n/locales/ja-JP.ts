@@ -540,6 +540,7 @@ export const ja_JP: TranslationMap = {
     on: "オン",
     off: "オフ",
     full: "フル",
+    commentary: "コメンタリー",
     stream: "ストリーム",
     customOption: "{value}（カスタム）",
     manual: "手動",

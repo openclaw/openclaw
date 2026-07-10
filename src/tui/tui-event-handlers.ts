@@ -2,6 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyFailoverReason, isAuthErrorMessage } from "../agents/embedded-agent-helpers.js";
+import { resolveVerboseKinds } from "../auto-reply/thinking.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import {
@@ -1034,9 +1035,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (isActiveRun) {
         armStreamingWatchdog(evt.runId);
       }
-      const verbose = state.sessionInfo.verboseLevel ?? "off";
-      const allowToolEvents = verbose !== "off";
-      const allowToolOutput = verbose === "full";
+      const verboseKinds = resolveVerboseKinds(state.sessionInfo.verboseLevel);
+      const allowToolEvents = verboseKinds?.toolSummaries === true;
+      const allowToolOutput = verboseKinds?.toolOutput === true;
       if (!allowToolEvents) {
         return;
       }

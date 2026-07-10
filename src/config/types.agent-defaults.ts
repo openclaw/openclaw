@@ -364,7 +364,11 @@ export type AgentDefaultsConfig = {
     | "adaptive"
     | "max"
     | "ultra";
-  /** Default verbose level when no /verbose directive is present. */
+  /**
+   * Default verbose level when no /verbose directive is present.
+   * Note: `commentary` is a session-level `/verbose` level only, not a
+   * persisted default (keeps the config forward/backward compatible).
+   */
   verboseDefault?: "off" | "on" | "full";
   /**
    * Detail mode for user-visible tool progress in /verbose and editable progress drafts.

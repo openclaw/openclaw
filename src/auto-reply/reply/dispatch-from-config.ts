@@ -134,7 +134,7 @@ import {
   type ReplyPayload,
 } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
-import { normalizeVerboseLevel } from "../thinking.js";
+import { resolveVerboseKinds } from "../thinking.js";
 import {
   takeCommandSessionMetadataChanges,
   type CommandSessionMetadataChange,
@@ -485,9 +485,14 @@ const createShouldEmitVerboseProgress = (params: {
   sessionKey?: string;
   storePath?: string;
   initialExplicitLevel?: string;
-  fallbackLevel: string;
+  fallbackLevel: string | undefined;
 }) => {
-  const resolveCurrentExplicitLevel = () => {
+  const fallbackKinds = resolveVerboseKinds(params.fallbackLevel ?? "") ?? {
+    commentary: false,
+    toolSummaries: false,
+    toolOutput: false,
+  };
+  const resolveCurrentExplicitKinds = () => {
     if (params.sessionKey && params.storePath) {
       try {
         const entry = loadSessionStoreEntry({
@@ -497,23 +502,18 @@ const createShouldEmitVerboseProgress = (params: {
           readConsistency: "latest",
           clone: false,
         });
-        return normalizeVerboseLevel(entry?.verboseLevel ?? "");
+        return resolveVerboseKinds(entry?.verboseLevel ?? "");
       } catch {
         // Ignore transient store read failures and fall back to the current dispatch snapshot.
       }
     }
-    return normalizeVerboseLevel(params.initialExplicitLevel ?? "");
+    return resolveVerboseKinds(params.initialExplicitLevel ?? "");
   };
-  const resolveLevel = () => {
-    const explicitLevel = resolveCurrentExplicitLevel();
-    if (explicitLevel) {
-      return explicitLevel;
-    }
-    return normalizeVerboseLevel(params.fallbackLevel) ?? "off";
-  };
+  const resolveKinds = () => resolveCurrentExplicitKinds() ?? fallbackKinds;
   return {
-    shouldEmit: () => resolveLevel() !== "off",
-    shouldEmitFull: () => resolveLevel() === "full",
+    shouldEmitCommentary: () => resolveKinds().commentary,
+    shouldEmitToolSummaries: () => resolveKinds().toolSummaries,
+    shouldEmitToolOutput: () => resolveKinds().toolOutput,
   };
 };
 
@@ -1842,15 +1842,13 @@ async function dispatchReplyFromConfigInner(
     storePath: sessionStoreEntry.storePath,
     initialExplicitLevel: sessionStoreEntry.entry?.verboseLevel,
     fallbackLevel:
-      normalizeVerboseLevel(
-        sessionStoreEntry.entry?.verboseLevel ??
-          sessionAgentCfg?.verboseDefault ??
-          cfg.agents?.defaults?.verboseDefault ??
-          "",
-      ) ?? "off",
+      sessionStoreEntry.entry?.verboseLevel ??
+      sessionAgentCfg?.verboseDefault ??
+      cfg.agents?.defaults?.verboseDefault,
   });
-  const shouldEmitVerboseProgress = verboseProgress.shouldEmit;
-  const shouldEmitFullVerboseProgress = verboseProgress.shouldEmitFull;
+  const shouldEmitCommentaryProgress = verboseProgress.shouldEmitCommentary;
+  const shouldEmitToolSummaryProgress = verboseProgress.shouldEmitToolSummaries;
+  const shouldEmitToolOutputProgress = verboseProgress.shouldEmitToolOutput;
   const replyRoute = resolveEffectiveReplyRoute({ ctx, entry: sessionStoreEntry.entry });
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
@@ -2992,7 +2990,7 @@ async function dispatchReplyFromConfigInner(
 
     emitMessageReceivedHooks();
 
-    const shouldSuppressDefaultToolProgressMessages = () => !shouldEmitVerboseProgress();
+    const shouldSuppressDefaultToolProgressMessages = () => !shouldEmitToolSummaryProgress();
     const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();
     const shouldSendToolSummaries = () => shouldSendVerboseProgressMessages();
     const shouldSendToolStartStatuses = false;
@@ -3027,8 +3025,7 @@ async function dispatchReplyFromConfigInner(
       sourceReplyDeliveryMode === "message_tool_only" &&
       ctx.InboundEventKind !== "room_event" &&
       !sendPolicyDenied &&
-      shouldEmitVerboseProgress() &&
-      shouldSendVerboseProgressMessages();
+      (shouldEmitCommentaryProgress() || shouldSendVerboseProgressMessages());
     const shouldDeliverForcedToolProgressDespiteSourceSuppression = () =>
       suppressAutomaticSourceDelivery &&
       sourceReplyDeliveryMode === "message_tool_only" &&
@@ -3063,7 +3060,7 @@ async function dispatchReplyFromConfigInner(
     // and flushed when the producer moves on, always before the final reply.
     let pendingCommentaryProgress: { itemId?: string; text: string } | null = null;
     const deliverCommentaryProgressMessage = async (text: string) => {
-      if (!shouldSendToolSummaries() || shouldSuppressProgressDelivery()) {
+      if (!shouldEmitCommentaryProgress() || shouldSuppressProgressDelivery()) {
         return;
       }
       const payload: ReplyPayload = { text: `💬 ${text}` };
@@ -3109,7 +3106,7 @@ async function dispatchReplyFromConfigInner(
     const shouldSuppressMessageToolOnlyTextErrorProgress = (payload: ReplyPayload) => {
       if (
         sourceReplyDeliveryMode !== "message_tool_only" ||
-        shouldEmitFullVerboseProgress() ||
+        shouldEmitToolOutputProgress() ||
         payload.isError !== true
       ) {
         return false;
@@ -3431,7 +3428,7 @@ async function dispatchReplyFromConfigInner(
       }
       const normalizedLabel = normalizeWorkingLabel(label);
       if (
-        !shouldEmitVerboseProgress() ||
+        !shouldEmitToolSummaryProgress() ||
         !shouldSendToolStartStatuses ||
         !normalizedLabel ||
         toolStartStatusCount >= 2 ||
@@ -3566,8 +3563,8 @@ async function dispatchReplyFromConfigInner(
       sendPolicyDenied ||
       (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
     const hasVisibleRegularVerboseToolProgress = () =>
-      shouldEmitVerboseProgress() &&
-      !shouldEmitFullVerboseProgress() &&
+      shouldEmitToolSummaryProgress() &&
+      !shouldEmitToolOutputProgress() &&
       shouldSendVerboseProgressMessages() &&
       ctx.InboundEventKind !== "room_event" &&
       !shouldSuppressProgressDelivery();
@@ -3590,7 +3587,7 @@ async function dispatchReplyFromConfigInner(
       if (params.replyOptions?.suppressToolErrorWarnings !== undefined) {
         return params.replyOptions.suppressToolErrorWarnings;
       }
-      if (!shouldEmitVerboseProgress()) {
+      if (!shouldEmitToolSummaryProgress()) {
         return false;
       }
       return observedVisibleToolErrorProgress ? true : undefined;
@@ -3741,7 +3738,7 @@ async function dispatchReplyFromConfigInner(
     // Snapshot verbose progress visibility for this run: commentary
     // classification in the CLI runners is wired once at run start, so a
     // mid-run verbose toggle cannot move inter-tool commentary between lanes.
-    const deliverStandaloneCommentaryProgress = shouldEmitVerboseProgress();
+    const deliverStandaloneCommentaryProgress = shouldEmitCommentaryProgress();
     const itemEventForwardingOptions = {
       forwardWhenSourceDeliverySuppressed: true,
       requiresToolSummaryVisibility: true,
@@ -3797,7 +3794,7 @@ async function dispatchReplyFromConfigInner(
     params.replyOptions?.onVerboseProgressVisibility?.(
       () =>
         deliverStandaloneCommentaryProgress &&
-        shouldSendVerboseProgressMessages() &&
+        shouldEmitCommentaryProgress() &&
         !shouldSuppressProgressDelivery(),
     );
 

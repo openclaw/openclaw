@@ -536,6 +536,7 @@ export const vi: TranslationMap = {
     on: "bật",
     off: "tắt",
     full: "đầy đủ",
+    commentary: "bình luận",
     stream: "luồng",
     customOption: "{value} (tùy chỉnh)",
     manual: "thủ công",

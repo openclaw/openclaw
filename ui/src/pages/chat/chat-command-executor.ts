@@ -68,11 +68,16 @@ export type SlashCommandContext = {
   agentId?: string;
 };
 
-function normalizeVerboseLevel(raw?: string | null): "off" | "on" | "full" | undefined {
+function normalizeVerboseLevel(
+  raw?: string | null,
+): "off" | "on" | "full" | "commentary" | undefined {
   if (!raw) {
     return undefined;
   }
   const key = normalizeLowercaseStringOrEmpty(raw);
+  if (key === "commentary") {
+    return "commentary";
+  }
   if (["off", "false", "no", "0"].includes(key)) {
     return "off";
   }
@@ -340,7 +345,7 @@ async function executeVerbose(
       return {
         content: formatDirectiveOptions(
           `Current verbose level: ${normalizeVerboseLevel(session?.verboseLevel) ?? "off"}.`,
-          "on, full, off",
+          "on, full, commentary, off",
         ),
       };
     } catch (err) {
@@ -351,7 +356,7 @@ async function executeVerbose(
   const level = normalizeVerboseLevel(rawLevel);
   if (!level) {
     return {
-      content: `Unrecognized verbose level "${rawLevel}". Valid levels: off, on, full.`,
+      content: `Unrecognized verbose level "${rawLevel}". Valid levels: off, on, full, commentary.`,
     };
   }
 

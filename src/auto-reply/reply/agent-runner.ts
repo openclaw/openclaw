@@ -75,7 +75,7 @@ import {
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
-import type { VerboseLevel } from "../thinking.js";
+import { resolveVerboseKinds, type VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
@@ -336,7 +336,7 @@ function buildInlinePluginStatusPayload(params: {
   includeTraceLines: boolean;
 }): ReplyPayload | undefined {
   const statusLines =
-    params.entry?.verboseLevel && params.entry.verboseLevel !== "off"
+    resolveVerboseKinds(params.entry?.verboseLevel)?.toolSummaries === true
       ? resolveSessionPluginStatusLines(params.entry)
       : [];
   const traceLines =
@@ -1855,7 +1855,9 @@ export async function runReplyAgent(params: {
       lastCallUsage,
     });
     recordReplyUsageState(runId, replyUsageState);
-    const verboseEnabled = resolvedVerboseLevel !== "off";
+    // Operational notices (new-session, auto-compaction, plugin status) ride
+    // the toolSummaries lane: "commentary" delivers narration only.
+    const verboseEnabled = resolveVerboseKinds(resolvedVerboseLevel)?.toolSummaries === true;
     const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
       followupRun.run.inputProvenance,
     );

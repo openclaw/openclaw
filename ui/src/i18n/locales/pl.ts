@@ -534,6 +534,7 @@ export const pl: TranslationMap = {
     on: "wł.",
     off: "wył.",
     full: "pełne",
+    commentary: "komentarz",
     stream: "strumień",
     customOption: "{value} (niestandardowe)",
     manual: "ręcznie",

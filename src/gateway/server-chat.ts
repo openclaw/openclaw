@@ -8,7 +8,7 @@ import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failov
 import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-common.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
-import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
+import { resolveVerboseKinds } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   type AgentEventPayload,
@@ -1239,15 +1239,15 @@ export function createAgentEventHandler({
     chatRunState.agentDeltaSentAt.set(key, now);
   };
 
-  const resolveToolVerboseLevel = (runId: string, sessionKey?: string) => {
+  const resolveToolVerboseKinds = (runId: string, sessionKey?: string) => {
     const runContext = getAgentRunContext(runId);
-    const runVerbose = normalizeVerboseLevel(runContext?.verboseLevel);
+    const runVerbose = resolveVerboseKinds(runContext?.verboseLevel);
     if (!sessionKey) {
-      return runVerbose ?? "off";
+      return runVerbose;
     }
     try {
       const { cfg, entry } = loadSessionEntry(sessionKey);
-      const sessionVerbose = normalizeVerboseLevel(entry?.verboseLevel);
+      const sessionVerbose = resolveVerboseKinds(entry?.verboseLevel);
       const sessionUpdatedAt = typeof entry?.updatedAt === "number" ? entry.updatedAt : undefined;
       const sessionChangedAfterRunStarted =
         sessionUpdatedAt !== undefined &&
@@ -1259,10 +1259,9 @@ export function createAgentEventHandler({
       if (runVerbose) {
         return runVerbose;
       }
-      const defaultVerbose = normalizeVerboseLevel(cfg.agents?.defaults?.verboseDefault);
-      return defaultVerbose ?? "off";
+      return resolveVerboseKinds(cfg.agents?.defaults?.verboseDefault);
     } catch {
-      return runVerbose ?? "off";
+      return runVerbose;
     }
   };
 
@@ -1340,14 +1339,14 @@ export function createAgentEventHandler({
     const last = agentRunSeq.get(evt.runId) ?? 0;
     const isToolEvent = evt.stream === "tool";
     const isItemEvent = evt.stream === "item";
-    const toolVerbose = isToolEvent ? resolveToolVerboseLevel(evt.runId, sessionKey) : "off";
+    const toolVerbose = isToolEvent ? resolveToolVerboseKinds(evt.runId, sessionKey) : undefined;
     const suppressHeartbeatToolEvents =
       isToolEvent && shouldSuppressHeartbeatToolEvents(clientRunId, evt.runId);
     const shouldCoalesceAgentEvent = shouldCoalesceAgentTextEvent(evt);
     // Channel/node subscribers respect verbose; authenticated Control UI
     // recipients need tool result payloads to render live tool cards.
     const channelToolPayload =
-      isToolEvent && toolVerbose !== "full"
+      isToolEvent && toolVerbose?.toolOutput !== true
         ? (() => {
             const data = evt.data ? { ...evt.data } : {};
             delete data.result;
@@ -1526,7 +1525,7 @@ export function createAgentEventHandler({
         isControlUiVisible &&
         isToolEvent &&
         !suppressHeartbeatToolEvents &&
-        toolVerbose !== "off"
+        toolVerbose?.toolSummaries === true
       ) {
         sendNodeAgentPayload(
           sessionKey,

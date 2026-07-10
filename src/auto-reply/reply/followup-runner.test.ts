@@ -2316,6 +2316,132 @@ describe("createFollowupRunner runtime config", () => {
     expect(callbackOrder).toEqual(["tool", "commentary"]);
   });
 
+  it("forwards embedded item preamble events under the commentary verbose level", async () => {
+    const onItemEvent = vi.fn(async () => {});
+    const onToolStart = vi.fn(async () => {});
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
+      }) => {
+        args.onAgentEvent?.({
+          stream: "item",
+          data: {
+            kind: "preamble",
+            itemId: "embedded-commentary-1",
+            progressText: "Checking the workspace.",
+          },
+        });
+        args.onAgentEvent?.({
+          stream: "tool",
+          data: { name: "exec", phase: "start", itemId: "tool-1" },
+        });
+        return { payloads: [{ text: "final" }], meta: {} };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onItemEvent, onToolStart },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "telegram",
+        run: {
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          messageProvider: "telegram",
+          verboseLevel: "commentary",
+        },
+      }),
+    );
+
+    expect(onItemEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "preamble",
+        progressText: "Checking the workspace.",
+        itemId: "embedded-commentary-1",
+      }),
+    );
+    // Commentary must not leak the tool lane on the embedded path.
+    expect(onToolStart).not.toHaveBeenCalled();
+  });
+
+  it("bridges queued commentary when the session switched to commentary after admission", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const onItemEvent = vi.fn(async () => {});
+    runCliAgentMock.mockImplementationOnce(
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
+        expect(params.emitCommentaryText).toBe(true);
+        realAgentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "item",
+          data: {
+            kind: "preamble",
+            itemId: "commentary-live-1",
+            progressText: "Reading the queue state.",
+          },
+        });
+        return {
+          payloads: [{ text: "final" }],
+          meta: {
+            agentMeta: {
+              provider: "claude-cli",
+              model: "claude-opus-4-7",
+            },
+          },
+        };
+      },
+    );
+
+    // No commentaryProgressEnabled admission flag: enablement must come from
+    // the live session verbose level ("commentary") at delivery time.
+    const runner = createFollowupRunner({
+      opts: { onItemEvent },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "telegram",
+        run: {
+          config: runtimeConfig,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          messageProvider: "telegram",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "commentary",
+        },
+      }),
+    );
+
+    expect(onItemEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "preamble",
+        progressText: "Reading the queue state.",
+        itemId: "commentary-live-1",
+      }),
+    );
+  });
+
   it("defers queued CLI attempt terminal lifecycle events until fallback settles", async () => {
     const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
       "../../infra/agent-events.js",
@@ -5808,6 +5934,28 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
         ...baseQueuedRun("discord"),
         originatingChannel: "discord",
         originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    const routed = requireMockCallArg(routeReplyMock, 0);
+    expect(requireRecord(routed.payload, "fallback payload")).toMatchObject({ isError: true });
+  });
+
+  it("keeps commentary-only output suppressed under the commentary verbose level", async () => {
+    // Parity with direct dispatch: /verbose commentary enables the commentary
+    // PROGRESS lane, not isCommentary final payloads — those stay behind the
+    // explicit commentaryPayloadsEnabled opt-in on the queued path too.
+    await runMessagingCase({
+      agentResult: { payloads: [{ text: "internal commentary", isCommentary: true }] },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...baseQueuedRun("discord").run,
+          verboseLevel: "commentary",
+        },
       } as FollowupRun,
     });
 
