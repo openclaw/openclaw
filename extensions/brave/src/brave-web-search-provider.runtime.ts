@@ -16,8 +16,8 @@ import {
   readCachedSearchPayload,
   readConfiguredSecretString,
   readPositiveIntegerParam,
-  readProviderEnvValue,
   readStringParam,
+  resolveWebSearchProviderCredential,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
@@ -91,12 +91,11 @@ function describeBraveRequestUrl(url: URL): {
 }
 
 function resolveBraveApiKey(searchConfig?: SearchConfigRecord): string | undefined {
-  return (
-    readConfiguredSecretString(
-      searchConfig?.apiKey,
-      "plugins.entries.brave.config.webSearch.apiKey",
-    ) ?? readProviderEnvValue(["BRAVE_API_KEY"])
-  );
+  return resolveWebSearchProviderCredential({
+    credentialValue: searchConfig?.apiKey,
+    path: "plugins.entries.brave.config.webSearch.apiKey",
+    envVars: ["BRAVE_API_KEY"],
+  });
 }
 
 function resolveBraveBaseUrl(braveConfig: { baseUrl?: unknown } | undefined): string {
