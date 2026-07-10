@@ -6,6 +6,10 @@ import type {
   MusicGenerationRequest,
 } from "openclaw/plugin-sdk/music-generation";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
+  createProviderOperationDeadline,
+  resolveProviderOperationTimeoutMs,
+} from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleGenerativeAiApiOrigin } from "./api.js";
 import {
@@ -147,19 +151,26 @@ export function buildGoogleMusicGenerationProvider(): MusicGenerationProvider {
         }
       }
 
-      const client = createGoogleGenAI({
-        apiKey: auth.apiKey,
-        httpOptions: {
-          ...(resolveConfiguredGoogleMusicBaseUrl(req)
-            ? { baseUrl: resolveConfiguredGoogleMusicBaseUrl(req) }
-            : {}),
-          timeout: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-        },
+      const configuredBaseUrl = resolveConfiguredGoogleMusicBaseUrl(req);
+      const operationTimeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      const deadline = createProviderOperationDeadline({
+        timeoutMs: operationTimeoutMs,
+        label: "Google music generation",
       });
       let generated: ReturnType<typeof extractTracks> | undefined;
       // Lyria promises audio for successful Clip responses, but has returned
       // unblocked text-only payloads transiently. Never retry explicit stops.
       for (let attempt = 0; attempt < 2; attempt += 1) {
+        const client = createGoogleGenAI({
+          apiKey: auth.apiKey,
+          httpOptions: {
+            ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
+            timeout: resolveProviderOperationTimeoutMs({
+              deadline,
+              defaultTimeoutMs: operationTimeoutMs,
+            }),
+          },
+        });
         const response = (await client.models.generateContent({
           model,
           contents: [

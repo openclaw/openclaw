@@ -28,6 +28,7 @@ type GoogleGenAIConfig = {
   apiKey?: string;
   httpOptions?: {
     baseUrl?: string;
+    timeout?: number;
   };
 };
 
@@ -43,6 +44,16 @@ function lastGoogleGenAIConfig(): GoogleGenAIConfig {
     throw new Error("Expected GoogleGenAI config");
   }
   return config as GoogleGenAIConfig;
+}
+
+function allGoogleGenAIConfigs(): GoogleGenAIConfig[] {
+  return (createGoogleGenAIMock.mock.calls as unknown[][]).map((call) => {
+    const config = call[0];
+    if (!config) {
+      throw new Error("Expected GoogleGenAI config");
+    }
+    return config as GoogleGenAIConfig;
+  });
 }
 
 function firstGenerateContentRequest(): GenerateContentRequest {
@@ -161,6 +172,36 @@ describe("google music generation provider", () => {
 
     expect(generateContentMock).toHaveBeenCalledTimes(2);
     expect(result.tracks[0]?.buffer).toEqual(Buffer.from("recovered-audio"));
+  });
+
+  it("shares the configured timeout budget across a no-audio retry", async () => {
+    mockGoogleAuth();
+    vi.spyOn(Date, "now")
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_000)
+      .mockReturnValue(2_500);
+    generateContentMock
+      .mockResolvedValueOnce({
+        candidates: [
+          {
+            content: { parts: [{ text: "[Verse]\nNeon lights" }] },
+            finishReason: "STOP",
+          },
+        ],
+      })
+      .mockResolvedValueOnce(googleMusicAudioResponse("recovered-audio"));
+
+    await buildGoogleMusicGenerationProvider().generateMusic({
+      provider: "google",
+      model: "lyria-3-clip-preview",
+      prompt: "upbeat synthpop anthem",
+      cfg: {},
+      timeoutMs: 5_000,
+    });
+
+    expect(allGoogleGenAIConfigs().map((config) => config.httpOptions?.timeout)).toEqual([
+      5_000, 3_500,
+    ]);
   });
 
   it("fails after one retry when Lyria keeps returning no audio", async () => {
