@@ -543,10 +543,7 @@ class ChatControllerOutboxTest {
       first.handleGatewayEvent("health", null)
       advanceUntilIdle()
 
-      val failed = first.outboxItems.value.single()
-      assertEquals(ChatOutboxStatus.Failed, failed.status)
-      assertEquals(0, failed.retryCount)
-      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, failed.lastError)
+      val ambiguous = first.outboxItems.value.single()
       assertEquals(listOf("send once"), gateway.sentMessages)
       assertFalse(first.healthOk.value)
 
@@ -554,7 +551,11 @@ class ChatControllerOutboxTest {
       first.handleGatewayEvent("health", null)
       first.handleGatewayEvent("health", null)
       advanceUntilIdle()
+      // Reconnect must not replay an ambiguous row; only the explicit retry below may dispatch it.
       assertEquals(1, gateway.sentMessages.size)
+      assertEquals(ChatOutboxStatus.Failed, ambiguous.status)
+      assertEquals(0, ambiguous.retryCount)
+      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, ambiguous.lastError)
 
       val restarted = controller(this, gateway, outbox)
       restarted.handleGatewayEvent("health", null)
@@ -567,9 +568,9 @@ class ChatControllerOutboxTest {
           .status,
       )
 
-      restarted.retryOutboxCommand(failed.id)
+      restarted.retryOutboxCommand(ambiguous.id)
       advanceUntilIdle()
-      assertEquals(listOf(failed.id, failed.id), gateway.sentIdempotencyKeys)
+      assertEquals(listOf(ambiguous.id, ambiguous.id), gateway.sentIdempotencyKeys)
       assertTrue(restarted.outboxItems.value.isEmpty())
     }
 
