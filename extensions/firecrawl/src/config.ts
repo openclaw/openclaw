@@ -81,7 +81,7 @@ export function resolveFirecrawlSearchConfig(cfg?: OpenClawConfig): FirecrawlSea
   if (!search || typeof search !== "object") {
     return undefined;
   }
-  const firecrawl = "firecrawl" in search ? search.firecrawl : undefined;
+  const firecrawl = Object.hasOwn(search, "firecrawl") ? search.firecrawl : undefined;
   if (!firecrawl || typeof firecrawl !== "object") {
     return undefined;
   }
@@ -98,7 +98,7 @@ function resolveFirecrawlFetchConfig(cfg?: OpenClawConfig): FirecrawlFetchConfig
   if (!fetch || typeof fetch !== "object") {
     return undefined;
   }
-  const firecrawl = "firecrawl" in fetch ? fetch.firecrawl : undefined;
+  const firecrawl = Object.hasOwn(fetch, "firecrawl") ? fetch.firecrawl : undefined;
   if (!firecrawl || typeof firecrawl !== "object") {
     return undefined;
   }
