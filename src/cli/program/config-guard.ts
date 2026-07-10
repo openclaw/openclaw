@@ -208,6 +208,7 @@ export async function ensureConfigReady(params: {
         migrateState: true,
         migrateLegacyConfig: false,
         invalidConfigNote: false,
+        ...(commandName === "status" ? { observe: false } : {}),
         ...(shouldRequireStartupMigrationCheckpoint(commandPath)
           ? { requireStartupMigrationCheckpoint: true }
           : {}),
