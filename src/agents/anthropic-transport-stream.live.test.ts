@@ -4,9 +4,9 @@
  * transport against the configured provider.
  */
 import http from "node:http";
+import { streamAnthropic } from "@openclaw/ai/internal/anthropic";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { streamAnthropic } from "../llm/providers/anthropic.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { isLiveBillingDrift } from "./live-test-provider-drift.js";
@@ -16,6 +16,8 @@ const describeLive = LIVE ? describe : describe.skip;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
 const PROVIDER_LIVE = isLiveTestEnabled(["ANTHROPIC_LIVE_TEST"]) && Boolean(ANTHROPIC_KEY);
 const describeProviderLive = PROVIDER_LIVE ? describe : describe.skip;
+const OPUS_TUPLE_LIVE = isLiveTestEnabled(["ANTHROPIC_LIVE_TEST"]) && Boolean(ANTHROPIC_KEY);
+const describeOpusTupleLive = OPUS_TUPLE_LIVE ? describe : describe.skip;
 
 type AnthropicMessagesModel = Model<"anthropic-messages">;
 type AnthropicStreamFn = ReturnType<typeof createAnthropicMessagesTransportStreamFn>;
@@ -159,6 +161,69 @@ describeLive("anthropic transport stream live", () => {
       await closeServer(server);
     }
   }, 10_000);
+});
+
+describeOpusTupleLive("anthropic Opus tuple schema provider live", () => {
+  it("accepts a draft-07 tuple tool after Anthropic projection", async () => {
+    const model: AnthropicMessagesModel = {
+      id: "claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 512,
+    };
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "Call tuple_probe with range [1, 2]." }],
+          tools: [
+            {
+              name: "tuple_probe",
+              description: "Return a pair of integers.",
+              parameters: {
+                type: "object",
+                properties: {
+                  range: {
+                    type: "array",
+                    items: [{ type: "integer" }, { type: "integer" }],
+                    additionalItems: false,
+                  },
+                },
+                required: ["range"],
+              },
+            },
+          ],
+        } as unknown as AnthropicStreamContext,
+        {
+          apiKey: ANTHROPIC_KEY,
+          maxTokens: 128,
+          toolChoice: { type: "tool", name: "tuple_probe" },
+        } as AnthropicStreamOptions,
+      ),
+    );
+
+    const result = await stream.result();
+    if (skipAnthropicBillingDrift("Opus tuple schema", result)) {
+      return;
+    }
+    const toolCall = result.content.find(
+      (block) => block.type === "toolCall" && block.name === "tuple_probe",
+    );
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(toolCall).toMatchObject({
+      type: "toolCall",
+      name: "tuple_probe",
+      arguments: { range: [1, 2] },
+    });
+  }, 45_000);
 });
 
 describeProviderLive("anthropic transport stream provider live", () => {

@@ -1,44 +1,22 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.ChatDraft
+import ai.openclaw.app.ChatDraftPlacement
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatComposerDraftTest {
   @Test
-  fun clearsLastAppliedDraftWhenViewModelDraftResets() {
-    val consumed =
-      applyDraftText(
-        draftText = "repeat this",
-        currentInput = "",
-        lastAppliedDraft = null,
-      )
+  fun replyDraftPreservesExistingComposerText() {
+    val draft = ChatDraft(text = "> quoted\n\n", placement = ChatDraftPlacement.BeforeExisting)
 
-    assertTrue(consumed.consumed)
-    assertEquals("repeat this", consumed.input)
-    assertEquals("repeat this", consumed.lastAppliedDraft)
+    assertEquals("> quoted\n\nmy reply", mergeChatDraft(draft, "my reply"))
+  }
 
-    val cleared =
-      applyDraftText(
-        draftText = null,
-        currentInput = consumed.input,
-        lastAppliedDraft = consumed.lastAppliedDraft,
-      )
+  @Test
+  fun replacementDraftReplacesExistingComposerText() {
+    val draft = ChatDraft(text = "repeat this", placement = ChatDraftPlacement.Replace)
 
-    assertFalse(cleared.consumed)
-    assertEquals("repeat this", cleared.input)
-    assertEquals(null, cleared.lastAppliedDraft)
-
-    val repeated =
-      applyDraftText(
-        draftText = "repeat this",
-        currentInput = cleared.input,
-        lastAppliedDraft = cleared.lastAppliedDraft,
-      )
-
-    assertTrue(repeated.consumed)
-    assertEquals("repeat this", repeated.input)
-    assertEquals("repeat this", repeated.lastAppliedDraft)
+    assertEquals("repeat this", mergeChatDraft(draft, "existing text"))
   }
 }

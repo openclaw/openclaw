@@ -7,14 +7,22 @@
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import { resolveCdpControlPolicy } from "../cdp-reachability-policy.js";
 import { withCdpSocket } from "../cdp.helpers.js";
 import { getChromeWebSocketUrl } from "../chrome.js";
+import { toBrowserErrorResponse } from "../errors.js";
 import { getPwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import type { ProfileContext } from "../server-context.js";
 import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
+import {
+  asyncBrowserRoute,
+  getProfileContext,
+  jsonBrowserError,
+  jsonError,
+  toStringOrEmpty,
+} from "./utils.js";
 
 const permissionRouteDeps = {
   getPwAiModule,
@@ -178,11 +186,11 @@ export function registerBrowserPermissionRoutes(
 
       try {
         await profileCtx.ensureBrowserAvailable();
-        const wsUrl = await getChromeWebSocketUrl(
-          profileCtx.profile.cdpUrl,
-          timeoutMs,
+        const cdpPolicy = resolveCdpControlPolicy(
+          profileCtx.profile,
           ctx.state().resolved.ssrfPolicy,
         );
+        const wsUrl = await getChromeWebSocketUrl(profileCtx.profile.cdpUrl, timeoutMs, cdpPolicy);
         if (!wsUrl) {
           return jsonError(res, 409, "browser CDP WebSocket unavailable");
         }
@@ -194,10 +202,14 @@ export function registerBrowserPermissionRoutes(
           requiredPermissions,
           optionalPermissions,
           timeoutMs,
-          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+          ssrfPolicy: cdpPolicy,
         });
         return res.json({ ok: true, origin, ...granted });
       } catch (error) {
+        const mapped = toBrowserErrorResponse(error);
+        if (mapped) {
+          return jsonBrowserError(res, mapped);
+        }
         return jsonError(res, 500, error instanceof Error ? error.message : String(error));
       }
     }),

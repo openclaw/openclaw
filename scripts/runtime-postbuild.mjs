@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mjs";
 import { copyPluginSdkRootAlias } from "./copy-plugin-sdk-root-alias.mjs";
+import { escapeRegExp } from "./lib/regexp.mjs";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
@@ -22,7 +23,6 @@ const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-
 const ROOT_STABLE_RUNTIME_ALIAS_PATTERN = /^.+\.(?:runtime|contract)\.js$/u;
 const ROOT_RUNTIME_IMPORT_SPECIFIER_PATTERN =
   /(["'])\.\/([^"']+\.(?:runtime|contract)-[A-Za-z0-9_-]+\.js)\1/gu;
-const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 const PLUGIN_SDK_ROOT_ALIAS_OUTPUT = "dist/plugin-sdk/root-alias.cjs";
 const OFFICIAL_CHANNEL_CATALOG_OUTPUT = "dist/channel-catalog.json";
 const LEGACY_ROOT_RUNTIME_COMPAT_ALIASES = [
@@ -149,14 +149,14 @@ export const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
 /**
  * Lists generated plugin SDK root-alias outputs.
  */
-export function listPluginSdkRootAliasOutputs() {
+function listPluginSdkRootAliasOutputs() {
   return [PLUGIN_SDK_ROOT_ALIAS_OUTPUT];
 }
 
 /**
  * Lists generated official channel catalog outputs.
  */
-export function listOfficialChannelCatalogOutputs() {
+function listOfficialChannelCatalogOutputs() {
   return [OFFICIAL_CHANNEL_CATALOG_OUTPUT];
 }
 
@@ -232,7 +232,7 @@ function resolveStableRootRuntimeAliasCandidate(params) {
 /**
  * Lists stable aliases for hashed root runtime/contract chunks.
  */
-export function listStableRootRuntimeAliasOutputs(params = {}) {
+function listStableRootRuntimeAliasOutputs(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
   const fsImpl = params.fs ?? fs;
@@ -252,7 +252,7 @@ export function listStableRootRuntimeAliasOutputs(params = {}) {
 /**
  * Lists compatibility chunk outputs required for old CLI exit paths.
  */
-export function listLegacyCliExitCompatOutputs(params = {}) {
+function listLegacyCliExitCompatOutputs(params = {}) {
   const chunks = params.chunks ?? LEGACY_CLI_EXIT_COMPAT_CHUNKS;
   return chunks
     .map(({ dest }) => dest.replace(/\\/g, "/"))
@@ -262,7 +262,7 @@ export function listLegacyCliExitCompatOutputs(params = {}) {
 /**
  * Lists legacy hashed runtime aliases that may be needed during live upgrades.
  */
-export function listLegacyRootRuntimeCompatOutputs(params = {}) {
+function listLegacyRootRuntimeCompatOutputs(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
   const fsImpl = params.fs ?? fs;

@@ -21,6 +21,16 @@ vi.mock("../channels/read-only-account-inspect.js", () => ({
   inspectReadOnlyChannelAccount: vi.fn(async () => null),
 }));
 
+// These doctor assertions cover core secret fields. Registry integration tests
+// own plugin-derived targets, so avoid compiling every bundled plugin here.
+vi.mock("../secrets/target-registry-data.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../secrets/target-registry-data.js")>();
+  return {
+    ...actual,
+    getSecretTargetRegistry: actual.getCoreSecretTargetRegistry,
+  };
+});
+
 import { noteSecurityWarnings } from "./doctor-security.js";
 
 describe("noteSecurityWarnings gateway exposure", () => {

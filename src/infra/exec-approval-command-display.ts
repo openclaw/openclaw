@@ -1,10 +1,10 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Sanitizes command text before it is displayed in approval prompts.
 import {
   computeSensitiveRedactionBitmap,
   redactSensitiveText,
   resolveRedactOptions,
 } from "../logging/redact.js";
-import { truncateUtf16Safe } from "../shared/utf16-slice.js";
 import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 
 // Escape control characters, Unicode format/line/paragraph separators, unpaired surrogates,

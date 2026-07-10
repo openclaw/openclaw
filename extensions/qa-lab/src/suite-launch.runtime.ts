@@ -52,7 +52,7 @@ export type QaSuiteRuntimeResult =
       result: QaUnifiedSuiteResult;
     };
 
-export type QaUnifiedSuiteResult = {
+type QaUnifiedSuiteResult = {
   evidencePath: string;
   outputDir: string;
   report: string;
@@ -460,9 +460,18 @@ async function runUnifiedQaSuite(params: {
       scenarioRequiresIsolatedQaSuiteWorker,
     );
     const sharedFlowPartitions = partitionSharedFlowScenarios(sharedFlowScenarios, concurrency);
+    // Channel-driver flow workers each launch a gateway plus transport harness.
+    // Serializing their isolated workers keeps state-mutating smoke checks from
+    // flaking under concurrent child gateways while preserving non-driver speed.
+    const channelDriverFlowRequiresExclusiveWorkers = Boolean(
+      params.runParams?.channelDriverSelection,
+    );
+    const isolatedFlowConcurrencyLimit = channelDriverFlowRequiresExclusiveWorkers
+      ? 1
+      : MAX_ISOLATED_FLOW_CONCURRENCY;
     const isolatedFlowConcurrency = Math.min(
       concurrency,
-      MAX_ISOLATED_FLOW_CONCURRENCY,
+      isolatedFlowConcurrencyLimit,
       isolatedFlowScenarios.length,
     );
     const isolatedFlowPartitions =
@@ -492,7 +501,10 @@ async function runUnifiedQaSuite(params: {
       const isolatedPartition =
         partition.kind === "isolated" || partition.kind.startsWith("isolated-");
       const task = {
-        weight: partition.concurrency,
+        weight:
+          isolatedPartition && channelDriverFlowRequiresExclusiveWorkers
+            ? concurrency
+            : partition.concurrency,
         run: async () => {
           const result = await runFlowSuite({
             ...params.runParams,

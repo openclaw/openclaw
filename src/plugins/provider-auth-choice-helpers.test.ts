@@ -1,24 +1,13 @@
 /** Verifies provider auth choice helper defaults, sorting, and config matching. */
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import { applyDefaultModel, applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
 
-describe("applyProviderAuthConfigPatch", () => {
-  beforeAll(() => {
-    applyProviderAuthConfigPatch(
-      {},
-      {
-        models: {
-          providers: {
-            google: {
-              models: [],
-            },
-          },
-        },
-      },
-    );
-  });
+const providerConfigNormalizer = ({ providerConfig }: { providerConfig: ModelProviderConfig }) =>
+  providerConfig;
 
+describe("applyProviderAuthConfigPatch", () => {
   const base = {
     agents: {
       defaults: {
@@ -145,7 +134,7 @@ describe("applyProviderAuthConfigPatch", () => {
       },
     };
 
-    const next = applyProviderAuthConfigPatch(baseLocal, patch);
+    const next = applyProviderAuthConfigPatch(baseLocal, patch, { providerConfigNormalizer });
     const provider = next.models?.providers?.["microsoft-foundry"] as
       | Record<string, unknown>
       | undefined;
@@ -265,7 +254,7 @@ describe("applyProviderAuthConfigPatch", () => {
       },
     } satisfies OpenClawConfig;
 
-    const next = applyProviderAuthConfigPatch({}, patch);
+    const next = applyProviderAuthConfigPatch({}, patch, { providerConfigNormalizer });
 
     expect(next.models?.providers?.google?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
     expect(next.models?.providers?.google?.api).toBe("openai-completions");
@@ -295,7 +284,7 @@ describe("applyProviderAuthConfigPatch", () => {
       },
     } satisfies OpenClawConfig;
 
-    const next = applyProviderAuthConfigPatch({}, patch);
+    const next = applyProviderAuthConfigPatch({}, patch, { providerConfigNormalizer });
 
     expect(next.models?.providers?.kilocode?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
   });

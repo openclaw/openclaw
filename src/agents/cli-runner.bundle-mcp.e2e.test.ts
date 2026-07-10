@@ -181,7 +181,7 @@ async function prepareBundleMcpExecutionContext(params: {
       bundleMcpMode: "claude-config-file",
     },
     preparedBackend,
-    reusableCliSession: {},
+    reusableCliSession: { mode: "none" },
     hadSessionFile: false,
     contextEngineConfig: params.config,
     modelId: params.model,

@@ -51,7 +51,7 @@ import {
 } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
-import { parseSessionLabel } from "../sessions/session-label.js";
+import { parseSessionLabel, SESSION_LABEL_MAX_LENGTH } from "../sessions/session-label.js";
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
@@ -183,6 +183,7 @@ export async function projectSessionsPatchEntry(params: {
       };
   if (existing && !existing.sessionId) {
     delete next.label;
+    delete next.category;
     delete next.displayName;
   }
 
@@ -366,6 +367,53 @@ export async function projectSessionsPatchEntry(params: {
         }
       }
       next.label = parsed.label;
+    }
+  }
+
+  if ("category" in patch) {
+    const raw = patch.category;
+    if (raw === null) {
+      delete next.category;
+    } else if (raw !== undefined) {
+      // Categories are shared organization buckets, so duplicates are expected (unlike labels).
+      const trimmed = normalizeOptionalString(raw) ?? "";
+      if (!trimmed) {
+        return invalid("invalid category: empty");
+      }
+      if (trimmed.length > SESSION_LABEL_MAX_LENGTH) {
+        return invalid(`invalid category: too long (max ${SESSION_LABEL_MAX_LENGTH})`);
+      }
+      next.category = trimmed;
+    }
+  }
+
+  if ("archived" in patch) {
+    if (patch.archived === true) {
+      // Archived sessions leave the active quick-access set in the same write.
+      next.archivedAt ??= now;
+      delete next.pinnedAt;
+    } else {
+      delete next.archivedAt;
+    }
+  }
+
+  if ("pinned" in patch) {
+    if (patch.pinned === true) {
+      if (next.archivedAt !== undefined) {
+        return invalid("cannot pin an archived session; restore it first");
+      }
+      next.pinnedAt ??= now;
+    } else {
+      delete next.pinnedAt;
+    }
+  }
+
+  if ("unread" in patch) {
+    if (patch.unread === true) {
+      next.markedUnreadAt = now;
+    } else {
+      next.lastReadAt = now;
+      delete next.markedUnreadAt;
     }
   }
 
@@ -584,7 +632,7 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
-  if (next.thinkingLevel) {
+  if (next.thinkingLevel && ("thinkingLevel" in patch || "model" in patch)) {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
     const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);

@@ -147,6 +147,94 @@ import Testing
         #expect(first == tmp.appendingPathComponent("node_modules/.bin").path)
     }
 
+    @Test func `managed install only precedes external installs after validation`() throws {
+        let home = try makeTempDirForTests()
+        let managedBin = home.appendingPathComponent(".openclaw/bin")
+        try FileManager().createDirectory(at: managedBin, withIntermediateDirectories: true)
+        let managedExecutable = managedBin.appendingPathComponent("openclaw")
+
+        let fallbackPaths = CommandResolver.preferredPaths(
+            home: home,
+            current: [],
+            projectRoot: home)
+        let validatedPaths = CommandResolver.preferredPaths(
+            home: home,
+            current: [],
+            projectRoot: home,
+            validatedExecutable: managedExecutable.path)
+
+        let packageManagerPath = home.appendingPathComponent("Library/pnpm").path
+        let fallbackManagedIndex = try #require(fallbackPaths.firstIndex(of: managedBin.path))
+        let fallbackPackageManagerIndex = try #require(fallbackPaths.firstIndex(of: packageManagerPath))
+        let validatedManagedIndex = try #require(validatedPaths.firstIndex(of: managedBin.path))
+        let validatedPackageManagerIndex = try #require(validatedPaths.firstIndex(of: packageManagerPath))
+        #expect(fallbackManagedIndex > fallbackPackageManagerIndex)
+        #expect(validatedManagedIndex < validatedPackageManagerIndex)
+    }
+
+    @Test func `node manager runtimes precede system runtimes`() throws {
+        let home = try makeTempDirForTests()
+        let nodeManagerBin = home.appendingPathComponent(".nvm/versions/node/v22.19.0/bin")
+        try makeExecutableForTests(at: nodeManagerBin.appendingPathComponent("node"))
+
+        let paths = CommandResolver.preferredPaths(
+            home: home,
+            current: [],
+            projectRoot: home)
+
+        let managerIndex = try #require(paths.firstIndex(of: nodeManagerBin.path))
+        let systemIndex = try #require(paths.firstIndex(of: "/opt/homebrew/bin"))
+        #expect(managerIndex < systemIndex)
+    }
+
+    @Test func `preferred paths include local user bin after system bins`() throws {
+        let home = try makeTempDirForTests()
+        let localBin = home.appendingPathComponent(".local/bin").path
+        let paths = CommandResolver.preferredPaths(
+            home: home,
+            current: [],
+            projectRoot: home)
+
+        let localIndex = try #require(paths.firstIndex(of: localBin))
+        let systemIndex = try #require(paths.firstIndex(of: "/bin"))
+        #expect(localIndex > systemIndex)
+        #expect(paths.count(where: { $0 == localBin }) == 1)
+    }
+
+    @Test func `SSH environment replaces path without dropping inherited values`() {
+        let paths = ["/usr/bin", "/bin", "/Users/test/.local/bin", "/opt/homebrew/bin"]
+        let environment = CommandResolver.sshEnvironment(
+            base: [
+                "HOME": "/Users/test",
+                "PATH": "/stale/path",
+                "SSH_AUTH_SOCK": "/tmp/ssh-agent.sock",
+            ],
+            searchPaths: paths)
+
+        #expect(environment["PATH"] == paths.joined(separator: ":"))
+        #expect(environment["HOME"] == "/Users/test")
+        #expect(environment["SSH_AUTH_SOCK"] == "/tmp/ssh-agent.sock")
+    }
+
+    @Test func `validated CLI preference expires when the app requires a newer version`() throws {
+        let defaults = self.makeDefaults()
+        let root = try makeTempDirForTests()
+        let executable = root.appendingPathComponent("openclaw")
+        FileManager().createFile(atPath: executable.path, contents: Data())
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        defaults.set(executable.path, forKey: cliValidatedExecutableKey)
+        defaults.set("2026.7.3", forKey: cliValidatedVersionKey)
+
+        #expect(CommandResolver.validatedOpenClawExecutable(
+            defaults: defaults,
+            fileManager: .default,
+            requiredVersion: "2026.7.3") == executable.path)
+        #expect(CommandResolver.validatedOpenClawExecutable(
+            defaults: defaults,
+            fileManager: .default,
+            requiredVersion: "2026.8.0") == nil)
+    }
+
     @Test func `builds SSH command for remote mode`() {
         let defaults = self.makeDefaults()
         defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)

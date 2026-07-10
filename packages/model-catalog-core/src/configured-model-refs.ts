@@ -17,6 +17,7 @@ export type ConfiguredModelRef = {
 /** Agent config keys that can contain direct model references. */
 export const AGENT_MODEL_CONFIG_KEYS = [
   "model",
+  "utilityModel",
   "imageModel",
   "imageGenerationModel",
   "videoGenerationModel",

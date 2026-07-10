@@ -72,7 +72,7 @@ async function readFirecrawlJsonResponse(
   return await readProviderJsonResponse<Record<string, unknown>>(response, label, opts);
 }
 
-export type FirecrawlSearchParams = {
+type FirecrawlSearchParams = {
   cfg?: OpenClawConfig;
   query: string;
   count?: number;
@@ -82,7 +82,7 @@ export type FirecrawlSearchParams = {
   scrapeResults?: boolean;
 };
 
-export type FirecrawlScrapeParams = {
+type FirecrawlScrapeParams = {
   cfg?: OpenClawConfig;
   url: string;
   extractMode: "markdown" | "text";
@@ -475,6 +475,10 @@ export function parseFirecrawlScrapePayload(params: {
   }
   const rawText = params.extractMode === "text" ? markdownToText(markdown) : markdown;
   const truncated = truncateText(rawText, params.maxChars);
+  const wrappedText = wrapExternalContent(truncated.text, {
+    source: "web_fetch",
+    includeWarning: false,
+  });
   return {
     url: params.url,
     finalUrl:
@@ -498,14 +502,8 @@ export function parseFirecrawlScrapePayload(params: {
     },
     truncated: truncated.truncated,
     rawLength: rawText.length,
-    wrappedLength: wrapExternalContent(truncated.text, {
-      source: "web_fetch",
-      includeWarning: false,
-    }).length,
-    text: wrapExternalContent(truncated.text, {
-      source: "web_fetch",
-      includeWarning: false,
-    }),
+    wrappedLength: wrappedText.length,
+    text: wrappedText,
     warning:
       typeof params.payload.warning === "string" && params.payload.warning
         ? wrapExternalContent(params.payload.warning, {

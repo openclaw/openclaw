@@ -1,11 +1,15 @@
 ---
 name: release-openclaw-maintainer
-description: Prepare or verify OpenClaw stable/beta releases, changelogs, release notes, publish commands, and artifacts.
+description: Prepare or verify OpenClaw stable, beta, and extended-stable releases, including backport discovery, changelogs, release notes, publish commands, and artifacts.
 ---
 
 # OpenClaw Release Maintainer
 
-Use this skill for release and publish-time workflow. Load `$release-private` if it exists before resolving Peter-owned credential locators or private host topology. Keep ordinary development changes and GHSA-specific advisory work outside this skill.
+Use this skill for release and publish-time workflow, including preparing the
+approved backport set for an extended-stable maintenance release. Load
+`$release-private` if it exists before resolving Peter-owned credential
+locators or private host topology. Keep ordinary development changes and
+GHSA-specific advisory work outside this skill.
 
 ## Respect release guardrails
 
@@ -13,7 +17,11 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
 - Versions use `YYYY.M.PATCH`, where `PATCH` is the sequential release-train number within the month, not the calendar day.
 - Choose a new beta train from stable and beta releases only. Alpha-only tags do not consume or advance the beta/stable patch number. Continue the highest existing unpublished/published beta train with the next `beta.N` when appropriate; otherwise increment the highest stable/beta patch by one and start at `beta.1`.
 - Example: after stable `2026.6.5`, the next new beta train is `2026.6.6-beta.1`, even if automated alpha-only tags such as `2026.6.10-alpha.1` exist.
-- Ask permission before any npm publish or release step.
+- Obtain explicit operator approval before the first irreversible publish
+  action. Instructions to cut, ship, publish, or get a named release out carry
+  through that release's validated publish and verification steps; do not ask
+  again at final dispatch. Reconfirm only if the target version, tag, channel,
+  publish scope, or a material risk changes.
 - This skill should be sufficient to drive the normal release flow end-to-end.
 - Use the private maintainer release docs for credentials, recovery steps, and mac signing/notary specifics, and use `docs/reference/RELEASING.md` for public policy.
 - Core `openclaw` publish is manual `workflow_dispatch`; creating or pushing a tag does not publish by itself.
@@ -134,9 +142,64 @@ prepare-run <PR>`.
 - When asked to announce on X, use `~/Projects/bird/bird` and follow the
   release tweet style below.
 
+## Prepare extended-stable backports
+
+When asked to create the initial `.33` extended-stable line or a later
+maintenance patch, read
+`references/extended-stable-backports.md` and follow it before version, tag, or
+publication work. Treat backport discovery and preparation as an ability of
+this release skill, not as a separate release workflow.
+
+The backport ability owns the complete mainline inventory, private-security
+reconciliation, candidate decisions, maintainer approval, coordinated staging
+PR, and proof handoff. After that PR lands, use the dedicated npm-only sequence
+below. Never route `.33+` through the regular beta/stable release sequence.
+
+## Publish extended-stable releases
+
+Use this path only for the trailing completed month's `.33+` line. Treat
+`docs/reference/RELEASING.md`,
+`scripts/openclaw-npm-extended-stable-release.mjs`, and the release workflows
+on pinned current `main` as the exact command and validation contract.
+
+1. Check out the canonical `extended-stable/YYYY.M.33` branch after the
+   approved backport PR lands. Require its tip, root package version, every
+   publishable official plugin version, and intended immutable `vYYYY.M.P` tag
+   to identify one exact release commit.
+2. Create and push `vYYYY.M.P` at that exact branch tip only after version prep
+   and focused backport proof are complete.
+3. Dispatch `openclaw-npm-release.yml` with `preflight_only=true` and
+   `npm_dist_tag=extended-stable` from the canonical branch. Save the successful
+   npm preflight run ID.
+4. Dispatch `full-release-validation.yml` from the same branch with
+   `ref=extended-stable/YYYY.M.33` and `release_profile=stable`. Save the
+   successful exact-head validation run ID.
+5. Dispatch `plugin-npm-release.yml` from the same branch with
+   `publish_scope=all-publishable`, the full release SHA as `ref`, and
+   `npm_dist_tag=extended-stable`. Require complete exact-version and selector
+   readback, then save the successful plugin run ID.
+6. Dispatch the real `openclaw-npm-release.yml` publish from the same branch
+   with the intended tag, `npm_dist_tag=extended-stable`, and all three saved
+   run IDs. The workflow must publish the exact prepared core tarball and prove
+   the referenced runs match the canonical branch and release SHA.
+7. Independently verify the exact core package, every official plugin package,
+   and all `extended-stable` selectors. If only the core selector readback
+   fails, use the `openclaw` repair command generated by the core workflow. If
+   an official-plugin selector is missing or stale for an already-published
+   version, use the approved credential-isolated release tooling for manual
+   plugin tag repair; the OIDC source workflow cannot mutate that tag. Never
+   republish an immutable version.
+8. Do not create a GitHub Release or publish macOS, Windows, Docker, mobile,
+   website, ClawHub, or private dist-tag artifacts from this path.
+
 ## Keep release channel naming aligned
 
-- `stable`: tagged releases only, published to npm `beta` by default; operators may target npm `latest` explicitly or promote later
+- `stable`: user updates resolve npm `latest`; tagged regular releases publish
+  to npm `beta` by default, then operators may target or promote to `latest`
+  explicitly
+- `extended-stable`: user updates resolve npm `extended-stable`; operators
+  publish the trailing completed month's `.33+` line from
+  `extended-stable/YYYY.M.33`
 - `beta`: prerelease tags like `vYYYY.M.PATCH-beta.N`, with npm dist-tag `beta`
 - Prefer `-beta.N`; do not mint new `-1` or `-2` beta suffixes
 - `dev`: moving head on `main`
@@ -758,7 +821,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 
 ## Run the release sequence
 
-1. Confirm the operator explicitly wants to cut a release.
+1. Confirm release intent once. Treat prior explicit instructions to cut, ship,
+   publish, or complete the named release as continuing authorization through
+   publish and verification. Reconfirm only if the release identity, channel,
+   publish scope, or material risk changes.
 2. Choose the exact target version and git tag.
 3. Commit any dirty files in coherent groups, push, pull/rebase, and verify the
    worktree is clean.

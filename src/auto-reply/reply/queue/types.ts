@@ -19,6 +19,7 @@ import type {
   QueuedReplyDeliveryCorrelation,
   QueuedReplyLifecycle,
   SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
 } from "../../get-reply-options.types.js";
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
@@ -62,8 +63,12 @@ export type FollowupRun = {
   currentInboundContext?: CurrentInboundPromptContext;
   /** Abort signal for turns that are canceled by their source-channel admission fence. */
   abortSignal?: AbortSignal;
+  /** Queue-owned cancellation fence used when lifecycle cleanup invalidates pending work. */
+  queueAbortSignal?: AbortSignal;
   deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   queuedLifecycle?: QueuedReplyLifecycle;
+  /** Dispatch-scoped freshness owner for a queued delivery-barrier wait. */
+  onFollowupAdmissionWaitChange?: (waiting: boolean) => void;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
@@ -100,6 +105,7 @@ export type FollowupRun = {
     sessionKey?: string;
     runtimePolicySessionKey?: string;
     messageProvider?: string;
+    clientCaps?: string[];
     chatType?: ChatType;
     agentAccountId?: string;
     groupId?: string;
@@ -148,6 +154,7 @@ export type FollowupRun = {
     inputProvenance?: InputProvenance;
     extraSystemPrompt?: string;
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
     silentReplyPromptMode?: SilentReplyPromptMode;
     extraSystemPromptStatic?: string;
     cliSessionBindingFacts?: CliSessionBindingFacts;
@@ -160,20 +167,35 @@ export type FollowupRun = {
   };
 };
 
-export function isFollowupRunAborted(run: Pick<FollowupRun, "abortSignal">): boolean {
-  return run.abortSignal?.aborted === true;
+export function isFollowupRunAborted(
+  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,
+): boolean {
+  return run.abortSignal?.aborted === true || run.queueAbortSignal?.aborted === true;
 }
 
 const enqueuedFollowupLifecycles = new WeakSet<QueuedReplyLifecycle>();
+const retiredFollowupCancellationLifecycles = new WeakSet<QueuedReplyLifecycle>();
 const completedFollowupLifecycles = new WeakSet<QueuedReplyLifecycle>();
 
-export function markFollowupRunEnqueued(run: Pick<FollowupRun, "queuedLifecycle">): void {
+export function markFollowupRunEnqueued(run: Pick<FollowupRun, "queuedLifecycle">): boolean {
   const lifecycle = run.queuedLifecycle;
   if (!lifecycle || enqueuedFollowupLifecycles.has(lifecycle)) {
-    return;
+    return true;
+  }
+  if (lifecycle.onEnqueued?.() === false) {
+    return false;
   }
   enqueuedFollowupLifecycles.add(lifecycle);
-  lifecycle.onEnqueued?.();
+  return true;
+}
+
+export function retireFollowupRunCancellation(run: Pick<FollowupRun, "queuedLifecycle">): void {
+  const lifecycle = run.queuedLifecycle;
+  if (!lifecycle || retiredFollowupCancellationLifecycles.has(lifecycle)) {
+    return;
+  }
+  retiredFollowupCancellationLifecycles.add(lifecycle);
+  lifecycle.onCancellationRetired?.();
 }
 
 export function completeFollowupRunLifecycle(run: Pick<FollowupRun, "queuedLifecycle">): void {

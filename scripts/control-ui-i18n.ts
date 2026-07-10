@@ -111,7 +111,12 @@ const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
 const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
 const SOURCE_LOCALE = "en";
-const CONTROL_UI_SOURCE_DIR = path.join(ROOT, "ui", "src", "ui");
+const CONTROL_UI_RAW_COPY_SOURCE_DIRS = [
+  path.join(ROOT, "ui", "src", "app"),
+  path.join(ROOT, "ui", "src", "components"),
+  path.join(ROOT, "ui", "src", "lib"),
+  path.join(ROOT, "ui", "src", "pages"),
+] as const;
 const RAW_COPY_BASELINE_PATH = path.join(I18N_ASSETS_DIR, "raw-copy-baseline.json");
 const RAW_COPY_BASELINE_VERSION = 1;
 const MAX_BATCH_ITEMS = 20;
@@ -421,7 +426,7 @@ function compareStringArrays(left: string[], right: string[]) {
   return left.every((value, index) => value === right[index]);
 }
 
-export type PlaceholderMismatch = {
+type PlaceholderMismatch = {
   key: string;
   locale: string;
   sourcePlaceholders: string[];
@@ -809,7 +814,9 @@ function collectRawCopyFromSource(params: {
 }
 
 async function collectControlUiRawCopyFindings(): Promise<RawCopyFinding[]> {
-  const files = await walkControlUiSourceFiles(CONTROL_UI_SOURCE_DIR);
+  const files = (
+    await Promise.all(CONTROL_UI_RAW_COPY_SOURCE_DIRS.map((dir) => walkControlUiSourceFiles(dir)))
+  ).flat();
   const findings: RawCopyFinding[] = [];
   for (const filePath of files.toSorted((left, right) => left.localeCompare(right))) {
     const source = await readFile(filePath, "utf8");
@@ -1490,7 +1497,7 @@ async function translateBatch(
   throw lastError ?? new Error("translation failed");
 }
 
-export type NativeTranslationEntry = {
+type NativeTranslationEntry = {
   id: string;
   source: string;
   sourcePath: string;
@@ -1554,6 +1561,14 @@ type SyncOutcome = {
   wrote: boolean;
 };
 
+export function shouldReuseExistingTranslation(options: {
+  allowTranslate: boolean;
+  force: boolean;
+  isFallback: boolean;
+}): boolean {
+  return !options.isFallback || (!options.allowTranslate && !options.force);
+}
+
 async function syncLocale(
   entry: LocaleEntry,
   options: { checkOnly: boolean; force: boolean; write: boolean },
@@ -1587,8 +1602,13 @@ async function syncLocale(
     const cachedByText = tmByTextHash.get(textHash);
     const existing = existingFlat.get(key);
     const shouldRefreshFallback = previousFallbackKeys.has(key);
+    const shouldReuse = shouldReuseExistingTranslation({
+      allowTranslate,
+      force: options.force,
+      isFallback: shouldRefreshFallback,
+    });
 
-    if (cached && !(allowTranslate && shouldRefreshFallback)) {
+    if (cached && shouldReuse) {
       nextFlat.set(key, cached.translated);
       if (shouldRefreshFallback) {
         fallbackKeys.push(key);
@@ -1607,7 +1627,7 @@ async function syncLocale(
       continue;
     }
 
-    if (existing !== undefined && !(allowTranslate && shouldRefreshFallback)) {
+    if (existing !== undefined && shouldReuse) {
       nextFlat.set(key, existing);
       if (shouldRefreshFallback) {
         fallbackKeys.push(key);

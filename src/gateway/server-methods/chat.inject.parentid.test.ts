@@ -1,7 +1,7 @@
 // Chat transcript parent-id tests protect gateway-injected assistant appends so
 // compaction history remains connected and transcript listeners receive updates.
 import fs from "node:fs";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import { createTranscriptFixtureSync } from "./chat.test-helpers.js";
@@ -37,9 +37,54 @@ function readLastTranscriptRecord(transcriptPath: string): Record<string, unknow
   return JSON.parse(lines.at(-1) as string) as Record<string, unknown>;
 }
 
+function readLastTranscriptRecordFromTail(transcriptPath: string): Record<string, unknown> {
+  const size = fs.statSync(transcriptPath).size;
+  const length = Math.min(size, 64 * 1024);
+  const buffer = Buffer.allocUnsafe(length);
+  const fd = fs.openSync(transcriptPath, "r");
+  let bytesRead = 0;
+  try {
+    bytesRead = fs.readSync(fd, buffer, 0, length, size - length);
+  } finally {
+    fs.closeSync(fd);
+  }
+  const lines = buffer.subarray(0, bytesRead).toString("utf8").trimEnd().split(/\r?\n/);
+  return JSON.parse(lines.at(-1) as string) as Record<string, unknown>;
+}
+
 // Guardrail: Gateway-injected assistant transcript messages must attach to the
 // current leaf with a `parentId` and must not sever compaction history.
 describe("gateway chat.inject transcript writes", () => {
+  let oversizedDir = "";
+  let oversizedTranscriptPath = "";
+
+  beforeAll(() => {
+    const fixture = createTranscriptFixtureSync({
+      prefix: "openclaw-chat-inject-large-",
+      sessionId: "sess-1",
+    });
+    oversizedDir = fixture.dir;
+    oversizedTranscriptPath = fixture.transcriptPath;
+    fs.appendFileSync(
+      oversizedTranscriptPath,
+      `${JSON.stringify({
+        type: "message",
+        id: "legacy-large-message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "x".repeat(9 * 1024 * 1024) }],
+        },
+      })}\n`,
+      "utf-8",
+    );
+  });
+
+  afterAll(() => {
+    if (oversizedDir) {
+      fs.rmSync(oversizedDir, { recursive: true, force: true });
+    }
+  });
+
   it("appends a agent session entry that includes parentId", async () => {
     const { dir, transcriptPath } = createTranscriptFixtureSync({
       prefix: "openclaw-chat-inject-",
@@ -61,35 +106,15 @@ describe("gateway chat.inject transcript writes", () => {
   });
 
   it("uses raw append for oversized append-only transcripts", async () => {
-    const { dir, transcriptPath } = createTranscriptFixtureSync({
-      prefix: "openclaw-chat-inject-large-",
-      sessionId: "sess-1",
-    });
+    const sizeBefore = fs.statSync(oversizedTranscriptPath).size;
+    const messageId = await appendHelloAndRequireId(oversizedTranscriptPath);
+    const last = readLastTranscriptRecordFromTail(oversizedTranscriptPath);
 
-    try {
-      fs.appendFileSync(
-        transcriptPath,
-        `${JSON.stringify({
-          type: "message",
-          id: "legacy-large-message",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "x".repeat(9 * 1024 * 1024) }],
-          },
-        })}\n`,
-        "utf-8",
-      );
-
-      const messageId = await appendHelloAndRequireId(transcriptPath);
-      const last = readLastTranscriptRecord(transcriptPath);
-
-      expect(last.type).toBe("message");
-      expect(last).toHaveProperty("id", messageId);
-      expect(last).toHaveProperty("message");
-      expect(Object.hasOwn(last, "parentId")).toBe(false);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(fs.statSync(oversizedTranscriptPath).size).toBeGreaterThan(sizeBefore);
+    expect(last.type).toBe("message");
+    expect(last).toHaveProperty("id", messageId);
+    expect(last).toHaveProperty("message");
+    expect(Object.hasOwn(last, "parentId")).toBe(false);
   });
 
   it("emits and returns the redacted injected assistant message", async () => {

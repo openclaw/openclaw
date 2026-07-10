@@ -40,6 +40,16 @@ describe("ClawRouter usage", () => {
           resetAt: Date.UTC(2026, 7, 1),
         },
       ],
+      billing: [
+        {
+          type: "budget",
+          used: 25,
+          limit: 100,
+          unit: "USD",
+          period: "month",
+          resetAt: Date.UTC(2026, 7, 1),
+        },
+      ],
       summary: "12 requests · 34,567 tokens · $25.00 used",
       plan: "Managed monthly budget",
     });
@@ -69,6 +79,7 @@ describe("ClawRouter usage", () => {
     expect(snapshot.windows).toEqual([]);
     expect(snapshot.summary).toBe("0 requests · 0 tokens · $0.00 used");
     expect(snapshot.plan).toBe("Unmetered proxy key");
+    expect(snapshot.billing).toEqual([{ type: "spend", amount: 0, unit: "USD" }]);
   });
 
   it("does not expose an upstream error body", async () => {
@@ -81,5 +92,24 @@ describe("ClawRouter usage", () => {
         ) as unknown as typeof fetch,
       }),
     ).rejects.toThrow("ClawRouter usage request failed (HTTP 403)");
+  });
+
+  it("bounds successful usage response bodies", async () => {
+    const oversizedPayload = JSON.stringify({
+      budget: { configured: false },
+      usage: { summary: { requestCount: 1 } },
+      padding: "x".repeat(1024 * 1024),
+    });
+
+    await expect(
+      fetchClawRouterUsage({
+        token: "proxy-key",
+        timeoutMs: 5000,
+        fetchFn: async () =>
+          new Response(oversizedPayload, {
+            headers: { "content-type": "application/json" },
+          }),
+      }),
+    ).rejects.toThrow("ClawRouter usage response exceeds");
   });
 });

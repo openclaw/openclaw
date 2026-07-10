@@ -8,18 +8,18 @@ export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE = "global";
 export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE_PREFIX = "telegram.message-dispatch-dedupe";
 export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID = "telegram-message-dispatch-dedupe";
-export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MEMORY_MAX_ENTRIES = 50_000;
+const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_MEMORY_MAX_ENTRIES = 50_000;
 export const TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES = 50_000;
 
 export type TelegramMessageDispatchReplayGuard = ClaimableDedupe &
   Required<Pick<ClaimableDedupe, "forget">>;
 
-export type TelegramMessageDispatchClaim =
+type TelegramMessageDispatchClaim =
   | { kind: "claimed"; key: string }
   | { kind: "duplicate" }
   | { kind: "invalid" };
 
-export type TelegramMessageDispatchReplayForgetFailure = {
+type TelegramMessageDispatchReplayForgetFailure = {
   key: string;
   error?: unknown;
 };

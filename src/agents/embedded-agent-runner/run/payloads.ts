@@ -47,6 +47,7 @@ import type { ToolResultFormat } from "../../embedded-agent-subscribe.shared-typ
 import {
   extractAssistantThinking,
   extractAssistantVisibleText,
+  sanitizeAssistantVisibleStreamText,
 } from "../../embedded-agent-utils.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
@@ -552,6 +553,7 @@ function resolveToolErrorWarningPolicy(params: {
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   assistantMessageIndex?: number;
+  assistantTranscriptOwned?: boolean;
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   currentAssistant?: AssistantMessage | null;
@@ -650,7 +652,9 @@ export function buildEmbeddedRunPayloads(params: {
     params.didSendDeterministicApprovalPrompt === true ||
     (params.sourceReplyDeliveryMode === "message_tool_only" && hasSourceReplyPayload) ||
     deliveredSourceReplyViaMessageTool;
-  const nonEmptyAssistantTexts = params.assistantTexts.filter((text) => text.trim().length > 0);
+  const nonEmptyAssistantTexts = params.assistantTexts
+    .map((text) => sanitizeAssistantVisibleStreamText(text))
+    .filter((text) => text.trim().length > 0);
   const currentAssistant = params.currentAssistant ?? undefined;
   const assistantForPayload =
     currentAssistant ?? (nonEmptyAssistantTexts.length === 1 ? undefined : params.lastAssistant);
@@ -926,9 +930,16 @@ export function buildEmbeddedRunPayloads(params: {
           nonTerminalToolErrorWarning: true,
         });
       }
-      if (!item.isError && !item.isReasoning && params.assistantMessageIndex !== undefined) {
+      if (
+        !item.isError &&
+        !item.isReasoning &&
+        (params.assistantMessageIndex !== undefined || params.assistantTranscriptOwned === true)
+      ) {
         setReplyPayloadMetadata(payload, {
-          assistantMessageIndex: params.assistantMessageIndex,
+          ...(params.assistantMessageIndex !== undefined
+            ? { assistantMessageIndex: params.assistantMessageIndex }
+            : {}),
+          ...(params.assistantTranscriptOwned === true ? { assistantTranscriptOwned: true } : {}),
         });
       }
       if (item.replyToId) {

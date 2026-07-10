@@ -320,6 +320,14 @@ export type CronJobState = {
   lastFailureAlertAtMs?: number;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
   scheduleErrorCount?: number;
+  /** Timestamp of the last trigger script evaluation. */
+  lastTriggerEvalAtMs?: number;
+  /** Number of completed trigger script evaluations. */
+  triggerEvalCount?: number;
+  /** Timestamp of the last trigger evaluation that fired. */
+  lastTriggerFireAtMs?: number;
+  /** JSON state returned by the last trigger script evaluation. */
+  triggerState?: unknown;
   /** Explicit delivery outcome, separate from execution outcome. */
   lastDeliveryStatus?: CronDeliveryStatus;
   /** Delivery-specific error text when available. */
@@ -334,6 +342,33 @@ export type CronJobState = {
   lastFailureNotificationDeliveryError?: string;
 };
 
+export type CronTrigger = {
+  script: string;
+  once?: boolean;
+};
+
+/**
+ * Closed failure taxonomy for trigger-script evaluation. Mirrors the code-mode
+ * failure codes plus the trigger tool budget; trigger-script.ts asserts the
+ * union stays in sync at compile time. Lives here (leaf module) so the cron
+ * service contract never imports the agents runtime.
+ */
+export type CronTriggerFailureCode =
+  | "aborted"
+  | "invalid_input"
+  | "runtime_unavailable"
+  | "timeout"
+  | "output_limit_exceeded"
+  | "snapshot_limit_exceeded"
+  | "internal_error"
+  | "tool_budget_exceeded";
+
+/** Result union returned by the cron trigger-script evaluator. */
+export type CronTriggerEvaluationResult =
+  | { kind: "evaluated"; fire: boolean; message?: string; state?: unknown }
+  | { kind: "busy" }
+  | { kind: "error"; code: CronTriggerFailureCode; error: string };
+
 /** Fully persisted cron job with spec fields and mutable run state. */
 export type CronJob = CronJobBase<
   CronSchedule,
@@ -343,6 +378,13 @@ export type CronJob = CronJobBase<
   CronDelivery,
   CronFailureAlert | false
 > & {
+  declarationKey?: string;
+  displayName?: string;
+  owner?: {
+    agentId?: string;
+    sessionKey?: string;
+  };
+  trigger?: CronTrigger;
   state: CronJobState;
 };
 
@@ -354,13 +396,27 @@ export type CronStoreFile = {
 
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" | "state"> & {
+  /** Internal callers can reserve a durable id before creation; public cron.add omits this. */
+  id?: string;
   state?: Partial<CronJobState>;
 };
 
 /** Patch input accepted by cron APIs without allowing immutable identity fields. */
 export type CronJobPatch = Partial<
-  Omit<CronJob, "id" | "createdAtMs" | "state" | "payload" | "delivery">
+  Omit<
+    CronJob,
+    | "id"
+    | "createdAtMs"
+    | "state"
+    | "payload"
+    | "delivery"
+    | "declarationKey"
+    | "displayName"
+    | "owner"
+  >
 > & {
+  displayName?: string | null;
+  trigger?: CronTrigger | null;
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
   state?: Partial<CronJobState>;

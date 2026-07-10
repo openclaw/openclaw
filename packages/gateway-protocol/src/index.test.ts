@@ -13,8 +13,8 @@ import {
   validateConnectParams,
   validateModelsListParams,
   validateNodeEventResult,
-  validateNodePairRequestParams,
   validateNodePresenceAlivePayload,
+  validateSessionsUsageParams,
   validateTasksCancelParams,
   validateTasksListParams,
   validateTalkCatalogResult,
@@ -118,6 +118,7 @@ describe("lazy protocol validators", () => {
         sessionKey: "global",
         agentId: "work",
         runId: "run-global-work",
+        preserveSideRuns: true,
       }),
     ).toBe(true);
     expect(
@@ -133,6 +134,15 @@ describe("lazy protocol validators", () => {
     expect(validateChatMetadataParams({ agentId: "work" })).toBe(true);
     expect(validateChatMetadataParams({ agentId: "" })).toBe(false);
     expect(validateChatMetadataParams({ agentId: "work", view: "configured" })).toBe(false);
+  });
+
+  it("accepts an IANA time zone for session usage while retaining UTC offsets", () => {
+    expect(validateSessionsUsageParams({ mode: "specific", timeZone: "Europe/Vienna" })).toBe(
+      true,
+    );
+    expect(validateSessionsUsageParams({ mode: "specific", utcOffset: "UTC+2" })).toBe(true);
+    expect(validateSessionsUsageParams({ mode: "specific", timeZone: "" })).toBe(false);
+    expect(validateSessionsUsageParams({ mode: "specific", timeZone: 2 })).toBe(false);
   });
 
   it("validates chat sends that suppress command interpretation", () => {
@@ -321,7 +331,12 @@ describe("validateTalkConfigResult", () => {
               instructions: "Speak with crisp diction.",
               mode: "realtime",
               transport: "gateway-relay",
+              vadThreshold: 0.45,
+              silenceDurationMs: 650,
+              prefixPaddingMs: 250,
+              reasoningEffort: "low",
               brain: "agent-consult",
+              consultRouting: "force-agent-consult",
             },
           },
         },
@@ -750,6 +765,18 @@ describe("validateChatEvent", () => {
     ).toBe(true);
   });
 
+  it("accepts an argument-free diagnostic on aborted chat events", () => {
+    expect(
+      validateChatEvent({
+        runId: "run-chat",
+        sessionKey: "agent:main:main",
+        seq: 2,
+        state: "aborted",
+        errorMessage: "edit tool validation failed: path: must be string",
+      }),
+    ).toBe(true);
+  });
+
   it("rejects v3-style chat deltas without deltaText", () => {
     expect(
       validateChatEvent({
@@ -776,6 +803,12 @@ describe("validateChatSendParams", () => {
     };
 
     expect(validateChatSendParams(base)).toBe(true);
+    expect(
+      validateChatSendParams({
+        ...base,
+        expectedSessionRoutingContract: "per-sender|main|main",
+      }),
+    ).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 2 })).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 0 })).toBe(false);
   });
@@ -836,27 +869,6 @@ describe("validateNodePresenceAlivePayload", () => {
       validateNodePresenceAlivePayload({
         trigger: "silent_push",
         arbitrary: true,
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("validateNodePairRequestParams", () => {
-  it("accepts node pairing permissions", () => {
-    expect(
-      validateNodePairRequestParams({
-        nodeId: "ios-node-1",
-        commands: ["canvas.snapshot"],
-        permissions: { camera: true, notifications: false },
-      }),
-    ).toBe(true);
-  });
-
-  it("rejects non-boolean node pairing permissions", () => {
-    expect(
-      validateNodePairRequestParams({
-        nodeId: "ios-node-1",
-        permissions: { camera: "yes" },
       }),
     ).toBe(false);
   });

@@ -823,6 +823,28 @@ describe("injectTimestamp", () => {
 });
 
 describe("sanitizeChatHistoryMessages", () => {
+  it("truncates display text without splitting surrogate pairs", () => {
+    const prefix = "a".repeat(7);
+    const result = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: `${prefix}😀tail` }],
+          timestamp: 1,
+        },
+      ],
+      8,
+    );
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `${prefix}\n...(truncated)...` }],
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("redacts base64 audio content blocks from chat history", () => {
     const data = Buffer.from("voice-bytes").toString("base64");
     const result = sanitizeChatHistoryMessages([
@@ -1799,6 +1821,167 @@ describe("projectRecentChatDisplayMessages", () => {
         timestamp: 2,
       },
     ]);
+  });
+
+  it("drops channel-final delivery mirrors that duplicate the preceding assistant reply", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: "yo big boy",
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "Yo Peter. I’m here." }],
+        __openclaw: { mirrorIdentity: "run-1:assistant" },
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Yo Peter. I’m here." }],
+        idempotencyKey: "channel-final:message-1:0",
+        openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "message-1" },
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: "yo big boy",
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "Yo Peter. I’m here." }],
+        __openclaw: { mirrorIdentity: "run-1:assistant" },
+        timestamp: 2,
+      },
+    ]);
+  });
+
+  it("keeps a channel-final delivery mirror after a filtered user turn", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "Repeated reply" }],
+        __openclaw: { mirrorIdentity: "run-1:assistant" },
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: "",
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Repeated reply" }],
+        idempotencyKey: "channel-final:message-2:0",
+        openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "message-2" },
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toHaveLength(2);
+    expect(result[1]).toEqual(
+      expect.objectContaining({
+        provider: "openclaw",
+        model: "delivery-mirror",
+      }),
+    );
+  });
+
+  it("keeps adjacent channel-final delivery mirrors from distinct sends", () => {
+    const deliveryMirror = (sourceMessageId: string, timestamp: number) => ({
+      role: "assistant",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      content: [{ type: "text", text: "Repeated reply" }],
+      idempotencyKey: `channel-final:${sourceMessageId}:0`,
+      openclawDeliveryMirror: { kind: "channel-final", sourceMessageId },
+      timestamp,
+    });
+
+    const result = projectRecentChatDisplayMessages([
+      deliveryMirror("message-1", 1),
+      deliveryMirror("message-2", 2),
+    ]);
+
+    expect(result).toHaveLength(2);
+  });
+
+  it("keeps channel-final mirrors after unmarked assistant replies", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "Repeated reply" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Repeated reply" }],
+        idempotencyKey: "channel-final:message-unmarked:0",
+        openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "message-unmarked" },
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toHaveLength(2);
+  });
+
+  it("keeps channel-final mirrors after forwarded sessions_send messages", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Forwarded status" }],
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:webchat:source",
+          sourceTool: "sessions_send",
+        },
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Forwarded status" }],
+        idempotencyKey: "channel-final:message-forwarded:0",
+        openclawDeliveryMirror: {
+          kind: "channel-final",
+          sourceMessageId: "message-forwarded",
+        },
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual(
+      expect.objectContaining({
+        role: "assistant",
+        senderLabel: "Forwarded from main",
+      }),
+    );
+    expect(result[1]).toEqual(
+      expect.objectContaining({
+        provider: "openclaw",
+        model: "delivery-mirror",
+      }),
+    );
   });
 
   it("keeps gateway-injected assistant replies when they are not duplicate ACP text", () => {
@@ -4732,6 +4915,154 @@ describe("gateway healthHandlers.health cache freshness", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  it("merges live dead-lettered delivery queue counts into cached health responses", async () => {
+    const tmpStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-cached-dq-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpStateDir;
+    try {
+      const { moveDeliveryQueueEntryToFailed, upsertDeliveryQueueEntry } =
+        await import("../../infra/delivery-queue-sqlite.js");
+      // The cached snapshot was built before this delivery dead-lettered.
+      const cached = {
+        ok: true,
+        ts: Date.now(),
+        durationMs: 1,
+        channels: {},
+        channelOrder: [],
+        channelLabels: {},
+        heartbeatSeconds: 0,
+        defaultAgentId: "main",
+        agents: [],
+        sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      };
+      upsertDeliveryQueueEntry({
+        queueName: "outbound",
+        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5 },
+      });
+      moveDeliveryQueueEntryToFailed("outbound", "dead-1");
+
+      const respond = vi.fn();
+      const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+      await healthHandlers.health({
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      });
+
+      const payload = mockCallArg(respond, 0, 1) as
+        | {
+            deliveryQueues?: {
+              failed?: Array<{ queueName?: string; count?: number; oldestFailedAt?: number }>;
+            };
+          }
+        | undefined;
+      expect(payload?.deliveryQueues?.failed).toHaveLength(1);
+      expect(payload?.deliveryQueues?.failed?.[0]).toMatchObject({
+        queueName: "outbound",
+        count: 1,
+      });
+      expect(typeof payload?.deliveryQueues?.failed?.[0]?.oldestFailedAt).toBe("number");
+      expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(tmpStateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("merges a live disabled config hot-reload status into cached health responses", async () => {
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      configReload: { hotReloadStatus: "active" },
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+    const getConfigReloaderHotReloadStatus = vi.fn(() => "disabled" as const);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        getConfigReloaderHotReloadStatus,
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    const payload = mockCallArg(respond, 0, 1) as
+      | { configReload?: { hotReloadStatus?: string } }
+      | undefined;
+    // The cache-hit merge must reflect the live "disabled" flip immediately,
+    // not the stale "active" value from the cached snapshot — otherwise
+    // operators wait up to HEALTH_REFRESH_INTERVAL_MS to see a watcher that
+    // has already permanently given up.
+    expect(payload?.configReload?.hotReloadStatus).toBe("disabled");
+    expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
+  });
+
+  it("preserves the cached config hot-reload status when no live accessor is available", async () => {
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      configReload: { hotReloadStatus: "disabled" },
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    const payload = mockCallArg(respond, 0, 1) as
+      | { configReload?: { hotReloadStatus?: string } }
+      | undefined;
+    expect(payload?.configReload?.hotReloadStatus).toBe("disabled");
   });
 
   it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {

@@ -31,6 +31,11 @@ import {
   OPENAI_PROVIDER_ID,
   listOpenAIAuthProfileProvidersForAgentRuntime,
 } from "../../agents/openai-routing.js";
+import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+import {
+  adoptPersistedSessionSnapshot,
+  sessionModelOverrideChangesApplied,
+} from "../../config/sessions/session-snapshot-merge.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
@@ -112,8 +117,8 @@ function shouldLogModelSelectionTiming(): boolean {
 const modelCatalogRuntimeLoader = createLazyImportLoader(
   () => import("../../agents/model-catalog.runtime.js"),
 );
-const sessionAccessorRuntimeLoader = createLazyImportLoader(
-  () => import("../../config/sessions/session-accessor.js"),
+const sessionPersistenceRuntimeLoader = createLazyImportLoader(
+  () => import("./session-entry-persistence.js"),
 );
 function normalizeRuntimeModelRef(provider: string, model: string) {
   return normalizeModelRef(provider, model, RUNTIME_MODEL_VISIBILITY_NORMALIZATION);
@@ -123,8 +128,8 @@ function loadModelCatalogRuntime() {
   return modelCatalogRuntimeLoader.load();
 }
 
-function loadSessionAccessorRuntime() {
-  return sessionAccessorRuntimeLoader.load();
+function loadSessionPersistenceRuntime() {
+  return sessionPersistenceRuntimeLoader.load();
 }
 
 function findSelectedCatalogEntry(params: {
@@ -321,20 +326,40 @@ export async function createModelSelectionState(params: {
     );
     const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
     if (staleDirectStoredOverride || !visibilityPolicy.allowsKey(key)) {
+      const initialSessionEntry = { ...sessionEntry };
+      const nextSessionEntry = { ...sessionEntry };
       const { updated } = applyModelOverrideToSessionEntry({
-        entry: sessionEntry,
+        entry: nextSessionEntry,
         selection: { provider: primaryProvider, model: primaryModel, isDefault: true },
         preserveAuthProfileOverride: staleDirectStoredOverride,
       });
+      let resetApplied = updated;
       if (updated) {
-        sessionStore[sessionKey] = sessionEntry;
         if (storePath) {
-          const { replaceSessionEntry } = await loadSessionAccessorRuntime();
-          await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+          const { persistReplySessionEntry } = await loadSessionPersistenceRuntime();
+          const persistence = await persistReplySessionEntry({
+            storePath,
+            sessionKey,
+            initialEntry: initialSessionEntry,
+            entry: nextSessionEntry,
+          });
+          if (persistence.status === "lifecycle-invalidated") {
+            throw new SessionWorkStartInvalidatedError(persistence.error);
+          }
+          const persistedEntry = persistence.entry;
+          resetApplied = sessionModelOverrideChangesApplied({
+            initial: initialSessionEntry,
+            next: nextSessionEntry,
+            current: persistedEntry,
+          });
+          adoptPersistedSessionSnapshot(sessionEntry, persistedEntry);
+        } else {
+          adoptPersistedSessionSnapshot(sessionEntry, nextSessionEntry);
         }
+        sessionStore[sessionKey] = sessionEntry;
       }
-      resetModelOverride = updated;
-      if (updated) {
+      resetModelOverride = resetApplied;
+      if (resetApplied) {
         resetModelOverrideRef = key;
         resetModelOverrideReason = staleDirectStoredOverride ? "stale" : "disallowed";
       }
@@ -369,7 +394,7 @@ export async function createModelSelectionState(params: {
     params.skipStoredModelOverride === true ||
     hasOneTurnModelOverride ||
     params.hasResolvedHeartbeatModelOverride === true ||
-    (staleDirectStoredOverride && storedOverride?.source === "session");
+    (resetModelOverride && staleDirectStoredOverride && storedOverride?.source === "session");
 
   if (storedOverride?.model && !skipStoredOverride) {
     const normalizedStoredOverride = normalizeRuntimeModelRef(

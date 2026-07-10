@@ -1,11 +1,17 @@
 // ClawRouter plugin entrypoint registers credential-scoped model routing and quota reporting.
-import { definePluginEntry, type ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  definePluginEntry,
+  type ProviderAuthMethod,
+  type ProviderResolveDynamicModelContext,
+  type ProviderRuntimeModel,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import {
   buildClawRouterProviderConfig,
   normalizeClawRouterApiBaseUrl,
+  normalizeClawRouterRootUrl,
   normalizeClawRouterResolvedModel,
 } from "./provider-catalog.js";
 import { wrapClawRouterProviderStream } from "./stream.js";
@@ -52,11 +58,43 @@ function buildApiKeyAuth(): ProviderAuthMethod {
   });
 }
 
-function configuredBaseUrl(config: {
-  models?: { providers?: Record<string, { baseUrl?: unknown }> };
-}): string | undefined {
-  const value = config.models?.providers?.[PROVIDER_ID]?.baseUrl;
+function configuredBaseUrl(
+  config: { models?: { providers?: Record<string, { baseUrl?: unknown }> } } | null | undefined,
+): string | undefined {
+  const value = config?.models?.providers?.[PROVIDER_ID]?.baseUrl;
   return typeof value === "string" ? value : undefined;
+}
+
+function dynamicModelScope(ctx: ProviderResolveDynamicModelContext): string {
+  return JSON.stringify([
+    ctx.agentDir ?? "",
+    ctx.workspaceDir ?? "",
+    ctx.authProfileId ?? "",
+    normalizeClawRouterRootUrl(ctx.providerConfig?.baseUrl ?? configuredBaseUrl(ctx.config)),
+  ]);
+}
+
+function buildRuntimeModels(
+  providerConfig: Awaited<ReturnType<typeof buildClawRouterProviderConfig>>,
+): Map<string, ProviderRuntimeModel> {
+  const models = new Map<string, ProviderRuntimeModel>();
+  for (const model of providerConfig.models) {
+    const api = model.api ?? providerConfig.api;
+    const baseUrl = model.baseUrl ?? providerConfig.baseUrl;
+    if (!api || !baseUrl) {
+      continue;
+    }
+    models.set(model.id, {
+      ...model,
+      api,
+      baseUrl,
+      provider: PROVIDER_ID,
+      input: model.input.filter(
+        (entry): entry is "text" | "image" => entry === "text" || entry === "image",
+      ),
+    });
+  }
+  return models;
 }
 
 function resolveToolFamily(modelId: string) {
@@ -75,6 +113,8 @@ export default definePluginEntry({
   name: "ClawRouter",
   description: "Managed multi-provider model routing and quotas",
   register(api) {
+    const dynamicModels = new Map<string, Map<string, ProviderRuntimeModel>>();
+
     api.registerProvider({
       id: PROVIDER_ID,
       label: "ClawRouter",
@@ -115,6 +155,31 @@ export default definePluginEntry({
             }),
           };
         },
+      },
+      resolveDynamicModel: (ctx) => dynamicModels.get(dynamicModelScope(ctx))?.get(ctx.modelId),
+      prepareDynamicModel: async (ctx) => {
+        const scope = dynamicModelScope(ctx);
+        dynamicModels.delete(scope);
+        const { resolveApiKeyForProvider } =
+          await import("openclaw/plugin-sdk/provider-auth-runtime");
+        const apiKey = (
+          await resolveApiKeyForProvider({
+            provider: PROVIDER_ID,
+            cfg: ctx.config,
+            ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+            ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
+            ...(ctx.authProfileId ? { profileId: ctx.authProfileId, lockedProfile: true } : {}),
+          })
+        )?.apiKey;
+        if (!apiKey) {
+          return;
+        }
+        const providerConfig = await buildClawRouterProviderConfig({
+          apiKey,
+          discoveryApiKey: apiKey,
+          baseUrl: ctx.providerConfig?.baseUrl ?? configuredBaseUrl(ctx.config),
+        });
+        dynamicModels.set(scope, buildRuntimeModels(providerConfig));
       },
       normalizeConfig: ({ providerConfig }) => {
         const baseUrl = normalizeClawRouterApiBaseUrl(providerConfig.baseUrl);

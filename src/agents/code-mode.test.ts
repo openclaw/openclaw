@@ -269,6 +269,13 @@ describe("Code Mode", () => {
     expect(compacted.catalogToolCount).toBe(2);
   });
 
+  it("marks only the internal wait control as hidden from channel progress", () => {
+    const { tools } = createCodeModeHarness();
+
+    expect(tools[0].hideFromChannelProgress).toBeUndefined();
+    expect(tools[1].hideFromChannelProgress).toBe(true);
+  });
+
   it("tells models to return the final code value", () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const compacted = applyCodeModeCatalog({
