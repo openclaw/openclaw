@@ -157,6 +157,34 @@ describe("ManagedWorktreeService", () => {
     expect(await git(created.path, "rev-parse", "HEAD")).toBe(baseCommit);
   });
 
+  it("rejects name reuse across owners instead of adopting a foreign worktree", async () => {
+    await service.create({
+      repoRoot: repo,
+      name: "shared-name",
+      ownerKind: "session",
+      ownerId: "agent:main:dashboard:one",
+    });
+    await expect(
+      service.create({
+        repoRoot: repo,
+        name: "shared-name",
+        ownerKind: "session",
+        ownerId: "agent:main:dashboard:two",
+      }),
+    ).rejects.toThrow(/already in use by session/);
+    await expect(service.create({ repoRoot: repo, name: "shared-name" })).rejects.toThrow(
+      /already in use by session/,
+    );
+    // The rightful owner still reuses its record.
+    const reused = await service.create({
+      repoRoot: repo,
+      name: "shared-name",
+      ownerKind: "session",
+      ownerId: "agent:main:dashboard:one",
+    });
+    expect(reused.ownerId).toBe("agent:main:dashboard:one");
+  });
+
   it("does not remove a concurrent successful create during remote fallback", async () => {
     await addRemote(root, repo);
 

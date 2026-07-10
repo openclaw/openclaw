@@ -75,6 +75,16 @@ function generateName(): string {
   return `wt-${randomBytes(4).toString("hex")}`;
 }
 
+function recordOwnerMatches(
+  record: ManagedWorktreeRecord,
+  params: Pick<CreateManagedWorktreeParams, "ownerKind" | "ownerId">,
+): boolean {
+  return (
+    record.ownerKind === (params.ownerKind ?? "manual") &&
+    (record.ownerId ?? undefined) === (params.ownerId ?? undefined)
+  );
+}
+
 async function resolveRepository(repoRoot: string): Promise<{
   repoRoot: string;
   sourceRoot: string;
@@ -360,6 +370,14 @@ export class ManagedWorktreeService {
     const root = path.join(resolveStateDir(this.env), "worktrees", repository.fingerprint);
     const worktreePath = path.join(root, name);
     const existing = findRegistryWorktreeByPath(this.env, worktreePath);
+    // Name reuse only ever adopts the caller's own record. Without this guard a
+    // caller-chosen name could bind a new owner to another session's or a
+    // manual checkout and run inside it.
+    if (existing?.name === name && !existing.removedAt && !recordOwnerMatches(existing, params)) {
+      throw new Error(
+        `worktree name is already in use by ${existing.ownerKind}${existing.ownerId ? ` ${existing.ownerId}` : ""}: ${name}`,
+      );
+    }
     if (existing?.name === name && existing.removedAt === undefined) {
       if (await pathExists(existing.path)) {
         return existing;
@@ -367,6 +385,11 @@ export class ManagedWorktreeService {
       updateRegistryWorktree(this.env, existing.id, { removedAt: this.now() });
     }
     if (existing?.name === name && existing.removedAt !== undefined && existing.snapshotRef) {
+      if (!recordOwnerMatches(existing, params)) {
+        throw new Error(
+          `worktree name is already in use by ${existing.ownerKind}${existing.ownerId ? ` ${existing.ownerId}` : ""}: ${name}`,
+        );
+      }
       return await this.restore({ id: existing.id });
     }
     await fs.mkdir(root, { recursive: true });

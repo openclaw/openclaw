@@ -13,6 +13,10 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 
+// Write transactions must run on the same env-scoped handle as their
+// statements; a bare transaction would open the default state DB while the
+// SQL hits the override, losing atomicity under OPENCLAW_STATE_DIR overrides.
+
 export type SessionGroupRecord = { name: string; position: number };
 
 type SessionGroupsDatabase = Pick<OpenClawStateKyselyDatabase, "session_groups">;
@@ -58,28 +62,30 @@ export function putSessionGroups(
   env: NodeJS.ProcessEnv = process.env,
 ): SessionGroupRecord[] {
   const normalized = normalizeGroupNames(names);
-  const db = dbFor(env);
-  const kysely = kyselyFor(db);
   const now = Date.now();
-  runOpenClawStateWriteTransaction(() => {
-    const existing = new Map(
-      executeSqliteQuerySync(
-        db,
-        kysely.selectFrom("session_groups").select(["name", "created_at"]),
-      ).rows.map((row) => [row.name, row.created_at]),
-    );
-    executeSqliteQuerySync(db, kysely.deleteFrom("session_groups"));
-    normalized.forEach((name, position) => {
-      executeSqliteQuerySync(
-        db,
-        kysely.insertInto("session_groups").values({
-          name,
-          position,
-          created_at: existing.get(name) ?? now,
-        }),
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const kysely = kyselyFor(db);
+      const existing = new Map(
+        executeSqliteQuerySync(
+          db,
+          kysely.selectFrom("session_groups").select(["name", "created_at"]),
+        ).rows.map((row) => [row.name, row.created_at]),
       );
-    });
-  });
+      executeSqliteQuerySync(db, kysely.deleteFrom("session_groups"));
+      normalized.forEach((name, position) => {
+        executeSqliteQuerySync(
+          db,
+          kysely.insertInto("session_groups").values({
+            name,
+            position,
+            created_at: existing.get(name) ?? now,
+          }),
+        );
+      });
+    },
+    { env },
+  );
   return normalized.map((name, position) => ({ name, position }));
 }
 
@@ -95,57 +101,61 @@ export function ensureSessionGroupRegistered(
   if (!normalized) {
     return;
   }
-  const db = dbFor(env);
-  const kysely = kyselyFor(db);
-  runOpenClawStateWriteTransaction(() => {
-    const existing = executeSqliteQuerySync(
-      db,
-      kysely.selectFrom("session_groups").select("name").where("name", "=", normalized).limit(1),
-    ).rows[0];
-    if (existing) {
-      return;
-    }
-    const maxRow = executeSqliteQuerySync(
-      db,
-      kysely.selectFrom("session_groups").select("position").orderBy("position", "desc").limit(1),
-    ).rows[0];
-    executeSqliteQuerySync(
-      db,
-      kysely.insertInto("session_groups").values({
-        name: normalized,
-        position: (maxRow?.position ?? -1) + 1,
-        created_at: Date.now(),
-      }),
-    );
-  });
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const kysely = kyselyFor(db);
+      const existing = executeSqliteQuerySync(
+        db,
+        kysely.selectFrom("session_groups").select("name").where("name", "=", normalized).limit(1),
+      ).rows[0];
+      if (existing) {
+        return;
+      }
+      const maxRow = executeSqliteQuerySync(
+        db,
+        kysely.selectFrom("session_groups").select("position").orderBy("position", "desc").limit(1),
+      ).rows[0];
+      executeSqliteQuerySync(
+        db,
+        kysely.insertInto("session_groups").values({
+          name: normalized,
+          position: (maxRow?.position ?? -1) + 1,
+          created_at: Date.now(),
+        }),
+      );
+    },
+    { env },
+  );
 }
 
 function renameCatalogEntry(from: string, to: string, env: NodeJS.ProcessEnv): void {
-  const db = dbFor(env);
-  const kysely = kyselyFor(db);
-  runOpenClawStateWriteTransaction(() => {
-    const source = executeSqliteQuerySync(
-      db,
-      kysely.selectFrom("session_groups").selectAll().where("name", "=", from).limit(1),
-    ).rows[0];
-    const targetExists = executeSqliteQuerySync(
-      db,
-      kysely.selectFrom("session_groups").select("name").where("name", "=", to).limit(1),
-    ).rows[0];
-    executeSqliteQuerySync(db, kysely.deleteFrom("session_groups").where("name", "=", from));
-    if (targetExists) {
-      // Rename into an existing group merges memberships; keep the target row.
-      return;
-    }
-    executeSqliteQuerySync(
-      db,
-      kysely.insertInto("session_groups").values({
-        name: to,
-        position: source?.position ?? 0,
-        created_at: source?.created_at ?? Date.now(),
-      }),
-    );
-  });
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const kysely = kyselyFor(db);
+      const source = executeSqliteQuerySync(
+        db,
+        kysely.selectFrom("session_groups").selectAll().where("name", "=", from).limit(1),
+      ).rows[0];
+      const targetExists = executeSqliteQuerySync(
+        db,
+        kysely.selectFrom("session_groups").select("name").where("name", "=", to).limit(1),
+      ).rows[0];
+      executeSqliteQuerySync(db, kysely.deleteFrom("session_groups").where("name", "=", from));
+      if (targetExists) {
+        // Rename into an existing group merges memberships; keep the target row.
+        return;
+      }
+      executeSqliteQuerySync(
+        db,
+        kysely.insertInto("session_groups").values({
+          name: to,
+          position: source?.position ?? 0,
+          created_at: source?.created_at ?? Date.now(),
+        }),
+      );
+    },
+    { env },
+  );
 }
 
 /**
@@ -211,10 +221,15 @@ export async function deleteSessionGroup(params: {
   if (!name) {
     throw new Error("group delete requires a non-empty name");
   }
-  const db = dbFor(env);
-  runOpenClawStateWriteTransaction(() => {
-    executeSqliteQuerySync(db, kyselyFor(db).deleteFrom("session_groups").where("name", "=", name));
-  });
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      executeSqliteQuerySync(
+        db,
+        kyselyFor(db).deleteFrom("session_groups").where("name", "=", name),
+      );
+    },
+    { env },
+  );
   const updatedSessions = await updateMemberCategories(params.cfg, name, undefined, env);
   return { groups: listSessionGroups(env), updatedSessions };
 }
