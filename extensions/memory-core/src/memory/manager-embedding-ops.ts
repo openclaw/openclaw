@@ -86,11 +86,12 @@ type MemoryIndexEntry = MemoryIndexWorkItem["entry"];
 type PreparedMemoryIndexEntry = {
   entry: MemoryIndexEntry;
   source: MemorySource;
-  /** Chunks that still need embedding + insertion; only the new ones when staleChunkIds is set. */
+  /** Chunks that still need embedding + insertion; only the new ones when sessionKeepIds is set. */
   chunks: MemoryChunk[];
   structuredInputBytes?: number;
-  /** Session chunk delta: writeChunks deletes these ids instead of clearing the whole file. */
-  staleChunkIds?: string[];
+  /** Session chunk delta: ids of unchanged rows to preserve; writeChunks
+   * derives stale rows from the live database inside its transaction. */
+  sessionKeepIds?: string[];
 };
 
 function countBatchSources(items: Array<{ source: MemorySource }>): Record<string, number> {
@@ -750,10 +751,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
   /**
    * Write chunks (and optional embeddings) for a file into the index: the
-   * chunks table, the vector table, and the FTS table. With staleChunkIds
-   * (session delta) only those ids are deleted and unchanged rows survive;
-   * otherwise the file is cleared and fully rewritten. Callers embed before
-   * this runs, so an embedding failure cannot leave the index partially pruned.
+   * chunks table, the vector table, and the FTS table. With sessionKeepIds
+   * (session delta) unchanged rows survive and stale rows are derived from
+   * the live database inside the transaction; otherwise the file is cleared
+   * and fully rewritten. Callers embed before this runs, so an embedding
+   * failure cannot leave the index partially pruned.
    */
   private writeChunks(
     entry: MemoryIndexEntry,
@@ -762,26 +764,39 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     chunks: MemoryChunk[],
     embeddings: number[][],
     vectorReady: boolean,
-    staleChunkIds?: string[],
+    sessionKeepIds?: string[],
   ): void {
     const now = Date.now();
     let derivedDeletesClean = true;
+    let keepRowsMissing = false;
+    let staleCount = 0;
     runSqliteImmediateTransactionSync(this.db, () => {
-      if (staleChunkIds) {
-        derivedDeletesClean = this.deleteChunkRowsByIds(staleChunkIds);
+      if (sessionKeepIds) {
+        // Stale ids come from the live rows inside BEGIN IMMEDIATE, not the
+        // plan snapshot, so a concurrent writer's commit between plan and
+        // write cannot leave rows this delete list does not know about.
+        const insertIds = chunks.map((chunk) => this.chunkRowId(source, entry.path, chunk, model));
+        const desiredIds = new Set([...sessionKeepIds, ...insertIds]);
+        const liveIds = new Set(
+          (
+            this.db
+              .prepare(`SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?`)
+              .all(entry.path, source) as Array<{ id: string }>
+          ).map((row) => row.id),
+        );
+        const staleIds = [...liveIds].filter((id) => !desiredIds.has(id));
+        staleCount = staleIds.length;
+        derivedDeletesClean = this.deleteChunkRowsByIds(staleIds);
         // The FTS INSERT below has no ON CONFLICT; drop any rows for the ids
         // being (re)inserted so a concurrent writer cannot leave duplicates.
-        if (this.fts.enabled && this.fts.available && chunks.length > 0) {
+        if (this.fts.enabled && this.fts.available && insertIds.length > 0) {
           try {
-            deleteMemoryFtsRows({
-              db: this.db,
-              tableName: FTS_TABLE,
-              ids: chunks.map((chunk) => this.chunkRowId(source, entry.path, chunk, model)),
-            });
+            deleteMemoryFtsRows({ db: this.db, tableName: FTS_TABLE, ids: insertIds });
           } catch {
             derivedDeletesClean = false;
           }
         }
+        keepRowsMissing = sessionKeepIds.some((id) => !liveIds.has(id));
       } else {
         this.clearIndexedFileData(entry.path, source);
       }
@@ -796,7 +811,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           now,
         );
       }
-      this.upsertFileRecord(entry, source);
+      if (keepRowsMissing) {
+        // A racing writer replaced rows this plan meant to keep; they cannot
+        // be restored here (their embeddings were skipped). Leave the old
+        // source record so the file stays hash-dirty and the next sync
+        // replans from the live rows and re-embeds what is missing.
+        log.debug("memory sync: session delta keep rows missing; deferring file record", {
+          path: entry.path,
+        });
+      } else {
+        this.upsertFileRecord(entry, source);
+      }
     });
     this.vectorDegradedWriteWarningShown = logMemoryVectorDegradedWrite({
       vectorEnabled: this.vector.enabled,
@@ -819,16 +844,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         !vectorReady &&
         embeddings.some((embedding) => embedding.length > 0);
       const parityKey = `${source}:${entry.path}`;
-      if (derivedDeletesClean && !ftsDegraded && !vectorDegraded) {
+      if (derivedDeletesClean && !ftsDegraded && !vectorDegraded && !keepRowsMissing) {
         this.sessionChunkParityVerified.add(parityKey);
       } else {
         this.sessionChunkParityVerified.delete(parityKey);
       }
-      if (staleChunkIds) {
+      if (sessionKeepIds) {
         log.debug("memory sync: incremental session chunk delta", {
           path: entry.path,
           new: chunks.length,
-          stale: staleChunkIds.length,
+          stale: staleCount,
+          kept: sessionKeepIds.length,
         });
       }
     }
@@ -905,7 +931,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     source: MemorySource,
     model: string,
     chunks: MemoryChunk[],
-  ): { newChunks: MemoryChunk[]; staleIds: string[] } | null {
+  ): { newChunks: MemoryChunk[]; keepIds: string[] } | null {
     const existing = this.db
       .prepare(
         `SELECT id, embedding = '[]' AS empty_embedding FROM memory_index_chunks WHERE path = ? AND source = ?`,
@@ -926,7 +952,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
     const existingById = new Map(existing.map((row) => [row.id, row]));
     const newChunks: MemoryChunk[] = [];
-    const staleIds: string[] = [];
+    const keepIds: string[] = [];
     const unchangedVectorIds: string[] = [];
     for (const [id, chunk] of desired) {
       const row = existingById.get(id);
@@ -935,19 +961,16 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       } else if (this.provider && row.empty_embedding) {
         // A row persisted with an empty embedding (partial provider failure)
         // must not freeze as "unchanged"; replace it so it gets re-embedded.
-        staleIds.push(id);
         newChunks.push(chunk);
-      } else if (!row.empty_embedding) {
-        unchangedVectorIds.push(id);
-      }
-    }
-    for (const row of existing) {
-      if (!desired.has(row.id)) {
-        staleIds.push(row.id);
+      } else {
+        keepIds.push(id);
+        if (!row.empty_embedding) {
+          unchangedVectorIds.push(id);
+        }
       }
     }
     if (this.sessionChunkParityVerified.has(`${source}:${entry.path}`)) {
-      return { newChunks, staleIds };
+      return { newChunks, keepIds };
     }
     // Unchanged rows are only safe to skip when their derived FTS/vector rows
     // actually exist (id-exact, so drift from degraded writes or old-model
@@ -974,7 +997,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     ) {
       return null;
     }
-    return { newChunks, staleIds };
+    return { newChunks, keepIds };
   }
 
   private hasVectorRows(ids: string[]): boolean {
@@ -1069,7 +1092,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           entry,
           source: options.source,
           chunks: delta.newChunks,
-          staleChunkIds: delta.staleIds,
+          sessionKeepIds: delta.keepIds,
         };
       }
     }
@@ -1164,7 +1187,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           item.chunks,
           fileEmbeddings,
           vectorReady,
-          item.staleChunkIds,
+          item.sessionKeepIds,
         );
       }
       prepared = [];
@@ -1218,7 +1241,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         prepared?.chunks ?? [],
         [],
         false,
-        prepared?.staleChunkIds,
+        prepared?.sessionKeepIds,
       );
       return;
     }
@@ -1267,7 +1290,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       prepared.chunks,
       embeddings,
       vectorReady,
-      prepared.staleChunkIds,
+      prepared.sessionKeepIds,
     );
   }
 }

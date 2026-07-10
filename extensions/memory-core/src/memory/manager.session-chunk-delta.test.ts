@@ -275,6 +275,112 @@ describe("memory session chunk-delta sync", () => {
     }
   });
 
+  type PlannerOps = {
+    planSessionChunkDelta: (...args: unknown[]) => unknown;
+    db: {
+      prepare: (sql: string) => {
+        run: (...params: unknown[]) => void;
+        get: (...params: unknown[]) => unknown;
+      };
+    };
+  };
+
+  it("deletes rows committed by a racing writer between plan and write", async () => {
+    const { manager, sessionFile } = await setUpManager(".state-delta-race-stale");
+    await fs.writeFile(sessionFile, transcriptTurns(1, 30), "utf8");
+    markSessionDirty(manager, sessionFile);
+    await manager.sync({ reason: "test" });
+    const indexedPath =
+      readSessionChunkRows(manager).length > 0
+        ? (
+            (Reflect.get(manager, "db") as PlannerOps["db"])
+              .prepare(`SELECT path FROM memory_index_chunks WHERE source = 'sessions' LIMIT 1`)
+              .get() as { path: string }
+          ).path
+        : "";
+
+    // Simulate a concurrent writer committing an extra row for this file
+    // between this manager's delta plan and its write transaction.
+    const ops = manager as unknown as PlannerOps;
+    const originalPlan = ops.planSessionChunkDelta.bind(manager);
+    ops.planSessionChunkDelta = (...args: unknown[]) => {
+      const plan = originalPlan(...args);
+      if (plan) {
+        ops.db
+          .prepare(
+            `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+             VALUES ('race-stale-id', ?, 'sessions', 1, 1, 'race-hash', 'mock-embed', 'race stale text', '[1,0,0]', 0)`,
+          )
+          .run(indexedPath);
+      }
+      return plan;
+    };
+
+    await fs.appendFile(sessionFile, transcriptTurns(31, 32), "utf8");
+    markSessionDirty(manager, sessionFile);
+    await manager.sync({ reason: "test" });
+
+    // Stale ids are derived from live rows inside the write transaction, so
+    // the racing writer's row is removed even though the plan never saw it.
+    const survivor = ops.db
+      .prepare(`SELECT id FROM memory_index_chunks WHERE id = 'race-stale-id'`)
+      .get();
+    expect(survivor).toBeUndefined();
+  });
+
+  it("defers the file record when a racing writer removed rows the plan kept", async () => {
+    const { manager, sessionFile } = await setUpManager(".state-delta-race-missing");
+    await fs.writeFile(sessionFile, transcriptTurns(1, 30), "utf8");
+    markSessionDirty(manager, sessionFile);
+    await manager.sync({ reason: "test" });
+    const before = readSessionChunkRows(manager);
+    const keptRow = before[0];
+    const ops = manager as unknown as PlannerOps;
+    const recordBefore = ops.db
+      .prepare(`SELECT hash FROM memory_index_sources WHERE source = 'sessions'`)
+      .get() as { hash: string };
+
+    // Simulate a concurrent writer deleting a row this plan intends to keep.
+    const originalPlan = ops.planSessionChunkDelta.bind(manager);
+    ops.planSessionChunkDelta = (...args: unknown[]) => {
+      const plan = originalPlan(...args);
+      if (plan) {
+        ops.db.prepare(`DELETE FROM memory_index_chunks WHERE id = ?`).run(keptRow?.id);
+        try {
+          ops.db.prepare(`DELETE FROM memory_index_chunks_fts WHERE id = ?`).run(keptRow?.id);
+        } catch {}
+      }
+      return plan;
+    };
+
+    await fs.appendFile(sessionFile, transcriptTurns(31, 32), "utf8");
+    markSessionDirty(manager, sessionFile);
+    await manager.sync({ reason: "test" });
+
+    // The kept row cannot be restored (its embedding was skipped), so the
+    // file record keeps the old hash and the file stays dirty for re-sync.
+    const recordAfter = ops.db
+      .prepare(`SELECT hash FROM memory_index_sources WHERE source = 'sessions'`)
+      .get() as { hash: string };
+    expect(recordAfter.hash).toBe(recordBefore.hash);
+
+    ops.planSessionChunkDelta = originalPlan;
+    markSessionDirty(manager, sessionFile);
+    await manager.sync({ reason: "test" });
+
+    // The follow-up sync replans from live rows and re-embeds what is missing.
+    const converged = readSessionChunkRows(manager);
+    expect(converged.some((row) => row.text === keptRow?.text)).toBe(true);
+    const recordConverged = ops.db
+      .prepare(`SELECT hash FROM memory_index_sources WHERE source = 'sessions'`)
+      .get() as { hash: string };
+    expect(recordConverged.hash).not.toBe(recordBefore.hash);
+    const ftsCount = readFtsRowCount(manager);
+    if (ftsCount !== null) {
+      expect(ftsCount).toBe(converged.length);
+    }
+  });
+
   it("re-embeds chunks that were persisted with an empty embedding", async () => {
     const { manager, sessionFile } = await setUpManager(".state-delta-empty-embedding");
     await fs.writeFile(sessionFile, transcriptTurns(1, 30), "utf8");
