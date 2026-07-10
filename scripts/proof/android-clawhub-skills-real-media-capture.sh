@@ -9,6 +9,8 @@ SKILLS_TEXT="Skills"
 CLAW_HUB_TEXT="ClawHub"
 REVIEW_TITLE="Review ClawHub audit"
 PROOF_SKILL_TITLE="Proof Clean Skill"
+REVIEW_SKILL_TITLE="Proof Review Skill"
+MALICIOUS_SKILL_TITLE="Proof Malicious Skill"
 GATEWAY_PORT="18789"
 CLAW_HUB_PORT="18880"
 GATEWAY_DEVICE_HOST="10.0.2.2"
@@ -635,9 +637,27 @@ record_screen() {
   timeout 20 adb pull "$remote" "$local_path" >/dev/null 2>&1 || true
 }
 
+start_interaction_record() {
+  local remote="$1"
+  local seconds="${2:-20}"
+  adb shell rm -f "$remote" >/dev/null 2>&1 || true
+  adb shell screenrecord --time-limit "$seconds" "$remote" >/dev/null 2>&1 &
+  RECORD_PID="$!"
+}
+
+finish_interaction_record() {
+  local remote="$1"
+  local local_path="$2"
+  wait "${RECORD_PID}" || true
+  timeout 20 adb pull "$remote" "$local_path" >/dev/null
+  RECORD_PID=""
+}
+
 start_real_gateway
 
 : "${PROOF_SKILL_TITLE:?missing clean proof skill title}"
+: "${REVIEW_SKILL_TITLE:?missing review-required proof skill title}"
+: "${MALICIOUS_SKILL_TITLE:?missing malicious proof skill title}"
 : "${REVIEW_TITLE:?missing review dialog title}"
 
 emulator -avd "$AVD_NAME" -no-window -no-snapshot -no-snapshot-save -no-audio -no-boot-anim -gpu swiftshader_indirect -memory 2048 -cores 2 > proof-output/emulator.log 2>&1 &
@@ -776,11 +796,72 @@ capture_png /sdcard/openclaw-07-clawhub-review-dialog.png proof-output/07-real-c
 copy_ui_xml proof-output/07-clawhub-review-dialog-ui.xml
 record_screen /sdcard/openclaw-clawhub-review-dialog.mp4 proof-output/clawhub-review-dialog.mp4 6
 
+# Clean path: record the real confirm action, Gateway download/install, success message, and
+# the installed-skill refresh that follows the successful RPC.
+start_interaction_record /sdcard/openclaw-clean-install.mp4 20
+tap_text "Install" "812 1750"
+wait_for_text "Installed proof-clean-skill@1.2.3" 120
+capture_png /sdcard/openclaw-08-clean-installed.png proof-output/08-clean-install-success.png
+copy_ui_xml proof-output/08-clean-install-success-ui.xml
+finish_interaction_record /sdcard/openclaw-clean-install.mp4 proof-output/clean-install-and-refresh.mp4
+
+# Clear the installed-skills filter and prove that the refreshed list contains the installed skill.
+tap_text "zzzzzzzz" "350 830"
+adb shell input keyevent 123
+for _ in $(seq 1 8); do adb shell input keyevent 67; done
+adb shell input text 'proof%sclean'
+adb shell input keyevent 4 || true
+for _ in $(seq 1 8); do
+  if wait_for_text "$PROOF_SKILL_TITLE" 2; then break; fi
+  adb shell input swipe 540 700 540 1950 500 || true
+  sleep 1
+done
+wait_for_text "$PROOF_SKILL_TITLE" 60
+capture_png /sdcard/openclaw-09-clean-refresh.png proof-output/09-clean-post-install-refresh.png
+copy_ui_xml proof-output/09-clean-post-install-refresh-ui.xml
+
+# Return to the ClawHub result list and exercise the review-required acknowledgement path.
+for _ in $(seq 1 8); do
+  if wait_for_text "$REVIEW_SKILL_TITLE" 2; then break; fi
+  adb shell input swipe 540 2050 540 850 500 || true
+  sleep 1
+done
+wait_for_text "$REVIEW_SKILL_TITLE" 60
+tap_install_for_skill "$REVIEW_SKILL_TITLE"
+wait_for_text "Acknowledge and install" 120
+capture_png /sdcard/openclaw-10-review-required.png proof-output/10-review-required-dialog.png
+copy_ui_xml proof-output/10-review-required-dialog-ui.xml
+start_interaction_record /sdcard/openclaw-review-install.mp4 20
+tap_text "Acknowledge and install" "740 1760"
+wait_for_text "Installed proof-review-skill@1.2.3" 120
+capture_png /sdcard/openclaw-11-review-installed.png proof-output/11-review-required-install-success.png
+copy_ui_xml proof-output/11-review-required-install-success-ui.xml
+finish_interaction_record /sdcard/openclaw-review-install.mp4 proof-output/review-required-install-and-refresh.mp4
+
+# Exercise the malicious path. The dialog itself must expose only Close; no Install or
+# acknowledgement action is permitted and the fixture must observe zero downloads.
+for _ in $(seq 1 8); do
+  if wait_for_text "$MALICIOUS_SKILL_TITLE" 2; then break; fi
+  adb shell input swipe 540 2050 540 850 500 || true
+  sleep 1
+done
+wait_for_text "$MALICIOUS_SKILL_TITLE" 60
+tap_install_for_skill "$MALICIOUS_SKILL_TITLE"
+wait_for_text "This release is blocked by ClawHub and will not be downloaded." 120
+capture_png /sdcard/openclaw-12-malicious-blocked.png proof-output/12-malicious-blocked.png
+copy_ui_xml proof-output/12-malicious-blocked-ui.xml
+record_screen /sdcard/openclaw-malicious-blocked.mp4 proof-output/malicious-blocked.mp4 8
+
 python3 - <<'PY'
 from pathlib import Path
 checks = {
     '06-clawhub-results-ui.xml': ['Proof Clean Skill', 'Install'],
     '07-clawhub-review-dialog-ui.xml': ['Review ClawHub audit', 'Proof Clean Skill', 'Safety', 'Clean', 'Install'],
+    '08-clean-install-success-ui.xml': ['Installed proof-clean-skill@1.2.3'],
+    '09-clean-post-install-refresh-ui.xml': ['Proof Clean Skill'],
+    '10-review-required-dialog-ui.xml': ['Proof Review Skill', 'Review required', 'Acknowledge and install'],
+    '11-review-required-install-success-ui.xml': ['Installed proof-review-skill@1.2.3'],
+    '12-malicious-blocked-ui.xml': ['Proof Malicious Skill', 'Blocked', 'This release is blocked by ClawHub and will not be downloaded.', 'Close'],
     'gateway-skills-search.json': ['Proof Clean Skill', 'proof-clean-skill'],
     'gateway-skills-verdict.json': ['clean', 'securityAuditUrl'],
     'clawhub-fixture.jsonl': ['/api/v1/search', '/api/v1/skills/-/security-verdicts'],
@@ -793,6 +874,36 @@ for rel, needles in checks.items():
             missing.append(f'{rel}: {needle}')
 if missing:
     raise SystemExit('Missing expected proof evidence: ' + ', '.join(missing))
+
+blocked = Path('proof-output/12-malicious-blocked-ui.xml').read_text(encoding='utf-8', errors='ignore')
+if 'Acknowledge and install' in blocked or 'text="Install"' in blocked:
+    raise SystemExit('Malicious dialog exposed an install action')
+PY
+
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+events = [json.loads(line) for line in Path('proof-output/clawhub-fixture.jsonl').read_text().splitlines() if line.strip()]
+summary = {}
+for slug in ('proof-clean-skill', 'proof-review-skill', 'proof-malicious-skill'):
+    summary[slug] = {
+        'verdicts': sum(1 for event in events if event.get('event') == 'verdict' and event.get('slug') == slug),
+        'downloads': sum(1 for event in events if event.get('event') == 'download' and event.get('slug') == slug),
+    }
+if summary['proof-clean-skill']['downloads'] != 1:
+    raise SystemExit(f"clean download count was {summary['proof-clean-skill']['downloads']}, expected 1")
+if summary['proof-review-skill']['downloads'] != 1:
+    raise SystemExit(f"review download count was {summary['proof-review-skill']['downloads']}, expected 1")
+if summary['proof-malicious-skill']['downloads'] != 0:
+    raise SystemExit('malicious skill was downloaded')
+Path('proof-output/fixture-events.json').write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
+Path('proof-output/gateway-proof-summary.json').write_text(json.dumps({
+    'clean_install': True,
+    'clean_post_install_refresh': True,
+    'review_required_acknowledged_install': True,
+    'malicious_blocked_without_download': True,
+}, indent=2, sort_keys=True) + '\n')
 PY
 
 cat > proof-output/README.md <<EOF
@@ -802,7 +913,7 @@ cat > proof-output/README.md <<EOF
 - PR head expectation: $(tr -d '[:space:]' < scripts/proof/pr101864-expected-head.txt 2>/dev/null || true)
 - Runner: GitHub-hosted ubuntu-24.04 + Android emulator API 35
 - App launch mode: normal Android launcher; screenshot mode disabled
-- Gateway path: Android Settings → Skills → ClawHub search → ClawHub install review dialog
+- Gateway path: Android Settings → Skills → clean install + refresh → review-required acknowledgement + install → malicious block
 - RPC evidence: skills.search, skills.detail, skills.securityReview via a temporary OpenClaw Gateway started from this checkout
 - ClawHub fixture: local ClawHub-compatible HTTP service inside this Actions run, logged in clawhub-fixture.jsonl
 
@@ -813,6 +924,49 @@ Key media:
 - 07-real-clawhub-review-dialog.png
 - clawhub-results.mp4
 - clawhub-review-dialog.mp4
+- clean-install-and-refresh.mp4
+- review-required-install-and-refresh.mp4
+- malicious-blocked.mp4
 EOF
 
-find proof-output -maxdepth 1 -type f -printf '%f\n' | sort > proof-output/artifact-manifest.txt
+python3 - <<'PY'
+import hashlib
+import json
+import struct
+import subprocess
+from pathlib import Path
+
+media = sorted(list(Path('proof-output').glob('*.png')) + list(Path('proof-output').glob('*.mp4')))
+metadata = []
+for path in media:
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    item = {'name': path.name, 'bytes': path.stat().st_size, 'sha256': digest}
+    if path.suffix == '.png':
+        with path.open('rb') as handle:
+            header = handle.read(24)
+        width, height = struct.unpack('>II', header[16:24])
+        item.update({'kind': 'image', 'width': width, 'height': height})
+    else:
+        probe = json.loads(subprocess.check_output([
+            'ffprobe', '-v', 'error', '-show_entries',
+            'format=duration:stream=codec_name,width,height', '-of', 'json', str(path),
+        ]))
+        stream = probe.get('streams', [{}])[0]
+        item.update({
+            'kind': 'video',
+            'duration_seconds': float(probe['format']['duration']),
+            'codec': stream.get('codec_name'),
+            'width': stream.get('width'),
+            'height': stream.get('height'),
+        })
+    metadata.append(item)
+Path('proof-output/proof-media-metadata.json').write_text(json.dumps(metadata, indent=2, sort_keys=True) + '\n')
+Path('proof-output/proof-media-sha256.txt').write_text(''.join(f"{item['sha256']}  {item['name']}\n" for item in metadata))
+PY
+
+printf '%s\n' \
+  latest-head.txt README.md artifact-manifest.txt proof-media-sha256.txt \
+  proof-media-metadata.json fixture-events.json gateway-proof-summary.json fixture-startup.txt \
+  > proof-output/artifact-manifest.txt
+find proof-output -maxdepth 1 -type f \( -name '*.png' -o -name '*.mp4' -o -name '*-ui.xml' \) -printf '%f\n' \
+  | sort >> proof-output/artifact-manifest.txt
