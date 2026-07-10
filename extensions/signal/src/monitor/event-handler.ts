@@ -33,6 +33,7 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createInternalHookEvent,
   fireAndForgetHook,
@@ -89,6 +90,16 @@ import type {
 } from "./event-handler.types.js";
 import { resolveSignalQuoteContext } from "./inbound-context.js";
 import { renderSignalMentions } from "./mentions.js";
+
+const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
+const RETRYABLE_FLUSH_MAX_ATTEMPTS = 3;
+const RETRYABLE_FLUSH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
+
+function isSignalReplySessionInitConflictError(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
+    (candidate) => REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
+  );
+}
 
 function formatAttachmentKindCount(kind: string, count: number): string {
   if (kind === "attachment") {
@@ -224,6 +235,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     replyToBody?: string;
     replyToSender?: string;
     replyToIsQuote?: boolean;
+    retryAttempt?: number;
   };
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
@@ -657,7 +669,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
   }
 
-  const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
+  const { debouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
     cfg: deps.cfg,
     channel: "signal",
     buildKey: (entry) => {
@@ -675,36 +687,66 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       });
     },
     onFlush: async (entries) => {
-      const last = entries.at(-1);
-      if (!last) {
-        return;
+      try {
+        const last = entries.at(-1);
+        if (!last) {
+          return;
+        }
+        if (entries.length === 1) {
+          await handleSignalInboundMessage(last);
+          return;
+        }
+        const combinedText = entries
+          .map((entry) => entry.bodyText)
+          .filter(Boolean)
+          .join("\\n");
+        const combinedCommandBody = entries
+          .map((entry) => entry.commandBody)
+          .filter(Boolean)
+          .join("\\n");
+        if (!combinedText.trim()) {
+          return;
+        }
+        await handleSignalInboundMessage({
+          ...last,
+          bodyText: combinedText,
+          commandBody: combinedCommandBody,
+          isBatched: true,
+          nativeReplyBody: last.nativeReplyBody ?? last.bodyText,
+          mediaPath: undefined,
+          mediaType: undefined,
+          mediaPaths: undefined,
+          mediaTypes: undefined,
+        });
+      } catch (err) {
+        if (!isSignalReplySessionInitConflictError(err)) {
+          throw err;
+        }
+        const retryableEntries = entries.filter(
+          (entry) => (entry.retryAttempt ?? 0) < RETRYABLE_FLUSH_MAX_ATTEMPTS,
+        );
+        if (retryableEntries.length === 0) {
+          throw err;
+        }
+        for (const entry of retryableEntries) {
+          const retryAttempt = entry.retryAttempt ?? 0;
+          const delayMs = RETRYABLE_FLUSH_RETRY_DELAYS_MS[retryAttempt];
+          if (delayMs === undefined) {
+            continue;
+          }
+          const retryEntry: SignalInboundEntry = {
+            ...entry,
+            retryAttempt: retryAttempt + 1,
+          };
+          logVerbose(
+            `signal: reply session init conflict, retrying in ${delayMs}ms (attempt ${retryAttempt + 1}/${RETRYABLE_FLUSH_MAX_ATTEMPTS})`,
+          );
+          setTimeout(() => {
+            void debouncer.enqueue(retryEntry);
+          }, delayMs);
+        }
+        throw err;
       }
-      if (entries.length === 1) {
-        await handleSignalInboundMessage(last);
-        return;
-      }
-      const combinedText = entries
-        .map((entry) => entry.bodyText)
-        .filter(Boolean)
-        .join("\\n");
-      const combinedCommandBody = entries
-        .map((entry) => entry.commandBody)
-        .filter(Boolean)
-        .join("\\n");
-      if (!combinedText.trim()) {
-        return;
-      }
-      await handleSignalInboundMessage({
-        ...last,
-        bodyText: combinedText,
-        commandBody: combinedCommandBody,
-        isBatched: true,
-        nativeReplyBody: last.nativeReplyBody ?? last.bodyText,
-        mediaPath: undefined,
-        mediaType: undefined,
-        mediaPaths: undefined,
-        mediaTypes: undefined,
-      });
     },
     onError: (err) => {
       deps.runtime.error?.(`signal debounce flush failed: ${String(err)}`);
@@ -1190,7 +1232,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       typeof nativeReplyTargetTimestamp === "number"
         ? String(nativeReplyTargetTimestamp)
         : undefined;
-    await inboundDebouncer.enqueue({
+    await debouncer.enqueue({
       senderName,
       senderDisplay,
       senderRecipient,
