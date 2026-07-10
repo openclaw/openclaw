@@ -2238,6 +2238,31 @@ describe("processDiscordMessage draft streaming", () => {
     expectFinalWithProgressReceipt("done", "🛠️ 1 tool call");
   });
 
+  it("deletes a narration-only draft before later tool progress starts a fresh draft", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onNarrationUpdate?.({ text: "Looking at the repository." });
+      await params?.replyOptions?.onNarrationUpdate?.({ text: "" });
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: { mode: "progress", progress: { label: "Shelling" } },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.deleteCurrentMessage).toHaveBeenCalledTimes(1);
+    expect(draftStream.update.mock.calls.map((call) => call[0])).toEqual([
+      "Shelling\n\nLooking at the repository.",
+      "Shelling\n\n🛠️ Exec",
+    ]);
+  });
+
   it("omits the narration callback when progress narration is disabled", async () => {
     createMockDraftStreamForTest();
     dispatchInboundMessage.mockImplementationOnce(async () => createNoQueuedDispatchResult());
