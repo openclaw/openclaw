@@ -1,9 +1,12 @@
+// Generates postbuild runtime artifacts: plugin metadata, SDK aliases, stable
+// runtime aliases, static assets, and compatibility chunks for live upgrades.
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mjs";
 import { copyPluginSdkRootAlias } from "./copy-plugin-sdk-root-alias.mjs";
+import { escapeRegExp } from "./lib/regexp.mjs";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
@@ -20,7 +23,6 @@ const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-
 const ROOT_STABLE_RUNTIME_ALIAS_PATTERN = /^.+\.(?:runtime|contract)\.js$/u;
 const ROOT_RUNTIME_IMPORT_SPECIFIER_PATTERN =
   /(["'])\.\/([^"']+\.(?:runtime|contract)-[A-Za-z0-9_-]+\.js)\1/gu;
-const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 const PLUGIN_SDK_ROOT_ALIAS_OUTPUT = "dist/plugin-sdk/root-alias.cjs";
 const OFFICIAL_CHANNEL_CATALOG_OUTPUT = "dist/channel-catalog.json";
 const LEGACY_ROOT_RUNTIME_COMPAT_ALIASES = [
@@ -54,7 +56,13 @@ const LEGACY_ROOT_RUNTIME_COMPAT_ALIASES = [
   // nested dist entries, but live gateways may still import them after update.
   ["manager-DzRWrKSA.js", "acp/control-plane/manager.js"],
   ["runtime-CeGN4XUC.js", "web-fetch/runtime.js"],
+  // v2026.5.22 and v2026.6.8 text-transform runtimes. The stable alias remains
+  // for old chunks, but new chunks keep hashed imports because the alias export
+  // set expanded in v2026.6.8 and may already be cached in a live gateway.
+  ["text-transforms.runtime-D9-SpAmI.js", "text-transforms.runtime.js"],
+  ["text-transforms.runtime-sEqsN4pN.js", "text-transforms.runtime.js"],
 ];
+const ROOT_RUNTIME_STABLE_IMPORT_SKIP_ALIASES = new Set(["text-transforms.runtime.js"]);
 const LEGACY_PLUGIN_INSTALL_RUNTIME_MARKERS = [
   "scanPackageInstallSource",
   "scanFileInstallSource",
@@ -126,6 +134,7 @@ const LEGACY_PLUGIN_INSTALL_RUNTIME_COMPAT_ALIASES = [
   aliasFileName: PLUGIN_INSTALL_RUNTIME_ALIAS.aliasFileName,
   sourceIncludes: LEGACY_PLUGIN_INSTALL_RUNTIME_MARKERS,
 }));
+/** Compatibility chunks kept for live gateways loading old CLI exit modules. */
 export const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
   {
     dest: "dist/memory-state-CcqRgDZU.js",
@@ -137,18 +146,24 @@ export const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
   },
 ];
 
-export function listPluginSdkRootAliasOutputs() {
+/**
+ * Lists generated plugin SDK root-alias outputs.
+ */
+function listPluginSdkRootAliasOutputs() {
   return [PLUGIN_SDK_ROOT_ALIAS_OUTPUT];
 }
 
-export function listOfficialChannelCatalogOutputs() {
+/**
+ * Lists generated official channel catalog outputs.
+ */
+function listOfficialChannelCatalogOutputs() {
   return [OFFICIAL_CHANNEL_CATALOG_OUTPUT];
 }
 
 function collectStableRootRuntimeAliasCandidates(params) {
   const distDir = params.distDir;
   const fsImpl = params.fs;
-  let entries = [];
+  let entries;
   try {
     entries = fsImpl.readdirSync(distDir, { withFileTypes: true });
   } catch {
@@ -185,7 +200,7 @@ function resolveStableRootRuntimeAliasCandidate(params) {
     return { candidate, source };
   });
   const implementationCandidates = candidatesWithSources.filter(
-    ({ source }) => source.trim() !== `export * from "./${aliasFileName}";`,
+    ({ source }) => !isRuntimeAliasSource(source, aliasFileName),
   );
   const candidateNames = implementationCandidates.map(({ candidate }) => candidate);
   if (candidateNames.length === 1) {
@@ -214,7 +229,10 @@ function resolveStableRootRuntimeAliasCandidate(params) {
   return wrappers.length === 1 ? wrappers[0].candidate : null;
 }
 
-export function listStableRootRuntimeAliasOutputs(params = {}) {
+/**
+ * Lists stable aliases for hashed root runtime/contract chunks.
+ */
+function listStableRootRuntimeAliasOutputs(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
   const fsImpl = params.fs ?? fs;
@@ -231,14 +249,20 @@ export function listStableRootRuntimeAliasOutputs(params = {}) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-export function listLegacyCliExitCompatOutputs(params = {}) {
+/**
+ * Lists compatibility chunk outputs required for old CLI exit paths.
+ */
+function listLegacyCliExitCompatOutputs(params = {}) {
   const chunks = params.chunks ?? LEGACY_CLI_EXIT_COMPAT_CHUNKS;
   return chunks
     .map(({ dest }) => dest.replace(/\\/g, "/"))
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-export function listLegacyRootRuntimeCompatOutputs(params = {}) {
+/**
+ * Lists legacy hashed runtime aliases that may be needed during live upgrades.
+ */
+function listLegacyRootRuntimeCompatOutputs(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
   const fsImpl = params.fs ?? fs;
@@ -262,6 +286,9 @@ export function listLegacyRootRuntimeCompatOutputs(params = {}) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/**
+ * Lists all core runtime postbuild outputs expected after a build.
+ */
 export function listCoreRuntimePostBuildOutputs(params = {}) {
   return [
     ...listPluginSdkRootAliasOutputs(),
@@ -272,6 +299,48 @@ export function listCoreRuntimePostBuildOutputs(params = {}) {
   ].toSorted((left, right) => left.localeCompare(right));
 }
 
+const RUNTIME_CHUNK_DEFAULT_EXPORT_PATTERN =
+  /(^|\n)\s*export\b\s*(?:default\b|\{[^}]*(?:\bas\s+default\b|\bdefault\b\s*(?=[,}]))[^}]*\})/u;
+
+function formatRuntimeAliasSource(targetFileName, forwardDefault = false) {
+  const specifier = JSON.stringify(`./${targetFileName}`);
+  const starSource = `export * from ${specifier};\n`;
+  return forwardDefault ? `${starSource}export { default } from ${specifier};\n` : starSource;
+}
+
+function isRuntimeAliasSource(source, targetFileName) {
+  const normalizedSource = source.trim();
+  return (
+    normalizedSource === formatRuntimeAliasSource(targetFileName).trim() ||
+    normalizedSource === formatRuntimeAliasSource(targetFileName, true).trim()
+  );
+}
+
+/**
+ * Builds alias module source for a runtime chunk target. `export * from`
+ * never re-exports `default`, so when the target chunk has a default export
+ * the alias must forward it explicitly — otherwise lazy `import()` consumers
+ * that destructure `default` receive `undefined` (e.g. the post-compaction
+ * count reconcile failed this way with "TypeError: reconcile is not a
+ * function" on every compaction).
+ */
+function buildRuntimeAliasSource(params) {
+  const { distDir, fsImpl, targetFileName } = params;
+  let targetSource;
+  try {
+    targetSource = fsImpl.readFileSync(path.join(distDir, targetFileName), "utf8");
+  } catch {
+    return formatRuntimeAliasSource(targetFileName);
+  }
+  return formatRuntimeAliasSource(
+    targetFileName,
+    RUNTIME_CHUNK_DEFAULT_EXPORT_PATTERN.test(targetSource),
+  );
+}
+
+/**
+ * Writes stable aliases for current hashed runtime chunks.
+ */
 export function writeStableRootRuntimeAliases(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
@@ -290,15 +359,21 @@ export function writeStableRootRuntimeAliases(params = {}) {
       fsImpl.rmSync?.(aliasPath, { force: true });
       continue;
     }
-    writeTextFileIfChanged(aliasPath, `export * from "./${candidate}";\n`);
+    writeTextFileIfChanged(
+      aliasPath,
+      buildRuntimeAliasSource({ distDir, fsImpl, targetFileName: candidate }),
+    );
   }
 }
 
+/**
+ * Rewrites hashed runtime imports to stable aliases so live updates survive swaps.
+ */
 export function rewriteRootRuntimeImportsToStableAliases(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
   const fsImpl = params.fs ?? fs;
-  let entries = [];
+  let entries;
   try {
     entries = fsImpl.readdirSync(distDir, { withFileTypes: true });
   } catch {
@@ -327,6 +402,9 @@ export function rewriteRootRuntimeImportsToStableAliases(params = {}) {
       candidates,
     });
     if (candidate) {
+      if (ROOT_RUNTIME_STABLE_IMPORT_SKIP_ALIASES.has(aliasFileName)) {
+        continue;
+      }
       runtimeAliasFiles.set(candidate, aliasFileName);
     }
   }
@@ -371,7 +449,7 @@ function resolveRootRuntimeCandidateByMarkers(params) {
   }
   const aliasBaseFileName = params.aliasFileName.replace(/\.js$/u, "");
   const hashedPattern = new RegExp(`^${escapeRegExp(aliasBaseFileName)}-[A-Za-z0-9_-]+\\.js$`, "u");
-  let entries = [];
+  let entries;
   try {
     entries = params.fsImpl.readdirSync(params.distDir, { withFileTypes: true });
   } catch {
@@ -415,6 +493,9 @@ function resolveLegacyRootRuntimeCompatTarget(params) {
   });
 }
 
+/**
+ * Writes compatibility aliases for shipped hashed runtime chunk names.
+ */
 export function writeLegacyRootRuntimeCompatAliases(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
@@ -441,10 +522,16 @@ export function writeLegacyRootRuntimeCompatAliases(params = {}) {
     if (!targetFileName) {
       continue;
     }
-    writeTextFileIfChanged(legacyPath, `export * from "./${targetFileName}";\n`);
+    writeTextFileIfChanged(
+      legacyPath,
+      buildRuntimeAliasSource({ distDir, fsImpl, targetFileName }),
+    );
   }
 }
 
+/**
+ * Writes small compatibility chunks for old CLI exit imports.
+ */
 export function writeLegacyCliExitCompatChunks(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const chunks = params.chunks ?? LEGACY_CLI_EXIT_COMPAT_CHUNKS;
@@ -453,6 +540,14 @@ export function writeLegacyCliExitCompatChunks(params = {}) {
   }
 }
 
+function shouldCopyStaticExtensionAssets(params) {
+  const env = params.env ?? process.env;
+  return env.OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS !== "0";
+}
+
+/**
+ * Runs every runtime postbuild phase after the main dist build.
+ */
 export function runRuntimePostBuild(params = {}) {
   const timingsEnabled = params.timings ?? process.env.OPENCLAW_RUNTIME_POSTBUILD_TIMINGS !== "0";
   const runPhase = (label, action) => {
@@ -471,6 +566,9 @@ export function runRuntimePostBuild(params = {}) {
   runPhase("official channel catalog", () => writeOfficialChannelCatalog(params));
   runPhase("bundled plugin runtime overlay", () => stageBundledPluginRuntime(params));
   runPhase("static extension assets", () => {
+    if (!shouldCopyStaticExtensionAssets(params)) {
+      return;
+    }
     const staticAssetParams = {
       rootDir: ROOT,
       ...params,

@@ -1,9 +1,10 @@
-import { isOperatorScope } from "../gateway/operator-scopes.js";
-import { logVerbose } from "../globals.js";
+/** Validates and registers plugin command definitions into the global command registry. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { isOperatorScope } from "../gateway/operator-scopes.js";
+import { logVerbose } from "../globals.js";
 import { isRecord } from "../utils.js";
 import { normalizeAgentPromptSurfaceKind } from "./agent-prompt-surface-kind.js";
 import {
@@ -52,6 +53,7 @@ function getReservedCommands(): Set<string> {
     "allowlist",
     "activation",
     "skill",
+    "learn",
     "subagents",
     "kill",
     "steer",
@@ -76,16 +78,19 @@ function getAgentPromptSurfaces(): Set<string> {
   return agentPromptSurfaces;
 }
 
+/** Result returned when a plugin command registration succeeds or fails validation. */
 export type CommandRegistrationResult = {
   ok: boolean;
   error?: string;
 };
 
+/** Returns true when a command name is owned by built-in OpenClaw command handling. */
 export function isReservedCommandName(name: string): boolean {
   const trimmed = normalizeOptionalLowercaseString(name) ?? "";
   return Boolean(trimmed && getReservedCommands().has(trimmed));
 }
 
+/** Validates user-visible command names before plugin registration accepts them. */
 export function validateCommandName(
   name: string,
   opts?: { allowReservedCommandNames?: boolean },
@@ -159,6 +164,12 @@ export function validatePluginCommandDefinition(
         ? `Command requiredScopes contains unknown operator scope: ${unknownScope}`
         : "Command requiredScopes contains unknown operator scope";
     }
+  }
+  if (
+    command.exposeSenderIsOwner !== undefined &&
+    typeof command.exposeSenderIsOwner !== "boolean"
+  ) {
+    return "Command exposeSenderIsOwner must be a boolean";
   }
   if (command.channels !== undefined) {
     if (!Array.isArray(command.channels)) {
@@ -308,7 +319,12 @@ export function pluginCommandSupportsChannel(
 export function registerPluginCommand(
   pluginId: string,
   command: OpenClawPluginCommandDefinition,
-  opts?: { pluginName?: string; pluginRoot?: string; allowReservedCommandNames?: boolean },
+  opts?: {
+    pluginName?: string;
+    pluginRoot?: string;
+    allowReservedCommandNames?: boolean;
+    allowOwnerStatusExposure?: boolean;
+  },
 ): CommandRegistrationResult {
   // Prevent registration while commands are being processed
   if (isPluginCommandRegistryLocked()) {
@@ -363,6 +379,9 @@ export function registerPluginCommand(
     pluginId,
     pluginName: opts?.pluginName,
     pluginRoot: opts?.pluginRoot,
+    ...(opts?.allowOwnerStatusExposure === true && normalizedCommand.exposeSenderIsOwner === true
+      ? { trustedOwnerStatusExposure: true as const }
+      : {}),
   });
   logVerbose(`Registered plugin command: ${key} (plugin: ${pluginId})`);
   return { ok: true };

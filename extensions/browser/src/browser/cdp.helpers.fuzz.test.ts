@@ -1,3 +1,4 @@
+// Browser tests cover cdp.helpers.fuzz plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   appendCdpPath,
@@ -6,7 +7,9 @@ import {
   isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
   parseBrowserHttpUrl,
+  redactCdpErrorText,
   redactCdpUrl,
+  stripCdpUrlCredentials,
 } from "./cdp.helpers.js";
 
 /**
@@ -349,6 +352,12 @@ describe("fuzz: parseBrowserHttpUrl", () => {
       expect(() => parseBrowserHttpUrl(url, "test")).toThrow(/must be http\(s\) or ws\(s\)/);
     }
   });
+
+  it("rejects explicitly configured port zero", () => {
+    for (const scheme of ["http", "https", "ws", "wss"]) {
+      expect(() => parseBrowserHttpUrl(`${scheme}://127.0.0.1:0`, "test")).toThrow(/invalid port/);
+    }
+  });
 });
 
 describe("fuzz: redactCdpUrl", () => {
@@ -382,6 +391,27 @@ describe("fuzz: redactCdpUrl", () => {
       const out = redactCdpUrl(junk);
       expect(typeof out).toBe("string");
     }
+  });
+});
+
+describe("CDP credential boundaries", () => {
+  it("moves URL userinfo out of dependency-facing connection URLs", () => {
+    expect(
+      stripCdpUrlCredentials(
+        "wss://alice:p%40ss@browserless.example/devtools/browser/id?token=keep-query",
+      ),
+    ).toBe("wss://browserless.example/devtools/browser/id?token=keep-query");
+  });
+
+  it("redacts embedded CDP URL credentials from dependency error prose", () => {
+    const message = redactCdpErrorText(
+      "connect failed for wss://alice:browser-password@browserless.example/devtools/browser/id?token=browser-token",
+    );
+
+    expect(message).toContain("browserless.example/devtools/browser/id");
+    expect(message).not.toContain("alice");
+    expect(message).not.toContain("browser-password");
+    expect(message).not.toContain("browser-token");
   });
 });
 

@@ -1,7 +1,9 @@
+// Gateway auxiliary method handlers.
+// Wires reload, secrets, exec approval, and plugin approval RPC handlers.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
-import { type PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
+import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import {
   resolveCommandSecretsFromActiveRuntimeSnapshot,
   type CommandSecretAssignment,
@@ -10,6 +12,7 @@ import {
   getActiveSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
+import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { diffConfigPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
@@ -18,6 +21,7 @@ import {
 } from "./config-reload-plan.js";
 import { createExecApprovalIosPushDelivery } from "./exec-approval-ios-push.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
+import type { ChannelAutostartSuppression } from "./server-channels.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./server-methods/types.js";
 import {
   disconnectStaleSharedGatewayAuthClients,
@@ -59,6 +63,7 @@ function createLazyHandler(
   };
 }
 
+/** Create auxiliary gateway handlers that are not part of the core descriptor set. */
 export function createGatewayAuxHandlers(params: {
   log: GatewayAuxHandlerLogger;
   activateRuntimeSecrets: ActivateRuntimeSecrets;
@@ -68,30 +73,33 @@ export function createGatewayAuxHandlers(params: {
   clients: Iterable<SharedGatewayAuthClient>;
   startChannel: (name: ChannelKind) => Promise<void>;
   stopChannel: (name: ChannelKind) => Promise<void>;
+  getChannelAutostartSuppression?: () => ChannelAutostartSuppression | null;
   logChannels: { info: (msg: string) => void };
 }) {
   const execApprovalManager = new ExecApprovalManager();
   const execApprovalForwarder = createExecApprovalForwarder();
   const execApprovalIosPushDelivery = createExecApprovalIosPushDelivery({ log: params.log });
-  let execApprovalHandlersPromise: Promise<GatewayRequestHandlers> | null = null;
-  const loadExecApprovalHandlers = () =>
-    (execApprovalHandlersPromise ??= import("./server-methods/exec-approval.js").then(
-      ({ createExecApprovalHandlers }) =>
+  const loadExecApprovalHandlers = createLazyPromise(
+    () =>
+      import("./server-methods/exec-approval.js").then(({ createExecApprovalHandlers }) =>
         createExecApprovalHandlers(execApprovalManager, {
           forwarder: execApprovalForwarder,
           iosPushDelivery: execApprovalIosPushDelivery,
         }),
-    ));
+      ),
+    { cacheRejections: true },
+  );
   const buildReloadPlan = params.buildReloadPlan ?? buildGatewayReloadPlan;
   const pluginApprovalManager = new ExecApprovalManager<PluginApprovalRequestPayload>();
-  let pluginApprovalHandlersPromise: Promise<GatewayRequestHandlers> | null = null;
-  const loadPluginApprovalHandlers = () =>
-    (pluginApprovalHandlersPromise ??= import("./server-methods/plugin-approval.js").then(
-      ({ createPluginApprovalHandlers }) =>
+  const loadPluginApprovalHandlers = createLazyPromise(
+    () =>
+      import("./server-methods/plugin-approval.js").then(({ createPluginApprovalHandlers }) =>
         createPluginApprovalHandlers(pluginApprovalManager, {
           forwarder: execApprovalForwarder,
         }),
-    ));
+      ),
+    { cacheRejections: true },
+  );
   // Serialize the entire `secrets.reload` path (activation + channel restart)
   // so concurrent callers cannot overlap the stop/start loop and so the
   // "before" snapshot used for the reload-plan diff is always the snapshot
@@ -113,10 +121,9 @@ export function createGatewayAuxHandlers(params: {
     reloadInFlight = run;
     return run;
   };
-  let secretsHandlersPromise: Promise<GatewayRequestHandlers> | null = null;
-  const loadSecretsHandlers = () =>
-    (secretsHandlersPromise ??= import("./server-methods/secrets.js").then(
-      ({ createSecretsHandlers }) =>
+  const loadSecretsHandlers = createLazyPromise(
+    () =>
+      import("./server-methods/secrets.js").then(({ createSecretsHandlers }) =>
         createSecretsHandlers({
           reloadSecrets: () =>
             runExclusiveReload(async () => {
@@ -133,7 +140,7 @@ export function createGatewayAuxHandlers(params: {
                 params.sharedGatewaySessionGenerationState.current;
               const previousSharedGatewaySessionGenerationRequired =
                 params.sharedGatewaySessionGenerationState.required;
-              let nextSharedGatewaySessionGeneration = previousSharedGatewaySessionGeneration;
+              let nextSharedGatewaySessionGeneration;
               let sharedGatewaySessionGenerationChanged = false;
               const stoppedChannels: ChannelKind[] = [];
               const restartedChannels = new Set<ChannelKind>();
@@ -170,6 +177,11 @@ export function createGatewayAuxHandlers(params: {
                   ) {
                     throw new Error(
                       `secrets.reload requires restarting channels: ${restartChannels.join(", ")}`,
+                    );
+                  }
+                  if (params.getChannelAutostartSuppression?.()) {
+                    throw new Error(
+                      `secrets.reload requires restarting channels but channel autostart is suppressed by crash-loop breaker: ${restartChannels.join(", ")}`,
                     );
                   }
                   const restartFailures: ChannelKind[] = [];
@@ -259,7 +271,9 @@ export function createGatewayAuxHandlers(params: {
             return { assignments, diagnostics, inactiveRefPaths };
           },
         }),
-    ));
+      ),
+    { cacheRejections: true },
+  );
 
   return {
     execApprovalManager,

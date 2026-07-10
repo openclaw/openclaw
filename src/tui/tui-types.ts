@@ -1,3 +1,7 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+// Defines shared TUI state, backend, and event types.
+import type { SessionGoal } from "../config/sessions/types.js";
+
 export type TuiOptions = {
   local?: boolean;
   url?: string;
@@ -23,9 +27,14 @@ export type TuiResult = {
   crestodianMessage?: string;
 };
 
+export type TuiHistoryLoadResult =
+  | { loaded: true; inFlightRunId: string | null }
+  | { loaded: false };
+
 export type ChatEvent = {
   runId: string;
   sessionKey: string;
+  agentId?: string;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
   errorMessage?: string;
@@ -35,6 +44,7 @@ export type BtwEvent = {
   kind: "btw";
   runId?: string;
   sessionKey?: string;
+  agentId?: string;
   question: string;
   text: string;
   isError?: boolean;
@@ -42,10 +52,25 @@ export type BtwEvent = {
   ts?: number;
 };
 
+export type SessionChangedEvent = {
+  sessionKey?: string;
+  agentId?: string;
+  reason?: string;
+  phase?: string;
+  runId?: string;
+  sessionId?: string;
+  updatedAt?: number | null;
+};
+
 export type AgentEvent = {
   runId: string;
   stream: string;
   data?: Record<string, unknown>;
+  // Stamped by the gateway on every emitted payload (see infra/agent-events.ts).
+  // Lifecycle events always carry sessionKey, letting the TUI adopt
+  // system-injected runs that never went through the local submit path.
+  sessionKey?: string;
+  agentId?: string;
 };
 
 export type ResponseUsageMode = "on" | "off" | "tokens" | "full";
@@ -53,7 +78,7 @@ export type ResponseUsageMode = "on" | "off" | "tokens" | "full";
 export type SessionInfo = {
   thinkingLevel?: string;
   thinkingLevels?: Array<{ id: string; label: string }>;
-  fastMode?: boolean;
+  fastMode?: FastMode;
   verboseLevel?: string;
   traceLevel?: string;
   reasoningLevel?: string;
@@ -63,7 +88,16 @@ export type SessionInfo = {
   inputTokens?: number | null;
   outputTokens?: number | null;
   totalTokens?: number | null;
+  /**
+   * True when `totalTokens` is a known-fresh value (e.g. 0 on a brand-new
+   * session) rather than an unknown/stale total. Lets the footer render `0`
+   * instead of `?` for fresh sessions, mirroring the `/status` fix in #93798.
+   */
+  totalTokensFresh?: boolean;
+  goal?: SessionGoal;
   responseUsage?: ResponseUsageMode;
+  /** Resolved effective usage mode (session override → channel config → default → off). Set by the gateway; the TUI uses this for no-arg toggle cycles so the cycle starts from the effective visible mode rather than the raw session value. */
+  effectiveResponseUsage?: ResponseUsageMode;
   updatedAt?: number | null;
   displayName?: string;
 };
@@ -133,6 +167,7 @@ export type TuiStateAccess = {
   activeChatRunId: string | null;
   pendingOptimisticUserMessage?: boolean;
   pendingChatRunId?: string | null;
+  pendingSubmitDraft?: { runId: string; text: string } | null;
   queuedMessages?: QueuedMessage[];
   historyLoaded: boolean;
   sessionInfo: SessionInfo;

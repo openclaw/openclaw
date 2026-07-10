@@ -1,3 +1,10 @@
+// Mattermost plugin module implements monitor resources behavior.
+import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   fetchMattermostChannel,
@@ -10,7 +17,7 @@ import {
 } from "./client.js";
 import { buildButtonProps, type MattermostInteractionResponse } from "./interactions.js";
 
-export type MattermostMediaKind = "image" | "audio" | "video" | "document" | "unknown";
+type MattermostMediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
 export type MattermostMediaInfo = {
   path: string;
@@ -18,8 +25,26 @@ export type MattermostMediaInfo = {
   kind: MattermostMediaKind;
 };
 
+export function formatMattermostInboundMediaText(params: {
+  body: string;
+  mediaPlaceholder: string;
+  expectedCount: number;
+  mediaCount: number;
+}): string {
+  const unavailableCount = Math.max(0, params.expectedCount - params.mediaCount);
+  if (unavailableCount === 0) {
+    return params.body;
+  }
+  return formatInboundMediaUnavailableText({
+    body: params.body,
+    mediaPlaceholder: params.mediaCount === 0 ? params.mediaPlaceholder : undefined,
+    notice: `[mattermost ${unavailableCount > 1 ? `${unavailableCount} attachments` : "attachment"} unavailable]`,
+  });
+}
+
 const CHANNEL_CACHE_TTL_MS = 5 * 60_000;
 const USER_CACHE_TTL_MS = 10 * 60_000;
+const MONITOR_RESOURCE_CACHE_MAX_ENTRIES = 1000;
 
 type SaveRemoteMedia = (params: {
   url: string;
@@ -49,6 +74,39 @@ export function createMattermostMonitorResources(params: {
   } = params;
   const channelCache = new Map<string, { value: MattermostChannel | null; expiresAt: number }>();
   const userCache = new Map<string, { value: MattermostUser | null; expiresAt: number }>();
+
+  const getCachedValue = <T>(
+    cache: Map<string, { value: T | null; expiresAt: number }>,
+    key: string,
+    nowMs: number | undefined,
+  ): T | null | undefined => {
+    const cached = cache.get(key);
+    if (!cached) {
+      return undefined;
+    }
+    if (nowMs !== undefined && cached.expiresAt > nowMs) {
+      return cached.value;
+    }
+    cache.delete(key);
+    return undefined;
+  };
+
+  const setCachedValue = <T>(
+    cache: Map<string, { value: T | null; expiresAt: number }>,
+    key: string,
+    value: T | null,
+    ttlMs: number,
+    rawNowMs: number,
+  ): void => {
+    const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNowMs });
+    if (expiresAt !== undefined) {
+      // Concurrent misses can resolve the same key out of order. Reinsert on
+      // writes so the cap keeps the most recently resolved resources.
+      cache.delete(key);
+      cache.set(key, { value, expiresAt });
+      pruneMapToMaxSize(cache, MONITOR_RESOURCE_CACHE_MAX_ENTRIES);
+    }
+  };
 
   const resolveMattermostMedia = async (
     fileIds?: string[] | null,
@@ -89,45 +147,35 @@ export function createMattermostMonitorResources(params: {
   };
 
   const resolveChannelInfo = async (channelId: string): Promise<MattermostChannel | null> => {
-    const cached = channelCache.get(channelId);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.value;
+    const rawNow = Date.now();
+    const cached = getCachedValue(channelCache, channelId, asDateTimestampMs(rawNow));
+    if (cached !== undefined) {
+      return cached;
     }
     try {
       const info = await fetchMattermostChannel(client, channelId);
-      channelCache.set(channelId, {
-        value: info,
-        expiresAt: Date.now() + CHANNEL_CACHE_TTL_MS,
-      });
+      setCachedValue(channelCache, channelId, info, CHANNEL_CACHE_TTL_MS, rawNow);
       return info;
     } catch (err) {
       logger.debug?.(`mattermost: channel lookup failed: ${String(err)}`);
-      channelCache.set(channelId, {
-        value: null,
-        expiresAt: Date.now() + CHANNEL_CACHE_TTL_MS,
-      });
+      setCachedValue(channelCache, channelId, null, CHANNEL_CACHE_TTL_MS, rawNow);
       return null;
     }
   };
 
   const resolveUserInfo = async (userId: string): Promise<MattermostUser | null> => {
-    const cached = userCache.get(userId);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.value;
+    const rawNow = Date.now();
+    const cached = getCachedValue(userCache, userId, asDateTimestampMs(rawNow));
+    if (cached !== undefined) {
+      return cached;
     }
     try {
       const info = await fetchMattermostUser(client, userId);
-      userCache.set(userId, {
-        value: info,
-        expiresAt: Date.now() + USER_CACHE_TTL_MS,
-      });
+      setCachedValue(userCache, userId, info, USER_CACHE_TTL_MS, rawNow);
       return info;
     } catch (err) {
       logger.debug?.(`mattermost: user lookup failed: ${String(err)}`);
-      userCache.set(userId, {
-        value: null,
-        expiresAt: Date.now() + USER_CACHE_TTL_MS,
-      });
+      setCachedValue(userCache, userId, null, USER_CACHE_TTL_MS, rawNow);
       return null;
     }
   };
@@ -143,17 +191,17 @@ export function createMattermostMonitorResources(params: {
       buttons,
     });
 
-  const updateModelPickerPost = async (params: {
+  const updateModelPickerPost = async (paramsLocal: {
     channelId: string;
     postId: string;
     message: string;
     buttons?: Array<unknown>;
   }): Promise<MattermostInteractionResponse> => {
-    const props = buildModelPickerProps(params.channelId, params.buttons ?? []) ?? {
+    const props = buildModelPickerProps(paramsLocal.channelId, paramsLocal.buttons ?? []) ?? {
       attachments: [],
     };
-    await updateMattermostPost(client, params.postId, {
-      message: params.message,
+    await updateMattermostPost(client, paramsLocal.postId, {
+      message: paramsLocal.message,
       props,
     });
     return {};

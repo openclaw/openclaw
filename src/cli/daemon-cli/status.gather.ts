@@ -1,4 +1,6 @@
+// Collects daemon status from service files, config snapshots, ports, probes, and plugin drift.
 import fs from "node:fs/promises";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
 import {
   createConfigIO,
@@ -12,13 +14,21 @@ import type {
   GatewayBindMode,
   GatewayControlUiConfig,
 } from "../../config/types.js";
+import { resolveSecretInputRef } from "../../config/types.secrets.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { resolveAdvertisedControlUiLinks } from "../../gateway/control-ui-links.js";
+import { gatewaySecretInputPathCanWin } from "../../gateway/credentials-secret-inputs.js";
 import { trimToUndefined } from "../../gateway/credentials.js";
+import { resolveGatewayProbeCredentialConfig } from "../../gateway/probe-auth.js";
+import {
+  ALL_GATEWAY_SECRET_INPUT_PATHS,
+  readGatewaySecretInputValue,
+} from "../../gateway/secret-input-paths.js";
 import {
   inspectBestEffortPrimaryTailnetIPv4,
   resolveBestEffortGatewayBindHostForDisplay,
@@ -36,9 +46,17 @@ import {
   readGatewayRestartHandoffSync,
   type GatewayRestartHandoff,
 } from "../../infra/restart-handoff.js";
+import {
+  inspectWindowsGatewayFirewall,
+  type WindowsGatewayFirewallDiagnostic,
+} from "../../infra/windows-gateway-firewall-diagnostics.js";
 import { resolveConfiguredLogFilePath } from "../../logging/log-file-path.js";
+import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-record-reader.js";
+import {
+  detectPluginVersionDrift,
+  type PluginVersionDriftReport,
+} from "../../plugins/plugin-version-drift.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { uniqueStrings } from "../../shared/string-normalization.js";
 import { VERSION } from "../../version.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
 import type { GatewayRpcOpts } from "./types.js";
@@ -60,8 +78,10 @@ type GatewayStatusSummary = {
   port: number;
   portSource: "service args" | "env/config";
   probeUrl: string;
+  controlUiLinks?: { httpUrl: string; wsUrl: string };
   probeNote?: string;
   version?: string | null;
+  windowsFirewall?: WindowsGatewayFirewallDiagnostic;
 };
 
 type PortStatusSummary = {
@@ -154,14 +174,12 @@ function coerceStatusConfig(value: unknown): OpenClawConfig {
 
 function hasOwnKey(value: unknown, key: string): boolean {
   return Boolean(
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.prototype.hasOwnProperty.call(value, key),
+    value && typeof value === "object" && !Array.isArray(value) && Object.hasOwn(value, key),
   );
 }
 
 function needsFullStatusConfigRead(raw: string, parsed: unknown): boolean {
+  // Fast reads skip config expansion; includes/env placeholders require full config IO.
   return raw.includes("$include") || raw.includes("${") || hasOwnKey(parsed, "env");
 }
 
@@ -326,6 +344,13 @@ export type DaemonStatus = {
     staleGatewayPids: number[];
   };
   extraServices: Array<{ label: string; detail: string; scope: string }>;
+  /**
+   * Plugin version drift report. Surfaces active official external plugins
+   * whose installed version does not match the running gateway version, which
+   * can happen after `npm install -g openclaw@<v>` updates the gateway binary
+   * without a corresponding `openclaw plugins update`.
+   */
+  pluginVersionDrift?: PluginVersionDriftReport;
 };
 
 function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: boolean) {
@@ -413,6 +438,16 @@ async function resolveGatewayStatusSummary(params: {
   const tlsEnabled = params.daemonCfg.gateway?.tls?.enabled === true;
   const scheme = tlsEnabled ? "wss" : "ws";
   const probeUrl = probeUrlOverride ?? `${scheme}://${probeHost}:${daemonPort}`;
+  const controlUiLinks =
+    params.daemonCfg.gateway?.controlUi?.enabled === false
+      ? undefined
+      : await resolveAdvertisedControlUiLinks({
+          port: daemonPort,
+          bind: bindMode,
+          customBindHost,
+          basePath: params.daemonCfg.gateway?.controlUi?.basePath,
+          tlsEnabled,
+        });
   let probeNote =
     !probeUrlOverride && bindMode === "lan"
       ? `bind=lan listens on 0.0.0.0 (all interfaces); probing via ${probeHost}.`
@@ -431,6 +466,7 @@ async function resolveGatewayStatusSummary(params: {
       port: daemonPort,
       portSource,
       probeUrl,
+      ...(controlUiLinks ? { controlUiLinks } : {}),
       ...(probeNote ? { probeNote } : {}),
     },
     daemonPort,
@@ -490,12 +526,44 @@ async function inspectEstablishedGatewayClients(params: {
   };
 }
 
+function hasActiveGatewayExecProbeCredential(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  explicitAuth: { token?: string; password?: string };
+  mode: "local" | "remote";
+}): boolean {
+  const cfg = resolveGatewayProbeCredentialConfig({
+    cfg: params.cfg,
+    mode: params.mode,
+  });
+  return ALL_GATEWAY_SECRET_INPUT_PATHS.some((path) => {
+    if (
+      !gatewaySecretInputPathCanWin({
+        config: cfg,
+        env: params.env,
+        explicitAuth: params.explicitAuth,
+        modeOverride: params.mode,
+        path,
+        remoteTokenFallback: "remote-only",
+      })
+    ) {
+      return false;
+    }
+    const ref = resolveSecretInputRef({
+      value: readGatewaySecretInputValue(cfg, path),
+      defaults: cfg.secrets?.defaults,
+    }).ref;
+    return ref?.source === "exec";
+  });
+}
+
 export async function gatherDaemonStatus(
   opts: {
     rpc: GatewayRpcOpts;
     probe: boolean;
     requireRpc?: boolean;
     deep?: boolean;
+    allowExecSecretRefs?: boolean;
   } & FindExtraGatewayServicesOptions,
 ): Promise<DaemonStatus> {
   const service = resolveGatewayService();
@@ -508,7 +576,9 @@ export async function gatherDaemonStatus(
     : process.env;
   const [loaded, runtime] = await Promise.all([
     service.isLoaded({ env: serviceEnv }).catch(() => false),
-    service.readRuntime(serviceEnv).catch((err) => ({ status: "unknown", detail: String(err) })),
+    service
+      .readRuntime(serviceEnv)
+      .catch((err: unknown) => ({ status: "unknown", detail: String(err) })),
   ]);
   const restartHandoff = opts.deep ? readGatewayRestartHandoffSync(serviceEnv) : null;
   const configAudit = command
@@ -534,6 +604,16 @@ export async function gatherDaemonStatus(
     commandProgramArguments: command?.programArguments,
     rpcUrlOverride: opts.rpc.url,
   });
+  const shouldInspectLocalGateway = daemonCfg.gateway?.mode !== "remote" && !probeUrlOverride;
+  const windowsFirewall =
+    opts.deep === true && shouldInspectLocalGateway
+      ? await inspectWindowsGatewayFirewall({
+          bind: gateway.bindMode,
+          mode: "quick",
+          port: daemonPort,
+          platform: process.platform,
+        })
+      : undefined;
   const { portStatus, portCliStatus } = await inspectDaemonPortStatuses({
     daemonPort,
     cliPort,
@@ -556,7 +636,9 @@ export async function gatherDaemonStatus(
   const staleUpdateLaunchdJobs =
     opts.deep && process.platform === "darwin"
       ? await loadLaunchdModule()
-          .then(({ findStaleOpenClawUpdateLaunchdJobs }) => findStaleOpenClawUpdateLaunchdJobs())
+          .then(({ findStaleOpenClawUpdateLaunchdJobs }) =>
+            findStaleOpenClawUpdateLaunchdJobs(serviceEnv),
+          )
           .catch(() => [])
       : [];
 
@@ -573,22 +655,40 @@ export async function gatherDaemonStatus(
     : undefined;
   let daemonProbeAuth: { token?: string; password?: string } | undefined;
   let rpcAuthWarning: string | undefined;
+  let allowRpcConfigCredentials = true;
+  let skippedProbeAuthForDisabledExecSecretRef = false;
   if (opts.probe) {
     const probeMode = daemonCfg.gateway?.mode === "remote" ? "remote" : "local";
-    const probeAuthResolution = await loadGatewayProbeAuthModule().then(
-      ({ resolveGatewayProbeAuthSafeWithSecretInputs }) =>
-        resolveGatewayProbeAuthSafeWithSecretInputs({
-          cfg: daemonCfg,
-          mode: probeMode,
-          env: mergedDaemonEnv as NodeJS.ProcessEnv,
-          explicitAuth: {
-            token: opts.rpc.token,
-            password: opts.rpc.password,
-          },
-        }),
-    );
-    daemonProbeAuth = probeAuthResolution.auth;
-    rpcAuthWarning = probeAuthResolution.warning;
+    const explicitAuth = {
+      token: opts.rpc.token,
+      password: opts.rpc.password,
+    };
+    const canResolveProbeAuth =
+      opts.allowExecSecretRefs !== false ||
+      !hasActiveGatewayExecProbeCredential({
+        cfg: daemonCfg,
+        env: mergedDaemonEnv as NodeJS.ProcessEnv,
+        explicitAuth,
+        mode: probeMode,
+      });
+    if (canResolveProbeAuth) {
+      const probeAuthResolution = await loadGatewayProbeAuthModule().then(
+        ({ resolveGatewayProbeAuthSafeWithSecretInputs }) =>
+          resolveGatewayProbeAuthSafeWithSecretInputs({
+            cfg: daemonCfg,
+            mode: probeMode,
+            env: mergedDaemonEnv as NodeJS.ProcessEnv,
+            explicitAuth,
+          }),
+      );
+      daemonProbeAuth = probeAuthResolution.auth;
+      rpcAuthWarning = probeAuthResolution.warning;
+    } else {
+      allowRpcConfigCredentials = false;
+      skippedProbeAuthForDisabledExecSecretRef = true;
+      rpcAuthWarning =
+        "Gateway probe auth skipped because gateway credentials use an exec SecretRef and exec SecretRefs are disabled for this status request.";
+    }
   }
 
   const rpc = opts.probe
@@ -606,11 +706,12 @@ export async function gatherDaemonStatus(
           timeoutMs,
           json: opts.rpc.json,
           requireRpc: opts.requireRpc,
+          allowRpcConfigCredentials,
           configPath: daemonConfigSummary.path,
         }),
       )
     : undefined;
-  if (rpc?.ok) {
+  if (rpc?.ok && !skippedProbeAuthForDisabledExecSecretRef) {
     rpcAuthWarning = undefined;
   }
   const health =
@@ -632,8 +733,41 @@ export async function gatherDaemonStatus(
     : undefined;
 
   let lastError: string | undefined;
-  if (loaded && runtime?.status === "running" && portStatus && portStatus.status !== "busy") {
-    lastError = (await readLastGatewayErrorLine(mergedDaemonEnv as NodeJS.ProcessEnv)) ?? undefined;
+  if (
+    shouldInspectLocalGateway &&
+    loaded &&
+    runtime?.status === "running" &&
+    portStatus &&
+    (portStatus.status !== "busy" || rpc?.ok === false)
+  ) {
+    lastError =
+      (await readLastGatewayErrorLine(mergedDaemonEnv as NodeJS.ProcessEnv, {
+        requirePatternMatch: portStatus.status === "busy",
+      })) ?? undefined;
+  }
+
+  // Plugin version drift detection.
+  // Compares active official external plugins against the *running* local
+  // gateway version reported by the probe handshake, falling back to the
+  // invoking CLI VERSION only when no gateway version is available. Reading
+  // records with the merged daemon environment inspects the managed service's
+  // profile/state dir, so remote/explicit URL probes need remote-owned
+  // diagnostics instead.
+  // Best-effort: unreadable install records omit this advisory report.
+  let pluginVersionDrift: PluginVersionDriftReport | undefined;
+  if (shouldInspectLocalGateway) {
+    try {
+      const installRecords = await loadInstalledPluginIndexInstallRecords({
+        env: mergedDaemonEnv as NodeJS.ProcessEnv,
+      });
+      pluginVersionDrift = detectPluginVersionDrift({
+        gatewayVersion: gatewayVersion ?? VERSION,
+        installRecords,
+        config: daemonCfg,
+      });
+    } catch {
+      pluginVersionDrift = undefined;
+    }
   }
 
   return {
@@ -657,6 +791,7 @@ export async function gatherDaemonStatus(
     },
     gateway: {
       ...gateway,
+      ...(windowsFirewall?.applies ? { windowsFirewall } : {}),
       ...(opts.probe
         ? {
             version: gatewayVersion,
@@ -685,6 +820,7 @@ export async function gatherDaemonStatus(
         }
       : {}),
     extraServices,
+    ...(pluginVersionDrift ? { pluginVersionDrift } : {}),
   };
 }
 

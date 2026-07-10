@@ -1,3 +1,4 @@
+// Google Meet plugin module implements cli behavior.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -6,12 +7,21 @@ import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import {
+  clampTimerTimeoutMs,
+  parseStrictPositiveInteger,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
   buildGoogleMeetCalendarDayWindow,
   findGoogleMeetCalendarEvent,
   listGoogleMeetCalendarEvents,
   type GoogleMeetCalendarLookupResult,
 } from "./calendar.js";
-import type { GoogleMeetConfig, GoogleMeetModeInput, GoogleMeetTransport } from "./config.js";
+import {
+  resolveGoogleMeetGatewayOperationTimeoutMs,
+  type GoogleMeetConfig,
+  type GoogleMeetModeInput,
+  type GoogleMeetTransport,
+} from "./config.js";
 import { hasCreateSpaceConfigInput, resolveCreateSpaceConfig } from "./create.js";
 import {
   buildGoogleMeetPreflightReport,
@@ -53,6 +63,13 @@ type OAuthLoginOptions = {
   timeoutSec?: string;
 };
 
+export const testing = {
+  parsePositiveNumber,
+  resolveGoogleMeetGatewayOperationTimeoutMs,
+  resolveGoogleMeetGatewayTimeoutMs,
+  resolveGoogleMeetOAuthCallbackTimeoutMs,
+};
+
 type ResolveSpaceOptions = {
   meeting?: string;
   today?: boolean;
@@ -81,7 +98,7 @@ type MeetArtifactOptions = ResolveSpaceOptions & {
   output?: string;
 };
 
-export type GoogleMeetExportRequest = {
+type GoogleMeetExportRequest = {
   meeting?: string;
   conferenceRecord?: string;
   calendarEventId?: string;
@@ -96,7 +113,7 @@ export type GoogleMeetExportRequest = {
   earlyBeforeMinutes?: number;
 };
 
-export type GoogleMeetExportWarning = {
+type GoogleMeetExportWarning = {
   type:
     | "smart_notes"
     | "transcript_entries"
@@ -107,7 +124,7 @@ export type GoogleMeetExportWarning = {
   message: string;
 };
 
-export type GoogleMeetExportManifest = {
+type GoogleMeetExportManifest = {
   generatedAt: string;
   request?: GoogleMeetExportRequest;
   tokenSource?: "cached-access-token" | "refresh-token";
@@ -150,6 +167,7 @@ type GoogleMeetGatewayMethod =
 type GoogleMeetGatewayCallResult = { ok: true; payload: unknown } | { ok: false; error: unknown };
 
 const GOOGLE_MEET_GATEWAY_DEFAULT_TIMEOUT_MS = 5000;
+const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 
 type DoctorOptions = {
   json?: boolean;
@@ -237,7 +255,8 @@ function parseOptionalNumber(value: string | undefined): number | undefined {
   if (!value?.trim()) {
     return undefined;
   }
-  const parsed = Number(value);
+  const trimmed = value.trim();
+  const parsed = PLAIN_DECIMAL_NUMBER_RE.test(trimmed) ? Number(trimmed) : Number.NaN;
   if (!Number.isFinite(parsed)) {
     throw new Error(`Expected a numeric value, received ${value}`);
   }
@@ -263,9 +282,33 @@ function parsePositiveNumber(value: string | undefined, label: string): number |
   if (value === undefined) {
     return undefined;
   }
-  const parsed = Number(value);
+  const trimmed = value.trim();
+  const parsed = PLAIN_DECIMAL_NUMBER_RE.test(trimmed) ? Number(trimmed) : Number.NaN;
   if (!Number.isFinite(parsed) || parsed <= 0) {
     throw new Error(`${label} must be a positive number`);
+  }
+  return parsed;
+}
+
+function resolveGoogleMeetGatewayTimeoutMs(timeoutMs: unknown): number {
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+    ? (clampTimerTimeoutMs(Math.ceil(timeoutMs)) ?? 1)
+    : GOOGLE_MEET_GATEWAY_DEFAULT_TIMEOUT_MS;
+}
+
+function resolveGoogleMeetOAuthCallbackTimeoutMs(timeoutSec: string | undefined): number {
+  return (
+    clampTimerTimeoutMs((parsePositiveNumber(timeoutSec, "timeout-sec") ?? 300) * 1000) ?? 300_000
+  );
+}
+
+function parsePositiveIntegerOption(value: string | undefined, label: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
+    throw new Error(`${label} must be a positive integer`);
   }
   return parsed;
 }
@@ -277,10 +320,7 @@ async function callGoogleMeetGateway(params: {
   timeoutMs?: number;
 }): Promise<GoogleMeetGatewayCallResult> {
   try {
-    const timeoutMs =
-      typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-        ? Math.max(1, Math.ceil(params.timeoutMs))
-        : GOOGLE_MEET_GATEWAY_DEFAULT_TIMEOUT_MS;
+    const timeoutMs = resolveGoogleMeetGatewayTimeoutMs(params.timeoutMs);
     return {
       ok: true,
       payload: await params.callGateway(
@@ -296,14 +336,6 @@ async function callGoogleMeetGateway(params: {
     }
     throw err;
   }
-}
-
-function resolveGoogleMeetGatewayOperationTimeoutMs(config: GoogleMeetConfig): number {
-  return Math.max(
-    60_000,
-    config.chrome.joinTimeoutMs + 30_000,
-    config.voiceCall.requestTimeoutMs + 10_000,
-  );
 }
 
 function formatDuration(value: number | undefined): string {
@@ -581,6 +613,7 @@ function writeRecoverCurrentTabResult(
         url: result.browser.browserUrl ?? result.tab?.url ?? "unknown",
         transport: result.transport,
         mode: "transcribe",
+        agentId: "main",
         state: "active",
         createdAt: "",
         updatedAt: "",
@@ -743,7 +776,7 @@ function resolveArtifactTokenOptions(
     refreshToken: options.refreshToken?.trim() || config.oauth.refreshToken,
     accessToken: options.accessToken?.trim() || config.oauth.accessToken,
     expiresAt: parseOptionalNumber(options.expiresAt) ?? config.oauth.expiresAt,
-    pageSize: parseOptionalNumber(options.pageSize),
+    pageSize: parsePositiveIntegerOption(options.pageSize, "page-size"),
     includeTranscriptEntries: options.transcriptEntries !== false,
     allConferenceRecords: Boolean(options.allConferenceRecords),
     includeDocumentBodies: Boolean(options.includeDocBodies),
@@ -1435,7 +1468,7 @@ export function registerGoogleMeetCli(params: {
       const code = await waitForGoogleMeetAuthCode({
         state,
         manual: Boolean(options.manual),
-        timeoutMs: (parseOptionalNumber(options.timeoutSec) ?? 300) * 1000,
+        timeoutMs: resolveGoogleMeetOAuthCallbackTimeoutMs(options.timeoutSec),
         authUrl,
         promptInput,
         writeLine: (message) => writeStdoutLine("%s", message),

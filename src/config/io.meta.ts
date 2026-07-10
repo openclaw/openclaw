@@ -1,7 +1,9 @@
+// Maintains config metadata fields written alongside user config.
 import { VERSION } from "../version.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-export const AUTO_MANAGED_CONFIG_META_FIELDS = {
+/** Metadata keys automatically stamped on config writes. */
+const AUTO_MANAGED_CONFIG_META_FIELDS = {
   lastTouchedVersion: "lastTouchedVersion",
   lastTouchedAt: "lastTouchedAt",
 } as const;

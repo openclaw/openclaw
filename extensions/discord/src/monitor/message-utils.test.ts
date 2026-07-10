@@ -1,10 +1,11 @@
+// Discord tests cover message utils plugin behavior.
 import {
   ComponentType,
   MessageFlags,
   MessageReferenceType,
   StickerFormatType,
 } from "discord-api-types/v10";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type Client, type Message } from "../internal/discord.js";
 
 const readRemoteMediaBuffer = vi.fn();
@@ -63,6 +64,10 @@ beforeAll(async () => {
     resolveMediaList,
     resolveReferencedReplyMediaList,
   } = await import("./message-utils.js"));
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 function asMessage(payload: Record<string, unknown>): Message {
@@ -1220,6 +1225,24 @@ describe("resolveDiscordChannelInfo", () => {
     expect(fetchChannel).toHaveBeenCalledTimes(1);
   });
 
+  it("caps cached channel info entries", async () => {
+    const cacheEntryLimit = 1000;
+    const fetchChannel = vi.fn(async (channelId: string) => ({
+      type: ChannelType.GuildText,
+      name: `name-${channelId}`,
+    }));
+    const client = { fetchChannel } as unknown as Client;
+
+    for (let index = 0; index <= cacheEntryLimit; index += 1) {
+      await resolveDiscordChannelInfo(client, `channel-${index}`);
+    }
+    await resolveDiscordChannelInfo(client, "channel-0");
+    await resolveDiscordChannelInfo(client, `channel-${cacheEntryLimit}`);
+
+    expect(fetchChannel).toHaveBeenCalledTimes(cacheEntryLimit + 2);
+    expect(fetchChannel).toHaveBeenNthCalledWith(cacheEntryLimit + 2, "channel-0");
+  });
+
   it("negative-caches missing channels", async () => {
     const fetchChannel = vi.fn().mockResolvedValue(null);
     const client = { fetchChannel } as unknown as Client;
@@ -1230,5 +1253,38 @@ describe("resolveDiscordChannelInfo", () => {
     expect(first).toBeNull();
     expect(second).toBeNull();
     expect(fetchChannel).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse cached channel info while the process clock is invalid", async () => {
+    const fetchChannel = vi
+      .fn()
+      .mockResolvedValueOnce({ type: ChannelType.GuildText, name: "old" })
+      .mockResolvedValueOnce({ type: ChannelType.GuildText, name: "fresh" });
+    const client = { fetchChannel } as unknown as Client;
+
+    const first = await resolveDiscordChannelInfo(client, "invalid-clock-channel");
+    expect(first?.name).toBe("old");
+
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    const second = await resolveDiscordChannelInfo(client, "invalid-clock-channel");
+
+    expect(second?.name).toBe("fresh");
+    expect(fetchChannel).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache channel info when the cache expiry would exceed the Date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    const fetchChannel = vi
+      .fn()
+      .mockResolvedValueOnce({ type: ChannelType.GuildText, name: "first" })
+      .mockResolvedValueOnce({ type: ChannelType.GuildText, name: "second" });
+    const client = { fetchChannel } as unknown as Client;
+
+    const first = await resolveDiscordChannelInfo(client, "overflow-cache-channel");
+    const second = await resolveDiscordChannelInfo(client, "overflow-cache-channel");
+
+    expect(first?.name).toBe("first");
+    expect(second?.name).toBe("second");
+    expect(fetchChannel).toHaveBeenCalledTimes(2);
   });
 });

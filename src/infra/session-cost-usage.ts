@@ -1,6 +1,10 @@
+// Persists and formats per-session cost and usage records.
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
@@ -19,8 +23,6 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
-import { asFiniteNumber } from "../shared/number-coercion.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
 import {
@@ -29,7 +31,13 @@ import {
   resolveModelCostConfigFingerprint,
 } from "../utils/usage-format.js";
 import { formatErrorMessage } from "./errors.js";
+import { createTimeZoneDayKeyFormatter } from "./format-time/format-datetime.js";
 import { replaceFileAtomic } from "./replace-file.js";
+import {
+  addCostUsageTotals as addTotals,
+  cloneCostUsageTotals as cloneTotals,
+  createEmptyCostUsageTotals as emptyTotals,
+} from "./session-cost-usage-totals.js";
 import type {
   CostBreakdown,
   CostUsageTotals,
@@ -52,6 +60,7 @@ import type {
   SessionUsageTimePoint,
   SessionUsageTimeSeries,
   UsageCacheStatus,
+  UsageDailyBucket,
 } from "./session-cost-usage.types.js";
 
 export type {
@@ -66,30 +75,21 @@ export type {
   SessionModelUsage,
   SessionToolUsage,
   UsageCacheStatus,
+  UsageDailyBucket,
 } from "./session-cost-usage.types.js";
 
-const emptyTotals = (): CostUsageTotals => ({
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  totalCost: 0,
-  inputCost: 0,
-  outputCost: 0,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
-});
-
-// Bump when the *meaning* of cached totals changes (not just their inputs), so durable
-// caches written by older builds are rebuilt instead of served stale. Bumped to 4:
-// unpriced (unknown) zero-cost usage now counts toward missingCostEntries, so a warm
-// cache from a pre-change build would otherwise keep reporting the old complete-$0 totals.
-const USAGE_COST_CACHE_VERSION = 4;
+// Bump when the durable cache schema or the meaning of cached totals changes, so
+// older builds are rebuilt instead of served stale.
+const USAGE_COST_CACHE_VERSION = 7;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
+const USAGE_COST_CACHE_TEMP_FILE_GRACE_MS = USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
 const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
+// Checkpoint policy for refreshCostUsageCache: bound the cost of full cache
+// serialization when scanning thousands of session files. Smaller of the two
+// limits triggers the next durable write.
+const USAGE_COST_CACHE_CHECKPOINT_FILES = 256;
+const USAGE_COST_CACHE_CHECKPOINT_INTERVAL_MS = 5_000;
 const logger = createSubsystemLogger("usage-cost-cache");
 
 type UsageCostRefreshState = {
@@ -126,23 +126,21 @@ type UsageCostCachedTranscriptEntry = {
 };
 
 type UsageCostCacheFileEntry = {
-  filePath: string;
   size: number;
   mtimeMs: number;
-  pricingFingerprint: string;
   scannedAt: number;
   parsedRecords: number;
   countedRecords: number;
   usageEntries: UsageCostCachedUsageEntry[];
   transcriptEntries?: UsageCostCachedTranscriptEntry[];
   totals: CostUsageTotals;
-  sessionId?: string;
   sessionSummary?: SessionCostSummary;
 };
 
 type UsageCostCacheFile = {
   version: number;
   updatedAt: number;
+  pricingFingerprint: string;
   files: Record<string, UsageCostCacheFileEntry>;
 };
 
@@ -162,34 +160,6 @@ type UsageCostCacheLockReadResult =
   | { state: "missing" }
   | { state: "valid"; lock: UsageCostCacheLock }
   | { state: "malformed"; mtimeMs: number };
-
-const cloneTotals = (totals: CostUsageTotals): CostUsageTotals => ({
-  input: totals.input,
-  output: totals.output,
-  cacheRead: totals.cacheRead,
-  cacheWrite: totals.cacheWrite,
-  totalTokens: totals.totalTokens,
-  totalCost: totals.totalCost,
-  inputCost: totals.inputCost,
-  outputCost: totals.outputCost,
-  cacheReadCost: totals.cacheReadCost,
-  cacheWriteCost: totals.cacheWriteCost,
-  missingCostEntries: totals.missingCostEntries,
-});
-
-const addTotals = (target: CostUsageTotals, source: CostUsageTotals): void => {
-  target.input += source.input;
-  target.output += source.output;
-  target.cacheRead += source.cacheRead;
-  target.cacheWrite += source.cacheWrite;
-  target.totalTokens += source.totalTokens;
-  target.totalCost += source.totalCost;
-  target.inputCost += source.inputCost;
-  target.outputCost += source.outputCost;
-  target.cacheReadCost += source.cacheReadCost;
-  target.cacheWriteCost += source.cacheWriteCost;
-  target.missingCostEntries += source.missingCostEntries;
-};
 
 function resolveUsageCostPricingFingerprint(config?: OpenClawConfig): string {
   return resolveModelCostConfigFingerprint(config);
@@ -334,31 +304,41 @@ async function acquireUsageCostCacheRefreshLock(cachePath: string): Promise<{
   }
 }
 
-function normalizeUsageCostCache(raw: unknown): UsageCostCacheFile {
+function createEmptyUsageCostCache(pricingFingerprint: string): UsageCostCacheFile {
+  return { version: USAGE_COST_CACHE_VERSION, updatedAt: 0, pricingFingerprint, files: {} };
+}
+
+function normalizeUsageCostCache(raw: unknown, pricingFingerprint: string): UsageCostCacheFile {
   if (!raw || typeof raw !== "object") {
-    return { version: USAGE_COST_CACHE_VERSION, updatedAt: 0, files: {} };
+    return createEmptyUsageCostCache(pricingFingerprint);
   }
   const record = raw as Record<string, unknown>;
   if (
     record.version !== USAGE_COST_CACHE_VERSION ||
+    typeof record.pricingFingerprint !== "string" ||
+    record.pricingFingerprint !== pricingFingerprint ||
     !record.files ||
     typeof record.files !== "object"
   ) {
-    return { version: USAGE_COST_CACHE_VERSION, updatedAt: 0, files: {} };
+    return createEmptyUsageCostCache(pricingFingerprint);
   }
   return {
     version: USAGE_COST_CACHE_VERSION,
     updatedAt: asFiniteNumber(record.updatedAt) ?? 0,
+    pricingFingerprint: record.pricingFingerprint,
     files: record.files as Record<string, UsageCostCacheFileEntry>,
   };
 }
 
-async function readUsageCostCache(cachePath: string): Promise<UsageCostCacheFile> {
+async function readUsageCostCache(
+  cachePath: string,
+  pricingFingerprint: string,
+): Promise<UsageCostCacheFile> {
   try {
     const raw = await fs.promises.readFile(cachePath, "utf-8");
-    return normalizeUsageCostCache(JSON.parse(raw));
+    return normalizeUsageCostCache(JSON.parse(raw), pricingFingerprint);
   } catch {
-    return { version: USAGE_COST_CACHE_VERSION, updatedAt: 0, files: {} };
+    return createEmptyUsageCostCache(pricingFingerprint);
   }
 }
 
@@ -368,6 +348,32 @@ async function writeUsageCostCache(cachePath: string, cache: UsageCostCacheFile)
     content: `${JSON.stringify(cache)}\n`,
     tempPrefix: ".usage-cost-cache",
   });
+}
+
+function isUsageCostCacheTempFileName(name: string): boolean {
+  if (!name.endsWith(".tmp") || name.startsWith(`${USAGE_COST_CACHE_FILE}.lock.`)) {
+    return false;
+  }
+  return name.startsWith(".usage-cost-cache.") || name.startsWith(`${USAGE_COST_CACHE_FILE}.`);
+}
+
+async function cleanupStaleUsageCostCacheTempFiles(cachePath: string): Promise<void> {
+  const dir = path.dirname(cachePath);
+  const cutoffMs = Date.now() - USAGE_COST_CACHE_TEMP_FILE_GRACE_MS;
+  const entries = await fs.promises.readdir(dir, { withFileTypes: true }).catch(() => []);
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (!entry.isFile() || !isUsageCostCacheTempFileName(entry.name)) {
+        return;
+      }
+      const tempPath = path.join(dir, entry.name);
+      const stats = await fs.promises.stat(tempPath).catch(() => null);
+      if (!stats || stats.mtimeMs > cutoffMs) {
+        return;
+      }
+      await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
+    }),
+  );
 }
 
 async function listUsageCountedTranscriptFileStats(
@@ -406,14 +412,12 @@ async function listUsageCountedTranscriptFiles(
 function isUsageCostCacheEntryFresh(params: {
   entry: UsageCostCacheFileEntry | undefined;
   file: UsageCostTranscriptFile;
-  pricingFingerprint: string;
   requireSessionSummary?: boolean;
 }): boolean {
   return Boolean(
     params.entry &&
     params.entry.size === params.file.size &&
     params.entry.mtimeMs === params.file.mtimeMs &&
-    params.entry.pricingFingerprint === params.pricingFingerprint &&
     (!params.requireSessionSummary || params.entry.sessionSummary),
   );
 }
@@ -421,24 +425,20 @@ function isUsageCostCacheEntryFresh(params: {
 function canUseUsageCostCacheEntryForPartial(params: {
   entry: UsageCostCacheFileEntry | undefined;
   file: UsageCostTranscriptFile;
-  pricingFingerprint: string;
 }): params is {
   entry: UsageCostCacheFileEntry;
   file: UsageCostTranscriptFile;
-  pricingFingerprint: string;
 } {
   return Boolean(
     params.entry &&
     params.entry.size <= params.file.size &&
-    params.entry.mtimeMs <= params.file.mtimeMs &&
-    params.entry.pricingFingerprint === params.pricingFingerprint,
+    params.entry.mtimeMs <= params.file.mtimeMs,
   );
 }
 
 function getUsageCostStaleFiles(params: {
   cache: UsageCostCacheFile;
   files: UsageCostTranscriptFile[];
-  pricingFingerprint: string;
   sessionSummaryFiles?: Set<string>;
 }): UsageCostTranscriptFile[] {
   const sessionSummaryFiles = params.sessionSummaryFiles ?? new Set<string>();
@@ -447,7 +447,6 @@ function getUsageCostStaleFiles(params: {
       !isUsageCostCacheEntryFresh({
         entry: params.cache.files[file.filePath],
         file,
-        pricingFingerprint: params.pricingFingerprint,
         requireSessionSummary: sessionSummaryFiles.has(file.filePath),
       }),
   );
@@ -456,7 +455,6 @@ function getUsageCostStaleFiles(params: {
 function countUsableUsageCostCacheFiles(params: {
   cache: UsageCostCacheFile;
   files: UsageCostTranscriptFile[];
-  pricingFingerprint: string;
 }): number {
   const filesByPath = new Map(params.files.map((file) => [file.filePath, file]));
   let cachedFiles = 0;
@@ -467,7 +465,6 @@ function countUsableUsageCostCacheFiles(params: {
       canUseUsageCostCacheEntryForPartial({
         entry,
         file,
-        pricingFingerprint: params.pricingFingerprint,
       })
     ) {
       cachedFiles += 1;
@@ -481,21 +478,20 @@ function buildCostUsageSummaryFromCache(params: {
   files: UsageCostTranscriptFile[];
   startMs: number;
   endMs: number;
-  pricingFingerprint: string;
+  dayBucket?: UsageDailyBucket;
   refreshing: boolean;
 }): CostUsageSummary {
   const dailyMap = new Map<string, CostUsageTotals>();
+  const formatDayKey = createUsageDayKeyFormatter(params.dayBucket);
   const totals = emptyTotals();
   const filesByPath = new Map(params.files.map((file) => [file.filePath, file]));
   const staleFiles = getUsageCostStaleFiles({
     cache: params.cache,
     files: params.files,
-    pricingFingerprint: params.pricingFingerprint,
   });
   const cachedFiles = countUsableUsageCostCacheFiles({
     cache: params.cache,
     files: params.files,
-    pricingFingerprint: params.pricingFingerprint,
   });
 
   for (const [filePath, entry] of Object.entries(params.cache.files)) {
@@ -505,7 +501,6 @@ function buildCostUsageSummaryFromCache(params: {
       !canUseUsageCostCacheEntryForPartial({
         entry,
         file,
-        pricingFingerprint: params.pricingFingerprint,
       })
     ) {
       continue;
@@ -522,10 +517,12 @@ function buildCostUsageSummaryFromCache(params: {
     }
   }
 
+  fillMissingDays(dailyMap, params.startMs, params.endMs, formatDayKey);
+
   const daily = Array.from(dailyMap.entries())
     .map(([date, bucket]) => Object.assign({ date }, bucket))
     .toSorted((a, b) => a.date.localeCompare(b.date));
-  const days = Math.ceil((params.endMs - params.startMs) / (24 * 60 * 60 * 1000)) + 1;
+  const days = countCalendarDays(params.startMs, params.endMs, formatDayKey);
   const status = params.refreshing
     ? "refreshing"
     : staleFiles.length > 0
@@ -566,6 +563,7 @@ function buildSessionCostSummaryFromCacheEntry(params: {
   sessionFile: string;
   startMs: number;
   endMs: number;
+  formatDayKey: UsageDayKeyFormatter;
 }): SessionCostSummary | null {
   if (!params.entry.transcriptEntries) {
     return null;
@@ -578,6 +576,7 @@ function buildSessionCostSummaryFromCacheEntry(params: {
   const utcQuarterHourTokenMap = new Map<string, SessionUtcQuarterHourTokenUsage>();
   const dailyLatencyMap = new Map<string, number[]>();
   const dailyModelUsageMap = new Map<string, SessionDailyModelUsage>();
+  const formatDayKey = params.formatDayKey;
   const messageCounts: SessionMessageCounts = {
     total: 0,
     user: 0,
@@ -603,6 +602,9 @@ function buildSessionCostSummaryFromCacheEntry(params: {
     if (ts !== undefined && ts > params.endMs) {
       continue;
     }
+    const date = ts === undefined ? undefined : new Date(ts);
+    const dayKey = date ? formatDayKey(date) : undefined;
+    const quarterBucket = date ? getUtcQuarterHourBucketKey(date) : undefined;
 
     if (ts !== undefined) {
       firstActivity = firstActivity === undefined ? ts : Math.min(firstActivity, ts);
@@ -623,9 +625,13 @@ function buildSessionCostSummaryFromCacheEntry(params: {
         const latencyMs =
           entry.durationMs ??
           (lastUserTimestamp !== undefined ? Math.max(0, ts - lastUserTimestamp) : undefined);
-        if (latencyMs !== undefined && Number.isFinite(latencyMs) && latencyMs <= maxLatencyMs) {
+        if (
+          latencyMs !== undefined &&
+          Number.isFinite(latencyMs) &&
+          latencyMs <= maxLatencyMs &&
+          dayKey !== undefined
+        ) {
           latencyValues.push(latencyMs);
-          const dayKey = formatDayKey(new Date(ts));
           const dailyLatencies = dailyLatencyMap.get(dayKey) ?? [];
           dailyLatencies.push(latencyMs);
           dailyLatencyMap.set(dayKey, dailyLatencies);
@@ -649,9 +655,7 @@ function buildSessionCostSummaryFromCacheEntry(params: {
       messageCounts.errors += 1;
     }
 
-    if (ts !== undefined) {
-      const date = new Date(ts);
-      const dayKey = formatDayKey(date);
+    if (dayKey !== undefined && quarterBucket) {
       activityDatesSet.add(dayKey);
       const daily = dailyMessageMap.get(dayKey) ?? {
         date: dayKey,
@@ -676,7 +680,6 @@ function buildSessionCostSummaryFromCacheEntry(params: {
       }
       dailyMessageMap.set(dayKey, daily);
 
-      const quarterBucket = getUtcQuarterHourBucketKey(date);
       const utcQuarterHour = utcQuarterHourMessageMap.get(quarterBucket.key) ?? {
         date: quarterBucket.date,
         quarterIndex: quarterBucket.quarterIndex,
@@ -708,9 +711,7 @@ function buildSessionCostSummaryFromCacheEntry(params: {
     }
 
     addTotals(totals, usageTotals);
-    if (ts !== undefined) {
-      const date = new Date(ts);
-      const dayKey = formatDayKey(date);
+    if (dayKey !== undefined && quarterBucket) {
       const componentTokens =
         usageTotals.input + usageTotals.output + usageTotals.cacheRead + usageTotals.cacheWrite;
       const existingDaily = dailyMap.get(dayKey) ?? { tokens: 0, cost: 0 };
@@ -718,7 +719,6 @@ function buildSessionCostSummaryFromCacheEntry(params: {
       existingDaily.cost += usageTotals.totalCost;
       dailyMap.set(dayKey, existingDaily);
 
-      const quarterBucket = getUtcQuarterHourBucketKey(date);
       const utcQuarterHourToken = utcQuarterHourTokenMap.get(quarterBucket.key) ?? {
         date: quarterBucket.date,
         quarterIndex: quarterBucket.quarterIndex,
@@ -842,6 +842,9 @@ function buildSessionCostSummaryFromCacheEntry(params: {
   };
 }
 
+const normalizeUsageCostTotalOrigin = (value: unknown): CostBreakdown["totalOrigin"] =>
+  value === "provider-billed" ? value : undefined;
+
 const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
   if (!usageRaw || typeof usageRaw !== "object") {
     return undefined;
@@ -863,6 +866,7 @@ const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | unde
     output: asFiniteNumber(cost.output),
     cacheRead: asFiniteNumber(cost.cacheRead),
     cacheWrite: asFiniteNumber(cost.cacheWrite),
+    totalOrigin: normalizeUsageCostTotalOrigin(cost.totalOrigin),
   };
 };
 
@@ -928,11 +932,124 @@ const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptE
   };
 };
 
-const formatDayKey = (date: Date): string =>
-  date.toLocaleDateString("en-CA", { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
-
 const formatUtcDayKey = (date: Date): string =>
   `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+
+type UsageDayKeyFormatter = (date: Date) => string;
+
+const createUsageDayKeyFormatter = (dayBucket?: UsageDailyBucket): UsageDayKeyFormatter => {
+  if (dayBucket?.mode === "utc-offset") {
+    return (date) =>
+      formatUtcDayKey(new Date(date.getTime() + dayBucket.utcOffsetMinutes * 60 * 1000));
+  }
+  const timeZone =
+    dayBucket?.mode === "time-zone"
+      ? dayBucket.timeZone
+      : Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return createTimeZoneDayKeyFormatter(timeZone);
+};
+
+/**
+ * Maximum window (in days) for which we will zero-fill missing calendar
+ * days. Bounded ranges from the UI's range filter top out at 90 days for
+ * the explicit picker and "All" is the wildcard escape hatch — anything
+ * wider than this threshold is treated as an all-time / open-ended range
+ * and falls back to sparse behavior (only days with activity), since a
+ * dense series at that scale would produce tens of thousands of zero
+ * buckets (e.g. a 1970-based startMs → ~20k entries) without any user
+ * value. 366 days covers a full year + leap-day cushion.
+ */
+const MAX_ZERO_FILL_DAYS = 366;
+
+/**
+ * Parse a `YYYY-MM-DD` day key into its UTC calendar-day timestamp. The
+ * timestamp is only used to enumerate calendar labels; usage timestamps stay
+ * in their requested timezone bucket.
+ */
+const parseDayKeyToUtcMs = (dayKey: string): number | null => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey);
+  if (!match) {
+    return null;
+  }
+  const year = Number(match[1]);
+  const monthIdx = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const dayMs = Date.UTC(year, monthIdx, day);
+  const date = new Date(dayMs);
+  return date.getUTCFullYear() === year &&
+    date.getUTCMonth() === monthIdx &&
+    date.getUTCDate() === day
+    ? dayMs
+    : null;
+};
+
+/**
+ * Ensure the daily map has an entry for every calendar day in [startMs, endMs].
+ * Days without activity are inserted with a zero-valued totals bucket so the
+ * resulting `daily` series matches the requested range length (one bar per
+ * calendar day) instead of only covering days with recorded usage.
+ *
+ * Day keys must use the same calendar zone as the request range. Otherwise a
+ * remote Gateway can return local-date labels for UTC/browser-local ranges,
+ * which drops boundary usage when the UI compares calendar windows.
+ */
+const fillMissingDays = (
+  dailyMap: Map<string, CostUsageTotals>,
+  startMs: number,
+  endMs: number,
+  formatDayKey: UsageDayKeyFormatter,
+): void => {
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+    return;
+  }
+  const dayMs = 24 * 60 * 60 * 1000;
+  const startKey = formatDayKey(new Date(startMs));
+  const endKey = formatDayKey(new Date(endMs));
+  const startDayMs = parseDayKeyToUtcMs(startKey);
+  const endDayMs = parseDayKeyToUtcMs(endKey);
+  if (startDayMs === null || endDayMs === null) {
+    // Defensive fallback — formatDayKey should always produce a YYYY-MM-DD
+    // key, but if locale data ever shifts under us, at least make sure the
+    // endpoint days are present so the chart isn't completely empty.
+    if (!dailyMap.has(startKey)) {
+      dailyMap.set(startKey, emptyTotals());
+    }
+    if (!dailyMap.has(endKey)) {
+      dailyMap.set(endKey, emptyTotals());
+    }
+    return;
+  }
+  // Bound the fill by calendar labels, not elapsed milliseconds: DST days can
+  // contain 23 or 25 hours. Wider ranges keep their sparse activity-only shape.
+  const spanDays = Math.floor((endDayMs - startDayMs) / dayMs) + 1;
+  if (spanDays > MAX_ZERO_FILL_DAYS) {
+    return;
+  }
+  const maxIterations = MAX_ZERO_FILL_DAYS + 1;
+  for (let cursorMs = startDayMs, i = 0; cursorMs <= endDayMs && i < maxIterations; i += 1) {
+    const key = formatUtcDayKey(new Date(cursorMs));
+    if (!dailyMap.has(key)) {
+      dailyMap.set(key, emptyTotals());
+    }
+    cursorMs += dayMs;
+  }
+  if (!dailyMap.has(endKey)) {
+    dailyMap.set(endKey, emptyTotals());
+  }
+};
+
+const countCalendarDays = (
+  startMs: number,
+  endMs: number,
+  formatDayKey: UsageDayKeyFormatter,
+): number => {
+  const startDayMs = parseDayKeyToUtcMs(formatDayKey(new Date(startMs)));
+  const endDayMs = parseDayKeyToUtcMs(formatDayKey(new Date(endMs)));
+  if (startDayMs === null || endDayMs === null || endDayMs < startDayMs) {
+    return Math.ceil((endMs - startMs) / (24 * 60 * 60 * 1000)) + 1;
+  }
+  return Math.floor((endDayMs - startDayMs) / (24 * 60 * 60 * 1000)) + 1;
+};
 
 const getUtcQuarterHourBucketKey = (
   date: Date,
@@ -1050,6 +1167,27 @@ const isModelPricingKnown = (cost: ReturnType<typeof resolveModelCostConfig>): b
   return cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0;
 };
 
+const shouldPreserveRecordedZeroCost = (costBreakdown: CostBreakdown | undefined): boolean =>
+  costBreakdown?.total === 0 &&
+  (costBreakdown.totalOrigin === "provider-billed" ||
+    [
+      costBreakdown.input,
+      costBreakdown.output,
+      costBreakdown.cacheRead,
+      costBreakdown.cacheWrite,
+    ].some((value) => value !== undefined && value !== 0));
+
+const shouldRecomputeRecordedZeroCost = (params: {
+  cost: ReturnType<typeof resolveModelCostConfig>;
+  costBreakdown: CostBreakdown | undefined;
+  costTotal: number | undefined;
+  usage: NormalizedUsage;
+}): boolean =>
+  params.costTotal === 0 &&
+  !shouldPreserveRecordedZeroCost(params.costBreakdown) &&
+  isModelPricingKnown(params.cost) &&
+  computeUsageTokenTotals(params.usage).totalTokens > 0;
+
 type UsageCostResolver = (params: {
   provider?: string;
   model?: string;
@@ -1124,6 +1262,17 @@ async function* readJsonlRecords(
   }
 }
 
+async function* readJsonlRecordsBestEffort(
+  filePath: string,
+): AsyncGenerator<Record<string, unknown>> {
+  try {
+    yield* readJsonlRecords(filePath);
+  } catch {
+    // Diagnostic readers return the records available before a stream failure.
+    // Durable cache scans use the strict reader so partial data is never marked fresh.
+  }
+}
+
 async function scanTranscriptFile(params: {
   filePath: string;
   config?: OpenClawConfig;
@@ -1148,7 +1297,10 @@ async function scanTranscriptFile(params: {
         provider: entry.provider,
         model: entry.model,
       });
-      if (cost?.tieredPricing && cost.tieredPricing.length > 0) {
+      const usageTotals = computeUsageTokenTotals(entry.usage);
+      const pricingKnown = isModelPricingKnown(cost);
+      const preserveRecordedZeroCost = shouldPreserveRecordedZeroCost(entry.costBreakdown);
+      if (cost?.tieredPricing && cost.tieredPricing.length > 0 && !preserveRecordedZeroCost) {
         // When tiered pricing is configured, always recompute to override
         // the flat-rate cost that the transport layer wrote into the transcript.
         // Clear costBreakdown so downstream aggregation uses the recomputed total
@@ -1156,9 +1308,10 @@ async function scanTranscriptFile(params: {
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
         entry.costBreakdown = undefined;
       } else if (
-        !isModelPricingKnown(cost) &&
+        !pricingKnown &&
+        !preserveRecordedZeroCost &&
         (entry.costTotal === undefined || entry.costTotal === 0) &&
-        computeUsageTokenTotals(entry.usage).totalTokens > 0
+        usageTotals.totalTokens > 0
       ) {
         // Pricing for this model is unknown: it has no positive per-token rate and no
         // trustworthy recorded cost. The transport either recorded nothing or a
@@ -1169,9 +1322,20 @@ async function scanTranscriptFile(params: {
         // above.
         entry.costTotal = undefined;
         entry.costBreakdown = undefined;
-      } else if (entry.costTotal === undefined) {
-        // Fill in missing cost estimates.
+      } else if (
+        entry.costTotal === undefined ||
+        shouldRecomputeRecordedZeroCost({
+          usage: entry.usage,
+          cost,
+          costBreakdown: entry.costBreakdown,
+          costTotal: entry.costTotal,
+        })
+      ) {
+        // Fill in missing estimates and override fabricated API-provided zeros
+        // for known-priced models such as DeepSeek V4. Providers that mark
+        // the total as provider-billed keep their authoritative zero total.
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+        entry.costBreakdown = undefined;
       }
     }
 
@@ -1275,6 +1439,7 @@ export function resolveExistingUsageSessionFile(params: {
 export async function loadCostUsageSummary(params?: {
   startMs?: number;
   endMs?: number;
+  dayBucket?: UsageDailyBucket;
   /** @deprecated Use startMs/endMs. */
   days?: number;
   config?: OpenClawConfig;
@@ -1297,6 +1462,7 @@ export async function loadCostUsageSummary(params?: {
   }
 
   const dailyMap = new Map<string, CostUsageTotals>();
+  const formatDayKey = createUsageDayKeyFormatter(params?.dayBucket);
   const totals = emptyTotals();
   const resolveCost = createUsageCostResolver(params?.config);
 
@@ -1334,12 +1500,14 @@ export async function loadCostUsageSummary(params?: {
     });
   }
 
+  fillMissingDays(dailyMap, sinceTime, untilTime, formatDayKey);
+
   const daily = Array.from(dailyMap.entries())
     .map(([date, bucket]) => Object.assign({ date }, bucket))
     .toSorted((a, b) => a.date.localeCompare(b.date));
 
   // Calculate days for backwards compatibility in response
-  const days = Math.ceil((untilTime - sinceTime) / (24 * 60 * 60 * 1000)) + 1;
+  const days = countCalendarDays(sinceTime, untilTime, formatDayKey);
 
   return {
     updatedAt: Date.now(),
@@ -1356,13 +1524,10 @@ async function scanUsageFileForCache(params: {
   previous?: UsageCostCacheFileEntry;
   includeSessionSummary?: boolean;
 }): Promise<UsageCostCacheFileEntry> {
-  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
   const appendOnlyPreviousCandidate =
     params.previous &&
-    params.previous.filePath === params.file.filePath &&
     params.previous.size > 0 &&
     params.previous.size < params.file.size &&
-    params.previous.pricingFingerprint === pricingFingerprint &&
     params.previous.mtimeMs <= params.file.mtimeMs
       ? params.previous
       : undefined;
@@ -1444,22 +1609,20 @@ async function scanUsageFileForCache(params: {
     (params.includeSessionSummary || appendOnlyPrevious?.sessionSummary)
       ? (buildSessionCostSummaryFromCacheEntry({
           entry: {
-            filePath: params.file.filePath,
             size: params.file.size,
             mtimeMs: params.file.mtimeMs,
-            pricingFingerprint,
             scannedAt: Date.now(),
             parsedRecords,
             countedRecords,
             usageEntries,
             transcriptEntries: combinedTranscriptEntries,
             totals,
-            sessionId,
           },
           sessionId,
           sessionFile: params.file.filePath,
           startMs: Number.NEGATIVE_INFINITY,
           endMs: Number.POSITIVE_INFINITY,
+          formatDayKey: createUsageDayKeyFormatter(),
         }) ?? undefined)
       : undefined;
 
@@ -1470,7 +1633,6 @@ async function scanUsageFileForCache(params: {
       ...appendOnlyPrevious,
       size: params.file.size,
       mtimeMs: params.file.mtimeMs,
-      pricingFingerprint,
       scannedAt: Date.now(),
       parsedRecords: appendOnlyPrevious.parsedRecords + parsedRecords,
       countedRecords: appendOnlyPrevious.countedRecords + countedRecords,
@@ -1482,17 +1644,14 @@ async function scanUsageFileForCache(params: {
   }
 
   return {
-    filePath: params.file.filePath,
     size: params.file.size,
     mtimeMs: params.file.mtimeMs,
-    pricingFingerprint,
     scannedAt: Date.now(),
     parsedRecords,
     countedRecords,
     usageEntries,
     transcriptEntries: combinedTranscriptEntries,
     totals,
-    sessionId,
     sessionSummary,
   };
 }
@@ -1512,11 +1671,15 @@ async function refreshCostUsageCacheForPath(params?: {
     return "busy";
   }
   try {
+    await cleanupStaleUsageCostCacheTempFiles(cachePath);
     const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config);
-    const cache = await readUsageCostCache(cachePath);
+    const cache = await readUsageCostCache(cachePath, pricingFingerprint);
     const files = await listUsageCountedTranscriptFiles(params?.agentId, {
       sessionsDir: params?.sessionsDir,
     });
+    // Empty caches come from missing/corrupt files and version/pricing mismatches.
+    // Persist the empty current-shape cache even when this refresh scans no files.
+    let cacheMutated = cache.updatedAt === 0;
     const sessionSummaryFiles = new Set(params?.sessionFiles ?? []);
     const refreshStartMs = params?.startMs;
     const refreshFiles =
@@ -1529,6 +1692,7 @@ async function refreshCostUsageCacheForPath(params?: {
     for (const filePath of Object.keys(cache.files)) {
       if (!livePaths.has(filePath)) {
         delete cache.files[filePath];
+        cacheMutated = true;
       }
     }
 
@@ -1539,7 +1703,6 @@ async function refreshCostUsageCacheForPath(params?: {
     const staleFiles = getUsageCostStaleFiles({
       cache,
       files: refreshFiles,
-      pricingFingerprint,
       sessionSummaryFiles,
     })
       .toSorted((a, b) => {
@@ -1550,6 +1713,14 @@ async function refreshCostUsageCacheForPath(params?: {
       .slice(0, maxFiles);
     const resolveCost = createUsageCostResolver(params?.config);
 
+    // Throttle full cache rewrites: writing a 100MB+ JSON cache after every
+    // single scanned session balloons CPU/IO into O(N * cacheSize). Instead,
+    // checkpoint at most once every USAGE_COST_CACHE_CHECKPOINT_INTERVAL_MS
+    // (or every USAGE_COST_CACHE_CHECKPOINT_FILES files) so an interrupted
+    // refresh still makes durable forward progress while a normal refresh of
+    // thousands of files only pays the serialization cost a handful of times.
+    let dirtyCount = 0;
+    let lastCheckpointMs = Date.now();
     for (const file of staleFiles) {
       cache.files[file.filePath] = await scanUsageFileForCache({
         file,
@@ -1558,12 +1729,24 @@ async function refreshCostUsageCacheForPath(params?: {
         previous: cache.files[file.filePath],
         includeSessionSummary: sessionSummaryFiles.has(file.filePath),
       });
+      dirtyCount += 1;
+      cacheMutated = true;
+      const now = Date.now();
+      if (
+        dirtyCount >= USAGE_COST_CACHE_CHECKPOINT_FILES ||
+        now - lastCheckpointMs >= USAGE_COST_CACHE_CHECKPOINT_INTERVAL_MS
+      ) {
+        cache.updatedAt = now;
+        await writeUsageCostCache(cachePath, cache);
+        dirtyCount = 0;
+        lastCheckpointMs = Date.now();
+      }
+    }
+
+    if (cacheMutated || dirtyCount > 0) {
       cache.updatedAt = Date.now();
       await writeUsageCostCache(cachePath, cache);
     }
-
-    cache.updatedAt = Date.now();
-    await writeUsageCostCache(cachePath, cache);
     return "refreshed";
   } finally {
     await lock.release();
@@ -1583,6 +1766,7 @@ export async function refreshCostUsageCache(params?: {
 export async function loadCostUsageSummaryFromCache(params: {
   startMs: number;
   endMs: number;
+  dayBucket?: UsageDailyBucket;
   config?: OpenClawConfig;
   agentId?: string;
   requestRefresh?: boolean;
@@ -1591,19 +1775,17 @@ export async function loadCostUsageSummaryFromCache(params: {
   const cachePath = resolveUsageCostCachePath(params.agentId);
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
   let [cache, files] = await Promise.all([
-    readUsageCostCache(cachePath),
+    readUsageCostCache(cachePath, pricingFingerprint),
     listUsageCountedTranscriptFiles(params.agentId),
   ]);
   const staleFiles = getUsageCostStaleFiles({
     cache,
     files,
-    pricingFingerprint,
   });
   if (params.requestRefresh !== false && staleFiles.length > 0) {
     const cachedFiles = countUsableUsageCostCacheFiles({
       cache,
       files,
-      pricingFingerprint,
     });
     if (params.refreshMode === "sync-when-empty" && cachedFiles === 0) {
       const result = await refreshCostUsageCache({
@@ -1612,14 +1794,13 @@ export async function loadCostUsageSummaryFromCache(params: {
         startMs: params.startMs,
       });
       [cache, files] = await Promise.all([
-        readUsageCostCache(cachePath),
+        readUsageCostCache(cachePath, pricingFingerprint),
         listUsageCountedTranscriptFiles(params.agentId),
       ]);
       if (result === "refreshed") {
         const remainingStaleFiles = getUsageCostStaleFiles({
           cache,
           files,
-          pricingFingerprint,
         });
         if (remainingStaleFiles.length > 0) {
           requestCostUsageCacheRefresh({ config: params.config, agentId: params.agentId });
@@ -1635,7 +1816,7 @@ export async function loadCostUsageSummaryFromCache(params: {
     files,
     startMs: params.startMs,
     endMs: params.endMs,
-    pricingFingerprint,
+    dayBucket: params.dayBucket,
     refreshing: usageCostRefreshes.has(cachePath) || refreshRunning,
   });
 }
@@ -1648,13 +1829,14 @@ export async function loadSessionCostSummaryFromCache(params: {
   agentId?: string;
   startMs?: number;
   endMs?: number;
+  dayBucket?: UsageDailyBucket;
   requestRefresh?: boolean;
   refreshMode?: "background" | "sync-when-empty";
 }): Promise<{ summary: SessionCostSummary | null; cacheStatus: UsageCacheStatus }> {
   const cachePath = resolveUsageCostCachePath(params.agentId);
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
   let [cache, stats] = await Promise.all([
-    readUsageCostCache(cachePath),
+    readUsageCostCache(cachePath, pricingFingerprint),
     fs.promises.stat(params.sessionFile).catch(() => null),
   ]);
   let file = stats
@@ -1666,7 +1848,6 @@ export async function loadSessionCostSummaryFromCache(params: {
     !isUsageCostCacheEntryFresh({
       entry,
       file,
-      pricingFingerprint,
       requireSessionSummary: true,
     });
   let refreshRequested = false;
@@ -1679,7 +1860,7 @@ export async function loadSessionCostSummaryFromCache(params: {
       });
       if (result === "refreshed") {
         [cache, stats] = await Promise.all([
-          readUsageCostCache(cachePath),
+          readUsageCostCache(cachePath, pricingFingerprint),
           fs.promises.stat(params.sessionFile).catch(() => null),
         ]);
         file = stats
@@ -1691,7 +1872,6 @@ export async function loadSessionCostSummaryFromCache(params: {
           !isUsageCostCacheEntryFresh({
             entry,
             file,
-            pricingFingerprint,
             requireSessionSummary: true,
           });
       } else {
@@ -1714,6 +1894,27 @@ export async function loadSessionCostSummaryFromCache(params: {
   const refreshRunning =
     usageCostRefreshes.has(cachePath) || (await isUsageCostCacheRefreshRunning(cachePath));
   let summary = stale ? null : (entry?.sessionSummary ?? null);
+  // Persisted summaries use Gateway-local day keys. Explicit request calendars
+  // must rebuild daily projections from the cached transcript entries.
+  const requiresDailyRebucket = params.dayBucket !== undefined;
+  if (
+    summary &&
+    params.startMs !== undefined &&
+    params.endMs !== undefined &&
+    (requiresDailyRebucket ||
+      !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs))
+  ) {
+    summary = entry
+      ? buildSessionCostSummaryFromCacheEntry({
+          entry,
+          sessionId: params.sessionId,
+          sessionFile: params.sessionFile,
+          startMs: params.startMs,
+          endMs: params.endMs,
+          formatDayKey: createUsageDayKeyFormatter(params.dayBucket),
+        })
+      : null;
+  }
   if (!summary && params.refreshMode === "sync-when-empty") {
     summary = await loadSessionCostSummary({
       sessionId: params.sessionId,
@@ -1723,33 +1924,8 @@ export async function loadSessionCostSummaryFromCache(params: {
       agentId: params.agentId,
       startMs: params.startMs,
       endMs: params.endMs,
+      dayBucket: params.dayBucket,
     });
-  }
-  if (
-    summary &&
-    params.startMs !== undefined &&
-    params.endMs !== undefined &&
-    !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs)
-  ) {
-    summary = entry
-      ? buildSessionCostSummaryFromCacheEntry({
-          entry,
-          sessionId: params.sessionId,
-          sessionFile: params.sessionFile,
-          startMs: params.startMs,
-          endMs: params.endMs,
-        })
-      : params.refreshMode === "sync-when-empty"
-        ? await loadSessionCostSummary({
-            sessionId: params.sessionId,
-            sessionEntry: params.sessionEntry,
-            sessionFile: params.sessionFile,
-            config: params.config,
-            agentId: params.agentId,
-            startMs: params.startMs,
-            endMs: params.endMs,
-          })
-        : null;
   }
   return {
     summary,
@@ -1764,6 +1940,104 @@ export async function loadSessionCostSummaryFromCache(params: {
       cachedFiles: stale ? 0 : 1,
       pendingFiles: stale ? 1 : 0,
       staleFiles: stale ? 1 : 0,
+      refreshedAt: cache.updatedAt || undefined,
+    },
+  };
+}
+
+export async function loadSessionCostSummariesFromCache(params: {
+  sessions: Array<{ sessionId?: string; sessionFile: string }>;
+  config?: OpenClawConfig;
+  agentId?: string;
+  startMs?: number;
+  endMs?: number;
+  dayBucket?: UsageDailyBucket;
+  requestRefresh?: boolean;
+}): Promise<{ summaries: Array<SessionCostSummary | null>; cacheStatus: UsageCacheStatus }> {
+  const cachePath = resolveUsageCostCachePath(params.agentId);
+  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
+  const statTasks = params.sessions.map(
+    (session) => async () => await fs.promises.stat(session.sessionFile).catch(() => null),
+  );
+  const statsPromise = runTasksWithConcurrency({
+    tasks: statTasks,
+    limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
+  }).then(({ results }) => results);
+  const [cache, stats, refreshRunning] = await Promise.all([
+    readUsageCostCache(cachePath, pricingFingerprint),
+    statsPromise,
+    isUsageCostCacheRefreshRunning(cachePath),
+  ]);
+  const staleFiles = new Set<string>();
+  let cachedFiles = 0;
+  const requiresDailyRebucket = params.dayBucket !== undefined;
+  let sharedFormatDayKey: UsageDayKeyFormatter | undefined;
+  // IANA formatter construction is expensive; lazily share it across every
+  // session rebuilt from this cache snapshot.
+  const getFormatDayKey = () =>
+    (sharedFormatDayKey ??= createUsageDayKeyFormatter(params.dayBucket));
+  const summaries = params.sessions.map((session, index) => {
+    const stat = stats[index];
+    const file = stat
+      ? { filePath: session.sessionFile, size: stat.size, mtimeMs: stat.mtimeMs }
+      : undefined;
+    const entry = cache.files[session.sessionFile];
+    const stale =
+      !file ||
+      !isUsageCostCacheEntryFresh({
+        entry,
+        file,
+        requireSessionSummary: true,
+      });
+    if (stale) {
+      staleFiles.add(session.sessionFile);
+      return null;
+    }
+    cachedFiles += 1;
+    const summary = entry?.sessionSummary ?? null;
+    if (
+      summary &&
+      params.startMs !== undefined &&
+      params.endMs !== undefined &&
+      (requiresDailyRebucket ||
+        !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs))
+    ) {
+      return entry
+        ? buildSessionCostSummaryFromCacheEntry({
+            entry,
+            sessionId: session.sessionId,
+            sessionFile: session.sessionFile,
+            startMs: params.startMs,
+            endMs: params.endMs,
+            formatDayKey: getFormatDayKey(),
+          })
+        : null;
+    }
+    return summary;
+  });
+  const refreshRequested = params.requestRefresh !== false && staleFiles.size > 0;
+  if (refreshRequested) {
+    requestCostUsageCacheRefresh({
+      config: params.config,
+      agentId: params.agentId,
+      sessionFiles: [...staleFiles],
+    });
+  }
+  const staleFileCount = staleFiles.size;
+  return {
+    summaries,
+    cacheStatus: {
+      status:
+        staleFileCount === 0
+          ? "fresh"
+          : refreshRunning || refreshRequested
+            ? "refreshing"
+            : cachedFiles > 0
+              ? "partial"
+              : "stale",
+      cachedFiles,
+      pendingFiles: staleFileCount,
+      staleFiles: staleFileCount,
       refreshedAt: cache.updatedAt || undefined,
     },
   };
@@ -1916,7 +2190,7 @@ export async function discoverAllSessions(params?: {
             if (message?.role === "user") {
               const content = message.content;
               if (typeof content === "string") {
-                firstUserMessage = content.slice(0, 100);
+                firstUserMessage = truncateUtf16Safe(content, 100);
               } else if (Array.isArray(content)) {
                 for (const block of content) {
                   if (
@@ -1926,7 +2200,7 @@ export async function discoverAllSessions(params?: {
                   ) {
                     const text = (block as Record<string, unknown>).text;
                     if (typeof text === "string") {
-                      firstUserMessage = text.slice(0, 100);
+                      firstUserMessage = truncateUtf16Safe(text, 100);
                     }
                     break;
                   }
@@ -1980,6 +2254,7 @@ export async function loadSessionCostSummary(params: {
   agentId?: string;
   startMs?: number;
   endMs?: number;
+  dayBucket?: UsageDailyBucket;
 }): Promise<SessionCostSummary | null> {
   const sessionFile = resolveExistingUsageSessionFile(params);
   if (!sessionFile || !fs.existsSync(sessionFile)) {
@@ -1996,6 +2271,7 @@ export async function loadSessionCostSummary(params: {
   const utcQuarterHourTokenMap = new Map<string, SessionUtcQuarterHourTokenUsage>();
   const dailyLatencyMap = new Map<string, number[]>();
   const dailyModelUsageMap = new Map<string, SessionDailyModelUsage>();
+  const formatDayKey = createUsageDayKeyFormatter(params.dayBucket);
   const messageCounts: SessionMessageCounts = {
     total: 0,
     user: 0,
@@ -2017,7 +2293,8 @@ export async function loadSessionCostSummary(params: {
     config: params.config,
     resolveCost,
     onEntry: (entry) => {
-      const ts = entry.timestamp?.getTime();
+      const timestamp = entry.timestamp;
+      const ts = timestamp?.getTime();
 
       // Filter by date range if specified
       if (params.startMs !== undefined && ts !== undefined && ts < params.startMs) {
@@ -2026,6 +2303,8 @@ export async function loadSessionCostSummary(params: {
       if (params.endMs !== undefined && ts !== undefined && ts > params.endMs) {
         return;
       }
+      const dayKey = timestamp ? formatDayKey(timestamp) : undefined;
+      const quarterBucket = timestamp ? getUtcQuarterHourBucketKey(timestamp) : undefined;
 
       if (ts !== undefined) {
         if (!firstActivity || ts < firstActivity) {
@@ -2039,14 +2318,13 @@ export async function loadSessionCostSummary(params: {
       if (entry.role === "user") {
         messageCounts.user += 1;
         messageCounts.total += 1;
-        if (entry.timestamp) {
-          lastUserTimestamp = entry.timestamp.getTime();
+        if (ts !== undefined) {
+          lastUserTimestamp = ts;
         }
       }
       if (entry.role === "assistant") {
         messageCounts.assistant += 1;
         messageCounts.total += 1;
-        const ts = entry.timestamp?.getTime();
         if (ts !== undefined) {
           const latencyMs =
             entry.durationMs ??
@@ -2054,10 +2332,10 @@ export async function loadSessionCostSummary(params: {
           if (
             latencyMs !== undefined &&
             Number.isFinite(latencyMs) &&
-            latencyMs <= MAX_LATENCY_MS
+            latencyMs <= MAX_LATENCY_MS &&
+            dayKey !== undefined
           ) {
             latencyValues.push(latencyMs);
-            const dayKey = formatDayKey(entry.timestamp ?? new Date(ts));
             const dailyLatencies = dailyLatencyMap.get(dayKey) ?? [];
             dailyLatencies.push(latencyMs);
             dailyLatencyMap.set(dayKey, dailyLatencies);
@@ -2081,8 +2359,7 @@ export async function loadSessionCostSummary(params: {
         messageCounts.errors += 1;
       }
 
-      if (entry.timestamp) {
-        const dayKey = formatDayKey(entry.timestamp);
+      if (dayKey !== undefined && quarterBucket) {
         activityDatesSet.add(dayKey);
         const daily = dailyMessageMap.get(dayKey) ?? {
           date: dayKey,
@@ -2097,7 +2374,6 @@ export async function loadSessionCostSummary(params: {
         dailyMessageMap.set(dayKey, daily);
 
         // Per-quarter-hour message counts for precise hourly stats (UTC-based)
-        const quarterBucket = getUtcQuarterHourBucketKey(entry.timestamp);
         const utcQuarterHour = utcQuarterHourMessageMap.get(quarterBucket.key) ?? {
           date: quarterBucket.date,
           quarterIndex: quarterBucket.quarterIndex,
@@ -2123,8 +2399,7 @@ export async function loadSessionCostSummary(params: {
         applyCostTotal(totals, entry.costTotal);
       }
 
-      if (entry.timestamp) {
-        const dayKey = formatDayKey(entry.timestamp);
+      if (dayKey !== undefined && quarterBucket) {
         const entryTokenTotals = computeUsageTokenTotals(entry.usage);
         // Preserve the legacy dailyBreakdown token basis until daily metrics are
         // refactored separately. The precise quarter-hour bucket below uses
@@ -2139,7 +2414,6 @@ export async function loadSessionCostSummary(params: {
               (entry.costBreakdown.cacheWrite ?? 0)
             : (entry.costTotal ?? 0));
 
-        const quarterBucket = getUtcQuarterHourBucketKey(entry.timestamp);
         const utcQuarterHourToken = utcQuarterHourTokenMap.get(quarterBucket.key) ?? {
           date: quarterBucket.date,
           quarterIndex: quarterBucket.quarterIndex,
@@ -2298,6 +2572,12 @@ export async function loadSessionUsageTimeSeries(params: {
     return null;
   }
 
+  if (params.maxPoints !== undefined && params.maxPoints !== null) {
+    if (!Number.isFinite(params.maxPoints) || params.maxPoints <= 0) {
+      return { sessionId: params.sessionId, points: [] };
+    }
+  }
+
   const points: SessionUsageTimePoint[] = [];
   let cumulativeTokens = 0;
   let cumulativeCost = 0;
@@ -2339,11 +2619,6 @@ export async function loadSessionUsageTimeSeries(params: {
   const sortedPoints = points.toSorted((a, b) => a.timestamp - b.timestamp);
 
   // Optionally downsample if too many points
-  if (params.maxPoints !== undefined && params.maxPoints !== null) {
-    if (!Number.isFinite(params.maxPoints) || params.maxPoints <= 0) {
-      return { sessionId: params.sessionId, points: [] };
-    }
-  }
   const maxPoints = params.maxPoints ?? 100;
   if (sortedPoints.length > maxPoints) {
     const step = Math.ceil(sortedPoints.length / maxPoints);
@@ -2413,9 +2688,11 @@ export async function loadSessionLogs(params: {
     }
   }
   const limit = params.limit ?? 50;
+  const boundedLimit = Number.isInteger(limit);
+  const retentionLimit = limit * 2;
   const resolveCost = createUsageCostResolver(params.config);
 
-  for await (const parsed of readJsonlRecords(sessionFile)) {
+  for await (const parsed of readJsonlRecordsBestEffort(sessionFile)) {
     try {
       const message = parsed.message as Record<string, unknown> | undefined;
       if (!message) {
@@ -2497,19 +2774,16 @@ export async function loadSessionLogs(params: {
         continue;
       }
 
-      // Truncate very long content
+      // Truncate very long content.
       const maxLen = 2000;
       if (content.length > maxLen) {
-        content = content.slice(0, maxLen) + "…";
+        content = truncateUtf16Safe(content, maxLen) + "…";
       }
 
       // Get timestamp
-      let timestamp = 0;
-      if (typeof parsed.timestamp === "string") {
-        timestamp = new Date(parsed.timestamp).getTime();
-      } else if (typeof message.timestamp === "number") {
-        timestamp = message.timestamp;
-      }
+      // Keep detail logs on the usage-summary timestamp path, including nested
+      // fallback; direct Date parsing can leak NaN as null through Gateway JSON.
+      const timestamp = parseTimestamp(parsed)?.getTime() ?? 0;
 
       // Get usage for assistant messages
       let tokens: number | undefined;
@@ -2525,13 +2799,25 @@ export async function loadSessionLogs(params: {
               (usage.cacheRead ?? 0) +
               (usage.cacheWrite ?? 0);
           const breakdown = extractCostBreakdown(usageRaw);
-          if (breakdown?.total !== undefined) {
+          const costConfig = resolveCost({
+            provider:
+              (typeof message.provider === "string" ? message.provider : undefined) ??
+              (typeof parsed.provider === "string" ? parsed.provider : undefined),
+            model:
+              (typeof message.model === "string" ? message.model : undefined) ??
+              (typeof parsed.model === "string" ? parsed.model : undefined),
+          });
+          if (
+            breakdown?.total !== undefined &&
+            !shouldRecomputeRecordedZeroCost({
+              usage,
+              cost: costConfig,
+              costBreakdown: breakdown,
+              costTotal: breakdown.total,
+            })
+          ) {
             cost = breakdown.total;
           } else {
-            const costConfig = resolveCost({
-              provider: message.provider as string | undefined,
-              model: message.model as string | undefined,
-            });
             cost = estimateUsageCost({ usage, cost: costConfig });
           }
         }
@@ -2544,15 +2830,25 @@ export async function loadSessionLogs(params: {
         tokens,
         cost,
       });
+      // Timestamps can arrive out of order, so keep a bounded sorted window instead
+      // of relying on transcript append order or retaining the whole file.
+      if (boundedLimit && logs.length > retentionLimit) {
+        logs.sort((a, b) => a.timestamp - b.timestamp);
+        logs.splice(0, logs.length - limit);
+      }
     } catch {
       // Ignore malformed lines
     }
   }
 
   // Sort by timestamp and limit
-  const sortedLogs = logs.toSorted((a, b) => a.timestamp - b.timestamp);
+  if (boundedLimit) {
+    logs.sort((a, b) => a.timestamp - b.timestamp);
+    return logs.length > limit ? logs.slice(-limit) : logs;
+  }
 
   // Return most recent logs
+  const sortedLogs = logs.toSorted((a, b) => a.timestamp - b.timestamp);
   if (sortedLogs.length > limit) {
     return sortedLogs.slice(-limit);
   }

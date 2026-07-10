@@ -1,10 +1,14 @@
+// Check Extension Package Tsc Boundary tests cover check extension package tsc boundary script behavior.
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   acquireBoundaryCheckLock,
+  appendBoundedStepOutput,
   cleanupCanaryArtifactsForExtensions,
   formatBoundaryCheckSuccessSummary,
   formatSlowCompileSummary,
@@ -12,6 +16,7 @@ import {
   formatStepFailure,
   installCanaryArtifactCleanup,
   isBoundaryCompileFresh,
+  resolveCompileConcurrency,
   resolveBoundaryCheckLockPath,
   resolveCanaryArtifactPaths,
   runNodeStepAsync,
@@ -35,6 +40,66 @@ function writeCanaryArtifacts(rootDir: string, extensionId = "demo") {
   return { canaryPath, tsconfigPath };
 }
 
+function createMockPipe() {
+  const pipe = new EventEmitter() as EventEmitter & {
+    setEncoding: (encoding: string) => void;
+  };
+  pipe.setEncoding = () => {};
+  return pipe;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (fs.existsSync(filePath)) {
+      return;
+    }
+    await sleep(25);
+  }
+  throw new Error(`timeout waiting for ${filePath}`);
+}
+
+async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!isProcessAlive(pid)) {
+      return;
+    }
+    await sleep(25);
+  }
+  throw new Error(`process still alive: ${pid}`);
+}
+
+function waitForChildClose(
+  child: ReturnType<typeof spawn>,
+  timeoutMs = 5_000,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error("child did not close before timeout"));
+    }, timeoutMs);
+    child.once("close", (code, signal) => {
+      clearTimeout(timeout);
+      resolve({ code, signal });
+    });
+  });
+}
+
 afterEach(() => {
   for (const rootDir of tempRoots) {
     fs.rmSync(rootDir, { force: true, recursive: true });
@@ -43,6 +108,14 @@ afterEach(() => {
 });
 
 describe("check-extension-package-tsc-boundary", () => {
+  it("keeps a bounded tail of captured step output", () => {
+    const first = appendBoundedStepOutput({ text: "", truncatedChars: 0 }, "abcdef", 5);
+    const second = appendBoundedStepOutput(first, "ghij", 5);
+
+    expect(first).toEqual({ text: "bcdef", truncatedChars: 1 });
+    expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
+  });
+
   it("removes stale canary artifacts across extensions", () => {
     const { rootDir } = createTempExtensionRoot();
     const { canaryPath, tsconfigPath } = writeCanaryArtifacts(rootDir);
@@ -86,6 +159,17 @@ describe("check-extension-package-tsc-boundary", () => {
     expect(fs.existsSync(demoA.tsconfigPath)).toBe(false);
     expect(fs.existsSync(demoB.canaryPath)).toBe(false);
     expect(fs.existsSync(demoB.tsconfigPath)).toBe(false);
+  });
+
+  it("parses extension boundary compile concurrency strictly", () => {
+    expect(resolveCompileConcurrency({ OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: "4" }, 32)).toBe(4);
+    expect(resolveCompileConcurrency({}, 12)).toBe(6);
+    expect(resolveCompileConcurrency({}, 3)).toBe(1);
+    for (const value of ["4x", "0", "1e3"]) {
+      expect(() =>
+        resolveCompileConcurrency({ OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: value }, 32),
+      ).toThrow("OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY must be a positive integer");
+    }
   });
 
   it("blocks concurrent boundary checks in the same checkout", () => {
@@ -348,6 +432,163 @@ describe("check-extension-package-tsc-boundary", () => {
     expect(elapsedMs).toBeGreaterThanOrEqual(0);
   }, 30_000);
 
+  it("clamps oversized async node step timers before scheduling", async () => {
+    await expect(
+      runNodeStepAsync(
+        "slow-success",
+        ["--eval", "setTimeout(() => process.exit(0), 25);"],
+        Number.MAX_SAFE_INTEGER,
+      ),
+    ).resolves.toMatchObject({
+      stderr: "",
+      stdout: "",
+    });
+  });
+
+  it("keeps async node step failure output bounded", async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      kill: (signal?: NodeJS.Signals | number) => boolean;
+      stderr: ReturnType<typeof createMockPipe>;
+      stdout: ReturnType<typeof createMockPipe>;
+    };
+    child.stdout = createMockPipe();
+    child.stderr = createMockPipe();
+    child.kill = () => true;
+
+    const failure = await runNodeStepAsync("noisy-plugin", ["--eval", "process.exit(2)"], 20_000, {
+      spawnImpl() {
+        setImmediate(() => {
+          child.stdout.emit("data", `stdout-begin-${"x".repeat(300_000)}-stdout-end`);
+          child.stderr.emit("data", `stderr-begin-${"y".repeat(300_000)}-stderr-end`);
+          child.emit("close", 2);
+        });
+        return child;
+      },
+    }).then(
+      () => {
+        throw new Error("expected noisy-plugin step to fail");
+      },
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(Error);
+    if (!(failure instanceof Error)) {
+      throw new Error("expected failed noisy step to reject with an Error");
+    }
+    expect(failure.message).toContain("[output truncated");
+    expect(failure.message).toContain("stdout-end");
+    expect(failure.message).toContain("stderr-end");
+    expect(failure.message).not.toContain("stdout-begin");
+    expect(failure.message).not.toContain("stderr-begin");
+    const fullOutput = (failure as { fullOutput?: unknown }).fullOutput;
+    expect(typeof fullOutput).toBe("string");
+    if (typeof fullOutput !== "string") {
+      throw new Error("expected failure fullOutput to be a string");
+    }
+    expect(fullOutput.length).toBeLessThan(600_000);
+  }, 30_000);
+
+  it("hard-kills timed out async node steps", async () => {
+    const processSignals: Array<[number, NodeJS.Signals | number | undefined]> = [];
+    let processGroupAlive = true;
+    const child = new EventEmitter() as EventEmitter & {
+      kill: (signal?: NodeJS.Signals | number) => boolean;
+      pid: number;
+      stderr: ReturnType<typeof createMockPipe>;
+      stdout: ReturnType<typeof createMockPipe>;
+    };
+    child.pid = 1234;
+    child.stdout = createMockPipe();
+    child.stderr = createMockPipe();
+    child.kill = () => true;
+
+    const failure = await runNodeStepAsync(
+      "hung-plugin",
+      ["--eval", "setTimeout(() => {}, 60_000)"],
+      5,
+      {
+        spawnImpl(command: string, args: string[]) {
+          expect(command).toBe(process.execPath);
+          expect(args).toEqual(["--eval", "setTimeout(() => {}, 60_000)"]);
+          return child;
+        },
+        killProcess(pid: number, signal?: NodeJS.Signals | number) {
+          if (signal === "SIGKILL") {
+            processGroupAlive = false;
+          }
+          if (signal === 0 && !processGroupAlive) {
+            processSignals.push([pid, signal]);
+            throw Object.assign(new Error("gone"), { code: "ESRCH" });
+          }
+          processSignals.push([pid, signal]);
+          return true;
+        },
+        platform: "darwin",
+      },
+    ).then(
+      () => {
+        throw new Error("expected hung-plugin step to time out");
+      },
+      (error: unknown) => error,
+    );
+
+    expect(processSignals).toEqual([
+      [-1234, "SIGKILL"],
+      [-1234, 0],
+    ]);
+    expect(failure).toBeInstanceOf(Error);
+    if (!(failure instanceof Error)) {
+      throw new Error("expected timeout failure to reject with an Error");
+    }
+    expect(failure.message).toContain("hung-plugin timed out after 5ms");
+    expect((failure as { kind?: unknown }).kind).toBe("timeout");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "waits for timed-out async node step process groups",
+    async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-extension-tsc-timeout-"));
+      tempRoots.add(root);
+      const childPidPath = path.join(root, "child.pid");
+      let childPid = 0;
+      const childScript = ["process.on('SIGTERM', () => {});", "setInterval(() => {}, 1000);"].join(
+        "",
+      );
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        "const fs = require('node:fs');",
+        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
+        "setInterval(() => {}, 1000);",
+      ].join("");
+
+      try {
+        const failurePromise = runNodeStepAsync("hung-step-group", ["--eval", parentScript], 100, {
+          spawnImpl(command: string, args: string[], options: unknown) {
+            return spawn(command, args, options as Parameters<typeof spawn>[2]);
+          },
+        }).then(
+          () => {
+            throw new Error("expected hung-step-group to time out");
+          },
+          (error: unknown) => error,
+        );
+
+        await waitForFile(childPidPath, 2_000);
+        childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+        expect(isProcessAlive(childPid)).toBe(true);
+
+        const failure = await failurePromise;
+        expect(failure).toBeInstanceOf(Error);
+        await waitForDead(childPid, 2_000);
+      } finally {
+        if (childPid && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
   it("aborts concurrent sibling steps after the first failure", async () => {
     const startedAt = Date.now();
     const slowStepTimeoutMs = 60_000;
@@ -373,6 +614,133 @@ describe("check-extension-package-tsc-boundary", () => {
 
     expect(Date.now() - startedAt).toBeLessThan(abortBudgetMs);
   }, 45_000);
+
+  it.skipIf(process.platform === "win32")(
+    "force-kills aborted async node step process groups",
+    async () => {
+      const { rootDir: root } = createTempExtensionRoot("abort-group");
+      const childPidPath = path.join(root, "child.pid");
+      let childPid = 0;
+      const childScript = ["process.on('SIGTERM', () => {});", "setInterval(() => {}, 1000);"].join(
+        "",
+      );
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        "const fs = require('node:fs');",
+        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("");
+      const failAfterSiblingStartsScript = [
+        "const fs = require('node:fs');",
+        `const childPidPath = ${JSON.stringify(childPidPath)};`,
+        "const deadlineAt = Date.now() + 2_000;",
+        "const wait = () => {",
+        "  if (fs.existsSync(childPidPath)) {",
+        "    setTimeout(() => process.exit(2), 150);",
+        "    return;",
+        "  }",
+        "  if (Date.now() >= deadlineAt) {",
+        "    process.exit(2);",
+        "    return;",
+        "  }",
+        "  setTimeout(wait, 10);",
+        "};",
+        "wait();",
+      ].join("");
+
+      try {
+        const command = runNodeStepsWithConcurrency(
+          [
+            {
+              label: "fail-fast",
+              args: ["--eval", failAfterSiblingStartsScript],
+              timeoutMs: 5_000,
+            },
+            {
+              label: "aborted-step-group",
+              args: ["--eval", parentScript],
+              timeoutMs: 60_000,
+            },
+          ],
+          2,
+        );
+
+        await waitForFile(childPidPath, 2_000);
+        childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+        expect(isProcessAlive(childPid)).toBe(true);
+
+        await expect(command).rejects.toThrow("fail-fast");
+        await waitForDead(childPid, 2_000);
+      } finally {
+        if (childPid && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "cleans active async node step descendants before forwarding parent SIGTERM",
+    async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-extension-tsc-signal-"));
+      tempRoots.add(root);
+      const childPidPath = path.join(root, "child.pid");
+      const readyPath = path.join(root, "child.ready");
+      const scriptUrl = pathToFileURL(
+        path.resolve("scripts/check-extension-package-tsc-boundary.mjs"),
+      ).href;
+      let childPid = 0;
+      let runner: ReturnType<typeof spawn> | undefined;
+      const childScript = [
+        "const fs = require('node:fs');",
+        "process.on('SIGTERM', () => {});",
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+        "setInterval(() => {}, 1000);",
+      ].join("");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+        `require('node:fs').writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("");
+      const runnerScript = [
+        `import { runNodeStepAsync } from ${JSON.stringify(scriptUrl)};`,
+        `await runNodeStepAsync('parent-signal-step-group', ['--eval', ${JSON.stringify(
+          parentScript,
+        )}], 60_000);`,
+      ].join("\n");
+
+      try {
+        runner = spawn(process.execPath, ["--input-type=module", "-e", runnerScript], {
+          cwd: process.cwd(),
+          stdio: ["ignore", "ignore", "pipe"],
+        });
+
+        await waitForFile(readyPath, 2_000);
+        await waitForFile(childPidPath, 2_000);
+        childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+        expect(isProcessAlive(childPid)).toBe(true);
+
+        runner.kill("SIGTERM");
+
+        await expect(waitForChildClose(runner)).resolves.toEqual({
+          code: null,
+          signal: "SIGTERM",
+        });
+        await waitForDead(childPid, 2_000);
+      } finally {
+        if (runner?.pid && isProcessAlive(runner.pid)) {
+          runner.kill("SIGKILL");
+        }
+        if (childPid && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+      }
+    },
+  );
 
   it("passes successful step timing metadata to onSuccess handlers", async () => {
     const elapsedTimes: number[] = [];

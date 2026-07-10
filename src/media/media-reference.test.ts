@@ -1,3 +1,4 @@
+// Media reference tests cover resolving refs to local, remote, and inline media.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,6 +10,7 @@ import {
   parseInboundMediaUri,
   resolveInboundMediaReference,
   resolveMediaReferenceLocalPath,
+  resolveMediaReferenceLocalPathInfo,
   resolveMediaReferenceSandboxPath,
 } from "./media-reference.js";
 
@@ -132,7 +134,13 @@ describe("media reference helpers", () => {
       await expect(resolveMediaReferenceLocalPath(`media://inbound/${id}`)).resolves.toBe(
         realFilePath,
       );
+      await expect(
+        resolveMediaReferenceLocalPathInfo(`media://inbound/${id}`),
+      ).resolves.toStrictEqual({ kind: "inbound", path: realFilePath });
       await expect(resolveMediaReferenceLocalPath("  MEDIA: ./out.png")).resolves.toBe("./out.png");
+      await expect(resolveMediaReferenceLocalPathInfo("  MEDIA: ./out.png")).resolves.toStrictEqual(
+        { kind: "local", path: "./out.png" },
+      );
     } finally {
       await fs.rm(filePath, { force: true });
     }

@@ -1,8 +1,9 @@
+// Session key utilities normalize and classify persisted session keys.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 
 export type ParsedAgentSessionKey = {
   agentId: string;
@@ -12,6 +13,19 @@ export type ParsedAgentSessionKey = {
 export type ParsedThreadSessionSuffix = {
   baseSessionKey: string | undefined;
   threadId: string | undefined;
+};
+
+export type ParsedSessionDeliveryRoute = {
+  accountId?: string;
+  channel: string;
+  peerId: string;
+  peerKind: "channel" | "direct" | "dm" | "group";
+  threadId?: string;
+};
+
+export type ParsedCronRunScopeSuffix = {
+  baseSessionKey: string | undefined;
+  runId: string | undefined;
 };
 
 export type RawSessionConversationRef = {
@@ -70,8 +84,29 @@ function findCasePreservingPeerDescriptor(
 }
 
 export function requiresFoldedSessionKeyAliasProof(sessionKey: string | undefined | null): boolean {
-  const ref = parseRawSessionConversationRef(sessionKey);
-  const descriptor = findCasePreservingPeerDescriptor(ref?.channel, ref?.kind);
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return false;
+  }
+  const parts = raw.split(":");
+  let bodyStartIndex = 0;
+  let hasAgentWrapper = false;
+  while (
+    parts.length - bodyStartIndex >= 3 &&
+    normalizeOptionalLowercaseString(parts[bodyStartIndex]) === "agent"
+  ) {
+    hasAgentWrapper = true;
+    bodyStartIndex += 2;
+  }
+  if (hasAgentWrapper) {
+    while (bodyStartIndex < parts.length && !normalizeOptionalString(parts[bodyStartIndex])) {
+      bodyStartIndex += 1;
+    }
+  }
+  const descriptor = findCasePreservingPeerDescriptor(
+    parts[bodyStartIndex],
+    parts[bodyStartIndex + 1],
+  );
   return descriptor?.span === "tail";
 }
 
@@ -94,6 +129,35 @@ function escapeRegExp(value: string): string {
 }
 
 type PreservedSpan = { start: number; end: number; trim: boolean };
+
+const NORMALIZED_SESSION_KEY_CACHE_MAX_ENTRIES = 2048;
+const NORMALIZED_SESSION_KEY_CACHE_MAX_LENGTH = 4096;
+const normalizedSessionKeyCache = new Map<string, string>();
+
+function readNormalizedSessionKeyCache(raw: string): string | undefined {
+  return raw.length <= NORMALIZED_SESSION_KEY_CACHE_MAX_LENGTH
+    ? normalizedSessionKeyCache.get(raw)
+    : undefined;
+}
+
+function writeNormalizedSessionKeyCache(raw: string, normalized: string): void {
+  if (raw.length > NORMALIZED_SESSION_KEY_CACHE_MAX_LENGTH) {
+    return;
+  }
+  normalizedSessionKeyCache.set(raw, normalized);
+  while (normalizedSessionKeyCache.size > NORMALIZED_SESSION_KEY_CACHE_MAX_ENTRIES) {
+    const oldest = normalizedSessionKeyCache.keys().next().value;
+    if (oldest === undefined) {
+      return;
+    }
+    normalizedSessionKeyCache.delete(oldest);
+  }
+}
+
+function mayContainCasePreservingPeer(raw: string): boolean {
+  const folded = raw.toLowerCase();
+  return CASE_PRESERVING_PEERS.some((descriptor) => folded.includes(`${descriptor.channel}:`));
+}
 
 /**
  * Collect [start,end) index ranges in `raw` whose case must be preserved, per the
@@ -137,8 +201,9 @@ function collectCasePreservedSpans(raw: string): PreservedSpan[] {
             spans.push({ start: threadIdStart, end: raw.length, trim: false });
           }
         };
-        // Tail: anchored to the real agent-scoped head; preserve through key end.
-        const scopedRe = new RegExp(`^agent:[^:]+:${channel}:${kind}:`, "i");
+        // Preserve tails behind nested or malformed ownership wrappers without
+        // treating an inner channel-shaped identity as a runtime route.
+        const scopedRe = new RegExp(`^(?:agent:[^:]*:)+:*${channel}:${kind}:`, "i");
         const scopedMatch = scopedRe.exec(raw);
         if (scopedMatch) {
           collectTailSpan(scopedMatch[0].length);
@@ -164,6 +229,15 @@ export function normalizeSessionKeyPreservingOpaquePeerIds(
   if (!raw) {
     return "";
   }
+  const cached = readNormalizedSessionKeyCache(raw);
+  if (cached !== undefined) {
+    return cached;
+  }
+  if (!mayContainCasePreservingPeer(raw)) {
+    const normalized = raw.toLowerCase();
+    writeNormalizedSessionKeyCache(raw, normalized);
+    return normalized;
+  }
   const spans = collectCasePreservedSpans(raw)
     .filter((span) => span.end > span.start)
     .toSorted((a, b) => a.start - b.start);
@@ -181,6 +255,7 @@ export function normalizeSessionKeyPreservingOpaquePeerIds(
     cursor = span.end;
   }
   normalized += normalizeLowercaseStringOrEmpty(raw.slice(cursor));
+  writeNormalizedSessionKeyCache(raw, normalized);
   return normalized;
 }
 
@@ -196,8 +271,8 @@ export function parseAgentSessionKey(
   if (!raw) {
     return null;
   }
-  const parts = raw.split(":").filter(Boolean);
-  if (parts.length < 3) {
+  const parts = raw.split(":");
+  if (parts.length < 3 || !parts[1] || !parts[2]) {
     return null;
   }
   if (parts[0] !== "agent") {
@@ -217,6 +292,32 @@ export function isCronRunSessionKey(sessionKey: string | undefined | null): bool
     return false;
   }
   return /^cron:[^:]+:run:[^:]+(?::|$)/.test(parsed.rest);
+}
+
+/**
+ * Splits the terminal per-run `:run:<id>` scope off an isolated cron session key
+ * (`agent:<id>:cron:<job>:run:<runId>`), yielding the cache-stable base key.
+ * The run scope is only ever appended to cron keys, so this is gated to that exact
+ * shape: any other key (including channel ids that embed a `:run:` segment) is returned
+ * unchanged with `runId` undefined, never truncating an unrelated session identity.
+ */
+export function parseCronRunScopeSuffix(
+  sessionKey: string | undefined | null,
+): ParsedCronRunScopeSuffix {
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return { baseSessionKey: undefined, runId: undefined };
+  }
+  const parsed = parseAgentSessionKey(raw);
+  if (!parsed || !/^cron:[^:]+:run:[^:]+$/.test(parsed.rest)) {
+    return { baseSessionKey: raw, runId: undefined };
+  }
+  const runMarker = ":run:";
+  const markerIndex = raw.toLowerCase().lastIndexOf(runMarker);
+  return {
+    baseSessionKey: raw.slice(0, markerIndex),
+    runId: raw.slice(markerIndex + runMarker.length),
+  };
 }
 
 export function isCronSessionKey(sessionKey: string | undefined | null): boolean {
@@ -244,7 +345,11 @@ export function getSubagentDepth(sessionKey: string | undefined | null): number 
   if (!raw) {
     return 0;
   }
-  return raw.split(":subagent:").length - 1;
+
+  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
+  const normalized = scoped.toLowerCase();
+  const matches = normalized.match(/(^|:)subagent:/g);
+  return matches?.length ?? 0;
 }
 
 export function isAcpSessionKey(sessionKey: string | undefined | null): boolean {
@@ -281,6 +386,56 @@ export function parseThreadSessionSuffix(
   return { baseSessionKey, threadId };
 }
 
+const SESSION_DELIVERY_PEER_KINDS = new Set<ParsedSessionDeliveryRoute["peerKind"]>([
+  "channel",
+  "direct",
+  "dm",
+  "group",
+]);
+
+/** Parse only complete external delivery shapes; nested ownership stays opaque. */
+export function parseSessionDeliveryRoute(
+  sessionKey: string | undefined | null,
+): ParsedSessionDeliveryRoute | null {
+  const parsedThread = parseThreadSessionSuffix(sessionKey);
+  const parsed = parseAgentSessionKey(parsedThread.baseSessionKey ?? sessionKey);
+  if (!parsed) {
+    return null;
+  }
+  const parts = parsed.rest.split(":");
+  if (parts[0] === "agent" || parts.length < 3) {
+    return null;
+  }
+  const channel = normalizeOptionalLowercaseString(parts[0]);
+  if (!channel) {
+    return null;
+  }
+
+  if (parts.length >= 4 && (parts[2] === "direct" || parts[2] === "dm")) {
+    const accountId = normalizeOptionalString(parts[1]);
+    const firstPeerIdSegment = normalizeOptionalString(parts[3]);
+    const peerId = normalizeOptionalString(parts.slice(3).join(":"));
+    if (!accountId || !firstPeerIdSegment || !peerId) {
+      return null;
+    }
+    return {
+      accountId,
+      channel,
+      peerId,
+      peerKind: parts[2],
+      threadId: parsedThread.threadId,
+    };
+  }
+
+  const peerKind = parts[1] as ParsedSessionDeliveryRoute["peerKind"] | undefined;
+  const firstPeerIdSegment = normalizeOptionalString(parts[2]);
+  const peerId = normalizeOptionalString(parts.slice(2).join(":"));
+  if (!peerKind || !SESSION_DELIVERY_PEER_KINDS.has(peerKind) || !firstPeerIdSegment || !peerId) {
+    return null;
+  }
+  return { channel, peerId, peerKind, threadId: parsedThread.threadId };
+}
+
 export function parseRawSessionConversationRef(
   sessionKey: string | undefined | null,
 ): RawSessionConversationRef | null {
@@ -289,11 +444,21 @@ export function parseRawSessionConversationRef(
     return null;
   }
 
-  const rawParts = raw.split(":").filter(Boolean);
-  const bodyStartIndex =
-    rawParts.length >= 3 && normalizeOptionalLowercaseString(rawParts[0]) === "agent" ? 2 : 0;
+  const rawParts = raw.split(":");
+  // Only the outer ownership wrapper is authoritative for routing. Any inner
+  // agent-shaped identity is opaque plugin input and must not inherit policy.
+  const hasAgentWrapper = normalizeOptionalLowercaseString(rawParts[0]) === "agent";
+  if (hasAgentWrapper && (!normalizeOptionalString(rawParts[1]) || rawParts.length < 3)) {
+    return null;
+  }
+  const bodyStartIndex = hasAgentWrapper ? 2 : 0;
   const parts = rawParts.slice(bodyStartIndex);
-  if (parts.length < 3) {
+  if (normalizeOptionalLowercaseString(parts[0]) === "agent") {
+    return null;
+  }
+  // Empty opaque tail segments are valid (for example compressed IPv6), but
+  // structural owner/channel/kind/first-id segments must be present.
+  if (parts.length < 3 || !normalizeOptionalString(parts[2])) {
     return null;
   }
 
@@ -310,18 +475,4 @@ export function parseRawSessionConversationRef(
   }
 
   return { channel, kind, rawId, prefix };
-}
-
-export function resolveThreadParentSessionKey(
-  sessionKey: string | undefined | null,
-): string | null {
-  const { baseSessionKey, threadId } = parseThreadSessionSuffix(sessionKey);
-  if (!threadId) {
-    return null;
-  }
-  const parent = normalizeOptionalString(baseSessionKey);
-  if (!parent) {
-    return null;
-  }
-  return parent;
 }

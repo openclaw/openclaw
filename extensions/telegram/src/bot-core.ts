@@ -1,7 +1,9 @@
+// Telegram plugin module implements bot core behavior.
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "openclaw/plugin-sdk/channel-policy";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
@@ -13,26 +15,35 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/native-command-config-runtime";
-import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
-import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
-import { resolveTelegramAccount, type ResolvedTelegramAccount } from "./accounts.js";
+import { resolveTelegramAccount } from "./accounts.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { registerTelegramHandlers } from "./bot-handlers.runtime.js";
-import { createTelegramMessageProcessor } from "./bot-message.js";
+import {
+  createTelegramMessageProcessor,
+  resolveTelegramMessageTurnSettings,
+} from "./bot-message.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
+import {
+  getTelegramSpooledReplayDeferredParticipant,
+  isTelegramSpooledReplayUpdate,
+  runWithTelegramUpdateProcessingFrame,
+  TelegramSpooledReplayProcessingError,
+} from "./bot-processing-outcome.js";
 import { createTelegramUpdateTracker } from "./bot-update-tracker.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import { resolveDefaultAgentId } from "./bot.agent.runtime.js";
 import { apiThrottler, Bot, sequentialize, type ApiClientOptions } from "./bot.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
-import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpers.js";
+import { buildTelegramGroupPeerId } from "./bot/helpers.js";
+import { setTelegramCallbackQueryAnswerPromise } from "./callback-query-answer-state.js";
 import {
   asTelegramClientFetch,
   createTelegramClientFetch,
@@ -41,7 +52,13 @@ import {
   resolveTelegramOutboundClientTimeoutFloorSeconds,
 } from "./client-fetch.js";
 import { resolveTelegramTransport } from "./fetch.js";
-import { stringifyTelegramRawUpdateForLog } from "./raw-update-log.js";
+import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
+import {
+  buildTelegramGroupHistorySelfSender,
+  recordTelegramGroupHistoryEntry,
+} from "./group-history-window.js";
+import { registerTelegramOutboundGroupHistoryRecorder } from "./outbound-message-context.js";
+import { formatTelegramRawUpdateForLog } from "./raw-update-log.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
@@ -49,40 +66,7 @@ import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 export type { TelegramBotOptions } from "./bot.types.js";
 
 export { getTelegramSequentialKey };
-
-export function resolveTelegramScopedGroupConfig(
-  telegramCfg: ResolvedTelegramAccount["config"],
-  chatId: string | number,
-  messageThreadId?: number,
-) {
-  const resolveTopicConfig = <T extends object>(
-    scopedConfig: { topics?: Record<string, T | undefined> } | undefined,
-  ): T | undefined => {
-    if (!scopedConfig || messageThreadId == null) {
-      return undefined;
-    }
-    const defaultConfig = scopedConfig.topics?.["*"];
-    const exactConfig = scopedConfig.topics?.[String(messageThreadId)];
-    if (defaultConfig && exactConfig) {
-      return { ...defaultConfig, ...exactConfig };
-    }
-    return exactConfig ?? defaultConfig;
-  };
-  const groups = telegramCfg.groups;
-  const direct = telegramCfg.direct;
-  const chatIdStr = String(chatId);
-  const isDm = !chatIdStr.startsWith("-");
-
-  if (isDm) {
-    const groupConfig = direct?.[chatIdStr] ?? direct?.["*"];
-    const topicConfig = resolveTopicConfig(groupConfig);
-    return { groupConfig, topicConfig };
-  }
-
-  const groupConfig = groups?.[chatIdStr] ?? groups?.["*"];
-  const topicConfig = resolveTopicConfig(groupConfig);
-  return { groupConfig, topicConfig };
-}
+export { resolveTelegramScopedGroupConfig };
 
 type TelegramBotRuntime = {
   Bot: typeof Bot;
@@ -210,27 +194,59 @@ export function createTelegramBotCore(
     if (!begin.accepted) {
       return;
     }
-    let completed = false;
     try {
-      await next();
-      completed = true;
-    } finally {
-      updateTracker.finishUpdate(begin.update, { completed });
+      const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
+        await next();
+      });
+      const deferredWork = getTelegramSpooledReplayDeferredParticipant();
+      if (deferredWork) {
+        void deferredWork.task
+          .then((deferredResult) => {
+            updateTracker.finishUpdate(begin.update, {
+              completed: deferredResult.kind !== "failed-retryable",
+            });
+          })
+          .catch(() => {
+            updateTracker.finishUpdate(begin.update, { completed: false });
+          });
+        return;
+      }
+      if (result?.kind === "failed-retryable") {
+        if (isTelegramSpooledReplayUpdate(ctx.update)) {
+          throw new TelegramSpooledReplayProcessingError(result.error);
+        }
+        updateTracker.finishUpdate(begin.update, { completed: true });
+        return;
+      }
+      updateTracker.finishUpdate(begin.update, { completed: true });
+    } catch (error) {
+      updateTracker.finishUpdate(begin.update, { completed: false });
+      throw error;
     }
+  });
+
+  // Answer callback queries immediately before sequentialize queues them behind
+  // agent turns for the same chat/topic. Telegram has a ~15s server-side timeout
+  // for answerCallbackQuery; if an agent turn is already processing, sequentialize
+  // delays the answer beyond that window and the user sees a stuck loading spinner.
+  bot.use(async (ctx, next) => {
+    const callback = ctx.callbackQuery;
+    if (callback) {
+      const answerPromise = bot.api.answerCallbackQuery(callback.id);
+      setTelegramCallbackQueryAnswerPromise(ctx, answerPromise);
+      void answerPromise.catch(() => {});
+    }
+    await next();
   });
 
   bot.use(botRuntime.sequentialize(getTelegramSequentialKey));
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
-  const MAX_RAW_UPDATE_CHARS = 8000;
 
   bot.use(async (ctx, next) => {
     if (shouldLogVerbose()) {
       try {
-        const raw = stringifyTelegramRawUpdateForLog(ctx.update);
-        const preview =
-          raw.length > MAX_RAW_UPDATE_CHARS ? `${raw.slice(0, MAX_RAW_UPDATE_CHARS)}...` : raw;
-        rawUpdateLogger.debug(`telegram update: ${preview}`);
+        rawUpdateLogger.debug(`telegram update: ${formatTelegramRawUpdateForLog(ctx.update)}`);
       } catch (err) {
         rawUpdateLogger.debug(`telegram update log failed: ${String(err)}`);
       }
@@ -238,19 +254,35 @@ export function createTelegramBotCore(
     await next();
   });
 
-  const historyLimit = Math.max(
-    0,
-    telegramCfg.historyLimit ??
-      cfg.messages?.groupChat?.historyLimit ??
-      DEFAULT_GROUP_HISTORY_LIMIT,
-  );
+  const { historyLimit } = resolveTelegramMessageTurnSettings({
+    accountId: account.accountId,
+    cfg,
+    telegramCfg,
+    opts,
+  });
   const groupHistories = new Map<string, HistoryEntry[]>();
-  const textLimit = resolveTextChunkLimit(cfg, "telegram", account.accountId);
-  const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
-  const allowFrom = opts.allowFrom ?? telegramCfg.allowFrom;
-  const groupAllowFrom =
-    opts.groupAllowFrom ?? telegramCfg.groupAllowFrom ?? telegramCfg.allowFrom ?? allowFrom;
-  const replyToMode = opts.replyToMode ?? telegramCfg.replyToMode ?? "off";
+  const botHistorySender = buildTelegramGroupHistorySelfSender(
+    account.name ?? opts.botInfo?.first_name ?? opts.botInfo?.username ?? "OpenClaw",
+  );
+  const unregisterOutboundGroupHistoryRecorder = registerTelegramOutboundGroupHistoryRecorder({
+    accountId: account.accountId,
+    recorder: (record) => {
+      if (!String(record.chatId).startsWith("-")) {
+        return;
+      }
+      recordTelegramGroupHistoryEntry({
+        historyMap: groupHistories,
+        historyKey: buildTelegramGroupPeerId(record.chatId, record.messageThreadId),
+        limit: historyLimit,
+        entry: {
+          sender: botHistorySender,
+          body: record.text?.trim() || "<media>",
+          timestamp: record.timestamp,
+          messageId: String(record.messageId),
+        },
+      });
+    },
+  });
   const nativeEnabled = resolveNativeCommandsEnabled({
     providerId: "telegram",
     providerSetting: telegramCfg.commands?.native,
@@ -265,14 +297,11 @@ export function createTelegramBotCore(
     providerSetting: telegramCfg.commands?.native,
     globalSetting: cfg.commands?.native,
   });
-  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-  const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const mediaMaxBytes = (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 100) * 1024 * 1024;
   const logger = getChildLogger({ module: "telegram-auto-reply" });
-  const streamMode = resolveTelegramStreamMode(telegramCfg);
-  const resolveGroupPolicy = (chatId: string | number) =>
+  const resolveGroupPolicy = (chatId: string | number, turnCfg: OpenClawConfig) =>
     resolveChannelGroupPolicy({
-      cfg,
+      cfg: turnCfg,
       channel: "telegram",
       accountId: account.accountId,
       groupId: String(chatId),
@@ -282,19 +311,19 @@ export function createTelegramBotCore(
     agentId?: string;
     messageThreadId?: number;
     sessionKey?: string;
+    cfg: OpenClawConfig;
   }) => {
-    const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
+    const agentId = params.agentId ?? resolveDefaultAgentId(params.cfg);
     const sessionKey =
       params.sessionKey ??
       `agent:${agentId}:telegram:group:${buildTelegramGroupPeerId(params.chatId, params.messageThreadId)}`;
-    const storePath = telegramDeps.resolveStorePath(cfg.session?.store, { agentId });
+    const storePath = telegramDeps.resolveStorePath(params.cfg.session?.store, { agentId });
     try {
-      const loadSessionStore = telegramDeps.loadSessionStore;
-      if (!loadSessionStore) {
+      const getSessionEntry = telegramDeps.getSessionEntry;
+      if (!getSessionEntry) {
         return undefined;
       }
-      const store = loadSessionStore(storePath);
-      const entry = store[sessionKey];
+      const entry = getSessionEntry({ storePath, sessionKey });
       if (entry?.groupActivation === "always") {
         return false;
       }
@@ -306,34 +335,28 @@ export function createTelegramBotCore(
     }
     return undefined;
   };
-  const resolveGroupRequireMention = (chatId: string | number) =>
+  const resolveGroupRequireMention = (chatId: string | number, turnCfg: OpenClawConfig) =>
     resolveChannelGroupRequireMention({
-      cfg,
+      cfg: turnCfg,
       channel: "telegram",
       accountId: account.accountId,
       groupId: String(chatId),
       requireMentionOverride: opts.requireMention,
       overrideOrder: "after-config",
     });
-  const loadFreshTelegramAccountConfig = () => {
-    try {
-      return resolveTelegramAccount({
-        cfg: telegramDeps.getRuntimeConfig(),
-        accountId: account.accountId,
-      }).config;
-    } catch (error) {
-      logVerbose(
-        `telegram: failed to load fresh config for account ${account.accountId}; using startup snapshot: ${String(error)}`,
-      );
-      return telegramCfg;
-    }
-  };
-  const resolveTelegramGroupConfig = (chatId: string | number, messageThreadId?: number) => {
-    const freshTelegramCfg = loadFreshTelegramAccountConfig();
-    return resolveTelegramScopedGroupConfig(freshTelegramCfg, chatId, messageThreadId);
+  const resolveTelegramGroupConfig = (
+    chatId: string | number,
+    messageThreadId: number | undefined,
+    turnCfg: OpenClawConfig,
+  ) => {
+    const turnTelegramCfg = resolveTelegramAccount({
+      cfg: turnCfg,
+      accountId: account.accountId,
+    }).config;
+    return resolveTelegramScopedGroupConfig(turnTelegramCfg, chatId, messageThreadId);
   };
 
-  // Global sendChatAction handler with 401 backoff / circuit breaker (issue #27092).
+  // Global sendChatAction handler with 401 backoff and transient cooldown.
   // Created BEFORE the message processor so it can be injected into every message context.
   // Shared across all message contexts for this account so that consecutive 401s
   // from ANY chat are tracked together — prevents infinite retry storms.
@@ -346,25 +369,14 @@ export function createTelegramBotCore(
 
   const processMessage = createTelegramMessageProcessor({
     bot,
-    cfg,
     account,
-    telegramCfg,
-    historyLimit,
     groupHistories,
-    dmPolicy,
-    allowFrom,
-    groupAllowFrom,
-    ackReactionScope,
     logger,
     resolveGroupActivation,
     resolveGroupRequireMention,
     resolveTelegramGroupConfig,
-    loadFreshConfig: () => telegramDeps.getRuntimeConfig(),
     sendChatActionHandler,
     runtime,
-    replyToMode,
-    streamMode,
-    textLimit,
     opts,
     telegramDeps,
   });
@@ -375,12 +387,7 @@ export function createTelegramBotCore(
     runtime,
     accountId: account.accountId,
     telegramCfg,
-    allowFrom,
-    groupAllowFrom,
-    replyToMode,
-    textLimit,
     mediaMaxBytes,
-    useAccessGroups,
     nativeEnabled,
     nativeSkillsEnabled,
     nativeDisabledExplicit,
@@ -400,8 +407,6 @@ export function createTelegramBotCore(
     runtime,
     mediaMaxBytes,
     telegramCfg,
-    allowFrom,
-    groupAllowFrom,
     resolveGroupPolicy,
     resolveGroupActivation,
     resolveGroupRequireMention,
@@ -415,6 +420,7 @@ export function createTelegramBotCore(
   const originalStop = bot.stop.bind(bot);
   bot.stop = ((...args: Parameters<typeof originalStop>) => {
     threadBindingManager?.stop();
+    unregisterOutboundGroupHistoryRecorder();
     return originalStop(...args);
   }) as typeof bot.stop;
 

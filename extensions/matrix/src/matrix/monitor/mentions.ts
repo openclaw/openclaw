@@ -1,3 +1,4 @@
+// Matrix plugin module implements mentions behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
@@ -88,6 +89,7 @@ function resolveMatrixMentionPrefixCandidates(params: {
   append(localpart ? `@${localpart}` : null);
   append(params.displayName);
   append(params.displayName ? `@${params.displayName}` : null);
+  append(params.displayName ? `@[${params.displayName}]` : null);
 
   return candidates;
 }
@@ -157,6 +159,7 @@ function isVisibleMentionLabel(params: {
     localpart ? extractVisibleMentionText(`@${localpart}`) : null,
     params.displayName ? extractVisibleMentionText(params.displayName) : null,
     params.displayName ? extractVisibleMentionText(`@${params.displayName}`) : null,
+    params.displayName ? extractVisibleMentionText(`@[${params.displayName}]`) : null,
   ].filter((value): value is string => Boolean(value));
   return candidates.includes(cleaned);
 }

@@ -1,3 +1,5 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+// Google Meet plugin module implements calendar behavior.
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { googleApiError } from "./google-api-errors.js";
 
@@ -5,6 +7,7 @@ const GOOGLE_CALENDAR_API_BASE_URL = "https://www.googleapis.com/calendar/v3";
 const GOOGLE_CALENDAR_API_HOST = "www.googleapis.com";
 const GOOGLE_MEET_URL_HOST = "meet.google.com";
 const GOOGLE_CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly";
+const GOOGLE_CALENDAR_REQUEST_TIMEOUT_MS = 30_000;
 
 type GoogleCalendarEventDate = {
   date?: string;
@@ -187,18 +190,20 @@ async function fetchGoogleCalendarEvents(params: {
     },
     policy: { allowedHostnames: [GOOGLE_CALENDAR_API_HOST] },
     auditContext: "google-meet.calendar.events.list",
+    timeoutMs: GOOGLE_CALENDAR_REQUEST_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {
-      const detail = await response.text();
       throw await googleApiError({
         response,
-        detail,
         prefix: "Google Calendar events.list",
         scopes: [GOOGLE_CALENDAR_EVENTS_SCOPE],
       });
     }
-    const payload = (await response.json()) as { items?: unknown };
+    const payload = await readProviderJsonResponse<{ items?: unknown }>(
+      response,
+      "Google Calendar events.list",
+    );
     if (payload.items !== undefined && !Array.isArray(payload.items)) {
       throw new Error("Google Calendar events.list response had non-array items");
     }

@@ -1,9 +1,11 @@
+// Msteams tests cover send context plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConfig, OpenClawConfig } from "../runtime-api.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { resolveMSTeamsProactiveReplyStyle, resolveMSTeamsSendContext } from "./send-context.js";
 
 const sendContextMockState = vi.hoisted(() => {
+  const getAccessToken = vi.fn();
   const store = {
     upsert: vi.fn(),
     get: vi.fn(),
@@ -14,12 +16,15 @@ const sendContextMockState = vi.hoisted(() => {
   };
   return {
     store,
+    loadMSTeamsSdkWithAuth: vi.fn(async () => ({ app: { id: "mock-app" } })),
+    createMSTeamsTokenProvider: vi.fn(() => ({ getAccessToken })),
+    getAccessToken,
     logWarn: vi.fn(),
   };
 });
 
-vi.mock("./conversation-store-fs.js", () => ({
-  createMSTeamsConversationStoreFs: () => sendContextMockState.store,
+vi.mock("./conversation-store-state.js", () => ({
+  createMSTeamsConversationStoreState: () => sendContextMockState.store,
 }));
 
 vi.mock("./runtime.js", () => ({
@@ -28,6 +33,11 @@ vi.mock("./runtime.js", () => ({
       getChildLogger: () => ({ warn: sendContextMockState.logWarn }),
     },
   }),
+}));
+
+vi.mock("./sdk.js", () => ({
+  loadMSTeamsSdkWithAuth: sendContextMockState.loadMSTeamsSdkWithAuth,
+  createMSTeamsTokenProvider: sendContextMockState.createMSTeamsTokenProvider,
 }));
 
 function channelRef(params?: Partial<StoredConversationReference>): StoredConversationReference {
@@ -48,10 +58,44 @@ beforeEach(() => {
   sendContextMockState.store.remove.mockReset();
   sendContextMockState.store.findPreferredDmByUserId.mockReset();
   sendContextMockState.store.findByUserId.mockReset();
+  sendContextMockState.loadMSTeamsSdkWithAuth.mockClear();
+  sendContextMockState.createMSTeamsTokenProvider.mockClear();
+  sendContextMockState.getAccessToken.mockReset();
   sendContextMockState.logWarn.mockReset();
+  vi.unstubAllEnvs();
 });
 
 describe("resolveMSTeamsSendContext", () => {
+  it("ignores ambient SERVICE_URL for default public-cloud proactive sends", async () => {
+    vi.stubEnv("SERVICE_URL", "https://bot.example.com/api/messages");
+    sendContextMockState.store.get.mockResolvedValue(
+      channelRef({
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+      }),
+    );
+
+    const cfg = {
+      channels: {
+        msteams: {
+          enabled: true,
+          appId: "app-id",
+          appPassword: "app-password",
+          tenantId: "tenant-id",
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      resolveMSTeamsSendContext({
+        cfg,
+        to: "conversation:19:channel@thread.tacv2",
+      }),
+    ).resolves.toMatchObject({
+      conversationId: "19:channel@thread.tacv2",
+      sdkCloudOptions: { cloud: "Public" },
+    });
+  });
+
   it("removes stored conversation references with blocked serviceUrl hosts", async () => {
     sendContextMockState.store.get.mockResolvedValue(
       channelRef({
@@ -81,6 +125,32 @@ describe("resolveMSTeamsSendContext", () => {
     );
 
     expect(sendContextMockState.store.remove).toHaveBeenCalledWith("19:channel@thread.tacv2");
+  });
+
+  it("does not query Graph while resolving an opaque Bot Framework conversation", async () => {
+    sendContextMockState.store.get.mockResolvedValue(
+      channelRef({
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+        conversation: { id: "a:personal", conversationType: "personal" },
+      }),
+    );
+
+    await resolveMSTeamsSendContext({
+      cfg: {
+        channels: {
+          msteams: {
+            enabled: true,
+            appId: "app-id",
+            appPassword: "app-password",
+            tenantId: "tenant-id",
+            sharePointSiteId: "site-id",
+          },
+        },
+      } as OpenClawConfig,
+      to: "conversation:a:personal",
+    });
+
+    expect(sendContextMockState.getAccessToken).not.toHaveBeenCalled();
   });
 });
 

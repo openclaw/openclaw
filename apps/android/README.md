@@ -1,8 +1,8 @@
 ## OpenClaw Android App
 
-Status: **extremely alpha**. The app is actively being rebuilt from the ground up.
+OpenClaw Android is the officially released Google Play app. It connects to an OpenClaw Gateway as a companion node for chat, voice, approvals, screen, and device-aware automation.
 
-### Rebuild Checklist
+### Current App Surface
 
 - [x] New 4-step onboarding flow
 - [x] Connect tab with `Setup Code` + `Manual` modes
@@ -18,7 +18,9 @@ Status: **extremely alpha**. The app is actively being rebuilt from the ground u
 - [x] Authenticated background presence beacons
 - [x] Voice tab full functionality
 - [x] Screen tab full functionality
-- [ ] Full end-to-end QA and release hardening
+- [x] Skill Workshop settings can filter proposals, inspect proposal content, and apply/reject/quarantine drafts through Gateway RPCs
+- [x] Per-app language selection for translated resources follows Android system settings and persistence
+- [x] Cron job settings support details, run history, run now, edits, enable/disable, and deletion with admin-scoped Gateway access
 
 ## Open in Android Studio
 
@@ -32,7 +34,7 @@ cd apps/android
 ./gradlew :app:installPlayDebug
 ./gradlew :app:testPlayDebugUnitTest
 cd ../..
-bun run android:bundle:release
+pnpm android:release:archive
 ```
 
 Third-party debug flavor:
@@ -44,10 +46,61 @@ cd apps/android
 ./gradlew :app:testThirdPartyDebugUnitTest
 ```
 
-`bun run android:bundle:release` auto-bumps Android `versionName`/`versionCode` in `apps/android/app/build.gradle.kts`, then builds two signed release bundles:
+Android release archives use the pinned version in `apps/android/version.json`. Update it with:
 
-- Play build: `apps/android/build/release-bundles/openclaw-<version>-play-release.aab`
-- Third-party build: `apps/android/build/release-bundles/openclaw-<version>-third-party-release.aab`
+```bash
+pnpm android:version
+pnpm android:version:check
+pnpm android:version:pin -- --from-gateway
+pnpm android:version:pin -- --version 2026.6.5 --version-code 2026060501
+```
+
+Release-owner signing sync:
+
+```bash
+pnpm android:release:signing:plan
+MATCH_PASSWORD=<signing repo password> pnpm android:release:signing:sync:pull
+MATCH_PASSWORD=<signing repo password> pnpm android:release:signing:check
+```
+
+The signing sync pulls encrypted Android upload-key assets from the shared `apps-signing` repo and materializes decrypted files under `apps/android/build/release-signing/`.
+Standalone release APK verification also requires that key's public certificate SHA-256 fingerprint to match `Config/ReleaseSigning.json`.
+
+Generate raw Google Play screenshots:
+
+```bash
+pnpm android:screenshots
+```
+
+The screenshot script defaults to a retained `OpenClaw_Screenshots_API36` AVD
+created from Android's no-cutout Pixel 2 profile. It creates the AVD when
+missing, boots it headlessly, waits for Android to finish booting, disables
+animations, captures the screenshots, then shuts down the emulator it started.
+The API 36 Google APIs system image must be installed in the local Android SDK.
+Use `ANDROID_SCREENSHOT_AVD` or `--avd` to select another AVD, or `--device` to
+explicitly use a connected emulator.
+
+`pnpm android:release:archive` builds signed release artifacts into `apps/android/build/release-artifacts/` and writes `.sha256` checksum files:
+
+- Play build: `openclaw-<version>-play-release.aab`
+- Third-party build: `openclaw-<version>-third-party-release.apk`
+
+`pnpm android:bundle:release` is an alias for the same Fastlane archive lane.
+
+Regular final and correction OpenClaw releases publish the signed third-party APK as `OpenClaw-Android.apk` with a checksum manifest and GitHub Actions provenance. `.github/workflows/android-release.yml` is the only automated GitHub Release upload path; `OpenClaw Release Publish` dispatches it while the canonical release is still a draft and blocks publication until the uploaded asset contract verifies.
+
+The protected `android-release` environment supplies `MATCH_PASSWORD`; the repository's read-only GitHub App token checks out encrypted material from `openclaw/apps-signing`. The workflow builds the exact release tag, refuses to replace different existing bytes, and re-downloads the APK for checksum, certificate, and provenance verification.
+
+`pnpm android:release:archive` is for local archive validation only. It is not a
+fallback upload path after `pnpm android:release:upload` fails.
+
+Agent-driven Google Play uploads must use `pnpm android:release:upload` as the
+only release path. If that command fails, stop and fix the failing screenshot,
+metadata, signing, validation, archive, or upload step before trying again. Do
+not upload archived artifacts through direct Fastlane lanes, Gradle artifacts,
+Google Play API commands, or Play Console mutation commands.
+
+See `apps/android/VERSIONING.md` and `apps/android/fastlane/SETUP.md` for the release workflow.
 
 Flavor-specific direct Gradle tasks:
 
@@ -76,7 +129,7 @@ Direct Gradle tasks:
 cd apps/android
 ./gradlew :app:ktlintCheck :benchmark:ktlintCheck
 ./gradlew :app:ktlintFormat :benchmark:ktlintFormat
-./gradlew :app:lintDebug
+./gradlew :app:lintPlayDebug :app:lintThirdPartyDebug
 ```
 
 `gradlew` auto-detects the Android SDK at `~/Library/Android/sdk` (macOS default) if `ANDROID_SDK_ROOT` / `ANDROID_HOME` are unset.
@@ -192,6 +245,9 @@ More details: `docs/platforms/android.md`.
 - Discovery:
   - Android 13+ (`API 33+`): `NEARBY_WIFI_DEVICES`
   - Android 12 and below: `ACCESS_FINE_LOCATION` (required for NSD scanning)
+- Location:
+  - Both flavors: `ACCESS_FINE_LOCATION` / `ACCESS_COARSE_LOCATION` for foreground checks.
+  - Third-party flavor only: `ACCESS_BACKGROUND_LOCATION` plus `FOREGROUND_SERVICE_LOCATION` for user-enabled `Always` checks.
 - Foreground service notification (Android 13+): `POST_NOTIFICATIONS`
 - Camera:
   - `CAMERA` for `camera.snap` and `camera.clip`
@@ -217,8 +273,9 @@ Current OpenClaw Android implication:
 - APK / sideload build can keep SMS, Call Log, and recent-photo features.
 - Google Play build excludes SMS send/search, Call Log search, and recent-photo access unless the product is intentionally positioned and approved under the relevant policy exception.
 - The repo now ships this split as Android product flavors:
-  - `play`: removes `READ_SMS`, `SEND_SMS`, `READ_CALL_LOG`, `READ_MEDIA_IMAGES`, `READ_MEDIA_VISUAL_USER_SELECTED`, and `READ_EXTERNAL_STORAGE`; hides SMS, Call Log, and Photos surfaces in onboarding, settings, and advertised node capabilities.
-  - `thirdParty`: keeps the full permission set and the existing SMS / Call Log / Photos functionality.
+  - `play`: removes `READ_SMS`, `SEND_SMS`, `READ_CALL_LOG`, `READ_MEDIA_IMAGES`, `READ_MEDIA_VISUAL_USER_SELECTED`, `READ_EXTERNAL_STORAGE`, and background location; hides SMS, Call Log, Photos, and `Always` location surfaces.
+  - Installed-app listing is user controlled. `device.apps` is advertised only after the user enables **Settings > Phone Capabilities > Installed Apps**. The command defaults to launcher-visible apps and does not require `QUERY_ALL_PACKAGES`.
+  - `thirdParty`: keeps the full permission set and the existing SMS / Call Log / Photos functionality, and offers explicit `Always` location opt-in through Android settings.
 
 Policy links:
 
@@ -252,9 +309,9 @@ Pre-req checklist:
 4) Open the app **Screen** tab and keep it active during the run (canvas/A2UI commands require the canvas WebView attached there).
 5) Grant runtime permissions for capabilities you expect to pass (camera/mic/location/notification listener/location, etc.).
 6) No interactive system dialogs should be pending before test start.
-7) Canvas host is enabled and reachable from the device (do not run gateway with `OPENCLAW_SKIP_CANVAS_HOST=1`; startup logs should include `canvas host mounted at .../__openclaw__/`).
+7) Canvas host is enabled and reachable from the device for remote Canvas checks (do not run gateway with `OPENCLAW_SKIP_CANVAS_HOST=1`; startup logs should include `canvas host mounted at .../__openclaw__/`).
 8) Local operator test client pairing is approved. If first run fails with `pairing required`, preview the latest pending request, approve the printed request ID, then rerun:
-9) For A2UI checks, keep the app on **Screen** tab; the node now auto-refreshes canvas capability once on first A2UI reachability failure (TTL-safe retry).
+9) For A2UI checks, keep the app on **Screen** tab; the node uses its bundled app-owned A2UI page for message application.
 
 ```bash
 openclaw devices list
@@ -286,12 +343,11 @@ Common failure quick-fixes:
 
 - `pairing required` before tests start:
   - list pending requests (`openclaw devices list`), then approve with the exact ID (`openclaw devices approve <requestId>`) and rerun.
-- `A2UI host not reachable` / `A2UI_HOST_NOT_CONFIGURED`:
-  - ensure the Canvas plugin host is running and reachable, keep the app on the **Screen** tab. The app refreshes the Canvas plugin surface URL once before failing; if it still fails, reconnect app and rerun.
+- `A2UI host not reachable` / `A2UI_HOST_UNAVAILABLE`:
+  - keep the app foregrounded on the **Screen** tab and rerun. A2UI commands use the bundled app-owned A2UI page; the Gateway Canvas host is still needed for remote Canvas checks, but not for A2UI message application.
 - `NODE_BACKGROUND_UNAVAILABLE: canvas unavailable`:
   - app is not effectively ready for canvas commands; keep app foregrounded and **Screen** tab active.
 
 ## Contributions
 
-This Android app is currently being rebuilt.
 Maintainer: @obviyus. For issues/questions/contributions, please open an issue or reach out on Discord.

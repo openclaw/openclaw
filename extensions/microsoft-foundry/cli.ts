@@ -1,8 +1,10 @@
+// Microsoft Foundry plugin module implements cli behavior.
 import { execFile, execFileSync, spawn } from "node:child_process";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { AzAccessToken, AzAccount } from "./shared.js";
 import { COGNITIVE_SERVICES_RESOURCE } from "./shared.js";
 
@@ -33,7 +35,7 @@ function summarizeAzErrorMessage(raw: string): string {
   if (/aadsts\d+/i.test(normalized)) {
     return "Azure login failed for the selected tenant. Re-run `az login --use-device-code` and confirm the tenant is correct.";
   }
-  return normalized.slice(0, 300);
+  return truncateUtf16Safe(normalized, 300);
 }
 
 function buildAzCommandError(error: Error, stderr: string, stdout: string): Error {
@@ -112,19 +114,19 @@ function parseAzJson(raw: string, label: string): unknown {
 }
 
 type AccessTokenParams = {
+  scope?: string;
   subscriptionId?: string;
   tenantId?: string;
 };
 
 function buildAccessTokenArgs(params?: AccessTokenParams): string[] {
-  const args = [
-    "account",
-    "get-access-token",
-    "--resource",
-    COGNITIVE_SERVICES_RESOURCE,
-    "--output",
-    "json",
-  ];
+  const args = ["account", "get-access-token"];
+  if (params?.scope) {
+    args.push("--scope", params.scope);
+  } else {
+    args.push("--resource", COGNITIVE_SERVICES_RESOURCE);
+  }
+  args.push("--output", "json");
   if (params?.subscriptionId) {
     args.push("--subscription", params.subscriptionId);
   } else if (params?.tenantId) {

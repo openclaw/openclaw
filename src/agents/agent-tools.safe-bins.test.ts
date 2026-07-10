@@ -1,3 +1,8 @@
+/**
+ * Tests safe-bin exec policy inside assembled coding tools.
+ * Verifies safe-bin profiles and supervisor spawn wiring without loading real
+ * shell environment state.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -102,7 +107,6 @@ vi.mock("../process/supervisor/index.js", () => ({
     spawn: supervisorSpawnMock,
     cancel: vi.fn(),
     cancelScope: vi.fn(),
-    reconcileOrphans: vi.fn(),
     getRecord: vi.fn(),
   }),
 }));
@@ -113,9 +117,13 @@ vi.mock("./channel-tools.js", () => ({
   listChannelAgentTools: () => [],
 }));
 
-vi.mock("./openclaw-tools.js", () => ({
-  createOpenClawTools: () => [],
-}));
+vi.mock("./openclaw-tools.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./openclaw-tools.js")>();
+  return {
+    createOpenClawTools: () => [],
+    filterToolsByClientCaps: actual.filterToolsByClientCaps,
+  };
+});
 
 vi.mock("./bash-tools.exec-host-shared.js", async () => {
   const mod = await vi.importActual<typeof import("./bash-tools.exec-host-shared.js")>(

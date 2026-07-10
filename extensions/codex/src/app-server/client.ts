@@ -1,5 +1,10 @@
+/**
+ * JSON-RPC client for Codex app-server transports, including request/response
+ * routing, notification fanout, server request handlers, and version checks.
+ */
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
 import {
   type CodexAppServerRequestMethod,
@@ -23,6 +28,7 @@ import {
 } from "./transport.js";
 import { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 
+/** Minimum supported Codex app-server version exported for callers/tests. */
 export { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX = 1_000_000;
@@ -39,6 +45,7 @@ type PendingRequest = {
   cleanup: () => void;
 };
 
+/** RPC error wrapper that preserves app-server error code and data. */
 export class CodexAppServerRpcError extends Error {
   readonly code?: number;
   readonly data?: JsonValue;
@@ -77,6 +84,7 @@ function isJsonObject(value: unknown): value is { [key: string]: JsonValue } {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+/** Returns true for errors that mean the app-server transport is closed. */
 export function isCodexAppServerConnectionClosedError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
@@ -91,10 +99,21 @@ type CodexServerRequestHandler = (
   request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
 ) => Promise<JsonValue | undefined> | JsonValue | undefined;
 
+/** Notification handler registered on a Codex app-server client. */
 export type CodexServerNotificationHandler = (
   notification: CodexServerNotification,
 ) => Promise<void> | void;
 
+/** Runtime identity returned by the Codex app-server initialize handshake. */
+export type CodexAppServerRuntimeIdentity = {
+  serverVersion: string;
+  userAgent?: string;
+  codexHome?: string;
+  platformFamily?: string;
+  platformOs?: string;
+};
+
+/** Stateful app-server JSON-RPC client over stdio or websocket transport. */
 export class CodexAppServerClient {
   private readonly child: CodexAppServerTransport;
   private readonly lines: ReadlineInterface;
@@ -107,6 +126,7 @@ export class CodexAppServerClient {
   private closed = false;
   private closeError: Error | undefined;
   private serverVersion: string | undefined;
+  private runtimeIdentity: CodexAppServerRuntimeIdentity | undefined;
   private stderrTail = "";
   private pendingParse:
     | {
@@ -120,6 +140,12 @@ export class CodexAppServerClient {
     this.child = child;
     this.lines = createInterface({ input: child.stdout });
     this.lines.on("line", (line) => this.handleLine(line));
+    this.lines.on("error", (error) =>
+      this.closeWithError(error instanceof Error ? error : new Error(String(error))),
+    );
+    child.stdout.on("error", (error) =>
+      this.closeWithError(error instanceof Error ? error : new Error(String(error))),
+    );
     child.stderr.on("data", (chunk: Buffer | string) => {
       const text = chunk.toString("utf8");
       this.stderrTail = appendBoundedTail(this.stderrTail, text, CODEX_APP_SERVER_STDERR_TAIL_MAX);
@@ -127,6 +153,11 @@ export class CodexAppServerClient {
       if (trimmed) {
         embeddedAgentLog.debug(`codex app-server stderr: ${trimmed}`);
       }
+    });
+    // Codex reserves stderr for diagnostics; losing that stream must not tear
+    // down an otherwise healthy JSON-RPC connection on stdout.
+    child.stderr.on("error", (error) => {
+      embeddedAgentLog.warn("codex app-server stderr stream failed", { error });
     });
     child.once("error", (error) =>
       this.closeWithError(error instanceof Error ? error : new Error(String(error))),
@@ -143,6 +174,7 @@ export class CodexAppServerClient {
     );
   }
 
+  /** Starts a new app-server client using resolved runtime start options. */
   static start(options?: Partial<CodexAppServerStartOptions>): CodexAppServerClient {
     const defaults = resolveCodexAppServerRuntimeOptions().start;
     const startOptions = {
@@ -159,10 +191,12 @@ export class CodexAppServerClient {
     return new CodexAppServerClient(createStdioTransport(startOptions));
   }
 
+  /** Builds a client around a fake transport for tests. */
   static fromTransportForTests(child: CodexAppServerTransport): CodexAppServerClient {
     return new CodexAppServerClient(child);
   }
 
+  /** Performs the app-server initialize handshake and validates protocol version. */
   async initialize(): Promise<void> {
     if (this.initialized) {
       return;
@@ -180,12 +214,19 @@ export class CodexAppServerClient {
       },
     } satisfies CodexInitializeParams);
     this.serverVersion = assertSupportedCodexAppServerVersion(response);
+    this.runtimeIdentity = buildCodexAppServerRuntimeIdentity(response, this.serverVersion);
     this.notify("initialized");
     this.initialized = true;
   }
 
+  /** Returns the version detected during initialize. */
   getServerVersion(): string | undefined {
     return this.serverVersion;
+  }
+
+  /** Returns runtime metadata detected during initialize. */
+  getRuntimeIdentity(): CodexAppServerRuntimeIdentity | undefined {
+    return this.runtimeIdentity ? { ...this.runtimeIdentity } : undefined;
   }
 
   request<M extends CodexAppServerRequestMethod>(
@@ -201,8 +242,9 @@ export class CodexAppServerClient {
   request<T = JsonValue | undefined>(
     method: string,
     params?: unknown,
-    options?: { timeoutMs?: number; signal?: AbortSignal },
+    optionsInput?: { timeoutMs?: number; signal?: AbortSignal },
   ): Promise<T> {
+    let options = optionsInput;
     options ??= {};
     if (this.closed) {
       return Promise.reject(this.closeError ?? new Error("codex app-server client is closed"));
@@ -267,25 +309,30 @@ export class CodexAppServerClient {
     });
   }
 
+  /** Sends a fire-and-forget JSON-RPC notification to the app-server. */
   notify(method: string, params?: JsonValue): void {
     this.writeMessage({ method, params });
   }
 
+  /** Registers a handler for app-server requests sent back to OpenClaw. */
   addRequestHandler(handler: CodexServerRequestHandler): () => void {
     this.requestHandlers.add(handler);
     return () => this.requestHandlers.delete(handler);
   }
 
+  /** Registers a notification handler and returns its disposer. */
   addNotificationHandler(handler: CodexServerNotificationHandler): () => void {
     this.notificationHandlers.add(handler);
     return () => this.notificationHandlers.delete(handler);
   }
 
+  /** Registers a close handler and returns its disposer. */
   addCloseHandler(handler: (client: CodexAppServerClient) => void): () => void {
     this.closeHandlers.add(handler);
     return () => this.closeHandlers.delete(handler);
   }
 
+  /** Closes the transport without waiting for process/socket shutdown. */
   close(): void {
     if (!this.markClosed(new Error("codex app-server client is closed"))) {
       return;
@@ -293,12 +340,13 @@ export class CodexAppServerClient {
     closeCodexAppServerTransport(this.child);
   }
 
+  /** Closes the transport and waits for shutdown according to transport policy. */
   async closeAndWait(options?: {
     exitTimeoutMs?: number;
     forceKillDelayMs?: number;
-  }): Promise<void> {
+  }): Promise<boolean> {
     this.markClosed(new Error("codex app-server client is closed"));
-    await closeCodexAppServerTransportAndWait(this.child, options);
+    return await closeCodexAppServerTransportAndWait(this.child, options);
   }
 
   private writeMessage(message: RpcRequest | RpcResponse, onError?: (error: Error) => void): void {
@@ -419,10 +467,17 @@ export class CodexAppServerClient {
       }
       this.writeMessage({ id: request.id, result: defaultServerRequestResponse(request) });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      embeddedAgentLog.warn("codex app-server server request handler failed", {
+        id: request.id,
+        method: request.method,
+        error,
+      });
       this.writeMessage({
         id: request.id,
         error: {
-          message: error instanceof Error ? error.message : String(error),
+          code: -32603,
+          message,
         },
       });
     }
@@ -531,12 +586,6 @@ function defaultServerRequestResponse(
   if (request.method === "item/permissions/requestApproval") {
     return { permissions: {}, scope: "turn" };
   }
-  if (isCodexAppServerApprovalRequest(request.method)) {
-    return {
-      decision: "decline",
-      reason: "OpenClaw codex app-server bridge does not grant native approvals yet.",
-    };
-  }
   if (request.method === "item/tool/requestUserInput") {
     return {
       answers: {},
@@ -575,21 +624,60 @@ function timeoutServerRequestResponse(
   };
 }
 
+/** Raised when the initialize handshake detects an unsupported app-server version. */
+export class CodexAppServerVersionError extends Error {
+  readonly detectedVersion?: string;
+
+  constructor(detectedVersion: string | undefined) {
+    const detected = detectedVersion
+      ? `detected ${detectedVersion}`
+      : "OpenClaw could not determine the running Codex version";
+    super(
+      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but ${detected}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
+    );
+    this.name = "CodexAppServerVersionError";
+    this.detectedVersion = detectedVersion;
+  }
+}
+
 function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse): string {
   const detectedVersion = readCodexVersionFromUserAgent(response.userAgent);
-  if (!detectedVersion) {
-    throw new Error(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but OpenClaw could not determine the running Codex version. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
-    );
-  }
-  if (compareCodexAppServerVersions(detectedVersion, MIN_CODEX_APP_SERVER_VERSION) < 0) {
-    throw new Error(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected ${detectedVersion}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
-    );
+  if (
+    !detectedVersion ||
+    compareCodexAppServerVersions(detectedVersion, MIN_CODEX_APP_SERVER_VERSION) < 0
+  ) {
+    throw new CodexAppServerVersionError(detectedVersion);
   }
   return detectedVersion;
 }
 
+export function isUnsupportedCodexAppServerVersionError(error: unknown): boolean {
+  return error instanceof CodexAppServerVersionError;
+}
+
+function buildCodexAppServerRuntimeIdentity(
+  response: CodexInitializeResponse,
+  serverVersion: string,
+): CodexAppServerRuntimeIdentity {
+  const userAgent = readNonEmptyInitializeString(response.userAgent);
+  const codexHome = readNonEmptyInitializeString(response.codexHome);
+  const platformFamily = readNonEmptyInitializeString(response.platformFamily);
+  const platformOs = readNonEmptyInitializeString(response.platformOs);
+  return {
+    serverVersion,
+    ...(userAgent ? { userAgent } : {}),
+    ...(codexHome ? { codexHome } : {}),
+    ...(platformFamily ? { platformFamily } : {}),
+    ...(platformOs ? { platformOs } : {}),
+  };
+}
+
+function readNonEmptyInitializeString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+/** Extracts the Codex version from the app-server initialize user-agent field. */
 export function readCodexVersionFromUserAgent(userAgent: string | undefined): string | undefined {
   // Codex returns `<originator>/<codex-version> ...`; the originator can be
   // OpenClaw, Codex Desktop, or an env override, so only the slash-delimited
@@ -600,6 +688,7 @@ export function readCodexVersionFromUserAgent(userAgent: string | undefined): st
   return match?.[1];
 }
 
+/** Compares stable Codex app-server versions for protocol floor checks. */
 export function compareCodexAppServerVersions(left: string, right: string): number {
   const leftVersion = parseVersionForComparison(left);
   const rightVersion = parseVersionForComparison(right);
@@ -651,7 +740,7 @@ function redactCodexAppServerLinePreview(value: string): string {
       "$1$2$3<redacted>$4",
     );
   return redacted.length > CODEX_APP_SERVER_PARSE_LOG_MAX
-    ? `${redacted.slice(0, CODEX_APP_SERVER_PARSE_LOG_MAX)}...`
+    ? `${truncateUtf16Safe(redacted, CODEX_APP_SERVER_PARSE_LOG_MAX)}...`
     : redacted;
 }
 
@@ -670,6 +759,9 @@ function buildCodexAppServerExitError(code: unknown, signal: unknown, stderrTail
   );
 }
 
+// Codex has emitted JSON with raw newlines inside string values, which breaks
+// line framing. Buffer the fragments and re-join with an escaped newline so
+// the message parses; bounded by CODEX_APP_SERVER_PARSE_BUFFER_MAX*.
 function shouldBufferCodexAppServerParseFailure(value: string, error: unknown): boolean {
   if (!value.startsWith("{") && !value.startsWith("[")) {
     return false;
@@ -700,6 +792,7 @@ const CODEX_APP_SERVER_APPROVAL_REQUEST_METHODS = new Set([
   "item/permissions/requestApproval",
 ]);
 
+/** Returns true for app-server approval request methods OpenClaw can answer. */
 export function isCodexAppServerApprovalRequest(method: string): boolean {
   return CODEX_APP_SERVER_APPROVAL_REQUEST_METHODS.has(method);
 }
@@ -714,6 +807,7 @@ function formatExitValue(value: unknown): string {
   return "unknown";
 }
 
+/** Test-only access to transport close helpers and parser redaction internals. */
 export const testing = {
   closeCodexAppServerTransport,
   closeCodexAppServerTransportAndWait,

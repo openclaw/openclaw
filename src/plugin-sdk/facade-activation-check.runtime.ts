@@ -1,3 +1,6 @@
+/**
+ * Runtime boundary checks for bundled plugin public-surface facade imports.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
@@ -15,21 +18,20 @@ import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "../plugins/config-state.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { isPluginEnabledByDefaultForPlatform } from "../plugins/default-enablement.js";
 import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
 } from "../plugins/manifest-registry.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import { ALWAYS_ALLOWED_RUNTIME_DIR_NAMES } from "./facade-activation-contract.js";
 import { resolveRegistryPluginModuleLocationFromRecords } from "./facade-resolution-shared.js";
 
-const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set([
-  "image-generation-core",
-  "media-understanding-core",
-  "speech-core",
-]);
+const ALWAYS_ALLOWED_RUNTIME_DIR_NAME_SET = new Set<string>(ALWAYS_ALLOWED_RUNTIME_DIR_NAMES);
 const EMPTY_FACADE_BOUNDARY_CONFIG: OpenClawConfig = {};
 
+/** Minimal manifest shape needed to decide whether a bundled facade may load. */
 export type FacadePluginManifestLike = Pick<
   PluginManifestRecord,
   "id" | "origin" | "enabledByDefault" | "enabledByDefaultOnPlatforms" | "rootDir" | "channels"
@@ -93,12 +95,23 @@ function getFacadeBoundaryResolvedConfig() {
 function getFacadeManifestRegistry(params: {
   env?: NodeJS.ProcessEnv;
 }): readonly PluginManifestRecord[] {
+  const envOption = params.env ? { env: params.env } : {};
+  const resolved = getFacadeBoundaryResolvedConfig();
+  const current = getCurrentPluginMetadataSnapshot({
+    config: resolved.config,
+    ...envOption,
+    allowWorkspaceScopedSnapshot: true,
+  });
+  if (current?.manifestRegistry) {
+    return current.manifestRegistry.plugins;
+  }
   return loadPluginManifestRegistry({
-    config: getFacadeBoundaryResolvedConfig().config,
-    ...(params.env ? { env: params.env } : {}),
+    config: resolved.config,
+    ...envOption,
   }).plugins;
 }
 
+/** Resolves the concrete plugin module location recorded in the manifest registry. */
 export function resolveRegistryPluginModuleLocation(params: {
   dirName: string;
   artifactBasename: string;
@@ -226,6 +239,7 @@ function resolveBundledPluginManifestRecord(params: {
   return resolved;
 }
 
+/** Resolves the stable plugin id used for telemetry and error reporting. */
 export function resolveTrackedFacadePluginId(params: {
   dirName: string;
   artifactBasename: string;
@@ -237,6 +251,7 @@ export function resolveTrackedFacadePluginId(params: {
   return resolveBundledPluginManifestRecord(params)?.id ?? params.dirName;
 }
 
+/** Evaluates whether a bundled plugin's api/runtime-api facade is currently enabled. */
 export function resolveBundledPluginPublicSurfaceAccess(params: {
   dirName: string;
   artifactBasename: string;
@@ -247,7 +262,7 @@ export function resolveBundledPluginPublicSurfaceAccess(params: {
 }): { allowed: boolean; pluginId?: string; reason?: string } {
   if (
     params.artifactBasename === "runtime-api.js" &&
-    ALWAYS_ALLOWED_RUNTIME_DIR_NAMES.has(params.dirName)
+    ALWAYS_ALLOWED_RUNTIME_DIR_NAME_SET.has(params.dirName)
   ) {
     return {
       allowed: true,
@@ -274,6 +289,7 @@ export function resolveBundledPluginPublicSurfaceAccess(params: {
   });
 }
 
+/** Applies normalized config and default enablement rules to one bundled manifest. */
 export function evaluateBundledPluginPublicSurfaceAccess(params: {
   params: { dirName: string; artifactBasename: string };
   manifestRecord: FacadePluginManifestLike;
@@ -305,6 +321,7 @@ export function evaluateBundledPluginPublicSurfaceAccess(params: {
   };
 }
 
+/** Throws the public error used when a disabled bundled plugin facade is imported. */
 export function throwForBundledPluginPublicSurfaceAccess(params: {
   access: { allowed: boolean; pluginId?: string; reason?: string };
   request: { dirName: string; artifactBasename: string };
@@ -315,6 +332,7 @@ export function throwForBundledPluginPublicSurfaceAccess(params: {
   );
 }
 
+/** Resolves bundled facade access and throws unless the facade is allowed to load. */
 export function resolveActivatedBundledPluginPublicSurfaceAccessOrThrow(params: {
   dirName: string;
   artifactBasename: string;

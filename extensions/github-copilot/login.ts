@@ -1,26 +1,45 @@
+// Github Copilot plugin module implements login behavior.
 import { intro, note, outro, spinner } from "@clack/prompts";
 import { stylePromptTitle } from "openclaw/plugin-sdk/cli-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logConfigUpdated, updateConfig } from "openclaw/plugin-sdk/config-mutation";
+import {
+  resolveExpiresAtMsFromDurationMs,
+  nonNegativeSecondsToSafeMilliseconds,
+  positiveSecondsToSafeMilliseconds,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import {
   applyAuthProfileConfig,
   ensureAuthProfileStore,
+  normalizeGithubCopilotDomain,
   upsertAuthProfileWithLock,
 } from "openclaw/plugin-sdk/provider-auth";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { PUBLIC_GITHUB_COPILOT_DOMAIN, resolveGithubCopilotDomain } from "./domain.js";
 
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
-const DEVICE_CODE_URL = "https://github.com/login/device/code";
-const ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
-const GITHUB_DEVICE_VERIFICATION_URL = "https://github.com/login/device";
-const GITHUB_AUTH_SSRF_POLICY: SsrFPolicy = { hostnameAllowlist: ["github.com"] };
+const GITHUB_DEVICE_FLOW_REQUEST_TIMEOUT_MS = 30_000;
+// Data-residency GitHub Enterprise support: the device flow, token exchange, and
+// completions endpoints all live under the tenant host (e.g. "acme.ghe.com")
+// instead of github.com. The host is threaded in from the selected auth flow so
+// the SSRF allowlist and every request target stay consistent for one login.
+const deviceCodeUrl = (domain: string) => `https://${domain}/login/device/code`;
+const accessTokenUrl = (domain: string) => `https://${domain}/login/oauth/access_token`;
+const deviceVerificationUrl = (domain: string) => `https://${domain}/login/device`;
+const githubAuthSsrfPolicy = (domain: string): SsrFPolicy => ({
+  hostnameAllowlist: [domain],
+});
 
 type DeviceCodeResponse = {
-  device_code: string;
-  user_code: string;
-  verification_uri: string;
-  expires_in: number;
-  interval: number;
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  expiresInMs: number;
+  expiresAt: number;
+  intervalMs: number;
 };
 
 type DeviceTokenResponse =
@@ -81,10 +100,46 @@ function parseJsonResponse(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function parseDeviceCodeResponse(
+  value: Record<string, unknown>,
+  issuedAt: number,
+): DeviceCodeResponse {
+  const expiresInMs = positiveSecondsToSafeMilliseconds(value.expires_in);
+  const intervalMs = nonNegativeSecondsToSafeMilliseconds(value.interval);
+  const expiresAt =
+    expiresInMs === undefined
+      ? undefined
+      : resolveExpiresAtMsFromDurationMs(expiresInMs, { nowMs: issuedAt });
+
+  if (
+    typeof value.device_code !== "string" ||
+    !value.device_code ||
+    typeof value.user_code !== "string" ||
+    !value.user_code ||
+    typeof value.verification_uri !== "string" ||
+    !value.verification_uri ||
+    expiresInMs === undefined ||
+    expiresAt === undefined ||
+    intervalMs === undefined
+  ) {
+    throw new Error("GitHub device code response missing fields");
+  }
+
+  return {
+    deviceCode: value.device_code,
+    userCode: value.user_code,
+    verificationUri: value.verification_uri,
+    expiresInMs,
+    expiresAt,
+    intervalMs,
+  };
+}
+
 async function postGitHubDeviceFlowForm(params: {
   url: string;
   body: URLSearchParams;
   failureLabel: string;
+  domain: string;
 }): Promise<Record<string, unknown>> {
   const { response, release } = await githubDeviceFlowFetchGuard({
     url: params.url,
@@ -97,40 +152,46 @@ async function postGitHubDeviceFlowForm(params: {
       body: params.body,
     },
     requireHttps: true,
-    policy: GITHUB_AUTH_SSRF_POLICY,
+    policy: githubAuthSsrfPolicy(params.domain),
     auditContext: "github-copilot-device-flow",
+    timeoutMs: GITHUB_DEVICE_FLOW_REQUEST_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {
       throw new Error(`${params.failureLabel}: HTTP ${response.status}`);
     }
-    return parseJsonResponse(await response.json());
+    return parseJsonResponse(
+      await readProviderJsonResponse(response, "github-copilot.device-flow"),
+    );
   } finally {
     await release();
   }
 }
 
-async function requestDeviceCode(params: { scope: string }): Promise<DeviceCodeResponse> {
+async function requestDeviceCode(params: {
+  scope: string;
+  domain: string;
+}): Promise<DeviceCodeResponse> {
   const body = new URLSearchParams({
     client_id: CLIENT_ID,
     scope: params.scope,
   });
 
-  const json = (await postGitHubDeviceFlowForm({
-    url: DEVICE_CODE_URL,
+  const json = await postGitHubDeviceFlowForm({
+    url: deviceCodeUrl(params.domain),
     body,
     failureLabel: "GitHub device code failed",
-  })) as DeviceCodeResponse;
-  if (!json.device_code || !json.user_code || !json.verification_uri) {
-    throw new Error("GitHub device code response missing fields");
-  }
-  return json;
+    domain: params.domain,
+  });
+  // Anchor expiry to when GitHub issued the code, before UI prompts or browser launch.
+  return parseDeviceCodeResponse(json, Date.now());
 }
 
 async function pollForAccessToken(params: {
   deviceCode: string;
   intervalMs: number;
   expiresAt: number;
+  domain: string;
 }): Promise<string> {
   const bodyBase = new URLSearchParams({
     client_id: CLIENT_ID,
@@ -140,9 +201,10 @@ async function pollForAccessToken(params: {
 
   while (Date.now() < params.expiresAt) {
     const json = (await postGitHubDeviceFlowForm({
-      url: ACCESS_TOKEN_URL,
+      url: accessTokenUrl(params.domain),
       body: bodyBase,
       failureLabel: "GitHub device token failed",
+      domain: params.domain,
     })) as DeviceTokenResponse;
     if ("access_token" in json && typeof json.access_token === "string") {
       return json.access_token;
@@ -150,11 +212,11 @@ async function pollForAccessToken(params: {
 
     const err = "error" in json ? json.error : "unknown";
     if (err === "authorization_pending") {
-      await new Promise((r) => setTimeout(r, params.intervalMs));
+      await sleepGitHubDevicePollDelay(params.intervalMs, params.expiresAt);
       continue;
     }
     if (err === "slow_down") {
-      await new Promise((r) => setTimeout(r, params.intervalMs + 2000));
+      await sleepGitHubDevicePollDelay(params.intervalMs + 2000, params.expiresAt);
       continue;
     }
     if (err === "expired_token") {
@@ -175,7 +237,19 @@ async function pollForAccessToken(params: {
   );
 }
 
-function normalizeGitHubDeviceVerificationUrl(raw: string): string {
+async function sleepGitHubDevicePollDelay(delayMs: number, expiresAt: number): Promise<void> {
+  const requestedDelayMs = Math.max(1, Math.floor(delayMs));
+  const targetAt = Math.min(Date.now() + requestedDelayMs, expiresAt);
+  while (Date.now() < targetAt) {
+    const remainingMs = Math.max(1, targetAt - Date.now());
+    const safeDelayMs = resolveTimerTimeoutMs(remainingMs, 1);
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(safeDelayMs, remainingMs));
+    });
+  }
+}
+
+function normalizeGitHubDeviceVerificationUrl(raw: string, domain: string): string {
   let parsed: URL;
   try {
     parsed = new URL(raw);
@@ -185,7 +259,7 @@ function normalizeGitHubDeviceVerificationUrl(raw: string): string {
 
   if (
     parsed.protocol !== "https:" ||
-    parsed.hostname !== "github.com" ||
+    parsed.hostname !== domain ||
     parsed.pathname !== "/login/device" ||
     parsed.username ||
     parsed.password
@@ -193,7 +267,7 @@ function normalizeGitHubDeviceVerificationUrl(raw: string): string {
     throw new Error("GitHub device flow returned an unexpected verification URL");
   }
 
-  return GITHUB_DEVICE_VERIFICATION_URL;
+  return deviceVerificationUrl(domain);
 }
 
 function normalizeGitHubDeviceUserCode(raw: string): string {
@@ -204,30 +278,28 @@ function normalizeGitHubDeviceUserCode(raw: string): string {
   return userCode;
 }
 
-export type GitHubCopilotDeviceFlowResult =
+type GitHubCopilotDeviceFlowResult =
   | { status: "authorized"; accessToken: string }
   | { status: "access_denied" }
   | { status: "expired" };
 
-export type GitHubCopilotDeviceFlowIO = {
+type GitHubCopilotDeviceFlowIO = {
   showCode(args: { verificationUrl: string; userCode: string; expiresInMs: number }): Promise<void>;
   openUrl?: (url: string) => Promise<void>;
 };
 
 export async function runGitHubCopilotDeviceFlow(
   io: GitHubCopilotDeviceFlowIO,
+  domain: string = PUBLIC_GITHUB_COPILOT_DOMAIN,
 ): Promise<GitHubCopilotDeviceFlowResult> {
-  const device = await requestDeviceCode({ scope: "read:user" });
-  const verificationUrl = normalizeGitHubDeviceVerificationUrl(device.verification_uri);
-  const userCode = normalizeGitHubDeviceUserCode(device.user_code);
-  const expiresInMs = device.expires_in * 1000;
-  // Anchor expiry to when GitHub issued the code, not when the UI finishes prompting.
-  const expiresAt = Date.now() + expiresInMs;
-
+  const host = normalizeGithubCopilotDomain(domain);
+  const device = await requestDeviceCode({ scope: "read:user", domain: host });
+  const verificationUrl = normalizeGitHubDeviceVerificationUrl(device.verificationUri, host);
+  const userCode = normalizeGitHubDeviceUserCode(device.userCode);
   await io.showCode({
     verificationUrl,
     userCode,
-    expiresInMs,
+    expiresInMs: device.expiresInMs,
   });
 
   try {
@@ -238,9 +310,10 @@ export async function runGitHubCopilotDeviceFlow(
 
   try {
     const accessToken = await pollForAccessToken({
-      deviceCode: device.device_code,
-      intervalMs: Math.max(1000, device.interval * 1000),
-      expiresAt,
+      deviceCode: device.deviceCode,
+      intervalMs: Math.max(1000, device.intervalMs),
+      expiresAt: device.expiresAt,
+      domain: host,
     });
     return { status: "authorized", accessToken };
   } catch (err) {
@@ -252,6 +325,41 @@ export async function runGitHubCopilotDeviceFlow(
     }
     throw err;
   }
+}
+
+// The shortcut login mints its token against the resolved domain, so the same
+// domain must land in persisted config: a tenant token with no stored
+// githubDomain would silently route to github.com (and 401) once
+// COPILOT_GITHUB_DOMAIN is unset. Mirrors the enterprise auth method's
+// persist-on-tenant / clear-on-public behavior.
+export function withGithubCopilotDomainConfig(cfg: OpenClawConfig, domain: string): OpenClawConfig {
+  // Normalize the optional layers to concrete objects before spreading:
+  // spreading a possibly-undefined object widens every optional property to
+  // `T | undefined`, which exactOptionalPropertyTypes rejects.
+  const models: NonNullable<OpenClawConfig["models"]> = cfg.models ?? {};
+  const providers: NonNullable<typeof models.providers> = models.providers ?? {};
+  const provider: NonNullable<(typeof providers)[string]> = providers["github-copilot"] ?? {};
+  const params = provider.params;
+  const isDefault = domain === PUBLIC_GITHUB_COPILOT_DOMAIN;
+  if (isDefault && !(params && "githubDomain" in params)) {
+    return cfg;
+  }
+  const nextParams: Record<string, unknown> = { ...params };
+  if (isDefault) {
+    delete nextParams.githubDomain;
+  } else {
+    nextParams.githubDomain = domain;
+  }
+  return {
+    ...cfg,
+    models: {
+      ...models,
+      providers: {
+        ...providers,
+        "github-copilot": { ...provider, params: nextParams },
+      },
+    },
+  };
 }
 
 export async function githubCopilotLoginCommand(
@@ -276,25 +384,41 @@ export async function githubCopilotLoginCommand(
     );
   }
 
+  // Mint against the same host the runtime will route to. resolveGithubCopilotDomain
+  // is env-authoritative (COPILOT_GITHUB_DOMAIN wins), and runtime token exchange
+  // uses the same resolver, so honoring it here keeps the minted token and the
+  // runtime endpoint on the same tenant instead of minting a public token that
+  // then 401s against api.<tenant>.
+  const domain = resolveGithubCopilotDomain();
+  if (domain !== PUBLIC_GITHUB_COPILOT_DOMAIN) {
+    note(
+      `Using the GitHub Enterprise domain from COPILOT_GITHUB_DOMAIN (${domain}). Unset it to log in against github.com.`,
+      stylePromptTitle("GitHub Copilot"),
+    );
+  }
+
   const spin = spinner();
-  spin.start("Requesting device code from GitHub...");
-  const device = await requestDeviceCode({ scope: "read:user" });
+  spin.start(`Requesting device code from ${domain}...`);
+  const device = await requestDeviceCode({
+    scope: "read:user",
+    domain,
+  });
   spin.stop("Device code ready");
 
   note(
-    [`Visit: ${device.verification_uri}`, `Code: ${device.user_code}`].join("\n"),
+    [`Visit: ${device.verificationUri}`, `Code: ${device.userCode}`].join("\n"),
     stylePromptTitle("Authorize"),
   );
 
-  const expiresAt = Date.now() + device.expires_in * 1000;
-  const intervalMs = Math.max(1000, device.interval * 1000);
+  const intervalMs = Math.max(1000, device.intervalMs);
 
   const polling = spinner();
   polling.start("Waiting for GitHub authorization...");
   const accessToken = await pollForAccessToken({
-    deviceCode: device.device_code,
+    deviceCode: device.deviceCode,
     intervalMs,
-    expiresAt,
+    expiresAt: device.expiresAt,
+    domain,
   });
   polling.stop("GitHub access token acquired");
 
@@ -309,11 +433,14 @@ export async function githubCopilotLoginCommand(
   });
 
   await updateConfig((cfg) =>
-    applyAuthProfileConfig(cfg, {
-      provider: "github-copilot",
-      profileId,
-      mode: "token",
-    }),
+    withGithubCopilotDomainConfig(
+      applyAuthProfileConfig(cfg, {
+        provider: "github-copilot",
+        profileId,
+        mode: "token",
+      }),
+      domain,
+    ),
   );
 
   logConfigUpdated(runtime);

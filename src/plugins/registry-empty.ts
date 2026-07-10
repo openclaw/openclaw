@@ -1,3 +1,4 @@
+// Provides the empty plugin registry used before discovery completes.
 import type { PluginRegistry } from "./registry-types.js";
 
 export function createEmptyPluginRegistry(): PluginRegistry {
@@ -41,6 +42,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     services: [],
     gatewayDiscoveryServices: [],
     commands: [],
+    interactiveHandlers: [],
     sessionExtensions: [],
     trustedToolPolicies: [],
     toolMetadata: [],

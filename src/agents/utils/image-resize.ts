@@ -1,15 +1,24 @@
+/**
+ * Agent image resize helpers.
+ *
+ * Downscales base64 image content for provider payload limits using the configured image processor.
+ */
 import type { ImageContent } from "../../llm/types.js";
-import { applyExifOrientation } from "./exif-orientation.js";
-import { loadPhoton } from "./photon.js";
+import {
+  convertImageToPng,
+  createImageProcessor,
+  isImageProcessorUnavailableError,
+  type ImageProbe,
+} from "../../media/image-ops.js";
 
-export interface ImageResizeOptions {
+interface ImageResizeOptions {
   maxWidth?: number; // Default: 2000
   maxHeight?: number; // Default: 2000
   maxBytes?: number; // Default: 4.5MB of base64 payload (below Anthropic's 5MB limit)
   jpegQuality?: number; // Default: 80
 }
 
-export interface ResizedImage {
+interface ResizedImage {
   data: string; // base64
   mimeType: string;
   originalWidth: number;
@@ -17,6 +26,74 @@ export interface ResizedImage {
   width: number;
   height: number;
   wasResized: boolean;
+}
+
+type ProcessImageResult =
+  | { ok: true; image: ImageContent; hints: string[] }
+  | { ok: false; message: string };
+
+const INLINE_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+
+function baseMimeType(mimeType: string | undefined): string {
+  const normalized = mimeType?.split(";")[0]?.trim().toLowerCase();
+  return normalized === "image/jpg" ? "image/jpeg" : (normalized ?? "");
+}
+
+async function normalizeImageForProvider(
+  image: ImageContent,
+): Promise<{ image: ImageContent; convertedFrom?: string } | null> {
+  const mimeType = baseMimeType(image.mimeType);
+  if (INLINE_IMAGE_MIME_TYPES.has(mimeType)) {
+    return { image: { ...image, mimeType } };
+  }
+  try {
+    const output = await convertImageToPng(Buffer.from(image.data, "base64"));
+    return {
+      image: { type: "image", data: output.toString("base64"), mimeType: "image/png" },
+      convertedFrom: mimeType || image.mimeType,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Normalize image formats for model input, then enforce inline size limits when enabled. */
+export async function processImage(
+  image: ImageContent,
+  options: { autoResizeImages: boolean },
+): Promise<ProcessImageResult> {
+  const normalized = await normalizeImageForProvider(image);
+  if (!normalized) {
+    return {
+      ok: false,
+      message: "[Image omitted: could not be converted to a supported inline image format.]",
+    };
+  }
+
+  const hints: string[] = [];
+  if (normalized.convertedFrom) {
+    hints.push(`[Image converted from ${normalized.convertedFrom} to image/png.]`);
+  }
+  if (!options.autoResizeImages) {
+    return { ok: true, image: normalized.image, hints };
+  }
+
+  const resized = await resizeImage(normalized.image);
+  if (!resized) {
+    return {
+      ok: false,
+      message: "[Image omitted: could not be resized below the inline image size limit.]",
+    };
+  }
+  const dimensionNote = formatDimensionNote(resized);
+  if (dimensionNote) {
+    hints.push(dimensionNote);
+  }
+  return {
+    ok: true,
+    image: { type: "image", data: resized.data, mimeType: resized.mimeType },
+    hints,
+  };
 }
 
 // 4.5MB of base64 payload. Provides headroom below Anthropic's 5MB limit.
@@ -29,14 +106,18 @@ const DEFAULT_OPTIONS: Required<ImageResizeOptions> = {
   jpegQuality: 80,
 };
 
+function maxBinaryBytesForBase64Budget(maxBase64Bytes: number): number {
+  return Math.floor(maxBase64Bytes / 4) * 3;
+}
+
 interface EncodedCandidate {
   data: string;
   encodedSize: number;
   mimeType: string;
 }
 
-function encodeCandidate(buffer: Uint8Array, mimeType: string): EncodedCandidate {
-  const data = Buffer.from(buffer).toString("base64");
+function encodeCandidate(buffer: Buffer, mimeType: string): EncodedCandidate {
+  const data = buffer.toString("base64");
   return {
     data,
     encodedSize: Buffer.byteLength(data, "utf-8"),
@@ -44,18 +125,24 @@ function encodeCandidate(buffer: Uint8Array, mimeType: string): EncodedCandidate
   };
 }
 
+function orientedDimensions(probe: ImageProbe): { width: number; height: number } {
+  return probe.orientation && probe.orientation >= 5 && probe.orientation <= 8
+    ? { width: probe.height, height: probe.width }
+    : { width: probe.width, height: probe.height };
+}
+
 /**
  * Resize an image to fit within the specified max dimensions and encoded file size.
  * Returns null if the image cannot be resized below maxBytes.
  *
- * Uses Photon (Rust/WASM) for image processing. If Photon is not available,
+ * Uses Rastermill for image processing. If no Rastermill backend is available,
  * returns null.
  *
  * Strategy for staying under maxBytes:
  * 1. First resize to maxWidth/maxHeight
- * 2. Try both PNG and JPEG formats, pick the smaller one
- * 3. If still too large, try JPEG with decreasing quality
- * 4. If still too large, progressively reduce dimensions until 1x1
+ * 2. Let Rastermill choose JPEG or PNG for the image transparency profile
+ * 3. If still too large, search decreasing quality/compression settings
+ * 4. If still too large, progressively reduce dimensions
  */
 export async function resizeImage(
   img: ImageContent,
@@ -64,23 +151,14 @@ export async function resizeImage(
   const opts = { ...DEFAULT_OPTIONS, ...options };
   const inputBuffer = Buffer.from(img.data, "base64");
   const inputBase64Size = Buffer.byteLength(img.data, "utf-8");
+  const processor = createImageProcessor();
 
-  const photon = await loadPhoton();
-  if (!photon) {
-    return null;
-  }
-
-  let image: ReturnType<typeof photon.PhotonImage.new_from_byteslice> | undefined;
   try {
-    const inputBytes = new Uint8Array(inputBuffer);
-    const rawImage = photon.PhotonImage.new_from_byteslice(inputBytes);
-    image = applyExifOrientation(photon, rawImage, inputBytes);
-    if (image !== rawImage) {
-      rawImage.free();
+    const probe = await processor.probe(inputBuffer);
+    if (!probe) {
+      return null;
     }
-
-    const originalWidth = image.get_width();
-    const originalHeight = image.get_height();
+    const { width: originalWidth, height: originalHeight } = orientedDimensions(probe);
     const format = img.mimeType?.split("/")[1] ?? "png";
 
     // Check if already within all limits (dimensions AND encoded size)
@@ -100,78 +178,40 @@ export async function resizeImage(
       };
     }
 
-    // Calculate initial dimensions respecting max limits
-    let targetWidth = originalWidth;
-    let targetHeight = originalHeight;
-
-    if (targetWidth > opts.maxWidth) {
-      targetHeight = Math.round((targetHeight * opts.maxWidth) / targetWidth);
-      targetWidth = opts.maxWidth;
-    }
-    if (targetHeight > opts.maxHeight) {
-      targetWidth = Math.round((targetWidth * opts.maxHeight) / targetHeight);
-      targetHeight = opts.maxHeight;
-    }
-
-    function tryEncodings(
-      width: number,
-      height: number,
-      jpegQualities: number[],
-    ): EncodedCandidate[] {
-      const resized = photon!.resize(image!, width, height, photon!.SamplingFilter.Lanczos3);
-
-      try {
-        const candidates: EncodedCandidate[] = [encodeCandidate(resized.get_bytes(), "image/png")];
-        for (const quality of jpegQualities) {
-          candidates.push(encodeCandidate(resized.get_bytes_jpeg(quality), "image/jpeg"));
-        }
-        return candidates;
-      } finally {
-        resized.free();
-      }
+    const qualitySteps = Array.from(new Set([opts.jpegQuality, 85, 70, 55, 40, 35]));
+    const output = await processor.encode(inputBuffer, {
+      format: "auto",
+      limits: {
+        maxWidth: opts.maxWidth,
+        maxHeight: opts.maxHeight,
+      },
+      maxBytes: maxBinaryBytesForBase64Budget(opts.maxBytes),
+      opaque: { format: "jpeg", quality: opts.jpegQuality },
+      transparent: { format: "png" },
+      search: {
+        quality: qualitySteps,
+        compressionLevel: [6, 9],
+      },
+    });
+    const candidate = encodeCandidate(output.data, output.mimeType);
+    if (candidate.encodedSize > opts.maxBytes || output.withinBudget === false) {
+      return null;
     }
 
-    const qualitySteps = Array.from(new Set([opts.jpegQuality, 85, 70, 55, 40]));
-    let currentWidth = targetWidth;
-    let currentHeight = targetHeight;
-
-    while (true) {
-      const candidates = tryEncodings(currentWidth, currentHeight, qualitySteps);
-      for (const candidate of candidates) {
-        if (candidate.encodedSize < opts.maxBytes) {
-          return {
-            data: candidate.data,
-            mimeType: candidate.mimeType,
-            originalWidth,
-            originalHeight,
-            width: currentWidth,
-            height: currentHeight,
-            wasResized: true,
-          };
-        }
-      }
-
-      if (currentWidth === 1 && currentHeight === 1) {
-        break;
-      }
-
-      const nextWidth = currentWidth === 1 ? 1 : Math.max(1, Math.floor(currentWidth * 0.75));
-      const nextHeight = currentHeight === 1 ? 1 : Math.max(1, Math.floor(currentHeight * 0.75));
-      if (nextWidth === currentWidth && nextHeight === currentHeight) {
-        break;
-      }
-
-      currentWidth = nextWidth;
-      currentHeight = nextHeight;
+    return {
+      data: candidate.data,
+      mimeType: candidate.mimeType,
+      originalWidth,
+      originalHeight,
+      width: output.width,
+      height: output.height,
+      wasResized: !output.data.equals(inputBuffer),
+    };
+  } catch (error) {
+    if (isImageProcessorUnavailableError(error)) {
+      return null;
     }
-
     return null;
-  } catch {
-    return null;
-  } finally {
-    if (image) {
-      image.free();
-    }
   }
 }
 

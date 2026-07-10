@@ -1,7 +1,8 @@
+// Verifies schema hint metadata and sensitive path handling.
+import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-url";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
-import { isSensitiveUrlConfigPath } from "../shared/net/redact-sensitive-url.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { testApi, isPluginOwnedChannelHintPath, isSensitiveConfigPath } from "./schema.hints.js";
 import { FIELD_LABELS } from "./schema.labels.js";
@@ -155,6 +156,26 @@ describe("mapSensitivePaths", () => {
 
     const result = mapSensitivePaths(schema, "", {});
     expect(result["env.*"]?.sensitive).toBe(undefined);
+  });
+
+  it("returns a new hints map without mutating caller-owned entries", () => {
+    const schema = z.object({
+      apiKey: z.string().register(sensitive),
+    });
+    const hints = {
+      group: { label: "Group" },
+    };
+
+    const result = mapSensitivePaths(schema, "", hints);
+
+    expect(result).not.toBe(hints);
+    expect(hints).toEqual({
+      group: { label: "Group" },
+    });
+    expect(result).toEqual({
+      group: { label: "Group" },
+      apiKey: { sensitive: true },
+    });
   });
 
   it("main schema yields correct hints (samples)", () => {

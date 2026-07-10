@@ -1,6 +1,8 @@
+// Vydra provider module implements model/runtime integration.
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
@@ -17,6 +19,7 @@ import {
   downloadVydraAsset,
   extractVydraResultUrls,
   normalizeVydraBaseUrl,
+  resolveVydraGeneratedMediaMaxBytes,
   trimToUndefined,
 } from "./shared.js";
 
@@ -127,7 +130,7 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
 
       try {
         await assertOkOrThrowHttpError(response, "Vydra speech synthesis failed");
-        const payload = await response.json();
+        const payload = await readProviderJsonResponse<unknown>(response, "Vydra speech synthesis");
         const audioUrl = extractVydraResultUrls(payload, "audio")[0];
         if (!audioUrl) {
           throw new Error("Vydra speech synthesis response missing audio URL");
@@ -137,6 +140,7 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
           kind: "audio",
           timeoutMs: req.timeoutMs,
           fetchFn,
+          maxBytes: resolveVydraGeneratedMediaMaxBytes({ cfg: req.cfg, kind: "audio" }),
         });
         return {
           audioBuffer: audio.buffer,

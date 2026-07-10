@@ -1,12 +1,13 @@
+// Keyed inbound-message debouncer that preserves same-key delivery order.
+import {
+  resolveNonNegativeIntegerOption,
+  resolveOptionalIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 import type { InboundDebounceByProvider } from "../config/types.messages.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-const resolveMs = (value: unknown): number | undefined => {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  return Math.max(0, Math.trunc(value));
-};
+const resolveMs = (value: unknown): number | undefined =>
+  resolveOptionalIntegerOption(value, { min: 0 });
 
 const resolveChannelOverride = (params: {
   byChannel?: InboundDebounceByProvider;
@@ -18,6 +19,7 @@ const resolveChannelOverride = (params: {
   return resolveMs(params.byChannel[params.channel]);
 };
 
+/** Resolve effective inbound debounce milliseconds from explicit, channel, and global config. */
 export function resolveInboundDebounceMs(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -44,6 +46,7 @@ type DebounceBuffer<T> = {
 
 const DEFAULT_MAX_TRACKED_KEYS = 2048;
 
+/** Options for creating a keyed inbound debouncer. */
 export type InboundDebounceCreateParams<T> = {
   debounceMs: number;
   maxTrackedKeys?: number;
@@ -56,18 +59,16 @@ export type InboundDebounceCreateParams<T> = {
   onCancel?: (items: T[]) => void;
 };
 
+/** Create a keyed debouncer with flush/cancel controls and same-key serialization. */
 export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>) {
   const buffers = new Map<string, DebounceBuffer<T>>();
   const keyChains = new Map<string, Promise<void>>();
-  const defaultDebounceMs = Math.max(0, Math.trunc(params.debounceMs));
+  const defaultDebounceMs = resolveNonNegativeIntegerOption(params.debounceMs, 0);
   const maxTrackedKeys = Math.max(1, Math.trunc(params.maxTrackedKeys ?? DEFAULT_MAX_TRACKED_KEYS));
 
   const resolveDebounceMs = (item: T) => {
     const resolved = params.resolveDebounceMs?.(item);
-    if (typeof resolved !== "number" || !Number.isFinite(resolved)) {
-      return defaultDebounceMs;
-    }
-    return Math.max(0, Math.trunc(resolved));
+    return resolveNonNegativeIntegerOption(resolved, defaultDebounceMs);
   };
 
   const runFlush = async (items: T[]) => {
@@ -199,8 +200,8 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
     }
-    buffer.timeout = setTimeout(async () => {
-      await flushBuffer(key, buffer);
+    buffer.timeout = setTimeout(() => {
+      void flushBuffer(key, buffer);
     }, buffer.debounceMs);
     buffer.timeout.unref?.();
   };
@@ -267,15 +268,13 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       });
       return;
     }
-
-    let buffer!: DebounceBuffer<T>;
     const reservedTask = enqueueReservedKeyTask(key, async () => {
       if (buffer.items.length === 0) {
         return;
       }
       await runFlush(buffer.items);
     });
-    buffer = {
+    const buffer: DebounceBuffer<T> = {
       items: [item],
       timeout: null,
       debounceMs,

@@ -1,6 +1,7 @@
+// Matrix plugin module implements actions behavior.
 import {
   createActionGate,
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringParam,
   ToolAuthorizationError,
 } from "openclaw/plugin-sdk/channel-actions";
@@ -138,7 +139,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     const listedActions = Array.from(actions);
     return {
       actions: listedActions,
-      capabilities: [],
+      capabilities: ["presentation"],
       schema: listedActions.includes("set-profile") ? buildMatrixProfileToolSchema() : null,
       mediaSourceParams: listedActions.includes("set-profile")
         ? { "set-profile": MATRIX_PROFILE_MEDIA_SOURCE_PARAMS }
@@ -218,7 +219,9 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "reactions") {
       const messageId = readStringParam(params, "messageId", { required: true });
-      const limit = readNumberParam(params, "limit", { integer: true });
+      const limit = readPositiveIntegerParam(params, "limit", {
+        message: "limit must be a positive integer.",
+      });
       return await dispatch({
         action: "reactions",
         roomId: resolveRoomId(),
@@ -228,13 +231,16 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "read") {
-      const limit = readNumberParam(params, "limit", { integer: true });
+      const limit = readPositiveIntegerParam(params, "limit", {
+        message: "limit must be a positive integer.",
+      });
       return await dispatch({
         action: "readMessages",
         roomId: resolveRoomId(),
         limit,
         before: readStringParam(params, "before"),
         after: readStringParam(params, "after"),
+        threadId: readStringParam(params, "threadId"),
       });
     }
 

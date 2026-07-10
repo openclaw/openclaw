@@ -1,3 +1,4 @@
+// Googlechat plugin module implements channeleps behavior.
 export {
   buildChannelConfigSchema,
   chunkTextForOutbound,
@@ -25,5 +26,6 @@ export {
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,
   normalizeGoogleChatTarget,
+  resolveGoogleChatOutboundSessionRoute,
   resolveGoogleChatOutboundSpace,
 } from "./targets.js";

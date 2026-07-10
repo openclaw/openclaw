@@ -1,6 +1,6 @@
+// Discord tests cover retry plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { isRetryableDiscordDeliveryError } from "./delivery-retry.js";
-import { DiscordError, RateLimitError } from "./internal/discord.js";
+import { RateLimitError } from "./internal/discord.js";
 import { createDiscordRetryRunner, isRetryableDiscordTransientError } from "./retry.js";
 
 const ZERO_DELAY_RETRY = { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 };
@@ -30,6 +30,10 @@ describe("isRetryableDiscordTransientError", () => {
     ["408 status", Object.assign(new Error("request timeout"), { status: 408 })],
     ["502 status", Object.assign(new Error("bad gateway"), { status: 502 })],
     ["503 statusCode", Object.assign(new Error("service unavailable"), { statusCode: 503 })],
+    [
+      "signed string statusCode",
+      Object.assign(new Error("service unavailable"), { statusCode: "+503" }),
+    ],
     ["fetch failed", new TypeError("fetch failed")],
     ["ECONNRESET", Object.assign(new Error("socket hang up"), { code: "ECONNRESET" })],
     ["ETIMEDOUT cause", new Error("request failed", { cause: { code: "ETIMEDOUT" } })],
@@ -40,6 +44,7 @@ describe("isRetryableDiscordTransientError", () => {
 
   it.each([
     ["400 status", Object.assign(new Error("bad request"), { status: 400 })],
+    ["fractional status", Object.assign(new Error("upstream rejected request"), { status: 500.5 })],
     ["403 status", Object.assign(new Error("missing permissions"), { statusCode: 403 })],
     ["unknown channel", new Error("Unknown Channel")],
     ["plain string", "fetch failed"],
@@ -64,20 +69,69 @@ describe("createDiscordRetryRunner", () => {
     await expect(runner(fn, "send")).rejects.toThrow("fetch failed");
     expect(fn).toHaveBeenCalledTimes(2);
   });
-});
 
-describe("isRetryableDiscordDeliveryError", () => {
-  it("retries status-coded errors from injected delivery dependencies", () => {
-    expect(
-      isRetryableDiscordDeliveryError(Object.assign(new Error("bad gateway"), { status: 502 })),
-    ).toBe(true);
-  });
-
-  it("does not retry Discord client errors after the request runner handled them", () => {
-    const err = new DiscordError(new Response("upstream", { status: 502 }), {
-      message: "Bad Gateway",
+  it("adds request retries after observing a gateway disconnect", async () => {
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValue("ok");
+    const runner = createDiscordRetryRunner({
+      retry: ZERO_DELAY_RETRY,
+      isGatewayDisconnected: () => true,
     });
 
-    expect(isRetryableDiscordDeliveryError(err)).toBe(false);
+    await expect(runner(fn, "send")).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(4);
+  });
+
+  it("remembers a disconnect when the gateway recovers before the baseline attempts end", async () => {
+    const isGatewayDisconnected = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValue("ok");
+    const runner = createDiscordRetryRunner({
+      retry: ZERO_DELAY_RETRY,
+      isGatewayDisconnected,
+    });
+
+    await expect(runner(fn, "send")).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not extend retries for unrelated application errors", async () => {
+    const fn = vi.fn().mockRejectedValue(new Error("invalid delivery payload"));
+    const runner = createDiscordRetryRunner({
+      retry: ZERO_DELAY_RETRY,
+      isGatewayDisconnected: () => true,
+    });
+
+    await expect(runner(fn, "send")).rejects.toThrow("invalid delivery payload");
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not extend HTTP retries beyond the configured attempt count", async () => {
+    const fn = vi.fn().mockRejectedValue(Object.assign(new Error("bad gateway"), { status: 502 }));
+    const runner = createDiscordRetryRunner({
+      retry: ZERO_DELAY_RETRY,
+      isGatewayDisconnected: () => true,
+    });
+
+    await expect(runner(fn, "send")).rejects.toThrow("bad gateway");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("honors an explicit single-attempt policy during disconnects", async () => {
+    const fn = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    const runner = createDiscordRetryRunner({
+      retry: { ...ZERO_DELAY_RETRY, attempts: 1 },
+      isGatewayDisconnected: () => true,
+    });
+
+    await expect(runner(fn, "send")).rejects.toThrow("fetch failed");
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 });

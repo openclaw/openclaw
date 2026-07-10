@@ -1,78 +1,30 @@
-import type { AgentSession } from "openclaw/plugin-sdk/agent-sessions";
+// Embedded system prompt tests cover prompt assembly for provider guidance,
+// delegation mode, workspace-only safety, memory sections, and active processes.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
-import {
-  applySystemPromptOverrideToSession,
-  buildEmbeddedSystemPrompt,
-  createSystemPromptOverride,
-} from "./system-prompt.js";
+import type { AgentSession } from "../sessions/index.js";
+import { applySystemPromptToSession, buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
 vi.mock("../../tts/tts.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
 }));
 
-type MutableSession = {
-  _baseSystemPrompt?: string;
-  _rebuildSystemPrompt?: (toolNames: string[]) => string;
-};
+describe("applySystemPromptToSession", () => {
+  it("applies the trimmed prompt through the session base prompt setter", () => {
+    const setBaseSystemPrompt = vi.fn();
 
-type MockSession = MutableSession & {
-  agent: {
-    state: {
-      systemPrompt?: string;
-    };
-  };
-};
+    applySystemPromptToSession(
+      { setBaseSystemPrompt } as unknown as AgentSession,
+      "  embedded prompt  ",
+    );
 
-function createMockSession(): {
-  session: MockSession;
-} {
-  const session = {
-    agent: { state: {} },
-  } as MockSession;
-  return { session };
-}
-
-function applyAndGetMutableSession(
-  prompt: Parameters<typeof applySystemPromptOverrideToSession>[1],
-) {
-  const { session } = createMockSession();
-  applySystemPromptOverrideToSession(session as unknown as AgentSession, prompt);
-  return {
-    mutable: session,
-  };
-}
-
-describe("applySystemPromptOverrideToSession", () => {
-  it("applies a string override to the session system prompt", () => {
-    const prompt = "You are a helpful assistant with custom context.";
-    const { mutable } = applyAndGetMutableSession(prompt);
-
-    expect(mutable.agent.state.systemPrompt).toBe(prompt);
-    expect(mutable["_baseSystemPrompt"]).toBe(prompt);
-  });
-
-  it("trims whitespace from string overrides", () => {
-    const { mutable } = applyAndGetMutableSession("  padded prompt  ");
-
-    expect(mutable.agent.state.systemPrompt).toBe("padded prompt");
-  });
-
-  it("applies a function override to the session system prompt", () => {
-    const override = createSystemPromptOverride("function-based prompt");
-    const { mutable } = applyAndGetMutableSession(override);
-
-    expect(mutable.agent.state.systemPrompt).toBe("function-based prompt");
-  });
-
-  it("sets _rebuildSystemPrompt that returns the override", () => {
-    const { mutable } = applyAndGetMutableSession("rebuild test");
-    expect(mutable["_rebuildSystemPrompt"]?.(["tool1"])).toBe("rebuild test");
+    expect(setBaseSystemPrompt).toHaveBeenCalledWith("embedded prompt");
   });
 });
-
 describe("buildEmbeddedSystemPrompt", () => {
   afterEach(() => {
+    // Memory prompt sections are shared plugin state, so each prompt-rendering
+    // test leaves the global registry clean.
     clearMemoryPluginState();
   });
 
@@ -130,7 +82,42 @@ describe("buildEmbeddedSystemPrompt", () => {
     expect(prompt).toContain("Mode: prefer");
   });
 
+  it("uses deferred capability names without listing them as visible tools", () => {
+    const prompt = buildEmbeddedSystemPrompt({
+      config: {
+        agents: {
+          defaults: {
+            subagents: {
+              delegationMode: "prefer",
+            },
+          },
+        },
+      },
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw",
+      reasoningTagHint: false,
+      runtimeInfo: {
+        agentId: "main",
+        host: "local",
+        os: "darwin",
+        arch: "arm64",
+        node: process.version,
+        model: "gpt-5.4",
+        provider: "openai",
+      },
+      tools: [{ name: "tool_search" } as never],
+      capabilityToolNames: ["sessions_spawn"],
+      userTimezone: "UTC",
+    });
+
+    expect(prompt).toContain("## Sub-Agent Delegation");
+    expect(prompt).toContain("Mode: prefer");
+    expect(prompt).not.toContain("- sessions_spawn: spawn an isolated sub-agent session");
+  });
+
   it("adds workspace-only scratch path guidance when fs workspaceOnly is enabled", () => {
+    // The prompt must steer writes toward workspace-local scratch paths when
+    // filesystem tools are constrained to the workspace.
     const prompt = buildEmbeddedSystemPrompt({
       config: {
         tools: {

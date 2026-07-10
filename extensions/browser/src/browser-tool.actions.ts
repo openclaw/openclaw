@@ -1,15 +1,28 @@
+/**
+ * Browser agent tool action executors.
+ *
+ * Converts model-facing parameters into browser control client calls and wraps
+ * browser-originated text as untrusted content before returning it to agents.
+ */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import {
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+} from "openclaw/plugin-sdk/param-readers";
 import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   browserAct,
   browserConsoleMessages,
+  browserDownload,
   browserSnapshot,
   browserTabs,
+  browserWaitForDownload,
   getBrowserProfileCapabilities,
   getRuntimeConfig,
   imageResultFromFile,
   jsonResult,
   normalizeOptionalString,
+  readStringParam,
   readStringValue,
   resolveBrowserConfig,
   resolveProfile,
@@ -18,27 +31,38 @@ import {
 } from "./browser-tool.runtime.js";
 import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
+  DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
   DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS,
 } from "./browser/constants.js";
+import { neutralizeMediaDirectives } from "./browser/vision.js";
 
 const browserToolActionDeps = {
   browserAct,
   browserConsoleMessages,
+  browserDownload,
   browserSnapshot,
   browserTabs,
+  browserWaitForDownload,
   getRuntimeConfig,
   imageResultFromFile,
 };
 
 const BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS = 5_000;
+const BROWSER_DOWNLOAD_REQUEST_TIMEOUT_SLACK_MS = 5_000;
 
 type BrowserActRequest = Parameters<typeof browserAct>[1];
 type BrowserActRequestWithTimeout = BrowserActRequest & { timeoutMs?: number };
 
 function normalizePositiveTimeoutMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
+  return readPositiveIntegerParam({ value }, "value", {
+    message: "timeoutMs must be a positive integer.",
+  });
+}
+
+function normalizeNonNegativeDurationMs(value: unknown): number | undefined {
+  return readNonNegativeIntegerParam({ value }, "value", {
+    message: "timeMs must be a non-negative integer.",
+  });
 }
 
 function supportsBrowserActTimeout(request: BrowserActRequest): boolean {
@@ -92,6 +116,8 @@ function withConfiguredActTimeout(
     return request;
   }
   if (existingSessionRejectsActTimeout(request) && usesExistingSessionProfile(profileName)) {
+    // Chrome MCP existing-session actions reject per-call timeouts for these
+    // operations, so default timeout injection must stay disabled there.
     return request;
   }
 
@@ -110,7 +136,7 @@ function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefine
     candidateTimeouts.push(explicitTimeout + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
   }
   if (request.kind === "wait") {
-    const waitDuration = normalizePositiveTimeoutMs(request.timeMs);
+    const waitDuration = normalizeNonNegativeDurationMs(request.timeMs);
     if (waitDuration !== undefined) {
       candidateTimeouts.push(waitDuration + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
     }
@@ -123,8 +149,10 @@ export const testing = {
     overrides: Partial<{
       browserAct: typeof browserAct;
       browserConsoleMessages: typeof browserConsoleMessages;
+      browserDownload: typeof browserDownload;
       browserSnapshot: typeof browserSnapshot;
       browserTabs: typeof browserTabs;
+      browserWaitForDownload: typeof browserWaitForDownload;
       imageResultFromFile: typeof imageResultFromFile;
       getRuntimeConfig: typeof getRuntimeConfig;
     }> | null,
@@ -132,8 +160,11 @@ export const testing = {
     browserToolActionDeps.browserAct = overrides?.browserAct ?? browserAct;
     browserToolActionDeps.browserConsoleMessages =
       overrides?.browserConsoleMessages ?? browserConsoleMessages;
+    browserToolActionDeps.browserDownload = overrides?.browserDownload ?? browserDownload;
     browserToolActionDeps.browserSnapshot = overrides?.browserSnapshot ?? browserSnapshot;
     browserToolActionDeps.browserTabs = overrides?.browserTabs ?? browserTabs;
+    browserToolActionDeps.browserWaitForDownload =
+      overrides?.browserWaitForDownload ?? browserWaitForDownload;
     browserToolActionDeps.imageResultFromFile =
       overrides?.imageResultFromFile ?? imageResultFromFile;
     browserToolActionDeps.getRuntimeConfig = overrides?.getRuntimeConfig ?? getRuntimeConfig;
@@ -186,7 +217,14 @@ function wrapBrowserExternalJson(params: {
   payload: unknown;
   includeWarning?: boolean;
 }): { wrappedText: string; safeDetails: Record<string, unknown> } {
-  const extractedText = JSON.stringify(params.payload, null, 2);
+  const extractedText = JSON.stringify(
+    params.payload,
+    (_key: string, value: unknown) =>
+      typeof value === "string" ? neutralizeMediaDirectives(value) : value,
+    2,
+  );
+  // Browser tabs, snapshots, and console output are page-controlled data. Keep
+  // text wrapped even when details carry the structured fields for callers.
   const wrappedText = wrapExternalContent(extractedText, {
     source: "browser",
     includeWarning: params.includeWarning ?? true,
@@ -250,9 +288,12 @@ function isChromeStaleTargetError(profile: string | undefined, err: unknown): bo
   if (!profile) {
     return false;
   }
+  const status =
+    err && typeof err === "object" && "status" in err ? (err as { status?: unknown }).status : null;
+  const msg = String(err);
+  const isTabNotFound = (status === 404 || msg.includes("404:")) && msg.includes("tab not found");
   if (profile === "user") {
-    const msg = String(err);
-    return msg.includes("404:") && msg.includes("tab not found");
+    return isTabNotFound;
   }
   const cfg = browserToolActionDeps.getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
@@ -260,8 +301,7 @@ function isChromeStaleTargetError(profile: string | undefined, err: unknown): bo
   if (!browserProfile || !getBrowserProfileCapabilities(browserProfile).usesChromeMcp) {
     return false;
   }
-  const msg = String(err);
-  return msg.includes("404:") && msg.includes("tab not found");
+  return isTabNotFound;
 }
 
 function stripTargetIdFromActRequest(
@@ -322,6 +362,7 @@ export async function executeTabsAction(params: {
   return formatTabsToolResult(tabs);
 }
 
+/** Execute and format browser snapshots for agent consumption. */
 export async function executeSnapshotAction(params: {
   input: Record<string, unknown>;
   baseUrl?: string;
@@ -346,16 +387,18 @@ export async function executeSnapshotAction(params: {
     input.refs === "aria" || input.refs === "role" ? input.refs : undefined;
   const hasMaxChars = Object.hasOwn(input, "maxChars");
   const targetId = normalizeOptionalString(input.targetId);
-  const limit =
-    typeof input.limit === "number" && Number.isFinite(input.limit) ? input.limit : undefined;
-  const maxChars =
-    typeof input.maxChars === "number" && Number.isFinite(input.maxChars) && input.maxChars > 0
-      ? Math.floor(input.maxChars)
-      : undefined;
+  const limit = readPositiveIntegerParam(input, "limit", {
+    message: "limit must be a positive integer.",
+  });
+  const maxCharsRaw = readNonNegativeIntegerParam(input, "maxChars", {
+    message: "maxChars must be a non-negative integer.",
+  });
+  const maxChars = maxCharsRaw !== undefined && maxCharsRaw > 0 ? maxCharsRaw : undefined;
   const interactive = typeof input.interactive === "boolean" ? input.interactive : undefined;
   const compact = typeof input.compact === "boolean" ? input.compact : undefined;
-  const depth =
-    typeof input.depth === "number" && Number.isFinite(input.depth) ? input.depth : undefined;
+  const depth = readNonNegativeIntegerParam(input, "depth", {
+    message: "depth must be a non-negative integer.",
+  });
   const selector = normalizeOptionalString(input.selector);
   const frame = normalizeOptionalString(input.frame);
   const resolvedMaxChars =
@@ -368,8 +411,12 @@ export async function executeSnapshotAction(params: {
       : hasMaxChars
         ? maxChars
         : undefined;
+  // AI snapshots have a compact default cap; ARIA snapshots keep full structure
+  // unless maxChars is explicit, because agents often need complete node refs.
   const snapshotTimeoutMs =
-    normalizePositiveTimeoutMs(input.timeoutMs) ?? DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
+    readPositiveIntegerParam(input, "timeoutMs", {
+      message: "timeoutMs must be a positive integer.",
+    }) ?? DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
   const snapshotQuery = {
     ...(format ? { format } : {}),
     targetId,
@@ -438,7 +485,7 @@ export async function executeSnapshotAction(params: {
       };
     }
     const extractedText = snapshot.snapshot ?? "";
-    const wrappedSnapshot = wrapExternalContent(extractedText, {
+    const wrappedSnapshot = wrapExternalContent(neutralizeMediaDirectives(extractedText), {
       source: "browser",
       includeWarning: true,
     });
@@ -453,6 +500,7 @@ export async function executeSnapshotAction(params: {
       labels: snapshot.labels,
       labelsCount: snapshot.labelsCount,
       labelsSkipped: snapshot.labelsSkipped,
+      annotations: snapshot.annotations,
       imagePath: snapshot.imagePath,
       imageType: snapshot.imageType,
       refsFallback,
@@ -506,6 +554,7 @@ export async function executeSnapshotAction(params: {
   }
 }
 
+/** Execute browser console retrieval and wrap page-controlled messages. */
 export async function executeConsoleAction(params: {
   input: Record<string, unknown>;
   baseUrl?: string;
@@ -535,6 +584,79 @@ export async function executeConsoleAction(params: {
   return formatConsoleToolResult(result);
 }
 
+function resolveDownloadProxyTimeoutMs(timeoutMs: number | undefined): number {
+  const waitTimeoutMs = timeoutMs ?? DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS;
+  // The node proxy must outlive the browser-server request; callBrowserProxy
+  // adds a second grace window for the outer Gateway node.invoke call.
+  return waitTimeoutMs + BROWSER_DOWNLOAD_REQUEST_TIMEOUT_SLACK_MS;
+}
+
+type BrowserDownloadRequest =
+  | { action: "download"; route: "/download"; ref: string; path: string }
+  | { action: "waitfordownload"; route: "/wait/download"; path?: string };
+
+function readBrowserDownloadRequest(
+  action: BrowserDownloadRequest["action"],
+  input: Record<string, unknown>,
+): BrowserDownloadRequest {
+  if (action === "download") {
+    return {
+      action,
+      route: "/download",
+      ref: readStringParam(input, "ref", { required: true }),
+      path: readStringParam(input, "path", { required: true }),
+    };
+  }
+  return {
+    action,
+    route: "/wait/download",
+    path: readStringParam(input, "path"),
+  };
+}
+
+/** Execute explicit Browser download operations through the local or node-host path. */
+export async function executeDownloadAction(params: {
+  action: "download" | "waitfordownload";
+  input: Record<string, unknown>;
+  baseUrl?: string;
+  profile?: string;
+  proxyRequest: BrowserProxyRequest | null;
+  onTabActivity?: (targetId: string | undefined) => void;
+}): Promise<AgentToolResult<unknown>> {
+  const { action, input, baseUrl, profile, proxyRequest } = params;
+  const targetId = normalizeOptionalString(input.targetId);
+  const timeoutMs = normalizePositiveTimeoutMs(input.timeoutMs);
+  const request = readBrowserDownloadRequest(action, input);
+  const result = proxyRequest
+    ? await proxyRequest({
+        method: "POST",
+        path: request.route,
+        profile,
+        timeoutMs: resolveDownloadProxyTimeoutMs(timeoutMs),
+        body:
+          request.action === "download"
+            ? { ref: request.ref, path: request.path, targetId, timeoutMs }
+            : { path: request.path, targetId, timeoutMs },
+      })
+    : request.action === "download"
+      ? await browserToolActionDeps.browserDownload(baseUrl, {
+          ref: request.ref,
+          path: request.path,
+          targetId,
+          timeoutMs,
+          profile,
+        })
+      : await browserToolActionDeps.browserWaitForDownload(baseUrl, {
+          path: request.path,
+          targetId,
+          timeoutMs,
+          profile,
+        });
+  params.onTabActivity?.(readStringValue((result as { targetId?: unknown }).targetId) ?? targetId);
+  return jsonResult(result);
+}
+
+/** Execute browser actions with profile-aware timeout defaults and stale-tab recovery. */
 export async function executeActAction(params: {
   request: BrowserActRequest;
   baseUrl?: string;

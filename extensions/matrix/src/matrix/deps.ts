@@ -1,3 +1,4 @@
+// Matrix plugin module implements deps behavior.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -11,17 +12,12 @@ const REQUIRED_MATRIX_PACKAGES = [
   "@matrix-org/matrix-sdk-crypto-wasm",
 ];
 const MIN_MATRIX_CRYPTO_NATIVE_BINDING_BYTES = 1_000_000;
+export const MATRIX_COMMAND_OUTPUT_TAIL_BYTES = 64 * 1024;
+const MATRIX_STREAM_ERROR_KILL_GRACE_MS = 1_000;
 
 type MatrixCryptoRuntimeDeps = {
   requireFn?: (id: string) => unknown;
-  runCommand?: (params: {
-    argv: string[];
-    cwd: string;
-    timeoutMs: number;
-    env?: NodeJS.ProcessEnv;
-  }) => Promise<CommandResult>;
   resolveFn?: (id: string) => string;
-  nodeExecutable?: string;
   log?: (message: string) => void;
 };
 
@@ -56,7 +52,28 @@ type CommandResult = {
 
 let defaultMatrixCryptoRuntimeEnsurePromise: Promise<void> | null = null;
 
-async function runFixedCommandWithTimeout(params: {
+function appendBoundedOutputTail(current: string, chunk: Buffer | string): string {
+  const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  if (chunkBuffer.byteLength >= MATRIX_COMMAND_OUTPUT_TAIL_BYTES) {
+    return chunkBuffer
+      .subarray(chunkBuffer.byteLength - MATRIX_COMMAND_OUTPUT_TAIL_BYTES)
+      .toString("utf8");
+  }
+
+  const currentBuffer = Buffer.from(current);
+  const nextBytes = currentBuffer.byteLength + chunkBuffer.byteLength;
+  if (nextBytes <= MATRIX_COMMAND_OUTPUT_TAIL_BYTES) {
+    return `${current}${chunkBuffer.toString("utf8")}`;
+  }
+
+  const currentTailBytes = MATRIX_COMMAND_OUTPUT_TAIL_BYTES - chunkBuffer.byteLength;
+  const currentTail = currentBuffer.subarray(currentBuffer.byteLength - currentTailBytes);
+  return Buffer.concat([currentTail, chunkBuffer], MATRIX_COMMAND_OUTPUT_TAIL_BYTES).toString(
+    "utf8",
+  );
+}
+
+export async function runFixedCommandWithTimeout(params: {
   argv: string[];
   cwd: string;
   timeoutMs: number;
@@ -83,6 +100,8 @@ async function runFixedCommandWithTimeout(params: {
     let stderr = "";
     let settled = false;
     let timer: NodeJS.Timeout | null = null;
+    let streamKillTimer: NodeJS.Timeout | null = null;
+    let streamErrorMessage: string | null = null;
     const killChildOnExit = () => {
       if (!settled && proc.exitCode === null) {
         proc.kill("SIGTERM");
@@ -97,20 +116,43 @@ async function runFixedCommandWithTimeout(params: {
       if (timer) {
         clearTimeout(timer);
       }
+      if (streamKillTimer) {
+        clearTimeout(streamKillTimer);
+      }
       process.off("exit", killChildOnExit);
       resolve(result);
     };
     process.once("exit", killChildOnExit);
 
     proc.stdout?.on("data", (chunk: Buffer | string) => {
-      stdout += chunk.toString();
+      stdout = appendBoundedOutputTail(stdout, chunk);
     });
     proc.stderr?.on("data", (chunk: Buffer | string) => {
-      stderr += chunk.toString();
+      stderr = appendBoundedOutputTail(stderr, chunk);
     });
+    const failReadableStream = (streamName: "stdout" | "stderr") => (error: Error) => {
+      if (settled || streamErrorMessage) {
+        return;
+      }
+      streamErrorMessage = `${streamName} stream failed: ${formatErrorMessage(error)}`;
+      if (proc.exitCode === null) {
+        proc.kill("SIGTERM");
+      }
+      streamKillTimer = setTimeout(() => {
+        if (!settled && proc.exitCode === null) {
+          proc.kill("SIGKILL");
+        }
+      }, MATRIX_STREAM_ERROR_KILL_GRACE_MS);
+      streamKillTimer.unref?.();
+    };
+    proc.stdout?.on("error", failReadableStream("stdout"));
+    proc.stderr?.on("error", failReadableStream("stderr"));
 
     timer = setTimeout(() => {
       proc.kill("SIGKILL");
+      if (streamErrorMessage) {
+        return;
+      }
       finalize({
         code: 124,
         stdout,
@@ -119,6 +161,9 @@ async function runFixedCommandWithTimeout(params: {
     }, params.timeoutMs);
 
     proc.on("error", (err) => {
+      if (streamErrorMessage) {
+        return;
+      }
       finalize({
         code: 1,
         stdout,
@@ -127,10 +172,15 @@ async function runFixedCommandWithTimeout(params: {
     });
 
     proc.on("close", (code) => {
+      const streamErrorStderr = streamErrorMessage
+        ? stderr
+          ? appendBoundedOutputTail(stderr, `\n${streamErrorMessage}`)
+          : streamErrorMessage
+        : stderr;
       finalize({
-        code: code ?? 1,
+        code: streamErrorMessage ? 1 : (code ?? 1),
         stdout,
-        stderr,
+        stderr: streamErrorStderr,
       });
     });
   });
@@ -243,8 +293,7 @@ function removeIncompleteMatrixCryptoNativeBinding(params: {
 export async function ensureMatrixCryptoRuntime(
   params: MatrixCryptoRuntimeDeps = {},
 ): Promise<void> {
-  const usesDefaultRuntime =
-    !params.requireFn && !params.runCommand && !params.resolveFn && !params.nodeExecutable;
+  const usesDefaultRuntime = !params.requireFn && !params.resolveFn;
   if (usesDefaultRuntime && defaultMatrixCryptoRuntimeEnsurePromise) {
     await defaultMatrixCryptoRuntimeEnsurePromise;
     return;
@@ -277,10 +326,8 @@ async function ensureMatrixCryptoRuntimeOnce(params: MatrixCryptoRuntimeDeps): P
 
   const scriptPath = resolveFn("@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js");
   params.log?.("matrix: bootstrapping native crypto runtime");
-  const runCommand = params.runCommand ?? runFixedCommandWithTimeout;
-  const nodeExecutable = params.nodeExecutable ?? process.execPath;
-  const result = await runCommand({
-    argv: [nodeExecutable, scriptPath],
+  const result = await runFixedCommandWithTimeout({
+    argv: [process.execPath, scriptPath],
     cwd: path.dirname(scriptPath),
     timeoutMs: 300_000,
     env: { COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },

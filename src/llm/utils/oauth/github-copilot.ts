@@ -2,6 +2,17 @@
  * GitHub Copilot OAuth flow
  */
 
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  assertOkOrThrowProviderError,
+  readProviderJsonResponse,
+} from "../../../agents/provider-http-errors.js";
+import {
+  nonNegativeSecondsToSafeMilliseconds,
+  positiveSecondsToSafeMilliseconds,
+  resolveExpiresAtMsFromDurationSeconds,
+  resolveExpiresAtMsFromEpochSeconds,
+} from "../../../infra/parse-finite-number.js";
 import type { Model } from "../../types.js";
 import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderInterface } from "./types.js";
 
@@ -9,8 +20,7 @@ type CopilotCredentials = OAuthCredentials & {
   enterpriseUrl?: string;
 };
 
-const decode = (s: string) => atob(s);
-const CLIENT_ID = decode("SXYxLmI1MDdhMDhjODdlY2ZlOTg=");
+const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 
 const COPILOT_HEADERS = {
   "User-Agent": "GitHubCopilotChat/0.35.0",
@@ -28,8 +38,8 @@ type DeviceCodeResponse = {
   device_code: string;
   user_code: string;
   verification_uri: string;
-  interval: number;
-  expires_in: number;
+  intervalMs: number;
+  expiresAt: number;
 };
 
 type DeviceTokenSuccessResponse = {
@@ -55,6 +65,14 @@ type CopilotRequestOptions = {
   signal?: AbortSignal;
   timeoutMs?: number;
 };
+
+function resolveExpiresAtFromDurationSeconds(value: unknown): number | undefined {
+  return resolveExpiresAtMsFromDurationSeconds(value);
+}
+
+function resolveExpiresAtFromEpochSeconds(value: unknown): number | undefined {
+  return resolveExpiresAtMsFromEpochSeconds(value, { bufferMs: 5 * 60 * 1000 });
+}
 
 export function normalizeDomain(input: string): string | null {
   const trimmed = input.trim();
@@ -131,7 +149,9 @@ function formatCopilotRequestError(
 }
 
 function buildCopilotRequestSignal(options: CopilotRequestOptions): AbortSignal {
-  const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? COPILOT_REQUEST_TIMEOUT_MS);
+  const timeoutSignal = AbortSignal.timeout(
+    resolveTimerTimeoutMs(options.timeoutMs, COPILOT_REQUEST_TIMEOUT_MS),
+  );
   if (!options.signal) {
     return timeoutSignal;
   }
@@ -144,7 +164,7 @@ async function fetchResponse(
   operation: string,
   options: CopilotRequestOptions = {},
 ): Promise<Response> {
-  const timeoutMs = options.timeoutMs ?? COPILOT_REQUEST_TIMEOUT_MS;
+  const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, COPILOT_REQUEST_TIMEOUT_MS);
   try {
     return await fetch(url, {
       ...init,
@@ -158,6 +178,8 @@ async function fetchResponse(
   }
 }
 
+// Shared 16 MiB bounded reader — a hostile OAuth endpoint cannot force the
+// runtime to buffer an unbounded body through `.text()` / `.json()`.
 async function fetchJson(
   url: string,
   init: RequestInit,
@@ -165,11 +187,9 @@ async function fetchJson(
   options: CopilotRequestOptions = {},
 ): Promise<unknown> {
   const response = await fetchResponse(url, init, operation, options);
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`${response.status} ${response.statusText}: ${text}`);
-  }
-  return response.json();
+  const label = `GitHub Copilot ${operation}`;
+  await assertOkOrThrowProviderError(response, label);
+  return readProviderJsonResponse(response, label);
 }
 
 async function startDeviceFlow(
@@ -203,14 +223,17 @@ async function startDeviceFlow(
   const userCode = (data as Record<string, unknown>).user_code;
   const verificationUri = (data as Record<string, unknown>).verification_uri;
   const interval = (data as Record<string, unknown>).interval;
-  const expiresIn = (data as Record<string, unknown>).expires_in;
+  const intervalMs = nonNegativeSecondsToSafeMilliseconds(interval);
+  const expiresAt = resolveExpiresAtFromDurationSeconds(
+    (data as Record<string, unknown>).expires_in,
+  );
 
   if (
     typeof deviceCode !== "string" ||
     typeof userCode !== "string" ||
     typeof verificationUri !== "string" ||
-    typeof interval !== "number" ||
-    typeof expiresIn !== "number"
+    intervalMs === undefined ||
+    expiresAt === undefined
   ) {
     throw new Error("Invalid device code response fields");
   }
@@ -219,8 +242,8 @@ async function startDeviceFlow(
     device_code: deviceCode,
     user_code: userCode,
     verification_uri: verificationUri,
-    interval,
-    expires_in: expiresIn,
+    intervalMs,
+    expiresAt,
   };
 }
 
@@ -250,13 +273,12 @@ function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
 async function pollForGitHubAccessToken(
   domain: string,
   deviceCode: string,
-  intervalSeconds: number,
-  expiresIn: number,
+  intervalMs: number,
+  deadline: number,
   signal?: AbortSignal,
 ) {
   const urls = getUrls(domain);
-  const deadline = Date.now() + expiresIn * 1000;
-  let intervalMs = Math.max(1000, Math.floor(intervalSeconds * 1000));
+  let pollingIntervalMs = Math.max(1000, intervalMs);
   let intervalMultiplier = INITIAL_POLL_INTERVAL_MULTIPLIER;
   let slowDownResponses = 0;
 
@@ -266,7 +288,7 @@ async function pollForGitHubAccessToken(
     }
 
     const remainingMs = deadline - Date.now();
-    const waitMs = Math.min(Math.ceil(intervalMs * intervalMultiplier), remainingMs);
+    const waitMs = Math.min(Math.ceil(pollingIntervalMs * intervalMultiplier), remainingMs);
     await abortableSleep(waitMs, signal);
 
     const raw = await fetchJson(
@@ -308,10 +330,11 @@ async function pollForGitHubAccessToken(
 
       if (error === "slow_down") {
         slowDownResponses += 1;
-        intervalMs =
-          typeof interval === "number" && interval > 0
-            ? interval * 1000
-            : Math.max(1000, intervalMs + 5000);
+        const slowDownIntervalMs = positiveSecondsToSafeMilliseconds(interval);
+        pollingIntervalMs =
+          slowDownIntervalMs === undefined
+            ? Math.max(1000, pollingIntervalMs + 5000)
+            : Math.max(1000, slowDownIntervalMs);
         intervalMultiplier = SLOW_DOWN_POLL_INTERVAL_MULTIPLIER;
         continue;
       }
@@ -359,16 +382,16 @@ export async function refreshGitHubCopilotToken(
   }
 
   const token = (raw as Record<string, unknown>).token;
-  const expiresAt = (raw as Record<string, unknown>).expires_at;
+  const expires = resolveExpiresAtFromEpochSeconds((raw as Record<string, unknown>).expires_at);
 
-  if (typeof token !== "string" || typeof expiresAt !== "number") {
+  if (typeof token !== "string" || expires === undefined) {
     throw new Error("Invalid Copilot token response fields");
   }
 
   return {
     refresh: refreshToken,
     access: token,
-    expires: expiresAt * 1000 - 5 * 60 * 1000,
+    expires,
     enterpriseUrl: enterpriseDomain,
   };
 }
@@ -385,9 +408,10 @@ async function enableGitHubCopilotModel(
 ): Promise<boolean> {
   const baseUrl = getGitHubCopilotBaseUrl(token, enterpriseDomain);
   const url = `${baseUrl}/models/${modelId}/policy`;
+  let response: Response | undefined;
 
   try {
-    const response = await fetchResponse(
+    response = await fetchResponse(
       url,
       {
         method: "POST",
@@ -406,6 +430,8 @@ async function enableGitHubCopilotModel(
     return response.ok;
   } catch {
     return false;
+  } finally {
+    await response?.body?.cancel().catch(() => undefined);
   }
 }
 
@@ -514,8 +540,8 @@ export async function loginGitHubCopilot(options: {
   const githubAccessToken = await pollForGitHubAccessToken(
     domain,
     device.device_code,
-    device.interval,
-    device.expires_in,
+    device.intervalMs,
+    device.expiresAt,
     options.signal,
   );
   const credentials = await refreshGitHubCopilotToken(
@@ -564,5 +590,6 @@ export const githubCopilotOAuthProvider: OAuthProviderInterface = {
 export const testing = {
   enableGitHubCopilotModel,
   listGitHubCopilotModelIds,
+  pollForGitHubAccessToken,
   startDeviceFlow,
 };

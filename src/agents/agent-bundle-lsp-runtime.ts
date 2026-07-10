@@ -1,4 +1,6 @@
+/** Session-scoped embedded LSP runtime and tool materialization for agent bundles. */
 import { spawn, type ChildProcess } from "node:child_process";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { logDebug, logWarn } from "../logger.js";
@@ -8,7 +10,6 @@ import {
 } from "../plugin-sdk/windows-spawn.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { killProcessTree } from "../process/kill-tree.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { loadEmbeddedAgentLspConfig } from "./embedded-agent-lsp.js";
 import {
   resolveStdioMcpServerLaunchConfig,
@@ -25,10 +26,13 @@ type LspSession = {
   process: ChildProcess;
   requestId: number;
   pendingRequests: Map<number, PendingLspRequest>;
-  buffer: string;
+  buffer: Buffer;
   initialized: boolean;
   capabilities: LspServerCapabilities;
   disposed: boolean;
+  // Preserve a terminal process/transport failure so later requests reject immediately
+  // instead of waiting for the per-request timeout.
+  failure?: Error;
 };
 
 type PendingLspRequest = {
@@ -46,7 +50,8 @@ type LspServerCapabilities = {
   [key: string]: unknown;
 };
 
-export type BundleLspToolRuntime = {
+/** Materialized LSP tools plus session capabilities and cleanup handle. */
+type BundleLspToolRuntime = {
   tools: AnyAgentTool[];
   sessions: Array<{ serverName: string; capabilities: LspServerCapabilities }>;
   dispose: () => Promise<void>;
@@ -69,6 +74,7 @@ function delay(ms: number): Promise<void> {
   });
 }
 
+/** Spawns one LSP server process using sanitized host env and Windows shim handling. */
 export function spawnLspServerProcess(config: StdioMcpServerLaunchConfig): ChildProcess {
   const mergedEnv = sanitizeHostExecEnv({ baseEnv: process.env, overrides: config.env ?? null });
   const program = resolveWindowsSpawnProgram({
@@ -93,7 +99,7 @@ function createLspSession(serverName: string, child: ChildProcess): LspSession {
     process: child,
     requestId: 0,
     pendingRequests: new Map(),
-    buffer: "",
+    buffer: Buffer.alloc(0),
     initialized: false,
     capabilities: {},
     disposed: false,
@@ -104,14 +110,55 @@ function registerActiveLspSession(session: LspSession): void {
   activeBundleLspSessions.add(session);
 }
 
+function rememberLspFailure(session: LspSession, error: Error): void {
+  session.failure ??= error;
+}
+
+function failLspSession(session: LspSession, error: Error): void {
+  rememberLspFailure(session, error);
+  for (const pending of session.pendingRequests.values()) {
+    clearTimeout(pending.timeout);
+    pending.reject(session.failure ?? error);
+  }
+  session.pendingRequests.clear();
+}
+
+function lspProcessExitError(
+  session: LspSession,
+  code: number | null,
+  signal: NodeJS.Signals | null,
+) {
+  return new Error(`LSP server "${session.serverName}" exited (${signal ?? code ?? "unknown"})`);
+}
+
 function attachLspProcessHandlers(session: LspSession): void {
-  session.process.stdout?.setEncoding("utf-8");
-  session.process.stdout?.on("data", (chunk: string) => handleIncomingData(session, chunk));
+  session.process.on("error", (error) => {
+    failLspSession(session, error);
+  });
+  session.process.on("exit", (code, signal) => {
+    // Block new requests immediately, but let stdout drain any final response before close.
+    rememberLspFailure(session, lspProcessExitError(session, code, signal));
+  });
+  session.process.on("close", (code, signal) => {
+    failLspSession(session, lspProcessExitError(session, code, signal));
+  });
+  session.process.stdout?.on("data", (chunk: Buffer | string) =>
+    handleIncomingData(session, chunk),
+  );
+  session.process.stdout?.on("error", (error) => {
+    failLspSession(session, error);
+  });
+  session.process.stdin?.on("error", (error) => {
+    failLspSession(session, error);
+  });
   session.process.stderr?.setEncoding("utf-8");
   session.process.stderr?.on("data", (chunk: string) => {
     for (const line of chunk.split(/\r?\n/).filter(Boolean)) {
       logDebug(`bundle-lsp:${session.serverName}: ${line.trim()}`);
     }
+  });
+  session.process.stderr?.on("error", (error) => {
+    logWarn(`bundle-lsp:${session.serverName}: stderr failed: ${String(error)}`);
   });
 }
 
@@ -120,44 +167,48 @@ function encodeLspMessage(body: unknown): string {
   return `Content-Length: ${Buffer.byteLength(json, "utf-8")}\r\n\r\n${json}`;
 }
 
-function parseLspMessages(buffer: string): { messages: unknown[]; remaining: string } {
+function parseLspMessages(buffer: Buffer): { messages: unknown[]; remaining: Buffer } {
   const messages: unknown[] = [];
   let remaining = buffer;
+  const headerSeparator = Buffer.from("\r\n\r\n", "ascii");
 
   while (true) {
-    const headerEnd = remaining.indexOf("\r\n\r\n");
+    const headerEnd = remaining.indexOf(headerSeparator);
     if (headerEnd === -1) {
       break;
     }
 
-    const header = remaining.slice(0, headerEnd);
+    const header = remaining.subarray(0, headerEnd).toString("ascii");
     const match = header.match(/Content-Length:\s*(\d+)/i);
     if (!match) {
-      remaining = remaining.slice(headerEnd + 4);
+      remaining = remaining.subarray(headerEnd + headerSeparator.length);
       continue;
     }
 
     const contentLength = Number.parseInt(match[1], 10);
-    const bodyStart = headerEnd + 4;
+    const bodyStart = headerEnd + headerSeparator.length;
     const bodyEnd = bodyStart + contentLength;
 
-    if (Buffer.byteLength(remaining.slice(bodyStart), "utf-8") < contentLength) {
+    if (remaining.length < bodyEnd) {
       break;
     }
 
     try {
-      const body = remaining.slice(bodyStart, bodyStart + contentLength);
+      const body = remaining.subarray(bodyStart, bodyEnd).toString("utf8");
       messages.push(JSON.parse(body));
     } catch {
       // skip malformed
     }
-    remaining = remaining.slice(bodyEnd);
+    remaining = remaining.subarray(bodyEnd);
   }
 
   return { messages, remaining };
 }
 
 function sendRequest(session: LspSession, method: string, params?: unknown): Promise<unknown> {
+  if (session.failure) {
+    return Promise.reject(session.failure);
+  }
   const id = ++session.requestId;
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -174,10 +225,13 @@ function sendRequest(session: LspSession, method: string, params?: unknown): Pro
   });
 }
 
-function handleIncomingData(session: LspSession, chunk: string) {
-  session.buffer += chunk;
+function handleIncomingData(session: LspSession, chunk: Buffer | string) {
+  session.buffer = Buffer.concat([
+    session.buffer,
+    typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk,
+  ]);
   const { messages, remaining } = parseLspMessages(session.buffer);
-  session.buffer = remaining;
+  session.buffer = remaining.length === 0 ? Buffer.alloc(0) : Buffer.from(remaining);
 
   for (const msg of messages) {
     if (typeof msg !== "object" || msg === null) {

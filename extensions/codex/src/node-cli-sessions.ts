@@ -1,8 +1,10 @@
+// Codex plugin module implements node cli sessions behavior.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
@@ -10,6 +12,7 @@ import type {
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -371,8 +374,8 @@ async function readHistorySessions(
     if (typeof parsed.text === "string" && parsed.text.trim()) {
       entry.lastMessage = truncateText(parsed.text.trim(), 140);
     }
-    if (typeof parsed.ts === "number" && Number.isFinite(parsed.ts)) {
-      entry.updatedAt = new Date(parsed.ts * 1000).toISOString();
+    if (typeof parsed.ts === "number") {
+      entry.updatedAt = timestampMsToIsoString(parsed.ts * 1000) ?? entry.updatedAt;
     }
     summaries.set(sessionId, entry);
   }
@@ -689,7 +692,10 @@ function normalizeTimeoutMs(value: unknown): number {
 }
 
 function truncateText(value: string, max: number): string {
-  return value.length > max ? `${value.slice(0, max - 3)}...` : value;
+  if (value.length <= max) {
+    return value;
+  }
+  return `${truncateUtf16Safe(value, Math.max(0, max - 3))}...`;
 }
 
 function compareOptionalStringsDesc(a?: string, b?: string): number {

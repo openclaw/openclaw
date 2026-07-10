@@ -1,6 +1,8 @@
+// Browser tests cover chrome plugin behavior.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createServer } from "node:http";
+import { createServer as createTcpServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -28,12 +30,15 @@ import {
   resolveBrowserExecutableForPlatform,
   stopOpenClawChrome,
 } from "./chrome.js";
+import { usesOpenClawMockKeychain } from "./chrome.profile-decoration.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
+
+const CHROME_TEST_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
 type StopChromeTarget = Parameters<typeof stopOpenClawChrome>[0];
 type ChromeCdpDiagnostic = Awaited<ReturnType<typeof diagnoseChromeCdp>>;
@@ -54,6 +59,13 @@ function expectReadyChromeCdpDiagnostic(
     throw new Error("Expected ready Chrome CDP diagnostic");
   }
   return diagnostic;
+}
+
+function jsonResponse(payload: unknown, status = 200): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
 }
 
 async function readJson(filePath: string): Promise<Record<string, unknown>> {
@@ -89,7 +101,7 @@ async function withMockChromeCdpServer(params: {
     res.writeHead(404);
     res.end();
   });
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: CHROME_TEST_WS_MAX_PAYLOAD_BYTES });
   server.on("upgrade", (req, socket, head) => {
     if (!req.url?.startsWith(params.wsPath)) {
       socket.destroy();
@@ -108,8 +120,12 @@ async function withMockChromeCdpServer(params: {
     const addr = server.address() as AddressInfo;
     await params.run(`http://127.0.0.1:${addr.port}`);
   } finally {
-    await new Promise<void>((resolve) => wss.close(() => resolve()));
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      wss.close(() => resolve());
+    });
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   }
 }
 
@@ -123,10 +139,17 @@ async function stopChromeWithProc(proc: ReturnType<typeof makeChromeTestProc>, t
   );
 }
 
-function makeChromeTestProc(overrides?: Partial<{ killed: boolean; exitCode: number | null }>) {
+function makeChromeTestProc(
+  overrides?: Partial<{
+    killed: boolean;
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+  }>,
+) {
   return {
     killed: overrides?.killed ?? false,
     exitCode: overrides?.exitCode ?? null,
+    signalCode: overrides?.signalCode ?? null,
     kill: vi.fn(),
   };
 }
@@ -216,6 +239,22 @@ describe("browser chrome profile decoration", () => {
         DEFAULT_DOWNLOAD_DIR,
       ),
     ).toBe(true);
+  });
+
+  it("records the managed profile keychain backend without changing existing profiles", async () => {
+    const userDataDir = await createUserDataDir();
+    decorateOpenClawProfile(userDataDir, {
+      color: DEFAULT_OPENCLAW_BROWSER_COLOR,
+      mockKeychain: true,
+    });
+
+    expect(usesOpenClawMockKeychain(userDataDir)).toBe(true);
+    decorateOpenClawProfile(userDataDir, { color: DEFAULT_OPENCLAW_BROWSER_COLOR });
+    expect(usesOpenClawMockKeychain(userDataDir)).toBe(true);
+
+    const existingUserDataDir = await createUserDataDir();
+    decorateOpenClawProfile(existingUserDataDir, { color: DEFAULT_OPENCLAW_BROWSER_COLOR });
+    expect(usesOpenClawMockKeychain(existingUserDataDir)).toBe(false);
   });
 
   it("treats missing managed download prefs as undecorated when required", async () => {
@@ -460,20 +499,11 @@ describe("browser chrome helpers", () => {
   it("reports reachability based on /json/version", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
-      } as unknown as Response),
+      vi.fn().mockResolvedValue(jsonResponse({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" })),
     );
     await expect(isChromeReachable("http://127.0.0.1:12345", 50)).resolves.toBe(true);
 
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-        json: async () => ({}),
-      } as unknown as Response),
-    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({}, 500)));
     await expect(isChromeReachable("http://127.0.0.1:12345", 50)).resolves.toBe(false);
 
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("boom")));
@@ -481,13 +511,7 @@ describe("browser chrome helpers", () => {
   });
 
   it("diagnoses /json/version responses that omit the websocket URL", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ Browser: "Chrome/Mock" }),
-      } as unknown as Response),
-    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ Browser: "Chrome/Mock" })));
 
     const diagnostic = expectFailedChromeCdpDiagnostic(
       await diagnoseChromeCdp("http://127.0.0.1:12345", 50, 50),
@@ -496,13 +520,26 @@ describe("browser chrome helpers", () => {
     expect(diagnostic.cdpUrl).toBe("http://127.0.0.1:12345");
   });
 
+  it("preserves invalid-json diagnostics for bounded /json/version reads", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("{", {
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    const diagnostic = expectFailedChromeCdpDiagnostic(
+      await diagnoseChromeCdp("http://127.0.0.1:12345", 50, 50),
+    );
+    expect(diagnostic.code).toBe("invalid_json");
+  });
+
   it("allows loopback CDP probes while still blocking non-loopback private targets in strict SSRF mode", async () => {
     const fetchSpy = vi
       .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
-      } as unknown as Response)
+      .mockResolvedValueOnce(jsonResponse({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }))
       .mockRejectedValue(new Error("should not be called"));
     vi.stubGlobal("fetch", fetchSpy);
 
@@ -549,7 +586,56 @@ describe("browser chrome helpers", () => {
         }),
       ).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
+  it("keeps authenticated trailing-slash discovery inside the guarded fetch path", async () => {
+    const requests: Array<{ authorization: string | undefined; url: string | undefined }> = [];
+    const authorization = `Basic ${Buffer.from("browser-user:browser-password").toString("base64")}`;
+    const server = createServer((req, res) => {
+      requests.push({ authorization: req.headers.authorization, url: req.url });
+      if (req.url === "/json/version/" && req.headers.authorization === authorization) {
+        const addr = server.address() as AddressInfo;
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/browser/authenticated`,
+          }),
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+      server.once("error", reject);
+    });
+
+    try {
+      const addr = server.address() as AddressInfo;
+      const credentialedUrl = `http://browser-user:browser-password@127.0.0.1:${addr.port}`;
+      await expect(isChromeReachable(credentialedUrl, 1000)).resolves.toBe(true);
+      expect(requests).toEqual([
+        { authorization, url: "/json/version" },
+        { authorization, url: "/json/version/" },
+      ]);
+      requests.length = 0;
+      await expect(getChromeWebSocketUrl(credentialedUrl, 1000)).resolves.toBe(
+        `ws://browser-user:browser-password@127.0.0.1:${addr.port}/devtools/browser/authenticated`,
+      );
+      expect(requests).toEqual([
+        { authorization, url: "/json/version" },
+        { authorization, url: "/json/version/" },
+      ]);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 
@@ -559,7 +645,7 @@ describe("browser chrome helpers", () => {
       onConnection: (wss) => {
         wss.on("connection", (ws) => {
           ws.on("message", (raw) => {
-            let message: { id?: unknown; method?: unknown } | null = null;
+            let message: { id?: unknown; method?: unknown } | null;
             try {
               const text =
                 typeof raw === "string"
@@ -633,17 +719,48 @@ describe("browser chrome helpers", () => {
     expect(formatted).not.toContain("supersecret123");
   });
 
-  it("adds a WSL2 portproxy hint for empty HTTP CDP replies", () => {
-    const formatted = formatChromeCdpDiagnostic({
-      ok: false,
-      code: "http_unreachable",
-      cdpUrl: "http://172.30.144.1:9222",
-      message: "fetch failed: other side closed",
-      elapsedMs: 12,
-    });
+  it.each(["fetch failed: other side closed", "fetch failed: read ECONNRESET"])(
+    "adds a WSL2 portproxy hint for empty HTTP CDP replies: %s",
+    (message) => {
+      const formatted = formatChromeCdpDiagnostic({
+        ok: false,
+        code: "http_unreachable",
+        cdpUrl: "http://172.30.144.1:9222",
+        message,
+        elapsedMs: 12,
+      });
 
-    expect(formatted).toContain("svchost/iphlpsvc owns the CDP port");
-    expect(formatted).toContain("127.0.0.1:9222 -> 127.0.0.1:9222");
+      expect(formatted).toContain("netsh interface portproxy show all");
+      expect(formatted).toContain("svchost/iphlpsvc owns");
+      expect(formatted).toContain("127.0.0.1:9222 -> 127.0.0.1:9222");
+      expect(formatted).toContain("falls back to [::1] only when the IPv4 bind fails");
+      expect(formatted).toContain("v4tov6");
+    },
+  );
+
+  it("surfaces Windows listener checks from a real empty-reply CDP probe", async () => {
+    // A broken portproxy accepts the WSL-side socket and closes it without an
+    // HTTP body. The host checks must survive the full probe/format path.
+    const portproxy = createTcpServer((socket) => socket.destroy());
+    await new Promise<void>((resolve, reject) => {
+      portproxy.listen(0, "127.0.0.1", () => resolve());
+      portproxy.once("error", reject);
+    });
+    try {
+      const addr = portproxy.address() as AddressInfo;
+      const diagnostic = expectFailedChromeCdpDiagnostic(
+        await diagnoseChromeCdp(`http://127.0.0.1:${addr.port}`, 500, 50),
+      );
+      expect(diagnostic.code).toBe("http_unreachable");
+      const formatted = formatChromeCdpDiagnostic(diagnostic);
+      expect(formatted).toContain("netstat -ano");
+      expect(formatted).toContain("v4tov6");
+      expect(formatted).not.toContain("Chrome 136");
+    } finally {
+      await new Promise<void>((resolve) => {
+        portproxy.close(() => resolve());
+      });
+    }
   });
 
   it("probes direct ws:// CDP URLs (with /devtools/ path) via handshake instead of HTTP", async () => {
@@ -723,7 +840,10 @@ describe("browser chrome helpers", () => {
       res.writeHead(404);
       res.end();
     });
-    const wss = new WebSocketServer({ noServer: true });
+    const wss = new WebSocketServer({
+      noServer: true,
+      maxPayload: CHROME_TEST_WS_MAX_PAYLOAD_BYTES,
+    });
     server.on("upgrade", (req, socket, head) => {
       if (req.url?.startsWith("/e/bad")) {
         socket.destroy();
@@ -755,8 +875,12 @@ describe("browser chrome helpers", () => {
       expect(diagnostic.wsUrl).toBe(wsOnlyBase);
       expect(diagnostic.browser).toBe("Browserless/Mock");
     } finally {
-      await new Promise<void>((resolve) => wss.close(() => resolve()));
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 
@@ -778,31 +902,34 @@ describe("browser chrome helpers", () => {
     // connections (Browserless/Browserbase-style provider).
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({}), // empty — no webSocketDebuggerUrl
-      } as unknown as Response),
+      vi.fn().mockResolvedValue(jsonResponse({})), // empty — no webSocketDebuggerUrl
     );
     // A real WS server accepts the handshake.
-    const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-    await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
+    const wss = new WebSocketServer({
+      port: 0,
+      host: "127.0.0.1",
+      maxPayload: CHROME_TEST_WS_MAX_PAYLOAD_BYTES,
+    });
+    await new Promise<void>((resolve) => {
+      wss.once("listening", () => resolve());
+    });
     const port = (wss.address() as AddressInfo).port;
     try {
       await expect(isChromeReachable(`ws://127.0.0.1:${port}`, 500)).resolves.toBe(true);
     } finally {
-      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
     }
   });
 
   it("falls back to a direct WS readiness check when /json/version has no debugger URL", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({}),
-      } as unknown as Response),
-    );
-    const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({})));
+    const wss = new WebSocketServer({
+      port: 0,
+      host: "127.0.0.1",
+      maxPayload: CHROME_TEST_WS_MAX_PAYLOAD_BYTES,
+    });
     wss.on("connection", (ws) => {
       ws.on("message", (raw) => {
         const message = JSON.parse(rawDataToString(raw)) as { id?: number; method?: string };
@@ -811,7 +938,9 @@ describe("browser chrome helpers", () => {
         }
       });
     });
-    await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
+    await new Promise<void>((resolve) => {
+      wss.once("listening", () => resolve());
+    });
     const port = (wss.address() as AddressInfo).port;
     try {
       await expect(isChromeCdpReady(`ws://127.0.0.1:${port}`, 500, 500)).resolves.toBe(true);
@@ -820,20 +949,16 @@ describe("browser chrome helpers", () => {
       );
       expect(diagnostic.wsUrl).toBe(`ws://127.0.0.1:${port}`);
     } finally {
-      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
     }
   });
 
   it("returns the original ws:// URL from getChromeWebSocketUrl when /json/version provides no debugger URL", async () => {
     // Covers the getChromeWebSocketUrl WS-fallback: discovery succeeds but
     // webSocketDebuggerUrl is absent — the original URL is returned as-is.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({}),
-      } as unknown as Response),
-    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({})));
     await expect(getChromeWebSocketUrl("ws://127.0.0.1:12345", 50)).resolves.toBe(
       "ws://127.0.0.1:12345",
     );
@@ -845,6 +970,19 @@ describe("browser chrome helpers", () => {
     expect(proc.kill).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { label: "exited", proc: makeChromeTestProc({ exitCode: 0 }) },
+    { label: "signaled", proc: makeChromeTestProc({ signalCode: "SIGTERM" }) },
+  ])("does not close a reused CDP port after the tracked process has $label", async ({ proc }) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await stopChromeWithProc(proc, 10);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(proc.kill).not.toHaveBeenCalled();
+  });
+
   it("stopOpenClawChrome sends SIGTERM and returns once CDP is down", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
     const proc = makeChromeTestProc();
@@ -852,18 +990,64 @@ describe("browser chrome helpers", () => {
     expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
-  it("stopOpenClawChrome escalates to SIGKILL when CDP stays reachable", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
-      } as unknown as Response),
-    );
-    const proc = makeChromeTestProc();
-    await stopChromeWithProc(proc, 1);
-    expect(proc.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
-    expect(proc.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+  it("stopOpenClawChrome asks Chrome to close gracefully before sending a signal", async () => {
+    let closeRequested = false;
+    await withMockChromeCdpServer({
+      wsPath: "/devtools/browser/graceful-stop",
+      onConnection: (wss) => {
+        wss.on("connection", (ws) => {
+          ws.on("message", (data) => {
+            const req = JSON.parse(rawDataToString(data)) as { id: number; method: string };
+            expect(req.method).toBe("Browser.close");
+            closeRequested = true;
+            ws.send(JSON.stringify({ id: req.id, result: {} }));
+          });
+        });
+      },
+      run: async (baseUrl) => {
+        const browserWsUrl = `${baseUrl.replace("http://", "ws://")}/devtools/browser/graceful-stop`;
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async () => {
+            if (closeRequested) {
+              throw new Error("down");
+            }
+            return jsonResponse({ webSocketDebuggerUrl: browserWsUrl });
+          }),
+        );
+        const proc = makeChromeTestProc();
+        await stopChromeWithProc(proc, 20);
+
+        expect(closeRequested).toBe(true);
+        expect(proc.kill).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  it("stopOpenClawChrome escalates when graceful close leaves CDP reachable", async () => {
+    await withMockChromeCdpServer({
+      wsPath: "/devtools/browser/stuck-stop",
+      onConnection: (wss) => {
+        wss.on("connection", (ws) => {
+          ws.on("message", (data) => {
+            const req = JSON.parse(rawDataToString(data)) as { id: number; method: string };
+            expect(req.method).toBe("Browser.close");
+            ws.send(JSON.stringify({ id: req.id, result: {} }));
+          });
+        });
+      },
+      run: async (baseUrl) => {
+        const browserWsUrl = `${baseUrl.replace("http://", "ws://")}/devtools/browser/stuck-stop`;
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async () => jsonResponse({ webSocketDebuggerUrl: browserWsUrl })),
+        );
+        const proc = makeChromeTestProc();
+        await stopChromeWithProc(proc, 1);
+        expect(proc.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+        expect(proc.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+      },
+    });
   });
 
   it("stopOpenClawChrome releases the managed-proxy CDP bypass exactly once on a double stop", async () => {
@@ -883,10 +1067,7 @@ describe("browser chrome helpers", () => {
   it("stopOpenClawChrome still releases the bypass when the SIGKILL fallback fires", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
-      } as unknown as Response),
+      vi.fn(async () => jsonResponse({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" })),
     );
     const proc = makeChromeTestProc();
     const release = vi.fn();
@@ -975,6 +1156,8 @@ describe("browser chrome launch args", () => {
         cdpIsLoopback: true,
         cdpPortRangeStart: 18800,
         cdpPortRangeEnd: 18810,
+        extensionRelayDefaultPort: 18808,
+        extensionRelayPorts: {},
         evaluateEnabled: false,
         remoteCdpTimeoutMs: 1500,
         remoteCdpHandshakeTimeoutMs: 3000,

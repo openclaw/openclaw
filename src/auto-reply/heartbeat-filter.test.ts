@@ -1,3 +1,4 @@
+/** Tests heartbeat filtering and skip behavior for empty heartbeat context. */
 import { describe, expect, it } from "vitest";
 import {
   filterHeartbeatTranscriptArtifacts,
@@ -10,6 +11,7 @@ import {
   HEARTBEAT_TRANSCRIPT_PROMPT,
   resolveHeartbeatPromptForResponseTool,
 } from "./heartbeat.js";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "./reply/delivery-hints.js";
 
 describe("isHeartbeatUserMessage", () => {
   it("matches heartbeat prompts", () => {
@@ -157,10 +159,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
   });
 
   it("removes OpenAI Responses input/output text heartbeat pairs", () => {
-    for (const deliveryHint of [
-      "Delivery: to send a message, use the `message` tool.",
-      "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-    ]) {
+    for (const deliveryHint of MESSAGE_TOOL_DELIVERY_HINTS) {
       const messages = [
         {
           role: "user",

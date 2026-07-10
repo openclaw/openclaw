@@ -1,14 +1,15 @@
+// JSON-only task command helpers.
+// These paths avoid maintenance reconciliation so short-lived JSON CLI processes stay read-only and exit cleanly.
+
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
 import { listTaskRecords } from "../tasks/runtime-internal.js";
 import { listTaskFlowAuditFindings } from "../tasks/task-flow-registry.audit.js";
 import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
-import {
-  listTaskAuditFindings,
-  summarizeTaskAuditFindings,
-} from "../tasks/task-registry.audit.js";
+import { listTaskAuditFindings } from "../tasks/task-registry.audit.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
+  buildTaskSystemAuditJsonPayload,
   buildTaskSystemAuditFindings,
   type TaskSystemAuditCode,
   type TaskSystemAuditSeverity,
@@ -20,13 +21,13 @@ function listTaskJsonRecords(): TaskRecord[] {
   return listTaskRecords();
 }
 
-export type TasksListJsonArgs = {
+type TasksListJsonArgs = {
   json?: boolean;
   runtime?: string;
   status?: string;
 };
 
-export type TasksAuditJsonArgs = {
+type TasksAuditJsonArgs = {
   json?: boolean;
   severity?: string;
   code?: string;
@@ -73,35 +74,18 @@ function buildTasksListJsonPayload(opts: TasksListJsonArgs) {
 function buildTasksAuditJsonPayload(opts: TasksAuditJsonArgs) {
   const severityFilter = opts.severity?.trim() as TaskSystemAuditSeverity | undefined;
   const codeFilter = opts.code?.trim() as TaskSystemAuditCode | undefined;
-  const { allFindings, filteredFindings, taskFindings, summary } = toSystemAuditFindings({
+  const result = toSystemAuditFindings({
     severityFilter,
     codeFilter,
   });
-  const limit = typeof opts.limit === "number" && opts.limit > 0 ? opts.limit : undefined;
-  const displayed = limit ? filteredFindings.slice(0, limit) : filteredFindings;
-  const legacySummary = summarizeTaskAuditFindings(taskFindings);
-  return {
-    count: allFindings.length,
-    filteredCount: filteredFindings.length,
-    displayed: displayed.length,
-    filters: {
-      severity: severityFilter ?? null,
-      code: codeFilter ?? null,
-      limit: limit ?? null,
-    },
-    summary: {
-      ...legacySummary,
-      taskFlows: summary.taskFlows,
-      combined: {
-        total: summary.total,
-        errors: summary.errors,
-        warnings: summary.warnings,
-      },
-    },
-    findings: displayed,
-  };
+  return buildTaskSystemAuditJsonPayload(result, {
+    severityFilter,
+    codeFilter,
+    limit: opts.limit,
+  });
 }
 
+/** Writes task list JSON without triggering task maintenance. */
 export async function tasksListJsonCommand(
   opts: TasksListJsonArgs,
   runtime: RuntimeEnv,
@@ -109,6 +93,7 @@ export async function tasksListJsonCommand(
   writeRuntimeJson(runtime, buildTasksListJsonPayload(opts));
 }
 
+/** Writes task audit JSON with combined task/task-flow findings. */
 export async function tasksAuditJsonCommand(
   opts: TasksAuditJsonArgs,
   runtime: RuntimeEnv,

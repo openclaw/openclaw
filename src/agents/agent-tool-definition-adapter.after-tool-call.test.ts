@@ -1,3 +1,8 @@
+/**
+ * Regression tests for adapter interaction with after_tool_call hooks.
+ * Ensures embedded run subscription handling remains the single after-hook
+ * execution path.
+ */
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,6 +25,7 @@ const hookMocks = vi.hoisted(() => ({
   isToolWrappedWithBeforeToolCallHook: vi.fn(() => false),
   consumeAdjustedParamsForToolCall: vi.fn((_: string) => undefined as unknown),
   recordAdjustedParamsForToolCall: vi.fn(),
+  recordStructuredReplayTrustForToolCall: vi.fn(),
   runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
     blocked: false,
     params,
@@ -38,6 +44,7 @@ vi.mock("./agent-tools.before-tool-call.js", () => ({
   }),
   consumeAdjustedParamsForToolCall: hookMocks.consumeAdjustedParamsForToolCall,
   recordAdjustedParamsForToolCall: hookMocks.recordAdjustedParamsForToolCall,
+  recordStructuredReplayTrustForToolCall: hookMocks.recordStructuredReplayTrustForToolCall,
   isBeforeToolCallBlockedError: (error: unknown) =>
     error instanceof hookMocks.BeforeToolCallBlockedError,
   isToolWrappedWithBeforeToolCallHook: hookMocks.isToolWrappedWithBeforeToolCallHook,
@@ -67,6 +74,7 @@ describe("agent tool definition adapter after_tool_call", () => {
     hookMocks.consumeAdjustedParamsForToolCall.mockClear();
     hookMocks.consumeAdjustedParamsForToolCall.mockReturnValue(undefined);
     hookMocks.recordAdjustedParamsForToolCall.mockClear();
+    hookMocks.recordStructuredReplayTrustForToolCall.mockClear();
     hookMocks.runBeforeToolCallHook.mockClear();
     hookMocks.runBeforeToolCallHook.mockImplementation(async ({ params }) => ({
       blocked: false,

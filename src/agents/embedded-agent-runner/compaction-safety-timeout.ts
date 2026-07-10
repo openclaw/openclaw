@@ -1,65 +1,28 @@
+/**
+ * Wraps compaction calls with a safety timeout and abort cleanup.
+ */
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CompactResult, ContextEngine } from "../../context-engine/types.js";
+import { createAbortError, mergeAbortSignals } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../node-host/with-timeout.js";
 
-export const EMBEDDED_COMPACTION_TIMEOUT_MS = 900_000;
+const EMBEDDED_COMPACTION_TIMEOUT_MS = 180_000;
 
-const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
-
-function createAbortError(signal: AbortSignal): Error {
+function abortErrorFromSignal(signal: AbortSignal): Error {
   const reason = "reason" in signal ? signal.reason : undefined;
   if (reason instanceof Error) {
     return reason;
   }
-  const err = reason ? new Error("aborted", { cause: reason }) : new Error("aborted");
-  err.name = "AbortError";
-  return err;
-}
-
-function composeAbortSignals(...signals: Array<AbortSignal | undefined>): {
-  signal?: AbortSignal;
-  cleanup: () => void;
-} {
-  const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
-  if (activeSignals.length <= 1) {
-    return { signal: activeSignals[0], cleanup: () => {} };
-  }
-
-  const controller = new AbortController();
-  const removers: Array<() => void> = [];
-
-  const abortFrom = (signal: AbortSignal) => {
-    if (!controller.signal.aborted) {
-      controller.abort("reason" in signal ? signal.reason : undefined);
-    }
-  };
-
-  for (const signal of activeSignals) {
-    if (signal.aborted) {
-      abortFrom(signal);
-      break;
-    }
-    const onAbort = () => abortFrom(signal);
-    signal.addEventListener("abort", onAbort, { once: true });
-    removers.push(() => signal.removeEventListener("abort", onAbort));
-  }
-
-  return {
-    signal: controller.signal,
-    cleanup: () => {
-      for (const remove of removers) {
-        remove();
-      }
-    },
-  };
+  return createAbortError("aborted", reason ? { cause: reason } : undefined);
 }
 
 export function resolveCompactionTimeoutMs(cfg?: OpenClawConfig): number {
-  const raw = cfg?.agents?.defaults?.compaction?.timeoutSeconds;
-  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-    return Math.min(Math.floor(raw) * 1000, MAX_SAFE_TIMEOUT_MS);
-  }
-  return EMBEDDED_COMPACTION_TIMEOUT_MS;
+  return (
+    finiteSecondsToTimerSafeMilliseconds(cfg?.agents?.defaults?.compaction?.timeoutSeconds, {
+      floorSeconds: true,
+    }) ?? EMBEDDED_COMPACTION_TIMEOUT_MS
+  );
 }
 
 export async function compactWithSafetyTimeout<T>(
@@ -90,7 +53,7 @@ export async function compactWithSafetyTimeout<T>(
       let externalAbortListener: (() => void) | undefined;
       let externalAbortPromise: Promise<never> | undefined;
       const abortSignal = opts?.abortSignal;
-      const composedAbortSignal = composeAbortSignals(timeoutSignal, abortSignal);
+      const composedAbortSignal = mergeAbortSignals([timeoutSignal, abortSignal]);
 
       if (timeoutSignal) {
         timeoutListener = () => {
@@ -102,12 +65,12 @@ export async function compactWithSafetyTimeout<T>(
       if (abortSignal) {
         if (abortSignal.aborted) {
           cancel();
-          throw createAbortError(abortSignal);
+          throw abortErrorFromSignal(abortSignal);
         }
         externalAbortPromise = new Promise((_, reject) => {
           externalAbortListener = () => {
             cancel();
-            reject(createAbortError(abortSignal));
+            reject(abortErrorFromSignal(abortSignal));
           };
           abortSignal.addEventListener("abort", externalAbortListener, { once: true });
         });
@@ -120,7 +83,7 @@ export async function compactWithSafetyTimeout<T>(
         }
         return await compactPromise;
       } finally {
-        composedAbortSignal.cleanup();
+        composedAbortSignal.dispose();
         if (timeoutListener) {
           timeoutSignal?.removeEventListener("abort", timeoutListener);
         }
@@ -135,7 +98,7 @@ export async function compactWithSafetyTimeout<T>(
 }
 
 /** Parameters for a single {@link ContextEngine.compact} invocation. */
-export type ContextEngineCompactParams = Parameters<ContextEngine["compact"]>[0];
+type ContextEngineCompactParams = Parameters<ContextEngine["compact"]>[0];
 
 /**
  * Invoke a plugin-owned {@link ContextEngine.compact} bounded by the same

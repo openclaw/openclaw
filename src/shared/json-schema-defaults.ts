@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+// JSON schema default helpers fill object values from TypeBox schema defaults.
 import { Compile } from "typebox/compile";
 import type { JsonSchemaObject } from "./json-schema.types.js";
 
@@ -76,10 +78,7 @@ const schemaIntegerKeywords = new Set([
   "minProperties",
 ]);
 const schemaBooleanKeywords = new Set(["deprecated", "readOnly", "uniqueItems", "writeOnly"]);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
+const JSON_POINTER_ARRAY_INDEX_SEGMENT = /^(0|[1-9]\d*)$/;
 
 function schemaTypeIncludes(schema: Record<string, unknown>, type: string): boolean {
   return schema.type === type || (Array.isArray(schema.type) && schema.type.includes(type));
@@ -110,6 +109,30 @@ function normalizeSchemaMap(value: unknown): unknown {
   );
 }
 
+function compilesUnicodePattern(pattern: string): boolean {
+  try {
+    const probe = new RegExp(pattern, "u");
+    void probe;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Repair JSON Schema regex patterns that fail TypeBox's unicode RegExp compile. */
+function repairJsonSchemaPatternForUnicodeRegExp(pattern: string): string {
+  if (compilesUnicodePattern(pattern)) {
+    return pattern;
+  }
+  const repaired = pattern.replace(/\\([^\\])/g, (match, ch: string) => {
+    if (ch === ":" || ch === "/") {
+      return ch;
+    }
+    return match;
+  });
+  return compilesUnicodePattern(repaired) ? repaired : pattern;
+}
+
 function normalizeSchemaDependencies(value: unknown): unknown {
   if (!isRecord(value)) {
     return value;
@@ -120,6 +143,20 @@ function normalizeSchemaDependencies(value: unknown): unknown {
       isStringArray(entry) ? entry : normalizeJsonSchemaNode(entry),
     ]),
   );
+}
+
+function normalizePatternProperties(value: Record<string, unknown>): Record<string, unknown> {
+  const normalized = new Map<string, unknown>();
+  for (const [pattern, propertySchema] of Object.entries(value)) {
+    const repairedPattern = repairJsonSchemaPatternForUnicodeRegExp(pattern);
+    const repairedSchema = normalizeJsonSchemaNode(propertySchema);
+    const existingSchema = normalized.get(repairedPattern);
+    normalized.set(
+      repairedPattern,
+      existingSchema === undefined ? repairedSchema : { allOf: [existingSchema, repairedSchema] },
+    );
+  }
+  return Object.fromEntries(normalized);
 }
 
 function expandJsonSchemaTypeArray(schema: Record<string, unknown>): Record<string, unknown> {
@@ -172,6 +209,12 @@ function normalizeJsonSchemaNode(schema: unknown): unknown {
       if (key === "$dynamicRef" && normalizedSchema.$ref === undefined) {
         return ["$ref", value];
       }
+      if (key === "pattern" && typeof value === "string") {
+        return [key, repairJsonSchemaPatternForUnicodeRegExp(value)];
+      }
+      if (key === "patternProperties" && isRecord(value)) {
+        return [key, normalizePatternProperties(value)];
+      }
       if (schemaMapKeywords.has(key)) {
         return [key, normalizeSchemaMap(value)];
       }
@@ -203,13 +246,21 @@ function validateTypeKeyword(type: unknown, path: string): string | undefined {
 }
 
 function decodePointerSegment(segment: string): string {
-  let decodedSegment = segment;
+  let decodedSegment;
   try {
     decodedSegment = decodeURIComponent(segment);
   } catch {
     decodedSegment = segment;
   }
   return decodedSegment.replace(/~1/g, "/").replace(/~0/g, "~");
+}
+
+function parseJsonPointerArrayIndex(segment: string): number | undefined {
+  if (!JSON_POINTER_ARRAY_INDEX_SEGMENT.test(segment)) {
+    return undefined;
+  }
+  const index = Number(segment);
+  return Number.isSafeInteger(index) ? index : undefined;
 }
 
 function resolveLocalAnchor(
@@ -304,8 +355,8 @@ function resolveLocalRef(
     let currentResourceBaseId = resourceBaseId;
     for (const segment of ref.slice(2).split("/").map(decodePointerSegment)) {
       if (Array.isArray(current)) {
-        const index = Number(segment);
-        if (!Number.isInteger(index) || index < 0) {
+        const index = parseJsonPointerArrayIndex(segment);
+        if (index === undefined) {
           return { found: false };
         }
         current = current[index];
@@ -368,15 +419,15 @@ function resolveSchemaResourceRef(
   const resolvedRefResource =
     refParts.resource === "" ? refParts.resource : resolveSchemaId(refParts.resource, baseId);
   const seen = new Set<object>();
-  const visit = (current: JsonSchemaValue, baseId: string | undefined): LocalRefResolution => {
+  const visit = (current: JsonSchemaValue, baseIdLocal: string | undefined): LocalRefResolution => {
     if (!isRecord(current) || seen.has(current)) {
       return { found: false };
     }
     seen.add(current);
 
-    let currentBaseId = baseId;
+    let currentBaseId = baseIdLocal;
     if (typeof current.$id === "string" && current.$id !== "") {
-      const resolvedId = resolveSchemaId(current.$id, baseId);
+      const resolvedId = resolveSchemaId(current.$id, baseIdLocal);
       currentBaseId = resolvedId;
       if (resolvedRefResource === resolvedId || refParts.resource === stripFragment(current.$id)) {
         return refParts.fragment
@@ -454,6 +505,7 @@ function resolveSchemaRef(
   return localTarget.found ? localTarget : resolveSchemaResourceRef(root, ref, baseId);
 }
 
+/** Normalize JSON Schema constructs into the TypeBox compiler subset used by plugin validators. */
 export function normalizeJsonSchemaForTypeBox(schema: JsonSchemaValue): JsonSchemaValue {
   return normalizeJsonSchemaNode(schema) as JsonSchemaValue;
 }
@@ -570,7 +622,7 @@ function findJsonSchemaNodeError(
   if (!isRecord(schema)) {
     return `${path}: schema must be an object or boolean`;
   }
-  if (Object.prototype.hasOwnProperty.call(schema, "type")) {
+  if (Object.hasOwn(schema, "type")) {
     const typeError = validateTypeKeyword(schema.type, path);
     if (typeError) {
       return typeError;
@@ -580,7 +632,7 @@ function findJsonSchemaNodeError(
     if (typeof schema.nullable !== "boolean") {
       return `${path}.nullable: expected boolean`;
     }
-    if (!Object.prototype.hasOwnProperty.call(schema, "type")) {
+    if (!Object.hasOwn(schema, "type")) {
       return `${path}.nullable: expected type`;
     }
   }
@@ -699,6 +751,7 @@ function findJsonSchemaNodeError(
   return undefined;
 }
 
+/** Return the first structural JSON Schema error that would make validation/defaulting unsafe. */
 export function findJsonSchemaShapeError(schema: JsonSchemaValue): string | undefined {
   return findJsonSchemaNodeError(schema, "<schema>", schema, schema, undefined);
 }
@@ -711,7 +764,7 @@ function cloneDefault<T>(value: T): T {
 }
 
 function getDefault(schema: JsonSchemaValue): unknown {
-  if (!isRecord(schema) || !Object.prototype.hasOwnProperty.call(schema, "default")) {
+  if (!isRecord(schema) || !Object.hasOwn(schema, "default")) {
     return undefined;
   }
   return cloneDefault(schema.default);
@@ -764,7 +817,7 @@ function inlineLocalRefsForMatch(
       ? { found: false as const }
       : resolveSchemaRef(root, currentResourceRoot, schema.$ref, currentResourceBaseId);
     if (target.found) {
-      const { $ref, ...siblingSchema } = schema;
+      const { $ref: _$ref, ...siblingSchema } = schema;
       resolvingRefs.add(refKey);
       const inlinedTarget = inlineLocalRefsForMatch(
         target.schema,
@@ -916,7 +969,7 @@ function applyObjectPropertyDefaults(
   if (isRecord(schema.additionalProperties)) {
     const additionalSchema = schema.additionalProperties as JsonSchemaValue;
     for (const key of Object.keys(value)) {
-      if (Object.prototype.hasOwnProperty.call(properties, key) || patternMatchedKeys.has(key)) {
+      if (Object.hasOwn(properties, key) || patternMatchedKeys.has(key)) {
         continue;
       }
       value[key] = applySchemaDefaults(
@@ -943,10 +996,7 @@ function applyObjectDependencyDefaults(
   let nextValue = value;
   if (isRecord(schema.dependencies)) {
     for (const [key, dependencySchema] of Object.entries(schema.dependencies)) {
-      if (
-        !Object.prototype.hasOwnProperty.call(nextValue, key) ||
-        isStringArray(dependencySchema)
-      ) {
+      if (!Object.hasOwn(nextValue, key) || isStringArray(dependencySchema)) {
         continue;
       }
       nextValue = applySchemaDefaults(
@@ -961,7 +1011,7 @@ function applyObjectDependencyDefaults(
   }
   if (isRecord(schema.dependentSchemas)) {
     for (const [key, dependentSchema] of Object.entries(schema.dependentSchemas)) {
-      if (!Object.prototype.hasOwnProperty.call(nextValue, key)) {
+      if (!Object.hasOwn(nextValue, key)) {
         continue;
       }
       nextValue = applySchemaDefaults(
@@ -1127,12 +1177,13 @@ function applyObjectPropertyAndDependencyDefaults(
 
 function applySchemaDefaults(
   schema: JsonSchemaValue,
-  value: unknown,
+  valueInput: unknown,
   root = schema,
   resolvingRefs = new Set<string>(),
   resourceRoot = root,
   resourceBaseId?: string,
 ): unknown {
+  let value = valueInput;
   if (value === undefined) {
     const defaultValue = getDefault(schema);
     if (defaultValue !== undefined) {
@@ -1262,6 +1313,7 @@ function applySchemaDefaults(
   return nextValue;
 }
 
+/** Apply schema defaults to a config value while preserving caller-owned value shape. */
 export function applyJsonSchemaDefaults<T>(schema: JsonSchemaValue, value: T): T {
   return applySchemaDefaults(schema, value) as T;
 }

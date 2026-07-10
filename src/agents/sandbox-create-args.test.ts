@@ -1,5 +1,7 @@
+// Verifies Docker create arguments for sandbox hardening and configured passthrough.
 import { describe, expect, it } from "vitest";
 import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
+import { SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./sandbox/constants.js";
 import { buildSandboxCreateArgs } from "./sandbox/docker.js";
 import type { SandboxDockerConfig } from "./sandbox/types.js";
 
@@ -8,6 +10,7 @@ describe("buildSandboxCreateArgs", () => {
     overrides: Partial<SandboxDockerConfig> = {},
     binds?: string[],
   ): SandboxDockerConfig {
+    // Baseline config keeps each Docker argument case focused on one override.
     return {
       image: "openclaw-sandbox:bookworm-slim",
       containerPrefix: "openclaw-sbx-",
@@ -39,6 +42,7 @@ describe("buildSandboxCreateArgs", () => {
   }
 
   function valuesForFlag(args: string[], flag: string): string[] {
+    // Docker flags are positional, so collect repeated flag values for assertions.
     const values: string[] = [];
     for (let i = 0; i < args.length; i += 1) {
       if (args[i] === flag) {
@@ -98,6 +102,7 @@ describe("buildSandboxCreateArgs", () => {
       "openclaw.sandbox=1",
       "openclaw.sessionKey=main",
       "openclaw.createdAtMs=1700000000000",
+      `openclaw.createArgsEpoch=${SANDBOX_DOCKER_CREATE_ARGS_EPOCH}`,
       "openclaw.sandboxBrowser=1",
     ]);
     expect(args).toContain("--read-only");
@@ -118,6 +123,39 @@ describe("buildSandboxCreateArgs", () => {
     expectFlagValues(args, "--cpus", ["1.5"]);
     expectFlagValues(args, "--env", ["LANG=C.UTF-8", `OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE}`]);
     expectFlagValues(args, "--ulimit", ["nofile=1024:2048", "nproc=128", "core=0"]);
+  });
+
+  it("omits non-finite numeric Docker resource flags", () => {
+    const cfg = createSandboxConfig({
+      pidsLimit: Number.POSITIVE_INFINITY,
+      cpus: Number.NaN,
+      ulimits: {
+        nofile: {
+          soft: Number.NaN,
+          hard: Number.POSITIVE_INFINITY,
+        },
+        fsize: Number.NaN,
+        core: Number.POSITIVE_INFINITY,
+        nproc: {
+          soft: Number.NEGATIVE_INFINITY,
+          hard: 1024,
+        },
+      },
+    });
+
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-non-finite-limits",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+    });
+
+    expect(args).not.toContain("--pids-limit");
+    expect(args).not.toContain("--cpus");
+    expectFlagValues(args, "--ulimit", ["nproc=1024"]);
+    expect(valuesForFlag(args, "--ulimit")).not.toContain("nofile=NaN:Infinity");
+    expect(valuesForFlag(args, "--ulimit")).not.toContain("fsize=NaN");
+    expect(valuesForFlag(args, "--ulimit")).not.toContain("core=Infinity");
   });
 
   it("passes explicit configured sandbox env through even when names look sensitive", () => {
@@ -216,6 +254,12 @@ describe("buildSandboxCreateArgs", () => {
       containerName: "openclaw-sbx-dangerous-parent",
       cfg: createSandboxConfig({}, ["/run:/run"]),
       expected: /blocked path/,
+    },
+    {
+      name: "bind source covering Docker socket directory",
+      containerName: "openclaw-sbx-covers-docker-socket-dir",
+      cfg: createSandboxConfig({}, ["/var:/var"]),
+      expected: /covers blocked path/,
     },
     {
       name: "network host mode",
@@ -332,5 +376,20 @@ describe("buildSandboxCreateArgs", () => {
       createdAtMs: 1700000000000,
     });
     expectFlagValues(args, "--network", ["container:peer"]);
+  });
+
+  it("passes one --init flag so Docker reaps orphaned processes", () => {
+    const cfg = createSandboxConfig();
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-init",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+    });
+    expect(args.filter((arg) => arg === "--init")).toHaveLength(1);
+    // Docker create options must follow the subcommand and precede the image.
+    const createIdx = args.indexOf("create");
+    const initIdx = args.indexOf("--init");
+    expect(initIdx).toBeGreaterThan(createIdx);
   });
 });

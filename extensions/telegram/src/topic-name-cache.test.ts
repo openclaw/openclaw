@@ -1,15 +1,45 @@
+// Telegram tests cover topic name cache plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  clearTopicNameCache,
-  getTopicEntry,
   getTopicName,
   resetTopicNameCacheForTest,
   setTelegramTopicNameStoreFactoryForTest,
-  topicNameCacheSize,
   updateTopicName,
 } from "./topic-name-cache.js";
 
-type TopicEntry = NonNullable<Awaited<ReturnType<typeof getTopicEntry>>>;
+type TopicEntry = {
+  name: string;
+  iconColor?: number;
+  iconCustomEmojiId?: string;
+  closed?: boolean;
+  updatedAt: number;
+};
+
+function topicKey(chatId: number | string, threadId: number | string): string {
+  return `${chatId}:${threadId}`;
+}
+
+function getStoredTopicEntry(
+  stores: Map<string, Map<string, TopicEntry>>,
+  chatId: number | string,
+  threadId: number | string,
+): TopicEntry | undefined {
+  const key = topicKey(chatId, threadId);
+  for (const entries of stores.values()) {
+    const entry = entries.get(key);
+    if (entry) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
+function topicStoreSize(stores: Map<string, Map<string, TopicEntry>>): number {
+  return Array.from(stores.values(), (entries) => entries.size).reduce(
+    (total, size) => total + size,
+    0,
+  );
+}
 
 function installMemoryStores() {
   const stores = new Map<string, Map<string, TopicEntry>>();
@@ -35,10 +65,11 @@ function installMemoryStores() {
 }
 
 describe("topic-name-cache", () => {
+  let stores: Map<string, Map<string, TopicEntry>>;
+
   beforeEach(async () => {
     vi.useRealTimers();
-    installMemoryStores();
-    await clearTopicNameCache();
+    stores = installMemoryStores();
     resetTopicNameCacheForTest();
   });
 
@@ -66,13 +97,13 @@ describe("topic-name-cache", () => {
     await updateTopicName(-100123, 42, { name: "Deployments" });
     await updateTopicName(-100123, 42, { closed: true });
     await expect(getTopicName(-100123, 42)).resolves.toBe("Deployments");
-    expect((await getTopicEntry(-100123, 42))?.closed).toBe(true);
+    expect(getStoredTopicEntry(stores, -100123, 42)?.closed).toBe(true);
   });
 
   it("marks topic as reopened", async () => {
     await updateTopicName(-100123, 42, { name: "Deployments", closed: true });
     await updateTopicName(-100123, 42, { closed: false });
-    expect((await getTopicEntry(-100123, 42))?.closed).toBe(false);
+    expect(getStoredTopicEntry(stores, -100123, 42)?.closed).toBe(false);
   });
 
   it("stores icon metadata", async () => {
@@ -81,7 +112,7 @@ describe("topic-name-cache", () => {
       iconColor: 0x6fb9f0,
       iconCustomEmojiId: "emoji123",
     });
-    const entry = await getTopicEntry(-100123, 42);
+    const entry = getStoredTopicEntry(stores, -100123, 42);
     expect(entry?.iconColor).toBe(0x6fb9f0);
     expect(entry?.iconCustomEmojiId).toBe("emoji123");
   });
@@ -89,16 +120,16 @@ describe("topic-name-cache", () => {
   it("does not store entries with empty name and no prior entry", async () => {
     await updateTopicName(-100123, 42, { closed: true });
     await expect(getTopicName(-100123, 42)).resolves.toBeUndefined();
-    expect(topicNameCacheSize()).toBe(0);
+    expect(topicStoreSize(stores)).toBe(0);
   });
 
   it("updates timestamps on write", async () => {
     vi.useFakeTimers();
     await updateTopicName(-100123, 42, { name: "A" });
-    const t1 = (await getTopicEntry(-100123, 42))?.updatedAt ?? 0;
+    const t1 = getStoredTopicEntry(stores, -100123, 42)?.updatedAt ?? 0;
     await vi.advanceTimersByTimeAsync(10);
     await updateTopicName(-100123, 42, { name: "B" });
-    const t2 = (await getTopicEntry(-100123, 42))?.updatedAt ?? 0;
+    const t2 = getStoredTopicEntry(stores, -100123, 42)?.updatedAt ?? 0;
     expect(t2).toBeGreaterThan(t1);
   });
 
@@ -111,7 +142,7 @@ describe("topic-name-cache", () => {
     for (let i = 0; i < 2049; i++) {
       await updateTopicName(-100000, i, { name: `Topic ${i}` });
     }
-    expect(topicNameCacheSize()).toBe(2048);
+    expect(topicStoreSize(stores)).toBe(2048);
     await expect(getTopicName(-100000, 0)).resolves.toBeUndefined();
     await expect(getTopicName(-100000, 2048)).resolves.toBe("Topic 2048");
   });
@@ -126,7 +157,7 @@ describe("topic-name-cache", () => {
     await getTopicName(-100000, 1);
     await updateTopicName(-100000, 9999, { name: "Newcomer" });
     await expect(getTopicName(-100000, 1)).resolves.toBe("Active");
-    expect(topicNameCacheSize()).toBe(2048);
+    expect(topicStoreSize(stores)).toBe(2048);
   });
 
   it("reloads persisted entries from plugin state", async () => {

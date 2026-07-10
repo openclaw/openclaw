@@ -1,3 +1,4 @@
+// Session model override tests cover model override parsing and validation.
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import {
@@ -177,6 +178,39 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.contextTokens).toBeUndefined();
     expect(entry.contextBudgetStatus).toBeUndefined();
     expect((entry.updatedAt ?? 0) > before).toBe(true);
+  });
+
+  it("sets liveModelSwitchPending when switching to default with runtime-only fields", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-96269",
+      updatedAt: Date.now() - 5_000,
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4-6",
+      contextTokens: 200_000,
+      contextBudgetStatus: contextBudgetStatus({
+        updatedAt: Date.now() - 5_000,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        contextTokenBudget: 200_000,
+      }),
+    };
+
+    const result = applyModelOverrideToSessionEntry({
+      entry,
+      selection: {
+        provider: "openai",
+        model: "gpt-5.4",
+        isDefault: true,
+      },
+      markLiveSwitchPending: true,
+    });
+
+    expect(result.updated).toBe(true);
+    expect(entry.modelProvider).toBeUndefined();
+    expect(entry.model).toBeUndefined();
+    expect(entry.contextTokens).toBeUndefined();
+    expect(entry.contextBudgetStatus).toBeUndefined();
+    expect(entry.liveModelSwitchPending).toBe(true);
   });
 
   it("marks non-default overrides with the provided source", () => {

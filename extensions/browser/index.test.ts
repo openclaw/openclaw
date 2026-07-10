@@ -1,7 +1,8 @@
+// Browser tests cover index plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   browserPluginNodeHostCommands,
   browserPluginReload,
@@ -25,6 +26,7 @@ const runtimeApiMocks = vi.hoisted(() => ({
   handleBrowserGatewayRequest: vi.fn(),
   registerBrowserCli: vi.fn(),
   runBrowserProxyCommand: vi.fn(async () => "ok"),
+  stopBrowserControlService: vi.fn(async () => undefined),
 }));
 
 vi.mock("./register.runtime.js", async () => {
@@ -44,6 +46,22 @@ vi.mock("./src/cli/browser-cli.js", () => ({
   registerBrowserCli: runtimeApiMocks.registerBrowserCli,
 }));
 
+vi.mock("./src/control-service.js", () => ({
+  stopBrowserControlService: runtimeApiMocks.stopBrowserControlService,
+}));
+
+beforeAll(async () => {
+  await import("./register.runtime.js");
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 function createApi() {
   const registerCli = vi.fn();
   const registerGatewayMethod = vi.fn();
@@ -53,6 +71,7 @@ function createApi() {
     id: "browser",
     name: "Browser",
     source: "test",
+    rootDir: "/plugins/browser",
     config: {},
     runtime: {} as OpenClawPluginApi["runtime"],
     registerCli,
@@ -89,7 +108,10 @@ function registerBrowserAutoEnableProbe(): BrowserAutoEnableProbe {
 
 describe("browser plugin", () => {
   it("exposes static browser metadata on the plugin definition", () => {
-    expect(browserPluginReload).toEqual({ restartPrefixes: ["browser"] });
+    expect(browserPluginReload).toEqual({
+      restartPrefixes: ["browser"],
+      hotPrefixes: ["browser.profiles"],
+    });
     expect(browserPluginNodeHostCommands).toHaveLength(1);
     expect(browserPluginNodeHostCommands[0]?.command).toBe("browser.proxy");
     expect(browserPluginNodeHostCommands[0]?.cap).toBe("browser");
@@ -128,12 +150,80 @@ describe("browser plugin", () => {
     }
 
     expect(tool.name).toBe("browser");
+    expect(tool.description).toContain("action=profiles");
+    expect(tool.description).not.toContain('profile="user"');
     expect(runtimeApiMocks.createBrowserTool).not.toHaveBeenCalled();
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
       sandboxBridgeUrl: "http://127.0.0.1:9999",
       allowHostControl: true,
       agentSessionKey: "agent:main:webchat:direct:123",
+      mediaScope: {
+        sessionKey: "agent:main:webchat:direct:123",
+        chatType: "direct",
+      },
+    });
+  });
+
+  it("passes runtime context needed for screenshot image understanding", async () => {
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+
+    const tool = factory({
+      sessionKey: "agent:main:webchat:direct:123",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      activeModel: { provider: "openai", modelId: "gpt-5.5" },
+      deliveryContext: { channel: "telegram" },
+    });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("expected browser plugin to return a single tool");
+    }
+
+    await tool.execute("call-1", { action: "status" });
+    expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
+      agentSessionKey: "agent:main:webchat:direct:123",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      activeModel: { provider: "openai", model: "gpt-5.5" },
+      mediaScope: {
+        sessionKey: "agent:main:webchat:direct:123",
+        channel: "telegram",
+        chatType: "direct",
+      },
+    });
+  });
+
+  it("derives group chat type for browser media scope", async () => {
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+
+    const tool = factory({
+      sessionKey: "agent:main:telegram:group:chat-123",
+      messageChannel: "telegram",
+    });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("expected browser plugin to return a single tool");
+    }
+
+    await tool.execute("call-1", { action: "status" });
+    expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
+      agentSessionKey: "agent:main:telegram:group:chat-123",
+      mediaScope: {
+        sessionKey: "agent:main:telegram:group:chat-123",
+        channel: "telegram",
+        chatType: "group",
+      },
     });
   });
 
@@ -155,7 +245,11 @@ describe("browser plugin", () => {
       ],
     });
     await registrar({ program: {} as never });
-    expect(runtimeApiMocks.registerBrowserCli).toHaveBeenCalledWith({});
+    expect(runtimeApiMocks.registerBrowserCli).toHaveBeenCalledWith(
+      {},
+      process.argv,
+      "/plugins/browser",
+    );
   });
 
   it("registers browser.request as an admin gateway method and lazy-loads handler", async () => {
@@ -185,7 +279,7 @@ describe("browser plugin", () => {
     expect(runtimeApiMocks.collectBrowserSecurityAuditFindings).toHaveBeenCalled();
   });
 
-  it("lazy-loads the browser service on start", async () => {
+  it("registers a lazy browser control service", async () => {
     const { api, registerService } = createApi();
     registerBrowserPlugin(api);
 
@@ -200,8 +294,41 @@ describe("browser plugin", () => {
     expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
 
     await service.start({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
+    expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
+
+    await service.stop({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
+    expect(runtimeApiMocks.stopBrowserControlService).toHaveBeenCalledOnce();
+  });
+
+  it("eager-loads the browser control service when explicitly requested", async () => {
+    vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", "1");
+    const { api, registerService } = createApi();
+    registerBrowserPlugin(api);
+
+    const service = mockCallArg(registerService) as {
+      id: string;
+      start: (...args: unknown[]) => unknown;
+    };
+
+    await service.start({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
     expect(runtimeApiMocks.createBrowserPluginService).toHaveBeenCalledOnce();
   });
+
+  for (const value of ["false", "", "disabled"]) {
+    it(`keeps browser control service env value ${JSON.stringify(value)} lazy`, async () => {
+      vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", value);
+      const { api, registerService } = createApi();
+      registerBrowserPlugin(api);
+
+      const service = mockCallArg(registerService) as {
+        id: string;
+        start: (...args: unknown[]) => unknown;
+      };
+
+      await service.start({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
+      expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
+    });
+  }
 
   it("declares setup auto-enable reasons for browser config surfaces", () => {
     const probe = registerBrowserAutoEnableProbe();

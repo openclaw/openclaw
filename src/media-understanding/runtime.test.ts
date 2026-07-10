@@ -1,3 +1,6 @@
+// Media-understanding runtime tests cover file APIs, provider dispatch, disabled
+// state, cleanup, remote references, and direct model-backed image calls.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -61,6 +64,8 @@ vi.mock("../media/media-services.js", () => ({
 }));
 
 function requireRunCapabilityRequest(): unknown {
+  // File API tests verify the normalized request handed to runCapability, not
+  // just the public return shape.
   const [call] = mocks.runCapability.mock.calls;
   if (!call) {
     throw new Error("expected runCapability call");
@@ -237,8 +242,9 @@ describe("media-understanding runtime", () => {
     });
   });
 
-  it("does not force typed remote URLs into the requested capability", async () => {
-    const media = [{ index: 0, url: "https://example.com/clip.mp4", mime: "video/mp4" }];
+  it("does not force encoded video URLs into the requested image capability", async () => {
+    const mediaUrl = "https://example.com/clip%2Emp4?download=1#preview";
+    const media = [{ index: 0, url: mediaUrl, mime: "video/mp4" }];
     mocks.normalizeMediaAttachments.mockReturnValue(media);
     mocks.runCapability.mockResolvedValue({
       outputs: [],
@@ -247,7 +253,7 @@ describe("media-understanding runtime", () => {
 
     await expect(
       describeImageFile({
-        filePath: "https://example.com/clip.mp4",
+        filePath: mediaUrl,
         cfg: {} as OpenClawConfig,
         agentDir: "/tmp/agent",
       }),
@@ -257,12 +263,12 @@ describe("media-understanding runtime", () => {
     });
 
     expect(mocks.normalizeMediaAttachments).toHaveBeenCalledWith({
-      MediaUrl: "https://example.com/clip.mp4",
+      MediaUrl: mediaUrl,
       MediaType: "video/mp4",
     });
     expect(requireRunCapabilityRequest()).toMatchObject({
       capability: "image",
-      ctx: { MediaUrl: "https://example.com/clip.mp4", MediaType: "video/mp4" },
+      ctx: { MediaUrl: mediaUrl, MediaType: "video/mp4" },
       media,
     });
   });
@@ -293,6 +299,49 @@ describe("media-understanding runtime", () => {
     expect(requireRunCapabilityRequest()).toMatchObject({
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
+    });
+  });
+
+  it("passes media scope context through file media understanding requests", async () => {
+    const output: MediaUnderstandingOutput = {
+      kind: "image.description",
+      attachmentIndex: 0,
+      provider: "vision-plugin",
+      model: "vision-v1",
+      text: "image ok",
+    };
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.jpg", mime: "image/jpeg" },
+    ]);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [output],
+    });
+
+    await describeImageFile({
+      filePath: "/tmp/sample.jpg",
+      mime: "image/jpeg",
+      cfg: {} as OpenClawConfig,
+      scopeContext: {
+        sessionKey: "agent:main:telegram:dm:123",
+        channel: "telegram",
+        chatType: "private",
+      },
+    });
+
+    expect(mocks.normalizeMediaAttachments).toHaveBeenCalledWith({
+      MediaPath: "/tmp/sample.jpg",
+      MediaType: "image/jpeg",
+      SessionKey: "agent:main:telegram:dm:123",
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "private",
+    });
+    expect(requireRunCapabilityRequest()).toMatchObject({
+      ctx: {
+        SessionKey: "agent:main:telegram:dm:123",
+        Surface: "telegram",
+        ChatType: "private",
+      },
     });
   });
 
@@ -569,6 +618,30 @@ describe("media-understanding runtime", () => {
     expect(mocks.cleanup).toHaveBeenCalledOnce();
   });
 
+  it("caps explicit image description timeouts before fetch and provider execution", async () => {
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, url: "https://example.com/photo.png", mime: "image/png" },
+    ]);
+
+    await describeImageFileWithModel({
+      filePath: "https://example.com/photo.png",
+      mediaUrl: "https://example.com/photo.png",
+      provider: "zai",
+      model: "glm-4.6v",
+      prompt: "Describe it",
+      cfg: {} as OpenClawConfig,
+      agentDir: "/tmp/agent",
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(mocks.getBuffer).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: MAX_TIMER_TIMEOUT_MS }),
+    );
+    expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: MAX_TIMER_TIMEOUT_MS }),
+    );
+  });
+
   it("routes direct image description through a provider-specific image hook", async () => {
     const describeImage = vi.fn(async () => ({
       text: "image ok",
@@ -696,6 +769,37 @@ describe("media-understanding runtime", () => {
     expect(extractOptions?.authStore).toBe(authStore);
     expect(extractOptions?.timeoutMs).toBe(45_000);
     expect(extractOptions?.agentDir).toBe("/tmp/agent");
+  });
+
+  it("caps explicit structured extraction timeouts before provider execution", async () => {
+    const extractStructured = vi.fn(async () => ({
+      text: "{}",
+      parsed: {},
+      model: "vision-json",
+      provider: "vision-plugin",
+      contentType: "json" as const,
+    }));
+    mocks.getMediaUnderstandingProvider.mockReturnValue({ id: "vision-plugin", extractStructured });
+
+    await extractStructuredWithModel({
+      input: [
+        {
+          type: "image",
+          buffer: Buffer.from("image-bytes"),
+          fileName: "fact.png",
+          mime: "image/png",
+        },
+      ],
+      instructions: "Return JSON.",
+      provider: "vision-plugin",
+      model: "vision-json",
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      cfg: {} as OpenClawConfig,
+    });
+
+    expect(extractStructured).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: MAX_TIMER_TIMEOUT_MS }),
+    );
   });
 
   it("rejects text-only structured extraction before provider lookup", async () => {

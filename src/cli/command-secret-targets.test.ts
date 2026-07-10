@@ -1,11 +1,11 @@
+// Command secret target tests cover CLI secret target mapping and validation.
 import { describe, expect, it, vi } from "vitest";
 
 const REGISTRY_IDS = [
   "agents.defaults.memorySearch.remote.apiKey",
   "agents.list[].memorySearch.remote.apiKey",
   "channels.discord.token",
-  "channels.discord.accounts.ops.token",
-  "channels.discord.accounts.chat.token",
+  "channels.discord.accounts.*.token",
   "channels.telegram.botToken",
   "gateway.auth.token",
   "gateway.auth.password",
@@ -249,6 +249,7 @@ import {
   getQrRemoteCommandSecretTargetIds,
   getScopedChannelsCommandSecretTargets,
   getSecurityAuditCommandSecretTargetIds,
+  getStatusCommandSecretTargetIds,
 } from "./command-secret-targets.js";
 
 describe("command secret target ids", () => {
@@ -270,6 +271,20 @@ describe("command secret target ids", () => {
     expect(ids.has("agents.list[].memorySearch.remote.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(true);
+    expect(ids.has("channels.discord.token")).toBe(false);
+  });
+
+  it("includes gateway auth targets for status command scans", () => {
+    const ids = getStatusCommandSecretTargetIds(undefined, undefined, {
+      includeChannelTargets: false,
+    });
+
+    expect(ids.has("gateway.auth.token")).toBe(true);
+    expect(ids.has("gateway.auth.password")).toBe(true);
+    expect(ids.has("gateway.remote.token")).toBe(true);
+    expect(ids.has("gateway.remote.password")).toBe(true);
+    expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
+    expect(ids.has("agents.list[].memorySearch.remote.apiKey")).toBe(true);
     expect(ids.has("channels.discord.token")).toBe(false);
   });
 
@@ -1049,11 +1064,7 @@ describe("command secret target ids", () => {
     });
 
     expect(scoped.targetIds).toEqual(
-      new Set([
-        "channels.discord.accounts.chat.token",
-        "channels.discord.accounts.ops.token",
-        "channels.discord.token",
-      ]),
+      new Set(["channels.discord.accounts.*.token", "channels.discord.token"]),
     );
   });
 
@@ -1062,9 +1073,9 @@ describe("command secret target ids", () => {
       config: {
         channels: {
           discord: {
-            defaultAccount: "ops",
+            defaultAccount: "Ops Team",
             accounts: {
-              ops: {
+              "Ops Team": {
                 token: { source: "env", provider: "default", id: "DISCORD_OPS" },
               },
             },
@@ -1076,12 +1087,32 @@ describe("command secret target ids", () => {
 
     expect(scoped.allowedPaths).toBeUndefined();
     expect(scoped.targetIds).toEqual(
-      new Set([
-        "channels.discord.accounts.chat.token",
-        "channels.discord.accounts.ops.token",
-        "channels.discord.token",
-      ]),
+      new Set(["channels.discord.accounts.*.token", "channels.discord.token"]),
     );
+  });
+
+  it("scopes a missing accountId to the channel default when requested", () => {
+    const scoped = getScopedChannelsCommandSecretTargets({
+      config: {
+        channels: {
+          discord: {
+            defaultAccount: "Ops Team",
+            accounts: {
+              "Ops Team": {
+                token: { source: "env", provider: "default", id: "DISCORD_OPS" },
+              },
+              chat: {
+                token: { source: "env", provider: "default", id: "DISCORD_CHAT" },
+              },
+            },
+          },
+        },
+      } as never,
+      channel: "discord",
+      defaultAccountWhenMissing: true,
+    });
+
+    expect(scoped.allowedPaths).toEqual(new Set(["channels.discord.accounts.Ops Team.token"]));
   });
 
   it("scopes allowed paths to channel globals + selected account", () => {

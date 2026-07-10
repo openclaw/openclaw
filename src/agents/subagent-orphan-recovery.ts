@@ -20,9 +20,10 @@ import {
   type SessionEntry,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
-import { readSessionMessagesAsync } from "../gateway/session-utils.fs.js";
+import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { truncateUtf16Safe } from "../utils.js";
 import { resolveInternalSessionEffectsTranscriptPath } from "./internal-session-effects.js";
 import {
   evaluateSubagentRecoveryGate,
@@ -72,7 +73,8 @@ function reclassifyLegacyRestartInterruptedRun(runRecord: SubagentRunRecord): vo
  */
 function buildResumeMessage(task: string, lastHumanMessage?: string): string {
   const maxTaskLen = 2000;
-  const truncatedTask = task.length > maxTaskLen ? `${task.slice(0, maxTaskLen)}...` : task;
+  const truncatedTask =
+    task.length > maxTaskLen ? `${truncateUtf16Safe(task, maxTaskLen)}...` : task;
 
   let message =
     `[System] Your previous turn was interrupted by a gateway reload. ` +
@@ -153,6 +155,11 @@ async function resumeOrphanedSession(params: {
       nextRunId: result.runId,
       fallback: params.originalRun,
       transcriptFile: resolveInternalSessionEffectsTranscriptPath(result.runId),
+      // Persist the stable original task (not the synthetic resume wrapper) so
+      // that any further post-restart redispatch reconstructs the same
+      // canonical task. Persisting `resumeMessage` instead would accumulate a
+      // wrapped-resume-of-resume cascade across repeated restarts.
+      task: params.task,
     });
     if (!remapped) {
       log.warn(
@@ -294,9 +301,13 @@ export async function recoverOrphanedSubagentSessions(params: {
         log.info(`found orphaned subagent session: ${childSessionKey} (run=${runId})`);
 
         const messages = await readSessionMessagesAsync(
-          entry.sessionId,
-          storePath,
-          entry.sessionFile,
+          {
+            agentId: resolveAgentIdFromSessionKey(childSessionKey),
+            sessionEntry: entry,
+            sessionId: entry.sessionId,
+            sessionKey: childSessionKey,
+            storePath,
+          },
           {
             mode: "recent",
             maxMessages: 200,
@@ -456,7 +467,7 @@ export function scheduleOrphanRecovery(params: {
             ),
           );
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           if (attempt < maxRetries) {
             const nextDelay = delay * RETRY_BACKOFF_MULTIPLIER;
             log.warn(

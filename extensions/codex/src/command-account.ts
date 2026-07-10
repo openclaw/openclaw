@@ -1,3 +1,4 @@
+// Codex plugin module implements command account behavior.
 import {
   ensureAuthProfileStore,
   findNormalizedProviderValue,
@@ -13,7 +14,6 @@ import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
-import { rememberCodexRateLimits } from "./app-server/rate-limit-cache.js";
 import {
   summarizeCodexAccountUsage,
   type CodexAccountUsageSummary,
@@ -21,7 +21,7 @@ import {
 import type { CodexControlRequestOptions, SafeValue } from "./command-rpc.js";
 
 const OPENAI_PROVIDER_ID = "openai";
-const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+const OPENAI_CODEX_PROVIDER_ID = OPENAI_PROVIDER_ID;
 
 type AuthProfileOrderConfig = Parameters<typeof resolveAuthProfileOrder>[0]["cfg"];
 
@@ -226,7 +226,7 @@ function resolveActiveProfileId(params: {
     params.store.lastGood?.[OPENAI_CODEX_PROVIDER_ID],
   ].find(
     (profileId): profileId is string =>
-      !!profileId &&
+      typeof profileId === "string" &&
       params.order.includes(profileId) &&
       isActiveProfileCandidate(params, profileId),
   );
@@ -330,7 +330,6 @@ async function readSubscriptionUsage(params: {
   if (!limits.ok) {
     return undefined;
   }
-  rememberCodexRateLimits(limits.value);
   return summarizeCodexAccountUsage(limits.value, params.now);
 }
 

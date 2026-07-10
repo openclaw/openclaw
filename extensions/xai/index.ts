@@ -1,20 +1,35 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+// Xai plugin entrypoint registers its OpenClaw integration.
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { OPENAI_COMPATIBLE_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
 import { defaultToolStreamExtraParams } from "openclaw/plugin-sdk/provider-stream-shared";
 import { jsonResult } from "openclaw/plugin-sdk/provider-web-search";
-import { Type } from "typebox";
 import {
   applyXaiRuntimeModelCompat,
   buildXaiImageGenerationProvider,
   normalizeXaiModelId,
   resolveXaiTransport,
 } from "./api.js";
+import {
+  buildMissingCodeExecutionApiKeyPayload,
+  createCodeExecutionToolDefinition,
+} from "./code-execution-tool-shared.js";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
-import { buildXaiProvider } from "./provider-catalog.js";
+import {
+  buildLiveXaiOAuthProvider,
+  buildLiveXaiProvider,
+  buildXaiProvider,
+} from "./provider-catalog.js";
+import { isXaiProviderId } from "./provider-id.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { buildXaiRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 import { buildXaiSpeechProvider } from "./speech-provider.js";
+import {
+  readPluginCodeExecutionConfig,
+  resolveCodeExecutionEnabled,
+} from "./src/code-execution-config.js";
 import {
   isXaiToolEnabled,
   resolveFallbackXaiAuth,
@@ -36,25 +51,14 @@ import {
 } from "./xai-oauth.js";
 
 const PROVIDER_ID = "xai";
-type CodeExecutionModule = typeof import("./code-execution.js");
-type XSearchModule = typeof import("./x-search.js");
 
 const XAI_CREDIT_OR_SPENDING_LIMIT_RE =
   /\b(?:used all available credits|monthly spending limit|purchase more credits|raise your spending limit)\b/i;
 const XAI_RATE_LIMIT_RE = /\b(?:rate limit exceeded|too many requests)\b/i;
 
-let codeExecutionModulePromise: Promise<CodeExecutionModule> | undefined;
-let xSearchModulePromise: Promise<XSearchModule> | undefined;
+const loadCodeExecutionModule = createLazyRuntimeModule(() => import("./code-execution.js"));
 
-function loadCodeExecutionModule(): Promise<CodeExecutionModule> {
-  codeExecutionModulePromise ??= import("./code-execution.js");
-  return codeExecutionModulePromise;
-}
-
-function loadXSearchModule(): Promise<XSearchModule> {
-  xSearchModulePromise ??= import("./x-search.js");
-  return xSearchModulePromise;
-}
+const loadXSearchModule = createLazyRuntimeModule(() => import("./x-search.js"));
 
 function classifyXaiFailoverReason(errorMessage: string) {
   if (XAI_CREDIT_OR_SPENDING_LIMIT_RE.test(errorMessage)) {
@@ -71,30 +75,12 @@ function hasResolvableXaiApiKey(config: unknown, auth?: XaiToolAuthContext): boo
 }
 
 function isCodeExecutionEnabled(config: unknown, auth?: XaiToolAuthContext): boolean {
-  if (!config || typeof config !== "object") {
-    return hasResolvableXaiApiKey(config, auth);
-  }
-  const entries = (config as Record<string, unknown>).plugins;
-  const pluginEntries =
-    entries && typeof entries === "object"
-      ? ((entries as Record<string, unknown>).entries as Record<string, unknown> | undefined)
-      : undefined;
-  const xaiEntry =
-    pluginEntries && typeof pluginEntries.xai === "object"
-      ? (pluginEntries.xai as Record<string, unknown>)
-      : undefined;
-  const pluginConfig =
-    xaiEntry && typeof xaiEntry.config === "object"
-      ? (xaiEntry.config as Record<string, unknown>)
-      : undefined;
-  const codeExecution =
-    pluginConfig && typeof pluginConfig.codeExecution === "object"
-      ? (pluginConfig.codeExecution as Record<string, unknown>)
-      : undefined;
-  if (codeExecution?.enabled === false) {
-    return false;
-  }
-  return hasResolvableXaiApiKey(config, auth);
+  return resolveCodeExecutionEnabled({
+    sourceConfig: config,
+    runtimeConfig: config,
+    config: readPluginCodeExecutionConfig(config),
+    auth,
+  });
 }
 
 function isXSearchEnabled(config: unknown, auth?: XaiToolAuthContext): boolean {
@@ -108,29 +94,36 @@ function isXSearchEnabled(config: unknown, auth?: XaiToolAuthContext): boolean {
   return hasResolvableXaiApiKey(config, auth);
 }
 
-function createLazyCodeExecutionTool(ctx: {
-  config?: Record<string, unknown>;
-  runtimeConfig?: Record<string, unknown>;
-  hasAuthForProvider?: XaiToolAuthContext["hasAuthForProvider"];
-  resolveApiKeyForProvider?: XaiToolAuthContext["resolveApiKeyForProvider"];
-}) {
+function shouldExposeXaiBilledTool(params: {
+  activeProvider?: string;
+  enabled?: unknown;
+}): boolean {
+  const activeProvider = params.activeProvider?.trim();
+  if (!activeProvider || params.enabled === false) {
+    return false;
+  }
+  // Cross-provider billing requires explicit consent; xAI models retain the
+  // credential-backed default. Unknown providers fail closed.
+  return isXaiProviderId(activeProvider) || params.enabled === true;
+}
+
+function createLazyCodeExecutionTool(ctx: OpenClawPluginToolContext) {
   const effectiveConfig = ctx.runtimeConfig ?? ctx.config;
+  const codeExecutionConfig = readPluginCodeExecutionConfig(effectiveConfig);
+  if (
+    !shouldExposeXaiBilledTool({
+      activeProvider: ctx.activeModel?.provider,
+      enabled: codeExecutionConfig?.enabled,
+    })
+  ) {
+    return null;
+  }
   if (!isCodeExecutionEnabled(effectiveConfig, ctx)) {
     return null;
   }
 
-  return {
-    label: "Code Execution",
-    name: "code_execution",
-    description:
-      "Run sandboxed Python analysis with xAI. Use for calculations, tabulation, summaries, and chart-style analysis without local machine access.",
-    parameters: Type.Object({
-      task: Type.String({
-        description:
-          "The full analysis task for xAI's remote Python sandbox. Include any data to analyze directly in the task.",
-      }),
-    }),
-    execute: async (toolCallId: string, args: Record<string, unknown>) => {
+  return createCodeExecutionToolDefinition(
+    async (toolCallId: string, args: Record<string, unknown>) => {
       const { createCodeExecutionTool } = await loadCodeExecutionModule();
       const tool = createCodeExecutionTool({
         config: ctx.config as never,
@@ -138,25 +131,24 @@ function createLazyCodeExecutionTool(ctx: {
         auth: ctx,
       });
       if (!tool) {
-        return jsonResult({
-          error: "missing_xai_api_key",
-          message:
-            "code_execution needs xAI credentials. Run `openclaw onboard --auth-choice xai-oauth` to sign in with Grok, run `openclaw onboard --auth-choice xai-api-key`, set `XAI_API_KEY` in the Gateway environment, or configure `plugins.entries.xai.config.webSearch.apiKey`.",
-          docs: "https://docs.openclaw.ai/tools/code-execution",
-        });
+        return jsonResult(buildMissingCodeExecutionApiKeyPayload());
       }
       return await tool.execute(toolCallId, args);
     },
-  };
+  );
 }
 
-function createLazyXSearchTool(ctx: {
-  config?: Record<string, unknown>;
-  runtimeConfig?: Record<string, unknown>;
-  hasAuthForProvider?: XaiToolAuthContext["hasAuthForProvider"];
-  resolveApiKeyForProvider?: XaiToolAuthContext["resolveApiKeyForProvider"];
-}) {
+function createLazyXSearchTool(ctx: OpenClawPluginToolContext) {
   const effectiveConfig = ctx.runtimeConfig ?? ctx.config;
+  const xSearchConfig = resolveEffectiveXSearchConfig(effectiveConfig);
+  if (
+    !shouldExposeXaiBilledTool({
+      activeProvider: ctx.activeModel?.provider,
+      enabled: xSearchConfig?.enabled,
+    })
+  ) {
+    return null;
+  }
   if (!isXSearchEnabled(effectiveConfig, ctx)) {
     return null;
   }
@@ -201,7 +193,60 @@ export default defineSingleProviderPluginEntry({
     ],
     extraAuth: [createXaiOAuthAuthMethod(), createXaiDeviceCodeAuthMethod()],
     catalog: {
-      buildProvider: buildXaiProvider,
+      order: "simple",
+      run: async (ctx) => {
+        const auth = ctx.resolveProviderAuth(PROVIDER_ID);
+        try {
+          const { resolveApiKeyForProvider } =
+            await import("openclaw/plugin-sdk/provider-auth-runtime");
+          const runtimeAuth = await resolveApiKeyForProvider({
+            provider: PROVIDER_ID,
+            cfg: ctx.config,
+            ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+            ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
+            ...(auth.profileId
+              ? {
+                  profileId: auth.profileId,
+                  lockedProfile: true,
+                }
+              : {}),
+          });
+          if (runtimeAuth?.mode === "oauth" && runtimeAuth.apiKey) {
+            return {
+              provider: await buildLiveXaiOAuthProvider({
+                discoveryApiKey: runtimeAuth.apiKey,
+              }),
+            };
+          }
+        } catch {
+          if (auth.mode === "oauth") {
+            // OAuth discovery is advisory; fall through so configured API-key
+            // auth can still publish the standard xAI catalog.
+          }
+        }
+        if (auth.apiKey) {
+          return {
+            provider: await buildLiveXaiProvider({
+              apiKey: auth.apiKey,
+              discoveryApiKey: auth.discoveryApiKey,
+            }),
+          };
+        }
+
+        const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID);
+        if (!apiKey.apiKey) {
+          return null;
+        }
+        return {
+          provider: await buildLiveXaiProvider({
+            apiKey: apiKey.apiKey,
+            discoveryApiKey: apiKey.discoveryApiKey,
+          }),
+        };
+      },
+      staticRun: async () => ({
+        provider: buildXaiProvider(),
+      }),
     },
     ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
     prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),

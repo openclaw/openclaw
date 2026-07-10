@@ -1,14 +1,20 @@
+// Resolves attachment payloads for plugin host hooks.
 import * as fsPromises from "node:fs/promises";
 import { lstat } from "node:fs/promises";
+import {
+  detectMime,
+  FILE_TYPE_SNIFF_MAX_BYTES,
+  normalizeMimeType,
+} from "@openclaw/media-core/mime";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolvePathFromInput } from "../agents/path-policy.js";
 import { resolveWorkspaceRoot } from "../agents/workspace-dir.js";
 import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { detectMime, FILE_TYPE_SNIFF_MAX_BYTES, normalizeMimeType } from "../media/mime.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import type {
   PluginAttachmentChannelHints,
@@ -19,23 +25,17 @@ import type {
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 const DEFAULT_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
+/** Filesystem adapter used by attachment MIME probes and tests. */
 export const attachmentProbeFs = {
   open: (...args: Parameters<typeof fsPromises.open>) => fsPromises.open(...args),
 };
 const MAX_ATTACHMENT_FILES = 10;
 
 type SendMessage = typeof import("../infra/outbound/message.js").sendMessage;
-let sendMessagePromise: Promise<SendMessage> | undefined;
 
-async function loadSendMessage(): Promise<SendMessage> {
-  sendMessagePromise ??= import("../infra/outbound/message.js").then(
-    (module) => module.sendMessage,
-  );
-  return sendMessagePromise;
-}
-
-type GetChannelPlugin = typeof import("../channels/plugins/index.js").getChannelPlugin;
-let getChannelPluginPromise: Promise<GetChannelPlugin> | undefined;
+const loadSendMessage = createLazyRuntimeModule(() =>
+  import("../infra/outbound/message.js").then((module) => module.sendMessage),
+);
 
 type AttachmentDeliveryChannelPlugin = {
   outbound?: {
@@ -43,12 +43,9 @@ type AttachmentDeliveryChannelPlugin = {
   };
 };
 
-async function loadGetChannelPlugin(): Promise<GetChannelPlugin> {
-  getChannelPluginPromise ??= import("../channels/plugins/index.js").then(
-    (module) => module.getChannelPlugin,
-  );
-  return getChannelPluginPromise;
-}
+const loadGetChannelPlugin = createLazyRuntimeModule(() =>
+  import("../channels/plugins/index.js").then((module) => module.getChannelPlugin),
+);
 
 type ResolvedAttachmentDelivery = {
   parseMode?: "HTML";
@@ -91,6 +88,7 @@ async function readMimeSniffBuffer(
   }
 }
 
+/** Resolves channel-specific attachment delivery options from caption format and hints. */
 export function resolveAttachmentDelivery(params: {
   channel: string;
   captionFormat?: PluginSessionAttachmentCaptionFormat;
@@ -214,6 +212,7 @@ function normalizeOptionalThreadId(value: unknown): string | number | undefined 
   return normalizeOptionalString(value);
 }
 
+/** Resolves the thread id used when delivering a plugin session attachment. */
 export function resolveSessionAttachmentThreadId(params: {
   deliveryThreadId?: unknown;
   explicitThreadId?: unknown;
@@ -228,6 +227,7 @@ export function resolveSessionAttachmentThreadId(params: {
   );
 }
 
+/** Sends a bundled-plugin session attachment through the session's active delivery route. */
 export async function sendPluginSessionAttachment(
   params: PluginSessionAttachmentParams & { config?: OpenClawConfig; origin?: PluginOrigin },
 ): Promise<PluginSessionAttachmentResult> {

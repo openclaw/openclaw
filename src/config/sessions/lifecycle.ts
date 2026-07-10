@@ -1,18 +1,92 @@
+// Session lifecycle timestamps prefer store metadata and fall back to transcript headers.
 import fs from "node:fs";
+import fsp from "node:fs/promises";
+import { asDateTimestampMs } from "../../shared/number-coercion.js";
+import { canonicalizeMainSessionAlias } from "./main-session.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   type SessionFilePathOptions,
 } from "./paths.js";
-import type { SessionEntry } from "./types.js";
+import { isTerminalSessionStatus, type SessionEntry, type SessionScope } from "./types.js";
 
 type SessionLifecycleEntry = Pick<
   SessionEntry,
   "sessionId" | "sessionFile" | "sessionStartedAt" | "lastInteractionAt" | "updatedAt"
 >;
 
+type SessionWorkStartEntry = Pick<SessionEntry, "archivedAt" | "sessionId">;
+
+type SessionWorkStartOptions = {
+  expectedSessionId?: string;
+};
+
+/** Stable Gateway error detail for stale session lifecycle requests. */
+export const SESSION_LIFECYCLE_CHANGED_ERROR_REASON = "session-changed";
+export const SESSION_WORK_START_INVALIDATED_ERROR_CODE = "SESSION_WORK_START_INVALIDATED";
+
+export class SessionWorkStartInvalidatedError extends Error {
+  readonly code = SESSION_WORK_START_INVALIDATED_ERROR_CODE;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionWorkStartInvalidatedError";
+  }
+}
+
+export function isSessionWorkStartInvalidatedError(
+  error: unknown,
+): error is SessionWorkStartInvalidatedError {
+  return (
+    error instanceof SessionWorkStartInvalidatedError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === SESSION_WORK_START_INVALIDATED_ERROR_CODE)
+  );
+}
+
+/** Archived sessions are read-only until the lifecycle owner restores them. */
+export function resolveSessionWorkStartError(
+  sessionKey: string,
+  entry: SessionWorkStartEntry | null | undefined,
+  options?: SessionWorkStartOptions,
+): string | undefined {
+  if (options?.expectedSessionId && !entry) {
+    return `Session "${sessionKey}" was deleted while starting work. Retry.`;
+  }
+  if (options?.expectedSessionId && entry?.sessionId !== options.expectedSessionId) {
+    return `Session "${sessionKey}" changed while starting work. Retry.`;
+  }
+  return entry?.archivedAt === undefined
+    ? undefined
+    : `Session "${sessionKey}" is archived. Restore it before starting new work.`;
+}
+
+// Transcript headers are read lazily to recover startedAt without parsing full files.
+
+type TerminalMainSessionTranscriptRegistryParams = {
+  entry: SessionEntry | undefined;
+  sessionScope?: SessionScope;
+  sessionKey?: string;
+  agentId: string;
+  mainKey?: string;
+  storePath?: string;
+};
+
+type TerminalMainSessionTranscriptRegistryCheck = {
+  sessionId: string;
+  registryTimestampMs: number;
+};
+
 function resolveTimestamp(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  const timestampMs = asDateTimestampMs(value);
+  return timestampMs !== undefined && timestampMs >= 0 ? timestampMs : undefined;
+}
+
+function resolvePositiveTimestamp(value: number | undefined): number | undefined {
+  const timestampMs = resolveTimestamp(value);
+  return timestampMs !== undefined && timestampMs > 0 ? timestampMs : undefined;
 }
 
 function parseTimestampMs(value: unknown): number | undefined {
@@ -23,7 +97,7 @@ function parseTimestampMs(value: unknown): number | undefined {
     return undefined;
   }
   const parsed = Date.parse(value);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+  return resolveTimestamp(parsed);
 }
 
 function readFirstLine(filePath: string): string | undefined {
@@ -46,7 +120,8 @@ function readFirstLine(filePath: string): string | undefined {
   }
 }
 
-export function readSessionHeaderStartedAtMs(params: {
+/** Reads session start time from a transcript header when store metadata is missing. */
+function readSessionHeaderStartedAtMs(params: {
   entry: SessionLifecycleEntry | undefined;
   agentId?: string;
   storePath?: string;
@@ -111,4 +186,108 @@ export function resolveSessionLifecycleTimestamps(params: {
       }),
     lastInteractionAt: resolveTimestamp(entry.lastInteractionAt),
   };
+}
+
+export function resolveTerminalMainSessionTranscriptRegistryCheck(
+  params: TerminalMainSessionTranscriptRegistryParams,
+): TerminalMainSessionTranscriptRegistryCheck | undefined {
+  if (!params.entry || !params.sessionKey) {
+    return undefined;
+  }
+  const configuredMainSessionKey = canonicalizeMainSessionAlias({
+    cfg: { session: { scope: params.sessionScope, mainKey: params.mainKey } },
+    agentId: params.agentId,
+    sessionKey: params.mainKey ?? "main",
+  });
+  const candidateSessionKey = canonicalizeMainSessionAlias({
+    cfg: { session: { scope: params.sessionScope, mainKey: params.mainKey } },
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  if (candidateSessionKey !== configuredMainSessionKey) {
+    return undefined;
+  }
+  const hasTerminalLifecycle =
+    isTerminalSessionStatus(params.entry.status) ||
+    resolvePositiveTimestamp(params.entry.endedAt) !== undefined;
+  if (!hasTerminalLifecycle) {
+    return undefined;
+  }
+  if (params.entry.status === "done") {
+    // Successful rows stay reusable: transcript writes can land after registry
+    // updates without making the session stale.
+    return undefined;
+  }
+  if (params.entry.status === "failed") {
+    // Failed rows with a present transcript stay reusable for retry/recovery.
+    // Callers already rotate failed rows when the transcript is missing.
+    return undefined;
+  }
+  // updatedAt is touched after managed transcript appends; endedAt can predate
+  // healthy post-run transcript writes and would rotate valid sessions.
+  const registryTimestampMs = resolvePositiveTimestamp(params.entry.updatedAt);
+  if (registryTimestampMs === undefined) {
+    return undefined;
+  }
+  const sessionId = typeof params.entry.sessionId === "string" ? params.entry.sessionId.trim() : "";
+  if (!sessionId) {
+    return undefined;
+  }
+  return { sessionId, registryTimestampMs };
+}
+
+function isTranscriptMtimeNewerThanRegistry(params: {
+  transcriptMtimeMs: number;
+  registryTimestampMs: number;
+}): boolean {
+  const transcriptMtimeMs = Math.floor(params.transcriptMtimeMs);
+  const registryTimestampMs = Math.floor(params.registryTimestampMs);
+  return Number.isFinite(transcriptMtimeMs) && transcriptMtimeMs > registryTimestampMs;
+}
+
+export function hasTerminalMainSessionTranscriptNewerThanRegistrySync(
+  params: TerminalMainSessionTranscriptRegistryParams,
+): boolean {
+  const check = resolveTerminalMainSessionTranscriptRegistryCheck(params);
+  if (!check) {
+    return false;
+  }
+  const pathOptions = resolveSessionFilePathOptions({
+    agentId: params.agentId,
+    storePath: params.storePath,
+  });
+  try {
+    const sessionFile = resolveSessionFilePath(check.sessionId, params.entry, pathOptions);
+    const stats = fs.statSync(sessionFile);
+    return isTranscriptMtimeNewerThanRegistry({
+      transcriptMtimeMs: stats.mtimeMs,
+      registryTimestampMs: check.registryTimestampMs,
+    });
+  } catch {
+    return false;
+  }
+}
+
+export async function hasTerminalMainSessionTranscriptNewerThanRegistry(
+  params: TerminalMainSessionTranscriptRegistryParams,
+): Promise<boolean> {
+  const check = resolveTerminalMainSessionTranscriptRegistryCheck(params);
+  if (!check) {
+    return false;
+  }
+  const pathOptions = resolveSessionFilePathOptions({
+    agentId: params.agentId,
+    storePath: params.storePath,
+  });
+  try {
+    // Session admission owns this bounded stat as the terminal-main reconciliation gate.
+    const sessionFile = resolveSessionFilePath(check.sessionId, params.entry, pathOptions);
+    const stats = await fsp.stat(sessionFile);
+    return isTranscriptMtimeNewerThanRegistry({
+      transcriptMtimeMs: stats.mtimeMs,
+      registryTimestampMs: check.registryTimestampMs,
+    });
+  } catch {
+    return false;
+  }
 }

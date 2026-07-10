@@ -1,9 +1,11 @@
+// Config fixture writer commands for E2E scenarios.
 import path from "node:path";
+import { readPositiveIntEnv, readTcpPortEnv } from "../env-limits.mjs";
 import { requireArg, writeJson } from "./common.mjs";
 
 function writeConfig(kind) {
   const configPath = requireArg(process.env.OPENCLAW_CONFIG_PATH, "OPENCLAW_CONFIG_PATH");
-  const port = Number(process.env.PORT ?? 18789);
+  const port = readTcpPortEnv("PORT", 18789);
   const config =
     kind === "config-reload"
       ? {
@@ -30,11 +32,13 @@ function writeConfig(kind) {
             },
             browser: {
               enabled: true,
+              noSandbox: true,
+              extraArgs: ["--remote-debugging-address=127.0.0.1", "about:blank"],
               defaultProfile: "docker-cdp",
               ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
               profiles: {
                 "docker-cdp": {
-                  cdpUrl: `http://127.0.0.1:${Number(process.env.CDP_PORT ?? 19222)}`,
+                  cdpUrl: `http://127.0.0.1:${readTcpPortEnv("CDP_PORT", 19222)}`,
                   color: "#FF4500",
                 },
               },
@@ -99,7 +103,7 @@ function writeOpenWebUiConfig([openaiApiKey]) {
     { path: "models.providers.openai.models", value: [] },
     {
       path: "models.providers.openai.timeoutSeconds",
-      value: Number.parseInt(process.env.OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS ?? "900", 10),
+      value: readPositiveIntEnv("OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS", 900),
     },
     { path: "models.providers.openai.agentRuntime", value: { id: "openclaw" } },
     { path: "gateway.controlUi.enabled", value: false },

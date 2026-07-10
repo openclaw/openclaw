@@ -1,23 +1,52 @@
+// Covers managed task-flow audit summaries and stale-flow classification.
 import { afterEach, describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createRunningTaskRun } from "./task-executor.js";
+import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
+import {
+  createRunningTaskRun as createRunningTaskRunOrNull,
+  finalizeTaskRunByRunId,
+} from "./task-executor.js";
 import {
   listTaskFlowAuditFindings,
   type TaskFlowAuditCode,
   type TaskFlowAuditFinding,
 } from "./task-flow-registry.audit.js";
 import {
-  createManagedTaskFlow,
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
+  requestFlowCancel,
   resetTaskFlowRegistryForTests,
   setFlowWaiting,
 } from "./task-flow-registry.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "./task-registry.js";
+import type { TaskRecord } from "./task-registry.types.js";
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
+
+function createManagedTaskFlow(
+  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
+): TaskFlowRecord {
+  const flow = createManagedTaskFlowOrNull(params);
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
+
+function createRunningTaskRun(
+  params: Parameters<typeof createRunningTaskRunOrNull>[0],
+): TaskRecord {
+  const task = createRunningTaskRunOrNull(params);
+  if (!task) {
+    throw new Error("expected running task creation to succeed");
+  }
+  return task;
+}
 
 function requireFinding(
   findings: TaskFlowAuditFinding[],
@@ -57,11 +86,7 @@ async function withTaskFlowAuditStateDir(run: (root: string) => Promise<void>): 
 
 describe("task-flow-registry audit", () => {
   afterEach(() => {
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
+    ORIGINAL_ENV.restore();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests();
     resetTaskFlowRegistryForTests();
@@ -220,6 +245,52 @@ describe("task-flow-registry audit", () => {
 
       const findings = listTaskFlowAuditFindings({ now: 6 * 60_000 });
       expect(requireFinding(findings, "cancel_stuck", flow.flowId).flow?.flowId).toBe(flow.flowId);
+    });
+  });
+
+  it("counts provisional subagent cancellation as active during audit", async () => {
+    await withTaskFlowAuditStateDir(async () => {
+      const now = Date.now();
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-audit",
+        goal: "Cancel subagent work",
+        status: "running",
+        createdAt: now - 6 * 60_000,
+        updatedAt: now - 6 * 60_000,
+      });
+      const runId = "run-provisional-cancel-audit";
+      const task = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:subagent:provisional-cancel",
+        runId,
+        task: "Wait for kill reconciliation",
+        startedAt: now - 6 * 60_000,
+        lastEventAt: now - 6 * 60_000,
+      });
+      expect(task.runId).toBe(runId);
+      requestFlowCancel({
+        flowId: flow.flowId,
+        expectedRevision: flow.revision,
+        cancelRequestedAt: now - 6 * 60_000,
+        updatedAt: now - 6 * 60_000,
+      });
+      finalizeTaskRunByRunId({
+        runId,
+        runtime: "subagent",
+        status: "cancelled",
+        endedAt: now - 6 * 60_000,
+        error: SUBAGENT_KILL_TASK_ERROR,
+      });
+
+      expect(
+        listTaskFlowAuditFindings({ now }).find(
+          (finding) => finding.code === "cancel_stuck" && finding.flow?.flowId === flow.flowId,
+        ),
+      ).toBeUndefined();
     });
   });
 });

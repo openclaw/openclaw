@@ -1,13 +1,17 @@
+/** Doctor repair for HEARTBEAT.md files that accidentally contain docs template wrappers. */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveWorkspaceTemplateDir } from "../agents/workspace-templates.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { writeTextAtomic } from "../infra/json-files.js";
-import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
+
+const HEARTBEAT_TEMPLATE_CHECK_ID = "core/doctor/heartbeat-template";
 
 const LEGACY_HEARTBEAT_PROSE_TEMPLATE = [
   "# HEARTBEAT.md",
@@ -86,7 +90,7 @@ const KNOWN_REPAIRABLE_DIRTY_HEARTBEAT_TEMPLATES = [
   DOCS_HEARTBEAT_TEMPLATE_PAGE_AS_TEMPLATE,
 ] as const;
 
-export type HeartbeatTemplateRepairAnalysis =
+type HeartbeatTemplateRepairAnalysis =
   | { status: "clean" }
   | { status: "dirty-template" }
   | { status: "dirty-template-with-custom-content"; customLines: string[] };
@@ -95,6 +99,7 @@ function linesEqual(left: readonly string[], right: readonly string[]): boolean 
   return left.length === right.length && left.every((line, index) => line === right[index]);
 }
 
+/** Classifies heartbeat template content as clean, repairable, or risky because it has user text. */
 export function analyzeHeartbeatTemplateForRepair(
   content: string,
 ): HeartbeatTemplateRepairAnalysis {
@@ -124,6 +129,68 @@ async function readCleanHeartbeatTemplate(): Promise<string> {
   return await fs.readFile(templatePath, "utf-8");
 }
 
+function heartbeatTemplateAnalysisToHealthFinding(
+  heartbeatPath: string,
+  analysis: Exclude<HeartbeatTemplateRepairAnalysis, { status: "clean" }>,
+): HealthFinding {
+  if (analysis.status === "dirty-template-with-custom-content") {
+    return {
+      checkId: HEARTBEAT_TEMPLATE_CHECK_ID,
+      severity: "warning",
+      message:
+        "HEARTBEAT.md contains an older heartbeat template wrapper plus custom or unrecognized content.",
+      path: heartbeatPath,
+      requirement: "legacy-template-with-custom-content",
+      fixHint: "Remove the fenced template and Related lines manually if they are not intentional.",
+    };
+  }
+  return {
+    checkId: HEARTBEAT_TEMPLATE_CHECK_ID,
+    severity: "warning",
+    message: "HEARTBEAT.md contains an older heartbeat documentation template.",
+    path: heartbeatPath,
+    requirement: "legacy-template",
+    fixHint: 'Run "openclaw doctor --fix" to replace it with the clean heartbeat template.',
+  };
+}
+
+/** Collects read-only structured findings for legacy HEARTBEAT.md template wrappers. */
+export async function collectHeartbeatTemplateHealthFindings(
+  cfg: OpenClawConfig,
+  deps?: {
+    readFile?: (filePath: string) => Promise<string>;
+  },
+): Promise<readonly HealthFinding[]> {
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  const heartbeatPath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
+  const readFile = deps?.readFile ?? ((filePath: string) => fs.readFile(filePath, "utf-8"));
+  let content: string;
+  try {
+    content = await readFile(heartbeatPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      return [];
+    }
+    return [
+      {
+        checkId: HEARTBEAT_TEMPLATE_CHECK_ID,
+        severity: "warning",
+        message: `Could not inspect HEARTBEAT.md: ${formatErrorMessage(error)}`,
+        path: heartbeatPath,
+        requirement: "inspect-failed",
+        fixHint: "Check file permissions, then rerun doctor.",
+      },
+    ];
+  }
+
+  const analysis = analyzeHeartbeatTemplateForRepair(content);
+  if (analysis.status === "clean") {
+    return [];
+  }
+  return [heartbeatTemplateAnalysisToHealthFinding(heartbeatPath, analysis)];
+}
+
+/** Replaces known dirty heartbeat templates with the clean runtime template when repair is enabled. */
 export async function maybeRepairHeartbeatTemplate(params: {
   cfg: OpenClawConfig;
   shouldRepair: boolean;

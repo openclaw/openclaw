@@ -1,9 +1,11 @@
+// Discord plugin module implements message handler.preflight behavior.
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import {
   buildMentionRegexes,
   classifyChannelInboundEvent,
   logInboundDrop,
+  recordChannelBotPairLoopAndCheckSuppression,
   resolveInboundMentionDecision,
   resolveUnmentionedGroupInboundPolicy,
   recordDroppedChannelInboundHistory,
@@ -63,9 +65,14 @@ import {
   resolveDiscordChannelInfo,
   resolveDiscordMessageChannelId,
   resolveDiscordMessageText,
+  resolveForwardedMediaList,
   resolveMediaList,
 } from "./message-utils.js";
 import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-identity.js";
+import {
+  DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+  DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+} from "./timeouts.js";
 
 export type {
   DiscordMessagePreflightContext,
@@ -425,7 +432,11 @@ export async function preflightDiscordMessage(
     logVerbose(`discord: drop bound-thread bot system message ${message.id}`);
     return null;
   }
-  const mentionRegexes = buildMentionRegexes(params.cfg, effectiveRoute.agentId);
+  const mentionRegexes = buildMentionRegexes(params.cfg, effectiveRoute.agentId, {
+    provider: "discord",
+    conversationId: messageChannelId,
+    providerPolicy: params.discordConfig?.mentionPatterns,
+  });
   const explicitlyMentioned = Boolean(
     botId && message.mentionedUsers?.some((user: User) => user.id === botId),
   );
@@ -455,7 +466,7 @@ export async function preflightDiscordMessage(
       })
     : null;
   logDebug(
-    `[discord-preflight] guild_id=${params.data.guild_id} guild_obj=${!!params.data.guild} guild_obj_id=${params.data.guild?.id} guildInfo=${!!guildInfo} guildEntries=${params.guildEntries ? Object.keys(params.guildEntries).join(",") : "none"}`,
+    `[discord-preflight] guild_id=${params.data.guild_id} guild_obj=${Boolean(params.data.guild)} guild_obj_id=${params.data.guild?.id} guildInfo=${Boolean(guildInfo)} guildEntries=${params.guildEntries ? Object.keys(params.guildEntries).join(",") : "none"}`,
   );
   if (
     isGuildMessage &&
@@ -763,6 +774,38 @@ export async function preflightDiscordMessage(
           nowMs: resolveTimestampMs(message.timestamp),
         }
       : undefined;
+  if (botLoopProtection) {
+    const botLoopResult = recordChannelBotPairLoopAndCheckSuppression(botLoopProtection);
+    if (botLoopResult.suppressed) {
+      logVerbose(
+        `discord: bot-to-bot loop detected before media download, suppressing for ${Math.max(0, Math.ceil((botLoopResult.cooldownUntilMs - Date.now()) / 1000))}s`,
+      );
+      return null;
+    }
+  }
+
+  // Discord CDN attachment URLs expire; download now (receipt time) instead
+  // of after the run queue, which may delay processing past the URL TTL.
+  const mediaResolveOptions = {
+    fetchImpl: params.discordRestFetch,
+    ssrfPolicy: params.cfg.browser?.ssrfPolicy,
+    readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+    totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+    abortSignal: params.abortSignal,
+  };
+  const preparedMedia = await resolveMediaList(message, params.mediaMaxBytes, mediaResolveOptions);
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
+  const forwardedMedia = await resolveForwardedMediaList(
+    message,
+    params.mediaMaxBytes,
+    mediaResolveOptions,
+  );
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
+  preparedMedia.push(...forwardedMedia);
 
   logDebug(
     `[discord-preflight] success: route=${effectiveRoute.agentId} sessionKey=${effectiveRoute.sessionKey}`,
@@ -786,6 +829,7 @@ export async function preflightDiscordMessage(
     baseText,
     messageText,
     ...(preflightTranscript !== undefined ? { preflightAudioTranscript: preflightTranscript } : {}),
+    preparedMedia,
     wasMentioned,
     route: effectiveRoute,
     threadBinding,
@@ -807,6 +851,7 @@ export async function preflightDiscordMessage(
     channelAllowlistConfigured,
     channelAllowed,
     shouldRequireMention,
+    groupRequireMention: shouldRequireMentionByConfig,
     hasAnyMention,
     hasControlCommand: hasControlCommandInMessage,
     allowTextCommands,
@@ -815,6 +860,5 @@ export async function preflightDiscordMessage(
     inboundEventKind,
     canDetectMention,
     historyEntry,
-    botLoopProtection,
   });
 }

@@ -1,3 +1,4 @@
+// Codex tests cover protocol validators plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   readCodexModelListResponse,
@@ -36,43 +37,32 @@ function makeMinimalResponse(threadOverrides: Record<string, unknown> = {}) {
   };
 }
 
+describe("Codex thread response validators", () => {
+  // The 0.143 floor guarantees both thread ids; pre-0.131 servers without
+  // sessionId must fail loudly instead of being silently normalized.
+  it("rejects thread responses missing sessionId", () => {
+    for (const assertResponse of [
+      assertCodexThreadStartResponse,
+      assertCodexThreadResumeResponse,
+    ]) {
+      const response = makeMinimalResponse({ sessionId: undefined });
+      delete (response.thread as Record<string, unknown>).sessionId;
+      expect(() => assertResponse(response)).toThrow("Invalid Codex app-server");
+    }
+  });
+});
+
 describe("assertCodexThreadStartResponse", () => {
   it("accepts response with both id and sessionId", () => {
     const response = makeMinimalResponse();
     const result = assertCodexThreadStartResponse(response);
     expect(result.thread.id).toBe("thread-1");
     expect(result.thread.sessionId).toBe("session-1");
-  });
-
-  it("normalizes missing sessionId from id", () => {
-    const response = makeMinimalResponse({ sessionId: undefined });
-    // Remove the sessionId key entirely
-    delete (response.thread as Record<string, unknown>).sessionId;
-    const result = assertCodexThreadStartResponse(response);
-    expect(result.thread.id).toBe("thread-1");
-    expect(result.thread.sessionId).toBe("thread-1");
-  });
-
-  it("normalizes missing id from sessionId", () => {
-    const response = makeMinimalResponse({ id: undefined, sessionId: "session-1" });
-    delete (response.thread as Record<string, unknown>).id;
-    const result = assertCodexThreadStartResponse(response);
-    expect(result.thread.id).toBe("session-1");
-    expect(result.thread.sessionId).toBe("session-1");
+    expect(result.thread.historyMode).toBe("legacy");
   });
 
   it("throws on invalid response", () => {
     expect(() => assertCodexThreadStartResponse({})).toThrow("Invalid Codex app-server");
-  });
-});
-
-describe("assertCodexThreadResumeResponse", () => {
-  it("normalizes missing sessionId from id", () => {
-    const response = makeMinimalResponse({ sessionId: undefined });
-    delete (response.thread as Record<string, unknown>).sessionId;
-    const result = assertCodexThreadResumeResponse(response);
-    expect(result.thread.id).toBe("thread-1");
-    expect(result.thread.sessionId).toBe("thread-1");
   });
 });
 

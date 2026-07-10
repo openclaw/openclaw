@@ -1,7 +1,20 @@
+/** Silent-reply and heartbeat tokens plus helpers for suppressing token-only model output. */
 import { escapeRegExp } from "../shared/regexp.js";
 
+/** Token that marks a heartbeat response as an acknowledgement with no user notification. */
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
+/** Token that marks an auto-reply response as intentionally silent. */
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
+
+const HARMONY_CHANNEL_MARKER_RE = /^\s*(?:set-thought\s+)?<[\w]*\|[^>]*>\s*$/;
+const BOX_DRAWING_HR_ONLY_RE = /^\s*─{3,}\s*$/;
+
+export function isInternalFormattingArtifact(text: string | undefined): boolean {
+  if (!text) {
+    return false;
+  }
+  return HARMONY_CHANNEL_MARKER_RE.test(text) || BOX_DRAWING_HR_ONLY_RE.test(text);
+}
 
 const silentExactRegexByToken = new Map<string, RegExp>();
 const silentTrailingRegexByToken = new Map<string, RegExp>();
@@ -29,6 +42,11 @@ function getSilentTrailingRegex(token: string): RegExp {
   return regex;
 }
 
+function stripEdgePunctuation(text: string): string {
+  return text.replace(/^\p{P}+|\p{P}+$/gu, "");
+}
+
+/** Returns true only for token-only silent replies. */
 export function isSilentReplyText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
@@ -38,10 +56,34 @@ export function isSilentReplyText(
   }
   // Match only token-only replies, including repeated tokens separated by whitespace.
   // This prevents substantive replies ending with NO_REPLY from being suppressed (#19537).
-  return getSilentExactRegex(token).test(text);
+  // Models sometimes wrap the token in punctuation. Preserve exact custom-token matching,
+  // but keep symbols such as emoji substantive so they are still delivered.
+  return (
+    getSilentExactRegex(token).test(text) ||
+    getSilentExactRegex(token).test(stripEdgePunctuation(text.trim()))
+  );
 }
 
 type SilentReplyActionEnvelope = { action?: unknown };
+
+function isSilentReplyJsonStringText(
+  text: string | undefined,
+  token: string = SILENT_REPLY_TOKEN,
+): boolean {
+  if (!text) {
+    return false;
+  }
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('"') || !trimmed.endsWith('"') || !trimmed.includes(token)) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return typeof parsed === "string" && parsed.trim() === token;
+  } catch {
+    return false;
+  }
+}
 
 function isSilentReplyEnvelopeText(
   text: string | undefined,
@@ -72,9 +114,9 @@ function isSilentReplyEnvelopeText(
 }
 
 const taggedReasoningPrefixRe =
-  /^\s*<\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>[\s\S]*?<\s*\/\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\s*>\s*/i;
+  /^\s*<\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>[\s\S]*?<\s*\/\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\s*>\s*/i;
 const openReasoningPrefixRe =
-  /^\s*<\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/i;
+  /^\s*<\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/i;
 const plainReasoningPrefixRe = /^\s*(?:think(?:ing)?|thought|analysis|reasoning)\s*:?\s*\r?\n/i;
 
 function stripLeadingReasoningBlocks(text: string): string {
@@ -171,12 +213,14 @@ function isReasoningPrefixedSilentReplyText(
   );
 }
 
+/** Returns true for token-only, JSON-envelope, or reasoning-prefixed silent payload text. */
 export function isSilentReplyPayloadText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
 ): boolean {
   return (
     isSilentReplyText(text, token) ||
+    isSilentReplyJsonStringText(text, token) ||
     isSilentReplyEnvelopeText(text, token) ||
     isReasoningPrefixedSilentReplyText(text, token)
   );
@@ -266,9 +310,6 @@ export function isSilentReplyPrefixText(
   if (normalized.length < 2) {
     return false;
   }
-  if (/[^A-Z_]/.test(normalized)) {
-    return false;
-  }
   const tokenUpper = token.toUpperCase();
   if (!tokenUpper.startsWith(normalized)) {
     return false;
@@ -276,8 +317,16 @@ export function isSilentReplyPrefixText(
   if (normalized.includes("_")) {
     return true;
   }
-  // Keep underscore guard for generic tokens to avoid suppressing unrelated
-  // uppercase words (e.g. HEART/HE with HEARTBEAT_OK). Only allow bare "NO"
-  // because NO_REPLY streaming can transiently emit that fragment.
+  // Full-token match is safe for any token.
+  if (normalized === tokenUpper) {
+    return true;
+  }
+  // For custom tokens containing non-letter characters (digits, hyphens),
+  // only match if the prefix includes at least one non-letter character
+  // from the token. Otherwise, a pure-letter prefix like "HE" for "HELP-QUIET"
+  // would suppress natural language that happens to share that prefix (#100007).
+  if (/[^A-Z_]/.test(tokenUpper)) {
+    return /[^A-Z_]/.test(normalized);
+  }
   return tokenUpper === SILENT_REPLY_TOKEN && normalized === "NO";
 }

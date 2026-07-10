@@ -1,8 +1,13 @@
+/**
+ * Gateway loop for polling ClickClack backlog events, opening the realtime
+ * websocket, and dispatching user messages into OpenClaw.
+ */
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RawData } from "ws";
 import { resolveClickClackInboundAccess } from "./access.js";
 import { resolveClickClackAccount } from "./accounts.js";
-import { createClickClackClient } from "./http-client.js";
+import { createClickClackClient, normalizeClickClackCorrelationId } from "./http-client.js";
 import { handleClickClackInbound } from "./inbound.js";
 import { resolveWorkspaceId } from "./resolve.js";
 import type {
@@ -17,6 +22,10 @@ function payloadString(event: ClickClackEvent, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
+function eventCorrelationId(event: ClickClackEvent): string | undefined {
+  return normalizeClickClackCorrelationId(event.payload?.correlation_id);
+}
+
 async function resolveEventMessage(params: {
   client: ReturnType<typeof createClickClackClient>;
   event: ClickClackEvent;
@@ -27,6 +36,8 @@ async function resolveEventMessage(params: {
   }
   const directConversationId = payloadString(params.event, "direct_conversation_id");
   if (directConversationId && typeof params.event.seq === "number") {
+    // ClickClack event payloads carry ids and cursors; fetch a narrow window
+    // around the sequence so the message body/author fields stay authoritative.
     const messages = await params.client.directMessages(
       directConversationId,
       params.event.seq - 1,
@@ -87,7 +98,17 @@ async function processEvent(params: {
   if (payloadString(params.event, "author_id") === params.botUserId) {
     return;
   }
-  const message = await resolveEventMessage({ client: params.client, event: params.event });
+  const correlationId = eventCorrelationId(params.event);
+  // The event body is only a routing hint. Re-fetch the authoritative message
+  // under the same safe correlation id before dispatching any model work.
+  const messageClient = correlationId
+    ? createClickClackClient({
+        baseUrl: params.account.baseUrl,
+        token: params.account.token,
+        correlationId,
+      })
+    : params.client;
+  const message = await resolveEventMessage({ client: messageClient, event: params.event });
   if (!message || message.author_id === params.botUserId) {
     return;
   }
@@ -107,6 +128,7 @@ async function processEvent(params: {
     config: params.config,
     message,
     access,
+    ...(correlationId ? { correlationId } : {}),
   });
 }
 
@@ -140,58 +162,96 @@ export async function startClickClackGatewayAccount(
   });
   let afterCursor = "";
   let initialized = false;
-  while (!ctx.abortSignal.aborted) {
-    const backlog = await client.events(workspaceId, afterCursor);
-    if (!initialized) {
-      for (const event of backlog) {
-        afterCursor = event.cursor || afterCursor;
-      }
-      initialized = true;
-    } else {
-      for (const event of backlog) {
-        afterCursor = event.cursor || afterCursor;
-        await processEvent({
-          account,
-          config: ctx.cfg,
-          client,
-          event,
-          botUserId: account.botUserId,
-        });
-      }
-    }
-    const socket = client.websocket(workspaceId, afterCursor);
-    await new Promise<void>((resolve, reject) => {
-      const abort = () => {
-        socket.close();
-        resolve();
-      };
-      ctx.abortSignal.addEventListener("abort", abort, { once: true });
-      socket.on("message", (data) => {
-        void (async () => {
-          const event = parseSocketEvent(data);
-          if (!event) {
-            ctx.log?.warn?.(`[${account.accountId}] skipped malformed ClickClack websocket event`);
-            return;
-          }
+  try {
+    while (!ctx.abortSignal.aborted) {
+      const backlog = await client.events(workspaceId, afterCursor);
+      if (!initialized) {
+        // First pass establishes the cursor without replaying historical backlog
+        // into fresh gateway sessions.
+        for (const event of backlog) {
+          afterCursor = event.cursor || afterCursor;
+        }
+        initialized = true;
+      } else {
+        for (const event of backlog) {
           afterCursor = event.cursor || afterCursor;
           await processEvent({
             account,
             config: ctx.cfg,
             client,
             event,
-            botUserId: account.botUserId ?? "",
+            botUserId: account.botUserId,
           });
-        })().catch(reject);
+        }
+      }
+      const socket = client.websocket(workspaceId, afterCursor);
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        let removeAbortListener: (() => void) | undefined;
+        const finishSocketCycle = () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          removeAbortListener?.();
+          removeAbortListener = undefined;
+          resolve();
+        };
+        const abort = () => {
+          socket.close();
+          finishSocketCycle();
+        };
+        ctx.abortSignal.addEventListener("abort", abort, { once: true });
+        removeAbortListener = () => ctx.abortSignal.removeEventListener("abort", abort);
+        socket.on("message", (data) => {
+          void (async () => {
+            const event = parseSocketEvent(data);
+            if (!event) {
+              ctx.log?.warn?.(
+                `[${account.accountId}] skipped malformed ClickClack websocket event`,
+              );
+              return;
+            }
+            afterCursor = event.cursor || afterCursor;
+            await processEvent({
+              account,
+              config: ctx.cfg,
+              client,
+              event,
+              botUserId: account.botUserId ?? "",
+            });
+          })().catch((e: unknown) =>
+            reject(
+              e instanceof Error
+                ? e
+                : new Error(`ClickClack ws message failed: ${formatErrorMessage(e)}`, {
+                    cause: e,
+                  }),
+            ),
+          );
+        });
+        socket.on("close", finishSocketCycle);
+        socket.on("error", (error) => {
+          if (settled || ctx.abortSignal.aborted) {
+            finishSocketCycle();
+            return;
+          }
+          ctx.log?.warn?.(
+            `[${account.accountId}] ClickClack websocket error; reconnecting: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          finishSocketCycle();
+          socket.close();
+        });
       });
-      socket.on("close", () => {
-        ctx.abortSignal.removeEventListener("abort", abort);
-        resolve();
-      });
-      socket.on("error", reject);
-    });
-    if (!ctx.abortSignal.aborted) {
-      await new Promise((resolve) => setTimeout(resolve, account.reconnectMs));
+      if (!ctx.abortSignal.aborted) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, account.reconnectMs);
+        });
+      }
     }
+  } finally {
+    ctx.setStatus({ accountId: account.accountId, running: false });
   }
-  ctx.setStatus({ accountId: account.accountId, running: false });
 }

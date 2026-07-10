@@ -1,3 +1,4 @@
+// Covers web-search provider config parsing and provider defaults.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as webSearchTesting } from "../agents/tools/web-search.js";
 import { buildWebSearchProviderConfig } from "./test-helpers.js";
@@ -594,8 +595,8 @@ describe("web search provider auto-detection", () => {
     vi.restoreAllMocks();
   });
 
-  it("falls back to brave when no keys available", () => {
-    expect(resolveSearchProvider({})).toBe("brave");
+  it("returns no provider when no credentials are available", () => {
+    expect(resolveSearchProvider({})).toBe("");
   });
 
   it("auto-detects brave when only BRAVE_API_KEY is set", () => {

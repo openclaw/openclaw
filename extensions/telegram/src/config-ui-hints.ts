@@ -1,3 +1,4 @@
+// Telegram helper module supports config ui hints behavior.
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const telegramChannelConfigUiHints = {
@@ -21,6 +22,22 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Config Writes",
     help: "Allow Telegram to write config in response to channel events/commands (default: true).",
   },
+  mentionPatterns: {
+    label: "Telegram Mention Pattern Policy",
+    help: "Scopes configured groupChat mentionPatterns to selected Telegram group chat IDs or chatId:topic:threadId topic IDs. Native Telegram bot mentions still trigger even when regex patterns are denied.",
+  },
+  "mentionPatterns.mode": {
+    label: "Telegram Mention Pattern Mode",
+    help: '"allow" enables configured regex mention patterns unless denyIn matches; "deny" disables them unless allowIn matches.',
+  },
+  "mentionPatterns.allowIn": {
+    label: "Telegram Mention Pattern Allowlist",
+    help: "Telegram group chat IDs or chatId:topic:threadId topic IDs where configured regex mention patterns are enabled when mode is deny.",
+  },
+  "mentionPatterns.denyIn": {
+    label: "Telegram Mention Pattern Denylist",
+    help: "Telegram group chat IDs or chatId:topic:threadId topic IDs where configured regex mention patterns are disabled. Native bot mentions still trigger.",
+  },
   "commands.native": {
     label: "Telegram Native Commands",
     help: 'Override native commands for Telegram (bool or "auto").',
@@ -40,6 +57,10 @@ export const telegramChannelConfigUiHints = {
   "streaming.chunkMode": {
     label: "Telegram Chunk Mode",
     help: 'Chunking mode for outbound Telegram text delivery: "length" (default) or "newline".',
+  },
+  richMessages: {
+    label: "Telegram Rich Messages",
+    help: "Opt into Bot API 10.1 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
   },
   "streaming.block.enabled": {
     label: "Telegram Block Streaming Enabled",
@@ -93,6 +114,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Progress Command Text",
     help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
   },
+  "streaming.progress.commentary": {
+    label: "Telegram Progress Commentary",
+    help: "Show assistant commentary/preamble text in the temporary progress draft. Final answer delivery is unchanged.",
+  },
   "retry.attempts": {
     label: "Telegram Retry Attempts",
     help: "Max retry attempts for outbound Telegram API calls (default: 3).",
@@ -139,7 +164,7 @@ export const telegramChannelConfigUiHints = {
   },
   trustedLocalFileRoots: {
     label: "Telegram Trusted Local File Roots",
-    help: "Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. Only absolute paths inside these roots are read directly; all other absolute paths are rejected.",
+    help: "Trusted local filesystem roots for self-hosted Telegram Bot API file_path values. Exact in-root paths are read directly; container paths under /var/lib/telegram-bot-api can map into a host volume mount. Other absolute paths are rejected.",
   },
   autoTopicLabel: {
     label: "Telegram Auto Topic Label",

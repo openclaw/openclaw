@@ -1,13 +1,35 @@
+// Slack tests cover messages plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSlackSystemEventTestHarness,
   type SlackSystemEventTestOverrides,
 } from "./system-event-test-harness.js";
 
-const { messageQueueMock, messageAllowMock } = vi.hoisted(() => ({
+const { messageQueueMock, messageAllowMock, inboundInfoSpy } = vi.hoisted(() => ({
   messageQueueMock: vi.fn(),
   messageAllowMock: vi.fn(),
+  inboundInfoSpy: vi.fn(),
 }));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  const makeLogger = () => {
+    const logger = {
+      subsystem: "test",
+      isEnabled: () => true,
+      trace: () => {},
+      debug: () => {},
+      info: inboundInfoSpy,
+      warn: () => {},
+      error: () => {},
+      fatal: () => {},
+      raw: () => {},
+      child: () => logger,
+    };
+    return logger;
+  };
+  return { ...actual, createSubsystemLogger: () => makeLogger() };
+});
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
   enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
@@ -18,10 +40,30 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime.js", () => ({
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   readChannelAllowFromStore: (...args: unknown[]) => messageAllowMock(...args),
 }));
+vi.mock("openclaw/plugin-sdk/text-chunking", () => ({
+  chunkItems: <T>(items: T[]) => [items],
+  markdownToIR: (text: string) => text,
+  renderMarkdownIRChunksWithinLimit: (text: string) => [text],
+  renderMarkdownWithMarkers: (text: string) => text,
+  sanitizeAssistantVisibleText: (text: string) => text,
+  stripReasoningTagsFromText: (text: string) => text,
+}));
 
 let registerSlackMessageEvents: typeof import("./messages.js").registerSlackMessageEvents;
+let formatSlackInboundLogLine: typeof import("./messages.js").formatSlackInboundLogLine;
 
-type MessageHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
+function inboundLogLines(): string[] {
+  return inboundInfoSpy.mock.calls
+    .map((call) => call[0])
+    .filter((line): line is string => typeof line === "string" && line.startsWith("Inbound "));
+}
+
+type MessageHandler = (args: {
+  event: Record<string, unknown>;
+  body: unknown;
+  context?: Record<string, unknown>;
+  client?: object;
+}) => Promise<void>;
 type RegisteredEventName = "message" | "app_mention";
 
 type MessageCase = {
@@ -43,6 +85,21 @@ function createHandlers(eventName: RegisteredEventName, overrides?: SlackSystemE
   };
 }
 
+function createEnterpriseHandlers(eventName: RegisteredEventName) {
+  const harness = createSlackSystemEventTestHarness({ dmPolicy: "open" });
+  harness.ctx.installationIdentity = {
+    kind: "enterprise",
+    apiAppId: "A_TEST",
+    enterpriseId: "E_TEST",
+  };
+  const handleSlackMessage = vi.fn(async () => {});
+  registerSlackMessageEvents({ ctx: harness.ctx, handleSlackMessage });
+  return {
+    handler: requireMessageHandler(harness.getHandler(eventName) as MessageHandler | null),
+    handleSlackMessage,
+  };
+}
+
 function requireMessageHandler(handler: MessageHandler | null): MessageHandler {
   if (!handler) {
     throw new Error("expected Slack message event handler");
@@ -56,11 +113,12 @@ function resetMessageMocks(): void {
 }
 
 beforeAll(async () => {
-  ({ registerSlackMessageEvents } = await import("./messages.js"));
+  ({ registerSlackMessageEvents, formatSlackInboundLogLine } = await import("./messages.js"));
 });
 
 beforeEach(() => {
   resetMessageMocks();
+  inboundInfoSpy.mockClear();
 });
 
 function makeChangedEvent(overrides?: { channel?: string; user?: string }) {
@@ -88,6 +146,17 @@ function makeAssistantChangedEvent(overrides?: { user?: string }) {
       thread_ts: "123.000",
       user: "U_BOT",
       text: "assistant wrapped user text",
+      blocks: [
+        {
+          type: "data_visualization",
+          title: "Latency",
+          chart: {
+            type: "line",
+            series: [{ name: "p95", data: [{ label: "Mon", value: 250 }] }],
+            axis_config: { categories: ["Mon"] },
+          },
+        },
+      ],
       metadata: { event_payload: { user } },
       assistant_thread: {
         channel_id: "D1",
@@ -167,6 +236,137 @@ async function runMessageCase(input: MessageCase = {}): Promise<void> {
 }
 
 describe("registerSlackMessageEvents", () => {
+  it("accepts two org workspaces and preserves each listener scope", async () => {
+    const { handler, handleSlackMessage } = createEnterpriseHandlers("message");
+    const clients = [{ id: "one" }, { id: "two" }];
+    for (const [index, teamId] of ["T111", "T222"].entries()) {
+      await handler({
+        event: {
+          type: "message",
+          channel: "C123",
+          channel_type: "channel",
+          user: "U123",
+          text: "hello",
+          ts: `123.${index}`,
+        },
+        body: { api_app_id: "A_TEST" },
+        context: { isEnterpriseInstall: true, enterpriseId: "E_TEST", teamId },
+        client: clients[index],
+      });
+    }
+
+    expect(handleSlackMessage).toHaveBeenCalledTimes(2);
+    const calls = handleSlackMessage.mock.calls as unknown as Array<
+      [unknown, { awaitDispatch?: boolean; eventScope?: unknown }]
+    >;
+    expect(calls[0]?.[1]).toMatchObject({
+      awaitDispatch: true,
+      eventScope: { teamId: "T111", client: clients[0] },
+    });
+    expect(calls[1]?.[1]).toMatchObject({
+      awaitDispatch: true,
+      eventScope: { teamId: "T222", client: clients[1] },
+    });
+  });
+
+  it("passes enterprise file_share messages to the media-aware handler", async () => {
+    const { handler, handleSlackMessage } = createEnterpriseHandlers("message");
+    const client = { id: "listener-client" };
+    await handler({
+      event: {
+        type: "message",
+        subtype: "file_share",
+        channel: "C123",
+        channel_type: "channel",
+        user: "U123",
+        text: "see attachment",
+        files: [{ id: "F123", url_private: "https://files.slack.com/file" }],
+        ts: "123.456",
+      },
+      body: { api_app_id: "A_TEST" },
+      context: { isEnterpriseInstall: true, enterpriseId: "E_TEST", teamId: "T111" },
+      client,
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledOnce();
+    expect(handleSlackMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subtype: "file_share",
+        files: [{ id: "F123", url_private: "https://files.slack.com/file" }],
+      }),
+      expect.objectContaining({
+        source: "message",
+        awaitDispatch: true,
+        eventScope: expect.objectContaining({ teamId: "T111", client }),
+      }),
+    );
+    expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "file_share with bot_id",
+      event: {
+        type: "message",
+        subtype: "file_share",
+        bot_id: "B_OTHER",
+        channel: "C123",
+        channel_type: "channel",
+        text: "bot attachment",
+        files: [{ id: "F123", url_private: "https://files.slack.com/file" }],
+        ts: "123.456",
+      },
+    },
+    {
+      name: "bot_message without bot_id",
+      event: {
+        type: "message",
+        subtype: "bot_message",
+        channel: "C123",
+        channel_type: "channel",
+        text: "bot text",
+        ts: "123.456",
+      },
+    },
+  ])("drops enterprise bot-authored $name events before dispatch", async ({ event }) => {
+    const { handler, handleSlackMessage } = createEnterpriseHandlers("message");
+    await handler({
+      event,
+      body: { api_app_id: "A_TEST" },
+      context: { isEnterpriseInstall: true, enterpriseId: "E_TEST", teamId: "T111" },
+      client: {},
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
+  it("drops bot-authored enterprise app_mention events before dispatch", async () => {
+    const { handler, handleSlackMessage } = createEnterpriseHandlers("app_mention");
+    await handler({
+      event: { ...makeAppMentionEvent(), bot_id: "B_OTHER" },
+      body: { api_app_id: "A_TEST" },
+      context: { isEnterpriseInstall: true, enterpriseId: "E_TEST", teamId: "T111" },
+      client: {},
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(inboundLogLines()).toEqual([]);
+  });
+
+  it("drops unsupported enterprise message subtypes before system events or dispatch", async () => {
+    const { handler, handleSlackMessage } = createEnterpriseHandlers("message");
+    await handler({
+      event: makeChangedEvent({ channel: "C123", user: "U123" }),
+      body: { api_app_id: "A_TEST" },
+      context: { isEnterpriseInstall: true, enterpriseId: "E_TEST", teamId: "T111" },
+      client: {},
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
   const cases: Array<{ name: string; input: MessageCase; calls: number }> = [
     {
       name: "enqueues message_changed system events when dmPolicy is open",
@@ -257,6 +457,7 @@ describe("registerSlackMessageEvents", () => {
             ts?: string;
             thread_ts?: string;
             assistant_thread?: Record<string, unknown>;
+            blocks?: unknown[];
           },
           { source?: string },
         ]
@@ -276,6 +477,17 @@ describe("registerSlackMessageEvents", () => {
         team_id: "T123",
       },
     });
+    expect(message?.blocks).toEqual([
+      {
+        type: "data_visualization",
+        title: "Latency",
+        chart: {
+          type: "line",
+          series: [{ name: "p95", data: [{ label: "Mon", value: 250 }] }],
+          axis_config: { categories: ["Mon"] },
+        },
+      },
+    ]);
     expect(call?.[1]).toEqual({ source: "message" });
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
@@ -386,6 +598,8 @@ describe("registerSlackMessageEvents", () => {
     });
 
     expect(handleSlackMessage).not.toHaveBeenCalled();
+    // Dropped DM app_mention (already handled via message.im) must not log a receipt.
+    expect(inboundLogLines()).toEqual([]);
   });
 
   it("routes app_mention events from channels to the message handler", async () => {
@@ -396,5 +610,55 @@ describe("registerSlackMessageEvents", () => {
     });
 
     expect(handleSlackMessage).toHaveBeenCalledTimes(1);
+    expect(inboundLogLines()).toEqual([
+      "Inbound app_mention slack:T_TEST:channel:C123:user:U1 -> bot:U_BOT (channel, 14 chars)",
+    ]);
+  });
+
+  it("logs channel app_mention receipts with zero chars when text is absent", async () => {
+    const { handleSlackMessage } = await invokeRegisteredHandler({
+      eventName: "app_mention",
+      overrides: { dmPolicy: "open" },
+      event: {
+        ...makeAppMentionEvent({ channel: "C123", channelType: "channel" }),
+        text: undefined,
+      },
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledTimes(1);
+    expect(inboundLogLines()).toEqual([
+      "Inbound app_mention slack:T_TEST:channel:C123:user:U1 -> bot:U_BOT (channel, 0 chars)",
+    ]);
+  });
+
+  it("logs channel app_mention receipts with unknown sender when user is absent", async () => {
+    const { handleSlackMessage } = await invokeRegisteredHandler({
+      eventName: "app_mention",
+      overrides: { dmPolicy: "open" },
+      event: {
+        ...makeAppMentionEvent({ channel: "C123", channelType: "channel" }),
+        user: undefined,
+      },
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledTimes(1);
+    expect(inboundLogLines()).toEqual([
+      "Inbound app_mention slack:T_TEST:channel:C123:user:unknown -> bot:U_BOT (channel, 14 chars)",
+    ]);
+  });
+
+  it("formats the inbound receipt line with channel, sender, body length, and bot identity", () => {
+    expect(
+      formatSlackInboundLogLine({
+        workspaceId: "T123",
+        channelId: "C456",
+        channelType: "channel",
+        userId: "U789",
+        botUserId: "U_BOT",
+        bodyChars: 42,
+      }),
+    ).toBe(
+      "Inbound app_mention slack:T123:channel:C456:user:U789 -> bot:U_BOT (channel, 42 chars)",
+    );
   });
 });

@@ -1,5 +1,10 @@
+// Defines the public plugin API and runtime extension contracts.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import type {
+  UnifiedModelCatalogEntry,
+  UnifiedModelCatalogKind,
+} from "@openclaw/model-catalog-core/model-catalog-types";
 import type { Command } from "commander";
 import type {
   ApiKeyCredential,
@@ -17,8 +22,6 @@ import type { PromptMode } from "../agents/system-prompt.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
@@ -34,7 +37,6 @@ import type {
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { ModelRegistry } from "../llm/model-registry.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
-import type { UnifiedModelCatalogEntry, UnifiedModelCatalogKind } from "../model-catalog/types.js";
 import type { MusicGenerationProvider } from "../music-generation/types.js";
 import type {
   RealtimeTranscriptionProviderConfig,
@@ -150,6 +152,8 @@ import type { WebFetchProviderPlugin, WebSearchProviderPlugin } from "./web-prov
 
 type ModelProviderRequestTransportOverrides =
   import("../agents/provider-request-config.js").ModelProviderRequestTransportOverrides;
+type ChannelId = import("../channels/plugins/types.core.js").ChannelId;
+type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
 
 export type { PluginRuntime } from "./runtime/types.js";
 export type { PluginOrigin } from "./plugin-origin.types.js";
@@ -187,12 +191,14 @@ export type {
 } from "./conversation-binding.types.js";
 export type {
   CliBackendAuthEpochMode,
+  CliBackendExecutionMode,
   CliBackendNormalizeConfigContext,
   CliBackendNativeToolMode,
   CliBackendPreparedExecution,
   CliBackendPrepareExecutionContext,
   CliBackendResolveExecutionArgs,
   CliBackendResolveExecutionArgsContext,
+  CliBackendSideQuestionToolMode,
   CliBackendThinkingLevel,
   CliBackendPlugin,
   CliBundleMcpMode,
@@ -409,6 +415,8 @@ export type ProviderAuthMethod = {
   label: string;
   hint?: string;
   kind: ProviderAuthKind;
+  /** Provider-owned model used to validate app-guided secret setup. */
+  starterModel?: string;
   /**
    * Optional wizard/onboarding metadata for this specific auth method.
    *
@@ -487,6 +495,7 @@ export type UnifiedModelCatalogProviderPlugin = {
 export type ProviderRuntimeProviderConfig = {
   baseUrl?: string;
   api?: ModelProviderConfig["api"];
+  auth?: ModelProviderConfig["auth"];
   models?: ModelProviderConfig["models"];
   headers?: unknown;
 };
@@ -503,10 +512,13 @@ export type ProviderResolveDynamicModelContext = {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
+  agentRuntimeId?: string;
   provider: string;
   modelId: string;
   modelRegistry: ModelRegistry;
   providerConfig?: ProviderRuntimeProviderConfig;
+  authProfileId?: string;
+  authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
 };
 
 /**
@@ -570,6 +582,7 @@ export type ProviderNormalizeTransportContext = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   provider: string;
+  modelId?: string;
   api?: string | null;
   baseUrl?: string;
 };
@@ -634,19 +647,35 @@ export type ProviderResolveUsageAuthContext = {
     providerIds?: string[];
     envDirect?: Array<string | undefined>;
   }) => string | undefined;
-  resolveOAuthToken: (params?: { provider?: string }) => Promise<ProviderResolvedUsageAuth | null>;
+  /** Ordered API-key/token candidates, including resolved SecretRefs, for credential classification. */
+  resolveApiKeyCandidatesFromConfigAndStore?: (params?: {
+    providerIds?: string[];
+    envDirect?: Array<string | undefined>;
+  }) => Promise<string[]>;
+  resolveOAuthToken: (params?: { provider?: string }) => Promise<ProviderUsageAuthToken | null>;
+};
+
+export type ProviderUsageAuthToken = {
+  token: string;
+  accountId?: string;
+  /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
+  subscriptionType?: string;
+  rateLimitTier?: string;
 };
 
 /**
  * Result of `resolveUsageAuth`.
  *
- * `token` is the credential used for provider usage/billing endpoints.
- * `accountId` is optional provider-specific metadata used by some usage APIs.
+ * Two shapes are supported:
+ * - `{ token: string; accountId?: string }` — use this token for provider usage endpoints.
+ * - `{ handled: true }` — this provider handled the request but has no usable
+ *   usage token; core must skip further fallback (generic API-key/OAuth fallback
+ *   must not run).
+ *
+ * Returning `null` or `undefined` means "not handled by this provider"; core
+ * proceeds to generic fallback resolution.
  */
-export type ProviderResolvedUsageAuth = {
-  token: string;
-  accountId?: string;
-};
+export type ProviderResolvedUsageAuth = ProviderUsageAuthToken | { handled: true };
 
 /**
  * Usage/quota snapshot input for providers that own their usage endpoint
@@ -664,6 +693,10 @@ export type ProviderFetchUsageSnapshotContext = {
   provider: string;
   token: string;
   accountId?: string;
+  authProfileId?: string;
+  /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
+  subscriptionType?: string;
+  rateLimitTier?: string;
   timeoutMs: number;
   fetchFn: typeof fetch;
 };
@@ -693,8 +726,11 @@ export type ProviderPrepareExtraParamsContext = {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
+  agentId?: string;
+  nativeWebSearchAllowedByToolPolicy?: boolean;
   provider: string;
   modelId: string;
+  model?: ProviderRuntimeModel;
   extraParams?: Record<string, unknown>;
   thinkingLevel?: ThinkLevel;
 };
@@ -773,6 +809,7 @@ export type ProviderReplayPolicy = {
   sanitizeMode?: ProviderReplaySanitizeMode;
   sanitizeToolCallIds?: boolean;
   toolCallIdMode?: ProviderReplayToolCallIdMode;
+  duplicateToolCallIdStyle?: "openai";
   preserveNativeAnthropicToolUseIds?: boolean;
   preserveSignatures?: boolean;
   sanitizeThoughtSignatures?: {
@@ -953,6 +990,9 @@ export type ProviderFailoverErrorContext = {
   provider?: string;
   modelId?: string;
   errorMessage: string;
+  status?: number;
+  code?: string;
+  errorType?: string;
 };
 
 /**
@@ -1092,6 +1132,7 @@ export type ProviderAugmentModelCatalogContext = {
   agentDir?: string;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  resolveProviderApiKey?: ProviderCatalogContext["resolveProviderApiKey"];
   entries: ModelCatalogEntry[];
 };
 
@@ -1456,6 +1497,13 @@ export type ProviderPlugin = {
    * transport implementation.
    */
   wrapStreamFn?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
+  /**
+   * Provider-owned wrapper for direct `completeSimple` callers.
+   *
+   * Opt in only when the provider must enforce the same wire contract outside
+   * the embedded agent runtime.
+   */
+  wrapSimpleCompletionStreamFn?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
   /**
    * Provider-owned native transport turn identity.
    *
@@ -1822,6 +1870,7 @@ export type SpeechProviderPlugin = {
   autoSelectOrder?: number;
   /** Default provider operation timeout in milliseconds when caller/config omit timeoutMs. */
   defaultTimeoutMs?: number;
+  defaultModel?: string;
   models?: readonly string[];
   voices?: readonly string[];
   resolveConfig?: (ctx: SpeechProviderResolveConfigContext) => SpeechProviderConfig;
@@ -1855,6 +1904,7 @@ export type RealtimeTranscriptionProviderPlugin = {
   label: string;
   aliases?: string[];
   defaultModel?: string;
+  models?: readonly string[];
   autoSelectOrder?: number;
   resolveConfig?: (
     ctx: RealtimeTranscriptionProviderResolveConfigContext,
@@ -1880,6 +1930,7 @@ export type RealtimeVoiceProviderPlugin = {
   label: string;
   aliases?: string[];
   defaultModel?: string;
+  models?: readonly string[];
   autoSelectOrder?: number;
   capabilities?: RealtimeVoiceProviderCapabilities;
   resolveConfig?: (ctx: RealtimeVoiceProviderResolveConfigContext) => RealtimeVoiceProviderConfig;
@@ -1945,6 +1996,8 @@ export type PluginCommandContext = {
   senderIsOwner?: boolean;
   /** Gateway client scopes for internal control-plane callers */
   gatewayClientScopes?: string[];
+  /** Host-resolved agent that owns the active session. */
+  agentId?: string;
   /** Stable host session key for the active conversation when available. */
   sessionKey?: string;
   /** Ephemeral host session id for the active conversation when available. */
@@ -1989,7 +2042,12 @@ export type PluginCommandContext = {
 /**
  * Result returned by a plugin command handler.
  */
-export type PluginCommandResult = ReplyPayload & { continueAgent?: boolean };
+export type PluginCommandResult = ReplyPayload & {
+  /** Allows the agent session to continue processing after the command. */
+  continueAgent?: boolean;
+  /** Suppresses channel fallback replies when the handler already delivered a response. */
+  suppressReply?: boolean;
+};
 
 /**
  * Handler function for plugin commands.
@@ -2054,6 +2112,8 @@ export type OpenClawPluginCommandDefinition = {
   requireAuth?: boolean;
   /** Operator scopes required by gateway clients; command owners may satisfy this on chat surfaces. */
   requiredScopes?: OperatorScope[];
+  /** Whether a trusted bundled handler needs owner status for subcommand-level authorization. */
+  exposeSenderIsOwner?: boolean;
   /**
    * Allows a bundled plugin to claim a command name that is otherwise reserved
    * by core. External plugins cannot use this field.
@@ -2746,8 +2806,8 @@ export type OpenClawPluginApi = {
     injection: PluginNextTurnInjection,
   ) => Promise<PluginNextTurnInjectionEnqueueResult>;
   /**
-   * Register a trusted pre-tool policy. Only bundled plugins may use this
-   * before-tool-call policy tier.
+   * Register a trusted pre-tool policy. Installed plugins must declare the
+   * policy id in `contracts.trustedToolPolicies`.
    */
   registerTrustedToolPolicy: (policy: PluginTrustedToolPolicyRegistration) => void;
   /**

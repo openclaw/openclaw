@@ -1,3 +1,4 @@
+// Whatsapp tests cover auth store plugin behavior.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -75,10 +76,10 @@ describe("auth-store", () => {
     expect(fsSync.existsSync(credsPath)).toBe(false);
   });
 
-  it("restores creds from a regular backup file", async () => {
+  it("restores malformed creds from a valid backup", async () => {
     const authDir = createTempAuthDir("openclaw-wa-auth-restore");
     const credsPath = path.join(authDir, "creds.json");
-    fsSync.writeFileSync(credsPath, "{", "utf-8");
+    fsSync.writeFileSync(credsPath, "{x", "utf-8");
     fsSync.writeFileSync(
       path.join(authDir, "creds.json.bak"),
       JSON.stringify({ me: { id: "123@s.whatsapp.net" } }),
@@ -89,6 +90,16 @@ describe("auth-store", () => {
     expect(JSON.parse(fsSync.readFileSync(credsPath, "utf-8"))).toEqual({
       me: { id: "123@s.whatsapp.net" },
     });
+  });
+
+  it("leaves malformed creds unchanged when the backup is malformed", async () => {
+    const authDir = createTempAuthDir("openclaw-wa-auth-malformed-backup");
+    const credsPath = path.join(authDir, "creds.json");
+    fsSync.writeFileSync(credsPath, "{x", "utf-8");
+    fsSync.writeFileSync(path.join(authDir, "creds.json.bak"), "{y", "utf-8");
+
+    await expect(restoreCredsFromBackupIfNeeded(authDir)).resolves.toBe(false);
+    expect(fsSync.readFileSync(credsPath, "utf-8")).toBe("{x");
   });
 
   it("preserves valid large creds instead of treating them as corrupt", async () => {

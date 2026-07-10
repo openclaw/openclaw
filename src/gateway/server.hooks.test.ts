@@ -1,3 +1,5 @@
+// Server hooks tests cover HTTP hook auth, payload normalization, dedupe,
+// session targeting, system events, and cron-isolated hook dispatch.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -17,6 +19,8 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
+
+await import("./server.js");
 
 const resolveMainKey = () => resolveMainSessionKeyFromConfig();
 const HOOK_TOKEN = "hook-secret";
@@ -47,14 +51,14 @@ function buildHookJsonHeaders(options?: {
 
 async function postHook(
   port: number,
-  path: string,
+  pathLocal: string,
   body: Record<string, unknown> | string,
   options?: {
     token?: string | null;
     headers?: Record<string, string>;
   },
 ): Promise<Response> {
-  return fetch(`http://127.0.0.1:${port}${path}`, {
+  return fetch(`http://127.0.0.1:${port}${pathLocal}`, {
     method: "POST",
     headers: buildHookJsonHeaders(options),
     body: typeof body === "string" ? body : JSON.stringify(body),
@@ -93,9 +97,18 @@ type HookCronRunCall = {
   sessionKey?: string;
   job?: {
     agentId?: string;
+    createdAtMs?: number;
     payload?: {
       externalContentSource?: string;
+      allowUnsafeExternalContent?: boolean;
       model?: string;
+    };
+    schedule?: {
+      kind?: string;
+      at?: string;
+    };
+    state?: {
+      nextRunAtMs?: number;
     };
   };
 };
@@ -309,6 +322,41 @@ describe("gateway server hooks", () => {
       const call = cronRunCall();
       expect(call?.sessionKey).toBe("main");
       expect(call?.job?.payload?.externalContentSource).toBe("gmail");
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
+  test("does not let mapped hook payload source claim gmail provenance", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowedSessionKeyPrefixes: ["hook:"],
+      gmail: { allowUnsafeExternalContent: true },
+      mappings: [
+        {
+          match: { path: "github" },
+          action: "agent",
+          messageTemplate: "Issue: {{payload.title}}",
+          sessionKey: "hook:webhook:github",
+        },
+      ],
+    };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const response = await postHook(port, "/hooks/github", {
+        source: "gmail",
+        id: "issue-1",
+        title: "Bug report",
+      });
+      expect(response.status).toBe(200);
+      await waitForCronIsolatedRuns(1);
+
+      const call = cronRunCall();
+      expect(call?.sessionKey).toBe("hook:webhook:github");
+      expect(call?.job?.payload?.externalContentSource).toBe("webhook");
+      expect(call?.job?.payload?.allowUnsafeExternalContent).toBeUndefined();
       drainSystemEvents(resolveMainKey());
     });
   });
@@ -787,6 +835,32 @@ describe("gateway server hooks", () => {
       requireNonEmptyString(thirdBody.runId, "third hook run id");
       expect(thirdBody.runId).not.toBe(firstBody.runId);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  test("dispatches agent hooks when the process clock is outside the Date range", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+
+      try {
+        const response = await postHook(port, "/hooks/agent", {
+          message: "Bad clock",
+          name: "Clock",
+        });
+        expect(response.status).toBe(200);
+        await waitForSystemEvent();
+      } finally {
+        dateNowSpy.mockRestore();
+      }
+
+      const call = cronRunCall();
+      expect(call.job?.createdAtMs).toBe(0);
+      expect(call.job?.schedule).toEqual({ kind: "at", at: "1970-01-01T00:00:00.000Z" });
+      expect(call.job?.state?.nextRunAtMs).toBe(0);
+      drainSystemEvents(resolveMainKey());
     });
   });
 

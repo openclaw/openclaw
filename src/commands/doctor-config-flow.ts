@@ -1,15 +1,16 @@
+/** Main doctor config flow: preflight, migrations, previews, repairs, and final write decision. */
 import path from "node:path";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { callGateway } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { note } from "../terminal/note.js";
 import {
   noteImplicitFallbackClobberWarnings,
   noteOpencodeProviderOverrides,
 } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
-import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { emitDoctorNotes, sanitizeDoctorNote } from "./doctor/emit-notes.js";
 import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
@@ -18,10 +19,7 @@ import {
   applyUnknownConfigKeyStep,
 } from "./doctor/shared/config-flow-steps.js";
 import { applyDoctorConfigMutation } from "./doctor/shared/config-mutation-state.js";
-import {
-  collectMissingDefaultAccountBindingWarnings,
-  collectMissingExplicitDefaultAccountWarnings,
-} from "./doctor/shared/default-account-warnings.js";
+import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 
 function hasLegacyInternalHookHandlers(raw: unknown): boolean {
   const handlers = (raw as { hooks?: { internal?: { handlers?: unknown } } })?.hooks?.internal
@@ -53,6 +51,31 @@ function collectInvalidHookTransformsDirWarnings(
   ];
 }
 
+function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): string[] {
+  const entries = cfg.hooks?.internal?.entries;
+  if (!entries) {
+    return [];
+  }
+  const unsupportedKeysByEntry = Object.entries(entries)
+    .filter(([, entry]) => entry && typeof entry === "object" && !Array.isArray(entry))
+    .map(([hookKey, entry]) => {
+      const unsupportedKeys = ["handler", "module", "extraDirs", "installs"].filter((key) =>
+        Object.hasOwn(entry, key),
+      );
+      return { hookKey, unsupportedKeys };
+    })
+    .filter(({ unsupportedKeys }) => unsupportedKeys.length > 0);
+
+  if (unsupportedKeysByEntry.length === 0) {
+    return [];
+  }
+
+  return unsupportedKeysByEntry.map(
+    ({ hookKey, unsupportedKeys }) =>
+      `- hooks.internal.entries.${hookKey}: unsupported loader key${unsupportedKeys.length === 1 ? "" : "s"} ${unsupportedKeys.join(", ")} will not load hook modules. Use bootstrap-extra-files for session bootstrap content, or create a managed/workspace hook directory with HOOK.md + handler.js. Doctor cannot rewrite this automatically because per-hook entry keys are open-ended hook configuration.`,
+  );
+}
+
 function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
   const channels =
     cfg.channels && typeof cfg.channels === "object" && !Array.isArray(cfg.channels)
@@ -80,6 +103,34 @@ function emitDoctorChangesPanel(
   note(message, title);
 }
 
+async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
+  try {
+    await callGateway({
+      method: "secrets.reload",
+      params: {},
+      timeoutMs: 3000,
+    });
+  } catch {
+    // Best-effort only: doctor --fix must still succeed when no gateway is running
+    // or the live gateway cannot reload unrelated secret-backed channels.
+  }
+  try {
+    await callGateway({
+      method: "models.authStatus",
+      params: { refresh: true },
+      timeoutMs: 3000,
+    });
+  } catch {
+    // Best-effort only: doctor --fix must still succeed when no gateway is running.
+  }
+}
+
+/**
+ * Loads config, runs doctor migrations/repairs, and returns the config write plan.
+ *
+ * This is the config-side orchestration boundary for doctor; it keeps preview notes, repair
+ * mutations, gateway auth refreshes, and final write confirmation in one ordered flow.
+ */
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
@@ -87,8 +138,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   prompter?: DoctorPrompter;
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
-  const preflight = await runDoctorConfigPreflight({ repairPrefixedConfig: shouldRepair });
-  let snapshot = preflight.snapshot;
+  const preflight = await runDoctorConfigPreflight({
+    repairPrefixedConfig: shouldRepair,
+    recoverCorruptTargetStore: shouldRepair,
+    crossStateDirImports: shouldRepair && params.options.crossStateDirImports === true,
+  });
+  const snapshot = preflight.snapshot;
   const baseCfg = preflight.baseConfig;
   let cfg: OpenClawConfig = baseCfg;
   let candidate = structuredClone(baseCfg);
@@ -105,7 +160,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     shouldRepair,
     doctorFixCommand,
   });
-  ({ cfg, candidate, pendingChanges, fixHints } = legacyStep.state);
+  cfg = legacyStep.state.cfg;
+  candidate = legacyStep.state.candidate;
+  pendingChanges = pendingChanges || legacyStep.state.pendingChanges;
+  fixHints = legacyStep.state.fixHints;
   const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
   const pluginLegacyIssues = await (async () => {
     if (snapshot.parsed === snapshot.sourceConfig) {
@@ -134,7 +192,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     !shouldRepair &&
     !fixHints.includes(`Run "${doctorFixCommand}" to migrate legacy config keys.`)
   ) {
-    fixHints = [...fixHints, `Run "${doctorFixCommand}" to migrate legacy config keys.`];
+    fixHints.push(`Run "${doctorFixCommand}" to migrate legacy config keys.`);
   }
   if (legacyIssueLines.length > 0) {
     note(legacyIssueLines.join("\n"), "Legacy config keys detected");
@@ -154,6 +212,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   if (hookTransformsDirWarnings.length > 0) {
     note(sanitizeDoctorNote(hookTransformsDirWarnings.join("\n")), "Doctor warnings");
   }
+  const unsupportedInternalHookEntryWarnings = collectUnsupportedInternalHookEntryWarnings(cfg);
+  if (unsupportedInternalHookEntryWarnings.length > 0) {
+    note(sanitizeDoctorNote(unsupportedInternalHookEntryWarnings.join("\n")), "Doctor warnings");
+  }
 
   const normalized = normalizeCompatibilityConfigValues(candidate);
   if (normalized.changes.length > 0) {
@@ -166,6 +228,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }));
   }
 
+  const pluginActivationSourceConfig = candidate;
   const { applyPluginAutoEnable } = await import("../config/plugin-auto-enable.js");
   const autoEnable = applyPluginAutoEnable({ config: candidate, env: process.env });
   if (autoEnable.changes.length > 0) {
@@ -223,15 +286,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }
   }
 
-  const missingDefaultAccountBindingWarnings =
-    collectMissingDefaultAccountBindingWarnings(candidate);
-  if (missingDefaultAccountBindingWarnings.length > 0) {
-    note(missingDefaultAccountBindingWarnings.join("\n"), "Doctor warnings");
-  }
-  const missingExplicitDefaultWarnings = collectMissingExplicitDefaultAccountWarnings(candidate);
-  if (missingExplicitDefaultWarnings.length > 0) {
-    note(missingExplicitDefaultWarnings.join("\n"), "Doctor warnings");
-  }
+  const { repairHooksTokenReuseGatewayAuth } =
+    await import("./doctor/shared/hooks-token-reuse-repair.js");
+  const hooksTokenReuseRepair = await repairHooksTokenReuseGatewayAuth(candidate, process.env);
+  emitDoctorChangesPanel(hooksTokenReuseRepair.changes, shouldRepair);
+  ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+    state: { cfg, candidate, pendingChanges, fixHints },
+    mutation: hooksTokenReuseRepair,
+    shouldRepair,
+    fixHint: `Run "${doctorFixCommand}" to rotate hooks.token away from Gateway auth.`,
+  }));
 
   if (shouldRepair) {
     const { runDoctorRepairSequence } = await import("./doctor/repair-sequencing.js");
@@ -241,6 +305,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       env: process.env,
     });
     ({ cfg, candidate, pendingChanges, fixHints } = repairSequence.state);
+    if (repairSequence.authProfilesRepaired) {
+      await refreshGatewayAuthStateAfterAuthProfileRepair();
+    }
     emitDoctorNotes({
       note,
       changeNotes: repairSequence.changeNotes,
@@ -250,8 +317,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const { collectDoctorPreviewNotes } = await import("./doctor/shared/preview-warnings.js");
     const previewNotes = await collectDoctorPreviewNotes({
       cfg: candidate,
+      activationSourceConfig: pluginActivationSourceConfig,
       doctorFixCommand,
       env: process.env,
+      allowExec: params.options.allowExec === true,
     });
     emitDoctorNotes({
       note,
@@ -278,7 +347,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   ({ cfg, candidate, pendingChanges, fixHints } = unknownStep.state);
   if (unknownStep.removed.length > 0 || unknownStep.repairs.length > 0) {
     const lines = [
-      ...unknownStep.removed.map((path) => `- ${path}`),
+      ...unknownStep.removed.map((pathLocal) => `- ${pathLocal}`),
       ...unknownStep.repairs.map((change) => `- ${change}`),
     ].join("\n");
     note(lines, shouldRepair ? "Doctor changes" : "Unknown config keys");

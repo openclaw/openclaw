@@ -1,3 +1,4 @@
+// Tests core command dispatch, aliases, authorization, and handler outcomes.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HookRunner } from "../../plugins/hooks.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -151,5 +152,70 @@ describe("emitResetCommandHooks", () => {
     expect(event.messages).toEqual([{ role: "user", content: "Recovered from archive" }]);
     expect(event.reason).toBe("new");
     expect(ctx.sessionId).toBe("prev-session");
+  });
+
+  it("keeps leaf-controlled side branches out of before_reset hooks", async () => {
+    fsMocks.readFile.mockResolvedValueOnce(
+      [
+        {
+          type: "message",
+          id: "active-root",
+          parentId: null,
+          message: { role: "user", content: "active root" },
+        },
+        {
+          type: "message",
+          id: "side-entry",
+          parentId: "active-root",
+          message: { role: "assistant", content: "side delivery" },
+        },
+        {
+          type: "leaf",
+          id: "active-leaf",
+          parentId: "side-entry",
+          targetId: "active-root",
+        },
+        {
+          type: "message",
+          id: "active-tail",
+          parentId: "active-root",
+          message: { role: "assistant", content: "active tail" },
+        },
+        {
+          type: "metadata",
+          id: "opaque-after-active-tail",
+          parentId: "side-entry",
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n"),
+    );
+
+    await emitResetCommandHooks({
+      action: "new",
+      ctx: {} as HandleCommandsParams["ctx"],
+      cfg: {} as HandleCommandsParams["cfg"],
+      command: {
+        surface: "discord",
+        senderId: "rai",
+        channel: "discord",
+        from: "discord:rai",
+        to: "discord:bot",
+        resetHookTriggered: false,
+      } as HandleCommandsParams["command"],
+      sessionKey: "agent:main:main",
+      previousSessionEntry: {
+        sessionId: "prev-session",
+        sessionFile: "/tmp/prev-session.jsonl",
+      } as HandleCommandsParams["previousSessionEntry"],
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    await vi.waitFor(() => expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1));
+    const [event] = firstBeforeResetCall();
+    expect(event.messages).toEqual([
+      { role: "user", content: "active root" },
+      { role: "assistant", content: "active tail" },
+    ]);
   });
 });

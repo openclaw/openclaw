@@ -1,3 +1,4 @@
+// Slack tests cover outbound adapter plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
@@ -6,8 +7,7 @@ vi.mock("./send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMessageSlackMock(...args),
 }));
 
-let slackOutbound: typeof import("./outbound-adapter.js").slackOutbound;
-({ slackOutbound } = await import("./outbound-adapter.js"));
+const { slackOutbound } = await import("./outbound-adapter.js");
 
 describe("slackOutbound", () => {
   const cfg = {
@@ -73,6 +73,10 @@ describe("slackOutbound", () => {
       threadTs: undefined,
       accountId: "default",
       blocks: [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: "final text" },
+        },
         {
           type: "section",
           text: { type: "mrkdwn", text: "Block body" },
@@ -163,5 +167,29 @@ describe("slackOutbound", () => {
       accountId: "default",
       blocks: [{ type: "divider" }],
     });
+  });
+
+  it("preserves raw Unicode agent identity emoji", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
+
+    await slackOutbound.sendText!({
+      cfg,
+      to: "C123",
+      text: "heartbeat alert",
+      accountId: "default",
+      identity: { name: "Pulse", emoji: "📟" },
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "heartbeat alert",
+      expect.objectContaining({
+        identity: {
+          username: "Pulse",
+          iconUrl: undefined,
+          iconEmoji: "📟",
+        },
+      }),
+    );
   });
 });

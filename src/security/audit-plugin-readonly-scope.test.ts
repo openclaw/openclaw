@@ -1,3 +1,4 @@
+// Verifies plugin readonly-scope audit findings.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const applyPluginAutoEnableMock = vi.hoisted(() => vi.fn());
@@ -14,9 +15,13 @@ vi.mock("../plugins/channel-plugin-ids.js", () => ({
     resolveConfiguredChannelPluginIdsMock(...args),
 }));
 
-vi.mock("../plugins/runtime.js", () => ({
-  getActivePluginRegistry: (...args: unknown[]) => getActivePluginRegistryMock(...args),
-}));
+vi.mock("../plugins/runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/runtime.js")>();
+  return {
+    ...actual,
+    getActivePluginRegistry: (...args: unknown[]) => getActivePluginRegistryMock(...args),
+  };
+});
 
 vi.mock("../plugins/runtime/metadata-registry-loader.js", () => ({
   loadPluginMetadataRegistrySnapshot: (...args: unknown[]) =>

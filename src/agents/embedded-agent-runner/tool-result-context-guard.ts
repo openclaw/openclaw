@@ -1,9 +1,14 @@
-import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+/**
+ * Installs context guards for oversized tool-result histories.
+ */
+import type {
+  ContextEngine,
+  ContextEngineRuntimeContext,
+  ContextEngineRuntimeSettings,
+} from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
-import {
-  CONTEXT_LIMIT_TRUNCATION_NOTICE,
-  formatContextLimitTruncationNotice,
-} from "./context-truncation-notice.js";
+import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
 import { shouldPreemptivelyCompactBeforePrompt } from "./run/preemptive-compaction.js";
@@ -48,7 +53,10 @@ type MidTurnPrecheckOptions = {
   onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
 };
 
-export { CONTEXT_LIMIT_TRUNCATION_NOTICE, formatContextLimitTruncationNotice };
+export {
+  CONTEXT_LIMIT_TRUNCATION_NOTICE,
+  formatContextLimitTruncationNotice,
+} from "./context-truncation-notice.js";
 
 export function markTranscriptPromptText(message: AgentMessage, text: string): void {
   Object.defineProperty(message, TRANSCRIPT_PROMPT_TEXT_KEY, {
@@ -157,8 +165,8 @@ function truncateTextToBudget(text: string, maxChars: number): string {
     cutPoint = newline;
   }
 
-  const omittedChars = text.length - cutPoint;
-  return text.slice(0, cutPoint) + formatContextLimitTruncationNotice(omittedChars);
+  const prefix = truncateUtf16Safe(text, cutPoint);
+  return prefix + formatContextLimitTruncationNotice(text.length - prefix.length);
 }
 
 function replaceToolResultText(msg: AgentMessage, text: string): AgentMessage {
@@ -324,12 +332,16 @@ export function installContextEngineLoopHook(params: {
   sessionFile: string;
   tokenBudget?: number;
   modelId: string;
+  repairAssembledMessages?: (messages: AgentMessage[]) => AgentMessage[];
   getPrePromptMessageCount?: () => number;
   onAfterTurnCheckpoint?: (messageCount: number) => void;
   getRuntimeContext?: (params: {
     messages: AgentMessage[];
     prePromptMessageCount: number;
   }) => ContextEngineRuntimeContext | undefined;
+  runtimeSettings?: ContextEngineRuntimeSettings;
+  /** True when this turn belongs to a heartbeat run. */
+  isHeartbeat?: boolean;
 }): () => void {
   const { contextEngine, sessionId, sessionKey, sessionFile, tokenBudget, modelId } = params;
   const mutableAgent = params.agent as GuardableAgentRecord;
@@ -394,6 +406,8 @@ export function installContextEngineLoopHook(params: {
             messages: transcriptMessages,
             prePromptMessageCount,
           }),
+          runtimeSettings: params.runtimeSettings,
+          isHeartbeat: params.isHeartbeat,
         });
       } else {
         const newMessages = transcriptMessages.slice(prePromptMessageCount);
@@ -403,6 +417,7 @@ export function installContextEngineLoopHook(params: {
               sessionId,
               sessionKey,
               messages: newMessages,
+              isHeartbeat: params.isHeartbeat,
             });
           } else {
             for (const message of newMessages) {
@@ -410,6 +425,7 @@ export function installContextEngineLoopHook(params: {
                 sessionId,
                 sessionKey,
                 message,
+                isHeartbeat: params.isHeartbeat,
               });
             }
           }
@@ -424,14 +440,15 @@ export function installContextEngineLoopHook(params: {
         messages: providerMessages,
         tokenBudget,
         model: modelId,
+        runtimeSettings: params.runtimeSettings,
       });
-      if (
-        assembled &&
-        Array.isArray(assembled.messages) &&
-        assembled.messages !== providerMessages
-      ) {
-        lastAssembledView = assembled.messages;
-        return assembled.messages;
+      if (assembled && Array.isArray(assembled.messages)) {
+        const repairedMessages =
+          params.repairAssembledMessages?.(assembled.messages) ?? assembled.messages;
+        if (repairedMessages !== providerMessages || assembled.messages !== providerMessages) {
+          lastAssembledView = repairedMessages;
+          return repairedMessages;
+        }
       }
       lastAssembledView = null;
     } catch {

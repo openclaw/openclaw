@@ -1,3 +1,4 @@
+// Defines WhatsApp channel configuration types.
 import type { ReactionLevel } from "../utils/reaction-level.js";
 import type {
   BlockStreamingCoalesceConfig,
@@ -11,13 +12,15 @@ import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
 } from "./types.channel-health.js";
-import type { DmConfig } from "./types.messages.js";
+import type { DmConfig, MentionPatternsPolicyConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type WhatsAppActionConfig = {
   reactions?: boolean;
   sendMessage?: boolean;
   polls?: boolean;
+  /** Enable the experimental requester-bound voice-call tool. Default: false. */
+  calls?: boolean;
 };
 
 export type WhatsAppReactionLevel = ReactionLevel;
@@ -70,6 +73,8 @@ type WhatsAppSharedConfig = {
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
   groupPolicy?: GroupPolicy;
+  /** Scope configured groupChat mentionPatterns to selected WhatsApp conversation IDs. */
+  mentionPatterns?: MentionPatternsPolicyConfig;
   /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
   contextVisibility?: ContextVisibilityMode;
   /** Max group messages to keep as history context (0 disables). */
@@ -132,7 +137,7 @@ export type WhatsAppConfig = WhatsAppConfigCore &
     accounts?: Record<string, WhatsAppAccountConfig>;
     /** Optional default account id when multiple accounts are configured. */
     defaultAccount?: string;
-    /** Per-action tool gating (default: true for all). */
+    /** Per-action tool gating. Calls default to false; existing actions default to true. */
     actions?: WhatsAppActionConfig;
     /** Plugin hook opt-in configuration for privacy-sensitive inbound events. */
     pluginHooks?: {

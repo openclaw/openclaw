@@ -1,9 +1,12 @@
+// Discord provider module implements model/runtime integration.
 import {
   createConnectedChannelStatusPatch,
   createTransportActivityStatusPatch,
 } from "openclaw/plugin-sdk/gateway-runtime";
+import { asDateTimestampMs, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
 import type { DiscordVoiceManager } from "../voice/manager.js";
@@ -33,12 +36,11 @@ const DISCORD_GATEWAY_TRANSPORT_ACTIVITY_STATUS_MIN_INTERVAL_MS = 30_000;
 type GatewayReadyWaitResult = "ready" | "stopped" | "timeout";
 
 function normalizeGatewayReadyTimeoutMs(value: unknown): number | undefined {
-  const numeric =
-    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
-  if (!Number.isFinite(numeric) || numeric <= 0) {
+  const numeric = parseStrictPositiveInteger(value);
+  if (numeric === undefined) {
     return undefined;
   }
-  return Math.min(Math.floor(numeric), MAX_DISCORD_GATEWAY_READY_TIMEOUT_MS);
+  return Math.min(numeric, MAX_DISCORD_GATEWAY_READY_TIMEOUT_MS);
 }
 
 export function resolveDiscordGatewayReadyTimeoutMs(params?: {
@@ -184,7 +186,8 @@ function parseGatewayCloseCode(message: string): number | undefined {
 
 function resolveTransportActivityAt(event: unknown): number {
   const at = (event as { at?: unknown } | undefined)?.at;
-  return typeof at === "number" && Number.isFinite(at) && at >= 0 ? at : Date.now();
+  const timestampMs = asDateTimestampMs(at);
+  return timestampMs !== undefined && timestampMs >= 0 ? timestampMs : Date.now();
 }
 
 function createGatewayStatusObserver(params: {
@@ -418,6 +421,7 @@ export async function runDiscordGatewayLifecycle(params: {
   gatewayRuntimeReadyTimeoutMs?: number;
 }) {
   const gateway = params.gateway;
+  const gatewayReadyAtLifecycleStart = gateway?.isConnected === true;
   if (gateway) {
     registerGateway(params.accountId, gateway);
   }
@@ -511,6 +515,18 @@ export async function runDiscordGatewayLifecycle(params: {
     // Drain gateway errors emitted before lifecycle listeners were attached.
     if (drainPendingGatewayErrors() === "stop") {
       return;
+    }
+
+    if (gatewayReadyAtLifecycleStart && params.voiceManager) {
+      // READY may precede lazy voice-listener registration. Reconcile only after lifecycle
+      // ownership begins so every startup failure still destroys the manager in `finally`.
+      void params.voiceManager
+        .autoJoin()
+        .catch((err: unknown) =>
+          params.runtime.error?.(
+            danger(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`),
+          ),
+        );
     }
 
     await waitForGatewayReady({

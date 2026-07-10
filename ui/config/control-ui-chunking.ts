@@ -1,8 +1,9 @@
-export function normalizeModuleId(id: string): string {
+// Control UI config module wires control ui chunking behavior.
+function normalizeModuleId(id: string): string {
   return id.replace(/\\/g, "/");
 }
 
-export function moduleIdIncludesPackage(id: string, packageName: string): boolean {
+function moduleIdIncludesPackage(id: string, packageName: string): boolean {
   const normalized = normalizeModuleId(id);
   return (
     normalized.includes(`/node_modules/${packageName}/`) ||

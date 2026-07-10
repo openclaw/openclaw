@@ -1,3 +1,4 @@
+/** Tests provider env-var candidate and auth evidence lookup. */
 import { describe, expect, it } from "vitest";
 import {
   getProviderEnvVars,
@@ -28,6 +29,12 @@ describe("provider env vars", () => {
     }
     expect(providerAuthNames).toContain("MINIMAX_CODE_PLAN_KEY");
     expect(providerAuthNames).toContain("MINIMAX_CODING_API_KEY");
+    expect(providerAuthNames).toContain("OPENAI_ADMIN_KEY");
+    expect(providerAuthNames).toContain("ANTHROPIC_ADMIN_KEY");
+    expect(providerAuthNames).toContain("ANTHROPIC_ADMIN_API_KEY");
+    expect(secretNames).toContain("OPENAI_ADMIN_KEY");
+    expect(secretNames).toContain("ANTHROPIC_ADMIN_KEY");
+    expect(secretNames).toContain("ANTHROPIC_ADMIN_API_KEY");
     expect(listKnownSecretEnvVarNames()).not.toContain("OPENCLAW_API_KEY");
   });
 
@@ -49,7 +56,7 @@ describe("provider env vars", () => {
   it("ignores prototype-chain keys when resolving provider env vars", () => {
     expect(getProviderEnvVars("__proto__")).toStrictEqual([]);
     expect(getProviderEnvVars("constructor")).toStrictEqual([]);
-    expect(getProviderEnvVars("openai")).toEqual(["OPENAI_API_KEY"]);
+    expect(getProviderEnvVars("openai")).toEqual(["CODEX_API_KEY", "OPENAI_API_KEY"]);
     expect(getProviderEnvVars("anthropic")).toEqual(["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]);
     expect(getProviderEnvVars("fal")).toEqual(["FAL_KEY", "FAL_API_KEY"]);
   });

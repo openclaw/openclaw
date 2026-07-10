@@ -1,6 +1,8 @@
+import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
+// Public media-understanding runtime API types for file-based image/audio/video
+// helpers and direct structured extraction.
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.js";
-import type { ActiveMediaModel } from "./active-model.types.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -19,6 +21,13 @@ export type RunMediaUnderstandingFileParams = {
   activeModel?: ActiveMediaModel;
   prompt?: string;
   timeoutMs?: number;
+  scopeContext?: MediaUnderstandingScopeContext;
+};
+
+export type MediaUnderstandingScopeContext = {
+  sessionKey?: string;
+  channel?: string;
+  chatType?: string;
 };
 
 export type RunMediaUnderstandingFileResult = {
@@ -39,6 +48,7 @@ export type DescribeImageFileParams = {
   activeModel?: ActiveMediaModel;
   prompt?: string;
   timeoutMs?: number;
+  scopeContext?: MediaUnderstandingScopeContext;
 };
 
 export type DescribeImageFileWithModelParams = {
@@ -53,6 +63,24 @@ export type DescribeImageFileWithModelParams = {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
+};
+
+export type PreparedImageDescriptionInput = {
+  buffer: Buffer;
+  fileName: string;
+  mime?: string;
+};
+
+export type PrepareImageDescriptionInputParams = Pick<
+  DescribeImageFileWithModelParams,
+  "filePath" | "mediaUrl" | "mime" | "cfg" | "timeoutMs"
+>;
+
+export type DescribePreparedImageWithModelParams = Omit<
+  DescribeImageFileWithModelParams,
+  "filePath" | "mediaUrl" | "mime"
+> & {
+  image: PreparedImageDescriptionInput;
 };
 
 type DescribeImageFileWithModelResult = Awaited<
@@ -105,6 +133,12 @@ export type MediaUnderstandingRuntime = {
     params: RunMediaUnderstandingFileParams,
   ) => Promise<RunMediaUnderstandingFileResult>;
   describeImageFile: (params: DescribeImageFileParams) => Promise<RunMediaUnderstandingFileResult>;
+  prepareImageDescriptionInput: (
+    params: PrepareImageDescriptionInputParams,
+  ) => Promise<PreparedImageDescriptionInput>;
+  describePreparedImageWithModel: (
+    params: DescribePreparedImageWithModelParams,
+  ) => Promise<DescribeImageFileWithModelResult>;
   describeImageFileWithModel: (
     params: DescribeImageFileWithModelParams,
   ) => Promise<DescribeImageFileWithModelResult>;

@@ -1,3 +1,4 @@
+// Zalouser plugin module implements session route behavior.
 import {
   buildChannelOutboundSessionRoute,
   type ChannelOutboundSessionRouteParams,
@@ -110,6 +111,7 @@ export function resolveZalouserOutboundSessionRoute(params: ChannelOutboundSessi
     agentId: params.agentId,
     channel: "zalouser",
     accountId: params.accountId,
+    recipientSessionExact: isGroup,
     peer: {
       kind: isGroup ? "group" : "direct",
       id: peerId,

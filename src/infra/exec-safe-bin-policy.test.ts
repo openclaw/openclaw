@@ -1,3 +1,4 @@
+// Covers safe-bin policy profiles, validation, and generated docs text.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -77,9 +78,9 @@ describe("exec safe bin policy grep", () => {
 describe("exec safe bin policy jq", () => {
   const jqProfile = SAFE_BIN_PROFILES.jq;
 
-  it("allows normal jq field filters", () => {
-    expect(validateSafeBinArgv([".foo"], jqProfile, { binName: "jq" })).toBe(true);
-    expect(validateSafeBinArgv([".env"], jqProfile, { binName: "jq" })).toBe(true);
+  it("blocks normal jq field filters in safe-bin mode", () => {
+    expect(validateSafeBinArgv([".foo"], jqProfile, { binName: "jq" })).toBe(false);
+    expect(validateSafeBinArgv([".env"], jqProfile, { binName: "jq" })).toBe(false);
   });
 
   it("blocks jq env builtin filters in safe-bin mode", () => {

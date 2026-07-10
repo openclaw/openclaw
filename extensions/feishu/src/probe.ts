@@ -1,4 +1,9 @@
+// Feishu plugin module implements probe behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import { createFeishuClient, type FeishuClientCredentials } from "./client.js";
 import type { FeishuProbeResult } from "./types.js";
@@ -13,7 +18,7 @@ const PROBE_SUCCESS_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const PROBE_ERROR_TTL_MS = 60 * 1000; // 1 minute
 const MAX_PROBE_CACHE_SIZE = 64;
 export const FEISHU_PROBE_REQUEST_TIMEOUT_MS = 10_000;
-export type ProbeFeishuOptions = {
+type ProbeFeishuOptions = {
   timeoutMs?: number;
   abortSignal?: AbortSignal;
 };
@@ -38,7 +43,12 @@ function setCachedProbeResult(
   result: FeishuProbeResult,
   ttlMs: number,
 ): FeishuProbeResult {
-  probeCache.set(cacheKey, { result, expiresAt: Date.now() + ttlMs });
+  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs);
+  if (expiresAt === undefined) {
+    probeCache.delete(cacheKey);
+    return result;
+  }
+  probeCache.set(cacheKey, { result, expiresAt });
   if (probeCache.size > MAX_PROBE_CACHE_SIZE) {
     const oldest = probeCache.keys().next().value;
     if (oldest !== undefined) {
@@ -74,8 +84,13 @@ export async function probeFeishu(
   // pollute each other's cache entry.
   const cacheKey = creds.accountId ?? `${creds.appId}:${creds.appSecret.slice(0, 8)}`;
   const cached = probeCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.result;
+  if (cached) {
+    const now = asDateTimestampMs(Date.now());
+    const expiresAt = asDateTimestampMs(cached.expiresAt);
+    if (now !== undefined && expiresAt !== undefined && expiresAt > now) {
+      return cached.result;
+    }
+    probeCache.delete(cacheKey);
   }
 
   try {

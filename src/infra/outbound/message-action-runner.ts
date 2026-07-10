@@ -1,14 +1,22 @@
+// Message-action runner normalizes tool params, resolves channel/target/media,
+// applies policies, and dispatches send/poll/plugin actions.
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentIdentity, resolveResponsePrefix } from "../../agents/identity.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import {
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
 } from "../../agents/tools/common.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -30,16 +38,14 @@ import {
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
-import { stripPlainTextToolCallBlocks } from "../../plugin-sdk/tool-payload.js";
+import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
+import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -47,6 +53,7 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../utils/message-channel.js";
+import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -55,7 +62,9 @@ import {
   resolveMessageChannelSelection,
 } from "./channel-selection.js";
 import type { OutboundSendDeps } from "./deliver.js";
+import { shouldUseInternalSourceReplySink } from "./internal-source-reply.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
+import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
@@ -67,12 +76,14 @@ import {
   resolveAttachmentMediaPolicy,
   resolveExtraActionMediaSourceParamKeys,
 } from "./message-action-params.js";
+import { actionRequiresTarget } from "./message-action-spec.js";
 import {
   prepareOutboundMirrorRoute,
   resolveAndApplyOutboundReplyToId,
   resolveAndApplyOutboundThreadId,
 } from "./message-action-threading.js";
 import { maybeApplyTtsToMessageActionSendPayload } from "./message-action-tts.js";
+import { resolveOutboundMessageGatewayOptions } from "./message-gateway-options.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import {
   applyCrossContextDecoration,
@@ -83,11 +94,15 @@ import {
   resolveEffectiveMessageToolsConfig,
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
-import { executePollAction, executeSendAction } from "./outbound-send-service.js";
+import {
+  executePollAction,
+  executeSendAction,
+  hasCorePresentationDelivery,
+  materializeMessagePresentationFallback,
+} from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
-import { extractToolPayload } from "./tool-payload.js";
 
 export type MessageActionRunnerGateway = {
   url?: string;
@@ -98,14 +113,11 @@ export type MessageActionRunnerGateway = {
   mode: GatewayClientMode;
 };
 
-let messageActionGatewayRuntimePromise: Promise<
-  typeof import("./message.gateway.runtime.js")
-> | null = null;
-
-function loadMessageActionGatewayRuntime() {
-  messageActionGatewayRuntimePromise ??= import("./message.gateway.runtime.js");
-  return messageActionGatewayRuntimePromise;
-}
+// Gateway runtime is only needed for remote message action dispatch or
+// idempotency keys; keep normal in-process actions import-light.
+const loadMessageActionGatewayRuntime = createLazyRuntimeModule(
+  () => import("./message.gateway.runtime.js"),
+);
 
 export type RunMessageActionParams = {
   cfg: OpenClawConfig;
@@ -128,6 +140,7 @@ export type RunMessageActionParams = {
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   inboundEventKind?: InboundEventKind;
+  inboundAudio?: boolean;
   abortSignal?: AbortSignal;
 };
 
@@ -154,6 +167,8 @@ export type MessageActionRunResult =
           to: string;
           ok: boolean;
           error?: string;
+          sentBeforeError?: true;
+          payload?: unknown;
           result?: MessageSendResult;
         }>;
       };
@@ -187,31 +202,16 @@ export function getToolResult(
 }
 
 function resolveGatewayActionOptions(gateway?: MessageActionRunnerGateway) {
-  const url =
-    gateway?.mode === GATEWAY_CLIENT_MODES.BACKEND ||
-    gateway?.clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
-      ? undefined
-      : gateway?.url;
-  return {
-    url,
-    token: gateway?.token,
-    timeoutMs:
-      typeof gateway?.timeoutMs === "number" && Number.isFinite(gateway.timeoutMs)
-        ? Math.max(1, Math.floor(gateway.timeoutMs))
-        : 10_000,
-    clientName: gateway?.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
-    clientDisplayName: gateway?.clientDisplayName,
-    mode: gateway?.mode ?? GATEWAY_CLIENT_MODES.CLI,
-  };
+  return resolveOutboundMessageGatewayOptions(gateway);
 }
 
 async function callGatewayMessageAction<T>(params: {
   gateway?: MessageActionRunnerGateway;
   actionParams: Record<string, unknown>;
 }): Promise<T> {
-  const { callGatewayLeastPrivilege } = await loadMessageActionGatewayRuntime();
+  const { callGateway, callGatewayLeastPrivilege } = await loadMessageActionGatewayRuntime();
   const gateway = resolveGatewayActionOptions(params.gateway);
-  return await callGatewayLeastPrivilege<T>({
+  const callParams = {
     url: gateway.url,
     token: gateway.token,
     method: "message.action",
@@ -220,6 +220,26 @@ async function callGatewayMessageAction<T>(params: {
     clientName: gateway.clientName,
     clientDisplayName: gateway.clientDisplayName,
     mode: gateway.mode,
+  };
+  const isTrustedBackendBridge =
+    gateway.clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
+    gateway.mode === GATEWAY_CLIENT_MODES.BACKEND;
+  const requesterAccountId = normalizeOptionalString(params.actionParams.requesterAccountId);
+  const requesterSenderId = normalizeOptionalString(params.actionParams.requesterSenderId);
+  const carriesTrustedRequester =
+    isTrustedBackendBridge &&
+    (requesterAccountId !== undefined ||
+      requesterSenderId !== undefined ||
+      params.actionParams.senderIsOwner !== undefined);
+  if (!carriesTrustedRequester) {
+    return await callGatewayLeastPrivilege<T>(callParams);
+  }
+  // Trusted requester fields come from inbound server context. The RPC needs
+  // admin scope to prove provenance; the Gateway recognizes this backend bridge
+  // and keeps channel-handler authorization at message.action least privilege.
+  return await callGateway<T>({
+    ...callParams,
+    scopes: ["operator.admin"],
   });
 }
 
@@ -454,6 +474,7 @@ type ResolvedActionContext = {
   params: Record<string, unknown>;
   channel: ChannelId;
   mediaAccess: OutboundMediaAccess;
+  extraActionMediaSourceParamKeys?: readonly string[];
   accountId?: string | null;
   dryRun: boolean;
   gateway?: MessageActionRunnerGateway;
@@ -495,7 +516,13 @@ function applySendPayloadPartsToActionParams(
   actionParams: Record<string, unknown>,
   parts: SendPayloadParts,
 ) {
-  actionParams.message = parts.message;
+  if (parts.message || !parts.payload.presentation) {
+    actionParams.message = parts.message;
+  } else {
+    // Presentation-only gateway handlers distinguish an omitted body from an
+    // explicit empty body when deciding whether to render semantic fallback.
+    delete actionParams.message;
+  }
   actionParams.media = parts.mediaUrl;
   actionParams.mediaUrl = parts.mediaUrl;
   actionParams.mediaUrls = parts.mediaUrls;
@@ -532,29 +559,109 @@ function collectMessageAttachmentMediaHints(value: unknown): string[] {
   return mediaUrls;
 }
 
-function hasExplicitRouteParam(params: Record<string, unknown>): boolean {
-  for (const key of ["channel", "target", "to", "channelId"]) {
-    if (normalizeOptionalString(params[key])) {
-      return true;
-    }
-  }
+function hasExplicitSingularTargetParam(params: Record<string, unknown>): boolean {
+  return readTrimmedStringAlias(params, ["target", "to", "channelId"]) !== undefined;
+}
+
+function hasExplicitTargetParam(params: Record<string, unknown>): boolean {
   return (
-    Array.isArray(params.targets) && params.targets.some((value) => normalizeOptionalString(value))
+    hasExplicitSingularTargetParam(params) ||
+    (Array.isArray(params.targets) &&
+      params.targets.some((value) => normalizeOptionalString(value)))
   );
 }
 
-function shouldUseInternalSourceReplySink(
+function hasPotentialActionTargetInput(
+  input: RunMessageActionParams,
+  params: Record<string, unknown>,
+): boolean {
+  return Boolean(
+    hasExplicitSingularTargetParam(params) ||
+    normalizeOptionalString(input.toolContext?.currentChannelId) ||
+    normalizeOptionalString(input.toolContext?.currentMessagingTarget) ||
+    hasPotentialPluginActionParam(params),
+  );
+}
+
+function isCurrentSourceTargetParam(
+  input: RunMessageActionParams,
+  params: Record<string, unknown>,
+): boolean {
+  const currentChannelId = normalizeOptionalString(input.toolContext?.currentChannelId);
+  const currentMessagingTarget = normalizeOptionalString(input.toolContext?.currentMessagingTarget);
+  if (!currentChannelId && !currentMessagingTarget) {
+    return false;
+  }
+  const currentChannelProvider = normalizeOptionalLowercaseString(
+    input.toolContext?.currentChannelProvider,
+  );
+  const explicitChannel = normalizeOptionalLowercaseString(params.channel);
+  if (explicitChannel && currentChannelProvider && explicitChannel !== currentChannelProvider) {
+    return false;
+  }
+
+  const explicitTarget =
+    normalizeOptionalString(params.target) ??
+    normalizeOptionalString(params.to) ??
+    normalizeOptionalString(params.channelId);
+  if (!explicitTarget) {
+    return false;
+  }
+
+  const provider = explicitChannel ?? currentChannelProvider;
+  const currentCandidates = new Set<string>();
+  for (const currentTarget of [currentMessagingTarget, currentChannelId]) {
+    if (!currentTarget) {
+      continue;
+    }
+    addCandidateAndUnprefixedAlias(currentCandidates, currentTarget);
+    if (provider) {
+      addCandidateAndUnprefixedAlias(
+        currentCandidates,
+        normalizeTargetForAccountBinding(provider, currentTarget),
+      );
+    }
+  }
+
+  const explicitCandidates = new Set<string>();
+  addCandidateAndUnprefixedAlias(explicitCandidates, explicitTarget);
+  if (provider) {
+    addCandidateAndUnprefixedAlias(
+      explicitCandidates,
+      normalizeTargetForAccountBinding(provider, explicitTarget),
+    );
+  }
+  return Array.from(explicitCandidates).some((candidate) => currentCandidates.has(candidate));
+}
+
+function hasExplicitNonCurrentChannelParam(
+  input: RunMessageActionParams,
+  params: Record<string, unknown>,
+): boolean {
+  const explicitChannel = normalizeOptionalLowercaseString(params.channel);
+  if (!explicitChannel) {
+    return false;
+  }
+  const currentChannelProvider = normalizeOptionalLowercaseString(
+    input.toolContext?.currentChannelProvider,
+  );
+  return !currentChannelProvider || explicitChannel !== currentChannelProvider;
+}
+
+function applyImplicitSourceReplySendPolicy(
   input: RunMessageActionParams,
   params: Record<string, unknown>,
 ) {
-  return (
-    input.action === "send" &&
-    input.sourceReplyDeliveryMode === "message_tool_only" &&
-    normalizeOptionalLowercaseString(input.toolContext?.currentChannelProvider) ===
-      INTERNAL_MESSAGE_CHANNEL &&
-    Boolean(input.sessionKey?.trim()) &&
-    !hasExplicitRouteParam(params)
-  );
+  if (input.action !== "send" || input.sourceReplyDeliveryMode !== "message_tool_only") {
+    return;
+  }
+  if (hasExplicitNonCurrentChannelParam(input, params)) {
+    return;
+  }
+  if (hasExplicitTargetParam(params) && !isCurrentSourceTargetParam(input, params)) {
+    return;
+  }
+  params.bestEffort = true;
 }
 
 async function runGatewayPluginMessageActionOrNull(params: {
@@ -587,6 +694,7 @@ async function runGatewayPluginMessageActionOrNull(params: {
       action: params.action,
       params: params.params,
       accountId: params.accountId ?? undefined,
+      requesterAccountId: params.input.requesterAccountId ?? undefined,
       requesterSenderId: params.input.requesterSenderId ?? undefined,
       senderIsOwner: params.input.senderIsOwner,
       sessionKey: params.input.sessionKey,
@@ -647,6 +755,8 @@ async function handleBroadcastAction(
     to: string;
     ok: boolean;
     error?: string;
+    sentBeforeError?: true;
+    payload?: unknown;
     result?: MessageSendResult;
   }> = [];
   const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
@@ -673,6 +783,7 @@ async function handleBroadcastAction(
           channel: targetChannel,
           to: resolved.to,
           ok: true,
+          payload: sendResult.kind === "send" ? sendResult.payload : undefined,
           result: sendResult.kind === "send" ? sendResult.sendResult : undefined,
         });
       } catch (err) {
@@ -684,6 +795,11 @@ async function handleBroadcastAction(
           to: target,
           ok: false,
           error: formatErrorMessage(err),
+          ...(err &&
+          typeof err === "object" &&
+          (err as { sentBeforeError?: unknown }).sentBeforeError === true
+            ? { sentBeforeError: true as const }
+            : {}),
         });
       }
     }
@@ -770,7 +886,7 @@ function buildInternalSourceReplyToolResult(payload: {
     content: [
       {
         type: "text",
-        text: `${action} visible reply to the current webchat conversation${sink}.`,
+        text: `${action} visible reply to the current source conversation${sink}.`,
       },
     ],
     details: {
@@ -820,9 +936,12 @@ async function buildSendPayloadParts(params: {
     readStringParam(actionParams, "mediaUrl", { trim: false }) ??
     readStringParam(actionParams, "path", { trim: false }) ??
     readStringParam(actionParams, "filePath", { trim: false }) ??
-    readStringParam(actionParams, "fileUrl", { trim: false });
+    readStringParam(actionParams, "fileUrl", { trim: false }) ??
+    readStringParam(actionParams, "image", { trim: false });
+  const mediaUrlHints = readStringArrayParam(actionParams, "mediaUrls") ?? [];
   const attachmentMediaHints = collectMessageAttachmentMediaHints(actionParams.attachments);
-  const hasMediaHint = Boolean(mediaHint) || attachmentMediaHints.length > 0;
+  const hasMediaHint =
+    Boolean(mediaHint) || mediaUrlHints.length > 0 || attachmentMediaHints.length > 0;
   const hasPresentation = hasMessagePresentationBlocks(actionParams.presentation);
   const hasInteractive = hasInteractiveReplyBlocks(actionParams.interactive);
   const caption = readStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
@@ -838,7 +957,10 @@ async function buildSendPayloadParts(params: {
     message = caption;
   }
 
-  const parsed = parseReplyDirectives(message);
+  const parsed = parseInlineDirectives(message, {
+    stripAudioTag: true,
+    stripReplyTags: true,
+  });
   const mergedMediaUrls: string[] = [];
   const seenMedia = new Set<string>();
   const pushMedia = (value?: string | null) => {
@@ -850,13 +972,12 @@ async function buildSendPayloadParts(params: {
     mergedMediaUrls.push(trimmed);
   };
   pushMedia(mediaHint);
+  for (const mediaUrlHint of mediaUrlHints) {
+    pushMedia(mediaUrlHint);
+  }
   for (const attachmentMediaHint of attachmentMediaHints) {
     pushMedia(attachmentMediaHint);
   }
-  for (const url of parsed.mediaUrls ?? []) {
-    pushMedia(url);
-  }
-  pushMedia(parsed.mediaUrl);
 
   const normalizedMediaUrls = await normalizeSandboxMediaList({
     values: mergedMediaUrls,
@@ -866,13 +987,18 @@ async function buildSendPayloadParts(params: {
   mergedMediaUrls.push(...normalizedMediaUrls);
 
   message = stripPlainTextToolCallBlocks(stripUnsupportedCitationControlMarkers(parsed.text));
-  actionParams.message = message;
+  if (message || !hasPresentation) {
+    actionParams.message = message;
+  } else {
+    delete actionParams.message;
+  }
   if (!actionParams.replyTo && parsed.replyToId) {
     actionParams.replyTo = parsed.replyToId;
   }
   if (!actionParams.media) {
     actionParams.media = mergedMediaUrls[0] || undefined;
   }
+  actionParams.mediaUrls = mergedMediaUrls.length > 0 ? [...mergedMediaUrls] : undefined;
 
   if (params.channel && params.target) {
     message = await maybeApplyCrossContextMarker({
@@ -901,7 +1027,11 @@ async function buildSendPayloadParts(params: {
   ) {
     throw new Error("send requires text or media");
   }
-  actionParams.message = message;
+  if (message || !hasPresentation) {
+    actionParams.message = message;
+  } else {
+    delete actionParams.message;
+  }
   const gifPlayback = readBooleanParam(actionParams, "gifPlayback") ?? false;
   const forceDocument =
     readBooleanParam(actionParams, "forceDocument") ??
@@ -910,8 +1040,7 @@ async function buildSendPayloadParts(params: {
   const asVoice =
     readBooleanParam(actionParams, "asVoice") ??
     readBooleanParam(actionParams, "audioAsVoice") ??
-    parsed.audioAsVoice ??
-    false;
+    parsed.audioAsVoice;
   const bestEffort = readBooleanParam(actionParams, "bestEffort");
   const silent = readBooleanParam(actionParams, "silent");
   const mirrorMediaUrls =
@@ -950,6 +1079,10 @@ async function buildSendPayloadParts(params: {
   };
 }
 
+// Detects leftover `{variable}` placeholders after prefix interpolation. Non-global so
+// `.test()` stays stateless; mirrors the variable shape in response-prefix-template.ts.
+const UNRESOLVED_PREFIX_VAR_PATTERN = /\{[a-zA-Z][a-zA-Z0-9.]*\}/;
+
 async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
   const {
     cfg,
@@ -976,9 +1109,42 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     agentId,
   });
 
-  const replyToId = resolveAndApplyOutboundReplyToId(params, {
+  // `message(action=send)` crosses into other conversations, so mirror the direct-reply
+  // egress and prepend messages.responsePrefix here too; otherwise the disambiguation
+  // prefix is silently dropped on tool sends while replies keep it. Interpolate the
+  // template like normalize-reply.ts so identity tokens render. model/provider/thinking
+  // tokens need the live model selection that a tool send never performs, so when any
+  // placeholder stays unresolved we skip prefixing instead of leaking a literal `{model}`.
+  // The startsWith guard matches normalize-reply.ts and keeps re-runs idempotent.
+  const responsePrefix = resolveResponsePrefixTemplate(
+    resolveResponsePrefix(cfg, agentId ?? "", {
+      channel,
+      accountId: accountId ?? undefined,
+    }),
+    { identityName: normalizeOptionalString(resolveAgentIdentity(cfg, agentId ?? "")?.name) },
+  );
+  const prefixHasUnresolvedVar =
+    responsePrefix !== undefined && UNRESOLVED_PREFIX_VAR_PATTERN.test(responsePrefix);
+  if (
+    responsePrefix &&
+    !prefixHasUnresolvedVar &&
+    sendPayload.message &&
+    !sendPayload.message.startsWith(responsePrefix)
+  ) {
+    const prefixedMessage = `${responsePrefix} ${sendPayload.message}`;
+    sendPayload = {
+      ...sendPayload,
+      message: prefixedMessage,
+      payload: { ...sendPayload.payload, text: prefixedMessage },
+    };
+    applySendPayloadPartsToActionParams(params, sendPayload);
+  }
+
+  const replyToIsExplicit = Boolean(readStringParam(params, "replyTo"));
+  resolveAndApplyOutboundReplyToId(params, {
     channel,
     toolContext: input.toolContext,
+    matchesToolContextTarget: getChannelPlugin(channel)?.threading?.matchesToolContextTarget,
   });
   const { resolvedThreadId, outboundRoute } = await prepareOutboundMirrorRoute({
     cfg,
@@ -992,9 +1158,12 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     dryRun,
     resolvedTarget,
     resolveAutoThreadId: getChannelPlugin(channel)?.threading?.resolveAutoThreadId,
+    resolveReplyTransport: getChannelPlugin(channel)?.threading?.resolveReplyTransport,
+    replyToIsExplicit,
     resolveOutboundSessionRoute,
     ensureOutboundSessionEntry,
   });
+  const resolvedReplyToId = readStringParam(params, "replyTo");
   throwIfAborted(abortSignal);
 
   const ttsPayload = await maybeApplyTtsToMessageActionSendPayload({
@@ -1004,6 +1173,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     accountId,
     agentId,
     sessionKey: input.sessionKey,
+    inboundAudio: input.inboundAudio,
     dryRun,
   });
   if (ttsPayload !== sendPayload.payload) {
@@ -1011,7 +1181,23 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     applySendPayloadPartsToActionParams(params, sendPayload);
   }
   throwIfAborted(abortSignal);
+  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+    cfg,
+    agentId,
+    mediaSources: collectActionMediaSourceHints(params, ctx.extraActionMediaSourceParamKeys, {
+      structuredAttachments: "all",
+    }),
+    sessionKey: input.sessionKey,
+    messageProvider: input.sessionKey ? undefined : channel,
+    accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
+    requesterSenderId: input.requesterSenderId,
+    requesterSenderName: input.requesterSenderName,
+    requesterSenderUsername: input.requesterSenderUsername,
+    requesterSenderE164: input.requesterSenderE164,
+  });
 
+  // Gateway action ownership wins even when this process has a render-capable
+  // outbound adapter; credentials and account selection may exist only remotely.
   const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
     cfg,
     params,
@@ -1036,6 +1222,23 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     return gatewayPluginAction;
   }
 
+  const useCorePresentationDelivery = Boolean(
+    sendPayload.payload.presentation &&
+    hasCorePresentationDelivery(resolveOutboundChannelPlugin({ channel, cfg })?.outbound),
+  );
+  if (sendPayload.payload.presentation && !useCorePresentationDelivery) {
+    const fallbackMessage = materializeMessagePresentationFallback({
+      payload: sendPayload.payload,
+      text: sendPayload.message,
+    });
+    sendPayload = {
+      ...sendPayload,
+      message: fallbackMessage,
+      payload: { ...sendPayload.payload, text: fallbackMessage },
+    };
+    applySendPayloadPartsToActionParams(params, sendPayload);
+  }
+
   const send = await executeSendAction({
     ctx: {
       cfg,
@@ -1049,7 +1252,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       requesterSenderUsername: input.requesterSenderUsername ?? undefined,
       requesterSenderE164: input.requesterSenderE164 ?? undefined,
       senderIsOwner: input.senderIsOwner,
-      mediaAccess: ctx.mediaAccess,
+      mediaAccess,
       accountId: accountId ?? undefined,
       sessionId: input.sessionId,
       inboundEventKind: input.inboundEventKind,
@@ -1075,11 +1278,14 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     payload: sendPayload.payload,
     mediaUrl: sendPayload.mediaUrl,
     mediaUrls: sendPayload.mediaUrls,
+    buffer: readStringParam(params, "buffer", { trim: false }) ?? undefined,
+    filename: readStringParam(params, "filename") ?? undefined,
+    contentType: readStringParam(params, "contentType") ?? undefined,
     asVoice: sendPayload.asVoice,
     gifPlayback: sendPayload.gifPlayback,
     forceDocument: sendPayload.forceDocument,
     bestEffort: sendPayload.bestEffort,
-    replyToId: replyToId ?? undefined,
+    replyToId: resolvedReplyToId ?? undefined,
     threadId: resolvedThreadId ?? undefined,
   });
 
@@ -1156,6 +1362,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       params,
       accountId: accountId ?? undefined,
       agentId,
+      requesterAccountId: input.requesterAccountId ?? undefined,
       requesterSenderId: input.requesterSenderId ?? undefined,
       sessionKey: input.sessionKey,
       sessionId: input.sessionId,
@@ -1174,9 +1381,8 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
         throw new Error("pollOption requires at least two values");
       }
       const allowMultiselect = readBooleanParam(params, "pollMulti") ?? false;
-      const durationHours = readNumberParam(params, "pollDurationHours", {
-        integer: true,
-        strict: true,
+      const durationHours = readPositiveIntegerParam(params, "pollDurationHours", {
+        message: "pollDurationHours must be a positive integer",
       });
 
       return {
@@ -1233,6 +1439,23 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
   if (!plugin?.actions?.handleAction) {
     throw new Error(`Channel ${channel} is unavailable for message actions (plugin not loaded).`);
   }
+
+  // Plugin actions bypass send/poll, so inherit thread metadata before either
+  // gateway or local dispatch to keep both execution modes on the same topic.
+  const targetForThreading =
+    normalizeOptionalString(params.to) ?? normalizeOptionalString(params.channelId) ?? "";
+  if (targetForThreading) {
+    resolveAndApplyOutboundThreadId(params, {
+      cfg,
+      to: targetForThreading,
+      accountId,
+      toolContext: input.toolContext,
+      resolveAutoThreadId: plugin.threading?.resolveAutoThreadId,
+      resolveReplyTransport: plugin.threading?.resolveReplyTransport,
+      replyToIsExplicit: Boolean(readStringParam(params, "replyTo")),
+    });
+  }
+
   const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
     cfg,
     params,
@@ -1266,6 +1489,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     mediaLocalRoots: mediaAccess.localRoots,
     mediaReadFile: mediaAccess.readFile,
     accountId: accountId ?? undefined,
+    requesterAccountId: input.requesterAccountId ?? undefined,
     requesterSenderId: input.requesterSenderId ?? undefined,
     senderIsOwner: input.senderIsOwner,
     sessionKey: input.sessionKey,
@@ -1316,16 +1540,23 @@ export async function runMessageAction(
   if (action === "send" && hasPollCreationParams(params)) {
     throw new Error('Poll fields require action "poll"; use action "poll" instead of "send".');
   }
-  if (shouldUseInternalSourceReplySink(input, params)) {
+  if (await shouldUseInternalSourceReplySink(input, params)) {
     return handleInternalSourceReplySendAction({ ...input, agentId: resolvedAgentId }, params);
   }
+  applyImplicitSourceReplySendPolicy(input, params);
+  // Missing targets must fail before channel discovery, which can bootstrap or
+  // probe configured plugins. Non-standard params may still be owner aliases.
+  if (actionRequiresTarget(action) && !hasPotentialActionTargetInput(input, params)) {
+    throw new Error(`Action ${action} requires a target.`);
+  }
+  const channel = await resolveChannel(cfg, params, input.toolContext);
+  params.channel = channel;
   params = normalizeMessageActionInput({
     action,
     args: params,
     toolContext: input.toolContext,
+    targetAliasSpec: getChannelPlugin(channel)?.actions?.messageActionTargetAliases?.[action],
   });
-
-  const channel = await resolveChannel(cfg, params, input.toolContext);
   let accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
   if (!accountId && resolvedAgentId) {
     accountId = resolveTargetBoundAccountId({
@@ -1382,17 +1613,32 @@ export async function runMessageAction(
     sandboxRoot: input.sandboxRoot,
     mediaAccess,
   });
+  const gateway = resolveGateway(input);
+  const channelPlugin = resolveOutboundChannelPlugin({ channel, cfg });
+  const preserveSendBuffer =
+    action === "send" &&
+    Boolean(gateway) &&
+    (channelPlugin?.actions?.resolveExecutionMode?.({
+      action: "send",
+    }) === "gateway" ||
+      channelPlugin?.outbound?.deliveryMode === "gateway");
 
-  await hydrateAttachmentParamsForAction({
-    cfg,
-    channel,
-    accountId,
-    args: params,
-    action,
-    dryRun,
-    mediaPolicy,
-    extraParamKeys: extraActionMediaSourceParamKeys,
-  });
+  const hydrateActionAttachmentParams = () =>
+    hydrateAttachmentParamsForAction({
+      cfg,
+      channel,
+      accountId,
+      args: params,
+      action,
+      dryRun,
+      preserveSendBuffer,
+      mediaPolicy,
+      extraParamKeys: extraActionMediaSourceParamKeys,
+    });
+
+  if (action !== "send") {
+    await hydrateActionAttachmentParams();
+  }
 
   const resolvedTarget = await resolveActionTarget({
     cfg,
@@ -1411,7 +1657,9 @@ export async function runMessageAction(
     agentId: resolvedAgentId,
   });
 
-  const gateway = resolveGateway(input);
+  if (action === "send") {
+    await hydrateActionAttachmentParams();
+  }
 
   if (action === "send") {
     return handleSendAction({
@@ -1419,6 +1667,7 @@ export async function runMessageAction(
       params,
       channel,
       mediaAccess,
+      extraActionMediaSourceParamKeys,
       accountId,
       dryRun,
       gateway,
@@ -1435,6 +1684,7 @@ export async function runMessageAction(
       params,
       channel,
       mediaAccess,
+      extraActionMediaSourceParamKeys,
       accountId,
       dryRun,
       gateway,
@@ -1448,6 +1698,7 @@ export async function runMessageAction(
     params,
     channel,
     mediaAccess,
+    extraActionMediaSourceParamKeys,
     accountId,
     dryRun,
     gateway,

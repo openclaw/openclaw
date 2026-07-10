@@ -1,8 +1,10 @@
+// Model resolver tests pin the startup fallback order for fresh and restored
+// agent sessions.
 import { describe, expect, it } from "vitest";
 import type { Model } from "../../llm/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import type { ModelRegistry } from "./model-registry.js";
-import { findInitialModel, restoreModelFromSession } from "./model-resolver.js";
+import { findInitialModel, parseModelPattern, restoreModelFromSession } from "./model-resolver.js";
 
 function model(provider: string, id: string): Model {
   return {
@@ -41,6 +43,8 @@ describe("model resolver fallback selection", () => {
   });
 
   it("falls back to registry order instead of core provider defaults", async () => {
+    // Restored sessions can reference removed models; choose an authenticated
+    // registry model rather than reviving a hard-coded provider default.
     const firstAvailable = model("anthropic", "claude-haiku");
     const result = await restoreModelFromSession(
       "openai",
@@ -51,5 +55,17 @@ describe("model resolver fallback selection", () => {
     );
 
     expect(result.model).toBe(firstAvailable);
+  });
+});
+
+describe("parseModelPattern version sorting", () => {
+  it("selects the numerically highest version when aliases span double-digit minors", () => {
+    const models = [
+      model("anthropic", "claude-opus-4-9"),
+      model("anthropic", "claude-opus-4-10"),
+      model("anthropic", "claude-opus-4-11"),
+    ];
+    const result = parseModelPattern("opus", models);
+    expect(result.model?.id).toBe("claude-opus-4-11");
   });
 });

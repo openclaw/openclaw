@@ -1,3 +1,4 @@
+// Defines Microsoft Teams channel configuration types.
 import type {
   BlockStreamingCoalesceConfig,
   ChannelPreviewStreamingConfig,
@@ -20,6 +21,9 @@ export type MSTeamsWebhookConfig = {
   /** Path for the messages endpoint. Default: /api/messages. */
   path?: string;
 };
+
+/** Teams SDK cloud environment. Public cloud is the default. */
+export type MSTeamsCloudName = "Public" | "USGov" | "USGovDoD" | "China";
 
 /**
  * Bot Framework OAuth SSO configuration for Microsoft Teams.
@@ -95,6 +99,13 @@ export type MSTeamsConfig = {
   appPassword?: SecretInput;
   /** Azure AD Tenant ID (for single-tenant bots). */
   tenantId?: string;
+  /** Teams SDK cloud environment. Default: Public. */
+  cloud?: MSTeamsCloudName;
+  /**
+   * Bot Connector service URL used by SDK proactive sends/edits/deletes.
+   * Set with `cloud` for USGov/DoD SDK clouds; set alone for GCC.
+   */
+  serviceUrl?: string;
   /**
    * Authentication type.
    * - `"secret"` (default): uses `appPassword` (client secret).
@@ -150,6 +161,12 @@ export type MSTeamsConfig = {
    * Use specific hosts only; avoid multi-tenant suffixes.
    */
   mediaAuthAllowHosts?: Array<string>;
+  /**
+   * Query Graph for channel/group media when Bot Framework HTML omits file markers.
+   * Requires the documented Graph permissions and adds one message lookup per
+   * otherwise unresolved HTML activity. Default: false.
+   */
+  graphMediaFallback?: boolean;
   /** Default: require @mention to respond in channels/groups. */
   requireMention?: boolean;
   /** Max group/channel messages to keep as history context (0 disables). */
@@ -162,7 +179,7 @@ export type MSTeamsConfig = {
   replyStyle?: MSTeamsReplyStyle;
   /** Per-team config. Key is team ID (from the /team/ URL path segment). */
   teams?: Record<string, MSTeamsTeamConfig>;
-  /** Max media size in MB (default: 100MB for OneDrive upload support). */
+  /** Max inbound and outbound media size in MB (default: 100MB). */
   mediaMaxMb?: number;
   /** SharePoint site ID for file uploads in group chats/channels (e.g., "contoso.sharepoint.com,guid1,guid2"). */
   sharePointSiteId?: string;

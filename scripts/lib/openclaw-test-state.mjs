@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Creates isolated OpenClaw test HOME/state directories and shell snippets.
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -321,6 +322,7 @@ function buildCreatePlan(options = {}) {
   };
 }
 
+/** Create an isolated OpenClaw test state directory and optional scenario config. */
 export async function createState(options = {}) {
   const label = normalizeLabel(options.label);
   const root = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${label}-`));
@@ -333,11 +335,13 @@ export async function createState(options = {}) {
   return plan;
 }
 
-export function renderEnvFile(plan) {
+/** Render a dotenv-style env file for a created test state plan. */
+function renderEnvFile(plan) {
   return `${renderExports(plan.env)}\n`;
 }
 
-export function renderShellSnippet(options = {}) {
+/** Render shell commands that create and export an isolated OpenClaw test state. */
+function renderShellSnippet(options = {}) {
   const label = normalizeLabel(options.label);
   const scenario = requireScenario(options.scenario);
   const config = scenarioConfig(scenario, options);
@@ -369,7 +373,8 @@ export function renderShellSnippet(options = {}) {
   return `${lines.join("\n")}\n`;
 }
 
-export function renderShellFunction() {
+/** Render a reusable shell function for creating isolated OpenClaw test state. */
+function renderShellFunction() {
   return `openclaw_test_state_create() {
   local raw_label="\${1:-state}"
   local label="$raw_label"
@@ -654,9 +659,11 @@ async function main(argv = process.argv.slice(2)) {
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 
 if (isMain) {
-  main().catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.stderr.write(usage());
-    process.exitCode = 1;
-  });
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      process.stderr.write(usage());
+      process.exitCode = 1;
+    },
+  );
 }

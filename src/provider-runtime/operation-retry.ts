@@ -1,3 +1,4 @@
+// Provider operation retry helpers run retryable provider operations with backoff.
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 
@@ -27,7 +28,7 @@ export type TransientProviderRetryOptions = {
 
 export type TransientProviderRetryConfig = boolean | TransientProviderRetryOptions;
 
-export const DEFAULT_TRANSIENT_PROVIDER_RETRY_OPTIONS = {
+const DEFAULT_TRANSIENT_PROVIDER_RETRY_OPTIONS = {
   attempts: 2,
   baseDelayMs: 250,
   maxDelayMs: 1_000,
@@ -45,7 +46,7 @@ export function resolveTransientProviderRetryOptions(
   return options;
 }
 
-export function defaultTransientProviderRetryForStage(
+function defaultTransientProviderRetryForStage(
   stage: ProviderOperationRetryStage,
 ): TransientProviderRetryConfig | undefined {
   return stage === "create" ? undefined : true;
@@ -142,7 +143,7 @@ function hasTimeoutSignal(error: unknown, message: string): boolean {
   );
 }
 
-export function isTransientProviderOperationError(error: unknown, message: string): boolean {
+function isTransientProviderOperationError(error: unknown, message: string): boolean {
   const status = readErrorStatus(error);
   if (status !== undefined) {
     return status === 500 || status === 502 || status === 503 || status === 504;
@@ -174,7 +175,10 @@ export function resolveTransientProviderAttempts(options?: TransientProviderRetr
   if (!options) {
     return 1;
   }
-  return Math.max(1, Math.round(Number.isFinite(options.attempts) ? options.attempts : 1));
+  if (!Number.isSafeInteger(options.attempts)) {
+    return 1;
+  }
+  return Math.max(1, options.attempts);
 }
 
 export function resolveTransientProviderDelayMs(

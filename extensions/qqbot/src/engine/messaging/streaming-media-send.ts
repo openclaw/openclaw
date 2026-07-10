@@ -5,8 +5,10 @@
  * 拆分、路径编码修复，以及统一的发送队列执行器。
  */
 
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GatewayAccount } from "../types.js";
 import { normalizePath } from "../utils/platform.js";
+import type { OutboundMediaAccessContext } from "./outbound-types.js";
 import {
   sendPhoto,
   sendVoice,
@@ -40,7 +42,7 @@ function createMediaTagRegex(): RegExp {
 }
 
 /** 媒体发送上下文（统一的，供流式和普通模式共用） */
-export interface MediaSendContext {
+export interface MediaSendContext extends OutboundMediaAccessContext {
   /** 媒体目标上下文（用于 sendPhoto/sendVoice 等） */
   mediaTarget: MediaTargetContext;
   /** qualifiedTarget（格式 "qqbot:c2c:xxx" 或 "qqbot:group:xxx"，用于 sendMediaAuto） */
@@ -90,7 +92,7 @@ function fixPathEncoding(
       log?.debug?.(`Decoding path with mixed encoding: ${result}`);
 
       // Step 1: 将八进制转义转换为字节
-      let decoded = result.replace(/\\([0-7]{1,3})/g, (_: string, octal: string) =>
+      const decoded = result.replace(/\\([0-7]{1,3})/g, (_: string, octal: string) =>
         String.fromCharCode(Number.parseInt(octal, 8)),
       );
 
@@ -166,7 +168,7 @@ interface FirstClosedMediaTag {
   textBefore: string;
   /** 标签类型（小写，如 "qqvoice"） */
   tagName: string;
-  /** 标签内的媒体路径（已 trim、去 MEDIA: 前缀、修复编码） */
+  /** 标签内的媒体路径（已 trim、修复编码） */
   mediaPath: string;
   /** 标签在输入文本中的结束索引（紧接标签后的第一个字符位置） */
   tagEndIndex: number;
@@ -207,10 +209,6 @@ export function findFirstClosedMediaTag(
     const tagName = match[1].toLowerCase();
     let mediaPath = match[2]?.trim() ?? "";
 
-    // 剥离 MEDIA: 前缀
-    if (mediaPath.startsWith("MEDIA:")) {
-      mediaPath = mediaPath.slice("MEDIA:".length);
-    }
     mediaPath = normalizePath(mediaPath);
     mediaPath = fixPathEncoding(mediaPath, log);
 
@@ -253,7 +251,16 @@ export async function executeSendQueue(
     skipInterTagText?: boolean;
   } = {},
 ): Promise<void> {
-  const { mediaTarget, qualifiedTarget, account, replyToId, log } = ctx;
+  const {
+    mediaTarget,
+    qualifiedTarget,
+    account,
+    replyToId,
+    log,
+    mediaAccess,
+    mediaLocalRoots,
+    mediaReadFile,
+  } = ctx;
   const prefix = mediaTarget.logPrefix ?? `[qqbot:${account.accountId}]`;
 
   /** 媒体发送失败时的兜底：通过 onSendText 发送错误文本给用户 */
@@ -289,7 +296,7 @@ export async function executeSendQueue(
       }
 
       log?.info(
-        `${prefix} executeSendQueue: sending ${item.type}: ${item.content.slice(0, 80)}...`,
+        `${prefix} executeSendQueue: sending ${item.type}: ${truncateUtf16Safe(item.content, 80)}...`,
       );
 
       if (item.type === "image") {
@@ -307,12 +314,12 @@ export async function executeSendQueue(
         try {
           const result = await Promise.race([
             sendVoice(mediaTarget, item.content, uploadFormats, transcodeEnabled),
-            new Promise<{ channel: string; error: string }>((resolve) =>
+            new Promise<{ channel: string; error: string }>((resolve) => {
               setTimeout(
                 () => resolve({ channel: "qqbot", error: "语音发送超时，已跳过" }),
                 voiceTimeout,
-              ),
-            ),
+              );
+            }),
           ]);
           if (result.error) {
             log?.error(`${prefix} sendVoice error: ${result.error}`);
@@ -342,6 +349,9 @@ export async function executeSendQueue(
           accountId: account.accountId,
           replyToId,
           account,
+          ...(mediaAccess ? { mediaAccess } : {}),
+          ...(mediaLocalRoots ? { mediaLocalRoots } : {}),
+          ...(mediaReadFile ? { mediaReadFile } : {}),
         });
         if (result.error) {
           log?.error(`${prefix} sendMedia(auto) error: ${result.error}`);

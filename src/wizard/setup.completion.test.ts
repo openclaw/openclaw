@@ -1,3 +1,4 @@
+// Setup completion tests cover final onboarding instructions and paths.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveCompletionProfilePath } from "../cli/completion-runtime.js";
@@ -48,7 +49,9 @@ describe("setupWizardShellCompletion", () => {
     await setupWizardShellCompletion({ flow: "quickstart", prompter, deps });
 
     expect(prompter.confirm).not.toHaveBeenCalled();
-    expect(deps.ensureCompletionCacheExists).toHaveBeenCalledWith("openclaw");
+    expect(deps.ensureCompletionCacheExists).toHaveBeenCalledWith("openclaw", {
+      generationMode: "full",
+    });
     expect(deps.installCompletion).toHaveBeenCalledWith("zsh", true, "openclaw");
     expect(prompter.note).toHaveBeenCalled();
   });

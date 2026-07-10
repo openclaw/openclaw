@@ -1,5 +1,6 @@
-import fs from "node:fs/promises";
+// Audits installed plugins for trust, provenance, and filesystem risks.
 import path from "node:path";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
@@ -13,38 +14,38 @@ import {
   createPluginRegistryIdNormalizer,
   loadPluginRegistrySnapshot,
 } from "../plugins/plugin-registry.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { createLazyPromise } from "../shared/lazy-runtime.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
-import { shouldIgnoreInstalledPluginDirName } from "./installed-plugin-dirs.js";
+import { listInstalledPluginDirs } from "./installed-plugin-dirs.js";
 
 type SandboxToolPolicy = import("../agents/sandbox/types.js").SandboxToolPolicy;
 
 type PluginTrustPolicyDeps = {
   isToolAllowedByPolicies: typeof import("../agents/tool-policy-match.js").isToolAllowedByPolicies;
-  pickSandboxToolPolicy: typeof import("./audit-tool-policy.js").pickSandboxToolPolicy;
+  pickSandboxToolPolicy: typeof import("../agents/sandbox-tool-policy.js").pickSandboxToolPolicy;
   resolveSandboxConfigForAgent: typeof import("../agents/sandbox/config.js").resolveSandboxConfigForAgent;
   resolveSandboxToolPolicyForAgent: typeof import("../agents/sandbox/tool-policy.js").resolveSandboxToolPolicyForAgent;
   resolveToolProfilePolicy: typeof import("../agents/tool-policy.js").resolveToolProfilePolicy;
 };
 
-let pluginTrustPolicyDepsPromise: Promise<PluginTrustPolicyDeps> | undefined;
-
-async function loadPluginTrustPolicyDeps(): Promise<PluginTrustPolicyDeps> {
-  pluginTrustPolicyDepsPromise ??= Promise.all([
-    import("../agents/sandbox/config.js"),
-    import("../agents/sandbox/tool-policy.js"),
-    import("../agents/tool-policy-match.js"),
-    import("../agents/tool-policy.js"),
-    import("./audit-tool-policy.js"),
-  ]).then(([sandboxConfig, sandboxToolPolicy, toolPolicyMatch, toolPolicy, auditToolPolicy]) => ({
-    isToolAllowedByPolicies: toolPolicyMatch.isToolAllowedByPolicies,
-    pickSandboxToolPolicy: auditToolPolicy.pickSandboxToolPolicy,
-    resolveSandboxConfigForAgent: sandboxConfig.resolveSandboxConfigForAgent,
-    resolveSandboxToolPolicyForAgent: sandboxToolPolicy.resolveSandboxToolPolicyForAgent,
-    resolveToolProfilePolicy: toolPolicy.resolveToolProfilePolicy,
-  }));
-  return await pluginTrustPolicyDepsPromise;
-}
+/** Lazily load tool-policy helpers so basic security imports avoid agent policy modules. */
+const loadPluginTrustPolicyDeps = createLazyPromise(
+  () =>
+    Promise.all([
+      import("../agents/sandbox/config.js"),
+      import("../agents/sandbox/tool-policy.js"),
+      import("../agents/tool-policy-match.js"),
+      import("../agents/tool-policy.js"),
+      import("../agents/sandbox-tool-policy.js"),
+    ]).then(([sandboxConfig, sandboxToolPolicy, toolPolicyMatch, toolPolicy, auditToolPolicy]) => ({
+      isToolAllowedByPolicies: toolPolicyMatch.isToolAllowedByPolicies,
+      pickSandboxToolPolicy: auditToolPolicy.pickSandboxToolPolicy,
+      resolveSandboxConfigForAgent: sandboxConfig.resolveSandboxConfigForAgent,
+      resolveSandboxToolPolicyForAgent: sandboxToolPolicy.resolveSandboxToolPolicyForAgent,
+      resolveToolProfilePolicy: toolPolicy.resolveToolProfilePolicy,
+    })),
+  { cacheRejections: true },
+);
 
 function readChannelCommandSetting(
   cfg: OpenClawConfig,
@@ -123,30 +124,6 @@ async function isChannelPluginConfigured(
     }
   }
   return false;
-}
-
-async function listInstalledPluginDirs(params: {
-  stateDir: string;
-  onReadError?: (error: unknown) => void;
-}): Promise<{ extensionsDir: string; pluginDirs: string[] }> {
-  const extensionsDir = path.join(params.stateDir, "extensions");
-  const st = await fs.stat(extensionsDir).catch((err: unknown) => {
-    params.onReadError?.(err);
-    return null;
-  });
-  if (!st?.isDirectory()) {
-    return { extensionsDir, pluginDirs: [] };
-  }
-  const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch((err) => {
-    params.onReadError?.(err);
-    return [];
-  });
-  const pluginDirs = entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .filter((name) => !shouldIgnoreInstalledPluginDirName(name))
-    .filter(Boolean);
-  return { extensionsDir, pluginDirs };
 }
 
 function resolveToolPolicies(params: {
@@ -274,6 +251,7 @@ function isPinnedRegistrySpec(spec: string): boolean {
   return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version);
 }
 
+/** Collect supply-chain and reachable-tool findings for installed plugins and hook packs. */
 export async function collectPluginsTrustFindings(params: {
   cfg: OpenClawConfig;
   stateDir: string;
@@ -292,6 +270,8 @@ export async function collectPluginsTrustFindings(params: {
         config: params.cfg,
         stateDir: params.stateDir,
       });
+      // Allowlist entries may use aliases/canonical ids. Normalize against the
+      // current registry before treating an entry as phantom.
       const normalizePluginId = createPluginRegistryIdNormalizer(pluginIndex);
       const indexedPluginIds = new Set(
         pluginIndex.plugins.map((plugin) => plugin.pluginId.toLowerCase()),
@@ -392,6 +372,8 @@ export async function collectPluginsTrustFindings(params: {
         const profile = context.tools?.profile ?? params.cfg.tools?.profile;
         const restrictiveProfile = Boolean(deps.resolveToolProfilePolicy(profile));
         const sandboxMode = deps.resolveSandboxConfigForAgent(params.cfg, context.agentId).mode;
+        // Probe with a synthetic plugin tool id: broad allow policies will allow
+        // it, while restrictive profiles or explicit allowlists should not.
         const policies = resolveToolPolicies({
           cfg: params.cfg,
           deps,
@@ -482,6 +464,8 @@ export async function collectPluginsTrustFindings(params: {
       if (!recordedVersion) {
         continue;
       }
+      // Installed package.json is the local truth; registry metadata drift means
+      // update/reinstall should refresh the recorded supply-chain evidence.
       const installPath = record.installPath ?? path.join(params.stateDir, "extensions", pluginId);
       const installedVersion = await readInstalledPackageVersion(installPath);
       if (!installedVersion || installedVersion === recordedVersion) {

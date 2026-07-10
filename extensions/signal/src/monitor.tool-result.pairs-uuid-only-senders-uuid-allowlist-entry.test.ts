@@ -1,3 +1,4 @@
+// Signal tests cover monitor.tool result.pairs uuid only senders uuid allowlist entry plugin behavior.
 import { Buffer } from "node:buffer";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -121,6 +122,49 @@ describe("monitorSignalProvider tool results", () => {
       expect((mockCallArg(streamMock, 1) as { timeoutMs?: unknown }).timeoutMs).toBe(0);
     } finally {
       randomSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a pending reply-session conflict retry when the monitor stops", async () => {
+    vi.useFakeTimers();
+    const abortController = new AbortController();
+    replyMock.mockRejectedValue(
+      new Error(
+        "reply session initialization conflicted for agent:main:signal:direct:+15550001111",
+      ),
+    );
+    streamMock.mockImplementation(async ({ onEvent, abortSignal }) => {
+      onEvent({
+        event: "receive",
+        data: JSON.stringify({
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1,
+            dataMessage: { message: "hello after the prior turn" },
+          },
+        }),
+      });
+      await new Promise<void>((resolve) => {
+        abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+
+    try {
+      const monitorPromise = monitorSignalProvider({
+        autoStart: false,
+        baseUrl: "http://127.0.0.1:8080",
+        abortSignal: abortController.signal,
+      });
+
+      await vi.waitFor(() => expect(replyMock).toHaveBeenCalledTimes(1));
+      abortController.abort(new Error("monitor stopped"));
+      await monitorPromise;
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(replyMock).toHaveBeenCalledTimes(1);
+    } finally {
       vi.useRealTimers();
     }
   });

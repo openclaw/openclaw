@@ -5,6 +5,7 @@ import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawPanel
+import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawSeparatedColumn
 import ai.openclaw.app.ui.design.ClawTextField
@@ -50,6 +51,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+/** Full-screen command palette for navigation and recent-session search. */
 @Composable
 internal fun CommandPalette(
   viewModel: MainViewModel,
@@ -93,7 +95,11 @@ internal fun CommandPalette(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(9.dp),
           ) {
-            CommandIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close search", onClick = onDismiss)
+            ClawPlainIconButton(
+              icon = Icons.AutoMirrored.Filled.ArrowBack,
+              contentDescription = "Close search",
+              onClick = onDismiss,
+            )
             Text(text = "Search", style = ClawTheme.type.title, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
             CommandAvatar(text = "OC")
           }
@@ -158,6 +164,7 @@ private data class CommandItem(
   val icon: ImageVector,
   val onClick: () -> Unit,
 ) {
+  /** Matches palette queries against both action title and explanatory subtitle. */
   fun matches(query: String): Boolean = query.isEmpty() || title.lowercase().contains(query) || subtitle.lowercase().contains(query)
 }
 
@@ -191,17 +198,12 @@ private fun CommandActionRow(row: CommandItem) {
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-      Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(19.dp), tint = ClawTheme.colors.text)
+      CommandRowIcon(icon = row.icon)
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
         Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(text = row.subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
-      Icon(
-        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-        contentDescription = "Open ${row.title}",
-        modifier = Modifier.size(17.dp),
-        tint = ClawTheme.colors.textMuted,
-      )
+      CommandRowChevron(contentDescription = "Open ${row.title}")
     }
   }
 }
@@ -235,41 +237,40 @@ private fun CommandSessionListRow(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      Surface(
-        modifier = Modifier.size(30.dp),
-        shape = CircleShape,
-        color = ClawTheme.colors.canvas,
-        border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(15.dp), tint = ClawTheme.colors.text)
-        }
-      }
+      CommandRowIcon(icon = Icons.Outlined.ChatBubbleOutline)
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
-        Text(text = row.subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1)
+        Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = row.subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
-      Text(text = row.metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-      Icon(
-        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-        contentDescription = "Open session",
-        modifier = Modifier.size(17.dp),
-        tint = ClawTheme.colors.textMuted,
-      )
+      Text(text = row.metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      CommandRowChevron(contentDescription = "Open session")
     }
   }
 }
 
 @Composable
-private fun CommandIconButton(
-  icon: ImageVector,
-  contentDescription: String,
-  onClick: () -> Unit,
-) {
-  Surface(onClick = onClick, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
+private fun CommandRowIcon(icon: ImageVector) {
+  Surface(
+    modifier = Modifier.size(30.dp),
+    shape = CircleShape,
+    color = ClawTheme.colors.canvas,
+    border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
+  ) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
+      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(15.dp), tint = ClawTheme.colors.text)
     }
+  }
+}
+
+@Composable
+private fun CommandRowChevron(contentDescription: String) {
+  Box(modifier = Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+    Icon(
+      imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+      contentDescription = contentDescription,
+      modifier = Modifier.size(17.dp),
+      tint = ClawTheme.colors.textMuted,
+    )
   }
 }
 
@@ -295,20 +296,21 @@ private fun CommandSectionLabel(title: String) {
   }
 }
 
-private fun providerCommandSubtitle(
+internal fun providerCommandSubtitle(
   isConnected: Boolean,
   providers: List<GatewayModelProviderSummary>,
   models: List<GatewayModelSummary>,
 ): String {
-  if (!isConnected) return "Connect Gateway to load models"
-  val readyProviderCount = providers.count { modelProviderReady(it.status) }
+  if (!isConnected) return "Connect Gateway to view providers"
+  val readyProviderCount = providerRows(providers = providers, models = models).count { it.ready }
   if (readyProviderCount > 0) return "$readyProviderCount providers ready"
-  if (models.isNotEmpty()) return "${models.size} models available"
-  return "Configure model access"
+  return "No ready providers"
 }
 
+/** Falls back to the canonical main-session label when gateway display names are blank. */
 private fun commandSessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: "Main session"
 
+/** Formats command-palette session timestamps for compact rows. */
 private fun commandRelativeTime(updatedAtMs: Long): String {
   val deltaMs = (System.currentTimeMillis() - updatedAtMs).coerceAtLeast(0L)
   val minutes = deltaMs / 60_000L

@@ -7,28 +7,21 @@
  *
  * Mechanics:
  *   - After each successful gateway start we snapshot the currently
- *     resolved `appId` / `clientSecret` to a per-account backup file.
+ *     resolved `appId` / `clientSecret` to a per-account SQLite KV entry.
  *   - During plugin startup, if the live config has an empty appId or
  *     secret, the gateway consults the backup and restores the values
  *     via the config mutation API.
- *   - Backups live under `~/.openclaw/qqbot/data/` so they survive
- *     plugin directory replacement.
+ *   - Legacy JSON backups are imported by `openclaw doctor --fix`, not by
+ *     runtime startup.
  *
  * Safety notes:
  *   - Only restore when credentials are **actually empty** — never
  *     overwrite a user's intentional config change.
- *   - Atomic write (temp file + rename) to avoid torn files.
- *   - Per-account file: `credential-backup-<accountId>.json`. We do
- *     **not** also key by appId because recovery happens precisely
- *     when appId is unknown.
- *   - Legacy single `credential-backup.json` is migrated automatically
- *     when the stored accountId matches the caller.
+ *   - Per-account key only; not keyed by appId because recovery happens
+ *     precisely when appId is unknown.
  */
 
-import fs from "node:fs";
-import { loadJsonFile } from "openclaw/plugin-sdk/json-store";
-import { replaceFileAtomicSync } from "openclaw/plugin-sdk/security-runtime";
-import { getCredentialBackupFile, getLegacyCredentialBackupFile } from "../utils/data-paths.js";
+import { buildQQBotStateKey, openQQBotSyncKeyedStore } from "../utils/sqlite-state.js";
 
 interface CredentialBackup {
   accountId: string;
@@ -37,24 +30,37 @@ interface CredentialBackup {
   savedAt: string;
 }
 
+export const CREDENTIAL_BACKUPS_NAMESPACE = "credential-backups";
+export const MAX_CREDENTIAL_BACKUPS = 1000;
+
+function createCredentialBackupStore() {
+  return openQQBotSyncKeyedStore<CredentialBackup>({
+    namespace: CREDENTIAL_BACKUPS_NAMESPACE,
+    maxEntries: MAX_CREDENTIAL_BACKUPS,
+  });
+}
+
+export function credentialBackupKey(accountId: string): string {
+  return buildQQBotStateKey("credential-backup", accountId);
+}
+
+function isUsableBackup(data: CredentialBackup | null | undefined): data is CredentialBackup {
+  return Boolean(data?.accountId && data.appId && data.clientSecret);
+}
+
 /** Persist a credential snapshot (called once gateway reaches READY). */
 export function saveCredentialBackup(accountId: string, appId: string, clientSecret: string): void {
   if (!appId || !clientSecret) {
     return;
   }
   try {
-    const backupPath = getCredentialBackupFile(accountId);
     const data: CredentialBackup = {
       accountId,
       appId,
       clientSecret,
       savedAt: new Date().toISOString(),
     };
-    replaceFileAtomicSync({
-      filePath: backupPath,
-      content: `${JSON.stringify(data, null, 2)}\n`,
-      tempPrefix: ".qqbot-credential-backup",
-    });
+    createCredentialBackupStore().register(credentialBackupKey(accountId), data);
   } catch {
     /* best-effort — ignore */
   }
@@ -63,43 +69,17 @@ export function saveCredentialBackup(accountId: string, appId: string, clientSec
 /**
  * Load a credential snapshot for `accountId`.
  *
- * Consults the new per-account file first; falls back to the legacy
- * global backup file and migrates it when the embedded `accountId`
- * matches the request. Returns `null` when no usable backup exists.
+ * Reads SQLite only. Legacy JSON backup import is owned by doctor/setup
+ * migration so runtime startup stays canonical-state-only.
  */
 export function loadCredentialBackup(accountId?: string): CredentialBackup | null {
   try {
     if (accountId) {
-      const newPath = getCredentialBackupFile(accountId);
-      const data = loadJsonFile<CredentialBackup>(newPath);
-      if (data?.appId && data.clientSecret) {
+      const store = createCredentialBackupStore();
+      const data = store.lookup(credentialBackupKey(accountId));
+      if (isUsableBackup(data)) {
         return data;
       }
-    }
-
-    const legacy = getLegacyCredentialBackupFile();
-    const data = loadJsonFile<CredentialBackup>(legacy);
-    if (data) {
-      if (!data?.appId || !data?.clientSecret) {
-        return null;
-      }
-      if (accountId && data.accountId !== accountId) {
-        return null;
-      }
-      if (data.accountId) {
-        try {
-          const backupPath = getCredentialBackupFile(data.accountId);
-          replaceFileAtomicSync({
-            filePath: backupPath,
-            content: `${JSON.stringify(data, null, 2)}\n`,
-            tempPrefix: ".qqbot-credential-backup",
-          });
-          fs.unlinkSync(legacy);
-        } catch {
-          /* ignore migration errors */
-        }
-      }
-      return data;
     }
   } catch {
     /* corrupt file — ignore */

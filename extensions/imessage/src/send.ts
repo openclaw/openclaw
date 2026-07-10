@@ -1,8 +1,10 @@
+// Imessage plugin module implements send behavior.
 import { spawn } from "node:child_process";
 import { constants, accessSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -13,6 +15,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { kindFromMime, resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { sleep as delay } from "openclaw/plugin-sdk/runtime-env";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
@@ -22,10 +25,19 @@ import {
   type IMessageApprovalConversationKey,
   registerIMessageApprovalReactionTargetForOutboundMessage,
 } from "./approval-reactions.js";
+import {
+  appendIMessageCliStderrTail,
+  appendIMessageCliStdout,
+  listenForIMessageCliStreamErrors,
+} from "./cli-output.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
+import { DEFAULT_IMESSAGE_SEND_TIMEOUT_MS } from "./constants.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
-import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
+import {
+  forgetPersistedIMessageEchoKey,
+  rememberPersistedIMessageEcho,
+} from "./monitor/persisted-echo-cache.js";
 import {
   formatIMessageChatTarget,
   type IMessageService,
@@ -35,6 +47,9 @@ import {
 
 const require = createRequire(import.meta.url);
 type ParsedIMessageTarget = ReturnType<typeof parseIMessageTarget>;
+const MIN_PENDING_PERSISTED_ECHO_TTL_MS = 60_000;
+const PENDING_PERSISTED_ECHO_GRACE_MS = 5_000;
+type IMessageSendTransport = "auto" | "bridge" | "applescript";
 
 type IMessageSendOpts = {
   cliPath?: string;
@@ -46,6 +61,7 @@ type IMessageSendOpts = {
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  audioAsVoice?: boolean;
   maxBytes?: number;
   timeoutMs?: number;
   chatId?: number;
@@ -74,7 +90,7 @@ type IMessageSendOpts = {
   }) => Promise<string | null> | string | null;
 };
 
-export type IMessageSendResult = {
+type IMessageSendResult = {
   /**
    * Generic identifier returned by the bridge. May be a GUID string, a
    * numeric ROWID stringified, or the literal "ok"/"unknown" placeholders
@@ -126,7 +142,7 @@ function isSshIMessageCliWrapper(cliPath: string): boolean {
   if (cached !== undefined) {
     return cached;
   }
-  let detected = false;
+  let detected;
   try {
     const content = readFileSync(expandCliPathForInspection(cliPath), "utf8");
     detected = /\bssh\b[\s\S]*\bimsg\b/u.test(content);
@@ -233,6 +249,16 @@ function resolveOutboundMessageGuid(
 
 function isNumericMessageRowId(value: string | null | undefined): value is string {
   return typeof value === "string" && /^\d+$/.test(value.trim());
+}
+
+function resolveTargetService(target: ParsedIMessageTarget): IMessageService | undefined {
+  if (target.kind !== "handle") {
+    return undefined;
+  }
+  if (target.serviceExplicit || target.service !== "auto") {
+    return target.service;
+  }
+  return undefined;
 }
 
 function normalizeResolvedMessageGuid(value: unknown): string | null {
@@ -398,12 +424,6 @@ async function resolveApprovalBindingMessageGuid(params: {
   );
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 async function resolveFallbackSentMessageGuid(params: {
   dbPath?: string;
   target: ParsedIMessageTarget;
@@ -449,6 +469,16 @@ function shouldRecoverApprovalPromptGuid(params: {
     !params.replyToId &&
     Boolean(params.message.trim()) &&
     Boolean(extractIMessageApprovalPromptBinding(params.message))
+  );
+}
+
+function canCheckSentMessageAfterRpcTimeout(params: {
+  dbPath?: string;
+  resolveSentMessageGuidImpl?: IMessageSendOpts["resolveSentMessageGuidImpl"];
+}): boolean {
+  return (
+    Boolean(params.resolveSentMessageGuidImpl) ||
+    canResolveLatestSentMessageGuidFromChatDb(params.dbPath)
   );
 }
 
@@ -501,6 +531,16 @@ function createIMessageSendReceipt(params: {
   return createMessageReceiptFromOutboundResults(receiptParams);
 }
 
+function isConcreteIMessageMessageId(messageId: string | undefined): boolean {
+  const trimmed = messageId?.trim();
+  return Boolean(trimmed && trimmed !== "unknown" && trimmed !== "ok");
+}
+
+function canSynthesizeAttachmentChatHandle(raw: string): boolean {
+  const trimmed = raw.trim();
+  return trimmed.includes("@") || trimmed.startsWith("+");
+}
+
 function resolveOutboundEchoScope(params: {
   accountId: string;
   target: ReturnType<typeof parseIMessageTarget>;
@@ -549,6 +589,31 @@ async function runIMessageCliJson(
     let stdout = "";
     let stderr = "";
     let killEscalation: ReturnType<typeof setTimeout> | null = null;
+    let settled = false;
+    const clearTimers = (options: { keepKillEscalation?: boolean } = {}): void => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (killEscalation && !options.keepKillEscalation) {
+        clearTimeout(killEscalation);
+      }
+    };
+    const fail = (error: Error, options: { keepKillEscalation?: boolean } = {}): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimers(options);
+      reject(error);
+    };
+    const succeed = (value: Record<string, unknown>): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimers();
+      resolve(value);
+    };
     const timer =
       timeoutMs && timeoutMs > 0
         ? setTimeout(() => {
@@ -560,32 +625,48 @@ async function runIMessageCliJson(
                 // best-effort
               }
             }, 2000);
-            reject(new Error(`iMessage action timed out after ${timeoutMs}ms`));
+            fail(new Error(`iMessage action timed out after ${timeoutMs}ms`), {
+              keepKillEscalation: true,
+            });
           }, timeoutMs)
         : null;
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
-      stdout += chunk;
+      if (settled) {
+        return;
+      }
+      const appended = appendIMessageCliStdout(stdout, chunk);
+      if (!appended.ok) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // best-effort
+        }
+        fail(new Error(appended.message));
+        return;
+      }
+      stdout = appended.value;
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk;
+      stderr = appendIMessageCliStderrTail(stderr, chunk);
+    });
+    listenForIMessageCliStreamErrors({
+      child,
+      isSettled: () => settled,
+      fail,
     });
     child.on("error", (error) => {
-      if (timer) {
-        clearTimeout(timer);
+      if (settled) {
+        clearTimers();
+        return;
       }
-      if (killEscalation) {
-        clearTimeout(killEscalation);
-      }
-      reject(error);
+      fail(error);
     });
     child.on("close", (code) => {
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (killEscalation) {
-        clearTimeout(killEscalation);
+      if (settled) {
+        clearTimers();
+        return;
       }
       const lines = stdout
         .split(/\r?\n/u)
@@ -606,24 +687,31 @@ async function runIMessageCliJson(
       if (code === 0 && parsed) {
         const failure = resolveIMessageCliFailure(parsed);
         if (failure) {
-          reject(new Error(failure));
+          fail(new Error(failure));
           return;
         }
-        resolve(parsed);
+        succeed(parsed);
         return;
       }
       if (parsed && typeof parsed.error === "string" && parsed.error.trim()) {
-        reject(new Error(parsed.error.trim()));
+        fail(new Error(parsed.error.trim()));
         return;
       }
       const detail = stderr.trim() || stdout.trim() || `imsg exited with code ${code}`;
-      reject(new Error(detail));
+      fail(new Error(detail));
     });
   });
 }
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function resolvePendingPersistedEchoTtlMs(timeoutMs: number): number {
+  return Math.max(
+    MIN_PENDING_PERSISTED_ECHO_TTL_MS,
+    Math.max(0, timeoutMs) + PENDING_PERSISTED_ECHO_GRACE_MS,
+  );
 }
 
 function isAttachmentCommandFallbackError(error: unknown): boolean {
@@ -633,12 +721,40 @@ function isAttachmentCommandFallbackError(error: unknown): boolean {
   );
 }
 
-async function resolveAttachmentChatGuid(params: {
+// A threaded reply (reply_to) needs the private-API bridge transport; on an
+// AppleScript-only deployment imsg rejects it outright. Detect that specific
+// error so we can resend the message unthreaded instead of dropping it (#99638).
+function isThreadedReplyUnsupportedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /reply_to requires bridge transport|cannot send threaded repl|threaded repl(?:y|ies)\b.*(?:unsupported|not supported|requires|unavailable)|requires bridge transport/iu.test(
+    message,
+  );
+}
+
+async function resolveAttachmentChatTarget(params: {
   target: ReturnType<typeof parseIMessageTarget>;
+  service?: IMessageService;
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
 }): Promise<string | null> {
   if (params.target.kind === "chat_guid") {
     return params.target.chatGuid;
+  }
+  if (params.target.kind === "handle") {
+    if (!canSynthesizeAttachmentChatHandle(params.target.to)) {
+      return null;
+    }
+    const normalizedHandle = normalizeIMessageHandle(params.target.to);
+    if (!normalizedHandle) {
+      return null;
+    }
+    const service = params.target.service !== "auto" ? params.target.service : params.service;
+    if (service === "sms") {
+      return `SMS;-;${normalizedHandle}`;
+    }
+    if (service === "imessage") {
+      return `iMessage;-;${normalizedHandle}`;
+    }
+    return `any;-;${normalizedHandle}`;
   }
   if (params.target.kind !== "chat_id") {
     return null;
@@ -647,19 +763,24 @@ async function resolveAttachmentChatGuid(params: {
   return stringValue(result.guid) ?? stringValue(result.chat_guid) ?? null;
 }
 
-async function trySendAttachmentForExplicitChat(params: {
+async function trySendAttachmentForTarget(params: {
   accountId: string;
   dbPath?: string;
   target: ReturnType<typeof parseIMessageTarget>;
+  service?: IMessageService;
   filePath: string;
+  audioAsVoice?: boolean;
+  replyToId?: string;
   echoText?: string;
+  pendingEchoTtlMs: number;
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
   resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
 }): Promise<IMessageSendResult | null> {
-  let attachmentChatGuid: string | null = null;
+  let attachmentChatTarget: string | null;
   try {
-    attachmentChatGuid = await resolveAttachmentChatGuid({
+    attachmentChatTarget = await resolveAttachmentChatTarget({
       target: params.target,
+      service: params.service,
       runCliJson: params.runCliJson,
     });
   } catch (error) {
@@ -668,22 +789,38 @@ async function trySendAttachmentForExplicitChat(params: {
     }
     throw error;
   }
-  if (!attachmentChatGuid) {
+  if (!attachmentChatTarget) {
     return null;
   }
 
+  const echoScope = resolveOutboundEchoScope({
+    accountId: params.accountId,
+    target: params.target,
+  });
   let result: Record<string, unknown>;
+  let pendingEchoKey: string | undefined;
   try {
+    if (echoScope) {
+      pendingEchoKey = rememberPersistedIMessageEcho({
+        scope: echoScope,
+        text: params.echoText,
+        ttlMs: params.pendingEchoTtlMs,
+        pending: true,
+      });
+    }
     result = await params.runCliJson([
       "send-attachment",
       "--chat",
-      attachmentChatGuid,
+      attachmentChatTarget,
       "--file",
       params.filePath,
+      ...(params.audioAsVoice ? ["--audio"] : []),
+      ...(params.replyToId ? ["--reply-to", params.replyToId] : []),
       "--transport",
       "auto",
     ]);
   } catch (error) {
+    forgetPersistedIMessageEchoKey(pendingEchoKey);
     if (isAttachmentCommandFallbackError(error)) {
       return null;
     }
@@ -692,6 +829,7 @@ async function trySendAttachmentForExplicitChat(params: {
   const failure = resolveIMessageCliFailure(result);
   if (failure) {
     const error = new Error(failure);
+    forgetPersistedIMessageEchoKey(pendingEchoKey);
     if (isAttachmentCommandFallbackError(error)) {
       return null;
     }
@@ -706,10 +844,6 @@ async function trySendAttachmentForExplicitChat(params: {
     resolveMessageGuidImpl: params.resolveMessageGuidImpl,
   });
   const messageId = resolvedId ?? (result.ok || result.success ? "ok" : "unknown");
-  const echoScope = resolveOutboundEchoScope({
-    accountId: params.accountId,
-    target: params.target,
-  });
   if (echoScope) {
     rememberPersistedIMessageEcho({
       scope: echoScope,
@@ -721,7 +855,16 @@ async function trySendAttachmentForExplicitChat(params: {
     rememberIMessageReplyCache({
       accountId: params.accountId,
       messageId: resolvedId,
-      chatGuid: params.target.kind === "chat_guid" ? params.target.chatGuid : attachmentChatGuid,
+      chatGuid:
+        params.target.kind === "chat_guid"
+          ? params.target.chatGuid
+          : params.target.kind === "chat_id"
+            ? attachmentChatTarget
+            : undefined,
+      chatIdentifier:
+        params.target.kind === "chat_identifier" || params.target.kind === "handle"
+          ? attachmentChatTarget
+          : undefined,
       chatId: params.target.kind === "chat_id" ? params.target.chatId : undefined,
       timestamp: Date.now(),
       isFromMe: true,
@@ -735,7 +878,8 @@ async function trySendAttachmentForExplicitChat(params: {
     receipt: createIMessageSendReceipt({
       messageId,
       target: params.target,
-      kind: "media",
+      kind: params.audioAsVoice ? "voice" : "media",
+      ...(params.replyToId ? { replyToId: params.replyToId } : {}),
     }),
   };
 }
@@ -762,8 +906,15 @@ export async function sendMessageIMessage(
   const target = parseIMessageTarget(opts.chatId ? formatIMessageChatTarget(opts.chatId) : to);
   const service =
     opts.service ??
-    (target.kind === "handle" ? target.service : undefined) ??
+    resolveTargetService(target) ??
     (account.config.service as IMessageService | undefined);
+  const sendTransport = (account.config.sendTransport ?? "auto") as IMessageSendTransport;
+  // Sends use a dedicated longer default (not the 10s probe timeout) so macOS 26
+  // bridge stalls aren't aborted mid-send. Explicit opts/probeTimeoutMs still win
+  // for callers that tuned them. See DEFAULT_IMESSAGE_SEND_TIMEOUT_MS.
+  const timeoutMs =
+    opts.timeoutMs ?? account.config.probeTimeoutMs ?? DEFAULT_IMESSAGE_SEND_TIMEOUT_MS;
+  const pendingEchoTtlMs = resolvePendingPersistedEchoTtlMs(timeoutMs);
   const region = opts.region?.trim() || account.config.region?.trim() || "US";
   const maxBytes =
     typeof opts.maxBytes === "number"
@@ -812,29 +963,66 @@ export async function sendMessageIMessage(
     throw new Error("iMessage send requires text or media");
   }
   const echoText = resolveOutboundEchoText(message, filePath ? mediaContentType : undefined);
-  const resolvedReplyToId = sanitizeReplyToId(opts.replyToId);
+  const replyActionsEnabled = createActionGate(account.config.actions)("reply");
+  const resolvedReplyToId = replyActionsEnabled ? sanitizeReplyToId(opts.replyToId) : undefined;
+  // The reply id actually delivered. The threaded-reply fallback below clears it
+  // so the receipt and approval binding report the unthreaded send it became,
+  // not the threaded reply the transport rejected (#99638).
+  let effectiveReplyToId = resolvedReplyToId;
   const runCliJson =
     opts.runCliJson ??
-    ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, opts.timeoutMs));
+    ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, timeoutMs));
 
-  if (filePath && !message.trim() && !resolvedReplyToId) {
-    const attachmentResult = await trySendAttachmentForExplicitChat({
+  if (filePath && (!resolvedReplyToId || opts.audioAsVoice)) {
+    const attachmentEchoText = message.trim()
+      ? resolveOutboundEchoText("", mediaContentType)
+      : echoText;
+    const attachmentResult = await trySendAttachmentForTarget({
       accountId: account.accountId,
       dbPath: chatDbLookupPath,
       target,
+      service,
       filePath,
-      echoText,
+      audioAsVoice: opts.audioAsVoice,
+      ...(resolvedReplyToId ? { replyToId: resolvedReplyToId } : {}),
+      echoText: attachmentEchoText,
+      pendingEchoTtlMs,
       runCliJson,
       resolveMessageGuidImpl: opts.resolveMessageGuidImpl,
     });
     if (attachmentResult) {
-      return attachmentResult;
+      if (!message.trim()) {
+        return attachmentResult;
+      }
+      const captionResult = await sendMessageIMessage(to, text, {
+        ...opts,
+        ...(opts.client ? { client: opts.client } : {}),
+        mediaUrl: undefined,
+      });
+      const messageId = isConcreteIMessageMessageId(attachmentResult.messageId)
+        ? attachmentResult.messageId
+        : captionResult.messageId;
+      return {
+        messageId,
+        ...((captionResult.guid ?? attachmentResult.guid)
+          ? { guid: captionResult.guid ?? attachmentResult.guid }
+          : {}),
+        sentText: captionResult.sentText,
+        ...((captionResult.echoText ?? attachmentResult.echoText)
+          ? { echoText: captionResult.echoText ?? attachmentResult.echoText }
+          : {}),
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [{ receipt: attachmentResult.receipt }, { receipt: captionResult.receipt }],
+          sentAt: Math.max(attachmentResult.receipt.sentAt, captionResult.receipt.sentAt),
+        }),
+      };
     }
   }
   const params: Record<string, unknown> = {
     text: message,
     service: service || "auto",
     region,
+    transport: sendTransport,
   };
   if (resolvedReplyToId) {
     params.reply_to = resolvedReplyToId;
@@ -856,43 +1044,78 @@ export async function sendMessageIMessage(
     params.to = target.to;
   }
 
+  const echoScope = resolveOutboundEchoScope({ accountId: account.accountId, target });
+
   const client =
     opts.client ??
     (opts.createClient
       ? await opts.createClient({ cliPath, dbPath })
       : await createIMessageRpcClient({ cliPath, dbPath }));
-  let shouldClose = !opts.client;
+  const shouldClose = !opts.client;
+  let closedClient = false;
+  const stopOwnedClient = async () => {
+    if (!shouldClose || closedClient) {
+      return;
+    }
+    closedClient = true;
+    await client.stop();
+  };
   let result: Record<string, unknown>;
-  let sendStartedAtMs = Date.now();
+  const sendStartedAtMs = Date.now();
+  let pendingEchoKey: string | undefined;
   try {
     try {
+      if (echoScope) {
+        pendingEchoKey = rememberPersistedIMessageEcho({
+          scope: echoScope,
+          text: echoText,
+          ttlMs: pendingEchoTtlMs,
+          pending: true,
+        });
+      }
       result = await client.request<Record<string, unknown>>("send", params, {
-        timeoutMs: opts.timeoutMs,
+        timeoutMs,
       });
     } catch (error) {
-      if (filePath || resolvedReplyToId || !isIMessageRpcSendTimeout(error)) {
+      if (resolvedReplyToId && isThreadedReplyUnsupportedError(error)) {
+        // #99638: the transport cannot deliver a threaded reply, so resend the
+        // message unthreaded rather than dropping it. Covers text and media
+        // replies alike (both carry reply_to through this send). One retry with
+        // reply_to stripped, keeping any file; a further failure propagates.
+        const plainParams = { ...params };
+        delete plainParams.reply_to;
+        result = await client.request<Record<string, unknown>>("send", plainParams, {
+          timeoutMs,
+        });
+        effectiveReplyToId = undefined;
+      } else if (filePath || !isIMessageRpcSendTimeout(error)) {
         throw error;
-      }
-      if (
+      } else if (
         !shouldRecoverApprovalPromptGuid({
           message,
           filePath,
           replyToId: resolvedReplyToId,
+        }) ||
+        !canCheckSentMessageAfterRpcTimeout({
+          dbPath: chatDbLookupPath,
+          resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
         })
       ) {
         throw error;
+      } else {
+        const recoveredGuid = await resolveFallbackSentMessageGuid({
+          dbPath: chatDbLookupPath,
+          target,
+          text: message,
+          sentAfterMs: sendStartedAtMs,
+          resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
+        });
+        if (recoveredGuid) {
+          result = { guid: recoveredGuid, status: "sent" };
+        } else {
+          throw error;
+        }
       }
-      const recoveredGuid = await resolveFallbackSentMessageGuid({
-        dbPath: chatDbLookupPath,
-        target,
-        text: message,
-        sentAfterMs: sendStartedAtMs,
-        resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
-      });
-      if (!recoveredGuid) {
-        throw error;
-      }
-      result = { guid: recoveredGuid, status: "sent" };
     }
     const resolvedId = resolveMessageId(result);
     const messageId =
@@ -913,7 +1136,7 @@ export async function sendMessageIMessage(
       shouldRecoverApprovalPromptGuid({
         message,
         filePath,
-        replyToId: resolvedReplyToId,
+        replyToId: effectiveReplyToId,
       })
     ) {
       approvalBindingMessageId = await resolveFallbackSentMessageGuid({
@@ -924,7 +1147,6 @@ export async function sendMessageIMessage(
         resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
       });
     }
-    const echoScope = resolveOutboundEchoScope({ accountId: account.accountId, target });
     if (echoScope) {
       rememberPersistedIMessageEcho({
         scope: echoScope,
@@ -977,12 +1199,13 @@ export async function sendMessageIMessage(
         messageId,
         target,
         kind: filePath ? "media" : "text",
-        ...(resolvedReplyToId ? { replyToId: resolvedReplyToId } : {}),
+        ...(effectiveReplyToId ? { replyToId: effectiveReplyToId } : {}),
       }),
     };
+  } catch (error) {
+    forgetPersistedIMessageEchoKey(pendingEchoKey);
+    throw error;
   } finally {
-    if (shouldClose) {
-      await client.stop();
-    }
+    await stopOwnedClient();
   }
 }

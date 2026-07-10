@@ -1,3 +1,6 @@
+/**
+ * Shared metadata and result types for embedded-agent runner surfaces.
+ */
 import type { HeartbeatToolResponse } from "../../auto-reply/heartbeat-tool-response.js";
 import type {
   CliSessionBinding,
@@ -12,6 +15,23 @@ import type {
 } from "../embedded-agent-messaging.types.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
+import type { ContextUsage } from "../usage.js";
+
+export type BlockReplyFlushContext =
+  | {
+      /** Boundary that requested the flush. */
+      reason: "message_end" | "terminal";
+    }
+  | {
+      /** Tool boundary separating pre-tool narration from the eventual answer. */
+      reason: "tool_start";
+      assistantMessageIndex: number;
+    }
+  | {
+      /** Pre-compaction delivery is safe only for a completed assistant attempt. */
+      reason: "pre_compaction";
+      attemptAccepted: boolean;
+    };
 
 export type EmbeddedAgentMeta = {
   sessionId: string;
@@ -22,6 +42,7 @@ export type EmbeddedAgentMeta = {
   agentHarnessId?: string;
   fallbackAttempts?: FallbackAttempt[];
   cliSessionBinding?: CliSessionBinding;
+  clearCliSessionBinding?: boolean;
   compactionCount?: number;
   /**
    * Token count estimate after the most recent successful auto-compaction.
@@ -55,6 +76,7 @@ export type EmbeddedAgentMeta = {
     output?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    contextUsage?: ContextUsage;
     reasoningTokens?: number;
     total?: number;
   };
@@ -70,6 +92,7 @@ export type TraceAttempt = {
     | "surface_error"
     | "candidate_failed"
     | "rotate_profile"
+    | "same_model_rate_limit"
     | "fallback_model"
     | "aborted"
     | "error";
@@ -79,7 +102,7 @@ export type TraceAttempt = {
   status?: number;
 };
 
-export type ExecutionTrace = {
+type ExecutionTrace = {
   winnerProvider?: string;
   winnerModel?: string;
   attempts?: TraceAttempt[];
@@ -87,7 +110,7 @@ export type ExecutionTrace = {
   runner?: "embedded" | "cli";
 };
 
-export type RequestShapingTrace = {
+type RequestShapingTrace = {
   authMode?: string;
   thinking?: string;
   reasoning?: string;
@@ -97,7 +120,7 @@ export type RequestShapingTrace = {
   blockStreaming?: string;
 };
 
-export type PromptSegmentTrace = {
+type PromptSegmentTrace = {
   key: string;
   chars: number;
 };
@@ -109,13 +132,13 @@ export type ToolSummaryTrace = {
   totalToolTimeMs?: number;
 };
 
-export type CompletionTrace = {
+type CompletionTrace = {
   finishReason?: string;
   stopReason?: string;
   refusal?: boolean;
 };
 
-export type ContextManagementTrace = {
+type ContextManagementTrace = {
   sessionCompactions?: number;
   lastTurnCompactions?: number;
   preflightCompactionApplied?: boolean;
@@ -155,8 +178,13 @@ export type EmbeddedAgentRunMeta = {
       | "role_ordering"
       | "image_size"
       | "retry_limit"
+      | "incomplete_turn"
       | "hook_block";
     message: string;
+    /** True only when model fallback can retry this terminal error without repeating side effects. */
+    fallbackSafe?: boolean;
+    /** True when the payload includes a trusted structured terminal tool summary. */
+    terminalPresentation?: boolean;
   };
   failureSignal?: EmbeddedRunFailureSignal;
   /** Stop reason for the agent run (e.g., "completed", "tool_calls"). */
@@ -183,6 +211,8 @@ export type EmbeddedAgentRunResult = {
     replyToId?: string;
     isError?: boolean;
     isReasoning?: boolean;
+    /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
+    isCommentary?: boolean;
     audioAsVoice?: boolean;
     trustedLocalMedia?: boolean;
     channelData?: Record<string, unknown>;
@@ -192,6 +222,8 @@ export type EmbeddedAgentRunResult = {
   // True if a messaging tool successfully sent a message.
   // Used to suppress agent's confirmation text.
   didSendViaMessagingTool?: boolean;
+  // True if message_tool_only delivered a visible reply to the current source conversation.
+  didDeliverSourceReplyViaMessageTool?: boolean;
   // True if a deterministic approval prompt was sent through the tool-result channel.
   didSendDeterministicApprovalPrompt?: boolean;
   // Texts successfully sent via messaging tools during the run.

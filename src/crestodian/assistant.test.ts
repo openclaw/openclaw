@@ -1,3 +1,4 @@
+// Crestodian assistant tests cover assistant-driven rescue message generation.
 import { describe, expect, it, vi } from "vitest";
 import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
@@ -24,6 +25,7 @@ function overview(overrides: Partial<CrestodianOverview["tools"]> = {}): Crestod
     tools: {
       codex: { command: "codex", found: false },
       claude: { command: "claude", found: false },
+      gemini: { command: "gemini", found: false },
       apiKeys: { openai: false, anthropic: false },
       ...overrides,
     },
@@ -66,9 +68,14 @@ describe("Crestodian assistant", () => {
     });
   });
 
-  it("rejects non-command output", () => {
+  it("rejects non-JSON and empty plans but accepts chat-only replies", () => {
     expect(parseCrestodianAssistantPlanText("I would edit config directly.")).toBeNull();
-    expect(parseCrestodianAssistantPlanText('{"reply":"missing command"}')).toBeNull();
+    expect(parseCrestodianAssistantPlanText("{}")).toBeNull();
+    // Conversational turns without a command are valid: the custodian can
+    // answer questions without proposing an operation.
+    expect(parseCrestodianAssistantPlanText('{"reply":"just chatting"}')).toEqual({
+      reply: "just chatting",
+    });
   });
 
   it("includes only operational summary context in planner prompts", () => {
@@ -114,6 +121,19 @@ describe("Crestodian assistant", () => {
     expect(prompt).toContain("OpenClaw source: /tmp/openclaw");
   });
 
+  it("keeps truncated conversation history valid at a UTF-16 boundary", () => {
+    const prefix = "a".repeat(499);
+    const prompt = buildCrestodianAssistantUserPrompt({
+      input: "continue",
+      overview: overview(),
+      history: [{ role: "user", text: `${prefix}🎉tail` }],
+    });
+
+    expect(prompt.slice(0, prompt.indexOf("User request:"))).toBe(
+      `Conversation so far:\nUser: ${prefix}…\n\n`,
+    );
+  });
+
   it("uses Claude CLI first for configless planning", async () => {
     const runCliAgent = vi.fn(
       async (_params: RunCliAgentParams): Promise<EmbeddedAgentRunResult> => ({
@@ -141,12 +161,12 @@ describe("Crestodian assistant", () => {
     }
     expect(result.command).toBe("status");
     expect(result.reply).toBe("Checking the shell.");
-    expect(result.modelLabel).toBe("claude-cli/claude-opus-4-7");
+    expect(result.modelLabel).toBe("claude-cli/claude-opus-4-8");
 
     expect(runCliAgent).toHaveBeenCalledTimes(1);
     const firstCliCall = firstMockArg(runCliAgent);
     expect(firstCliCall.provider).toBe("claude-cli");
-    expect(firstCliCall.model).toBe("claude-opus-4-7");
+    expect(firstCliCall.model).toBe("claude-opus-4-8");
     expect(firstCliCall.cleanupCliLiveSessionOnRunEnd).toBe(true);
     const firstCliConfig = requireRecord(firstCliCall.config);
     const firstCliAgents = requireRecord(firstCliConfig.agents);
@@ -166,6 +186,17 @@ describe("Crestodian assistant", () => {
         }),
       ).map((backend) => backend.kind),
     ).toEqual(["claude-cli", "codex-app-server"]);
+
+    // Setup-ladder order: Claude Code, Codex, Gemini.
+    expect(
+      selectCrestodianLocalPlannerBackends(
+        overview({
+          claude: { command: "claude", found: true },
+          codex: { command: "codex", found: true },
+          gemini: { command: "gemini", found: true },
+        }),
+      ).map((backend) => backend.kind),
+    ).toEqual(["claude-cli", "codex-app-server", "gemini-cli"]);
 
     const [codexAppServer] = selectCrestodianLocalPlannerBackends(
       overview({

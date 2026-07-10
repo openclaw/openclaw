@@ -1,5 +1,6 @@
+// Lazily resolves optional service modules without eager runtime imports.
 import { isTruthyEnvValue } from "../infra/env.js";
-import { toSafeImportPath } from "./import-specifier.js";
+import { toSafeImportPath } from "../shared/import-specifier.js";
 
 type LazyServiceModule = Record<string, unknown>;
 

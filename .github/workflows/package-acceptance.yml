@@ -325,7 +325,7 @@ jobs:
       telegram_mode: ${{ steps.profile.outputs.telegram_mode }}
     steps:
       - name: Checkout package workflow ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ inputs.workflow_ref }}
           fetch-depth: 0
@@ -339,7 +339,7 @@ jobs:
 
       - name: Download current-run package artifact input
         if: inputs.source == 'artifact' && inputs.artifact_run_id == ''
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ inputs.artifact_name }}
           path: .artifacts/package-candidate-input
@@ -492,7 +492,7 @@ jobs:
           node scripts/resolve-upgrade-survivor-baselines.mjs "${args[@]}" >/dev/null
 
       - name: Upload package-under-test artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ env.PACKAGE_ARTIFACT_NAME }}
           path: |
@@ -541,13 +541,13 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout package workflow ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ inputs.workflow_ref }}
           fetch-depth: 1
 
       - name: Download package-under-test artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ needs.resolve_package.outputs.package_artifact_name }}
           path: .artifacts/docker-e2e-package
@@ -657,14 +657,15 @@ jobs:
     steps:
       - name: Verify package acceptance results
         env:
+          ADVISORY: ${{ inputs.advisory }}
           DOCKER_RESULT: ${{ needs.docker_acceptance.result }}
           PACKAGE_INTEGRITY_RESULT: ${{ needs.package_integrity.result }}
           PACKAGE_TELEGRAM_RESULT: ${{ needs.package_telegram.result }}
           RESOLVE_RESULT: ${{ needs.resolve_package.result }}
+          TELEGRAM_ENABLED: ${{ needs.resolve_package.outputs.telegram_enabled }}
         shell: bash
         run: |
           set -euo pipefail
-          advisory="${{ inputs.advisory }}"
           failed=0
           for item in \
             "resolve_package=${RESOLVE_RESULT}" \
@@ -674,8 +675,17 @@ jobs:
           do
             name="${item%%=*}"
             result="${item#*=}"
+            result_failed=false
             if [[ "$result" != "success" && "$result" != "skipped" ]]; then
-              if [[ "$advisory" == "true" && "$name" != "resolve_package" ]]; then
+              result_failed=true
+            fi
+            if [[ "$name" == "package_telegram" &&
+                  "$TELEGRAM_ENABLED" == "true" &&
+                  "$result" != "success" ]]; then
+              result_failed=true
+            fi
+            if [[ "$result_failed" == "true" ]]; then
+              if [[ "$ADVISORY" == "true" && "$name" != "resolve_package" ]]; then
                 echo "::warning::${name} ended with ${result}; package acceptance is advisory for this caller."
                 continue
               fi

@@ -1,3 +1,5 @@
+// Payload tests cover successful embedded run replies, final-answer selection,
+// message-tool source replies, media directives, and tool-error warning policy.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
@@ -10,6 +12,8 @@ import {
 
 describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   function expectNoPayloads(params: Parameters<typeof buildPayloads>[0]) {
+    // Many suppression cases should produce no channel reply at all; keep the
+    // assertion explicit so accidental fallback text is obvious.
     const payloads = buildPayloads(params);
     expect(payloads).toHaveLength(0);
   }
@@ -34,6 +38,48 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expect(payloads).toStrictEqual([]);
+  });
+
+  it("strips provider reasoning close tags from streamed assistant payload text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["</mm:think>Scan complete. No new actionable inbox items."],
+    });
+
+    expectSinglePayloadText(payloads, "Scan complete. No new actionable inbox items.");
+  });
+
+  it("suppresses streamed text that only contains hidden reasoning", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["<mm:think>private reasoning</mm:think>"],
+    });
+
+    expect(payloads).toStrictEqual([]);
+  });
+
+  it("sanitizes every streamed text while preserving multiple visible answers", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [
+        '<tool_call>{"name":"exec","arguments":{"command":"secret"}}</tool_call>',
+        "</mm:think>First visible answer.",
+        "Second visible answer.",
+      ],
+    });
+
+    expect(payloads.map((payload) => payload.text)).toStrictEqual([
+      "First visible answer.",
+      "Second visible answer.",
+    ]);
+  });
+
+  it("keeps media directives while sanitizing streamed assistant text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["</mm:think>MEDIA:/tmp/reply-image.png\nAttached image"],
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Attached image");
+    expect(payloads[0]?.mediaUrl).toBe("/tmp/reply-image.png");
+    expect(payloads[0]?.mediaUrls).toEqual(["/tmp/reply-image.png"]);
   });
 
   it("falls back to final-answer assistant text when streamed text is unavailable", () => {
@@ -65,6 +111,103 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expectSinglePayloadText(payloads, "Done.");
+  });
+
+  it("marks runtime-persisted final replies as transcript owned", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Already persisted."],
+      assistantTranscriptOwned: true,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+      assistantTranscriptOwned: true,
+    });
+  });
+
+  it("does not revive signed unphased text when explicit final-answer text is empty", () => {
+    expectNoPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "MEDIA:/tmp/old.png",
+            textSignature: JSON.stringify({ v: 1, id: "item_old" }),
+          },
+          {
+            type: "text",
+            text: "   ",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+  });
+
+  it("does not revive signed unphased text when explicit output_text final-answer text is empty", () => {
+    expectNoPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "MEDIA:/tmp/old.png",
+            textSignature: JSON.stringify({ v: 1, id: "item_old" }),
+          },
+          {
+            type: "output_text",
+            text: "   ",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+  });
+
+  it("keeps literal mid-answer reasoning-looking tags in final-answer text", () => {
+    const text = "Before <think>literal tag text after";
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text,
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, text);
+  });
+
+  it("keeps strict reasoning-tag stripping for legacy string fallback text", () => {
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: "Visible prefix <think>private reasoning tail",
+      } as unknown as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Visible prefix");
   });
 
   it("falls back to final-answer assistant text when streamed text only contains blanks", () => {
@@ -198,7 +341,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   it("does not replay raw-looking accumulated tool output when final answer text is available", () => {
     const payloads = buildPayloads({
       assistantTexts: [
-        "/root/openclaw/src/gateway/protocol/schema/protocol-schemas.ts:181:  PluginControlUiDescriptorSchema,",
+        "/root/openclaw/packages/gateway-protocol/src/schema/protocol-schemas.ts:181:  PluginControlUiDescriptorSchema,",
         "The schema export is fixed.",
       ],
       lastAssistant: {
@@ -222,6 +365,8 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   });
 
   it("turns internal message-tool source replies into suppression-safe final payloads", () => {
+    // message_tool_only source replies are already delivered internally but
+    // still need mirror metadata so transcript/persistence can record them.
     const payloads = buildPayloads({
       assistantTexts: ["ordinary final should stay private"],
       didSendViaMessagingTool: true,
@@ -253,6 +398,20 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         idempotencyKey: "run-1:internal-source-reply:0",
       },
     });
+  });
+
+  it("suppresses terminal assistant text after direct message-tool source replies", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["ordinary final should stay private"],
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+      sessionKey: "agent:main",
+      agentId: "main",
+      runId: "run-1",
+    });
+
+    expect(payloads).toEqual([]);
   });
 
   it("preserves rich-only internal message-tool source replies", () => {
@@ -352,6 +511,8 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   });
 
   it("marks middleware tool-error warnings after assistant output as non-terminal", () => {
+    // Middleware failures after useful assistant output warn the user without
+    // replacing the successful answer as the terminal payload.
     const payloads = buildPayloads({
       assistantTexts: ["Queued 3 topics."],
       lastToolError: {
@@ -436,6 +597,24 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSingleToolErrorPayload(payloads, {
       title: "Exec",
       detail: "Command timed out after 1800 seconds.",
+    });
+  });
+
+  it("surfaces heartbeat exec tool output details when the task run fails", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        meta: "show last 20 lines of ~/.openclaw/workspace/memory/2026-06-04.md",
+        error:
+          "tail: cannot open '/home/user/.openclaw/workspace/memory/2026-06-04.md' for reading: No such file or directory",
+      },
+      isHeartbeatTrigger: true,
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "show last 20 lines",
+      detail: "No such file or directory",
     });
   });
 
@@ -638,6 +817,8 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   });
 
   it("uses raw final assistant text when visible-text extraction removed a media-only directive line", () => {
+    // Media directives are not visible text, but they still carry channel media
+    // attachments and must survive final-answer extraction.
     const payloads = buildPayloads({
       lastAssistant: {
         role: "assistant",

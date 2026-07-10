@@ -1,3 +1,4 @@
+// Amazon Bedrock tests cover discovery plugin behavior.
 import type { BedrockClient } from "@aws-sdk/client-bedrock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -165,6 +166,112 @@ describe("bedrock discovery", () => {
     });
   });
 
+  it.each([
+    {
+      label: "Fable",
+      profileId: "us.anthropic.claude-fable-5",
+      profileName: "US Claude Fable 5",
+      foundationId: "anthropic.claude-fable-5",
+    },
+    {
+      label: "Mythos",
+      profileId: "us.anthropic.claude-mythos-5",
+      profileName: "US Claude Mythos 5",
+      foundationId: "anthropic.claude-mythos-5",
+    },
+  ])(
+    "marks known $label inference profile fallbacks as reasoning capable",
+    async ({ profileId, profileName, foundationId }) => {
+      sendMock
+        .mockResolvedValueOnce({
+          modelSummaries: [],
+        })
+        .mockResolvedValueOnce({
+          inferenceProfileSummaries: [
+            {
+              inferenceProfileId: profileId,
+              inferenceProfileName: profileName,
+              status: "ACTIVE",
+              type: "SYSTEM_DEFINED",
+              models: [
+                {
+                  modelArn: `arn:aws:bedrock:us-east-1::foundation-model/${foundationId}`,
+                },
+              ],
+            },
+          ],
+        });
+
+      const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+
+      expect(models).toHaveLength(1);
+      expectModelFields(models[0], {
+        id: profileId,
+        reasoning: true,
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+        thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+      });
+    },
+  );
+
+  it("applies the Sonnet 5 contract to inference-profile-only discovery", async () => {
+    sendMock.mockResolvedValueOnce({ modelSummaries: [] }).mockResolvedValueOnce({
+      inferenceProfileSummaries: [
+        {
+          inferenceProfileId: "global.anthropic.claude-sonnet-5",
+          inferenceProfileName: "Global Claude Sonnet 5",
+          status: "ACTIVE",
+          type: "SYSTEM_DEFINED",
+          models: [
+            {
+              modelArn: "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-5",
+            },
+          ],
+        },
+      ],
+    });
+
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+
+    expectModelFields(models[0], {
+      id: "global.anthropic.claude-sonnet-5",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+      params: { canonicalModelId: "claude-sonnet-5" },
+    });
+  });
+
+  it("skips Mythos Preview inference profiles because Mantle owns that route", async () => {
+    sendMock
+      .mockResolvedValueOnce({
+        modelSummaries: [],
+      })
+      .mockResolvedValueOnce({
+        inferenceProfileSummaries: [
+          {
+            inferenceProfileId: "us.anthropic.claude-mythos-preview",
+            inferenceProfileName: "US Claude Mythos Preview",
+            status: "ACTIVE",
+            type: "SYSTEM_DEFINED",
+            models: [
+              {
+                modelArn:
+                  "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-mythos-preview",
+              },
+            ],
+          },
+        ],
+      });
+
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+
+    expect(models).toEqual([]);
+  });
+
   it("normalizes region-prefixed versioned model ids when resolving context windows", async () => {
     sendMock
       .mockResolvedValueOnce({
@@ -195,6 +302,110 @@ describe("bedrock discovery", () => {
     });
   });
 
+  it("uses 1M context window for dotted Claude Opus 4.8 Bedrock refs", async () => {
+    sendMock
+      .mockResolvedValueOnce({
+        modelSummaries: [
+          {
+            modelId: "anthropic.claude-opus-4.8-v1:0",
+            modelName: "Claude Opus 4.8",
+            providerName: "anthropic",
+            inputModalities: ["TEXT"],
+            outputModalities: ["TEXT"],
+            responseStreamingSupported: true,
+            modelLifecycle: { status: "ACTIVE" },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        inferenceProfileSummaries: [
+          {
+            inferenceProfileId: "us.anthropic.claude-opus-4.8-v1:0",
+            inferenceProfileName: "US Claude Opus 4.8",
+            status: "ACTIVE",
+            type: "SYSTEM_DEFINED",
+            models: [
+              {
+                modelArn:
+                  "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-4.8-v1:0",
+              },
+            ],
+          },
+        ],
+      });
+
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+
+    expectModelFields(
+      models.find((model) => model.id === "anthropic.claude-opus-4.8-v1:0"),
+      {
+        contextWindow: 1_000_000,
+        reasoning: true,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      },
+    );
+    expectModelFields(
+      models.find((model) => model.id === "us.anthropic.claude-opus-4.8-v1:0"),
+      {
+        contextWindow: 1_000_000,
+        reasoning: true,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      },
+    );
+  });
+
+  it("applies Fable limits and reasoning metadata to foundation and profile models", async () => {
+    sendMock
+      .mockResolvedValueOnce({
+        modelSummaries: [
+          {
+            modelId: "anthropic.claude-fable-5",
+            modelName: "Claude Fable 5",
+            providerName: "anthropic",
+            inputModalities: ["TEXT", "IMAGE"],
+            outputModalities: ["TEXT"],
+            responseStreamingSupported: true,
+            modelLifecycle: { status: "ACTIVE" },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        inferenceProfileSummaries: [
+          {
+            inferenceProfileId: "company-fable",
+            inferenceProfileName: "Company Fable",
+            status: "ACTIVE",
+            type: "APPLICATION",
+            models: [
+              {
+                modelArn: "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-fable-5",
+              },
+            ],
+          },
+        ],
+      });
+
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+    const expected = {
+      reasoning: true,
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+    };
+
+    expectModelFields(
+      models.find((model) => model.id === "anthropic.claude-fable-5"),
+      expected,
+    );
+    expectModelFields(
+      models.find((model) => model.id === "company-fable"),
+      {
+        ...expected,
+        params: { canonicalModelId: "claude-fable-5" },
+      },
+    );
+  });
+
   it("caches results when refreshInterval is enabled", async () => {
     mockSingleActiveSummary();
 
@@ -202,6 +413,28 @@ describe("bedrock discovery", () => {
     await discoverBedrockModels({ region: "us-east-1", clientFactory });
     // 2 calls on first discovery (ListFoundationModels + ListInferenceProfiles), 0 on cached second.
     expect(sendMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips cache when refreshInterval expiry overflows", async () => {
+    sendMock
+      .mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] })
+      .mockResolvedValueOnce({ inferenceProfileSummaries: [] })
+      .mockResolvedValueOnce({ modelSummaries: [baseActiveAnthropicSummary] })
+      .mockResolvedValueOnce({ inferenceProfileSummaries: [] });
+
+    await discoverBedrockModels({
+      region: "us-east-1",
+      config: { refreshInterval: 1 },
+      now: () => 8_640_000_000_000_000,
+      clientFactory,
+    });
+    await discoverBedrockModels({
+      region: "us-east-1",
+      config: { refreshInterval: 1 },
+      now: () => 8_640_000_000_000_000,
+      clientFactory,
+    });
+    expect(sendMock).toHaveBeenCalledTimes(4);
   });
 
   it("skips cache when refreshInterval is 0", async () => {
@@ -335,7 +568,9 @@ describe("bedrock discovery", () => {
       input: ["text", "image"],
       contextWindow: 1000000,
       maxTokens: 4096,
+      params: { canonicalModelId: "claude-sonnet-4-6" },
     });
+    expect(usProfile?.thinkingLevelMap).toBeUndefined();
     expectModelFields(euProfile, { input: ["text", "image"] });
     expectModelFields(globalProfile, { input: ["text", "image"] });
 
@@ -471,6 +706,8 @@ describe("bedrock discovery", () => {
       contextWindow: 1_000_000,
       maxTokens: 4096,
       input: ["text"],
+      params: { canonicalModelId: "claude-opus-4-6-v1:0" },
+      thinkingLevelMap: { xhigh: null, max: "max" },
     });
   });
 

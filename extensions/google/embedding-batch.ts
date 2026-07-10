@@ -1,3 +1,4 @@
+// Google plugin module implements embedding batch behavior.
 import crypto from "node:crypto";
 import {
   buildEmbeddingBatchGroupOptions,
@@ -8,7 +9,10 @@ import {
   sanitizeAndNormalizeEmbedding,
   withRemoteHttpResponse,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
+import {
+  createProviderHttpError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GeminiEmbeddingClient, GeminiTextEmbeddingRequest } from "./embedding-provider.js";
 
@@ -125,7 +129,10 @@ async function submitGeminiBatch(params: {
         const text = await fileRes.text();
         throw new Error(`gemini batch file upload failed: ${fileRes.status} ${text}`);
       }
-      return (await fileRes.json()) as { name?: string; file?: { name?: string } };
+      return readProviderJsonResponse<{ name?: string; file?: { name?: string } }>(
+        fileRes,
+        "gemini.batch-file-upload",
+      );
     },
   });
   const fileId = filePayload.name ?? filePayload.file?.name;
@@ -157,7 +164,7 @@ async function submitGeminiBatch(params: {
     },
     onResponse: async (batchRes) => {
       if (batchRes.ok) {
-        return (await batchRes.json()) as GeminiBatchStatus;
+        return readProviderJsonResponse<GeminiBatchStatus>(batchRes, "gemini.batch-create");
       }
       const text = await batchRes.text();
       if (batchRes.status === 404) {
@@ -190,7 +197,7 @@ async function fetchGeminiBatchStatus(params: {
       if (!res.ok) {
         throw await createProviderHttpError(res, "gemini batch status failed");
       }
-      return (await res.json()) as GeminiBatchStatus;
+      return readProviderJsonResponse<GeminiBatchStatus>(res, "gemini.batch-status");
     },
   });
 }
@@ -267,7 +274,9 @@ async function waitForGeminiBatch(params: {
       throw new Error(`gemini batch ${params.batchName} timed out after ${params.timeoutMs}ms`);
     }
     params.debug?.(`gemini batch ${params.batchName} ${state}; waiting ${params.pollIntervalMs}ms`);
-    await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, params.pollIntervalMs);
+    });
     current = undefined;
   }
 }
@@ -284,7 +293,7 @@ export async function runGeminiEmbeddingBatches(
       maxRequests: GEMINI_BATCH_MAX_REQUESTS,
       debugLabel: "memory embeddings: gemini batch submit",
     }),
-    runGroup: async ({ group, groupIndex, groups, byCustomId }) => {
+    runGroup: async ({ group, groupIndex, groups, byCustomId, pollIntervalMs, timeoutMs }) => {
       const batchInfo = await submitGeminiBatch({
         gemini: params.gemini,
         requests: group,
@@ -326,8 +335,8 @@ export async function runGeminiEmbeddingBatches(
               gemini: params.gemini,
               batchName,
               wait: params.wait,
-              pollIntervalMs: params.pollIntervalMs,
-              timeoutMs: params.timeoutMs,
+              pollIntervalMs,
+              timeoutMs,
               debug: params.debug,
               initial: batchInfo,
             });

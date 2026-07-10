@@ -1,6 +1,11 @@
 // Public usage fetch helpers for provider plugins.
 
 export type {
+  ProviderUsageCostBreakdown,
+  ProviderUsageCostDaily,
+  ProviderUsageCostHistory,
+  ProviderUsageModelBreakdown,
+  ProviderUsageBilling,
   ProviderUsageSnapshot,
   UsageProviderId,
   UsageWindow,
@@ -9,6 +14,7 @@ export type {
 export {
   fetchClaudeUsage,
   fetchCodexUsage,
+  fetchDeepSeekUsage,
   fetchGeminiUsage,
   fetchMinimaxUsage,
   fetchZaiUsage,

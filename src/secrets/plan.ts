@@ -1,13 +1,17 @@
+/** Validates and normalizes serialized secrets apply plans before config mutation. */
+import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { SecretProviderConfig, SecretRef } from "../config/types.secrets.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
-import { isRecord as isObjectRecord } from "../shared/record-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
-import { isValidExecSecretRefId, isValidSecretProviderAlias } from "./ref-contract.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { isValidSecretProviderAlias, isValidSecretRef } from "./ref-contract.js";
 import { parseDotPath, toDotPath } from "./shared.js";
 import { resolvePlanTargetAgainstRegistry, type ResolvedPlanTarget } from "./target-registry.js";
 
+/** Registry target id accepted by a secrets apply plan. */
 export type SecretsPlanTargetType = string;
 
+/** One planned SecretRef mutation against config or auth-profile storage. */
 export type SecretsPlanTarget = {
   type: SecretsPlanTargetType;
   /**
@@ -41,6 +45,7 @@ export type SecretsPlanTarget = {
   authProfileProvider?: string;
 };
 
+/** Serialized plan produced by `openclaw secrets configure` or supplied manually. */
 export type SecretsApplyPlan = {
   version: 1;
   protocolVersion: 1;
@@ -56,16 +61,11 @@ export type SecretsApplyPlan = {
   };
 };
 
-const FORBIDDEN_PATH_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
-
 function isSecretProviderConfigShape(value: unknown): value is SecretProviderConfig {
   return SecretProviderSchema.safeParse(value).success;
 }
 
-function hasForbiddenPathSegment(segments: string[]): boolean {
-  return segments.some((segment) => FORBIDDEN_PATH_SEGMENTS.has(segment));
-}
-
+/** Resolves a user-supplied plan target through the registry after path safety checks. */
 export function resolveValidatedPlanTarget(candidate: {
   type?: SecretsPlanTargetType;
   path?: string;
@@ -86,9 +86,11 @@ export function resolveValidatedPlanTarget(candidate: {
     Array.isArray(candidate.pathSegments) && candidate.pathSegments.length > 0
       ? normalizeStringEntries(candidate.pathSegments)
       : parseDotPath(path);
-  if (segments.length === 0 || hasForbiddenPathSegment(segments) || path !== toDotPath(segments)) {
+  if (segments.length === 0 || segments.some(isBlockedObjectKey) || path !== toDotPath(segments)) {
     return null;
   }
+  // Registry resolution is the ownership gate; caller-provided paths must map to a known
+  // mutable SecretRef target before apply code can write anything.
   return resolvePlanTargetAgainstRegistry({
     type: candidate.type,
     pathSegments: segments,
@@ -97,6 +99,7 @@ export function resolveValidatedPlanTarget(candidate: {
   });
 }
 
+/** Validates the external secrets apply plan shape and every target/provider mutation. */
 export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -132,7 +135,7 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
       ref.provider.trim().length === 0 ||
       typeof ref.id !== "string" ||
       ref.id.trim().length === 0 ||
-      (ref.source === "exec" && !isValidExecSecretRefId(ref.id))
+      !isValidSecretRef(ref as SecretRef)
     ) {
       return false;
     }
@@ -176,6 +179,7 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
   return true;
 }
 
+/** Normalizes omitted plan options to the apply-time defaults. */
 export function normalizeSecretsPlanOptions(
   options: SecretsApplyPlan["options"] | undefined,
 ): Required<NonNullable<SecretsApplyPlan["options"]>> {

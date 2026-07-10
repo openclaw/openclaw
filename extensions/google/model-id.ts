@@ -1,9 +1,14 @@
+// Google plugin module implements model id behavior.
 const ANTIGRAVITY_BARE_PRO_IDS = new Set(["gemini-3-pro", "gemini-3.1-pro", "gemini-3-1-pro"]);
 const GOOGLE_PROVIDER_PREFIX = "google/";
 
+export function stripGoogleProviderPrefix(id: string): string {
+  return id.startsWith(GOOGLE_PROVIDER_PREFIX) ? id.slice(GOOGLE_PROVIDER_PREFIX.length) : id;
+}
+
 export function normalizeGoogleModelId(id: string): string {
   if (id.startsWith(GOOGLE_PROVIDER_PREFIX)) {
-    const modelId = id.slice(GOOGLE_PROVIDER_PREFIX.length);
+    const modelId = stripGoogleProviderPrefix(id);
     const normalizedModelId = normalizeGoogleModelId(modelId);
     return normalizedModelId === modelId ? id : `${GOOGLE_PROVIDER_PREFIX}${normalizedModelId}`;
   }
@@ -26,6 +31,9 @@ export function normalizeGoogleModelId(id: string): string {
   }
   if (id === "gemini-3.1-flash" || id === "gemini-3.1-flash-preview") {
     return "gemini-3-flash-preview";
+  }
+  if (id === "gemma-4-26b") {
+    return "gemma-4-26b-a4b-it";
   }
   return id;
 }

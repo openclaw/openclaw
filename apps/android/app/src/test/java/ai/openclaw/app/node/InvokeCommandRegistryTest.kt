@@ -116,6 +116,15 @@ class InvokeCommandRegistryTest {
   }
 
   @Test
+  fun advertisedCommands_includesDeviceAppsOnlyWhenUserOptedIn() {
+    val disabled = InvokeCommandRegistry.advertisedCommands(defaultFlags(installedAppsSharingEnabled = false))
+    val enabled = InvokeCommandRegistry.advertisedCommands(defaultFlags(installedAppsSharingEnabled = true))
+
+    assertFalse(disabled.contains(OpenClawDeviceCommand.Apps.rawValue))
+    assertTrue(enabled.contains(OpenClawDeviceCommand.Apps.rawValue))
+  }
+
+  @Test
   fun advertisedCommands_includesFeatureCommandsWhenEnabled() {
     val commands =
       InvokeCommandRegistry.advertisedCommands(
@@ -151,6 +160,7 @@ class InvokeCommandRegistryTest {
           voiceWakeEnabled = false,
           motionActivityAvailable = true,
           motionPedometerAvailable = false,
+          installedAppsSharingEnabled = false,
           debugBuild = false,
         ),
       )
@@ -239,11 +249,23 @@ class InvokeCommandRegistryTest {
   fun find_returnsForegroundMetadataForCameraCommands() {
     val list = InvokeCommandRegistry.find(OpenClawCameraCommand.List.rawValue)
     val location = InvokeCommandRegistry.find(OpenClawLocationCommand.Get.rawValue)
+    val pttStart = InvokeCommandRegistry.find(OpenClawTalkCommand.PttStart.rawValue)
+    val pttStop = InvokeCommandRegistry.find(OpenClawTalkCommand.PttStop.rawValue)
+    val pttCancel = InvokeCommandRegistry.find(OpenClawTalkCommand.PttCancel.rawValue)
+    val pttOnce = InvokeCommandRegistry.find(OpenClawTalkCommand.PttOnce.rawValue)
 
     assertNotNull(list)
     assertEquals(true, list?.requiresForeground)
     assertNotNull(location)
     assertEquals(false, location?.requiresForeground)
+    assertNotNull(pttStart)
+    assertEquals(false, pttStart?.requiresForeground)
+    assertNotNull(pttStop)
+    assertEquals(false, pttStop?.requiresForeground)
+    assertNotNull(pttCancel)
+    assertEquals(false, pttCancel?.requiresForeground)
+    assertNotNull(pttOnce)
+    assertEquals(true, pttOnce?.requiresForeground)
   }
 
   @Test
@@ -262,6 +284,7 @@ class InvokeCommandRegistryTest {
     voiceWakeEnabled: Boolean = false,
     motionActivityAvailable: Boolean = false,
     motionPedometerAvailable: Boolean = false,
+    installedAppsSharingEnabled: Boolean = false,
     debugBuild: Boolean = false,
   ): NodeRuntimeFlags =
     NodeRuntimeFlags(
@@ -275,6 +298,7 @@ class InvokeCommandRegistryTest {
       voiceWakeEnabled = voiceWakeEnabled,
       motionActivityAvailable = motionActivityAvailable,
       motionPedometerAvailable = motionPedometerAvailable,
+      installedAppsSharingEnabled = installedAppsSharingEnabled,
       debugBuild = debugBuild,
     )
 

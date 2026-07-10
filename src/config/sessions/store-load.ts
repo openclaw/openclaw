@@ -1,9 +1,10 @@
+// Session store loading normalizes persisted records, migrations, maintenance, and caches.
 import fs from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginJsonValue, type PluginJsonValue } from "../../plugins/host-hook-json.js";
 import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
-import { isRecord } from "../../shared/record-coerce.js";
 import {
   normalizeDeliveryChannelRoute,
   normalizeDeliveryContext,
@@ -13,6 +14,7 @@ import { getFileStatSnapshot } from "../cache-utils.js";
 import { hydrateSessionStoreSkillPromptRefs } from "./skill-prompt-blobs.js";
 import {
   cloneSessionStoreRecord,
+  cloneSessionStoreSnapshotEntry,
   cloneSessionStoreSnapshot,
   internSessionEntryLargeStrings,
   isSessionStoreCacheEnabled,
@@ -32,6 +34,8 @@ import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
   pruneStaleEntries,
+  pruneStaleModelRunEntries,
+  shouldRunModelRunPrune,
   shouldRunSessionEntryMaintenance,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
@@ -43,6 +47,11 @@ export type LoadSessionStoreOptions = {
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   runMaintenance?: boolean;
   clone?: boolean;
+  hydrateSkillPromptRefs?: boolean;
+};
+
+export type ReadSessionEntryOptions = {
+  hydrateSkillPromptRefs?: boolean;
 };
 
 const log = createSubsystemLogger("sessions/store");
@@ -64,6 +73,10 @@ function normalizeOptionalStringOrNull(value: unknown): string | null | undefine
     return value;
   }
   return undefined;
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function normalizeRecordKey(value: string): string | undefined {
@@ -109,6 +122,7 @@ function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry 
       return;
     }
     if (next === entry) {
+      // Copy-on-write keeps unchanged entries referentially stable for cache reuse.
       next = { ...entry };
     }
     if (value === undefined) {
@@ -146,6 +160,16 @@ function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry 
     "pendingFinalDeliveryIntentId",
     normalizeOptionalStringOrNull(entry.pendingFinalDeliveryIntentId),
   );
+  const restartRecoveryDeliveryContext = normalizeOptionalDeliveryContext(
+    entry.restartRecoveryDeliveryContext,
+  );
+  if (!sameDeliveryContext(entry.restartRecoveryDeliveryContext, restartRecoveryDeliveryContext)) {
+    assign("restartRecoveryDeliveryContext", restartRecoveryDeliveryContext);
+  }
+  assign(
+    "restartRecoveryDeliveryRunId",
+    normalizeOptionalString(entry.restartRecoveryDeliveryRunId),
+  );
 
   return next;
 }
@@ -162,6 +186,7 @@ function normalizePluginExtensions(entry: SessionEntry): SessionEntry {
 
   let changed = false;
   const normalizedExtensions: Record<string, Record<string, PluginJsonValue>> = {};
+  // Plugin state is an external boundary; only JSON-safe keyed records are persisted back.
   for (const [rawPluginId, rawPluginState] of Object.entries(entry.pluginExtensions)) {
     const pluginId = normalizeRecordKey(rawPluginId);
     if (!pluginId || !isRecord(rawPluginState)) {
@@ -310,11 +335,11 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
 
 // resolvedSkills carries the full parsed Skill[] (including each SKILL.md body)
 // and is only used as an in-turn cache by the runtime — see
-// src/agents/embedded-agent-runner/skills-runtime.ts. Persisting it bloats
+// src/skills/runtime/embedded-run-entries.ts. Persisting it bloats
 // sessions.json by orders of magnitude when many sessions are active. Strip
 // it from every entry that flows through normalize, so neither the in-memory
 // store reloaded from disk nor the JSON serialized back to disk carries it.
-function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
+export function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
   const snapshot = entry.skillsSnapshot;
   if (!snapshot || snapshot.resolvedSkills === undefined) {
     return entry;
@@ -354,6 +379,8 @@ export function loadSessionStore(
   storePath: string,
   opts: LoadSessionStoreOptions = {},
 ): Record<string, SessionEntry> {
+  const shouldHydrateSkillPromptRefs = opts.hydrateSkillPromptRefs !== false;
+  const canWriteSessionStoreCache = shouldHydrateSkillPromptRefs;
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
     const currentFileStat = getFileStatSnapshot(storePath);
     const cached = readSessionStoreCache({
@@ -367,13 +394,13 @@ export function loadSessionStore(
     }
   }
 
-  // Retry a few times on Windows because readers can briefly observe empty or
+  // Retry a few times because readers can briefly observe empty or
   // transiently invalid content while another process is swapping the file.
   let store: Record<string, SessionEntry> = {};
-  let fileStat = getFileStatSnapshot(storePath);
-  let mtimeMs = fileStat?.mtimeMs;
+  const fileStat = getFileStatSnapshot(storePath);
+  const mtimeMs = fileStat?.mtimeMs;
   let serializedFromDisk: string | undefined;
-  const maxReadAttempts = process.platform === "win32" ? 3 : 1;
+  const maxReadAttempts = 3;
   const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
   for (let attempt = 0; attempt < maxReadAttempts; attempt += 1) {
     try {
@@ -391,7 +418,12 @@ export function loadSessionStore(
       // writes the file after readFileSync returns, a post-read stat could tag
       // stale content as current and make future cache hits return old data.
       break;
-    } catch {
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      const isPermanentReadError = code === "ENOENT" || code === "EACCES" || code === "EPERM";
+      if (isPermanentReadError) {
+        break;
+      }
       if (attempt < maxReadAttempts - 1) {
         Atomics.wait(retryBuf!, 0, 0, 50);
         continue;
@@ -399,18 +431,36 @@ export function loadSessionStore(
     }
   }
 
-  const hydratedPromptRefs = hydrateSessionStoreSkillPromptRefs({ storePath, store });
+  const hydratedPromptRefs = shouldHydrateSkillPromptRefs
+    ? hydrateSessionStoreSkillPromptRefs({ storePath, store })
+    : false;
   const migrated = applySessionStoreMigrations(store);
   const normalized = normalizeSessionStore(store);
   if (hydratedPromptRefs || migrated || normalized) {
+    // Any in-memory repair invalidates the original serialized bytes for future write projection.
     serializedFromDisk = undefined;
   }
   if (opts.runMaintenance) {
     const maintenance = opts.maintenanceConfig ?? resolveMaintenanceConfig();
     const beforeCount = Object.keys(store).length;
+    let modelRunPruned = 0;
     let pruned = 0;
     let capped = 0;
-    if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
+    if (maintenance.mode === "enforce") {
+      const preserveSessionKeys = collectSessionMaintenancePreserveKeys();
+      if (
+        shouldRunModelRunPrune({
+          maintenance,
+          entryCount: beforeCount,
+        })
+      ) {
+        modelRunPruned = pruneStaleModelRunEntries(store, maintenance.modelRunPruneAfterMs, {
+          log: false,
+          preserveKeys: preserveSessionKeys,
+        });
+      }
+    }
+    if (maintenance.mode === "enforce" && Object.keys(store).length > maintenance.maxEntries) {
       const preserveSessionKeys = collectSessionMaintenancePreserveKeys();
       pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
         log: false,
@@ -428,12 +478,13 @@ export function loadSessionStore(
         : 0;
     }
     const afterCount = Object.keys(store).length;
-    if (pruned > 0 || capped > 0) {
+    if (modelRunPruned > 0 || pruned > 0 || capped > 0) {
       serializedFromDisk = undefined;
       log.info("applied load-time maintenance to session store", {
         storePath,
         before: beforeCount,
         after: afterCount,
+        modelRunPruned,
         pruned,
         capped,
         maxEntries: maintenance.maxEntries,
@@ -443,7 +494,7 @@ export function loadSessionStore(
 
   setSerializedSessionStore(storePath, serializedFromDisk);
 
-  if (!opts.skipCache && isSessionStoreCacheEnabled()) {
+  if (!opts.skipCache && canWriteSessionStoreCache && isSessionStoreCacheEnabled()) {
     writeSessionStoreCache({
       storePath,
       store,
@@ -487,13 +538,17 @@ export function readSessionStoreSnapshot(storePath: string): SessionStoreSnapsho
 export function readSessionEntry(
   storePath: string,
   sessionKey: string,
+  opts: ReadSessionEntryOptions = {},
 ): SessionStoreSnapshotEntry | undefined {
-  const snapshot = readSessionStoreSnapshot(storePath);
+  const store = loadSessionStore(storePath, {
+    clone: false,
+    ...(opts.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
+  });
   const resolved = resolveSessionStoreEntry({
-    store: snapshot as Record<string, SessionEntry>,
+    store,
     sessionKey,
   });
-  return resolved.existing as SessionStoreSnapshotEntry | undefined;
+  return resolved.existing ? cloneSessionStoreSnapshotEntry(resolved.existing) : undefined;
 }
 
 export function readSessionEntries(storePath: string): SessionStoreSnapshotEntries {

@@ -1,5 +1,6 @@
 {
   "id": "minimax",
+  "icon": "https://cdn.simpleicons.org/minimax",
   "activation": {
     "onStartup": false
   },
@@ -34,18 +35,19 @@
       "choiceHint": "Global endpoint - api.minimax.io",
       "groupId": "minimax",
       "groupLabel": "MiniMax",
-      "groupHint": "M2.7 (recommended)"
+      "groupHint": "M3 (recommended)"
     },
     {
       "provider": "minimax",
       "method": "api-global",
       "choiceId": "minimax-global-api",
+      "appGuidedSecret": true,
       "deprecatedChoiceIds": ["minimax", "minimax-api", "minimax-cloud", "minimax-api-lightning"],
       "choiceLabel": "MiniMax API key (Global)",
       "choiceHint": "Global endpoint - api.minimax.io",
       "groupId": "minimax",
       "groupLabel": "MiniMax",
-      "groupHint": "M2.7 (recommended)",
+      "groupHint": "M3 (recommended)",
       "optionKey": "minimaxApiKey",
       "cliFlag": "--minimax-api-key",
       "cliOption": "--minimax-api-key <key>",
@@ -59,18 +61,19 @@
       "choiceHint": "CN endpoint - api.minimaxi.com",
       "groupId": "minimax",
       "groupLabel": "MiniMax",
-      "groupHint": "M2.7 (recommended)"
+      "groupHint": "M3 (recommended)"
     },
     {
       "provider": "minimax",
       "method": "api-cn",
       "choiceId": "minimax-cn-api",
+      "appGuidedSecret": true,
       "deprecatedChoiceIds": ["minimax-api-key-cn"],
       "choiceLabel": "MiniMax API key (CN)",
       "choiceHint": "CN endpoint - api.minimaxi.com",
       "groupId": "minimax",
       "groupLabel": "MiniMax",
-      "groupHint": "M2.7 (recommended)",
+      "groupHint": "M3 (recommended)",
       "optionKey": "minimaxApiKey",
       "cliFlag": "--minimax-api-key",
       "cliOption": "--minimax-api-key <key>",
@@ -83,7 +86,8 @@
     "imageGenerationProviders": ["minimax", "minimax-portal"],
     "musicGenerationProviders": ["minimax", "minimax-portal"],
     "videoGenerationProviders": ["minimax", "minimax-portal"],
-    "webSearchProviders": ["minimax"]
+    "webSearchProviders": ["minimax"],
+    "usageProviders": ["minimax"]
   },
   "configContracts": {
     "compatibilityRuntimePaths": ["tools.web.search.apiKey"]

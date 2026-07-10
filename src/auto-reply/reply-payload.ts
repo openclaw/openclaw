@@ -1,9 +1,12 @@
+/** Reply payload contracts and metadata helpers shared by dispatch and channel renderers. */
+import type { ReplyToMode } from "../config/types.base.js";
 import type {
   InteractiveReply,
   MessagePresentation,
   ReplyPayloadDelivery,
 } from "../interactive/payload.js";
 
+/** Channel-agnostic assistant reply payload. */
 export type ReplyPayload = {
   text?: string;
   mediaUrl?: string;
@@ -45,6 +48,10 @@ export type ReplyPayload = {
   /** Marks this payload as a reasoning/thinking block. Channels that do not
    *  have a dedicated reasoning lane (e.g. WhatsApp, web) should suppress it. */
   isReasoning?: boolean;
+  /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
+  isCommentary?: boolean;
+  /** Reasoning stream text is a complete replacement snapshot, not a delta. */
+  isReasoningSnapshot?: boolean;
   /** Marks this payload as a compaction status notice (start/end).
    *  Should be excluded from TTS transcript accumulation so compaction
    *  status lines are not synthesised into the spoken assistant reply. */
@@ -57,13 +64,69 @@ export type ReplyPayload = {
   channelData?: Record<string, unknown>;
 };
 
+// Private device-pair -> Gateway live-display envelope key. Do not re-export
+// through Plugin SDK; this is not a third-party plugin contract.
+const PAIRING_QR_REPLY_CHANNEL_DATA_KEY = "openclawPairingQr";
+
+export type PairingQrReplyChannelData = {
+  setupCode: string;
+  expiresAtMs: number;
+};
+
+function normalizePairingQrSetupCode(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function normalizePairingQrExpiresAtMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+export function buildPairingQrReplyChannelData(
+  params: PairingQrReplyChannelData,
+): Record<string, unknown> {
+  return {
+    [PAIRING_QR_REPLY_CHANNEL_DATA_KEY]: {
+      setupCode: params.setupCode,
+      expiresAtMs: params.expiresAtMs,
+    },
+  };
+}
+
+export function readPairingQrReplyChannelData(
+  payload: Pick<ReplyPayload, "channelData">,
+): PairingQrReplyChannelData | undefined {
+  const raw = payload.channelData?.[PAIRING_QR_REPLY_CHANNEL_DATA_KEY];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  const record = raw as Record<string, unknown>;
+  const setupCode = normalizePairingQrSetupCode(record.setupCode);
+  const expiresAtMs = normalizePairingQrExpiresAtMs(record.expiresAtMs);
+  return setupCode && expiresAtMs ? { setupCode, expiresAtMs } : undefined;
+}
+
+/** Metadata for fast-auto progress notices. */
+export const FAST_MODE_AUTO_PROGRESS_KIND = "fast-mode-auto";
+
+export function isFastModeAutoProgressPayload(payload: Pick<ReplyPayload, "channelData">): boolean {
+  return payload.channelData?.openclawProgressKind === FAST_MODE_AUTO_PROGRESS_KIND;
+}
+
+/** Metadata for audio-only media that supplements already-visible assistant text. */
 export type ReplyPayloadTtsSupplement = {
   spokenText: string;
   visibleTextAlreadyDelivered?: boolean;
 };
 
-export const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
+/** Reply policy facts that provider adapters use to resolve the final transport route. */
+export type ReplyDeliveryContext = {
+  chatType?: "direct" | "group" | "channel" | null;
+  replyToMode: ReplyToMode;
+};
 
+const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
+
+/** Appends the standard media failure warning without duplicating it. */
 export function appendReplyMediaFailureWarning(text: string | undefined): string {
   if (!text?.trim()) {
     return REPLY_MEDIA_FAILURE_WARNING;
@@ -82,6 +145,7 @@ function hasReplyPayloadMedia(payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrl
   return Boolean(payload.mediaUrl?.trim() || payload.mediaUrls?.some((url) => url.trim()));
 }
 
+/** Returns normalized TTS supplement metadata only when the payload has media to carry it. */
 export function getReplyPayloadTtsSupplement(
   payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls" | "ttsSupplement">,
 ): ReplyPayloadTtsSupplement | undefined {
@@ -97,12 +161,14 @@ export function getReplyPayloadTtsSupplement(
   };
 }
 
+/** Returns true when the payload is a valid TTS supplement media payload. */
 export function isReplyPayloadTtsSupplement(
   payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls" | "ttsSupplement">,
 ): boolean {
   return Boolean(getReplyPayloadTtsSupplement(payload));
 }
 
+/** Marks a reply payload as supplemental TTS media while preserving the original shape. */
 export function markReplyPayloadAsTtsSupplement<T extends ReplyPayload>(
   payload: T,
   spokenText: string = payload.spokenText ?? payload.text ?? "",
@@ -124,6 +190,7 @@ export function markReplyPayloadAsTtsSupplement<T extends ReplyPayload>(
   };
 }
 
+/** Removes visible-only fields from a payload that should be delivered as TTS supplement media. */
 export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayload {
   const supplement = getReplyPayloadTtsSupplement(payload);
   if (!supplement) {
@@ -143,8 +210,26 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
   };
 }
 
+/** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
+  /** The runtime owns the transcript decision for this assistant payload. */
+  assistantTranscriptOwned?: boolean;
+  /** Foreground freshness prevented a visible final after transcript persistence. */
+  foregroundDeliverySuppression?: {
+    reason: "stale-foreground";
+  };
+  /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
+  finalDeliveryCapture?: object;
+  /** replyToId existed before reply threading could inject an implicit target. */
+  replyToIdExplicit?: boolean;
+  /** Canonical reply policy used by both message-tool dedupe and final delivery routing. */
+  replyDelivery?: ReplyDeliveryContext;
+  /** Route identity that produced replyDelivery, used to reject stale cross-route policy. */
+  replyDeliverySource?: {
+    channel: string;
+    accountId?: string;
+  };
   /**
    * Internal OpenClaw notices generated after a runtime/provider failure are
    * not assistant source replies. Dispatch may deliver them even when normal
@@ -171,6 +256,7 @@ export type ReplyPayloadMetadata = {
 
 const replyPayloadMetadata = new WeakMap<object, ReplyPayloadMetadata>();
 
+/** Adds internal metadata to a reply payload object. */
 export function setReplyPayloadMetadata<T extends object>(
   payload: T,
   metadata: ReplyPayloadMetadata,
@@ -180,25 +266,42 @@ export function setReplyPayloadMetadata<T extends object>(
   return payload;
 }
 
+/** Reads internal metadata attached to a reply payload object. */
 export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata | undefined {
   return replyPayloadMetadata.get(payload);
 }
 
+/** Returns true when a payload is the synthesized warning for a non-terminal tool error. */
 export function isReplyPayloadNonTerminalToolErrorWarning(payload: object): boolean {
   return getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning === true;
 }
 
+/** Copies internal payload metadata when cloning or transforming payload objects. */
 export function copyReplyPayloadMetadata<T extends object>(source: object, payload: T): T {
   const metadata = getReplyPayloadMetadata(source);
   return metadata ? setReplyPayloadMetadata(payload, metadata) : payload;
 }
 
+/** Marks a notice payload as deliverable even when normal source replies are suppressed. */
 export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(payload: T): T {
   return setReplyPayloadMetadata(payload, {
     deliverDespiteSourceReplySuppression: true,
   });
 }
 
+export function markCommandReplyForDelivery(
+  reply: ReplyPayload | ReplyPayload[] | undefined,
+): ReplyPayload | ReplyPayload[] | undefined {
+  if (!reply) {
+    return reply;
+  }
+  if (Array.isArray(reply)) {
+    return reply.map((payload) => markReplyPayloadForSourceSuppressionDelivery(payload));
+  }
+  return markReplyPayloadForSourceSuppressionDelivery(reply);
+}
+
+/** Returns true for internal status/notice payloads, not assistant answer content. */
 export function isReplyPayloadStatusNotice(
   payload: Pick<ReplyPayload, "isCompactionNotice" | "isFallbackNotice" | "isStatusNotice">,
 ): boolean {

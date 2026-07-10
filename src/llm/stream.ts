@@ -1,58 +1,17 @@
-import "./providers/register-builtins.js";
-import { getApiProvider } from "./api-registry.js";
-import type {
-  Api,
-  AssistantMessage,
-  AssistantMessageEventStreamContract,
-  Context,
-  Model,
-  ProviderStreamOptions,
-  SimpleStreamOptions,
-  StreamOptions,
-} from "./types.js";
+// Streams LLM responses through registered providers and normalizes events.
+// This facade owns the process-default AI runtime wiring: it installs the
+// OpenClaw host policy ports and registers built-in providers exactly once,
+// before any caller imports the stream API.
+import { defaultApiRegistry } from "@openclaw/ai/internal/runtime";
+import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
+import "./ai-transport-host.js";
 
-export { getEnvApiKey } from "./env-api-keys.js";
+registerBuiltInApiProviders(defaultApiRegistry);
 
-function resolveApiProvider(api: Api) {
-  const provider = getApiProvider(api);
-  if (!provider) {
-    throw new Error(`No API provider registered for api: ${api}`);
-  }
-  return provider;
-}
-
-export function stream<TApi extends Api>(
-  model: Model<TApi>,
-  context: Context,
-  options?: ProviderStreamOptions,
-): AssistantMessageEventStreamContract {
-  const provider = resolveApiProvider(model.api);
-  return provider.stream(model, context, options as StreamOptions);
-}
-
-export async function complete<TApi extends Api>(
-  model: Model<TApi>,
-  context: Context,
-  options?: ProviderStreamOptions,
-): Promise<AssistantMessage> {
-  const s = stream(model, context, options);
-  return s.result();
-}
-
-export function streamSimple<TApi extends Api>(
-  model: Model<TApi>,
-  context: Context,
-  options?: SimpleStreamOptions,
-): AssistantMessageEventStreamContract {
-  const provider = resolveApiProvider(model.api);
-  return provider.streamSimple(model, context, options);
-}
-
-export async function completeSimple<TApi extends Api>(
-  model: Model<TApi>,
-  context: Context,
-  options?: SimpleStreamOptions,
-): Promise<AssistantMessage> {
-  const s = streamSimple(model, context, options);
-  return s.result();
-}
+export {
+  complete,
+  completeSimple,
+  getEnvApiKey,
+  stream,
+  streamSimple,
+} from "@openclaw/ai/internal/runtime";

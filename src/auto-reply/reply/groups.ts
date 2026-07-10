@@ -1,12 +1,13 @@
+/** Group/direct chat prompt context, activation, and silent-reply helpers. */
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyPolicy } from "../../shared/silent-reply-policy.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { normalizeGroupActivation } from "../group-activation.js";
@@ -143,6 +144,7 @@ function resolveDiscordRequireMentionFallback(params: {
   return undefined;
 }
 
+/** Resolves whether a group/channel turn requires an explicit mention. */
 export async function resolveGroupRequireMention(params: {
   cfg: OpenClawConfig;
   ctx: TemplateContext;
@@ -195,6 +197,7 @@ export async function resolveGroupRequireMention(params: {
   });
 }
 
+/** Converts requireMention into the default prompt activation label. */
 export function defaultGroupActivation(requireMention: boolean): "always" | "mention" {
   return !requireMention ? "always" : "mention";
 }
@@ -218,6 +221,17 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
   return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
 }
 
+function resolveSharedChatNoun(chatType?: string | null): "group chat" | "channel" {
+  return normalizeOptionalLowercaseString(chatType) === "channel" ? "channel" : "group chat";
+}
+
+/**
+ * Builds trusted group/channel delivery guidance.
+ *
+ * Room names, members, and history are rendered separately as untrusted inbound
+ * context. Legacy automatic delivery posts text final replies directly, but
+ * files/images/attachments still need message(action=send).
+ */
 export function buildGroupChatContext(params: {
   sessionCtx: TemplateContext;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -225,27 +239,31 @@ export function buildGroupChatContext(params: {
   silentToken?: string;
 }): string {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
+  const provider = normalizeOptionalLowercaseString(params.sessionCtx.Provider);
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
+  const sharedChatNoun = resolveSharedChatNoun(params.sessionCtx.ChatType);
+  const destinationLabel = sharedChatNoun === "channel" ? "this channel" : "this group chat";
 
   const lines: string[] = [];
-  lines.push(`You are in a ${providerLabel} group chat.`);
+  lines.push(`You are in a ${providerLabel} ${sharedChatNoun}.`);
   if (messageToolOnly) {
     lines.push(
-      "Normal final replies are private and are not automatically sent to this group chat. To post visible output here, use the message tool with action=send; the target defaults to this group chat.",
+      `Normal final replies are private and are not automatically sent to ${destinationLabel}. To post visible output here, use the message tool with action=send; the target defaults to ${destinationLabel}.`,
     );
   } else {
     lines.push(
-      "Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group - just reply normally.",
+      `Your text replies are automatically sent to ${destinationLabel} unless the current-turn context says final replies stay private. For ordinary text, do not use the message tool to send to this same destination unless the current-turn context asks for visible output via message(action=send). Use message(action=send) only when you need to send files, images, or other attachments to this same ${sharedChatNoun === "channel" ? "channel/thread" : "group/topic"}.`,
     );
   }
   lines.push(
     "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.",
   );
+  const tableGuidance = provider === "telegram" ? "" : " Avoid Markdown tables.";
   lines.push(
-    "Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.",
+    `Write like a human.${tableGuidance} Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.`,
   );
   lines.push("If addressed to someone else, stay silent unless invited or correcting key facts.");
-  if (normalizeOptionalLowercaseString(params.sessionCtx.Provider) === "discord") {
+  if (provider === "discord") {
     lines.push("Discord: wrap bare URLs like <https://example.com> to suppress embeds.");
   }
   lines.push(
@@ -255,8 +273,9 @@ export function buildGroupChatContext(params: {
     !messageToolOnly && params.silentToken && params.silentReplyPolicy !== "disallow";
   if (messageToolOnly) {
     lines.push(
-      "If no visible group response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the group.",
+      `If no visible ${sharedChatNoun === "channel" ? "channel" : "group"} response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to ${destinationLabel}.`,
     );
+    lines.push("Be extremely selective: reply only when directly addressed or clearly helpful.");
   }
   if (canUseSilentReply) {
     lines.push(
@@ -276,6 +295,7 @@ export function buildGroupChatContext(params: {
   return lines.join(" ");
 }
 
+/** Builds system prompt context for direct conversations. */
 export function buildDirectChatContext(params: {
   sessionCtx: TemplateContext;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -293,10 +313,13 @@ export function buildDirectChatContext(params: {
     );
     return lines.join(" ");
   }
-  lines.push("Your replies are automatically sent to this conversation.");
+  lines.push(
+    "Your replies are automatically sent to this conversation unless the current-turn context says final replies stay private.",
+  );
   return lines.join(" ");
 }
 
+/** Resolves silent-reply behavior text for group prompt instructions. */
 export function resolveGroupSilentReplyBehavior(params: {
   sessionEntry?: SessionEntry;
   defaultActivation: "always" | "mention";
@@ -316,18 +339,14 @@ export function resolveGroupSilentReplyBehavior(params: {
   };
 }
 
+/** Builds the channel-specific group intro injected into the system prompt. */
 export function buildGroupIntro(params: {
-  cfg: OpenClawConfig;
-  sessionCtx: TemplateContext;
   sessionEntry?: SessionEntry;
   defaultActivation: "always" | "mention";
-  silentToken: string;
-  silentReplyPolicy?: SilentReplyPolicy;
 }): string {
   const { activation } = resolveGroupSilentReplyBehavior(params);
-  const activationLine =
-    activation === "always"
-      ? "Activation: always-on (you receive every group message)."
-      : "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included).";
-  return `${activationLine} Address the specific sender noted in the message context.`;
+  if (activation === "always") {
+    return "Activation: always-on (you receive every group message). You see every message; most need no response. When you do reply, address the specific sender noted in the message context.";
+  }
+  return "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.";
 }

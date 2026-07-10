@@ -1,3 +1,4 @@
+// OC Path tests cover security and limits plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   MAX_PATH_LENGTH,
@@ -12,6 +13,16 @@ import {
 import { parseJsonc } from "../../jsonc/parse.js";
 import { parseJsonl } from "../../jsonl/parse.js";
 
+function expectUtf16SafeLimitError(run: () => unknown, expectedInput: string): void {
+  try {
+    run();
+    expect.fail("expected an OC_PATH_TOO_LONG error");
+  } catch (err) {
+    expect(err).toBeInstanceOf(OcPathError);
+    expect((err as OcPathError).code).toBe("OC_PATH_TOO_LONG");
+    expect((err as OcPathError).input).toBe(expectedInput);
+  }
+}
 
 describe("encoding edges", () => {
   it("strips leading UTF-8 BOM from path string", () => {
@@ -36,7 +47,6 @@ describe("encoding edges", () => {
     expect(() => parseOcPath("oc://X.md/items/[k=a\x00b]")).toThrow(OcPathError);
   });
 });
-
 
 describe("file-slot containment", () => {
   it("rejects absolute POSIX file slot", () => {
@@ -73,10 +83,26 @@ describe("file-slot containment", () => {
   });
 });
 
-
 describe("path-string and traversal caps", () => {
   it("parseOcPath rejects strings longer than MAX_PATH_LENGTH", () => {
     expect(() => parseOcPath("oc://X/" + "a".repeat(MAX_PATH_LENGTH))).toThrow(/exceeds .* bytes/);
+  });
+
+  it("keeps overlong parse input UTF-16 safe", () => {
+    const prefix = `oc://${"a".repeat(74)}`;
+    expectUtf16SafeLimitError(
+      () => parseOcPath(`${prefix}😀${"b".repeat(MAX_PATH_LENGTH)}`),
+      `${prefix}…`,
+    );
+  });
+
+  it("keeps post-NFC overlong parse input UTF-16 safe", () => {
+    const prefix = `oc://${"a".repeat(74)}`;
+    const input = `${prefix}😀${"\u0344".repeat(MAX_PATH_LENGTH - prefix.length - 2)}`;
+    expect(input).toHaveLength(MAX_PATH_LENGTH);
+    expect(input.normalize("NFC").length).toBeGreaterThan(MAX_PATH_LENGTH);
+
+    expectUtf16SafeLimitError(() => parseOcPath(input), `${prefix}…`);
   });
 
   it("parseOcPath accepts a path right at the cap", () => {
@@ -87,6 +113,15 @@ describe("path-string and traversal caps", () => {
   it("formatOcPath enforces the same cap on output", () => {
     expect(() => formatOcPath({ file: "X", section: "a".repeat(MAX_PATH_LENGTH) })).toThrow(
       /Formatted oc:\/\/ exceeds/,
+    );
+  });
+
+  it("keeps overlong formatted paths UTF-16 safe", () => {
+    const sectionPrefix = "a".repeat(72);
+    expectUtf16SafeLimitError(
+      () =>
+        formatOcPath({ file: "X", section: `${sectionPrefix}😀${"b".repeat(MAX_PATH_LENGTH)}` }),
+      `oc://X/${sectionPrefix}…`,
     );
   });
 
@@ -123,7 +158,6 @@ describe("path-string and traversal caps", () => {
   });
 });
 
-
 describe("sentinel literal at format boundary", () => {
   it("formatOcPath rejects a struct carrying the redaction sentinel", () => {
     expect(() => formatOcPath({ file: "AGENTS.md", section: "__OPENCLAW_REDACTED__" })).toThrow(
@@ -131,7 +165,6 @@ describe("sentinel literal at format boundary", () => {
     );
   });
 });
-
 
 describe("numeric segments dispatch by node kind", () => {
   it("negative numeric key on object resolves as literal key (openclaw#59934)", () => {
@@ -153,7 +186,6 @@ describe("numeric segments dispatch by node kind", () => {
   });
 });
 
-
 describe("setOcPath value coercion is locale-independent and exact-match", () => {
   it("number coercion accepts `1.5`, refuses `1,5`", () => {
     const ast = parseJsonc('{"x":1.0}').ast;
@@ -173,7 +205,6 @@ describe("setOcPath value coercion is locale-independent and exact-match", () =>
     expect(setOcPath(ast, parseOcPath("oc://X/x"), "yes").ok).toBe(false);
   });
 });
-
 
 describe("predicate-value injection is contained", () => {
   it("regex metacharacters in predicate value match literally, not as regex", () => {
@@ -212,7 +243,6 @@ describe("predicate-value injection is contained", () => {
     expect(matches).toHaveLength(1);
   });
 });
-
 
 describe("structural rejection", () => {
   it("rejects mismatched brackets and braces", () => {

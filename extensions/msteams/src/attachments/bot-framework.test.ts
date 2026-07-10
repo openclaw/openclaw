@@ -1,3 +1,4 @@
+// Msteams tests cover bot framework plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setMSTeamsRuntime } from "../runtime.js";
 import {
@@ -81,7 +82,7 @@ function installRuntime(): MockRuntime {
 }
 
 function createMockFetch(entries: Array<{ match: RegExp; response: Response }>): typeof fetch {
-  return (async (input: RequestInfo | URL) => {
+  return vi.fn(async (input: RequestInfo | URL) => {
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const entry = entries.find((e) => e.match.test(url));
@@ -175,6 +176,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       tokenProvider: buildTokenProvider(),
       maxBytes: 10_000_000,
       fetchFn,
+      fetchFnSupportsDispatcher: true,
       resolveFn: resolvePublicHost,
     });
 
@@ -182,6 +184,49 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
     expect(media?.contentType).toBe(runtime.savedContentType);
     expect(runtime.saveCalls).toHaveLength(1);
     expect(runtime.saveCalls[0].buffer.toString("utf-8")).toBe("PDFBYTES");
+  });
+
+  it("skips malformed attachment view content-length before saving media", async () => {
+    const info = {
+      name: "report.pdf",
+      type: "application/pdf",
+      views: [{ viewId: "original", size: 3 }],
+    };
+    const warn = vi.fn();
+    const fetchFn = createMockFetch([
+      {
+        match: /\/v3\/attachments\/att-1$/,
+        response: new Response(JSON.stringify(info), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      },
+      {
+        match: /\/v3\/attachments\/att-1\/views\/original$/,
+        response: new Response("PDFBYTES", {
+          status: 200,
+          headers: { "content-length": "0x3" },
+        }),
+      },
+    ]);
+
+    const media = await downloadMSTeamsBotFrameworkAttachment({
+      serviceUrl: "https://smba.trafficmanager.net/amer/",
+      attachmentId: "att-1",
+      tokenProvider: buildTokenProvider(),
+      maxBytes: 10_000_000,
+      fetchFn,
+      fetchFnSupportsDispatcher: true,
+      resolveFn: resolvePublicHost,
+      logger: { warn },
+    });
+
+    expect(media).toBeUndefined();
+    expect(runtime.saveCalls).toHaveLength(0);
+    expect(warn).toHaveBeenCalledWith(
+      "msteams botFramework attachmentView invalid content-length",
+      { error: "invalid content-length header: 0x3" },
+    );
   });
 
   it("returns undefined when attachment info fetch fails", async () => {
@@ -198,11 +243,74 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       tokenProvider: buildTokenProvider(),
       maxBytes: 10_000_000,
       fetchFn,
+      fetchFnSupportsDispatcher: true,
       resolveFn: resolvePublicHost,
     });
 
     expect(media).toBeUndefined();
     expect(runtime.saveCalls).toHaveLength(0);
+  });
+
+  it("does not send Bot Framework service tokens to non-auth-allowlisted media hosts", async () => {
+    const seenAuth: Array<string | null> = [];
+    const fetchFn: typeof fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      seenAuth.push(new Headers(init?.headers).get("authorization"));
+      return new Response("unauthorized", { status: 401 });
+    }) as typeof fetch;
+
+    const media = await downloadMSTeamsBotFrameworkAttachment({
+      serviceUrl: "https://attacker.trafficmanager.net",
+      attachmentId: "att-1",
+      tokenProvider: buildTokenProvider(),
+      maxBytes: 10_000_000,
+      fetchFn,
+      fetchFnSupportsDispatcher: true,
+      resolveFn: resolvePublicHost,
+    });
+
+    expect(media).toBeUndefined();
+    expect(seenAuth).toEqual([null]);
+    expect(runtime.saveCalls).toHaveLength(0);
+  });
+
+  it("sends Bot Framework service tokens to auth-allowlisted service hosts", async () => {
+    const seenAuth: Array<string | null> = [];
+    const fileBytes = Buffer.from("BFBYTES", "utf-8");
+    const fetchFn: typeof fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      seenAuth.push(new Headers(init?.headers).get("authorization"));
+      if (url.endsWith("/v3/attachments/att-1")) {
+        return new Response(
+          JSON.stringify({
+            name: "doc.pdf",
+            type: "application/pdf",
+            views: [{ viewId: "original", size: fileBytes.byteLength }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.endsWith("/v3/attachments/att-1/views/original")) {
+        return new Response(fileBytes, {
+          status: 200,
+          headers: { "content-length": String(fileBytes.byteLength) },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    const media = await downloadMSTeamsBotFrameworkAttachment({
+      serviceUrl: "https://smba.trafficmanager.net/amer",
+      attachmentId: "att-1",
+      tokenProvider: buildTokenProvider(),
+      maxBytes: 10_000_000,
+      fetchFn,
+      fetchFnSupportsDispatcher: true,
+      resolveFn: resolvePublicHost,
+    });
+
+    expect(media?.path).toBe(runtime.savePath);
+    expect(seenAuth).toEqual(["Bearer bf-token", "Bearer bf-token"]);
   });
 
   it("skips when attachment view size exceeds maxBytes", async () => {
@@ -265,15 +373,8 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
-  describe("Node 24+ dispatcher bypass (issue #63396)", () => {
-    it("drives the caller's fetchFn directly without the pinned undici dispatcher", async () => {
-      // Regression: before the fix, fetchBotFrameworkAttachment* routed
-      // through `fetchWithSsrFGuard`, which installs a `createPinnedDispatcher`
-      // incompatible with Node 24+'s built-in undici v7. Downloads failed with
-      // "invalid onRequestStart method". The fix switches to
-      // `safeFetchWithPolicy`, which calls the supplied `fetchFn` directly
-      // and never attaches a pinned dispatcher. Verify the caller's `fetchFn`
-      // is invoked (no dispatcher in init).
+  describe("guarded attachment fetches", () => {
+    it("drives dispatcher-aware caller fetchFn hooks through a pinned dispatcher", async () => {
       const fileBytes = Buffer.from("BFBYTES", "utf-8");
       const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
       const fetchFn: typeof fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -305,20 +406,20 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         tokenProvider: buildTokenProvider(),
         maxBytes: 10_000_000,
         fetchFn,
+        fetchFnSupportsDispatcher: true,
         resolveFn: resolvePublicHost,
       });
 
       expect(media?.path).toBe(runtime.savePath);
       expect(media?.contentType).toBe(runtime.savedContentType);
       // Both the attachment info call and the view call should be observed,
-      // confirming the direct fetch path was taken (no dispatcher interception).
+      // confirming the guarded fetch path still preserves caller fetch hooks.
       expect(fetchCalls).toHaveLength(2);
       expect(fetchCalls[0].url.endsWith("/v3/attachments/att-1")).toBe(true);
       expect(fetchCalls[1].url.endsWith("/v3/attachments/att-1/views/original")).toBe(true);
-      // Verify no pinned undici dispatcher is attached on either request.
       for (const call of fetchCalls) {
         const init = call.init as RequestInit & { dispatcher?: unknown };
-        expect(init?.dispatcher).toBeUndefined();
+        expect(init?.dispatcher).toBeDefined();
       }
     });
 
@@ -336,6 +437,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         tokenProvider: buildTokenProvider(),
         maxBytes: 10_000_000,
         fetchFn,
+        fetchFnSupportsDispatcher: true,
         resolveFn: resolvePublicHost,
         logger,
       });
@@ -373,6 +475,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         tokenProvider: buildTokenProvider(),
         maxBytes: 10_000_000,
         fetchFn,
+        fetchFnSupportsDispatcher: true,
         resolveFn: resolvePublicHost,
         logger,
       });
@@ -410,6 +513,61 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         "msteams botFramework attachmentInfo non-ok",
         { status: 500 },
       ]);
+    });
+
+    it("bounds an unbounded attachmentInfo JSON body and cancels the stream", async () => {
+      const state = { canceled: false, enqueued: 0 };
+      const chunkBytes = 1024 * 1024;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (state.enqueued >= 64) {
+            controller.close();
+            return;
+          }
+          state.enqueued += 1;
+          controller.enqueue(new Uint8Array(chunkBytes).fill(0x61));
+        },
+        cancel() {
+          state.canceled = true;
+        },
+      });
+      const jsonSpy = vi.spyOn(Response.prototype, "json").mockImplementation(async () => {
+        throw new Error("raw response.json() should not be used");
+      });
+      const fetchFn: typeof fetch = vi.fn(async () => {
+        return new Response(stream, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      });
+
+      try {
+        const warn = vi.fn();
+        const media = await downloadMSTeamsBotFrameworkAttachment({
+          serviceUrl: "https://smba.trafficmanager.net/amer",
+          attachmentId: "att-1",
+          tokenProvider: buildTokenProvider(),
+          maxBytes: 10_000_000,
+          fetchFn,
+          fetchFnSupportsDispatcher: true,
+          resolveFn: resolvePublicHost,
+          logger: { warn },
+        });
+
+        expect(media).toBeUndefined();
+        expect(jsonSpy).not.toHaveBeenCalled();
+        // Enforced well before the 64 MiB test ceiling; an unbounded reader would keep pulling.
+        expect(state.enqueued).toBeLessThan(32);
+        expect(state.canceled).toBe(true);
+        expect(warn).toHaveBeenCalledWith(
+          "msteams botFramework attachmentInfo parse failed",
+          expect.objectContaining({
+            error: expect.stringMatching(/JSON response exceeds 16777216 bytes/),
+          }),
+        );
+      } finally {
+        jsonSpy.mockRestore();
+      }
     });
   });
 });

@@ -1,8 +1,11 @@
+// Produces task-flow registry audit summaries for diagnostics and maintenance.
 import { listTasksForFlowId } from "./runtime-internal.js";
+import { isTaskFlowCancellationPending } from "./task-cancellation-state.js";
 import { getTaskFlowRegistryRestoreFailure, listTaskFlowRecords } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
+/** Severity used by task-flow registry audit findings. */
 export type TaskFlowAuditSeverity = "warn" | "error";
 export type TaskFlowAuditCode =
   | "restore_failed"
@@ -29,7 +32,7 @@ export type TaskFlowAuditSummary = {
   byCode: Record<TaskFlowAuditCode, number>;
 };
 
-export type TaskFlowAuditOptions = {
+type TaskFlowAuditOptions = {
   now?: number;
   flows?: TaskFlowRecord[];
   staleRunningMs?: number;
@@ -118,7 +121,7 @@ function findTimestampInconsistency(flow: TaskFlowRecord): TaskFlowAuditFinding 
   return null;
 }
 
-export function createEmptyTaskFlowAuditSummary(): TaskFlowAuditSummary {
+function createEmptyTaskFlowAuditSummary(): TaskFlowAuditSummary {
   return {
     total: 0,
     warnings: 0,
@@ -162,9 +165,7 @@ export function listTaskFlowAuditFindings(
     const referenceAt = getReferenceAt(flow);
     const ageMs = Math.max(0, now - referenceAt);
     const linkedTasks = getLinkedTasks(flow.flowId);
-    const activeTasks = linkedTasks.filter(
-      (task) => task.status === "queued" || task.status === "running",
-    );
+    const activeTasks = linkedTasks.filter((task) => isTaskFlowCancellationPending(task));
 
     if (flow.status === "running" && ageMs >= staleRunningMs) {
       findings.push(

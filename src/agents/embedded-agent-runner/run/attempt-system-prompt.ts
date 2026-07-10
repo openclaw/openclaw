@@ -1,10 +1,9 @@
+/**
+ * Builds the system prompt inputs for a single embedded-agent attempt.
+ */
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderTransformSystemPromptContext } from "../../../plugins/types.js";
-import {
-  appendAgentBootstrapSystemPromptSupplement,
-  appendModelIdentitySystemPrompt,
-} from "../../system-prompt.js";
-import { buildEmbeddedSystemPrompt, createSystemPromptOverride } from "../system-prompt.js";
+import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
 
 type EmbeddedSystemPromptParams = Parameters<typeof buildEmbeddedSystemPrompt>[0];
 type ProviderSystemPromptTransform = (params: {
@@ -14,9 +13,8 @@ type ProviderSystemPromptTransform = (params: {
   context: ProviderTransformSystemPromptContext;
 }) => string;
 
-export type BuildAttemptSystemPromptParams = {
+type BuildAttemptSystemPromptParams = {
   isRawModelRun: boolean;
-  systemPromptOverrideText?: string;
   embeddedSystemPrompt: EmbeddedSystemPromptParams;
   transformProviderSystemPrompt: ProviderSystemPromptTransform;
   providerTransform: {
@@ -27,45 +25,21 @@ export type BuildAttemptSystemPromptParams = {
   };
 };
 
-export type AttemptSystemPrompt = {
+/** System prompt pair used by an attempt: untransformed base plus provider-ready prompt. */
+type AttemptSystemPrompt = {
   baseSystemPrompt: string;
   systemPrompt: string;
-  systemPromptOverride: (defaultPrompt?: string) => string;
 };
 
-function appendRuntimeExtraSystemPrompt(params: {
-  systemPrompt: string;
-  extraSystemPrompt?: string;
-  promptMode?: EmbeddedSystemPromptParams["promptMode"];
-}): string {
-  const extraSystemPrompt = params.extraSystemPrompt?.trim();
-  if (!extraSystemPrompt || params.promptMode === "none") {
-    return params.systemPrompt;
-  }
-  const contextHeader =
-    params.promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
-  return `${params.systemPrompt.trimEnd()}\n\n${contextHeader}\n${extraSystemPrompt}\n`;
-}
-
+/**
+ * Builds the embedded system prompt and applies provider-specific transforms
+ * unless this is a raw model run. Raw runs still keep `baseSystemPrompt` for
+ * diagnostics/cache boundaries, but submit an empty provider prompt.
+ */
 export function buildAttemptSystemPrompt(
   params: BuildAttemptSystemPromptParams,
 ): AttemptSystemPrompt {
-  const baseSystemPrompt = params.systemPromptOverrideText
-    ? appendModelIdentitySystemPrompt({
-        systemPrompt: appendRuntimeExtraSystemPrompt({
-          systemPrompt: appendAgentBootstrapSystemPromptSupplement({
-            systemPrompt: params.systemPromptOverrideText,
-            bootstrapMode: params.embeddedSystemPrompt.bootstrapMode,
-            bootstrapTruncationNotice: params.embeddedSystemPrompt.bootstrapTruncationNotice,
-            contextFiles: params.embeddedSystemPrompt.contextFiles,
-          }),
-          extraSystemPrompt: params.embeddedSystemPrompt.extraSystemPrompt,
-          promptMode: params.embeddedSystemPrompt.promptMode,
-        }),
-        model: params.embeddedSystemPrompt.runtimeInfo.model,
-      })
-    : buildEmbeddedSystemPrompt(params.embeddedSystemPrompt);
-
+  const baseSystemPrompt = buildEmbeddedSystemPrompt(params.embeddedSystemPrompt);
   const systemPrompt = params.isRawModelRun
     ? ""
     : params.transformProviderSystemPrompt({
@@ -81,6 +55,5 @@ export function buildAttemptSystemPrompt(
   return {
     baseSystemPrompt,
     systemPrompt,
-    systemPromptOverride: createSystemPromptOverride(systemPrompt),
   };
 }

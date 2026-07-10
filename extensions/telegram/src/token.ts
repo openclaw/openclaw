@@ -1,14 +1,20 @@
+// Telegram plugin module implements token behavior.
 import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-core";
 import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "openclaw/plugin-sdk/routing";
 import {
   normalizeSecretInputString,
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+import { resolveDefaultTelegramAccountId } from "./account-selection.js";
 
 type TelegramTokenSource = "env" | "tokenFile" | "config" | "none";
 
@@ -103,7 +109,9 @@ export function resolveTelegramToken(
   cfg?: OpenClawConfig,
   opts: ResolveTelegramTokenOpts = {},
 ): TelegramTokenResolution {
-  const accountId = normalizeAccountId(opts.accountId);
+  const requestedAccountId = normalizeOptionalAccountId(opts.accountId);
+  const accountId =
+    requestedAccountId ?? (cfg ? resolveDefaultTelegramAccountId(cfg) : DEFAULT_ACCOUNT_ID);
   const telegramCfg = cfg?.channels?.telegram;
 
   // Account IDs are normalized for routing (e.g. lowercased). Config keys may not
@@ -132,7 +140,7 @@ export function resolveTelegramToken(
   if (accountId !== DEFAULT_ACCOUNT_ID && !accountCfg) {
     const accounts = telegramCfg?.accounts;
     const hasConfiguredAccounts =
-      !!accounts &&
+      Boolean(accounts) &&
       typeof accounts === "object" &&
       !Array.isArray(accounts) &&
       Object.keys(accounts).length > 0;

@@ -1,3 +1,4 @@
+// Browser tests cover agent.snapshot.local managed plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 import type { BrowserRequest } from "./types.js";
@@ -71,6 +72,9 @@ vi.mock("../../media/store.js", () => ({
 }));
 
 vi.mock("./agent.shared.js", () => ({
+  browserNavigationPolicyForProfile: vi.fn(() => ({
+    ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+  })),
   getPwAiModule: vi.fn(async () => null),
   handleRouteError: vi.fn(
     (
@@ -97,6 +101,7 @@ function getSnapshotGetHandler() {
   registerBrowserAgentSnapshotRoutes(app, {
     state: () => ({
       resolved: {
+        actionTimeoutMs: 60_000,
         extraArgs: [],
         ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
       },
@@ -124,6 +129,11 @@ describe("local-managed browser snapshot routes", () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.body).toEqual({ error: "browser navigation blocked by policy" });
+    expect(routeState.profileCtx.ensureTabAvailable).toHaveBeenCalledWith(undefined, {
+      allowPlaywrightFallback: false,
+      signal: undefined,
+      timeoutMs: undefined,
+    });
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
       url: "http://127.0.0.1:8080/admin",
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },

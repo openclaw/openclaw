@@ -1,4 +1,14 @@
+/**
+ * sessions_list built-in tool.
+ *
+ * Lists visible sessions and optionally hydrates titles, last messages, and transcript-derived metadata.
+ */
 import path from "node:path";
+import {
+  normalizeFastMode,
+  normalizeOptionalLowercaseString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
@@ -9,19 +19,28 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
-import {
-  deriveSessionTitle,
-  readSessionTitleFieldsFromTranscriptAsync,
-} from "../../gateway/session-utils.js";
+import { readSessionTitleFieldsFromTranscriptAsync } from "../../gateway/session-transcript-readers.js";
+import { deriveSessionTitle } from "../../gateway/session-utils.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
+import { normalizeFastModeAutoOnSeconds, normalizeFastModeSource } from "../../shared/fast-mode.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
+import {
+  optionalNonNegativeIntegerSchema,
+  optionalPositiveIntegerSchema,
+} from "../schema/typebox.js";
 import {
   describeSessionsListTool,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
+import { stripToolMessages } from "./chat-history-text.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringArrayParam, readStringParam } from "./common.js";
+import {
+  jsonResult,
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+  readStringArrayParam,
+  readStringParam,
+} from "./common.js";
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityRowChecker,
@@ -33,17 +52,17 @@ import {
   resolveSandboxedSessionToolContext,
   type SessionListRow,
   type SessionRunStatus,
-  stripToolMessages,
 } from "./sessions-helpers.js";
 
 const SessionsListToolSchema = Type.Object({
   kinds: Type.Optional(Type.Array(Type.String())),
-  limit: Type.Optional(Type.Number({ minimum: 1 })),
-  activeMinutes: Type.Optional(Type.Number({ minimum: 1 })),
-  messageLimit: Type.Optional(Type.Number({ minimum: 0 })),
+  limit: optionalPositiveIntegerSchema(),
+  activeMinutes: optionalPositiveIntegerSchema(),
+  messageLimit: optionalNonNegativeIntegerSchema(),
   label: Type.Optional(Type.String({ minLength: 1 })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   search: Type.Optional(Type.String({ minLength: 1 })),
+  archived: Type.Optional(Type.Boolean()),
   includeDerivedTitles: Type.Optional(Type.Boolean()),
   includeLastMessage: Type.Optional(Type.Boolean()),
 });
@@ -62,6 +81,7 @@ function readSessionRunStatus(value: unknown): SessionRunStatus | undefined {
     : undefined;
 }
 
+/** Creates the sessions-list tool with gateway-backed listing and local transcript enrichment. */
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
@@ -97,22 +117,14 @@ export function createSessionsListTool(opts?: {
       );
       const allowedKinds = allowedKindsList.length ? new Set(allowedKindsList) : undefined;
 
-      const limit =
-        typeof params.limit === "number" && Number.isFinite(params.limit)
-          ? Math.max(1, Math.floor(params.limit))
-          : undefined;
-      const activeMinutes =
-        typeof params.activeMinutes === "number" && Number.isFinite(params.activeMinutes)
-          ? Math.max(1, Math.floor(params.activeMinutes))
-          : undefined;
-      const messageLimitRaw =
-        typeof params.messageLimit === "number" && Number.isFinite(params.messageLimit)
-          ? Math.max(0, Math.floor(params.messageLimit))
-          : 0;
+      const limit = readPositiveIntegerParam(params, "limit");
+      const activeMinutes = readPositiveIntegerParam(params, "activeMinutes");
+      const messageLimitRaw = readNonNegativeIntegerParam(params, "messageLimit") ?? 0;
       const messageLimit = Math.min(messageLimitRaw, 20);
       const label = readStringParam(params, "label");
       const agentId = readStringParam(params, "agentId");
       const search = readStringParam(params, "search");
+      const archived = params.archived === true;
       const includeDerivedTitles = params.includeDerivedTitles === true;
       const includeLastMessage = params.includeLastMessage === true;
       const gatewayCall = opts?.callGateway ?? callGateway;
@@ -127,6 +139,7 @@ export function createSessionsListTool(opts?: {
           label,
           agentId,
           search,
+          archived,
           includeDerivedTitles: false,
           includeLastMessage: false,
           includeGlobal: !restrictToSpawned,
@@ -148,8 +161,9 @@ export function createSessionsListTool(opts?: {
       const titleTargets: Array<{
         row: SessionListRow;
         titleEntry: SessionEntry;
+        sessionEntry: { sessionFile?: string; sessionId: string };
         sessionId: string;
-        sessionFile?: string;
+        sessionKey: string;
         agentId: string;
       }> = [];
 
@@ -176,6 +190,8 @@ export function createSessionsListTool(opts?: {
           continue;
         }
 
+        // Gateway listings include pseudo/global rows for UI callers. The tool only exposes real
+        // sessions and the explicit global session when the requester is already global.
         if (key === "unknown") {
           continue;
         }
@@ -253,6 +269,9 @@ export function createSessionsListTool(opts?: {
           }
         }
 
+        const effectiveFastMode = normalizeFastMode(entry.effectiveFastMode);
+        const effectiveFastModeSource = normalizeFastModeSource(entry.effectiveFastModeSource);
+        const fastAutoOnSeconds = normalizeFastModeAutoOnSeconds(entry.fastAutoOnSeconds);
         const row: SessionListRow = {
           key: displayKey,
           agentId: resolvedAgentId,
@@ -296,6 +315,10 @@ export function createSessionsListTool(opts?: {
                 }
               : undefined,
           updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : undefined,
+          archived: entry.archived === true,
+          archivedAt: typeof entry.archivedAt === "number" ? entry.archivedAt : undefined,
+          pinned: entry.pinned === true,
+          pinnedAt: typeof entry.pinnedAt === "number" ? entry.pinnedAt : undefined,
           sessionId,
           model: readStringValue(entry.model),
           contextTokens: typeof entry.contextTokens === "number" ? entry.contextTokens : undefined,
@@ -318,7 +341,10 @@ export function createSessionsListTool(opts?: {
                 )
             : undefined,
           thinkingLevel: readStringValue(entry.thinkingLevel),
-          fastMode: typeof entry.fastMode === "boolean" ? entry.fastMode : undefined,
+          fastMode: normalizeFastMode(entry.fastMode),
+          ...(effectiveFastMode !== undefined ? { effectiveFastMode } : {}),
+          ...(effectiveFastModeSource !== undefined ? { effectiveFastModeSource } : {}),
+          ...(fastAutoOnSeconds !== undefined ? { fastAutoOnSeconds } : {}),
           verboseLevel: readStringValue(entry.verboseLevel),
           reasoningLevel: readStringValue(entry.reasoningLevel),
           elevatedLevel: readStringValue(entry.elevatedLevel),
@@ -346,8 +372,16 @@ export function createSessionsListTool(opts?: {
               subject: readStringValue((entry as { subject?: unknown }).subject),
               updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
             },
+            sessionEntry: {
+              sessionId,
+              ...(sessionFile ? { sessionFile } : {}),
+            },
             sessionId,
-            ...(sessionFile ? { sessionFile } : {}),
+            sessionKey: resolveInternalSessionKey({
+              key,
+              alias,
+              mainKey,
+            }),
             agentId: resolvedAgentId,
           });
         }
@@ -373,12 +407,13 @@ export function createSessionsListTool(opts?: {
               return;
             }
             const target = titleTargets[next];
-            const fields = await readSessionTitleFieldsFromTranscriptAsync(
-              target.sessionId,
+            const fields = await readSessionTitleFieldsFromTranscriptAsync({
+              agentId: target.agentId,
+              sessionEntry: target.sessionEntry,
+              sessionId: target.sessionId,
+              sessionKey: target.sessionKey,
               storePath,
-              target.sessionFile,
-              target.agentId,
-            );
+            });
             if (includeDerivedTitles && !target.row.derivedTitle) {
               target.row.derivedTitle = deriveSessionTitle(
                 target.titleEntry,

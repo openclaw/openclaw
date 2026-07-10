@@ -1,3 +1,6 @@
+/**
+ * Knip configuration for OpenClaw root and bundled plugin dependency hygiene.
+ */
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
 
 function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""): string {
@@ -10,6 +13,7 @@ const rootEntries = [
   "src/entry.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
+  "src/audit/audit-event-writer.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
   "src/infra/kysely-node-sqlite.ts!",
   "src/infra/warning-filter.ts!",
@@ -27,7 +31,7 @@ const bundledPluginEntries = [
   "setup-entry.ts!",
   "{api,contract-api,helper-api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,setup-api}.ts!",
   "subagent-hooks-api.ts!",
-  "src/{api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,doctor-contract,setup-surface}.ts!",
+  "src/{api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,doctor-contract,setup-surface,mcp-serve}.ts!",
   "src/subagent-hooks-api.ts!",
 ] as const;
 
@@ -50,7 +54,7 @@ const bundledPluginIgnoredRuntimeDependencies = [
   "lit",
   "linkedom",
   "openclaw",
-  "pdfjs-dist",
+  "clawpdf",
 ] as const;
 
 const rootBundledPluginRuntimeDependencies = [
@@ -70,7 +74,7 @@ const rootBundledPluginRuntimeDependencies = [
   "minimatch",
   "node-edge-tts",
   "openshell",
-  "pdfjs-dist",
+  "clawpdf",
   "tokenjuice",
 ] as const;
 
@@ -125,18 +129,9 @@ const config = {
     "**/*.test-utils.ts",
     "test/helpers/live-image-probe.ts",
     "src/secrets/credential-matrix.ts",
-    "src/agents/claude-cli-runner.ts",
-    "src/agents/agent-auth-json.ts",
-    "src/agents/tool-policy.conformance.ts",
-    "src/auto-reply/reply/audio-tags.ts",
-    "src/gateway/live-tool-probe-utils.ts",
-    "src/gateway/server.auth.shared.ts",
     "src/shared/text/assistant-visible-text.ts",
     bundledPluginFile("telegram", "src/bot/reply-threading.ts"),
     bundledPluginFile("telegram", "src/draft-chunking.ts"),
-    bundledPluginFile("msteams", "src/conversation-store-memory.ts"),
-    bundledPluginFile("msteams", "src/polls-store-memory.ts"),
-    bundledPluginFile("voice-call", "src/providers/index.ts"),
   ],
   ignore: ["packages/*/dist/**"],
   workspaces: {
@@ -144,7 +139,13 @@ const config = {
       entry: rootEntries,
       ignoreDependencies: [
         "@openclaw/*",
+        // Docker packaging stages @openclaw/ai without nested dependencies after
+        // verifying the root owns its exact runtime dependency versions.
+        "@mistralai/mistralai",
+        "cross-spawn",
+        "file-type",
         "playwright-core",
+        "partial-json",
         "sqlite-vec",
         "tree-sitter-bash",
         ...rootBundledPluginRuntimeDependencies,
@@ -157,8 +158,29 @@ const config = {
       ],
     },
     ui: {
-      entry: ["index.html!", "src/main.ts!", "vite.config.ts!", "vitest*.ts!"],
+      entry: [
+        "index.html!",
+        "src/main.ts!",
+        "src/lib/browser-redact.ts!",
+        "vite.config.ts!",
+        "vitest*.ts!",
+      ],
+      // Workboard lazy-loads Three.js at runtime; Knip's dependency pass misses it.
+      ignoreDependencies: ["three"],
       project: ["src/**/*.{ts,tsx}!"],
+    },
+    "packages/ai": {
+      // Mirror the published export map so knip sees every dist entry point.
+      entry: [
+        "src/index.ts!",
+        "src/providers.ts!",
+        "src/types.ts!",
+        "src/validation.ts!",
+        "src/utils/diagnostics.ts!",
+        "src/utils/event-stream.ts!",
+        "src/internal/*.ts!",
+      ],
+      project: ["src/**/*.ts!"],
     },
     "packages/sdk": {
       entry: ["src/index.ts!"],
@@ -168,9 +190,52 @@ const config = {
       entry: ["src/index.ts!", "src/*.ts!", "src/harness/**/*.ts!"],
       project: ["src/**/*.ts!"],
     },
+    "packages/gateway-client": {
+      entry: ["src/index.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/gateway-protocol": {
+      entry: ["src/index.ts!", "src/schema.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/net-policy": {
+      entry: ["src/index.ts!", "src/ip.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/markdown-core": {
+      entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/media-core": {
+      entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/acp-core": {
+      entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/terminal-core": {
+      entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/speech-core": {
+      entry: ["api.ts!", "runtime-api.ts!", "speaker.ts!", "voice-models.ts!"],
+      project: ["**/*.ts!"],
+      ignoreDependencies: ["openclaw"],
+    },
     "packages/*": {
       entry: ["index.js!", "scripts/postinstall.js!"],
       project: ["index.js!", "scripts/**/*.js!"],
+    },
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/llama-cpp`]: {
+      entry: bundledPluginEntries,
+      project: ["index.ts!", "src/**/*.{js,mjs,ts}!"],
+      ignoreDependencies: [
+        // The provider resolves node-llama-cpp from its own package at runtime
+        // so local embeddings use the plugin-owned native dependency.
+        "node-llama-cpp",
+        ...bundledPluginIgnoredRuntimeDependencies,
+      ],
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/*`]: {
       // Bundled plugins often load their public surface via string specifiers in

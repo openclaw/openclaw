@@ -1,3 +1,5 @@
+// Gateway TLS runtime loads configured certificates or generates a local
+// self-signed pair, returning server-ready options plus client fingerprint.
 import { execFile } from "node:child_process";
 import { X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
@@ -12,6 +14,8 @@ import { normalizeFingerprint } from "./fingerprint.js";
 
 const execFileAsync = promisify(execFile);
 
+// Gateway TLS runtime carries loaded cert material plus the normalized SHA-256
+// fingerprint advertised to clients.
 export type GatewayTlsRuntime = {
   enabled: boolean;
   required: boolean;
@@ -40,6 +44,8 @@ async function generateSelfSignedCert(params: {
       "openssl not found in trusted system directories. Install it in an OS-managed location.",
     );
   }
+  // Use execFile with a trusted system binary; certificate paths are arguments,
+  // not shell text.
   await execFileAsync(opensslBin, [
     "req",
     "-x509",
@@ -63,6 +69,7 @@ async function generateSelfSignedCert(params: {
   );
 }
 
+/** Load or generate gateway TLS material and return server-ready TLS options. */
 export async function loadGatewayTlsRuntime(
   cfg: GatewayTlsConfig | undefined,
   log?: { info?: (msg: string) => void; warn?: (msg: string) => void },
@@ -73,8 +80,20 @@ export async function loadGatewayTlsRuntime(
 
   const autoGenerate = cfg.autoGenerate !== false;
   const baseDir = path.join(CONFIG_DIR, "gateway", "tls");
-  const certPath = resolveUserPath(cfg.certPath ?? path.join(baseDir, "gateway-cert.pem"));
-  const keyPath = resolveUserPath(cfg.keyPath ?? path.join(baseDir, "gateway-key.pem"));
+  // Only blank/whitespace values fall back to the default. Any non-empty path is
+  // passed through verbatim so resolveUserPath owns all normalization (it trims
+  // and expands ~); trimming here would duplicate it and silently rewrite paths
+  // that contain leading/trailing spaces.
+  const certPath = resolveUserPath(
+    typeof cfg.certPath === "string" && cfg.certPath.trim()
+      ? cfg.certPath
+      : path.join(baseDir, "gateway-cert.pem"),
+  );
+  const keyPath = resolveUserPath(
+    typeof cfg.keyPath === "string" && cfg.keyPath.trim()
+      ? cfg.keyPath
+      : path.join(baseDir, "gateway-key.pem"),
+  );
   const caPath = cfg.caPath ? resolveUserPath(cfg.caPath) : undefined;
 
   const hasCert = await pathExists(certPath);

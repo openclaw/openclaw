@@ -1,6 +1,8 @@
+// Telegram plugin module implements channel actions behavior.
 import {
   createUnionActionGate,
   listTokenSourcedAccounts,
+  readStringParam,
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
 import type {
@@ -10,6 +12,7 @@ import type {
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramActionConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { inspectTelegramAccount } from "./account-inspect.js";
@@ -21,12 +24,7 @@ import {
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
 import { createTelegramPollExtraToolSchemas } from "./message-tool-schema.js";
 
-let telegramActionRuntimePromise: Promise<typeof import("./action-runtime.js")> | null = null;
-
-async function loadTelegramActionRuntime() {
-  telegramActionRuntimePromise ??= import("./action-runtime.js");
-  return await telegramActionRuntimePromise;
-}
+const loadTelegramActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.js"));
 
 export const telegramMessageActionRuntime = {
   handleTelegramAction: async (
@@ -49,8 +47,50 @@ const TELEGRAM_MESSAGE_ACTION_MAP = {
   "topic-edit": "editForumTopic",
 } as const satisfies Partial<Record<ChannelMessageActionName, string>>;
 
+const TELEGRAM_TOOL_DELIVERY_ACTIONS = new Set([
+  "createForumTopic",
+  "delete",
+  "deleteMessage",
+  "edit",
+  "editForumTopic",
+  "editMessage",
+  "poll",
+  "react",
+  "send",
+  "sendMessage",
+  "sendSticker",
+  "sticker",
+  "topic-create",
+  "topic-edit",
+]);
+
 function resolveTelegramMessageActionName(action: ChannelMessageActionName) {
   return TELEGRAM_MESSAGE_ACTION_MAP[action as keyof typeof TELEGRAM_MESSAGE_ACTION_MAP];
+}
+
+function prepareTelegramSendPayload({
+  ctx,
+  payload,
+}: Parameters<NonNullable<ChannelMessageActionAdapter["prepareSendPayload"]>>[0]) {
+  if (ctx.action !== "send" || !payload.presentation) {
+    return null;
+  }
+  const quoteText = readStringParam(ctx.params, "quoteText");
+  if (!quoteText) {
+    return payload;
+  }
+  const rawTelegramData = payload.channelData?.telegram;
+  const telegramData =
+    rawTelegramData && typeof rawTelegramData === "object" && !Array.isArray(rawTelegramData)
+      ? (rawTelegramData as Record<string, unknown>)
+      : {};
+  return {
+    ...payload,
+    channelData: {
+      ...payload.channelData,
+      telegram: { ...telegramData, quoteText },
+    },
+  };
 }
 
 function resolveTelegramActionDiscovery(cfg: Parameters<typeof listTelegramAccountIds>[0]) {
@@ -164,6 +204,7 @@ function describeTelegramMessageTool({
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeTelegramMessageTool,
   resolveExecutionMode: () => "gateway",
+  prepareSendPayload: prepareTelegramSendPayload,
   resolveCliActionRequest: ({ action, args }) => {
     if (action !== "thread-create") {
       return { action, args };
@@ -180,6 +221,8 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },
+  isToolDeliveryAction: ({ args }) =>
+    typeof args.action === "string" && TELEGRAM_TOOL_DELIVERY_ACTIONS.has(args.action),
   handleAction: async ({
     action,
     params,

@@ -64,6 +64,20 @@
             }
           },
           {
+            "id": "kimi-k2.7-code",
+            "name": "Kimi K2.7 Code",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": {
+              "input": 0.95,
+              "output": 4,
+              "cacheRead": 0.19,
+              "cacheWrite": 0
+            }
+          },
+          {
             "id": "kimi-k2.5",
             "name": "Kimi K2.5",
             "input": ["text", "image"],
@@ -137,6 +151,7 @@
       "provider": "moonshot",
       "method": "api-key",
       "choiceId": "moonshot-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Moonshot API key (.ai)",
       "groupId": "moonshot",
       "groupLabel": "Moonshot AI (Kimi K2.6)",
@@ -150,6 +165,7 @@
       "provider": "moonshot",
       "method": "api-key-cn",
       "choiceId": "moonshot-api-key-cn",
+      "appGuidedSecret": true,
       "choiceLabel": "Moonshot API key (.cn)",
       "groupId": "moonshot",
       "groupLabel": "Moonshot AI (Kimi K2.6)",

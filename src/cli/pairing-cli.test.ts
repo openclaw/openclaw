@@ -1,6 +1,7 @@
+// Pairing CLI tests cover pairing command registration and pairing status output.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { theme } from "../terminal/theme.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { registerPairingCli } from "./pairing-cli.js";
 
 const mocks = vi.hoisted(() => ({
@@ -221,6 +222,30 @@ describe("pairing cli", () => {
     await runPairing(["pairing", "list"]);
 
     expect(listChannelPairingRequests).toHaveBeenCalledWith("slack");
+  });
+
+  it("redirects to openclaw devices when no pairing channels are configured", async () => {
+    listPairingChannels.mockReturnValueOnce([]);
+
+    const error = await runPairing(["pairing", "list"]).then(
+      () => null,
+      (err: unknown) => err,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain("openclaw devices");
+    // Must not leak the empty enum that originally read like a bug.
+    expect(message).not.toContain("expected one of: )");
+    expect(message).not.toContain("()");
+    expect(listChannelPairingRequests).not.toHaveBeenCalled();
+  });
+
+  it("lists supported channels when one is required but omitted", async () => {
+    // Multiple channels configured (default mock) + no channel argument.
+    await expect(runPairing(["pairing", "list"])).rejects.toThrow(
+      "expected one of: telegram, discord, imessage",
+    );
   });
 
   it("accepts channel as positional for approve (npm-run compatible)", async () => {

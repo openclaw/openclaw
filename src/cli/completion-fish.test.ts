@@ -1,15 +1,11 @@
+// Fish completion tests cover fish shell completion script generation.
 import { describe, expect, it } from "vitest";
 import {
   buildFishOptionCompletionLine,
   buildFishSubcommandCompletionLine,
-  escapeFishDescription,
 } from "./completion-fish.js";
 
 describe("completion-fish helpers", () => {
-  it("escapes single quotes in descriptions", () => {
-    expect(escapeFishDescription("Bob's plugin")).toBe("Bob'\\''s plugin");
-  });
-
   it("builds a subcommand completion line", () => {
     const line = buildFishSubcommandCompletionLine({
       rootCmd: "openclaw",

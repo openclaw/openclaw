@@ -1,4 +1,10 @@
+/**
+ * Exec runtime tests.
+ * Covers target resolution, cursor mode tracking, exit outcome classification,
+ * system events, and process lifecycle behavior.
+ */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
@@ -23,7 +29,6 @@ vi.mock("../process/supervisor/index.js", () => ({
 let markBackgrounded: typeof import("./bash-process-registry.js").markBackgrounded;
 let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExecExitOutcome;
 let detectCursorKeyMode: typeof import("./bash-tools.exec-runtime.js").detectCursorKeyMode;
-let emitExecSystemEvent: typeof import("./bash-tools.exec-runtime.js").emitExecSystemEvent;
 let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").formatExecFailureReason;
 let renderExecUpdateText: typeof import("./bash-tools.exec-runtime.js").renderExecUpdateText;
 let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
@@ -34,7 +39,6 @@ beforeAll(async () => {
   ({
     buildExecExitOutcome,
     detectCursorKeyMode,
-    emitExecSystemEvent,
     formatExecFailureReason,
     renderExecUpdateText,
     resolveExecTarget,
@@ -395,7 +399,9 @@ describe("exec notifyOnExit suppression", () => {
           startedAtMs: Date.now(),
           pid: 123,
           wait: async () => {
-            await new Promise((resolve) => setImmediate(resolve));
+            await new Promise((resolve) => {
+              setImmediate(resolve);
+            });
             return {
               reason: params.reason,
               exitCode: null,
@@ -462,149 +468,38 @@ describe("exec notifyOnExit suppression", () => {
     expect(heartbeat.reason).toBe("exec-event");
     expect(heartbeat.sessionKey).toBe("agent:main:main");
   });
-});
 
-describe("emitExecSystemEvent", () => {
-  beforeEach(() => {
-    requestHeartbeatMock.mockClear();
-    enqueueSystemEventMock.mockClear();
+  it("keeps background exec exit-notification snippets on a UTF-16 boundary", async () => {
+    // A backgrounded command whose tail output overflows the 180-char snippet
+    // cap with an emoji straddling the cut must not deliver a lone surrogate to
+    // the user's channel. The emoji's high surrogate lands at index 178, so a
+    // raw slice(0, 179) would keep the dangling half.
+    const head = "a".repeat(178);
+    const overflowingOutput = `${head}🎉${"b".repeat(30)}`;
+    await runBackgroundedExit({ reason: "manual-cancel", stdout: overflowingOutput });
+
+    const [message] = requireSystemEventCall();
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+    expect(message).not.toMatch(loneSurrogate);
+    // The snippet stays truncated (ellipsis) while keeping the readable head.
+    expect(message).toContain("…");
+    expect(message).toContain(head);
   });
 
-  it("scopes heartbeat wake to the event session key", () => {
-    emitExecSystemEvent("Exec finished", {
-      sessionKey: "agent:ops:main",
-      contextKey: "exec:run-1",
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:-100123:topic:47",
-        threadId: 47,
-      },
-    });
+  it("keeps the notify tail source on a UTF-16 boundary", async () => {
+    // The notify path first takes a 400-char tail, then compacts that tail to a
+    // 180-char snippet. If the 400-char tail starts inside an emoji, the final
+    // compacted snippet must not preserve the dangling low surrogate.
+    const prefix = "a".repeat(101);
+    const tailHead = "b".repeat(179);
+    const overflowingOutput = `${prefix}🎉${tailHead}${"c".repeat(220)}`;
+    await runBackgroundedExit({ reason: "manual-cancel", stdout: overflowingOutput });
 
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
-      sessionKey: "agent:ops:main",
-      contextKey: "exec:run-1",
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:-100123:topic:47",
-        threadId: 47,
-      },
-    });
-    const heartbeat = requireHeartbeatCall();
-    expect(heartbeat.coalesceMs).toBe(0);
-    expect(heartbeat.reason).toBe("exec-event");
-    expect(heartbeat.sessionKey).toBe("agent:ops:main");
-  });
-
-  it("remaps cron-run event enqueue and wake targets to the drained agent main session", () => {
-    emitExecSystemEvent("Exec finished", {
-      sessionKey: "agent:ops:cron:nightly:run:run-1",
-      contextKey: "exec:run-cron",
-      mainKey: "primary",
-    });
-
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
-      sessionKey: "agent:ops:primary",
-      contextKey: "exec:run-cron",
-    });
-    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
-    const [[heartbeatParams]] = requestHeartbeatMock.mock.calls as unknown as Array<
-      [{ coalesceMs?: number; reason?: string; sessionKey?: string }]
-    >;
-    expect(heartbeatParams.coalesceMs).toBe(0);
-    expect(heartbeatParams.reason).toBe("exec-event");
-    expect(heartbeatParams.sessionKey).toBe("agent:ops:primary");
-  });
-
-  it("routes global-scope cron-run events to the global queue and preserves the agent wake target", () => {
-    emitExecSystemEvent("Exec finished", {
-      sessionKey: "agent:ops:cron:nightly:run:run-1:subagent:worker",
-      contextKey: "exec:run-global",
-      sessionScope: "global",
-    });
-
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
-      sessionKey: "global",
-      contextKey: "exec:run-global",
-    });
-    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
-    const [[heartbeatParams]] = requestHeartbeatMock.mock.calls as unknown as Array<
-      [{ agentId?: string; coalesceMs?: number; reason?: string }]
-    >;
-    expect(heartbeatParams.agentId).toBe("ops");
-    expect(heartbeatParams.coalesceMs).toBe(0);
-    expect(heartbeatParams.reason).toBe("exec-event");
-    expect(requireHeartbeatCall()).not.toHaveProperty("sessionKey");
-  });
-
-  it("routes single-owner dmScope=main direct exec events to the agent main session", () => {
-    emitExecSystemEvent("Exec finished", {
-      sessionKey: "agent:main:telegram:default:direct:123",
-      contextKey: "exec:run-dm",
-      deliveryContext: {
-        channel: "telegram",
-        to: "123",
-      },
-      eventRouting: {
-        dmScope: "main",
-        allowFrom: ["123"],
-        channel: "telegram",
-        accountId: "default",
-      },
-    });
-
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
-      sessionKey: "agent:main:main",
-      contextKey: "exec:run-dm",
-      deliveryContext: {
-        channel: "telegram",
-        to: "123",
-      },
-    });
-    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
-    const heartbeat = requireHeartbeatCall();
-    expect(heartbeat.coalesceMs).toBe(0);
-    expect(heartbeat.reason).toBe("exec-event");
-    expect(heartbeat.sessionKey).toBe("agent:main:main");
-  });
-
-  it("keeps wake unscoped for non-agent session keys", () => {
-    emitExecSystemEvent("Exec finished", {
-      sessionKey: "global",
-      contextKey: "exec:run-global",
-    });
-
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
-      sessionKey: "global",
-      contextKey: "exec:run-global",
-    });
-    const heartbeat = requireHeartbeatCall();
-    expect(heartbeat.coalesceMs).toBe(0);
-    expect(heartbeat.reason).toBe("exec-event");
-  });
-
-  it("ignores events without a session key", () => {
-    emitExecSystemEvent("Exec finished", {
-      sessionKey: "  ",
-      contextKey: "exec:run-2",
-    });
-
-    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatMock).not.toHaveBeenCalled();
-  });
-
-  it("skips heartbeat wake for subagent session keys", () => {
-    emitExecSystemEvent("Exec finished", {
-      sessionKey: "agent:main:subagent:abc-123",
-      contextKey: "exec:run-sub",
-    });
-
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
-      sessionKey: "agent:main:subagent:abc-123",
-      contextKey: "exec:run-sub",
-      deliveryContext: undefined,
-    });
-    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+    const [message] = requireSystemEventCall();
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+    expect(message).not.toMatch(loneSurrogate);
+    expect(message).not.toContain("�");
+    expect(message).toContain(tailHead);
   });
 });
 
@@ -720,6 +615,48 @@ describe("buildExecExitOutcome", () => {
 });
 
 describe("runExecProcess POSIX command wrapper", () => {
+  it("normalizes non-finite and oversized exec timeouts before spawning", async () => {
+    supervisorMock.spawn.mockResolvedValue({
+      runId: "mock-run",
+      startedAtMs: Date.now(),
+      wait: async () => ({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 0,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+      cancel: vi.fn(),
+    });
+
+    const baseParams = {
+      command: "echo test",
+      workdir: "/tmp",
+      env: { PATH: "/usr/bin" },
+      pathPrepend: [],
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: false,
+    };
+
+    await runExecProcess({
+      ...baseParams,
+      timeoutSec: Number.POSITIVE_INFINITY,
+    });
+    await runExecProcess({
+      ...baseParams,
+      timeoutSec: 3_000_000,
+    });
+
+    expect(supervisorMock.spawn.mock.calls[0]?.[0].timeoutMs).toBeUndefined();
+    expect(supervisorMock.spawn.mock.calls[1]?.[0].timeoutMs).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+  });
+
   it("wraps command with PATH export if OPENCLAW_PREPEND_PATH is present", async () => {
     if (process.platform === "win32") {
       return;
@@ -741,7 +678,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       cancel: vi.fn(),
     });
 
-    const run = await runExecProcess({
+    const ignoredRun = await runExecProcess({
       command: "echo test",
       workdir: "/tmp",
       env: { PATH: "/usr/bin" },
@@ -753,6 +690,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       notifyOnExit: false,
       timeoutSec: null,
     });
+    void ignoredRun;
 
     expect(supervisorMock.spawn).toHaveBeenCalledTimes(1);
     const spawnCall = supervisorMock.spawn.mock.calls[0][0];
@@ -784,7 +722,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       cancel: vi.fn(),
     });
 
-    const run = await runExecProcess({
+    const ignoredRun = await runExecProcess({
       command: "echo test",
       workdir: "C:\\tmp",
       env: { Path: "C:\\Windows\\System32" },
@@ -796,6 +734,7 @@ describe("runExecProcess POSIX command wrapper", () => {
       notifyOnExit: false,
       timeoutSec: null,
     });
+    void ignoredRun;
 
     expect(supervisorMock.spawn).toHaveBeenCalledTimes(1);
     const spawnCall = supervisorMock.spawn.mock.calls[0][0];

@@ -1,9 +1,11 @@
+// Gmail setup utilities write helper files and normalize Gmail setup settings.
 import fs from "node:fs";
 import path from "node:path";
-import { hasBinary } from "../agents/skills.js";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveExecutable } from "../infra/executable-path.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
+import { hasBinary } from "../skills/loading/config.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizeServePath } from "./gmail.js";
 
@@ -23,7 +25,7 @@ function trimOutput(value: string): string {
   if (trimmed.length <= MAX_OUTPUT_CHARS) {
     return trimmed;
   }
-  return `${trimmed.slice(0, MAX_OUTPUT_CHARS)}…`;
+  return `${truncateUtf16Safe(trimmed, MAX_OUTPUT_CHARS)}…`;
 }
 
 function formatCommandResultInternal(

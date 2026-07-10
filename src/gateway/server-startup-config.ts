@@ -1,8 +1,11 @@
+// Gateway startup config loads, repairs, validates, and activates runtime config
+// plus secrets snapshots before the server exposes user-facing surfaces.
 import { isDeepStrictEqual } from "node:util";
 import {
   formatInvalidConfigRecoveryHint,
   formatPluginPackagingRuntimeOutputRecoveryHint,
 } from "../cli/config-recovery-hints.js";
+import { createInvalidConfigError } from "../config/io.invalid-config.js";
 import {
   type ReadConfigFileSnapshotWithPluginMetadataResult,
   readConfigFileSnapshotWithPluginMetadata,
@@ -16,6 +19,7 @@ import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   prepareSecretsRuntimeFastPathSnapshot,
@@ -31,6 +35,7 @@ import {
   getLiveSecretsRuntimeAuthStores,
   setPreparedSecretsRuntimeSnapshotRefreshContext,
 } from "../secrets/runtime-state.js";
+import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 import {
@@ -58,6 +63,7 @@ type RuntimeSecretsActivationParams = {
   activate: boolean;
 };
 
+/** Gateway startup hook that prepares secrets and optionally activates the prepared snapshot. */
 export type ActivateRuntimeSecrets = ((
   config: OpenClawConfig,
   params: RuntimeSecretsActivationParams,
@@ -79,6 +85,7 @@ type GatewayStartupConfigMeasure = <T>(
   options?: { omitErrorMessage?: boolean },
 ) => Promise<T>;
 
+/** Timeline attributes kept small and deterministic for startup secret preparation spans. */
 function secretsPrepareTimelineAttributes(
   config: OpenClawConfig,
   activationParams: RuntimeSecretsActivationParams,
@@ -90,12 +97,14 @@ function secretsPrepareTimelineAttributes(
   };
 }
 
+/** Config snapshot plus optional plugin metadata loaded before Gateway startup auth. */
 export type GatewayStartupConfigSnapshotLoadResult = {
   snapshot: ConfigFileSnapshot;
   wroteConfig: boolean;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
+/** Load and validate the config snapshot, applying runtime-only plugin auto-enable changes. */
 export async function loadGatewayStartupConfigSnapshot(params: {
   minimalTestGateway: boolean;
   log: GatewayStartupLog;
@@ -112,7 +121,8 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   const pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
   const wroteConfig = false;
   if (configSnapshot.legacyIssues.length > 0 && isNixMode) {
-    throw new Error(
+    throw createInvalidConfigError(
+      configSnapshot.path,
       "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
     );
   }
@@ -161,6 +171,7 @@ function withRuntimeConfig(
   };
 }
 
+/** Create the serialized secrets activation function used by startup and reload paths. */
 export function createRuntimeSecretsActivator(params: {
   logSecrets: GatewayStartupLog;
   emitStateEvent: (
@@ -170,21 +181,22 @@ export function createRuntimeSecretsActivator(params: {
   ) => void;
   prepareRuntimeSecretsSnapshot?: PrepareRuntimeSecretsSnapshot;
   activateRuntimeSecretsSnapshot?: ActivateRuntimeSecretsSnapshot;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins" | "manifestRegistry">;
 }): ActivateRuntimeSecrets {
   let secretsDegraded = false;
   let secretsActivationTail: Promise<void> = Promise.resolve();
-  let secretsRuntimePromise: Promise<typeof import("../secrets/runtime.js")> | null = null;
-  let authProfilesPromise: Promise<typeof import("../agents/auth-profiles.js")> | null = null;
-  const loadSecretsRuntime = () => {
-    secretsRuntimePromise ??= import("../secrets/runtime.js");
-    return secretsRuntimePromise;
-  };
-  const loadAuthProfiles = () => {
-    authProfilesPromise ??= import("../agents/auth-profiles.js");
-    return authProfilesPromise;
-  };
-
+  const loadSecretsRuntime = createLazyPromise(() => import("../secrets/runtime.js"), {
+    cacheRejections: true,
+  });
+  const loadAuthProfiles = createLazyPromise(() => import("../agents/auth-profiles.js"), {
+    cacheRejections: true,
+  });
+  const startupManifestRegistry =
+    params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
   const runWithSecretsActivationLock = async <T>(operation: () => Promise<T>): Promise<T> => {
+    // Secret refresh mutates process-wide active snapshot state, so activation
+    // requests are serialized even when reload and startup probes overlap.
     const run = secretsActivationTail.then(operation, operation);
     secretsActivationTail = run.then(
       () => undefined,
@@ -267,8 +279,11 @@ export function createRuntimeSecretsActivator(params: {
         ) {
           const fastPath = prepareSecretsRuntimeFastPathSnapshot({
             config: pruneSkippedStartupSecretSurfaces(config),
+            ...(startupManifestRegistry ? { manifestRegistry: startupManifestRegistry } : {}),
           });
           if (fastPath) {
+            // The startup fast path avoids importing the full secrets runtime
+            // until refresh/preflight needs dynamic provider or auth-store work.
             const coercePreflightSnapshot = (
               value: unknown,
               sourceConfig: OpenClawConfig,
@@ -279,6 +294,25 @@ export function createRuntimeSecretsActivator(params: {
               const candidate = value as PreparedRuntimeSecretsSnapshot;
               return isDeepStrictEqual(candidate.sourceConfig, sourceConfig) ? candidate : null;
             };
+            const prepareFastPathRuntimeSnapshot = async (
+              secretsRuntime: typeof import("../secrets/runtime.js"),
+              sourceConfig: OpenClawConfig,
+              includeAuthStoreRefs: boolean | undefined,
+            ) =>
+              await secretsRuntime.prepareSecretsRuntimeSnapshot({
+                config: sourceConfig,
+                env: fastPath.refreshContext.env,
+                agentDirs: resolveRefreshAgentDirs(sourceConfig, fastPath.refreshContext),
+                includeAuthStoreRefs:
+                  includeAuthStoreRefs ?? fastPath.refreshContext.includeAuthStoreRefs,
+                loadablePluginOrigins: fastPath.refreshContext.loadablePluginOrigins,
+                ...(fastPath.refreshContext.manifestRegistry
+                  ? { manifestRegistry: fastPath.refreshContext.manifestRegistry }
+                  : {}),
+                ...(fastPath.usesAuthStoreFallback || !fastPath.refreshContext.loadAuthStore
+                  ? {}
+                  : { loadAuthStore: fastPath.refreshContext.loadAuthStore }),
+              });
             return await finishPreparedSnapshot(fastPath.snapshot, activationParams, {
               activateRuntimeSecretsSnapshot: (snapshot) =>
                 activateSecretsRuntimeSnapshotState({
@@ -291,17 +325,11 @@ export function createRuntimeSecretsActivator(params: {
                       if (!activeSnapshot) {
                         return false;
                       }
-                      return await secretsRuntime.prepareSecretsRuntimeSnapshot({
-                        config: sourceConfig,
-                        env: fastPath.refreshContext.env,
-                        agentDirs: resolveRefreshAgentDirs(sourceConfig, fastPath.refreshContext),
-                        includeAuthStoreRefs:
-                          includeAuthStoreRefs ?? fastPath.refreshContext.includeAuthStoreRefs,
-                        loadablePluginOrigins: fastPath.refreshContext.loadablePluginOrigins,
-                        ...(fastPath.usesAuthStoreFallback || !fastPath.refreshContext.loadAuthStore
-                          ? {}
-                          : { loadAuthStore: fastPath.refreshContext.loadAuthStore }),
-                      });
+                      return await prepareFastPathRuntimeSnapshot(
+                        secretsRuntime,
+                        sourceConfig,
+                        includeAuthStoreRefs,
+                      );
                     },
                     refresh: async ({ sourceConfig, includeAuthStoreRefs, preflightResult }) => {
                       const secretsRuntime = await loadSecretsRuntime();
@@ -311,19 +339,14 @@ export function createRuntimeSecretsActivator(params: {
                         fastPath.refreshContext.includeAuthStoreRefs;
                       const refreshed =
                         coercePreflightSnapshot(preflightResult, sourceConfig) ??
-                        (await secretsRuntime.prepareSecretsRuntimeSnapshot({
-                          config: sourceConfig,
-                          env: fastPath.refreshContext.env,
-                          agentDirs: resolveRefreshAgentDirs(sourceConfig, fastPath.refreshContext),
-                          includeAuthStoreRefs:
-                            includeAuthStoreRefs ?? fastPath.refreshContext.includeAuthStoreRefs,
-                          loadablePluginOrigins: fastPath.refreshContext.loadablePluginOrigins,
-                          ...(fastPath.usesAuthStoreFallback ||
-                          !fastPath.refreshContext.loadAuthStore
-                            ? {}
-                            : { loadAuthStore: fastPath.refreshContext.loadAuthStore }),
-                        }));
+                        (await prepareFastPathRuntimeSnapshot(
+                          secretsRuntime,
+                          sourceConfig,
+                          includeAuthStoreRefs,
+                        ));
                       if (oneShotSkipAuthStoreRefs && activeSnapshot) {
+                        // Preserve live auth-store handles across a one-shot
+                        // preflight that intentionally skipped auth-store refs.
                         refreshed.authStores = getLiveSecretsRuntimeAuthStores();
                         setPreparedSecretsRuntimeSnapshotRefreshContext(
                           refreshed,
@@ -352,6 +375,10 @@ export function createRuntimeSecretsActivator(params: {
           () =>
             prepareRuntimeSecretsSnapshot({
               config: pruneSkippedStartupSecretSurfaces(config),
+              ...(startupManifestRegistry ? { manifestRegistry: startupManifestRegistry } : {}),
+              ...(params.pluginMetadataSnapshot
+                ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+                : {}),
               ...(loadAuthStore ? { loadAuthStore } : {}),
             }),
           {
@@ -380,7 +407,8 @@ export function createRuntimeSecretsActivator(params: {
   return activateRuntimeSecrets;
 }
 
-export function assertValidGatewayStartupConfigSnapshot(
+/** Throw a formatted startup error when the loaded config snapshot is invalid. */
+function assertValidGatewayStartupConfigSnapshot(
   snapshot: ConfigFileSnapshot,
   options: { includeDoctorHint?: boolean } = {},
 ): void {
@@ -397,15 +425,17 @@ export function assertValidGatewayStartupConfigSnapshot(
       : options.includeDoctorHint
         ? `\n${formatInvalidConfigRecoveryHint()}`
         : "";
-  throw new Error(`Invalid config at ${snapshot.path}.\n${issues}${recoveryHint}`);
+  throw createInvalidConfigError(snapshot.path, `${issues}${recoveryHint}`);
 }
 
+/** Prepare the effective Gateway startup config after auth, overrides, and secrets activation. */
 export async function prepareGatewayStartupConfig(params: {
   configSnapshot: ConfigFileSnapshot;
   authOverride?: GatewayAuthConfig;
   tailscaleOverride?: GatewayTailscaleConfig;
   activateRuntimeSecrets: ActivateRuntimeSecrets;
   persistStartupAuth?: boolean;
+  log?: GatewayStartupLog;
   measure?: GatewayStartupConfigMeasure;
 }): Promise<Awaited<ReturnType<typeof ensureGatewayStartupAuth>>> {
   const measure = params.measure ?? (async (_name, run) => await run());
@@ -447,6 +477,8 @@ export async function prepareGatewayStartupConfig(params: {
       isDeepStrictEqual(pruneSkippedStartupSecretSurfaces(config), preflightPrepared.sourceConfig),
     );
   const activateStartupSecrets = async (config: OpenClawConfig) => {
+    // Reuse the preflight snapshot only if generated startup auth did not
+    // change the secret-relevant source config.
     if (preflightPrepared && canReusePreflightPreparedSnapshot(config)) {
       return await params.activateRuntimeSecrets.activatePreparedSnapshot!(preflightPrepared, {
         reason: "startup",
@@ -479,6 +511,7 @@ export async function prepareGatewayStartupConfig(params: {
       env: process.env,
       authOverride: preflightAuthOverride,
       tailscaleOverride: params.tailscaleOverride,
+      warn: params.log?.warn,
       persist: params.persistStartupAuth ?? false,
       baseHash: params.configSnapshot.hash,
     }),

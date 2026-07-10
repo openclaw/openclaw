@@ -1,14 +1,28 @@
+/**
+ * Browser agent tool registration.
+ *
+ * Builds the model-facing browser tool, chooses sandbox/host/node routing, and
+ * maps high-level actions onto browser control client calls.
+ */
 import crypto from "node:crypto";
+import {
+  BROWSER_PROXY_ERROR_ENVELOPE,
+  parseBrowserProxyFailure,
+  type BrowserProxyEnvelope,
+  type BrowserProxyFile,
+  type BrowserProxySuccess,
+} from "./browser-proxy-envelope.js";
+import { describeBrowserTool } from "./browser-tool-description.js";
 import {
   executeActAction,
   executeConsoleAction,
+  executeDownloadAction,
   executeSnapshotAction,
   executeTabsAction,
 } from "./browser-tool.actions.js";
 import {
   type AnyAgentTool,
   type NodeListNode,
-  DEFAULT_UPLOAD_DIR,
   BrowserToolSchema,
   applyBrowserProxyPaths,
   browserAct,
@@ -26,6 +40,7 @@ import {
   browserStatus,
   browserStop,
   callGatewayTool,
+  describeImageFile,
   getRuntimeConfig,
   getBrowserProfileCapabilities,
   imageResultFromFile,
@@ -33,19 +48,27 @@ import {
   listNodes,
   normalizeOptionalString,
   persistBrowserProxyFiles,
+  readPositiveIntegerParam,
   readStringParam,
   readStringValue,
   resolveBrowserConfig,
+  resolveExistingUploadPaths,
   resolveRuntimeImageSanitization,
-  resolveExistingPathsWithinRoot,
   resolveNodeIdFromList,
   resolveProfile,
+  saveMediaBuffer,
   selectDefaultNodeFromList,
+  stageBrowserScreenshotForSharing,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 } from "./browser-tool.runtime.js";
+import { BrowserServiceError } from "./browser/client-fetch.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
+import { parseBrowserNavigationUrl } from "./browser/navigation-guard.js";
+import { normalizeBrowserScreenshot } from "./browser/screenshot.js";
+import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./browser/vision.js";
+import { wrapExternalContent } from "./sdk-security-runtime.js";
 
 const browserToolDeps = {
   browserAct,
@@ -62,10 +85,14 @@ const browserToolDeps = {
   browserStart,
   browserStatus,
   browserStop,
+  describeImageFile,
   getRuntimeConfig,
   imageResultFromFile,
   listNodes,
   callGatewayTool,
+  normalizeBrowserScreenshot,
+  saveMediaBuffer,
+  stageBrowserScreenshotForSharing,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
@@ -88,10 +115,14 @@ export const testing = {
       browserStart: typeof browserStart;
       browserStatus: typeof browserStatus;
       browserStop: typeof browserStop;
+      describeImageFile: typeof describeImageFile;
       imageResultFromFile: typeof imageResultFromFile;
       getRuntimeConfig: typeof getRuntimeConfig;
       listNodes: typeof listNodes;
       callGatewayTool: typeof callGatewayTool;
+      normalizeBrowserScreenshot: typeof normalizeBrowserScreenshot;
+      saveMediaBuffer: typeof saveMediaBuffer;
+      stageBrowserScreenshotForSharing: typeof stageBrowserScreenshotForSharing;
       touchSessionBrowserTab: typeof touchSessionBrowserTab;
       trackSessionBrowserTab: typeof trackSessionBrowserTab;
       untrackSessionBrowserTab: typeof untrackSessionBrowserTab;
@@ -113,10 +144,16 @@ export const testing = {
     browserToolDeps.browserStart = overrides?.browserStart ?? browserStart;
     browserToolDeps.browserStatus = overrides?.browserStatus ?? browserStatus;
     browserToolDeps.browserStop = overrides?.browserStop ?? browserStop;
+    browserToolDeps.describeImageFile = overrides?.describeImageFile ?? describeImageFile;
     browserToolDeps.imageResultFromFile = overrides?.imageResultFromFile ?? imageResultFromFile;
     browserToolDeps.getRuntimeConfig = overrides?.getRuntimeConfig ?? getRuntimeConfig;
     browserToolDeps.listNodes = overrides?.listNodes ?? listNodes;
     browserToolDeps.callGatewayTool = overrides?.callGatewayTool ?? callGatewayTool;
+    browserToolDeps.normalizeBrowserScreenshot =
+      overrides?.normalizeBrowserScreenshot ?? normalizeBrowserScreenshot;
+    browserToolDeps.saveMediaBuffer = overrides?.saveMediaBuffer ?? saveMediaBuffer;
+    browserToolDeps.stageBrowserScreenshotForSharing =
+      overrides?.stageBrowserScreenshotForSharing ?? stageBrowserScreenshotForSharing;
     browserToolDeps.touchSessionBrowserTab =
       overrides?.touchSessionBrowserTab ?? touchSessionBrowserTab;
     browserToolDeps.trackSessionBrowserTab =
@@ -128,21 +165,29 @@ export const testing = {
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   const targetId = normalizeOptionalString(params.targetId);
-  const timeoutMs =
-    typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-      ? params.timeoutMs
-      : undefined;
+  const timeoutMs = readPositiveIntegerParam(params, "timeoutMs", {
+    message: "timeoutMs must be a positive integer.",
+  });
   return { targetId, timeoutMs };
 }
 
 function readTargetUrlParam(params: Record<string, unknown>) {
-  return (
+  const targetUrl =
     readStringParam(params, "targetUrl") ??
-    readStringParam(params, "url", { required: true, label: "targetUrl" })
-  );
+    readStringParam(params, "url", { required: true, label: "targetUrl" });
+  parseBrowserNavigationUrl(targetUrl);
+  return targetUrl;
 }
 
+function formatScreenshotShareHint(filePath: string): string {
+  return `[Screenshot saved to ${JSON.stringify(filePath)}. Use this path with the message tool to share the screenshot explicitly.]`;
+}
+
+const SCREENSHOT_SHARE_UNAVAILABLE =
+  "[Screenshot sharing is unavailable because an outbound copy could not be prepared.]";
+
 const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
+  "kind",
   "targetId",
   "ref",
   "doubleClick",
@@ -170,10 +215,31 @@ const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
   "timeoutMs",
 ] as const;
 
+const LEGACY_BROWSER_ACT_SHARED_REQUEST_KEYS = new Set<
+  (typeof LEGACY_BROWSER_ACT_REQUEST_KEYS)[number]
+>(["targetId"]);
+
 function readActRequestParam(params: Record<string, unknown>) {
   const requestParam = params.request;
   if (requestParam && typeof requestParam === "object") {
-    return requestParam as Parameters<typeof browserAct>[1];
+    const request = { ...(requestParam as Record<string, unknown>) };
+    const hasMismatchedKind =
+      typeof request.kind === "string" &&
+      typeof params.kind === "string" &&
+      request.kind !== params.kind;
+    for (const key of LEGACY_BROWSER_ACT_REQUEST_KEYS) {
+      if (Object.hasOwn(request, key) || !Object.hasOwn(params, key)) {
+        continue;
+      }
+      // Flattened act fields are legacy shape repair. Only the tab scope is
+      // safe across kind mismatches; action-specific fields can corrupt the
+      // explicit nested request.
+      if (hasMismatchedKind && !LEGACY_BROWSER_ACT_SHARED_REQUEST_KEYS.has(key)) {
+        continue;
+      }
+      request[key] = params[key];
+    }
+    return request as Parameters<typeof browserAct>[1];
   }
 
   const kind = readStringParam(params, "kind");
@@ -181,7 +247,7 @@ function readActRequestParam(params: Record<string, unknown>) {
     return undefined;
   }
 
-  const request: Record<string, unknown> = { kind };
+  const request: Record<string, unknown> = {};
   for (const key of LEGACY_BROWSER_ACT_REQUEST_KEYS) {
     if (!Object.hasOwn(params, key)) {
       continue;
@@ -190,17 +256,6 @@ function readActRequestParam(params: Record<string, unknown>) {
   }
   return request as Parameters<typeof browserAct>[1];
 }
-
-type BrowserProxyFile = {
-  path: string;
-  base64: string;
-  mimeType?: string;
-};
-
-type BrowserProxyResult = {
-  result: unknown;
-  files?: BrowserProxyFile[];
-};
 
 const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
 const BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS = 5_000;
@@ -220,7 +275,15 @@ async function resolveBrowserNodeTarget(params: {
   requestedNode?: string;
   target?: "sandbox" | "host" | "node";
   sandboxBridgeUrl?: string;
+  allowHostControl?: boolean;
 }): Promise<BrowserNodeTarget | null> {
+  if (params.allowHostControl === false) {
+    if (params.target === "node" || params.requestedNode) {
+      throw new Error("Node browser control is disabled by sandbox policy.");
+    }
+    return null;
+  }
+
   const cfg = browserToolDeps.getRuntimeConfig();
   const policy = cfg.gateway?.nodes?.browser;
   const mode = policy?.mode ?? "auto";
@@ -294,7 +357,7 @@ async function callBrowserProxy(params: {
   body?: unknown;
   timeoutMs?: number;
   profile?: string;
-}): Promise<BrowserProxyResult> {
+}): Promise<BrowserProxySuccess> {
   const proxyTimeoutMs =
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
       ? Math.max(1, Math.floor(params.timeoutMs))
@@ -313,26 +376,35 @@ async function callBrowserProxy(params: {
         body: params.body,
         timeoutMs: proxyTimeoutMs,
         profile: params.profile,
+        errorEnvelope: BROWSER_PROXY_ERROR_ENVELOPE,
       },
       idempotencyKey: crypto.randomUUID(),
     },
+    { scopes: ["operator.admin"] },
   );
   const parsed = unwrapBrowserProxyPayload(payload);
+  const failure = parseBrowserProxyFailure(parsed);
+  if (failure) {
+    const { status, body } = failure.error;
+    throw new BrowserServiceError(body.error, "reason" in body ? body : undefined, status);
+  }
   if (!parsed || typeof parsed !== "object" || !("result" in parsed)) {
     throw new Error("browser proxy failed");
   }
   return parsed;
 }
 
-function unwrapBrowserProxyPayload(payload: { payload?: unknown; payloadJSON?: unknown } | null) {
+function unwrapBrowserProxyPayload(
+  payload: { payload?: unknown; payloadJSON?: unknown } | null,
+): BrowserProxyEnvelope | null {
   if (payload?.payload !== undefined) {
-    return payload.payload;
+    return payload.payload as BrowserProxyEnvelope;
   }
   if (typeof payload?.payloadJSON !== "string" || !payload.payloadJSON.trim()) {
     return null;
   }
   try {
-    return JSON.parse(payload.payloadJSON) as BrowserProxyResult;
+    return JSON.parse(payload.payloadJSON) as BrowserProxyEnvelope;
   } catch {
     return null;
   }
@@ -422,15 +494,27 @@ function usesExistingSessionManageFlow(params: { action: string; profileName?: s
 }
 
 function readToolTimeoutMs(params: Record<string, unknown>) {
-  return typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-    ? Math.max(1, Math.floor(params.timeoutMs))
-    : undefined;
+  return readPositiveIntegerParam(params, "timeoutMs", {
+    message: "timeoutMs must be a positive integer.",
+  });
 }
 
+/** Create the Browser tool exposed to agents. */
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  activeModel?: {
+    provider?: string;
+    model?: string;
+  };
+  mediaScope?: {
+    sessionKey?: string;
+    channel?: string;
+    chatType?: string;
+  };
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
@@ -438,19 +522,7 @@ export function createBrowserTool(opts?: {
   return {
     label: "Browser",
     name: "browser",
-    description: [
-      "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
-      "Browser choice: omit profile by default for the isolated OpenClaw-managed browser (`openclaw`).",
-      'For the logged-in user browser, use profile="user". A supported Chromium-based browser (v144+) must be running on the selected host or browser node. Use only when existing logins/cookies matter and the user is present.',
-      'For profile="user" or other existing-session profiles, omit timeoutMs on act:type, evaluate, hover, scrollIntoView, drag, select, and fill; that driver rejects per-call timeout overrides for those actions.',
-      'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
-      "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc). For tab operations, targetId also accepts tabId handles (t1) and labels from action=tabs.",
-      "For multi-step browser work, login checks, stale refs, duplicate tabs, or Google Meet flows, use the bundled browser-automation skill when it is available.",
-      'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
-      "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
-      `target selects browser location (sandbox|host|node). Default: ${targetDefault}.`,
-      hostHint,
-    ].join(" "),
+    description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -483,6 +555,7 @@ export function createBrowserTool(opts?: {
           requestedNode: requestedNode ?? undefined,
           target,
           sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+          allowHostControl: opts?.allowHostControl,
         });
       } catch (error) {
         // Keep the logged-in user browser usable on the host when auto-discovery
@@ -505,7 +578,7 @@ export function createBrowserTool(opts?: {
           });
 
       const proxyRequest = nodeTarget
-        ? async (opts: {
+        ? async (optsLocal: {
             method: string;
             path: string;
             query?: Record<string, string | number | boolean | undefined>;
@@ -515,12 +588,12 @@ export function createBrowserTool(opts?: {
           }) => {
             const proxy = await callBrowserProxy({
               nodeId: nodeTarget.nodeId,
-              method: opts.method,
-              path: opts.path,
-              query: opts.query,
-              body: opts.body,
-              timeoutMs: opts.timeoutMs,
-              profile: opts.profile,
+              method: optsLocal.method,
+              path: optsLocal.path,
+              query: optsLocal.query,
+              body: optsLocal.body,
+              timeoutMs: optsLocal.timeoutMs,
+              profile: optsLocal.profile,
             });
             const mapping = await persistProxyFiles(proxy.files);
             applyProxyPaths(proxy.result, mapping);
@@ -735,11 +808,7 @@ export function createBrowserTool(opts?: {
           const element = readStringParam(params, "element");
           const labels = typeof params.labels === "boolean" ? params.labels : undefined;
           const type = params.type === "jpeg" ? "jpeg" : "png";
-          const timeoutMs =
-            typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-              ? Math.max(1, Math.floor(params.timeoutMs))
-              : undefined;
-          const effectiveTimeoutMs = timeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
+          const effectiveTimeoutMs = requestedTimeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
           const result = proxyRequest
             ? ((await proxyRequest({
                 method: "POST",
@@ -767,11 +836,99 @@ export function createBrowserTool(opts?: {
                 profile,
               });
           touchTrackedTab(readStringValue(result.targetId) ?? targetId);
+          const screenshotPath = result.path;
+          const screenshotCfg = browserToolDeps.getRuntimeConfig();
+          const imageSanitization = resolveRuntimeImageSanitization();
+          let shareHint = SCREENSHOT_SHARE_UNAVAILABLE;
+          try {
+            // The original result remains private. Only this bounded outbound
+            // copy may cross the sandbox boundary after an explicit message call.
+            const sharePath = await browserToolDeps.stageBrowserScreenshotForSharing(
+              screenshotPath,
+              imageSanitization?.maxDimensionPx,
+            );
+            shareHint = formatScreenshotShareHint(sharePath);
+          } catch {
+            // Screenshot viewing remains useful when optional outbound staging fails.
+          }
+          // Screenshots stay in the tool result for agent vision, but channel
+          // delivery must remain an explicit message-tool action.
+          const screenshotDetails = {
+            ...(result as Record<string, unknown>),
+            media: { outbound: false },
+          };
+          try {
+            const described = await describeBrowserScreenshot(
+              {
+                cfg: screenshotCfg,
+                filePath: screenshotPath,
+                agentDir: opts?.agentDir,
+                workspaceDir: opts?.workspaceDir,
+                activeModel: opts?.activeModel,
+                mediaScope: opts?.mediaScope,
+                imageSanitization,
+              },
+              {
+                describeImageFile: browserToolDeps.describeImageFile,
+                normalizeBrowserScreenshot: browserToolDeps.normalizeBrowserScreenshot,
+                saveMediaBuffer: browserToolDeps.saveMediaBuffer,
+              },
+            );
+            if (described) {
+              const analyzedBy =
+                described.provider && described.model
+                  ? `${described.provider}/${described.model}`
+                  : "media image understanding";
+              const headerLines = [`[analyzed by ${analyzedBy}]`];
+              // Vision model descriptions contain web page content which is
+              // untrusted external input — wrap it the same way snapshot and
+              // tabs results are wrapped to mitigate prompt injection.
+              const wrappedDescription = wrapExternalContent(
+                neutralizeMediaDirectives(described.text.trim()),
+                {
+                  source: "browser",
+                  includeWarning: true,
+                },
+              );
+              const text = `${headerLines.join("\n")}\n${wrappedDescription}\n${shareHint}`;
+              return {
+                content: [{ type: "text", text }],
+                details: {
+                  ...(result as Record<string, unknown>),
+                  // Do NOT include details.media here — the vision path returns
+                  // a text description as the deliverable output. Exposing the raw
+                  // screenshot as media would cause channel delivery to auto-send
+                  // potentially sensitive page content. The text block carries the
+                  // staged outbound-copy path for an explicit message-tool send.
+                  vision: {
+                    provider: described.provider,
+                    model: described.model,
+                    decision: described.decision,
+                  },
+                },
+              };
+            }
+          } catch (err) {
+            // Fall back to returning the raw image block so the agent loop can
+            // still recover. Provider/runtime error messages are untrusted
+            // input too, so defang line-start final-reply media directives.
+            const rawReason = err instanceof Error ? err.message : String(err);
+            const reason = neutralizeMediaDirectives(rawReason);
+            const extraText = `[browser screenshot vision failed: ${reason}]\n${shareHint}`;
+            return await browserToolDeps.imageResultFromFile({
+              label: "browser:screenshot",
+              path: screenshotPath,
+              extraText,
+              details: screenshotDetails,
+              imageSanitization,
+            });
+          }
           return await browserToolDeps.imageResultFromFile({
             label: "browser:screenshot",
-            path: result.path,
-            details: result,
-            imageSanitization: resolveRuntimeImageSanitization(),
+            path: screenshotPath,
+            extraText: shareHint,
+            details: screenshotDetails,
+            imageSanitization,
           });
         }
         case "navigate": {
@@ -820,20 +977,26 @@ export function createBrowserTool(opts?: {
             details: result,
           };
         }
+        case "download":
+        case "waitfordownload":
+          return await executeDownloadAction({
+            action,
+            input: params,
+            baseUrl,
+            profile,
+            proxyRequest,
+            onTabActivity: touchTrackedTab,
+          });
         case "upload": {
           const paths = Array.isArray(params.paths) ? params.paths.map((p) => String(p)) : [];
           if (paths.length === 0) {
             throw new Error("paths required");
           }
-          const uploadPathsResult = await resolveExistingPathsWithinRoot({
-            rootDir: DEFAULT_UPLOAD_DIR,
-            requestedPaths: paths,
-            scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-          });
-          if (!uploadPathsResult.ok) {
-            throw new Error(uploadPathsResult.error);
+          const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths });
+          if (!resolvedResult.ok) {
+            throw new Error(resolvedResult.error);
           }
-          const normalizedPaths = uploadPathsResult.paths;
+          const normalizedPaths = resolvedResult.paths;
           const ref = readStringParam(params, "ref");
           const inputRef = readStringParam(params, "inputRef");
           const element = readStringParam(params, "element");

@@ -1,7 +1,9 @@
+// Spawn utilities configure child processes and normalize spawned process handles.
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { spawn } from "node:child_process";
+import { toErrorObject } from "../infra/errors.js";
 
-export type SpawnFallback = {
+type SpawnFallback = {
   label: string;
   options: SpawnOptions;
 };
@@ -64,7 +66,7 @@ async function spawnAndWaitForSpawn(
       }
       settled = true;
       cleanup();
-      reject(err);
+      reject(toErrorObject(err, "Non-Error rejection"));
     };
     const onSpawn = () => {
       finishResolve();

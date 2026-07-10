@@ -1,14 +1,23 @@
+// Persists directive-derived session preferences such as model and auth choices.
 import {
   resolveAgentDir,
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveCliRuntimeModelBackendBinding } from "../../agents/cli-backends.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
-import { normalizeProviderId, type ModelAliasIndex } from "../../agents/model-selection.js";
-import { resolveContextConfigProviderForRuntime } from "../../agents/openai-codex-routing.js";
-import { updateSessionStore } from "../../config/sessions/store.js";
+import {
+  modelKey,
+  normalizeProviderId,
+  type ModelAliasIndex,
+} from "../../agents/model-selection.js";
+import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
+import {
+  adoptPersistedSessionSnapshot,
+  sessionModelOverrideChangesApplied,
+  sessionSnapshotChangesApplied,
+} from "../../config/sessions/session-snapshot-merge.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
@@ -19,12 +28,13 @@ import { isThinkingLevelSupported, resolveSupportedThinkingLevel } from "../thin
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import {
-  canPersistInternalExecDirective,
-  canPersistInternalVerboseDirective,
+  canPersistSessionDirectiveDefaults,
   enqueueModeSwitchEvents,
+  resolveDirectiveTouchedSessionFields,
 } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
 import { resolveContextTokens } from "./model-selection.js";
+import { persistReplySessionEntry } from "./session-entry-persistence.js";
 
 export type PersistedThinkingLevelRemap = {
   from: ThinkLevel;
@@ -96,13 +106,16 @@ export async function persistInlineDirectives(params: {
   messageProvider?: string;
   surface?: string;
   gatewayClientScopes?: string[];
+  commandAuthorized?: boolean;
   senderIsOwner?: boolean;
   markLiveSwitchPending?: boolean;
+  modelCatalog?: ModelCatalogEntry[];
   thinkingCatalog?: ModelCatalogEntry[];
 }): Promise<{
   provider: string;
   model: string;
   contextTokens: number;
+  sessionChangesApplied: boolean;
   thinkingRemap?: PersistedThinkingLevelRemap;
 }> {
   const {
@@ -124,15 +137,25 @@ export async function persistInlineDirectives(params: {
   } = params;
   let { provider, model } = params;
   let thinkingRemap: PersistedThinkingLevelRemap | undefined;
-  const allowInternalExecPersistence = canPersistInternalExecDirective({
+  let sessionChangesApplied = true;
+  const allowInternalExecPersistence = canPersistSessionDirectiveDefaults({
     messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
+    commandAuthorized: params.commandAuthorized,
+    senderIsOwner: params.senderIsOwner,
   });
-  const allowInternalVerbosePersistence = canPersistInternalVerboseDirective({
+  const allowInternalVerbosePersistence = canPersistSessionDirectiveDefaults({
     messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
+    commandAuthorized: params.commandAuthorized,
+    senderIsOwner: params.senderIsOwner,
+  });
+  const touchedSessionFields = resolveDirectiveTouchedSessionFields({
+    directives,
+    allowInternalExecPersistence,
+    allowInternalVerbosePersistence,
   });
   const thinkingCatalog =
     params.thinkingCatalog && params.thinkingCatalog.length > 0
@@ -145,6 +168,8 @@ export async function persistInlineDirectives(params: {
   const agentDir = resolveAgentDir(cfg, activeAgentId) ?? params.agentDir;
 
   if (sessionEntry && sessionStore && sessionKey) {
+    const initialSessionEntry = { ...sessionEntry };
+    let appliedSessionEntry = sessionEntry;
     const prevElevatedLevel =
       (sessionEntry.elevatedLevel as ElevatedLevel | undefined) ??
       (agentCfg?.elevatedDefault as ElevatedLevel | undefined) ??
@@ -240,6 +265,9 @@ export async function persistInlineDirectives(params: {
         ? params.effectiveModelDirective
         : undefined;
     let modelUpdated = false;
+    let modelApplied = true;
+    let modelRuntimeEvent: { contextKey: string; text: string } | undefined;
+    let modelSwitchEvent: { alias?: string; label: string } | undefined;
     if (modelDirective) {
       const modelResolution = resolveModelSelectionFromDirective({
         directives: {
@@ -253,7 +281,7 @@ export async function persistInlineDirectives(params: {
         defaultModel,
         aliasIndex,
         allowedModelKeys,
-        allowedModelCatalog: [],
+        allowedModelCatalog: params.modelCatalog ?? [],
         provider,
       });
       if (modelResolution.modelSelection) {
@@ -271,32 +299,23 @@ export async function persistInlineDirectives(params: {
         if (runtimeOverride?.kind === "clear") {
           if (sessionEntry.agentRuntimeOverride) {
             delete sessionEntry.agentRuntimeOverride;
-            updated = true;
           }
         } else if (runtimeOverride?.kind === "set") {
           if (sessionEntry.agentRuntimeOverride) {
             delete sessionEntry.agentRuntimeOverride;
-            updated = true;
           }
-          enqueueSystemEvent(
-            `Ignored session runtime ${runtimeOverride.runtime}; configure provider or model runtime policy instead.`,
-            {
-              sessionKey,
-              contextKey: `model-runtime:${modelResolution.modelSelection.provider}:${runtimeOverride.runtime}:ignored-session-runtime`,
-            },
-          );
+          modelRuntimeEvent = {
+            text: `Ignored session runtime ${runtimeOverride.runtime}; configure provider or model runtime policy instead.`,
+            contextKey: `model-runtime:${modelResolution.modelSelection.provider}:${runtimeOverride.runtime}:ignored-session-runtime`,
+          };
         } else if (runtimeOverride?.kind === "invalid") {
           if (sessionEntry.agentRuntimeOverride) {
             delete sessionEntry.agentRuntimeOverride;
-            updated = true;
           }
-          enqueueSystemEvent(
-            `Ignored unsupported runtime ${runtimeOverride.runtime} for ${modelResolution.modelSelection.provider}.`,
-            {
-              sessionKey,
-              contextKey: `model-runtime:${modelResolution.modelSelection.provider}:${runtimeOverride.runtime}`,
-            },
-          );
+          modelRuntimeEvent = {
+            text: `Ignored unsupported runtime ${runtimeOverride.runtime} for ${modelResolution.modelSelection.provider}.`,
+            contextKey: `model-runtime:${modelResolution.modelSelection.provider}:${runtimeOverride.runtime}`,
+          };
         }
         modelUpdated = appliedModelOverride.updated;
         provider = modelResolution.modelSelection.provider;
@@ -326,20 +345,20 @@ export async function persistInlineDirectives(params: {
               provider,
               model,
             };
-            updated = true;
           }
         }
         const nextLabel = `${provider}/${model}`;
         if (nextLabel !== initialModelLabel) {
-          enqueueSystemEvent(
-            formatModelSwitchEvent(nextLabel, modelResolution.modelSelection.alias),
-            {
-              sessionKey,
-              contextKey: `model:${nextLabel}`,
-            },
-          );
+          modelSwitchEvent = {
+            label: nextLabel,
+            ...(modelResolution.modelSelection.alias
+              ? { alias: modelResolution.modelSelection.alias }
+              : {}),
+          };
         }
-        updated = updated || modelUpdated;
+        // Explicit model selections must still perform the atomic persisted
+        // winner check when their value matches the local snapshot.
+        updated = true;
       }
     }
     if (directives.hasQueueDirective && directives.queueReset) {
@@ -354,32 +373,98 @@ export async function persistInlineDirectives(params: {
       sessionEntry.updatedAt = Date.now();
       sessionStore[sessionKey] = sessionEntry;
       if (storePath) {
-        await updateSessionStore(storePath, (store) => {
-          store[sessionKey] = sessionEntry;
+        const persistence = await persistReplySessionEntry({
+          storePath,
+          sessionKey,
+          initialEntry: initialSessionEntry,
+          entry: sessionEntry,
+          reassertLiveModelSwitchPending:
+            modelUpdated &&
+            params.markLiveSwitchPending === true &&
+            sessionEntry.liveModelSwitchPending === true,
+          touchedFields: touchedSessionFields,
         });
+        if (persistence.status === "current") {
+          const persistedEntry = persistence.entry;
+          sessionStore[sessionKey] = persistedEntry;
+          sessionChangesApplied = sessionSnapshotChangesApplied({
+            initial: initialSessionEntry,
+            next: sessionEntry,
+            current: persistedEntry,
+            touchedFields: touchedSessionFields,
+          });
+          if (modelDirective) {
+            modelApplied =
+              sessionChangesApplied &&
+              sessionModelOverrideChangesApplied({
+                initial: initialSessionEntry,
+                next: sessionEntry,
+                current: persistedEntry,
+                reassertLiveModelSwitchPending:
+                  modelUpdated &&
+                  params.markLiveSwitchPending === true &&
+                  sessionEntry.liveModelSwitchPending === true,
+              });
+          }
+          adoptPersistedSessionSnapshot(sessionEntry, persistedEntry);
+          appliedSessionEntry = sessionEntry;
+        } else {
+          if (persistence.entry) {
+            sessionStore[sessionKey] = persistence.entry;
+          }
+          sessionChangesApplied = false;
+          if (modelDirective) {
+            modelApplied = false;
+          }
+        }
       }
-      if (modelDirective && modelUpdated) {
+      if (modelDirective && !modelApplied) {
+        sessionChangesApplied = false;
+        const persistedEntry = sessionStore[sessionKey];
+        provider = persistedEntry?.providerOverride?.trim() || defaultProvider;
+        model = persistedEntry?.modelOverride?.trim() || defaultModel;
+        thinkingRemap = undefined;
+      }
+      if (modelDirective && modelUpdated && modelApplied) {
         triggerSessionPatchHook({
           cfg,
-          sessionEntry,
+          sessionEntry: appliedSessionEntry,
           sessionKey,
           patch: { key: sessionKey, model: modelDirective },
         });
       }
-      enqueueModeSwitchEvents({
-        enqueueSystemEvent,
-        sessionEntry,
+      if (sessionChangesApplied) {
+        enqueueModeSwitchEvents({
+          enqueueSystemEvent,
+          sessionEntry: appliedSessionEntry,
+          sessionKey,
+          elevatedChanged,
+          reasoningChanged,
+        });
+      }
+    }
+    if (modelRuntimeEvent && modelApplied) {
+      enqueueSystemEvent(modelRuntimeEvent.text, {
         sessionKey,
-        elevatedChanged,
-        reasoningChanged,
+        contextKey: modelRuntimeEvent.contextKey,
+      });
+    }
+    if (modelSwitchEvent && modelApplied) {
+      enqueueSystemEvent(formatModelSwitchEvent(modelSwitchEvent.label, modelSwitchEvent.alias), {
+        sessionKey,
+        contextKey: `model:${modelSwitchEvent.label}`,
       });
     }
   }
 
+  const selectedCatalogEntry = params.modelCatalog?.find(
+    (entry) => modelKey(entry.provider, entry.id) === modelKey(provider, model),
+  );
   return {
     provider,
     model,
     thinkingRemap,
+    sessionChangesApplied,
     contextTokens: resolveContextTokens({
       cfg,
       agentCfg,
@@ -392,8 +477,11 @@ export async function persistInlineDirectives(params: {
           agentId: activeAgentId,
           sessionKey,
         }).runtime,
+        config: cfg,
       }),
       model,
+      modelContextWindow: selectedCatalogEntry?.contextWindow,
+      modelContextTokens: selectedCatalogEntry?.contextTokens,
     }),
   };
 }

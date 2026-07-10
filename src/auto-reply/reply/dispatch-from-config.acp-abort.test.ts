@@ -1,3 +1,4 @@
+// Tests ACP dispatch abort behavior and emitted lifecycle hooks.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type {
@@ -195,6 +196,9 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
     internalHookMocks.triggerInternalHook.mockReset();
     sessionStoreMocks.currentEntry = undefined;
+    sessionStoreMocks.loadSessionEntry
+      .mockReset()
+      .mockImplementation(() => sessionStoreMocks.currentEntry);
     sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
     sessionStoreMocks.readSessionEntry.mockReset().mockReturnValue(undefined);
     sessionStoreMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/mock-sessions.json");
@@ -213,6 +217,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     diagnosticMocks.logSessionStateChange.mockReset();
     diagnosticMocks.markDiagnosticSessionProgress.mockReset();
     agentEventMocks.emitAgentEvent.mockReset();
+    agentEventMocks.emitAgentAuditEvent.mockReset();
     agentEventMocks.onAgentEvent.mockReset().mockImplementation(() => () => {});
     setNoAbort();
   });
@@ -513,6 +518,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       },
     };
     sessionBindingMocks.resolveByConversation.mockReturnValue(boundConversation);
+    sessionStoreMocks.currentEntry = sessionStore[sourceSessionKey];
     sessionStoreMocks.loadSessionStore.mockReturnValue(sessionStore);
     sessionStoreMocks.resolveSessionStoreEntry.mockImplementation((...args: unknown[]) => {
       const params = args[0] as { store?: Record<string, unknown>; sessionKey?: string };
@@ -882,8 +888,12 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     });
 
     await hookStartedPromise;
-    expect(hookAbortSignal).toBe(existingOperation.abortSignal);
+    // The hook signal composes the operation signal with lifecycle/upstream
+    // signals, so assert propagation instead of instance identity.
+    expect(hookAbortSignal?.aborted).toBe(false);
     expect(replyRunRegistry.abort("agent:already-active-reply-dispatch")).toBe(true);
+    expect(existingOperation.abortSignal.aborted).toBe(true);
+    expect(hookAbortSignal?.aborted).toBe(true);
 
     await expect(dispatchPromise).resolves.toMatchObject({
       queuedFinal: false,
@@ -1027,7 +1037,9 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
 
     releaseResolver();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();

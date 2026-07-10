@@ -1,25 +1,53 @@
+/** Mutates and persists isolated cron session state around one run. */
 import fs from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
-import type { SkillSnapshot } from "../../agents/skills.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
+import { isSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import type { resolveCronSession } from "./session.js";
 
 type MutableSessionStore = Record<string, SessionEntry>;
 
+/** Mutable cron session entry updated by an isolated run before persistence. */
 export type MutableCronSessionEntry = SessionEntry;
+/** Resolved cron session plus its mutable backing store and active entry. */
 export type MutableCronSession = ReturnType<typeof resolveCronSession> & {
   store: MutableSessionStore;
   sessionEntry: MutableCronSessionEntry;
 };
+/** Live provider/model/auth-profile selection reported by the running session. */
 export type CronLiveSelection = LiveSessionModelSelection;
 
 type UpdateSessionStore = (
   storePath: string,
   update: (store: MutableSessionStore) => void,
+  options?: { activeSessionKey?: string; requireWriteSuccess?: boolean },
 ) => Promise<void>;
 
+/** Persists the currently selected mutable cron session entry to the session store. */
 export type PersistCronSessionEntry = () => Promise<void>;
+
+/** Hidden exact-run row retained while detached cron work can still resume. */
+export type CronRunContinuationSession = {
+  initialize: () => Promise<void>;
+  sync: () => Promise<void>;
+  setCliExecutionProvider: (provider?: string) => Promise<void>;
+  seal: (options?: { basePersisted?: boolean }) => Promise<void>;
+};
+
+export class CronSessionLifecycleClaimError extends Error {
+  constructor(sessionKey: string) {
+    super(`Session "${sessionKey}" changed while starting work. Retry.`);
+    this.name = "CronSessionLifecycleClaimError";
+  }
+}
+
+export function resolveCronLifecycleRevisionIdentity(lifecycleRevision: string): string {
+  return `cron-lifecycle-revision:${lifecycleRevision}`;
+}
 
 function cronTranscriptExists(entry: SessionEntry): boolean {
   const sessionFile = entry.sessionFile?.trim();
@@ -31,8 +59,18 @@ function normalizeSessionField(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+export function projectCronOwnershipFields(entry: SessionEntry): Partial<SessionEntry> {
+  const projected: Partial<SessionEntry> = { ...entry };
+  delete projected.label;
+  delete projected.pinnedAt;
+  delete projected.updatedAt;
+  return projected;
+}
+
 function toNonResumableCronSessionEntry(entry: SessionEntry): SessionEntry {
   const next = { ...entry } as Partial<SessionEntry>;
+  // If the transcript never materialized, do not persist stale resume handles
+  // that would make the next cron run believe a resumable CLI session exists.
   delete next.sessionId;
   delete next.sessionFile;
   delete next.sessionStartedAt;
@@ -43,6 +81,7 @@ function toNonResumableCronSessionEntry(entry: SessionEntry): SessionEntry {
   return next as SessionEntry;
 }
 
+/** Creates the persistence callback that stores cron session metadata after a run. */
 export function createPersistCronSessionEntry(params: {
   isFastTestEnv: boolean;
   cronSession: MutableCronSession;
@@ -53,19 +92,151 @@ export function createPersistCronSessionEntry(params: {
     if (params.isFastTestEnv) {
       return;
     }
+    const liveEntry = params.cronSession.sessionEntry;
     const persistedEntry =
       isCronSessionKey(params.agentSessionKey) &&
-      params.cronSession.sessionEntry.sessionId &&
-      !cronTranscriptExists(params.cronSession.sessionEntry)
-        ? toNonResumableCronSessionEntry(params.cronSession.sessionEntry)
-        : params.cronSession.sessionEntry;
-    params.cronSession.store[params.agentSessionKey] = persistedEntry;
-    await params.updateSessionStore(params.cronSession.storePath, (store) => {
-      store[params.agentSessionKey] = persistedEntry;
-    });
+      liveEntry.sessionId &&
+      !cronTranscriptExists(liveEntry)
+        ? toNonResumableCronSessionEntry(liveEntry)
+        : liveEntry;
+    let committedEntry = persistedEntry;
+    let mergedLiveEntry = liveEntry;
+    await params.updateSessionStore(
+      params.cronSession.storePath,
+      (store) => {
+        const currentEntry = store[params.agentSessionKey];
+        const ownsCurrentRevision =
+          currentEntry?.lifecycleRevision === params.cronSession.lifecycleRevision;
+        const currentRevisionActive = Boolean(
+          currentEntry?.lifecycleRevision &&
+          isSessionWorkAdmissionActive(params.cronSession.storePath, [
+            resolveCronLifecycleRevisionIdentity(currentEntry.lifecycleRevision),
+          ]),
+        );
+        const initialEntryMatchesOwnershipFields =
+          currentEntry !== undefined &&
+          params.cronSession.initialSessionEntry !== undefined &&
+          isDeepStrictEqual(
+            projectCronOwnershipFields(currentEntry),
+            projectCronOwnershipFields(params.cronSession.initialSessionEntry),
+          );
+        const canClaimInitialRevision = params.cronSession.initialSessionEntry
+          ? !currentRevisionActive && initialEntryMatchesOwnershipFields
+          : currentEntry === undefined;
+        // Concurrent persistent runs can resolve the same initial row. Once one
+        // revision claims it, older owners must not reclaim it and delete newer state.
+        if (!ownsCurrentRevision && !canClaimInitialRevision) {
+          throw new CronSessionLifecycleClaimError(params.agentSessionKey);
+        }
+        if (
+          (ownsCurrentRevision || canClaimInitialRevision) &&
+          currentEntry &&
+          params.cronSession.initialSessionEntry
+        ) {
+          committedEntry = mergeSessionSnapshotChanges({
+            initial: params.cronSession.initialSessionEntry,
+            next: persistedEntry,
+            current: currentEntry,
+          });
+          mergedLiveEntry = mergeSessionSnapshotChanges({
+            initial: params.cronSession.initialSessionEntry,
+            next: liveEntry,
+            current: currentEntry,
+          });
+        }
+        store[params.agentSessionKey] = committedEntry;
+      },
+      { activeSessionKey: params.agentSessionKey, requireWriteSuccess: true },
+    );
+    // The storage projection may intentionally omit resume identity until its
+    // transcript exists. Keep that projection out of the active run object.
+    params.cronSession.sessionEntry = mergedLiveEntry;
+    params.cronSession.initialSessionEntry = structuredClone(committedEntry);
+    params.cronSession.store[params.agentSessionKey] = committedEntry;
   };
 }
 
+/** Creates the hidden exact-run session owner used by detached media wakes. */
+export function createCronRunContinuationSession(params: {
+  isFastTestEnv: boolean;
+  cronSession: MutableCronSession;
+  runSessionKey: string;
+  thinkingLevel?: string;
+  toolsAllow?: string[];
+  toolsAllowIsDefault?: boolean;
+  cliSessionBindingFacts?: {
+    extraSystemPromptStatic?: string;
+    sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+    requireExplicitMessageTarget?: boolean;
+  };
+  updateSessionStore: UpdateSessionStore;
+}): CronRunContinuationSession {
+  const continuation: NonNullable<SessionEntry["cronRunContinuation"]> = {
+    lifecycleRevision: params.cronSession.lifecycleRevision,
+    phase: "running" as const,
+    ...(params.toolsAllow !== undefined ? { toolsAllow: [...params.toolsAllow] } : {}),
+    ...(params.toolsAllowIsDefault === true ? { toolsAllowIsDefault: true } : {}),
+    ...(params.cliSessionBindingFacts
+      ? { cliSessionBindingFacts: { ...params.cliSessionBindingFacts } }
+      : {}),
+  };
+  const owns = (entry: SessionEntry | undefined) =>
+    entry?.cronRunContinuation?.lifecycleRevision === continuation.lifecycleRevision;
+  const persist = async (create: boolean, phase: "running" | "ready", basePersisted = false) => {
+    if (params.isFastTestEnv) {
+      return;
+    }
+    const source = structuredClone(params.cronSession.sessionEntry);
+    let persisted = false;
+    let alreadySealed = false;
+    await params.updateSessionStore(
+      params.cronSession.storePath,
+      (store) => {
+        const current = store[params.runSessionKey];
+        if ((current && !owns(current)) || (!current && !create)) {
+          return;
+        }
+        // Leaving running transfers ownership to gateway continuation turns.
+        // The initial cron owner must never overwrite their newer state.
+        if (current && current.cronRunContinuation?.phase !== "running") {
+          alreadySealed = phase === "ready" && current.cronRunContinuation?.phase === "ready";
+          return;
+        }
+        store[params.runSessionKey] = {
+          ...current,
+          ...source,
+          ...(params.thinkingLevel ? { thinkingLevel: params.thinkingLevel } : {}),
+          cronRunContinuation: {
+            ...continuation,
+            phase,
+            ...(phase === "ready" ? { basePersisted } : {}),
+          },
+        };
+        persisted = true;
+      },
+      { activeSessionKey: params.runSessionKey, requireWriteSuccess: true },
+    );
+    if (!persisted && !alreadySealed) {
+      throw new CronSessionLifecycleClaimError(params.runSessionKey);
+    }
+  };
+  return {
+    initialize: async () => await persist(true, "running"),
+    sync: async () => await persist(false, "running"),
+    setCliExecutionProvider: async (provider) => {
+      const normalizedProvider = provider?.trim();
+      if (normalizedProvider) {
+        continuation.cliExecutionProvider = normalizedProvider;
+      } else {
+        delete continuation.cliExecutionProvider;
+      }
+      await persist(false, "running");
+    },
+    seal: async (options) => await persist(false, "ready", options?.basePersisted === true),
+  };
+}
+
+/** Adopts the session id/file produced by a run and preserves usage-family lineage. */
 export function adoptCronRunSessionMetadata(params: {
   entry: MutableCronSessionEntry;
   sessionKey: string;
@@ -103,6 +274,7 @@ export function adoptCronRunSessionMetadata(params: {
   return changed;
 }
 
+/** Persists a changed skills snapshot onto the cron session entry outside fast tests. */
 export async function persistCronSkillsSnapshotIfChanged(params: {
   isFastTestEnv: boolean;
   cronSession: MutableCronSession;
@@ -124,6 +296,7 @@ export async function persistCronSkillsSnapshotIfChanged(params: {
   await params.persistSessionEntry();
 }
 
+/** Records the selected provider/model before a cron run starts. */
 export function markCronSessionPreRun(params: {
   entry: MutableCronSessionEntry;
   provider: string;
@@ -134,6 +307,7 @@ export function markCronSessionPreRun(params: {
   params.entry.systemSent = true;
 }
 
+/** Syncs live model/auth-profile changes from a running cron session back to storage. */
 export function syncCronSessionLiveSelection(params: {
   entry: MutableCronSessionEntry;
   liveSelection: CronLiveSelection;
@@ -144,6 +318,8 @@ export function syncCronSessionLiveSelection(params: {
     params.entry.authProfileOverride = params.liveSelection.authProfileId;
     params.entry.authProfileOverrideSource = params.liveSelection.authProfileIdSource;
     if (params.liveSelection.authProfileIdSource === "auto") {
+      // Auto-selected profiles are tied to the compaction generation that
+      // resolved them; manual overrides should survive later compactions.
       params.entry.authProfileOverrideCompactionCount = params.entry.compactionCount ?? 0;
     } else {
       delete params.entry.authProfileOverrideCompactionCount;

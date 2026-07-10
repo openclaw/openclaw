@@ -1,3 +1,4 @@
+// Discord plugin module implements send.components behavior.
 import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -23,6 +24,7 @@ import {
   type RequestClient,
 } from "./internal/discord.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
+import type { DiscordReplyReference } from "./reply-reference.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { sendMessageDiscord } from "./send.outbound.js";
 import { createDiscordSendResult } from "./send.receipt.js";
@@ -30,7 +32,7 @@ import {
   buildDiscordSendError,
   createDiscordClient,
   resolveChannelId,
-  resolveDiscordChannelType,
+  resolveDiscordChannel,
   toDiscordFileBlob,
   stripUndefinedFields,
   SUPPRESS_NOTIFICATIONS_FLAG,
@@ -153,7 +155,7 @@ type DiscordComponentSendOpts = {
   token?: string;
   rest?: RequestClient;
   silent?: boolean;
-  replyTo?: string;
+  reply?: DiscordReplyReference;
   sessionKey?: string;
   agentId?: string;
   mediaUrl?: string;
@@ -166,6 +168,8 @@ type DiscordComponentSendOpts = {
   tableMode?: MarkdownTableMode;
   chunkMode?: ChunkMode;
   suppressEmbeds?: boolean;
+  /** Persist the concrete platform send before component bookkeeping can fail. */
+  onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
 };
 
 export function registerBuiltDiscordComponentMessage(params: {
@@ -198,8 +202,8 @@ async function buildDiscordComponentPayload(params: {
   body: ReturnType<typeof stripUndefinedFields>;
   buildResult: ReturnType<typeof buildDiscordComponentMessage>;
 }> {
-  const messageReference = params.opts.replyTo
-    ? { message_id: params.opts.replyTo, fail_if_not_exists: false }
+  const messageReference = params.opts.reply
+    ? { message_id: params.opts.reply.messageId, fail_if_not_exists: false }
     : undefined;
 
   let spec = params.spec;
@@ -278,12 +282,13 @@ export async function sendDiscordComponentMessage(
       mediaLocalRoots: opts.mediaLocalRoots,
       mediaReadFile: opts.mediaReadFile,
       mediaAccess: opts.mediaAccess,
-      replyTo: opts.replyTo,
+      reply: opts.reply,
       silent: opts.silent,
       textLimit: opts.textLimit,
       maxLinesPerMessage: opts.maxLinesPerMessage,
       tableMode: opts.tableMode,
       chunkMode: opts.chunkMode,
+      onDeliveryResult: opts.onDeliveryResult,
       ...(opts.suppressEmbeds === undefined ? {} : { suppressEmbeds: opts.suppressEmbeds }),
     });
   }
@@ -294,9 +299,9 @@ export async function sendDiscordComponentMessage(
   const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
-  const channelType = await resolveDiscordChannelType(rest, channelId);
+  const channel = await resolveDiscordChannel(rest, channelId);
 
-  if (channelType && DISCORD_FORUM_LIKE_TYPES.has(channelType)) {
+  if (channel && DISCORD_FORUM_LIKE_TYPES.has(channel.type)) {
     throw new Error("Discord components are not supported in forum-style channels");
   }
 
@@ -325,6 +330,14 @@ export async function sendDiscordComponentMessage(
     });
   }
 
+  const deliveryResult = createDiscordSendResult({
+    result,
+    fallbackChannelId: channelId,
+    kind: "card",
+    ...(opts.reply ? { reply: opts.reply } : {}),
+  });
+  await opts.onDeliveryResult?.(deliveryResult);
+
   registerBuiltDiscordComponentMessage({
     buildResult,
     messageId: result.id,
@@ -337,12 +350,7 @@ export async function sendDiscordComponentMessage(
     direction: "outbound",
   });
 
-  return createDiscordSendResult({
-    result,
-    fallbackChannelId: channelId,
-    kind: "card",
-    ...(opts.replyTo ? { replyToId: opts.replyTo } : {}),
-  });
+  return deliveryResult;
 }
 
 export async function editDiscordComponentMessage(
@@ -400,6 +408,6 @@ export async function editDiscordComponentMessage(
     },
     fallbackChannelId: channelId,
     kind: "card",
-    ...(opts.replyTo ? { replyToId: opts.replyTo } : {}),
+    ...(opts.reply ? { reply: opts.reply } : {}),
   });
 }

@@ -1,7 +1,11 @@
+// Subagent spawn attachment tests cover strict base64 decoding, attachment name
+// validation, materialization paths, and cleanup after spawn failures.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
+import { decodeStrictBase64 } from "./subagent-attachments.js";
 import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
@@ -26,13 +30,10 @@ beforeAll(async () => {
   });
 });
 
-// --- decodeStrictBase64 ---
-
 describe("decodeStrictBase64", () => {
   const maxBytes = 1024;
 
   it("valid base64 returns buffer with correct bytes", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
     const input = "hello world";
     const encoded = Buffer.from(input).toString("base64");
     const result = decodeStrictBase64(encoded, maxBytes);
@@ -40,49 +41,41 @@ describe("decodeStrictBase64", () => {
   });
 
   it("empty string returns null", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
     expect(decodeStrictBase64("", maxBytes)).toBeNull();
   });
 
   it("bad padding (length % 4 !== 0) returns null", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
     expect(decodeStrictBase64("abc", maxBytes)).toBeNull();
   });
 
   it("non-base64 chars returns null", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
     expect(decodeStrictBase64("!@#$", maxBytes)).toBeNull();
   });
 
   it("whitespace-only returns null (empty after strip)", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
     expect(decodeStrictBase64("   ", maxBytes)).toBeNull();
   });
 
   it("pre-decode oversize guard: encoded string > maxEncodedBytes * 2 returns null", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
-    // maxEncodedBytes = ceil(1024/3)*4 = 1368; *2 = 2736
+    // Pre-decode guard rejects obviously oversized payloads before allocating
+    // the decoded buffer.
     const oversized = "A".repeat(2737);
     expect(decodeStrictBase64(oversized, maxBytes)).toBeNull();
   });
 
   it("decoded byteLength exceeds maxDecodedBytes returns null", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
     const bigBuf = Buffer.alloc(1025, 0x42);
     const encoded = bigBuf.toString("base64");
     expect(decodeStrictBase64(encoded, maxBytes)).toBeNull();
   });
 
   it("valid base64 at exact boundary returns Buffer", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
     const exactBuf = Buffer.alloc(1024, 0x41);
     const encoded = exactBuf.toString("base64");
     const result = decodeStrictBase64(encoded, maxBytes);
     expect(result?.byteLength).toBe(1024);
   });
 });
-
-// --- filename validation via spawnSubagentDirect ---
 
 describe("spawnSubagentDirect filename validation", () => {
   beforeEach(async () => {
@@ -219,28 +212,31 @@ describe("spawnSubagentDirect filename validation", () => {
       return store;
     });
     try {
-      vi.stubEnv("HOME", homeDir);
-      const { spawnSubagentDirect } = subagentSpawnModule;
-      const result = await spawnSubagentDirect(
-        {
-          task: "test",
-          cwd: "~/task-repo",
-          attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
-        },
-        ctx,
-      );
+      await withEnvAsync({ HOME: homeDir }, async () => {
+        const { spawnSubagentDirect } = subagentSpawnModule;
+        const result = await spawnSubagentDirect(
+          {
+            task: "test",
+            cwd: "~/task-repo",
+            attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
+          },
+          ctx,
+        );
 
-      expect(result.status).toBe("accepted");
-      const attachmentsRoot = path.join(expectedCwd, ".openclaw", "attachments");
-      expect(fs.existsSync(attachmentsRoot)).toBe(true);
-      const childSessionKey = result.childSessionKey as string;
-      expect(persistedStore?.[childSessionKey]?.spawnedCwd).toBe(expectedCwd);
+        expect(result.status).toBe("accepted");
+        const attachmentsRoot = path.join(expectedCwd, ".openclaw", "attachments");
+        expect(fs.existsSync(attachmentsRoot)).toBe(true);
+        const childSessionKey = result.childSessionKey as string;
+        expect(persistedStore?.[childSessionKey]?.spawnedCwd).toBe(expectedCwd);
+      });
     } finally {
       fs.rmSync(homeDir, { recursive: true, force: true });
     }
   });
 
   it("removes materialized attachments when lineage patching fails", async () => {
+    // Attachments are created before the child session lineage patch; failures
+    // must delete both the child session and materialized files.
     const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
     const store: Record<string, Record<string, unknown>> = {};
     updateSessionStoreMock.mockImplementation(async (_storePath: unknown, mutator: unknown) => {

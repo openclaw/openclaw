@@ -1,3 +1,4 @@
+// Daemon service env tests cover environment variable assembly for services.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -35,6 +36,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/home/testuser/.fnm/current/bin");
     expect(result).toContain("/home/testuser/.volta/bin");
     expect(result).toContain("/home/testuser/.asdf/shims");
+    expect(result).toContain("/home/testuser/.local/share/pnpm/bin");
     expect(result).toContain("/home/testuser/.local/share/pnpm");
     expect(result).toContain("/home/testuser/.bun/bin");
   });
@@ -49,7 +51,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toEqual(["/usr/local/bin", "/usr/bin", "/bin"]);
   });
 
-  it("places user directories before system directories on Linux", () => {
+  it("places user directories after system directories on Linux", () => {
     const result = getMinimalServicePathParts({
       platform: "linux",
       home: "/home/testuser",
@@ -61,7 +63,33 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
 
     expect(userDirIndex).toBeGreaterThan(-1);
     expect(systemDirIndex).toBeGreaterThan(-1);
-    expect(userDirIndex).toBeLessThan(systemDirIndex);
+    expect(systemDirIndex).toBeLessThan(userDirIndex);
+  });
+
+  it("places package-manager bin directories after trusted system directories on Linux", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      env: {
+        HOME: "/home/testuser",
+        PNPM_HOME: "/home/testuser/.local/share/pnpm",
+        NPM_CONFIG_PREFIX: "/home/testuser/.npm-global",
+      },
+      existsSync: allExist,
+    });
+
+    const systemDirIndex = result.indexOf("/usr/bin");
+    const packageManagerDirs = [
+      "/home/testuser/.local/share/pnpm",
+      "/home/testuser/.local/share/pnpm/bin",
+      "/home/testuser/.npm-global/bin",
+    ];
+
+    expect(systemDirIndex).toBeGreaterThan(-1);
+    for (const dir of packageManagerDirs) {
+      const dirIndex = result.indexOf(dir);
+      expect(dirIndex).toBeGreaterThan(-1);
+      expect(systemDirIndex).toBeLessThan(dirIndex);
+    }
   });
 
   it("places extraDirs before user directories on Linux", () => {
@@ -97,6 +125,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     });
 
     expect(result).toContain("/opt/pnpm");
+    expect(result).toContain("/opt/pnpm/bin");
     expect(result).toContain("/opt/npm/bin");
     expect(result).toContain("/opt/bun/bin");
     expect(result).toContain("/opt/volta/bin");
@@ -221,7 +250,9 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
       "/Users/testuser/Library/Application Support/fnm/aliases/default/bin",
     );
     expect(result).not.toContain("/Users/testuser/.fnm/aliases/default/bin");
+    expect(result).not.toContain("/Users/testuser/Library/pnpm/bin");
     expect(result).not.toContain("/Users/testuser/Library/pnpm");
+    expect(result).not.toContain("/Users/testuser/.local/share/pnpm/bin");
     expect(result).not.toContain("/Users/testuser/.local/share/pnpm");
   });
 
@@ -255,6 +286,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     });
 
     expect(result).toContain("/opt/pnpm");
+    expect(result).toContain("/opt/pnpm/bin");
     expect(result).toContain("/opt/volta/bin");
     expect(result).toContain("/opt/bun/bin");
     expect(result).toContain("/opt/asdf/shims");
@@ -332,6 +364,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     });
 
     expect(result).toContain("/home/testuser/.local/share/pnpm");
+    expect(result).toContain("/home/testuser/.local/share/pnpm/bin");
     expect(result).toContain("/home/testuser/.local/share/fnm/aliases/default/bin");
     expect(result).toContain("/home/testuser/.local/share/fnm/current/bin");
   });
@@ -514,6 +547,7 @@ describe("buildMinimalServicePath", () => {
     // Verify user directories are included
     expect(parts).toContain("/home/alice/.local/bin");
     expect(parts).toContain("/home/alice/.npm-global/bin");
+    expect(parts).toContain("/home/alice/.local/share/pnpm/bin");
     expect(parts).toContain("/home/alice/.nvm/current/bin");
     expect(parts).toContain("/home/alice/.local/share/fnm/aliases/default/bin");
 
@@ -534,7 +568,7 @@ describe("buildMinimalServicePath", () => {
     expect(parts).toEqual(["/usr/local/bin", "/usr/bin", "/bin"]);
   });
 
-  it("ensures user directories come before system directories on Linux", () => {
+  it("ensures user directories come after system directories on Linux", () => {
     const result = buildMinimalServicePath({
       platform: "linux",
       env: { HOME: "/home/bob" },
@@ -545,7 +579,7 @@ describe("buildMinimalServicePath", () => {
     const firstUserDirIdx = parts.indexOf("/home/bob/.local/bin");
     const firstSystemDirIdx = parts.indexOf("/usr/local/bin");
 
-    expect(firstUserDirIdx).toBeLessThan(firstSystemDirIdx);
+    expect(firstSystemDirIdx).toBeLessThan(firstUserDirIdx);
   });
 
   it("includes extra directories when provided", () => {
@@ -601,6 +635,7 @@ describe("buildServiceEnvironment", () => {
     expect(typeof env.OPENCLAW_SERVICE_VERSION).toBe("string");
     expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway.service");
     expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway");
+    expect(env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBe("1");
     if (process.platform === "darwin") {
       expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.gateway");
     }
@@ -683,6 +718,33 @@ describe("buildServiceEnvironment", () => {
     if (process.platform === "darwin") {
       expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
     }
+  });
+
+  it("preserves explicit systemd unit overrides", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_PROFILE: "work",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-maintenance",
+      },
+      port: 18789,
+      platform: "linux",
+    });
+
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-maintenance.service");
+  });
+
+  it("preserves explicit systemd unit overrides with service suffix", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-maintenance.service",
+      },
+      port: 18789,
+      platform: "linux",
+    });
+
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-maintenance.service");
   });
 
   it("sets a profile-specific launchd marker for macOS gateway services", () => {
@@ -790,6 +852,13 @@ describe("buildNodeServiceEnvironment", () => {
       env: { HOME: "/home/user", OPENCLAW_GATEWAY_TOKEN: " node-token " },
     });
     expect(env.OPENCLAW_GATEWAY_TOKEN).toBe("node-token");
+  });
+
+  it("passes through OPENCLAW_GATEWAY_PASSWORD for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user", OPENCLAW_GATEWAY_PASSWORD: " node-password " },
+    });
+    expect(env.OPENCLAW_GATEWAY_PASSWORD).toBe("node-password");
   });
 
   it("passes through OPENCLAW_ALLOW_INSECURE_PRIVATE_WS for node services", () => {

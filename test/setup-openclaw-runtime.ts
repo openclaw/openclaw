@@ -1,3 +1,4 @@
+// OpenClaw runtime test setup installs runtime mocks and cleanup.
 import { afterAll, afterEach, beforeAll, vi } from "vitest";
 import type {
   ChannelId,
@@ -6,6 +7,7 @@ import type {
 } from "../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
+import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
 import type { PluginRegistry } from "../src/plugins/registry.js";
 import { installSharedTestSetup } from "./setup.shared.js";
 
@@ -124,10 +126,7 @@ function createTestRegistryForSetup(
   channels: Array<{ pluginId: string; plugin: ChannelPlugin; source: string }> = [],
 ): PluginRegistry {
   return {
-    plugins: [],
-    tools: [],
-    hooks: [],
-    typedHooks: [],
+    ...createEmptyPluginRegistry(),
     channels: channels as unknown as PluginRegistry["channels"],
     channelSetups: channels.map((entry) => ({
       pluginId: entry.pluginId,
@@ -135,29 +134,6 @@ function createTestRegistryForSetup(
       source: entry.source,
       enabled: true,
     })),
-    providers: [],
-    embeddingProviders: [],
-    speechProviders: [],
-    realtimeTranscriptionProviders: [],
-    realtimeVoiceProviders: [],
-    mediaUnderstandingProviders: [],
-    imageGenerationProviders: [],
-    videoGenerationProviders: [],
-    webFetchProviders: [],
-    webSearchProviders: [],
-    migrationProviders: [],
-    memoryEmbeddingProviders: [],
-    gatewayHandlers: {},
-    httpRoutes: [],
-    cliRegistrars: [],
-    reloads: [],
-    nodeHostCommands: [],
-    securityAuditCollectors: [],
-    services: [],
-    gatewayDiscoveryServices: [],
-    commands: [],
-    conversationBindingResolvedHandlers: [],
-    diagnostics: [],
   };
 }
 
@@ -204,8 +180,7 @@ const createStubOutbound = (
   sendText: async ({ deps, to, text }) => {
     const send = pickSendFn(id, deps);
     if (send) {
-      // oxlint-disable-next-line typescript/no-explicit-any
-      const result = (await send(to, text, { verbose: false } as any)) as {
+      const result = (await send(to, text, { verbose: false })) as {
         messageId: string;
       };
       return { channel: id, ...result };
@@ -215,8 +190,7 @@ const createStubOutbound = (
   sendMedia: async ({ deps, to, text, mediaUrl }) => {
     const send = pickSendFn(id, deps);
     if (send) {
-      // oxlint-disable-next-line typescript/no-explicit-any
-      const result = (await send(to, text, { verbose: false, mediaUrl } as any)) as {
+      const result = (await send(to, text, { verbose: false, mediaUrl })) as {
         messageId: string;
       };
       return { channel: id, ...result };

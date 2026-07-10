@@ -1,3 +1,5 @@
+// Tool-call id tests cover provider-safe rewrites, collision handling, replay
+// preservation for signed thinking turns, and strict short-id mode.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import { castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
@@ -148,6 +150,8 @@ function expectReplaySafeSignedTurnOwnership(params: {
   preservedTurn: "first" | "second";
   firstToolCallIndex: number;
 }) {
+  // Signed thinking blocks bind the following tool call; replay repair may keep
+  // only the safe turn's id and must rewrite the colliding sibling turn.
   const out = sanitizeToolCallIdsForCloudCodeAssist(params.input, "strict", {
     preserveReplaySafeThinkingToolCallIds: true,
     allowedToolNames: ["read"],
@@ -380,8 +384,7 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
       expect(out).toBe(input);
       expect(
-        ((out[0] as Extract<AgentMessage, { role: "assistant" }>).content?.[1] as { id?: string })
-          .id,
+        ((out[0] as Extract<AgentMessage, { role: "assistant" }>).content[1] as { id?: string }).id,
       ).toBe("call_1");
       expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe("call_1");
     });
@@ -438,6 +441,68 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       // Should not contain underscores or hyphens
       expect(aId).not.toMatch(/[_-]/);
       expect(bId).not.toMatch(/[_-]/);
+    });
+
+    it("rewrites OpenAI-shaped tool result id aliases with the matching assistant id", () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [readToolCall("call_mock_image_generate_1")],
+        },
+        {
+          role: "toolResult",
+          call_id: "call_mock_image_generate_1",
+          callId: "call_mock_image_generate_1",
+          tool_call_id: "call_mock_image_generate_1",
+          tool_use_id: "call_mock_image_generate_1",
+          toolName: "image_generate",
+          content: [{ type: "text", text: "Background task started" }],
+        },
+      ]);
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict");
+      const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+      const toolCall = assistant.content?.[0] as { id?: string };
+      const toolResult = out[1] as Extract<AgentMessage, { role: "toolResult" }> & {
+        call_id?: string;
+        callId?: string;
+        tool_call_id?: string;
+        tool_use_id?: string;
+      };
+
+      expect(toolCall.id).toBe("callmockimagegenerate1");
+      expect(toolResult.toolCallId).toBe(toolCall.id);
+      expect(toolResult.call_id).toBe(toolCall.id);
+      expect(toolResult.callId).toBe(toolCall.id);
+      expect(toolResult.tool_call_id).toBe(toolCall.id);
+      expect(toolResult.tool_use_id).toBe(toolCall.id);
+    });
+
+    it("keeps an existing canonical tool result id when raw aliases match the assistant", () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [readToolCall("call_mock_image_generate_1")],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "callmockimagegenerate1",
+          call_id: "call_mock_image_generate_1",
+          toolName: "image_generate",
+          content: [{ type: "text", text: "Background task started" }],
+        },
+      ]);
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict");
+      const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+      const toolCall = assistant.content?.[0] as { id?: string };
+      const toolResult = out[1] as Extract<AgentMessage, { role: "toolResult" }> & {
+        call_id?: string;
+      };
+
+      expect(toolCall.id).toBe("callmockimagegenerate1");
+      expect(toolResult.toolCallId).toBe(toolCall.id);
+      expect(toolResult.call_id).toBe(toolCall.id);
     });
 
     it("assigns distinct strict IDs when identical raw tool call ids repeat", () => {
@@ -531,6 +596,36 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
         "functions.read:0",
       );
       expect((out[3] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(second.id);
+    });
+
+    it("uses OpenAI-style ids for repeated native Kimi ids when requested", () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "functions.read:0", name: "read", arguments: {} }],
+        },
+        buildToolResult({ toolCallId: "functions.read:0", text: "one" }),
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "functions.read:0", name: "read", arguments: {} }],
+        },
+        buildToolResult({ toolCallId: "functions.read:0", text: "two" }),
+      ]);
+      const options = { duplicateToolCallIdStyle: "openai" as const };
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict", options);
+      const firstContent = (out[0] as Extract<AgentMessage, { role: "assistant" }>).content;
+      const secondContent = (out[2] as Extract<AgentMessage, { role: "assistant" }>).content;
+      if (!Array.isArray(firstContent) || !Array.isArray(secondContent)) {
+        throw new Error("Expected assistant tool-call content");
+      }
+      const firstId = (firstContent[0] as { id?: string }).id;
+      const secondId = (secondContent[0] as { id?: string }).id;
+      expect(firstId).toBe("functions.read:0");
+      expect(secondId).toMatch(/^call_[a-f0-9]{24}$/);
+      expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(firstId);
+      expect((out[3] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(secondId);
+      expect(sanitizeToolCallIdsForCloudCodeAssist(out, "strict", options)).toBe(out);
     });
 
     it("does not preserve malformed Kimi-like ids", () => {

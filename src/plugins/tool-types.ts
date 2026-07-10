@@ -1,3 +1,4 @@
+// Defines plugin tool metadata and filesystem policy types.
 import type { ToolFsPolicy } from "../agents/tool-fs-policy.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -45,7 +46,14 @@ export type OpenClawPluginToolContext = {
   deliveryContext?: DeliveryContext;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
   requesterSenderId?: string;
+  /** Trusted owner bit from inbound context (runtime-provided, not tool args). */
+  senderIsOwner?: boolean;
   sandboxed?: boolean;
+  /**
+   * True for explicit one-shot local CLI runs that must release plugin-owned
+   * process resources before the command exits.
+   */
+  oneShotCliRun?: boolean;
 };
 
 export type OpenClawPluginToolFactory = (

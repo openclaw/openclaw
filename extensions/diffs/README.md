@@ -2,6 +2,14 @@
 
 Read-only diff viewer plugin for **OpenClaw** agents.
 
+## Install
+
+```bash
+openclaw plugins install @openclaw/diffs
+```
+
+Restart the Gateway after installing or updating the plugin.
+
 It gives agents one tool, `diffs`, that can:
 
 - render a gateway-hosted diff viewer for canvas use
@@ -12,6 +20,7 @@ It gives agents one tool, `diffs`, that can:
 
 The tool can return:
 
+- `details.changed`: `false` when before/after inputs are identical and no artifact was rendered; `true` for rendered results
 - `details.viewerUrl`: a gateway URL that can be opened in the canvas
 - `details.filePath`: a local rendered artifact path when file rendering is requested
 - `details.fileFormat`: the rendered file format (`png` or `pdf`)
@@ -118,6 +127,16 @@ Set plugin-wide defaults in `~/.openclaw/openclaw.json`:
 
 Explicit tool parameters still win over these defaults.
 
+## Docs
+
+- https://docs.openclaw.ai/tools/diffs
+
+## Package
+
+- Plugin id: `diffs`
+- Package: `@openclaw/diffs`
+- Minimum OpenClaw host: `2026.4.30`
+
 Security options:
 
 - `security.allowRemoteViewer` (default `false`): allows non-loopback access to `/plugins/diffs/view/...` token URLs
@@ -206,6 +225,8 @@ diff --git a/src/example.ts b/src/example.ts
 
 ## Notes
 
+- Multi-file patches start with a changed-files summary card: totals, per-file `+N`/`-N` stats, change badges, and anchor links.
+- Rendered PNG/PDF files keep the per-file header counts but omit the interactive view toggles.
 - The viewer is hosted locally through the gateway under `/plugins/diffs/...`.
 - Artifacts are ephemeral and stored in the plugin temp subfolder (`$TMPDIR/openclaw-diffs`).
 - Default viewer URLs use loopback (`127.0.0.1`) unless you set plugin `viewerBaseUrl`, pass `baseUrl`, or use `gateway.bind=custom` + `gateway.customBindHost`.

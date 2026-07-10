@@ -1,7 +1,14 @@
+// End-to-end subscription tests cover usage, lifecycle, tool logging,
+// messaging/media side effects, and replay-state behavior for embedded runs.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import * as agentEvents from "../infra/agent-events.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { parseLogLine } from "../logging/parse-log-line.js";
 import {
   THINKING_TAG_CASES,
   createSubscribedSessionHarness,
@@ -17,6 +24,8 @@ import { makeZeroUsageSnapshot } from "./usage.js";
 
 describe("subscribeEmbeddedAgentSession", () => {
   async function flushBlockReplyCallbacks(): Promise<void> {
+    // Block replies can schedule nested microtasks; drain twice before checking
+    // delivery state in broad subscription tests.
     await Promise.resolve();
     await Promise.resolve();
   }
@@ -49,13 +58,15 @@ describe("subscribeEmbeddedAgentSession", () => {
   function createSubscribedHarness(
     options: Omit<Parameters<typeof subscribeEmbeddedAgentSession>[0], "session">,
   ) {
+    // Default trusted media tools to built-ins so tests that opt into custom
+    // builtin sets get matching local media trust behavior.
     const { session, emit } = createStubSessionHarness();
-    subscribeEmbeddedAgentSession({
+    const subscription = subscribeEmbeddedAgentSession({
       session,
       ...options,
       trustedLocalMediaToolNames: options.trustedLocalMediaToolNames ?? options.builtinToolNames,
     });
-    return { emit };
+    return { emit, subscription };
   }
 
   function emitAssistantTextDelta(
@@ -69,6 +80,21 @@ describe("subscribeEmbeddedAgentSession", () => {
       assistantMessageEvent: {
         type: "text_delta",
         delta,
+      },
+    });
+  }
+
+  function emitAssistantTextEnd(
+    emit: (evt: unknown) => void,
+    content: string,
+    message: Record<string, unknown> = { role: "assistant" },
+  ) {
+    emit({
+      type: "message_update",
+      message,
+      assistantMessageEvent: {
+        type: "text_end",
+        content,
       },
     });
   }
@@ -112,6 +138,47 @@ describe("subscribeEmbeddedAgentSession", () => {
       isError: params.isError,
       result: params.result,
     });
+  }
+
+  async function captureToolLifecycleLogSubsystems(messageChannel?: string): Promise<string[]> {
+    // Use a temporary file-backed logger so subsystem attribution is verified
+    // against real serialized log lines.
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-log-attribution-"));
+    const logFile = path.join(tempDir, "openclaw.log");
+    try {
+      setLoggerOverride({
+        level: "debug",
+        consoleLevel: "silent",
+        file: logFile,
+      });
+      const { emit } = createSubscribedHarness({
+        runId: "run-log-attribution",
+        messageChannel,
+      });
+
+      emitToolRun({
+        emit,
+        toolName: "exec",
+        toolCallId: "tool-log-attribution",
+        args: { command: "echo ok" },
+        isError: false,
+        result: { ok: true },
+      });
+
+      const logText = await fs.readFile(logFile, "utf8");
+      const subsystems: string[] = [];
+      for (const line of logText.trim().split(/\n+/)) {
+        const parsed = parseLogLine(line);
+        if (parsed?.message.includes("embedded run tool")) {
+          subsystems.push(parsed.subsystem ?? "");
+        }
+      }
+      return subsystems;
+    } finally {
+      resetLogger();
+      setLoggerOverride(null);
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   }
 
   function findBlockReplyPayload(
@@ -195,6 +262,21 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
+  it.each([
+    ["telegram", "gateway/channels/telegram"],
+    [undefined, "agent/embedded"],
+    ["openclaw", "agent/embedded"],
+    ["not a channel", "agent/embedded"],
+  ] as const)(
+    "attributes tool lifecycle logs for channel=%s",
+    async (messageChannel, subsystem) => {
+      await expect(captureToolLifecycleLogSubsystems(messageChannel)).resolves.toEqual([
+        subsystem,
+        subsystem,
+      ]);
+    },
+  );
+
   it("does not double-count usage when done and message_end carry the same snapshot", () => {
     const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
     const usage = {
@@ -276,6 +358,29 @@ describe("subscribeEmbeddedAgentSession", () => {
       ]);
     },
   );
+
+  it("suppressLiveStreamOutput skips per-chunk preview but still delivers final text", () => {
+    const onAgentEvent = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onAgentEvent,
+      suppressLiveStreamOutput: true,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "Hello ");
+    emitAssistantTextDelta(emit, "world");
+
+    // No live preview events while suppressed (the per-chunk parsing path is skipped).
+    expect(extractAgentEventPayloads(onAgentEvent.mock.calls)).toHaveLength(0);
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Hello world" }],
+    } as AssistantMessage;
+    emit({ type: "message_end", message: assistantMessage });
+    expectSingleAgentEventText(onAgentEvent.mock.calls, "Hello world");
+  });
 
   it("blocks local MEDIA urls from case-variant tool names in verbose output", async () => {
     const onToolResult = vi.fn();
@@ -419,7 +524,7 @@ describe("subscribeEmbeddedAgentSession", () => {
   it("does not attach generated image media to an early streamed chunk before explicit MEDIA", async () => {
     const onToolResult = vi.fn();
     const onBlockReply = vi.fn();
-    const { emit } = createSubscribedHarness({
+    const { emit, subscription } = createSubscribedHarness({
       runId: "run",
       onToolResult,
       onBlockReply,
@@ -492,6 +597,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       .map(([payload]) => payload)
       .filter((payload) => payload.mediaUrls?.includes("/tmp/generated.png"));
     expect(mediaPayloads).toHaveLength(1);
+    expect(subscription.hasToolMediaBlockReply()).toBe(true);
   });
 
   it("attaches media from internal completion events even when assistant omits MEDIA lines", async () => {
@@ -694,6 +800,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       audioAsVoice: true,
     });
     expect(subscription.getPendingToolMediaReply()).toBeNull();
+    expect(subscription.hasToolMediaBlockReply()).toBe(true);
     expect(subscription.getVisibleBlockReplyCount()).toBe(1);
   });
 
@@ -776,6 +883,70 @@ describe("subscribeEmbeddedAgentSession", () => {
       .filter((value): value is string => typeof value === "string");
     expect(streamTexts.at(-1)).toBe("Checking files done");
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+  });
+
+  type ReasoningWindowGateCase = {
+    label: string;
+    reasoningMode: "off" | "stream";
+    streamReasoningInNonStreamModes?: boolean;
+    expected: boolean;
+  };
+
+  it.each<ReasoningWindowGateCase>([
+    {
+      label: "absent opt-in with off reasoning",
+      reasoningMode: "off",
+      expected: false,
+    },
+    {
+      label: "false opt-in with off reasoning",
+      reasoningMode: "off",
+      streamReasoningInNonStreamModes: false,
+      expected: false,
+    },
+    {
+      label: "false opt-in with stream reasoning",
+      reasoningMode: "stream",
+      streamReasoningInNonStreamModes: false,
+      expected: true,
+    },
+    {
+      label: "true opt-in with off reasoning",
+      reasoningMode: "off",
+      streamReasoningInNonStreamModes: true,
+      expected: true,
+    },
+  ])("gates reasoning-window streaming for $label", (params) => {
+    const onReasoningStream = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      reasoningMode: params.reasoningMode,
+      ...(params.streamReasoningInNonStreamModes === undefined
+        ? {}
+        : { streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes }),
+      onReasoningStream,
+    });
+
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Checking files" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        delta: "Checking files",
+      },
+    });
+
+    if (params.expected) {
+      expect(onReasoningStream).toHaveBeenCalledWith({
+        text: "Checking files",
+        ...(params.reasoningMode === "stream" ? {} : { requiresReasoningProgressOptIn: true }),
+      });
+    } else {
+      expect(onReasoningStream).not.toHaveBeenCalled();
+    }
   });
 
   it("extracts correct reasoning delta for incremental stream updates", () => {
@@ -882,6 +1053,158 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(payloads[0]?.delta).toBe("Visible answer");
   });
 
+  it("replaces leaked MiniMax reasoning when its orphan close arrives in a later delta", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "private chain");
+    emitAssistantTextDelta(emit, "</mm:think>Visible answer");
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toMatchObject([
+      { text: "private chain", delta: "private chain" },
+      { text: "Visible answer", delta: "", replace: true },
+    ]);
+  });
+
+  it("replaces malformed streamed reasoning when orphan close tags split across deltas", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "private chain of thought </thi");
+    emitAssistantTextDelta(emit, "nk> Visible answer");
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Visible answer");
+    expect(payloads[0]?.replace).toBeUndefined();
+  });
+
+  it("preserves visible text before a split orphan close when no final text follows", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "Done ");
+    emitAssistantTextDelta(emit, "</thi");
+    emitAssistantTextDelta(emit, "nk>");
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Done");
+  });
+
+  it("preserves media directives when orphan close replacement has no text", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "private chain of thought </thi");
+    emitAssistantTextDelta(emit, "nk>\nMEDIA:/tmp/a.png\n");
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "private chain of thought </think>\nMEDIA:/tmp/a.png\n" }],
+      } as AssistantMessage,
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads.at(-1)).toMatchObject({
+      text: "",
+      mediaUrls: ["/tmp/a.png"],
+    });
+    expect(payloads.at(-1)?.replace).toBeUndefined();
+  });
+
+  it("preserves block tag literals inside fenced code split across deltas", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+    const finalText = "```xml\n<thinking>literal</thinking>\n```";
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "```xml\n");
+    emitAssistantTextDelta(emit, "<thinking>literal</thinking>\n");
+    emitAssistantTextDelta(emit, "```");
+    emitAssistantTextEnd(emit, finalText);
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads.at(-1)?.text).toBe(finalText);
+  });
+
+  it("does not infer a fence from a chunk-local line start before reasoning tags", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "abc");
+    emitAssistantTextDelta(emit, "~~~xml\n<think>secret");
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads[0]?.text).toBe("abc");
+    expect(payloads.at(-1)?.text).toBe("abc~~~xml");
+    expect(payloads.some((payload) => String(payload.text).includes("secret"))).toBe(false);
+  });
+
+  it("preserves split fenced code openers while stripping later reasoning", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "``");
+    emitAssistantTextDelta(
+      emit,
+      "`xml\n<thinking>literal</thinking>\n```\n<think>secret</think>answer",
+    );
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads.at(-1)?.text).toBe("```xml\n<thinking>literal</thinking>\n```\nanswer");
+  });
+
+  it("preserves long fenced code openers split after three markers", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+    const finalText = "````\n<thinking>literal</thinking>\n```\n````";
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "```");
+    emitAssistantTextDelta(emit, "`\n<thinking>literal</thinking>\n```\n````");
+    emitAssistantTextEnd(emit, finalText);
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads.at(-1)?.text).toBe(finalText);
+  });
+
+  it("keeps close tag literals inside hidden fenced code stripped across deltas", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "<think>\n```ts\nliteral ");
+    emitAssistantTextDelta(emit, "</think> still private");
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(0);
+  });
+
+  it("does not carry hidden fenced code state into visible text", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "<think>\n```ts\nscratch");
+    emitAssistantTextDelta(emit, "\n```\n</think>Visible answer");
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads.at(-1)?.text).toBe("Visible answer");
+  });
+
+  it("preserves block tag literals inside tilde fenced code split across deltas", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+    const finalText = "~~~xml\n<thinking>literal</thinking>\n~~~";
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "~~~xml\n");
+    emitAssistantTextDelta(emit, "<thinking>literal</thinking>\n");
+    emitAssistantTextDelta(emit, "~~~");
+    emitAssistantTextEnd(emit, finalText);
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads.at(-1)?.text).toBe(finalText);
+  });
+
   it("emits agent events on message_end for non-streaming assistant text", () => {
     const { session, emit } = createStubSessionHarness();
 
@@ -918,13 +1241,17 @@ describe("subscribeEmbeddedAgentSession", () => {
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta(emit, "MEDIA:");
     emitAssistantTextDelta(emit, " https://example.com/a.png\nCaption");
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "MEDIA: https://example.com/a.png\nCaption" }],
+      } as AssistantMessage,
+    });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe("Caption");
-    expect(payloads[0]?.delta).toBe("Caption");
-    expect(payloads[0]?.replace).toBeUndefined();
-    expect(payloads[0]?.mediaUrls).toEqual(["https://example.com/a.png"]);
+    expect(payloads.at(-1)?.text).toBe("Caption");
+    expect(payloads.at(-1)?.mediaUrls).toEqual(["https://example.com/a.png"]);
   });
 
   it("emits agent events when media-only text is finalized", () => {
@@ -940,11 +1267,17 @@ describe("subscribeEmbeddedAgentSession", () => {
         content: "MEDIA: https://example.com/a.png",
       },
     });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "MEDIA: https://example.com/a.png" }],
+      } as AssistantMessage,
+    });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe("");
-    expect(payloads[0]?.mediaUrls).toEqual(["https://example.com/a.png"]);
+    expect(payloads.at(-1)?.text).toBe("");
+    expect(payloads.at(-1)?.mediaUrls).toEqual(["https://example.com/a.png"]);
   });
 
   it("keeps unresolved mutating failure when an unrelated tool succeeds", () => {
@@ -1053,6 +1386,43 @@ describe("subscribeEmbeddedAgentSession", () => {
     const error = (lifecycleError.data as { error?: unknown } | undefined)?.error;
     expect(typeof error).toBe("string");
     expect(error).toContain("API rate limit reached");
+  });
+
+  it("reads terminal abort state before emitting lifecycle:end", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+    let terminalAborted = false;
+    subscribeEmbeddedAgentSession({
+      session,
+      runId: "run-aborted",
+      sessionKey: "test-session",
+      onAgentEvent,
+      isTerminalAborted: () => terminalAborted,
+    });
+    const assistantMessage = {
+      api: "test",
+      provider: "test",
+      model: "test",
+      role: "assistant",
+      stopReason: "aborted",
+      content: [],
+      usage: makeZeroUsageSnapshot(),
+      timestamp: 0,
+    } as AssistantMessage;
+
+    emit({ type: "message_start", message: assistantMessage });
+    emit({ type: "message_end", message: assistantMessage });
+    terminalAborted = true;
+    emit({ type: "agent_end", messages: [assistantMessage] });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toContainEqual(
+      expect.objectContaining({
+        phase: "end",
+        stopReason: "aborted",
+        aborted: true,
+      }),
+    );
   });
 
   it("preserves replay-invalid lifecycle truth across compaction retries after mutating tools", () => {

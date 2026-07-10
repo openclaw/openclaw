@@ -1,3 +1,5 @@
+// Vercel Ai Gateway tests cover provider catalog plugin behavior.
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -6,16 +8,23 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname: (baseUrl: string) => ({
+    allowedHostnames: [new URL(baseUrl).hostname],
+  }),
 }));
 
 import {
   discoverVercelAiGatewayModels,
   getStaticVercelAiGatewayModelCatalog,
   VERCEL_AI_GATEWAY_BASE_URL,
+  VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW,
+  VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS,
 } from "./api.js";
+import { resolveVercelAiGatewayDynamicModel } from "./models.js";
 import {
   buildStaticVercelAiGatewayProvider,
   buildVercelAiGatewayProvider,
+  resolveVercelAiGatewayModel,
 } from "./provider-catalog.js";
 
 const STATIC_MODEL_IDS = [
@@ -46,7 +55,16 @@ async function withLiveDiscovery<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
+function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+    ...init,
+  });
+}
+
 afterEach(() => {
+  clearLiveCatalogCacheForTests();
   fetchWithSsrFGuardMock.mockReset();
 });
 
@@ -75,15 +93,50 @@ describe("vercel ai gateway provider catalog", () => {
     });
   });
 
+  it("builds runtime metadata for live-only model ids", () => {
+    expect(resolveVercelAiGatewayDynamicModel("custom/provider-model")).toEqual({
+      id: "custom/provider-model",
+      name: "custom/provider-model",
+      reasoning: false,
+      input: ["text"],
+      contextWindow: VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW,
+      maxTokens: VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+    });
+  });
+
+  it("adds transport metadata for runtime model resolution", () => {
+    expect(resolveVercelAiGatewayModel("custom/provider-model")).toMatchObject({
+      id: "custom/provider-model",
+      provider: "vercel-ai-gateway",
+      api: "anthropic-messages",
+      baseUrl: VERCEL_AI_GATEWAY_BASE_URL,
+    });
+  });
+
+  it("preserves provider thinking metadata for known live-only upstream models", () => {
+    expect(resolveVercelAiGatewayModel("openai/gpt-5.5")).toMatchObject({
+      reasoning: true,
+      input: ["text", "image"],
+    });
+    expect(resolveVercelAiGatewayModel("anthropic/claude-sonnet-4-6")).toMatchObject({
+      input: ["text", "image"],
+    });
+  });
+
   it("falls back to the static catalog for malformed successful model list payloads", async () => {
     for (const payload of [[], { data: {} }, { data: [null] }]) {
+      clearLiveCatalogCacheForTests();
+      fetchWithSsrFGuardMock.mockReset();
       fetchWithSsrFGuardMock.mockResolvedValueOnce({
-        response: {
-          ok: true,
-          status: 200,
-          json: async () => payload,
-        },
+        response: jsonResponse(payload),
         release: async () => {},
+        finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
       });
 
       await withLiveDiscovery(async () => {
@@ -92,5 +145,45 @@ describe("vercel ai gateway provider catalog", () => {
         );
       });
     }
+  });
+
+  it("falls back from malformed live token metadata", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: jsonResponse({
+        data: [
+          {
+            id: "anthropic/claude-opus-4.6",
+            name: "Claude Opus 4.6",
+            context_window: -1,
+            max_tokens: 128_000.5,
+            tags: ["vision", "reasoning"],
+          },
+          {
+            id: "custom/provider-model",
+            name: "Custom model",
+            context_window: Number.POSITIVE_INFINITY,
+            max_tokens: 0,
+            tags: ["reasoning"],
+          },
+        ],
+      }),
+      release: async () => {},
+      finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
+    });
+
+    await withLiveDiscovery(async () => {
+      const models = await discoverVercelAiGatewayModels();
+
+      expect(models[0]).toMatchObject({
+        id: "anthropic/claude-opus-4.6",
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+      });
+      expect(models[1]).toMatchObject({
+        id: "custom/provider-model",
+        contextWindow: VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS,
+      });
+    });
   });
 });

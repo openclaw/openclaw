@@ -1,13 +1,17 @@
+/** Shared CLI runner test doubles for supervisor, bootstrap, and heartbeat seams. */
 import type { Mock } from "vitest";
 import { beforeEach, vi } from "vitest";
 import type { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import type { enqueueSystemEvent } from "../infra/system-events.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
+import { getClaudeLiveSessionGenerationForOwner } from "./cli-runner/claude-live-session.js";
 import { setCliRunnerExecuteTestDeps } from "./cli-runner/execute.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
+// Shared CLI runner test doubles. They replace supervisor/process and bootstrap
+// dependencies so CLI runner tests can assert process behavior deterministically.
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnFn = ProcessSupervisor["spawn"];
 type EnqueueSystemEventFn = typeof enqueueSystemEvent;
@@ -41,6 +45,8 @@ setCliRunnerExecuteTestDeps({
     spawn: async (params: Parameters<SupervisorSpawnFn>[0]) => {
       let stdoutDelivered = false;
       let stderrDelivered = false;
+      // Supervisor tests sometimes return captured output even when streaming
+      // was requested; replay it through callbacks once to match production.
       const wrappedParams = {
         ...params,
         onStdout: params.onStdout
@@ -65,6 +71,8 @@ setCliRunnerExecuteTestDeps({
         wait: async () => {
           const exit = await wait();
           if (params.captureOutput === false) {
+            // Production streams stdout/stderr through callbacks; replay captured
+            // output once so tests cover streaming and captured-output paths.
             if (!stdoutDelivered && exit.stdout) {
               params.onStdout?.(exit.stdout);
             }
@@ -78,7 +86,6 @@ setCliRunnerExecuteTestDeps({
     },
     cancel: vi.fn(),
     cancelScope: vi.fn(),
-    reconcileOrphans: vi.fn(),
     getRecord: vi.fn(),
   }),
   enqueueSystemEvent: (
@@ -121,6 +128,7 @@ type ManagedRunMock = {
   cancel: Mock<() => void>;
 };
 
+/** Build a managed-run mock returned by the process supervisor test double. */
 export function createManagedRun(
   exit: MockRunExit,
   pid = 1234,
@@ -135,6 +143,7 @@ export function createManagedRun(
   };
 }
 
+/** Queue one successful CLI supervisor run. */
 export function mockSuccessfulCliRun() {
   supervisorSpawnMock.mockResolvedValueOnce(
     createManagedRun({
@@ -150,11 +159,13 @@ export function mockSuccessfulCliRun() {
   );
 }
 
+/** Restore prepare-time CLI runner test dependencies after a test overrides them. */
 export function restoreCliRunnerPrepareTestDeps() {
   setCliRunnerPrepareTestDeps({
     makeBootstrapWarn: () => () => {},
     resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
     resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
+    getClaudeLiveSessionGenerationForOwner,
   });
 }
 

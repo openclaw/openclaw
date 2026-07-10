@@ -1,3 +1,5 @@
+// Openai provider module implements model/runtime integration.
+import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -11,24 +13,27 @@ import {
   pollProviderOperationJson,
   postJsonRequest,
   postMultipartRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
-import { resolveConfiguredOpenAIBaseUrl, toOpenAIDataUrl } from "./shared.js";
+import { resolveConfiguredOpenAIBaseUrl } from "./shared.js";
 
 const DEFAULT_OPENAI_VIDEO_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_VIDEO_MODEL = "sora-2";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 2_500;
 const MAX_POLL_ATTEMPTS = 120;
+const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 const OPENAI_VIDEO_SECONDS = [4, 8, 12] as const;
 const OPENAI_VIDEO_SIZES = ["720x1280", "1280x720", "1024x1792", "1792x1024"] as const;
 
@@ -74,6 +79,14 @@ function resolveDurationSeconds(durationSeconds: number | undefined): "4" | "8" 
     Math.abs(current - rounded) < Math.abs(best - rounded) ? current : best,
   );
   return String(nearest) as "4" | "8" | "12";
+}
+
+function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
+  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured * 1024 * 1024);
+  }
+  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
 function resolveSize(params: {
@@ -233,6 +246,7 @@ async function downloadOpenAIVideo(
     timeoutMs?: ProviderOperationTimeoutMs;
     baseUrl: string;
     fetchFn: typeof fetch;
+    maxBytes: number;
   } & OpenAIVideoRequestPolicy,
 ): Promise<GeneratedVideoAsset> {
   const url = new URL(`${params.baseUrl}/videos/${params.videoId}/content`);
@@ -253,9 +267,12 @@ async function downloadOpenAIVideo(
   });
   try {
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-    const arrayBuffer = await response.arrayBuffer();
+    const buffer = await readResponseWithLimit(response, params.maxBytes, {
+      onOverflow: ({ maxBytes }) =>
+        new Error(`OpenAI generated video download exceeds ${maxBytes} bytes`),
+    });
     return {
-      buffer: Buffer.from(arrayBuffer),
+      buffer,
       mimeType,
       fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
     };
@@ -267,7 +284,6 @@ async function downloadOpenAIVideo(
 export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
   return {
     id: "openai",
-    aliases: ["openai-codex"],
     label: "OpenAI",
     defaultModel: DEFAULT_OPENAI_VIDEO_MODEL,
     models: [DEFAULT_OPENAI_VIDEO_MODEL, "sora-2-pro"],
@@ -275,6 +291,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
       isProviderApiKeyConfigured({
         provider: "openai",
         agentDir,
+        profileTypes: ["api_key"],
       }),
     capabilities: {
       generate: {
@@ -305,8 +322,9 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         cfg: req.cfg,
         agentDir: req.agentDir,
         store: req.authStore,
+        modelApi: "openai-responses",
       });
-      if (!auth.apiKey) {
+      if (!auth.apiKey || (auth.mode !== undefined && auth.mode !== "api-key")) {
         throw new Error("OpenAI API key missing");
       }
 
@@ -351,7 +369,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
                   ...(seconds ? { seconds } : {}),
                   ...(size ? { size } : {}),
                   input_reference: {
-                    image_url: toOpenAIDataUrl(referenceAsset.buffer, referenceAsset.mimeType),
+                    image_url: toImageDataUrl(referenceAsset),
                   },
                 },
                 timeoutMs: resolveProviderOperationTimeoutMs({
@@ -408,7 +426,10 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
 
       try {
         await assertOkOrThrowHttpError(response, "OpenAI video generation failed");
-        const submitted = (await response.json()) as OpenAIVideoResponse;
+        const submitted = await readProviderJsonResponse<OpenAIVideoResponse>(
+          response,
+          "OpenAI video generation failed",
+        );
         const videoId = normalizeOptionalString(submitted.id);
         if (!videoId) {
           throw new Error("OpenAI video generation response missing video id");
@@ -436,6 +457,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
           fetchFn,
           allowPrivateNetwork,
           dispatcherPolicy,
+          maxBytes: resolveGeneratedVideoMaxBytes(req),
         });
         return {
           videos: [video],

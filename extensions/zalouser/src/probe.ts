@@ -1,5 +1,7 @@
+// Zalouser plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { ZcaUserInfo } from "./types.js";
 import { getZaloUserInfo } from "./zalo-js.js";
 
@@ -12,14 +14,27 @@ export async function probeZalouser(
   timeoutMs?: number,
 ): Promise<ZalouserProbeResult> {
   try {
-    const user = timeoutMs
-      ? await Promise.race([
+    let user: ZcaUserInfo | null;
+    if (timeoutMs) {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        user = await Promise.race([
           getZaloUserInfo(profile),
-          new Promise<null>((resolve) =>
-            setTimeout(() => resolve(null), Math.max(timeoutMs, 1000)),
-          ),
-        ])
-      : await getZaloUserInfo(profile);
+          new Promise<null>((resolve) => {
+            timeout = setTimeout(
+              () => resolve(null),
+              resolveTimerTimeoutMs(timeoutMs, 1000, 1000),
+            );
+          }),
+        ]);
+      } finally {
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+      }
+    } else {
+      user = await getZaloUserInfo(profile);
+    }
 
     if (!user) {
       return { ok: false, error: "Not authenticated" };

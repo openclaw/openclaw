@@ -1,4 +1,6 @@
+// Google provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createWebSearchProviderContractFields,
   mergeScopedSearchConfig,
@@ -16,21 +18,16 @@ import {
 const GEMINI_CREDENTIAL_PATH = "plugins.entries.google.config.webSearch.apiKey";
 const GOOGLE_PROVIDER_CREDENTIAL_PATH = "models.providers.google.apiKey";
 
-type GeminiWebSearchRuntime = typeof import("./gemini-web-search-provider.runtime.js");
-
-let geminiWebSearchRuntimePromise: Promise<GeminiWebSearchRuntime> | undefined;
-
-function loadGeminiWebSearchRuntime(): Promise<GeminiWebSearchRuntime> {
-  geminiWebSearchRuntimePromise ??= import("./gemini-web-search-provider.runtime.js");
-  return geminiWebSearchRuntimePromise;
-}
+const loadGeminiWebSearchRuntime = createLazyRuntimeModule(
+  () => import("./gemini-web-search-provider.runtime.js"),
+);
 
 const GEMINI_TOOL_PARAMETERS = {
   type: "object",
   properties: {
     query: { type: "string", description: "Search query string." },
     count: {
-      type: "number",
+      type: "integer",
       description: "Number of results to return (1-10).",
       minimum: 1,
       maximum: 10,
@@ -39,7 +36,8 @@ const GEMINI_TOOL_PARAMETERS = {
     language: { type: "string", description: "Not supported by Gemini." },
     freshness: {
       type: "string",
-      description: "Limit Google Search grounding to recent results: day, week, month, or year.",
+      description:
+        "Filter Gemini search freshness: week, month, and year use hard Google Search time ranges; day prioritizes the last 24 hours as a recency hint.",
     },
     date_after: {
       type: "string",

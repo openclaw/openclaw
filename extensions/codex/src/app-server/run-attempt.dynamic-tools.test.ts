@@ -1,3 +1,4 @@
+// Codex tests cover run attemptynamic tools plugin behavior.
 import path from "node:path";
 import { onAgentEvent, type AgentEventPayload } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -52,6 +53,49 @@ function activeDiagnosticToolKeys(events: DiagnosticEventPayload[]): Set<string>
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
+  it.each(["cancelled", "timed_out"] as const)(
+    "preserves the %s terminal reason in trusted tool diagnostics",
+    async (terminalReason) => {
+      const diagnosticEvents: DiagnosticEventPayload[] = [];
+      const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
+        diagnosticEvents.push(event),
+      );
+      const call = {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: `call-${terminalReason}`,
+        namespace: null,
+        tool: "lookup",
+        arguments: {},
+      } satisfies CodexDynamicToolCallParams;
+      try {
+        emitDynamicToolStartedDiagnostic({
+          call,
+          agentId: "agent-terminal-reason",
+          runId: "run-terminal-reason",
+        });
+        emitDynamicToolTerminalDiagnostic({
+          call,
+          agentId: "agent-terminal-reason",
+          runId: "run-terminal-reason",
+          durationMs: 1,
+          response: {
+            success: false,
+            diagnosticTerminalReason: terminalReason,
+            contentItems: [{ type: "inputText", text: "not persisted by audit" }],
+          },
+        });
+        await flushDiagnosticEvents();
+      } finally {
+        unsubscribeDiagnostics();
+      }
+
+      expect(diagnosticEvents.find((event) => event.type === "tool.execution.error")).toMatchObject(
+        { agentId: "agent-terminal-reason", terminalReason },
+      );
+    },
+  );
+
   it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
@@ -92,6 +136,11 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("thread/start");
+    await vi.waitFor(() =>
+      expect(onExecutionPhase).toHaveBeenCalledWith(
+        expect.objectContaining({ phase: "turn_accepted" }),
+      ),
+    );
 
     const toolResult = (await harness.handleServerRequest({
       id: "request-tool-1",
@@ -127,7 +176,11 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         isError?: boolean;
         name?: string;
         phase?: string;
-        result?: { success?: boolean };
+        result?: {
+          content?: Array<{ text?: string; type?: string; url?: string }>;
+          contentItems?: unknown;
+          success?: unknown;
+        };
         toolCallId?: string;
       };
       stream?: string;
@@ -149,7 +202,10 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     expect(resultEvent?.data?.name).toBe("lookup");
     expect(resultEvent?.data?.toolCallId).toBe("call-1");
     expect(resultEvent?.data?.isError).toBe(true);
-    expect(resultEvent?.data?.result?.success).toBe(false);
+    expect(resultEvent?.data?.result).not.toHaveProperty("success");
+    expect(resultEvent?.data?.result).not.toHaveProperty("contentItems");
+    expect(resultEvent?.data?.result?.content?.[0]?.type).toBe("text");
+    expect(resultEvent?.data?.result?.content?.[0]?.text).toBe("Unknown OpenClaw tool: lookup");
     expect(JSON.stringify(agentEvents)).not.toContain("plain-secret-value-12345");
     const globalStartEvent = globalAgentEvents.find(
       (event) => event.stream === "tool" && event.data.phase === "start",

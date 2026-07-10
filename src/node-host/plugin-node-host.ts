@@ -1,15 +1,18 @@
+/**
+ * Plugin node-host command registry bridge.
+ *
+ * Node hosts load the active plugin registry, expose registered capabilities
+ * and commands, and dispatch incoming node-host commands by exact command id.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
-let pluginRegistryLoaderModulePromise:
-  | Promise<typeof import("../plugins/runtime/runtime-registry-loader.js")>
-  | undefined;
+const loadPluginRegistryLoaderModule = createLazyRuntimeModule(
+  () => import("../plugins/runtime/runtime-registry-loader.js"),
+);
 
-async function loadPluginRegistryLoaderModule() {
-  pluginRegistryLoaderModulePromise ??= import("../plugins/runtime/runtime-registry-loader.js");
-  return await pluginRegistryLoaderModulePromise;
-}
-
+/** Ensure plugin registry data is loaded before node-host command dispatch. */
 export async function ensureNodeHostPluginRegistry(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -22,6 +25,7 @@ export async function ensureNodeHostPluginRegistry(params: {
   });
 }
 
+/** List registered node-host capabilities and command ids in deterministic order. */
 export function listRegisteredNodeHostCapsAndCommands(): {
   caps: string[];
   commands: string[];
@@ -41,6 +45,7 @@ export function listRegisteredNodeHostCapsAndCommands(): {
   };
 }
 
+/** Invoke a registered node-host plugin command, or return null for unknown commands. */
 export async function invokeRegisteredNodeHostCommand(
   command: string,
   paramsJSON?: string | null,

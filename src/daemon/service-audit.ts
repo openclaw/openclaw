@@ -1,11 +1,17 @@
+/** Audits installed daemon service definitions for drift and repair candidates. */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeStringEntries, sortUniqueStrings } from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  sortUniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import { normalizeEnvVarKey } from "../infra/host-env-security.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
+import { VERSION } from "../version.js";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
@@ -59,6 +65,7 @@ export const SERVICE_AUDIT_CODES = {
   gatewayRuntimeNodeVersionManager: "gateway-runtime-node-version-manager",
   gatewayRuntimeNodeSystemMissing: "gateway-runtime-node-system-missing",
   gatewayTokenDrift: "gateway-token-drift",
+  gatewayServiceVersionMismatch: "gateway-service-version-mismatch",
   launchdKeepAlive: "launchd-keep-alive",
   launchdRunAtLoad: "launchd-run-at-load",
   systemdAfterNetworkOnline: "systemd-after-network-online",
@@ -67,6 +74,7 @@ export const SERVICE_AUDIT_CODES = {
   systemdKillModeProcessOrNone: "systemd-kill-mode-process-or-none",
 } as const;
 
+/** Returns whether audit issues require migrating a daemon to a stable Node runtime. */
 export function needsNodeRuntimeMigration(issues: ServiceConfigIssue[]): boolean {
   return issues.some(
     (issue) =>
@@ -90,6 +98,8 @@ function parseSystemdUnit(content: string): {
   let restartSec: string | undefined;
   let killMode: string | undefined;
 
+  // Parse only unit keys relevant to service resilience; this is not a full
+  // systemd parser and intentionally ignores sections.
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line) {
@@ -136,11 +146,22 @@ function isRestartSecPreferred(value: string | undefined): boolean {
   if (!value) {
     return false;
   }
-  const parsed = Number.parseFloat(value);
-  if (!Number.isFinite(parsed)) {
+  const parsed = parseSystemdRestartSecSeconds(value);
+  if (parsed === undefined) {
     return false;
   }
   return Math.abs(parsed - 5) < 0.01;
+}
+
+function parseSystemdRestartSecSeconds(value: string): number | undefined {
+  const match = value
+    .trim()
+    .match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))(?:\s*(?:s|sec|secs|second|seconds))?$/iu);
+  if (!match) {
+    return undefined;
+  }
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 async function auditSystemdUnit(
@@ -148,7 +169,7 @@ async function auditSystemdUnit(
   issues: ServiceConfigIssue[],
 ) {
   const unitPath = resolveSystemdUserUnitPath(env);
-  let content = "";
+  let content;
   try {
     content = await fs.readFile(unitPath, "utf8");
   } catch {
@@ -197,7 +218,7 @@ async function auditLaunchdPlist(
   issues: ServiceConfigIssue[],
 ) {
   const plistPath = resolveLaunchAgentPlistPath(env);
-  let content = "";
+  let content;
   try {
     content = await fs.readFile(plistPath, "utf8");
   } catch {
@@ -237,14 +258,25 @@ function auditGatewayCommand(programArguments: string[] | undefined, issues: Ser
   }
 }
 
-function parseGatewayPortArg(value: string | undefined): number | undefined {
-  const parsed = Number.parseInt(value ?? "", 10);
-  return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= 65535 ? parsed : undefined;
+type GatewayServiceCommandPort =
+  | { kind: "missing" }
+  | { kind: "valid"; port: number }
+  | { kind: "invalid"; raw: string };
+
+function parseGatewayPortArg(value: string | undefined): GatewayServiceCommandPort {
+  const raw = value?.trim() ?? "";
+  const port = parseTcpPort(raw);
+  if (port !== null) {
+    return { kind: "valid", port };
+  }
+  return raw ? { kind: "invalid", raw } : { kind: "missing" };
 }
 
-export function readGatewayServiceCommandPort(programArguments?: string[]): number | undefined {
+function readGatewayServiceCommandPortState(
+  programArguments?: string[],
+): GatewayServiceCommandPort {
   if (!programArguments || programArguments.length === 0) {
-    return undefined;
+    return { kind: "missing" };
   }
   for (let index = 0; index < programArguments.length; index += 1) {
     const arg = programArguments[index];
@@ -255,7 +287,7 @@ export function readGatewayServiceCommandPort(programArguments?: string[]): numb
       return parseGatewayPortArg(arg.slice("--port=".length));
     }
   }
-  return undefined;
+  return { kind: "missing" };
 }
 
 function auditGatewayServicePort(params: {
@@ -271,14 +303,21 @@ function auditGatewayServicePort(params: {
   ) {
     return;
   }
-  const servicePort = readGatewayServiceCommandPort(params.programArguments);
-  if (servicePort === undefined || servicePort === params.expectedPort) {
+  const servicePort = readGatewayServiceCommandPortState(params.programArguments);
+  if (servicePort.kind === "missing") {
     return;
   }
+  if (servicePort.kind === "valid" && servicePort.port === params.expectedPort) {
+    return;
+  }
+  const detail =
+    servicePort.kind === "valid"
+      ? `${servicePort.port} -> ${params.expectedPort}`
+      : `${servicePort.raw} -> ${params.expectedPort}`;
   params.issues.push({
     code: SERVICE_AUDIT_CODES.gatewayPortMismatch,
     message: "Gateway service port does not match current gateway config.",
-    detail: `${servicePort} -> ${params.expectedPort}`,
+    detail,
     level: "recommended",
   });
 }
@@ -564,6 +603,20 @@ export function checkTokenDrift(params: {
   return null;
 }
 
+function auditGatewayServiceVersion(command: GatewayServiceCommand, issues: ServiceConfigIssue[]) {
+  const serviceVersion = command?.environment?.OPENCLAW_SERVICE_VERSION?.trim();
+  if (!serviceVersion || serviceVersion === VERSION) {
+    return;
+  }
+
+  issues.push({
+    code: SERVICE_AUDIT_CODES.gatewayServiceVersionMismatch,
+    message: `Gateway service was installed by OpenClaw ${serviceVersion}; current CLI is ${VERSION}.`,
+    detail: command?.sourcePath,
+    level: "recommended",
+  });
+}
+
 export async function auditGatewayServiceConfig(params: {
   env: Record<string, string | undefined>;
   command: GatewayServiceCommand;
@@ -585,6 +638,7 @@ export async function auditGatewayServiceConfig(params: {
   auditManagedServiceEnvironment(params.command, issues, params.expectedManagedServiceEnvKeys);
   auditProxyServiceEnvironment(params.command, issues);
   auditGatewayToken(params.command, issues, params.expectedGatewayToken);
+  auditGatewayServiceVersion(params.command, issues);
   auditGatewayServicePath(params.command, issues, params.env, platform, params.expectedServicePath);
   await auditGatewayRuntime(params.env, params.command, issues, platform);
 

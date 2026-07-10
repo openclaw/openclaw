@@ -1,3 +1,4 @@
+// Feishu tests cover channel plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { feishuPlugin } from "./channel.js";
@@ -94,6 +95,12 @@ afterAll(() => {
   vi.doUnmock("./client.js");
   vi.doUnmock("./channel.runtime.js");
   vi.resetModules();
+});
+
+describe("feishuPlugin metadata", () => {
+  it("opts announce delivery into persisted session lookup", () => {
+    expect(feishuPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
+  });
 });
 
 describe("feishuPlugin.status.probeAccount", () => {
@@ -273,7 +280,7 @@ describe("feishuPlugin actions", () => {
   });
 
   it("honors the selected Feishu account during discovery", () => {
-    const cfg = {
+    const cfgLocal = {
       channels: {
         feishu: {
           enabled: true,
@@ -296,7 +303,7 @@ describe("feishuPlugin actions", () => {
       },
     } as OpenClawConfig;
 
-    expect(getDescribedActions(cfg, "default")).toEqual([
+    expect(getDescribedActions(cfgLocal, "default")).toEqual([
       "send",
       "read",
       "edit",
@@ -308,7 +315,7 @@ describe("feishuPlugin actions", () => {
       "channel-info",
       "channel-list",
     ]);
-    expect(getDescribedActions(cfg, "work")).toEqual([
+    expect(getDescribedActions(cfgLocal, "work")).toEqual([
       "send",
       "read",
       "edit",
@@ -347,6 +354,217 @@ describe("feishuPlugin actions", () => {
     expect(details.ok).toBe(true);
     expect(details.messageId).toBe("om_sent");
     expect(details.chatId).toBe("oc_group_1");
+  });
+
+  it("sends plain message card JSON as a native Feishu card", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: JSON.stringify({
+          schema: "2.0",
+          header: {
+            title: { tag: "plain_text", content: "Plain JSON card" },
+            template: "green",
+          },
+          body: {
+            elements: [{ tag: "markdown", content: "Card body" }],
+          },
+        }),
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    const sendCardArgs = requireRecord(
+      mockCallArg(sendCardFeishuMock, 0, 0, "sendCardFeishu"),
+      "send card args",
+    );
+    expect(sendCardArgs.cfg).toBe(cfg);
+    expect(sendCardArgs.to).toBe("chat:oc_group_1");
+    expect(sendCardArgs.accountId).toBeUndefined();
+    expect(sendCardArgs.replyToMessageId).toBeUndefined();
+    expect(sendCardArgs.replyInThread).toBe(false);
+    const card = requireRecord(sendCardArgs.card, "card");
+    expect(card.header).toEqual({
+      title: { tag: "plain_text", content: "Plain JSON card" },
+      template: "green",
+    });
+    expect(card.body).toEqual({
+      elements: [{ tag: "markdown", content: "Card body" }],
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.messageId).toBe("om_card");
+    expect(details.chatId).toBe("oc_group_1");
+  });
+
+  it("sends legacy top-level elements card JSON as a native Feishu card", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: JSON.stringify({
+          header: {
+            title: { tag: "plain_text", content: "Legacy JSON card" },
+            template: "green",
+          },
+          elements: [
+            {
+              tag: "div",
+              text: { tag: "lark_md", content: '**Legacy** <at id="ou_1">body</at>' },
+            },
+            {
+              tag: "div",
+              text: { tag: "plain_text", content: "Literal *text*" },
+            },
+          ],
+        }),
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    const sendCardArgs = requireRecord(
+      mockCallArg(sendCardFeishuMock, 0, 0, "sendCardFeishu"),
+      "send card args",
+    );
+    const card = requireRecord(sendCardArgs.card, "card");
+    expect(card.header).toEqual({
+      title: { tag: "plain_text", content: "Legacy JSON card" },
+      template: "green",
+    });
+    expect(card.body).toEqual({
+      elements: [
+        {
+          tag: "markdown",
+          content: '**Legacy** &lt;at id="ou_1"&gt;body&lt;/at&gt;',
+        },
+        { tag: "markdown", content: "Literal \\*text\\*" },
+      ],
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("detects message card JSON after the configured response prefix", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+    const cardJson = JSON.stringify({
+      body: {
+        elements: [{ tag: "markdown", content: "Prefixed card" }],
+      },
+    });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: `[Nexus] ${cardJson}`,
+      },
+      cfg: {
+        ...cfg,
+        messages: { responsePrefix: "[Nexus]" },
+      },
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    const sendCardArgs = requireRecord(
+      mockCallArg(sendCardFeishuMock, 0, 0, "sendCardFeishu"),
+      "send card args",
+    );
+    const card = requireRecord(sendCardArgs.card, "card");
+    expect(card.body).toEqual({
+      elements: [{ tag: "markdown", content: "Prefixed card" }],
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("sends wrapped interactive card JSON as a Feishu thread reply card", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "thread-reply",
+      params: {
+        to: "chat:oc_group_1",
+        messageId: "om_parent",
+        text: JSON.stringify({
+          type: "interactive",
+          card: {
+            body: {
+              elements: [{ tag: "markdown", content: "Reply card" }],
+            },
+          },
+        }),
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    const sendCardArgs = requireRecord(
+      mockCallArg(sendCardFeishuMock, 0, 0, "sendCardFeishu"),
+      "send card args",
+    );
+    expect(sendCardArgs.replyToMessageId).toBe("om_parent");
+    expect(sendCardArgs.replyInThread).toBe(true);
+    const card = requireRecord(sendCardArgs.card, "card");
+    expect(card.body).toEqual({
+      elements: [{ tag: "markdown", content: "Reply card" }],
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps ordinary JSON messages on the text path", async () => {
+    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_sent", chatId: "oc_group_1" });
+    const message = JSON.stringify({ ok: true, elements: "not-a-card" });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: { to: "chat:oc_group_1", message },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      to: "chat:oc_group_1",
+      text: message,
+      accountId: undefined,
+      replyToMessageId: undefined,
+      replyInThread: false,
+    });
+  });
+
+  it("rejects card JSON sent with media", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "send",
+        params: {
+          to: "chat:oc_group_1",
+          message: JSON.stringify({
+            elements: [{ tag: "markdown", content: "Card body" }],
+          }),
+          media: "/tmp/image.png",
+        },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+        mediaLocalRoots: ["/tmp"],
+      } as never),
+    ).rejects.toThrow("Feishu send does not support card with media.");
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
 
   it("renders presentation messages as cards", async () => {
@@ -393,6 +611,72 @@ describe("feishuPlugin actions", () => {
     expect(details.ok).toBe(true);
     expect(details.messageId).toBe("om_card");
     expect(details.chatId).toBe("oc_group_1");
+  });
+
+  it("prefers structured presentation over raw card JSON text", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: JSON.stringify({
+          header: { title: { tag: "plain_text", content: "Raw card" } },
+          elements: [{ tag: "markdown", content: "Raw body" }],
+        }),
+        presentation: {
+          title: "Structured card",
+          blocks: [{ type: "text", text: "Structured body" }],
+        },
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    const sendCardArgs = requireRecord(
+      mockCallArg(sendCardFeishuMock, 0, 0, "sendCardFeishu"),
+      "send card args",
+    );
+    const card = requireRecord(sendCardArgs.card, "card");
+    expect(card.header).toEqual({
+      title: { tag: "plain_text", content: "Structured card" },
+      template: "blue",
+    });
+    expect(card.body).toEqual({
+      elements: [{ tag: "markdown", content: "Structured body" }],
+    });
+  });
+
+  it("prefers structured interactive input over raw card JSON text", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: JSON.stringify({
+          header: { title: { tag: "plain_text", content: "Raw card" } },
+          elements: [{ tag: "markdown", content: "Raw body" }],
+        }),
+        interactive: {
+          blocks: [{ type: "text", text: "Interactive body" }],
+        },
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    const sendCardArgs = requireRecord(
+      mockCallArg(sendCardFeishuMock, 0, 0, "sendCardFeishu"),
+      "send card args",
+    );
+    const card = requireRecord(sendCardArgs.card, "card");
+    expect(card.header).toBeUndefined();
+    expect(card.body).toEqual({
+      elements: [{ tag: "markdown", content: "Interactive body" }],
+    });
   });
 
   it("renders presentation buttons as native Feishu card buttons", async () => {
@@ -443,6 +727,36 @@ describe("feishuPlugin actions", () => {
     expect(
       elements.some((element) => requireRecord(element, "card element").tag === "action"),
     ).toBe(false);
+  });
+
+  it("does not render callback action buttons as Feishu quick commands", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Inspect", action: { type: "callback", value: "inspect:123" } }],
+            },
+          ],
+        },
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    const sendCardArgs = requireRecord(
+      mockCallArg(sendCardFeishuMock, 0, 0, "sendCardFeishu"),
+      "send card args",
+    );
+    const card = requireRecord(sendCardArgs.card, "card");
+    const elements = requireArray(requireRecord(card.body, "card body").elements, "card elements");
+    expect(elements).toEqual([{ tag: "markdown", content: "- Inspect" }]);
   });
 
   it("renders legacy web_app presentation buttons as native Feishu link buttons", async () => {
@@ -1039,6 +1353,68 @@ describe("feishuPlugin actions", () => {
     const peers = requireArray(details.peers, "peers");
     expect(requireRecord(groups[0], "group").id).toBe("oc_group_1");
     expect(requireRecord(peers[0], "peer").id).toBe("ou_1");
+  });
+
+  it("accepts plus-signed channel-list limits", async () => {
+    listFeishuDirectoryGroupsLiveMock.mockResolvedValueOnce([{ kind: "group", id: "oc_group_1" }]);
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "channel-list",
+      params: { query: "eng", limit: "+05", scope: "groups" },
+      cfg,
+      accountId: undefined,
+    } as never);
+
+    expect(listFeishuDirectoryGroupsLiveMock).toHaveBeenCalledWith({
+      cfg,
+      query: "eng",
+      limit: 5,
+      fallbackToStatic: false,
+      accountId: undefined,
+    });
+  });
+
+  it("ignores malformed channel-list limits", async () => {
+    listFeishuDirectoryGroupsLiveMock.mockResolvedValueOnce([{ kind: "group", id: "oc_group_1" }]);
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "channel-list",
+      params: { query: "eng", limit: "-1", scope: "groups" },
+      cfg,
+      accountId: undefined,
+    } as never);
+
+    expect(listFeishuDirectoryGroupsLiveMock).toHaveBeenCalledWith({
+      cfg,
+      query: "eng",
+      limit: undefined,
+      fallbackToStatic: false,
+      accountId: undefined,
+    });
+  });
+
+  it("ignores non-decimal Feishu action page sizes", async () => {
+    getChatMembersMock.mockResolvedValueOnce({
+      chat_id: "oc_group_1",
+      members: [],
+      has_more: false,
+    });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "member-info",
+      params: { chatId: "oc_group_1", pageSize: "0x10" },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(getChatMembersMock).toHaveBeenCalledWith(
+      { tag: "client" },
+      "oc_group_1",
+      undefined,
+      undefined,
+      "open_id",
+    );
   });
 
   it("fails channel-list when live discovery fails", async () => {

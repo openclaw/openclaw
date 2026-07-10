@@ -3,16 +3,23 @@
 
 import os from "node:os";
 
-const DEFAULT_LOCAL_FULL_SUITE_PARALLELISM = 4;
-const LARGE_LOCAL_FULL_SUITE_PARALLELISM = 10;
-const DEFAULT_LOCAL_FULL_SUITE_VITEST_WORKERS = 1;
-const LARGE_LOCAL_FULL_SUITE_VITEST_WORKERS = 2;
+const MAX_LOCAL_FULL_SUITE_PARALLELISM = 10;
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
-function parsePositiveInt(value) {
-  const parsed = Number.parseInt(value ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+function parsePositiveInt(value, label) {
+  const text = value?.trim();
+  if (!text) {
+    return null;
+  }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer; got: ${value}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer; got: ${value}`);
+  }
+  return parsed;
 }
 
 function isSystemThrottleDisabled(env) {
@@ -79,7 +86,12 @@ export function resolveLocalVitestScheduling(
   system = detectVitestHostInfo(),
   pool = "threads",
 ) {
-  const override = parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
+  const override = parsePositiveInt(
+    env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS,
+    env.OPENCLAW_VITEST_MAX_WORKERS === undefined
+      ? "OPENCLAW_TEST_WORKERS"
+      : "OPENCLAW_VITEST_MAX_WORKERS",
+  );
   if (override !== null) {
     const maxWorkers = clamp(override, 1, 16);
     return {
@@ -174,42 +186,12 @@ export function resolveLocalVitestScheduling(
   };
 }
 
-export function shouldUseLargeLocalFullSuiteProfile(
-  env = process.env,
-  system = detectVitestHostInfo(),
-) {
-  if (isCiLikeEnv(env)) {
-    return false;
-  }
-  const scheduling = resolveLocalVitestScheduling(env, system, "threads");
-  return scheduling.maxWorkers >= 5 && !scheduling.throttledBySystem;
-}
-
 export function resolveLocalFullSuiteProfile(env = process.env, system = detectVitestHostInfo()) {
-  if (!isSystemThrottleDisabled(env)) {
-    const memoryPressureLimit = resolveMemoryPressureWorkerLimit(system);
-    if (memoryPressureLimit === 1) {
-      return {
-        shardParallelism: 1,
-        vitestMaxWorkers: 1,
-      };
-    }
-    if (memoryPressureLimit === 2) {
-      return {
-        shardParallelism: 2,
-        vitestMaxWorkers: 1,
-      };
-    }
-  }
-
-  if (shouldUseLargeLocalFullSuiteProfile(env, system)) {
-    return {
-      shardParallelism: LARGE_LOCAL_FULL_SUITE_PARALLELISM,
-      vitestMaxWorkers: LARGE_LOCAL_FULL_SUITE_VITEST_WORKERS,
-    };
-  }
+  const scheduling = resolveLocalVitestScheduling(env, system, "threads");
   return {
-    shardParallelism: DEFAULT_LOCAL_FULL_SUITE_PARALLELISM,
-    vitestMaxWorkers: DEFAULT_LOCAL_FULL_SUITE_VITEST_WORKERS,
+    // Each shard is a separate Vitest process with its own module graph. Spend the
+    // host worker budget once across shards instead of multiplying it inside them.
+    shardParallelism: Math.min(scheduling.maxWorkers, MAX_LOCAL_FULL_SUITE_PARALLELISM),
+    vitestMaxWorkers: 1,
   };
 }

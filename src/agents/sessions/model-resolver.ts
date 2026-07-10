@@ -2,16 +2,16 @@
  * Model resolution, scoping, and initial selection
  */
 
+import { modelsAreEqual } from "@openclaw/ai/internal/runtime";
 import chalk from "chalk";
 import { minimatch } from "minimatch";
-import { modelsAreEqual } from "../../llm/model-utils.js";
 import type { Model } from "../../llm/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import type { ThinkingLevel } from "../runtime/index.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ModelRegistry } from "./model-registry.js";
 
-const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 function isValidThinkingLevel(level: string): level is ThinkingLevel {
   return VALID_THINKING_LEVELS.includes(level as ThinkingLevel);
@@ -116,11 +116,11 @@ function tryMatchModel(modelPattern: string, availableModels: Model[]): Model | 
 
   if (aliases.length > 0) {
     // Prefer alias - if multiple aliases, pick the one that sorts highest
-    aliases.sort((a, b) => b.id.localeCompare(a.id));
+    aliases.sort((a, b) => b.id.localeCompare(a.id, undefined, { numeric: true }));
     return aliases[0];
   }
   // No alias found, pick latest dated version
-  datedVersions.sort((a, b) => b.id.localeCompare(a.id));
+  datedVersions.sort((a, b) => b.id.localeCompare(a.id, undefined, { numeric: true }));
   return datedVersions[0];
 }
 

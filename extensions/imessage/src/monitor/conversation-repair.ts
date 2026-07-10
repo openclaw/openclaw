@@ -1,3 +1,4 @@
+// Imessage plugin module implements conversation repair behavior.
 import type { IMessageRpcClient } from "../client.js";
 import type { IMessagePayload } from "./types.js";
 
@@ -18,7 +19,7 @@ type MessagesHistoryResult = {
   messages?: unknown[];
 };
 
-export type RepairIMessageConversationAnchorParams = {
+type RepairIMessageConversationAnchorParams = {
   client: IMessageRpcClient;
   message: IMessagePayload;
   runtime?: RuntimeLogger;

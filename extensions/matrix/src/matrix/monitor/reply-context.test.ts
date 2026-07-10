@@ -1,3 +1,4 @@
+// Matrix tests cover reply context plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createMatrixReplyContextResolver, summarizeMatrixReplyEvent } from "./reply-context.js";
 import { createPollStartEvent } from "./test-events.js";
@@ -36,6 +37,30 @@ describe("matrix reply context", () => {
     }
     expect(result.length).toBeLessThanOrEqual(500);
     expect(result.endsWith("...")).toBe(true);
+  });
+
+  it("truncates on a code-point boundary without orphaning a surrogate half", () => {
+    // Body is 496 'a' + 😀 (U+1F600, a surrogate pair at UTF-16 indices 496-497)
+    // + "bcd". Raw `.slice(0, 497)` would split the emoji and leave a lone high
+    // surrogate (\uD83D) before the ellipsis. The fix must drop the half emoji.
+    const body = `${"a".repeat(496)}😀bcd`;
+    expect(body.length).toBe(501);
+    const result = summarizeMatrixReplyEvent({
+      event_id: "$original",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      origin_server_ts: Date.now(),
+      content: {
+        msgtype: "m.text",
+        body,
+      },
+    } as MatrixRawEvent);
+    if (result === undefined) {
+      throw new Error("expected truncated reply context");
+    }
+    expect(result).toBe(`${"a".repeat(496)}...`);
+    // No dangling high surrogate should survive the truncation.
+    expect(result.includes("\uD83D")).toBe(false);
   });
 
   it("handles media-only reply events", () => {

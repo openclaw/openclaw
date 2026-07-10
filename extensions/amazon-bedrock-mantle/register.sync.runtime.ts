@@ -1,11 +1,20 @@
+/**
+ * Synchronous Amazon Bedrock Mantle provider registration. It wires discovery,
+ * runtime bearer-token preparation, stream wrappers, and failover classifiers.
+ */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi, ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  modelCostsEqual,
+  resolveClaudeSonnet5ModelIdentity,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   mergeImplicitMantleProvider,
   resolveImplicitMantleProvider,
   resolveMantleBearerToken,
   resolveMantleRuntimeBearerToken,
+  resolveMantleSonnet5Cost,
 } from "./discovery.js";
 import { createMantleAnthropicStreamFn } from "./mantle-anthropic.runtime.js";
 
@@ -15,6 +24,24 @@ type BedrockMantlePluginConfig = {
   };
 };
 
+function normalizeMantleResolvedModel(params: {
+  modelId: string;
+  model: ProviderRuntimeModel;
+}): ProviderRuntimeModel | undefined {
+  if (
+    resolveClaudeSonnet5ModelIdentity({ id: params.modelId, params: params.model.params }) ===
+    undefined
+  ) {
+    return undefined;
+  }
+  const cost = resolveMantleSonnet5Cost();
+  if (modelCostsEqual(params.model.cost, cost)) {
+    return undefined;
+  }
+  return { ...params.model, cost };
+}
+
+/** Register the Amazon Bedrock Mantle provider with OpenClaw. */
 export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
   const providerId = "amazon-bedrock-mantle";
   const startupPluginConfig = (api.pluginConfig ?? {}) as BedrockMantlePluginConfig;
@@ -60,6 +87,8 @@ export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
         apiKey,
         env,
       }),
+    normalizeResolvedModel: ({ modelId, model }) =>
+      normalizeMantleResolvedModel({ modelId, model }),
     createStreamFn: ({ model }) =>
       model.api === "anthropic-messages" ? createMantleAnthropicStreamFn() : undefined,
     matchesContextOverflowError: ({ errorMessage }) =>

@@ -1,8 +1,9 @@
+// Qa Lab plugin module implements character eval behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { runQaManualLane } from "./manual-lane.runtime.js";
+import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { isQaFastModeModelRef, type QaProviderMode } from "./model-selection.js";
 import {
   QA_FRONTIER_CHARACTER_EVAL_MODELS,
@@ -10,9 +11,9 @@ import {
   QA_FRONTIER_CHARACTER_JUDGE_MODELS,
   QA_FRONTIER_CHARACTER_THINKING_BY_MODEL,
 } from "./providers/live-frontier/character-eval.js";
-import { type QaThinkingLevel } from "./qa-gateway-config.js";
+import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import { extractQaVisibleReplyLeakText } from "./reply-failure.js";
-import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
+import { readQaSuiteFailedScenarioCountFromFile } from "./suite-summary.js";
 import type { QaSuiteResult } from "./suite.js";
 
 const DEFAULT_CHARACTER_SCENARIO_ID = "character-vibes-gollum";
@@ -411,6 +412,7 @@ async function defaultRunJudge(params: {
   prompt: string;
   timeoutMs: number;
 }) {
+  const { runQaManualLane } = await import("./manual-lane.runtime.js");
   const result = await runQaManualLane({
     repoRoot: params.repoRoot,
     providerMode: "live-frontier",
@@ -422,6 +424,11 @@ async function defaultRunJudge(params: {
     timeoutMs: params.timeoutMs,
   });
   return result.reply;
+}
+
+async function defaultRunSuite(params: Parameters<RunSuiteFn>[0]) {
+  const { runQaFlowSuiteFromRuntime } = await import("./suite-launch.runtime.js");
+  return await runQaFlowSuiteFromRuntime(params);
 }
 
 function renderCharacterEvalReport(params: {
@@ -514,11 +521,11 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
 
   const outputDir =
     params.outputDir ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `character-eval-${Date.now().toString(36)}`);
+    path.join(repoRoot, ".artifacts", "qa-e2e", `character-eval-${createQaArtifactRunId()}`);
   const runsDir = path.join(outputDir, "runs");
   await fs.mkdir(runsDir, { recursive: true });
 
-  const runSuite = params.runSuite ?? runQaSuiteFromRuntime;
+  const runSuite = params.runSuite ?? defaultRunSuite;
   const candidateConcurrency = normalizeConcurrency(
     params.candidateConcurrency,
     DEFAULT_CHARACTER_EVAL_CONCURRENCY,
@@ -559,10 +566,8 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
       });
       const transcript = extractTranscript(result);
       const transcriptFailure = detectTranscriptFailure(transcript);
-      const status =
-        result.scenarios.some((scenario) => scenario.status === "fail") || transcriptFailure
-          ? "fail"
-          : "pass";
+      const failedScenarioCount = await readQaSuiteFailedScenarioCountFromFile(result.summaryPath);
+      const status = failedScenarioCount > 0 || transcriptFailure ? "fail" : "pass";
       const run = {
         model,
         status,

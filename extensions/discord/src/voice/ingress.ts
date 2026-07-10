@@ -1,3 +1,4 @@
+// Discord plugin module implements ingress behavior.
 import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveRealtimeBootstrapContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
@@ -10,7 +11,7 @@ import { authorizeDiscordVoiceIngress } from "./access.js";
 import type { VoiceSessionEntry } from "./session.js";
 import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 
-export const DISCORD_VOICE_MESSAGE_PROVIDER = "discord-voice";
+const DISCORD_VOICE_MESSAGE_PROVIDER = "discord-voice";
 
 const logger = createSubsystemLogger("discord/voice");
 
@@ -20,7 +21,7 @@ export type DiscordVoiceIngressContext = {
   speakerLabel: string;
 };
 
-export type DiscordVoiceAgentTurnResult = {
+type DiscordVoiceAgentTurnResult = {
   context: DiscordVoiceIngressContext;
   text: string;
 };

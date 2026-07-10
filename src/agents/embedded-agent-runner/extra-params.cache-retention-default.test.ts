@@ -1,7 +1,7 @@
+// Coverage for cache-retention defaults and overrides in extra params.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
-import { isOpenRouterAnthropicModelRef } from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import { testing as extraParamsTesting, applyExtraParamsToAgent } from "./extra-params.js";
 import { resolveCacheRetention } from "./prompt-cache-retention.js";
 
@@ -12,6 +12,8 @@ function applyAndExpectWrapped(params: {
   model?: Parameters<typeof applyExtraParamsToAgent>[8];
   provider: string;
 }) {
+  // Wrapping is the observable signal that cache-retention handling was enabled
+  // without requiring a real provider stream call.
   const agent: { streamFn?: StreamFn } = {};
 
   applyExtraParamsToAgent(
@@ -31,7 +33,7 @@ function applyAndExpectWrapped(params: {
   }
 }
 
-// Mock the logger to avoid noise in tests
+// Keep cache-retention warning/debug output out of assertion logs.
 vi.mock("./logger.js", () => ({
   log: {
     debug: vi.fn(),
@@ -168,6 +170,8 @@ describe("cacheRetention default behavior", () => {
   });
 
   it("respects cacheRetention for custom provider with anthropic-messages API", () => {
+    // Custom Anthropic-compatible providers only receive cache markers when
+    // config explicitly opts in; no native-provider default should leak in.
     applyAndExpectWrapped({
       cfg: {
         agents: {
@@ -317,13 +321,5 @@ describe("cacheRetention default behavior", () => {
         "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/z27qyso459da",
       ),
     ).toBeUndefined();
-  });
-});
-
-describe("anthropic-family cache semantics", () => {
-  it("classifies OpenRouter Anthropic model refs centrally", () => {
-    expect(isOpenRouterAnthropicModelRef("openrouter", "anthropic/claude-opus-4-6")).toBe(true);
-    expect(isOpenRouterAnthropicModelRef("openrouter", "google/gemini-2.5-pro")).toBe(false);
-    expect(isOpenRouterAnthropicModelRef("OpenRouter", "Anthropic/Claude-Sonnet-4")).toBe(true);
   });
 });

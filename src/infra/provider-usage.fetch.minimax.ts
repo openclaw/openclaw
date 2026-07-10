@@ -1,7 +1,12 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+// Fetches and normalizes MiniMax provider usage records.
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { isRecord } from "../utils.js";
+import { readTrimmedStringAlias } from "../utils/string-readers.js";
 import {
   buildUsageHttpErrorSnapshot,
+  discardUsageResponseBody,
   fetchJson,
   parseFiniteNumber,
 } from "./provider-usage.fetch.shared.js";
@@ -181,27 +186,17 @@ function pickNumber(record: Record<string, unknown>, keys: readonly string[]): n
 }
 
 function pickString(record: Record<string, unknown>, keys: readonly string[]): string | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
+  return readTrimmedStringAlias(record, keys);
 }
 
 function parseEpoch(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
-    if (value < 1e12) {
-      return Math.floor(value * 1000);
-    }
-    return Math.floor(value);
+    const timestampMs = value < 1e12 ? Math.floor(value * 1000) : Math.floor(value);
+    return asDateTimestampMs(timestampMs);
   }
   if (typeof value === "string" && value.trim()) {
     const parsed = Date.parse(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
+    return asDateTimestampMs(parsed);
   }
   return undefined;
 }
@@ -412,13 +407,16 @@ export async function fetchMinimaxUsage(
   );
 
   if (!res.ok) {
+    await discardUsageResponseBody(res);
     return buildUsageHttpErrorSnapshot({
       provider: "minimax",
       status: res.status,
     });
   }
 
-  const data = (await res.json().catch(() => null)) as MinimaxUsageResponse;
+  const data = await readProviderJsonResponse<MinimaxUsageResponse>(res, "minimax usage").catch(
+    () => null,
+  );
   if (!isRecord(data)) {
     return {
       provider: "minimax",

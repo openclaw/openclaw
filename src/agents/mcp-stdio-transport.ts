@@ -1,3 +1,6 @@
+/**
+ * OpenClaw stdio transport wrapper for MCP server subprocesses.
+ */
 import { spawn, type ChildProcess } from "node:child_process";
 import process from "node:process";
 import { PassThrough } from "node:stream";
@@ -8,7 +11,7 @@ import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../process/linux-oom-score.js";
 
-export type OpenClawStdioServerParameters = {
+type OpenClawStdioServerParameters = {
   command: string;
   args?: string[];
   env?: Record<string, string>;
@@ -33,6 +36,7 @@ export class OpenClawStdioClientTransport implements Transport {
   private readonly readBuffer = new ReadBuffer();
   private readonly stderrStream: PassThrough | null = null;
   private process?: ChildProcess;
+  private closingProcess?: ChildProcess;
 
   constructor(private readonly serverParams: OpenClawStdioServerParameters) {
     if (serverParams.stderr === "pipe" || serverParams.stderr === "overlapped") {
@@ -83,6 +87,7 @@ export class OpenClawStdioClientTransport implements Transport {
       });
       child.stdout?.on("error", (error: Error) => this.onerror?.(error));
       if (this.stderrStream && child.stderr) {
+        child.stderr.on("error", (error: Error) => this.onerror?.(error));
         child.stderr.pipe(this.stderrStream);
       }
     });
@@ -93,7 +98,7 @@ export class OpenClawStdioClientTransport implements Transport {
   }
 
   get pid() {
-    return this.process?.pid ?? null;
+    return this.process?.pid ?? this.closingProcess?.pid ?? null;
   }
 
   private processReadBuffer() {
@@ -111,8 +116,12 @@ export class OpenClawStdioClientTransport implements Transport {
   }
 
   async close(): Promise<void> {
-    const processToClose = this.process;
+    const processToClose = this.process ?? this.closingProcess;
     this.process = undefined;
+    this.closingProcess = processToClose;
+    if (processToClose) {
+      this.closingProcess = processToClose;
+    }
     if (processToClose) {
       const closePromise = new Promise<void>((resolve) => {
         processToClose.once("close", () => resolve());
@@ -132,6 +141,25 @@ export class OpenClawStdioClientTransport implements Transport {
           await Promise.race([closePromise, delay(SIGKILL_REAP_TIMEOUT_MS)]);
         }
       }
+    }
+    if (this.closingProcess === processToClose) {
+      this.closingProcess = undefined;
+    }
+    this.readBuffer.clear();
+  }
+
+  async forceClose(): Promise<void> {
+    const processToClose = this.process ?? this.closingProcess;
+    this.process = undefined;
+    if (processToClose?.pid && processToClose.exitCode === null) {
+      const closePromise = new Promise<void>((resolve) => {
+        processToClose.once("close", () => resolve());
+      });
+      signalProcessTree(processToClose.pid, "SIGKILL");
+      await Promise.race([closePromise, delay(SIGKILL_REAP_TIMEOUT_MS)]);
+    }
+    if (this.closingProcess === processToClose) {
+      this.closingProcess = undefined;
     }
     this.readBuffer.clear();
   }

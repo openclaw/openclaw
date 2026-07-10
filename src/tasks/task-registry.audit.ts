@@ -1,3 +1,4 @@
+// Produces task registry audit summaries for diagnostics and maintenance.
 import {
   compareTaskAuditFindingSortKeys,
   createEmptyTaskAuditSummary,
@@ -28,6 +29,7 @@ export type { TaskAuditCode, TaskAuditFinding, TaskAuditSeverity, TaskAuditSumma
 
 let taskAuditTaskProvider: () => TaskRecord[] = () => [];
 
+/** Installs the task source used by inspectable task audits. */
 export function configureTaskAuditTaskProvider(provider: () => TaskRecord[]): void {
   taskAuditTaskProvider = provider;
 }
@@ -185,10 +187,7 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
   return findings.toSorted(compareFindings);
 }
 
-export function isRetainedLostTaskAuditFinding(
-  finding: TaskAuditFinding,
-  now = Date.now(),
-): boolean {
+function isRetainedLostTaskAuditFinding(finding: TaskAuditFinding, now = Date.now()): boolean {
   const cleanupAfter = resolveEffectiveTaskCleanupAfter(finding.task);
   return (
     finding.code === "lost" &&

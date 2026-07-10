@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Generate Bundled Channel Config Metadata script supports OpenClaw repository automation.
 import fs from "node:fs";
 import path from "node:path";
 import { loadBundledPluginPublicArtifactModuleSync } from "../src/plugins/public-surface-loader.js";
@@ -234,7 +235,7 @@ function resolveChannelUnsupportedSecretRefSurfacePatterns(
   }
 }
 
-export async function collectBundledChannelConfigMetadata(params?: { repoRoot?: string }) {
+async function collectBundledChannelConfigMetadata(params?: { repoRoot?: string }) {
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
   const sources = collectBundledPluginSources({ repoRoot, requirePackageJson: true });
   const entries: BundledChannelConfigMetadata[] = [];
@@ -288,7 +289,7 @@ export async function collectBundledChannelConfigMetadata(params?: { repoRoot?: 
   return entries.toSorted((left, right) => left.channelId.localeCompare(right.channelId));
 }
 
-export async function writeBundledChannelConfigMetadataModule(params?: {
+async function writeBundledChannelConfigMetadataModule(params?: {
   repoRoot?: string;
   outputPath?: string;
   check?: boolean;

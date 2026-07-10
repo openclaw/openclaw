@@ -1,3 +1,4 @@
+// Generate Npm Shrinkwrap tests cover generate npm shrinkwrap script behavior.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -5,15 +6,18 @@ import {
   collectCurrentShrinkwrapOverrides,
   collectOverrideViolations,
   collectPnpmLockViolations,
+  createNpmShrinkwrapExecOptions,
   createNpmShrinkwrapCommand,
   disableShrinkwrappedOverrideConflictSources,
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
   normalizeNpmVersionDrift,
+  packageJsonForShrinkwrap,
   packageDependencyInputsChanged,
   pnpmLockOverrideVersionForVersions,
   parsePnpmPackageKey,
   parseLockPackagePath,
+  resolvePackageDirs,
   restoreCurrentPnpmLockedPackages,
   shouldUseLegacyPeerDepsForShrinkwrap,
   shrinkwrapPackageDirsForChangedPaths,
@@ -23,6 +27,21 @@ describe("generate-npm-shrinkwrap", () => {
   function repoRelativePath(value: string): string {
     return path.relative(process.cwd(), value).replaceAll("\\", "/");
   }
+
+  it("omits workspace packages that are published beside the package", () => {
+    const normalized = packageJsonForShrinkwrap(
+      {
+        dependencies: { "@openclaw/ai": "workspace:2026.6.11", chalk: "5.6.2" },
+        devDependencies: { local: "workspace:*" },
+        peerDependencies: { host: "workspace:^1.2.3" },
+      },
+      {},
+    );
+
+    expect(normalized).not.toHaveProperty("devDependencies");
+    expect(normalized.dependencies).toEqual({ chalk: "5.6.2" });
+    expect(normalized.peerDependencies).toEqual({});
+  });
 
   it("runs npm shrinkwrap through cmd.exe for Windows npm shims", () => {
     const execPath = "C:\\nodejs\\node.exe";
@@ -42,6 +61,54 @@ describe("generate-npm-shrinkwrap", () => {
       shell: false,
       windowsVerbatimArguments: true,
     });
+  });
+
+  it("bounds npm shrinkwrap command runtime and captured output by default", () => {
+    expect(
+      createNpmShrinkwrapExecOptions({ command: "npm", args: ["install"] }, "/tmp/package", {}),
+    ).toMatchObject({
+      cwd: "/tmp/package",
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10 * 60 * 1000,
+    });
+  });
+
+  it("rejects short flag package selectors before resolving shrinkwrap targets", () => {
+    expect(() => resolvePackageDirs(["--package-dir", "-h"])).toThrow(
+      "--package-dir requires a package directory.",
+    );
+    expect(() => resolvePackageDirs(["--changed", "--base", "-h"])).toThrow(
+      "--base requires a git ref.",
+    );
+    expect(() => resolvePackageDirs(["--changed", "--head", "-h"])).toThrow(
+      "--head requires a git ref.",
+    );
+  });
+
+  it("accepts strict npm shrinkwrap command timeout and buffer overrides", () => {
+    expect(
+      createNpmShrinkwrapExecOptions({ command: "npm", args: ["install"] }, "/tmp/package", {
+        OPENCLAW_NPM_SHRINKWRAP_COMMAND_MAX_BUFFER_BYTES: "1048576",
+        OPENCLAW_NPM_SHRINKWRAP_COMMAND_TIMEOUT_MS: "30000",
+      }),
+    ).toMatchObject({
+      maxBuffer: 1024 * 1024,
+      timeout: 30000,
+    });
+  });
+
+  it("rejects loose npm shrinkwrap command timeout and buffer overrides", () => {
+    expect(() =>
+      createNpmShrinkwrapExecOptions({ command: "npm", args: ["install"] }, "/tmp/package", {
+        OPENCLAW_NPM_SHRINKWRAP_COMMAND_TIMEOUT_MS: "30s",
+      }),
+    ).toThrow("invalid OPENCLAW_NPM_SHRINKWRAP_COMMAND_TIMEOUT_MS: 30s");
+    expect(() =>
+      createNpmShrinkwrapExecOptions({ command: "npm", args: ["install"] }, "/tmp/package", {
+        OPENCLAW_NPM_SHRINKWRAP_COMMAND_MAX_BUFFER_BYTES: "64mb",
+      }),
+    ).toThrow("invalid OPENCLAW_NPM_SHRINKWRAP_COMMAND_MAX_BUFFER_BYTES: 64mb");
   });
 
   it("extracts exact versions from npm override specs", () => {
@@ -297,6 +364,7 @@ describe("generate-npm-shrinkwrap", () => {
           },
           "node_modules/zod": {
             version: "4.4.3",
+            deprecated: "Use another package",
             peer: true,
           },
           "node_modules/keeps-peer-false": {
@@ -337,6 +405,16 @@ describe("generate-npm-shrinkwrap", () => {
         { baileys: { peerDependenciesMeta: { sharp: { optional: true } } } },
       ),
     ).toBe(false);
+  });
+
+  it("uses legacy peer resolution when the package has optional peers", () => {
+    expect(
+      shouldUseLegacyPeerDepsForShrinkwrap({
+        dependencies: { zod: "4.4.3" },
+        peerDependencies: { openclaw: ">=2026.5.30" },
+        peerDependenciesMeta: { openclaw: { optional: true } },
+      }),
+    ).toBe(true);
   });
 
   it("applies package extension peer metadata to generated shrinkwrap packages", () => {

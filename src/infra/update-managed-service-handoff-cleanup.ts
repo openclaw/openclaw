@@ -1,9 +1,10 @@
+// Cleans up managed service handoff files after update completion.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 export const MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX = "openclaw-update-run-handoff-";
-export const MANAGED_SERVICE_UPDATE_HANDOFF_STALE_TTL_MS = 24 * 60 * 60_000;
+const MANAGED_SERVICE_UPDATE_HANDOFF_STALE_TTL_MS = 24 * 60 * 60_000;
 
 export async function cleanupStaleManagedServiceUpdateHandoffs(params?: {
   tmpDir?: string;

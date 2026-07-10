@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements suite runtime agent behavior.
 export {
   createSession,
   readEffectiveTools,
@@ -13,6 +14,7 @@ export {
   runAgentPrompt,
   runQaCli,
   startAgentRun,
+  waitForAgentHistoryReply,
   waitForAgentRun,
 } from "./suite-runtime-agent-process.js";
 export {

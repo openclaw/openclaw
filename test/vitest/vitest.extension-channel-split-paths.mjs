@@ -1,3 +1,4 @@
+// Test routing specs for channel plugins split into dedicated Vitest configs.
 import { bundledPluginRoot } from "../../scripts/lib/bundled-plugin-paths.mjs";
 
 export const splitChannelExtensionShardSpecs = [
@@ -37,8 +38,4 @@ export function resolveSplitChannelExtensionShard(root) {
   return splitChannelExtensionShardSpecs.find(
     (spec) => bundledPluginRoot(spec.id) === normalizedRoot,
   );
-}
-
-export function isSplitChannelExtensionRoot(root) {
-  return Boolean(resolveSplitChannelExtensionShard(root));
 }

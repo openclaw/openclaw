@@ -1,6 +1,10 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
+// Builds OpenAI-compatible embedding provider entries for plugins.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { resolveConfiguredSecretInputString } from "../gateway/resolve-configured-secret-input-string.js";
+import { readResponseTextPrefix } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname, type SsrFPolicy } from "../infra/net/ssrf.js";
 import type {
@@ -11,9 +15,14 @@ import type {
   EmbeddingProviderCreateOptions,
 } from "./embedding-provider-types.js";
 
+/** Provider id for OpenAI-compatible remote embedding servers. */
 export const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
 const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
+const EMBEDDING_ERROR_BODY_MAX_BYTES = 8 * 1024;
+const EMBEDDING_ERROR_BODY_MAX_CHARS = 1_000;
+const EMBEDDING_ERROR_TRUNCATED_SUFFIX = "... [truncated]";
 
+/** Normalized OpenAI-compatible embedding client configuration. */
 export type OpenAICompatibleEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
@@ -279,11 +288,31 @@ function readEmbeddingVectors(
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {
-  try {
-    return await response.json();
-  } catch (cause) {
-    throw new Error("openai-compatible embeddings failed: malformed JSON response", { cause });
+  return await readProviderJsonResponse(response, "openai-compatible embeddings failed");
+}
+
+async function readEmbeddingErrorBodySnippet(response: Response): Promise<string | undefined> {
+  if (!response.body || response.bodyUsed) {
+    return undefined;
   }
+  const prefix = await readResponseTextPrefix(response, EMBEDDING_ERROR_BODY_MAX_BYTES).catch(
+    () => undefined,
+  );
+  if (!prefix?.text) {
+    return undefined;
+  }
+  const { text, truncated } = prefix;
+  if (text.length > EMBEDDING_ERROR_BODY_MAX_CHARS) {
+    return `${truncateUtf16Safe(text, EMBEDDING_ERROR_BODY_MAX_CHARS)}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}`;
+  }
+  return truncated ? `${text}${EMBEDDING_ERROR_TRUNCATED_SUFFIX}` : text;
+}
+
+async function createEmbeddingHttpError(response: Response): Promise<Error> {
+  const snippet = await readEmbeddingErrorBodySnippet(response);
+  return new Error(
+    `openai-compatible embeddings failed: HTTP ${response.status}${snippet ? `: ${snippet}` : ""}`,
+  );
 }
 
 async function postEmbeddingRequest(params: {
@@ -313,9 +342,7 @@ async function postEmbeddingRequest(params: {
   });
   try {
     if (!response.ok) {
-      throw new Error(
-        `openai-compatible embeddings failed: HTTP ${response.status}: ${await response.text()}`,
-      );
+      throw await createEmbeddingHttpError(response);
     }
     return readEmbeddingVectors(
       (await readJsonResponse(response)) as OpenAICompatibleEmbeddingResponse,
@@ -326,7 +353,8 @@ async function postEmbeddingRequest(params: {
   }
 }
 
-export async function createOpenAICompatibleEmbeddingClient(
+/** Creates a normalized OpenAI-compatible embedding client from runtime config. */
+async function createOpenAICompatibleEmbeddingClient(
   options: EmbeddingProviderCreateOptions,
 ): Promise<OpenAICompatibleEmbeddingClient> {
   const configuredProvider = resolveConfiguredProvider(options);
@@ -362,6 +390,7 @@ export async function createOpenAICompatibleEmbeddingClient(
   };
 }
 
+/** Creates an OpenAI-compatible embedding provider and its backing client. */
 export async function createOpenAICompatibleEmbeddingProvider(
   options: EmbeddingProviderCreateOptions,
 ): Promise<{
@@ -398,6 +427,7 @@ export async function createOpenAICompatibleEmbeddingProvider(
   };
 }
 
+/** Embedding provider adapter for OpenAI-compatible remote embedding APIs. */
 export const openAICompatibleEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
   id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
   transport: "remote",

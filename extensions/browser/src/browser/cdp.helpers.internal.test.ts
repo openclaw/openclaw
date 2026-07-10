@@ -1,3 +1,4 @@
+// Browser tests cover cdp.helpers.internal plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";
@@ -42,7 +43,9 @@ import { BrowserCdpEndpointBlockedError } from "./errors.js";
 
 async function startWsServer() {
   const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-  await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
+  await new Promise<void>((resolve) => {
+    wss.once("listening", () => resolve());
+  });
   const port = (wss.address() as { port: number }).port;
   return { wss, port, url: `ws://127.0.0.1:${port}/devtools/browser/TEST` };
 }
@@ -55,7 +58,9 @@ describe("cdp.helpers internal", () => {
     registerManagedProxyBrowserCdpBypassMock.mockReset();
     registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => undefined);
     if (wss) {
-      await new Promise<void>((resolve) => wss?.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss?.close(() => resolve());
+      });
       wss = null;
     }
   });
@@ -307,7 +312,9 @@ describe("cdp.helpers internal", () => {
           cb(true);
         },
       });
-      await new Promise<void>((resolve) => wss?.once("listening", () => resolve()));
+      await new Promise<void>((resolve) => {
+        wss?.once("listening", () => resolve());
+      });
       const port = (wss.address() as { port: number }).port;
       let callbackCount = 0;
       wss.on("connection", (socket) => {
@@ -341,7 +348,9 @@ describe("cdp.helpers internal", () => {
           cb(false, 429, "too many requests");
         },
       });
-      await new Promise<void>((resolve) => wss?.once("listening", () => resolve()));
+      await new Promise<void>((resolve) => {
+        wss?.once("listening", () => resolve());
+      });
       const port = (wss.address() as { port: number }).port;
 
       await expect(
@@ -408,8 +417,9 @@ describe("cdp.helpers internal", () => {
       await expect(
         withCdpSocket(server.url, async (send) => {
           await send("Test.ok");
-          // biome-ignore lint/style/useThrowOnlyError: exercising the non-Error guard on purpose.
-          throw "raw-string-from-callback";
+          const rejectRawString = () =>
+            Promise.reject(toLintErrorObject("raw-string-from-callback", "Non-Error rejection"));
+          return rejectRawString();
         }),
       ).rejects.toThrow(/raw-string-from-callback/);
     });
@@ -485,6 +495,28 @@ describe("cdp.helpers internal", () => {
     // suite. The branch is c8-ignored in the source file with an
     // accompanying justification.
   });
+
+  it("moves WebSocket URL userinfo into the Authorization header", async () => {
+    const server = await startWsServer();
+    wss = server.wss;
+    const authorization = new Promise<string | undefined>((resolve) => {
+      server.wss.once("connection", (socket, request) => {
+        resolve(request.headers.authorization);
+        socket.close();
+      });
+    });
+    const credentialedUrl = server.url.replace("ws://", "ws://alice:p%40ss@");
+    const ws = openCdpWebSocket(credentialedUrl, { handshakeTimeoutMs: 500 });
+
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", reject);
+    });
+
+    expect(ws.url).toBe(server.url);
+    expect(await authorization).toBe(`Basic ${Buffer.from("alice:p@ss").toString("base64")}`);
+    ws.close();
+  });
 });
 
 describe("openCdpWebSocket option handling", () => {
@@ -538,6 +570,7 @@ describe("openCdpWebSocket option handling", () => {
     expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(
       "ws://127.0.0.1:1/devtools/browser/X",
     );
+    expect(ws.url).toBe("ws://127.0.0.1:1/devtools/browser/X");
     expect(release).toHaveBeenCalledOnce();
     ws.once("error", () => {});
     ws.close();
@@ -564,3 +597,17 @@ describe("openCdpWebSocket option handling", () => {
     ws.close();
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

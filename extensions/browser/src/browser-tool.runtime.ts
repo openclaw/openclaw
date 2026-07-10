@@ -1,6 +1,13 @@
+/**
+ * Runtime dependency barrel for the Browser agent tool.
+ *
+ * Kept separate from browser-tool.ts so tests can mock the tool boundary while
+ * production still imports SDK helpers and browser client actions lazily.
+ */
 import { getRuntimeConfig } from "./sdk-config.js";
 
 export { getRuntimeConfig };
+/** Resolve global image downscaling for screenshots returned to agent tools. */
 export function resolveRuntimeImageSanitization(): { maxDimensionPx: number } | undefined {
   const configured = getRuntimeConfig().agents?.defaults?.imageMaxDimensionPx;
   if (typeof configured !== "number" || !Number.isFinite(configured)) {
@@ -10,11 +17,14 @@ export function resolveRuntimeImageSanitization(): { maxDimensionPx: number } | 
 }
 export {
   callGatewayTool,
+  describeImageFile,
   imageResultFromFile,
   jsonResult,
   listNodes,
+  readPositiveIntegerParam,
   readStringParam,
   resolveNodeIdFromList,
+  saveMediaBuffer,
   selectDefaultNodeFromList,
 } from "./sdk-setup-tools.js";
 export type { AnyAgentTool, NodeListNode } from "./sdk-setup-tools.js";
@@ -29,9 +39,11 @@ export {
   browserArmDialog,
   browserArmFileChooser,
   browserConsoleMessages,
+  browserDownload,
   browserNavigate,
   browserPdfSave,
   browserScreenshotAction,
+  browserWaitForDownload,
 } from "./browser/client-actions.js";
 export {
   browserCloseTab,
@@ -47,9 +59,10 @@ export {
 } from "./browser/client.js";
 export { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 export { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./browser/constants.js";
-export { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "./browser/paths.js";
+export { resolveExistingUploadPaths } from "./browser/paths.js";
 export { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 export { applyBrowserProxyPaths, persistBrowserProxyFiles } from "./browser/proxy-files.js";
+export { stageBrowserScreenshotForSharing } from "./browser/screenshot-sharing.js";
 export {
   touchSessionBrowserTab,
   trackSessionBrowserTab,

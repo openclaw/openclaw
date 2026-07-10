@@ -1,3 +1,4 @@
+// Account snapshot field tests cover channel account snapshot serialization fields.
 import { describe, expect, it } from "vitest";
 import { projectSafeChannelAccountSnapshotFields } from "./account-snapshot-fields.js";
 
@@ -58,5 +59,16 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
       lastEventAt: 345,
       lastTransportActivityAt: 456,
     });
+  });
+
+  it("projects terminalDisconnect when present and omits it when absent", () => {
+    const withFlag = projectSafeChannelAccountSnapshotFields({
+      connected: false,
+      terminalDisconnect: true,
+    });
+    expect(withFlag.terminalDisconnect).toBe(true);
+
+    const withoutFlag = projectSafeChannelAccountSnapshotFields({ connected: false });
+    expect(withoutFlag).not.toHaveProperty("terminalDisconnect");
   });
 });

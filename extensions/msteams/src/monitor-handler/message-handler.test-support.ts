@@ -1,3 +1,4 @@
+// Msteams plugin module implements message handler support behavior.
 import { vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
@@ -17,6 +18,7 @@ type MessageHandlerDepsOptions = {
   shouldHandleTextCommands?: PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"];
   createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
   resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
+  getTeamDetails?: ReturnType<typeof vi.fn>;
 };
 
 export function createMessageHandlerDeps(
@@ -38,6 +40,8 @@ export function createMessageHandlerDeps(
       lastRoutePolicy: "session" as const,
       matchedBy: "default" as const,
     }));
+  const getTeamDetails =
+    options.getTeamDetails ?? vi.fn(async () => ({ aadGroupId: "team-aad-group" }));
 
   installMSTeamsTestRuntime({
     enqueueSystemEvent,
@@ -56,7 +60,7 @@ export function createMessageHandlerDeps(
   });
 
   const conversationStore = {
-    get: vi.fn(async () => null),
+    get: vi.fn<MSTeamsMessageHandlerDeps["conversationStore"]["get"]>(async () => null),
     upsert: vi.fn(async () => undefined),
     list: vi.fn(async () => []),
     remove: vi.fn(async () => false),
@@ -68,7 +72,7 @@ export function createMessageHandlerDeps(
     cfg,
     runtime: { error: vi.fn() } as unknown as RuntimeEnv,
     appId: "test-app",
-    adapter: {} as MSTeamsMessageHandlerDeps["adapter"],
+    app: {} as MSTeamsMessageHandlerDeps["app"],
     tokenProvider: {
       getAccessToken: vi.fn(async () => "token"),
     },
@@ -93,6 +97,7 @@ export function createMessageHandlerDeps(
     upsertPairingRequest,
     recordInboundSession,
     resolveAgentRoute,
+    getTeamDetails,
   };
 }
 

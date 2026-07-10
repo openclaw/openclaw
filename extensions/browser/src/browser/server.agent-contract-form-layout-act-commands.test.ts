@@ -1,7 +1,8 @@
+// Browser tests cover server.agent contract form layout act commands plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import "../test-support/browser-security.mock.js";
 import { BROWSER_NAVIGATION_BLOCKED_MESSAGE } from "./errors.js";
 import { DEFAULT_DOWNLOAD_DIR, DEFAULT_TRACE_DIR, DEFAULT_UPLOAD_DIR } from "./paths.js";
@@ -22,12 +23,17 @@ const state = getBrowserControlServerTestState();
 const pwMocks = getPwMocks();
 const realFetch: BrowserTestFetch = (input, init) => getBrowserTestFetch()(input, init);
 
+beforeAll(async () => {
+  await import("../server.js");
+});
+
 type GuardedCurrentTabRouteCase = {
   method: "GET" | "POST";
   path: string;
   body?: Record<string, unknown>;
   mockName:
     | "cookiesGetViaPlaywright"
+    | "downloadViaPlaywright"
     | "executeActViaPlaywright"
     | "highlightViaPlaywright"
     | "pdfViaPlaywright"
@@ -38,7 +44,8 @@ type GuardedCurrentTabRouteCase = {
     | "storageGetViaPlaywright"
     | "takeScreenshotViaPlaywright"
     | "traceStartViaPlaywright"
-    | "traceStopViaPlaywright";
+    | "traceStopViaPlaywright"
+    | "waitForDownloadViaPlaywright";
 };
 
 const guardedCurrentTabRouteCases: readonly GuardedCurrentTabRouteCase[] = [
@@ -74,6 +81,18 @@ const guardedCurrentTabRouteCases: readonly GuardedCurrentTabRouteCase[] = [
     path: "/response/body",
     body: { targetId: "abcd1234", url: "**/api/data" },
     mockName: "responseBodyViaPlaywright",
+  },
+  {
+    method: "POST",
+    path: "/wait/download",
+    body: { targetId: "abcd1234", path: "report.pdf" },
+    mockName: "waitForDownloadViaPlaywright",
+  },
+  {
+    method: "POST",
+    path: "/download",
+    body: { targetId: "abcd1234", ref: "e12", path: "report.pdf" },
+    mockName: "downloadViaPlaywright",
   },
   {
     method: "POST",
@@ -274,6 +293,15 @@ describe("browser control server", () => {
       expect(resizeNegative.error).toContain("resize requires positive width and height");
       expect(pwMocks.resizeViewportViaPlaywright).toHaveBeenCalledTimes(1);
 
+      const resizeTooLarge = await postJson<{ error?: string; code?: string }>(`${base}/act`, {
+        kind: "resize",
+        width: 8193,
+        height: 600,
+      });
+      expect(resizeTooLarge.code).toBe("ACT_INVALID_REQUEST");
+      expect(resizeTooLarge.error).toContain("resize width and height must not exceed 8192");
+      expect(pwMocks.resizeViewportViaPlaywright).toHaveBeenCalledTimes(1);
+
       const wait = await postJson<{ ok: boolean }>(`${base}/act`, {
         kind: "wait",
         timeMs: 5,
@@ -439,6 +467,63 @@ describe("browser control server", () => {
     },
     slowTimeoutMs,
   );
+
+  it("rejects loose response body numeric options before dispatch", async () => {
+    const base = await startServerAndBase();
+    const beforeCalls = pwMocks.responseBodyViaPlaywright.mock.calls.length;
+
+    const timeoutRes = await postJson<{ error?: string }>(`${base}/response/body`, {
+      url: "**/api/data",
+      timeoutMs: "1e3",
+    });
+    expect(timeoutRes.error).toContain("timeoutMs must be a positive integer.");
+
+    const maxCharsRes = await postJson<{ error?: string }>(`${base}/response/body`, {
+      url: "**/api/data",
+      maxChars: "0x10",
+    });
+    expect(maxCharsRes.error).toContain("maxChars must be a positive integer.");
+
+    expect(pwMocks.responseBodyViaPlaywright).toHaveBeenCalledTimes(beforeCalls);
+  });
+
+  it("rejects loose hook and download timeout options before dispatch", async () => {
+    const base = await startServerAndBase();
+    const uploadCalls = pwMocks.armFileUploadViaPlaywright.mock.calls.length;
+    const dialogCalls = pwMocks.armDialogViaPlaywright.mock.calls.length;
+    const waitCalls = pwMocks.waitForDownloadViaPlaywright.mock.calls.length;
+    const downloadCalls = pwMocks.downloadViaPlaywright.mock.calls.length;
+
+    const uploadRes = await postJson<{ error?: string }>(`${base}/hooks/file-chooser`, {
+      paths: ["a.txt"],
+      timeoutMs: "1e3",
+    });
+    expect(uploadRes.error).toContain("timeoutMs must be a positive integer.");
+
+    const dialogRes = await postJson<{ error?: string }>(`${base}/hooks/dialog`, {
+      accept: true,
+      timeoutMs: "0x10",
+    });
+    expect(dialogRes.error).toContain("timeoutMs must be a positive integer.");
+
+    const waitRes = await postJson<{ error?: string }>(`${base}/wait/download`, {
+      path: "report.pdf",
+      timeoutMs: "1000ms",
+    });
+    expect(waitRes.error).toContain("timeoutMs must be a positive integer.");
+
+    const downloadRes = await postJson<{ error?: string }>(`${base}/download`, {
+      ref: "e12",
+      path: "report.pdf",
+      timeoutMs: "1.5",
+    });
+    expect(downloadRes.error).toContain("timeoutMs must be a positive integer.");
+
+    expect(pwMocks.armFileUploadViaPlaywright).toHaveBeenCalledTimes(uploadCalls);
+    expect(pwMocks.armDialogViaPlaywright).toHaveBeenCalledTimes(dialogCalls);
+    expect(pwMocks.waitForDownloadViaPlaywright).toHaveBeenCalledTimes(waitCalls);
+    expect(pwMocks.downloadViaPlaywright).toHaveBeenCalledTimes(downloadCalls);
+  });
 
   it("agent contract: hooks + response + downloads + screenshot", async () => {
     const base = await startServerAndBase();

@@ -1,20 +1,23 @@
+// Covers installed plugin manifest registry behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
 } from "./installed-plugin-index-store.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  clearPluginMetadataLifecycleCaches();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -108,6 +111,64 @@ function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
   return Object.freeze(value);
 }
 
+function writePackageManifest(rootDir: string, channelLabel: string) {
+  const packageJsonPath = path.join(rootDir, "package.json");
+  fs.writeFileSync(
+    packageJsonPath,
+    JSON.stringify({
+      name: "@openclaw/installed",
+      version: "1.0.0",
+      dependencies: {
+        "runtime-dep": "1.0.0",
+      },
+      openclaw: {
+        channel: {
+          id: "installed",
+          label: channelLabel,
+        },
+      },
+    }),
+    "utf8",
+  );
+  return packageJsonPath;
+}
+
+function createIndexWithPackageJson(rootDir: string): InstalledPluginIndex {
+  const index = createIndexWithFileSignatures(rootDir);
+  const packageJsonPath = writePackageManifest(rootDir, "Installed");
+  const record = index.plugins[0];
+  if (!record) {
+    throw new Error("expected index record");
+  }
+  record.packageJson = {
+    path: "package.json",
+    hash: "package-json-hash",
+    fileSignature: fileSignature(packageJsonPath),
+  };
+  return {
+    ...index,
+    plugins: [record],
+  };
+}
+
+function createIndexWithUnhashedPackageJson(rootDir: string): InstalledPluginIndex {
+  const index = createIndexWithFileSignatures(rootDir);
+  const packageJsonPath = writePackageManifest(rootDir, "Installed");
+  const record = index.plugins[0];
+  if (!record) {
+    throw new Error("expected index record");
+  }
+  record.packageJson = {
+    path: "package.json",
+    hash: "",
+    fileSignature: fileSignature(packageJsonPath),
+  };
+  return {
+    ...index,
+    plugins: [record],
+  };
+}
+
 describe("loadPluginManifestRegistryForInstalledIndex", () => {
   it("reuses frozen installed-index fingerprints when file signatures are persisted", () => {
     const rootDir = makeTempDir();
@@ -135,6 +196,97 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     const second = resolveInstalledManifestRegistryIndexFingerprint(index);
 
     expect(second).not.toBe(first);
+  });
+
+  it("reuses package realpaths across mutable installed-index fingerprint builds", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndexWithUnhashedPackageJson(rootDir);
+    const packageJsonPath = path.join(fs.realpathSync(rootDir), "package.json");
+    const realpathSpy = vi.spyOn(fs, "realpathSync");
+    let rootPathCalls: unknown[][];
+    let packageJsonPathCalls: unknown[][];
+    try {
+      resolveInstalledManifestRegistryIndexFingerprint(index);
+      resolveInstalledManifestRegistryIndexFingerprint(index);
+      rootPathCalls = realpathSpy.mock.calls.filter(([filePath]) => filePath === rootDir);
+      packageJsonPathCalls = realpathSpy.mock.calls.filter(
+        ([filePath]) => filePath === packageJsonPath,
+      );
+    } finally {
+      realpathSpy.mockRestore();
+    }
+
+    expect(rootPathCalls).toHaveLength(1);
+    expect(packageJsonPathCalls).toHaveLength(1);
+  });
+
+  it("clears package realpath memoization with plugin metadata lifecycle caches", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndexWithUnhashedPackageJson(rootDir);
+    const packageJsonPath = path.join(fs.realpathSync(rootDir), "package.json");
+    const realpathSpy = vi.spyOn(fs, "realpathSync");
+    let rootPathCalls: unknown[][];
+    let packageJsonPathCalls: unknown[][];
+    try {
+      resolveInstalledManifestRegistryIndexFingerprint(index);
+      clearPluginMetadataLifecycleCaches();
+      resolveInstalledManifestRegistryIndexFingerprint(index);
+      rootPathCalls = realpathSpy.mock.calls.filter(([filePath]) => filePath === rootDir);
+      packageJsonPathCalls = realpathSpy.mock.calls.filter(
+        ([filePath]) => filePath === packageJsonPath,
+      );
+    } finally {
+      realpathSpy.mockRestore();
+    }
+
+    expect(rootPathCalls).toHaveLength(2);
+    expect(packageJsonPathCalls).toHaveLength(2);
+  });
+
+  it("bounds package realpath memoization across many fingerprint roots", () => {
+    const firstRootDir = makeTempDir();
+    writePlugin(firstRootDir, "installed", "installed-");
+    const firstIndex = createIndexWithUnhashedPackageJson(firstRootDir);
+    resolveInstalledManifestRegistryIndexFingerprint(firstIndex);
+
+    const records: InstalledPluginIndexRecord[] = [];
+    for (let index = 0; index < 300; index += 1) {
+      const rootDir = makeTempDir();
+      const pluginId = `installed-${index}`;
+      writePlugin(rootDir, pluginId, `${pluginId}-`);
+      const record = createIndexWithUnhashedPackageJson(rootDir).plugins[0];
+      if (!record) {
+        throw new Error("expected index record");
+      }
+      records.push({
+        ...record,
+        pluginId,
+        manifestHash: `manifest-hash-${index}`,
+      });
+    }
+    resolveInstalledManifestRegistryIndexFingerprint({
+      ...firstIndex,
+      plugins: records,
+    });
+
+    const packageJsonPath = path.join(fs.realpathSync(firstRootDir), "package.json");
+    const realpathSpy = vi.spyOn(fs, "realpathSync");
+    let rootPathCalls: unknown[][];
+    let packageJsonPathCalls: unknown[][];
+    try {
+      resolveInstalledManifestRegistryIndexFingerprint(firstIndex);
+      rootPathCalls = realpathSpy.mock.calls.filter(([filePath]) => filePath === firstRootDir);
+      packageJsonPathCalls = realpathSpy.mock.calls.filter(
+        ([filePath]) => filePath === packageJsonPath,
+      );
+    } finally {
+      realpathSpy.mockRestore();
+    }
+
+    expect(rootPathCalls).toHaveLength(1);
+    expect(packageJsonPathCalls).toHaveLength(1);
   });
 
   it("does not cache shallow-frozen installed-index fingerprints with mutable nested records", () => {
@@ -206,6 +358,74 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(second.plugins[0]?.modelSupport).toEqual({
       modelPrefixes: ["updated-installed-"],
     });
+  });
+
+  it("reuses installed package metadata until plugin metadata caches are cleared", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndexWithPackageJson(rootDir);
+    const env = {
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+
+    const first = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+    writePackageManifest(rootDir, "Updated");
+    const second = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+    clearPluginMetadataLifecycleCaches();
+    const third = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+
+    expect(first.plugins[0]?.packageChannel?.label).toBe("Installed");
+    expect(second.plugins[0]?.packageChannel?.label).toBe("Installed");
+    expect(third.plugins[0]?.packageChannel?.label).toBe("Updated");
+    expect(third.plugins[0]?.packageDependencies).toEqual({
+      "runtime-dep": "1.0.0",
+    });
+  });
+
+  it("reuses installed package json path validation across registry loads", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndexWithPackageJson(rootDir);
+    const env = {
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+
+    loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+    const realpathSpy = vi.spyOn(fs, "realpathSync");
+    let packagePathCalls: unknown[][];
+    try {
+      loadPluginManifestRegistryForInstalledIndex({
+        index,
+        env,
+        includeDisabled: true,
+      });
+      const packageJsonPath = path.join(rootDir, "package.json");
+      packagePathCalls = realpathSpy.mock.calls.filter(
+        ([filePath]) => filePath === packageJsonPath,
+      );
+    } finally {
+      realpathSpy.mockRestore();
+    }
+
+    expect(packagePathCalls).toStrictEqual([]);
   });
 
   it("loads manifest metadata only for plugins present in the installed index", () => {

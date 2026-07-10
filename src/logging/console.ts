@@ -1,7 +1,8 @@
+// Console logging helpers format and write messages to console streams.
 import util from "node:util";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { isVerbose } from "../global-state.js";
-import { stripAnsi } from "../terminal/ansi.js";
 import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
@@ -112,6 +113,19 @@ export function setConsoleSubsystemFilter(filters?: string[] | null): void {
   }
   const normalized = filters.map((value) => value.trim()).filter((value) => value.length > 0);
   loggingState.consoleSubsystemFilter = normalized.length > 0 ? normalized : null;
+}
+
+/** Hides subsystem console lines for TTY-owned work while preserving file logging. */
+export async function withConsoleSubsystemsSuppressed<T>(work: () => Promise<T>): Promise<T> {
+  const previousFilter = loggingState.consoleSubsystemFilter
+    ? [...loggingState.consoleSubsystemFilter]
+    : null;
+  setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
+  try {
+    return await work();
+  } finally {
+    setConsoleSubsystemFilter(previousFilter);
+  }
 }
 
 export function setConsoleTimestampPrefix(enabled: boolean): void {

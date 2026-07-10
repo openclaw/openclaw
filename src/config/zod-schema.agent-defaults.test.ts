@@ -1,3 +1,4 @@
+// Covers agent default schema parsing and compatibility behavior.
 import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
@@ -26,6 +27,17 @@ function expectSchemaFailurePath(result: SchemaParseResult, expectedPathPrefix: 
 }
 
 describe("agent defaults schema", () => {
+  it("accepts utility models on defaults and agent entries", () => {
+    const defaults = AgentDefaultsSchema.parse({ utilityModel: "openai/gpt-5.4-mini" })!;
+    const agent = AgentEntrySchema.parse({
+      id: "ops",
+      utilityModel: "google/gemini-3.1-flash-lite-preview",
+    });
+
+    expect(defaults.utilityModel).toBe("openai/gpt-5.4-mini");
+    expect(agent.utilityModel).toBe("google/gemini-3.1-flash-lite-preview");
+  });
+
   it("accepts subagent archiveAfterMinutes=0 to disable archiving", () => {
     expectSchemaSuccess(
       AgentDefaultsSchema.safeParse({
@@ -68,6 +80,17 @@ describe("agent defaults schema", () => {
         videoGenerationModel: {
           primary: "qwen/wan2.6-t2v",
           fallbacks: ["minimax/video-01"],
+        },
+      }),
+    );
+  });
+
+  it("accepts voiceModel", () => {
+    expectSchemaSuccess(
+      AgentDefaultsSchema.safeParse({
+        voiceModel: {
+          primary: "openai/gpt-4o-mini-tts",
+          fallbacks: ["elevenlabs/eleven_multilingual_v2"],
         },
       }),
     );
@@ -302,6 +325,20 @@ describe("agent defaults schema", () => {
     })!;
     expect(result.compaction?.truncateAfterCompaction).toBe(true);
     expect(result.compaction?.maxActiveTranscriptBytes).toBe("20mb");
+  });
+
+  it("rejects unsafe byte-size strings in compaction defaults", () => {
+    const unsafe = String(Number.MAX_SAFE_INTEGER + 1);
+    expect(
+      AgentDefaultsSchema.safeParse({
+        compaction: { maxActiveTranscriptBytes: unsafe },
+      }).success,
+    ).toBe(false);
+    expect(
+      AgentDefaultsSchema.safeParse({
+        compaction: { memoryFlush: { forceFlushTranscriptBytes: unsafe } },
+      }).success,
+    ).toBe(false);
   });
 
   it("accepts compaction.midTurnPrecheck.enabled", () => {

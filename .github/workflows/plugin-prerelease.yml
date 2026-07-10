@@ -1,5 +1,7 @@
 name: Plugin Prerelease
 
+run-name: ${{ inputs.dispatch_id != '' && format('Plugin Prerelease {0}', inputs.dispatch_id) || 'Plugin Prerelease' }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -18,6 +20,11 @@ on:
         required: false
         default: false
         type: boolean
+      dispatch_id:
+        description: Optional parent workflow dispatch identifier
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -47,7 +54,7 @@ jobs:
       plugin_prerelease_docker_lanes: ${{ steps.manifest.outputs.plugin_prerelease_docker_lanes }}
     steps:
       - name: Checkout target
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ inputs.target_ref }}
           fetch-depth: 1
@@ -216,7 +223,7 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_static_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
@@ -252,7 +259,7 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_node_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
@@ -325,7 +332,7 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_extension_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
@@ -357,7 +364,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
@@ -519,7 +526,7 @@ jobs:
 
       - name: Upload plugin inspector advisory artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: plugin-inspector-advisory
           path: .artifacts/plugin-inspector/**

@@ -1,18 +1,28 @@
+// Stores and streams transcript files for later summary and replay.
 import { createReadStream } from "node:fs";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { resolveOptionalIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import type { TranscriptsSummary } from "./summary.js";
 import { renderTranscriptsMarkdown } from "./summary.js";
 
+/**
+ * File-backed transcript session store.
+ *
+ * Sessions are stored by date/session id with metadata JSON, append-only
+ * utterance JSONL, and rendered summary artifacts.
+ */
+/** Stored session metadata plus the resolved session directory. */
 export type TranscriptsSessionEntry = {
   session: TranscriptSessionDescriptor;
   sessionDir: string;
 };
 
 function safeSegment(value: string): string {
+  // Session ids can come from external providers; path segments stay conservative.
   return value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "session";
 }
 
@@ -32,13 +42,6 @@ async function readJsonFile<T>(filePath: string): Promise<T | undefined> {
   }
 }
 
-function normalizeMaxUtterances(value: number | undefined): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  return Math.max(1, Math.floor(value));
-}
-
 function sameSessionIdentity(
   left: TranscriptSessionDescriptor,
   right: TranscriptSessionDescriptor,
@@ -46,9 +49,11 @@ function sameSessionIdentity(
   return left.sessionId === right.sessionId && left.startedAt === right.startedAt;
 }
 
+/** Durable transcript store rooted at a caller-provided directory. */
 export class TranscriptsStore {
   constructor(private readonly rootDir: string) {}
 
+  /** Resolve the dated directory for a transcript session. */
   sessionDir(session: TranscriptSessionDescriptor): string {
     return path.join(this.rootDir, dateSegment(session.startedAt), safeSegment(session.sessionId));
   }
@@ -107,6 +112,7 @@ export class TranscriptsStore {
       }
     }
     if (matches.length > 1) {
+      // Ambiguous bare ids require an explicit date prefix to avoid reading the wrong session.
       throw new Error(
         `multiple transcripts sessions match ${selector}; use a YYYY-MM-DD/${selector} selector`,
       );
@@ -114,16 +120,19 @@ export class TranscriptsStore {
     return matches[0];
   }
 
+  /** Persist transcript session metadata. */
   async writeSession(session: TranscriptSessionDescriptor): Promise<void> {
     const dir = this.sessionDir(session);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, "metadata.json"), `${JSON.stringify(session, null, 2)}\n`);
   }
 
+  /** Read one session descriptor by session id or qualified date/id selector. */
   async readSession(sessionId: string): Promise<TranscriptSessionDescriptor | undefined> {
     return (await this.readSessionEntry(sessionId))?.session;
   }
 
+  /** Read one session descriptor plus its directory. */
   async readSessionEntry(sessionId: string): Promise<TranscriptsSessionEntry | undefined> {
     const dir = await this.findSessionDir(sessionId);
     if (!dir) {
@@ -135,13 +144,7 @@ export class TranscriptsStore {
     return session ? { session, sessionDir: dir } : undefined;
   }
 
-  async appendUtterance(sessionId: string, utterance: TranscriptUtterance): Promise<void> {
-    const dir =
-      (await this.findSessionDir(sessionId)) ??
-      path.join(this.rootDir, dateSegment(sessionId), safeSegment(sessionId));
-    await this.appendUtteranceToDir(dir, sessionId, utterance);
-  }
-
+  /** Append an utterance for an exact session descriptor. */
   async appendUtteranceForSession(
     session: TranscriptSessionDescriptor,
     utterance: TranscriptUtterance,
@@ -162,6 +165,7 @@ export class TranscriptsStore {
     );
   }
 
+  /** Read utterances for an exact session descriptor. */
   async readUtterancesForSession(
     session: TranscriptSessionDescriptor,
     options: { maxUtterances?: number } = {},
@@ -169,6 +173,7 @@ export class TranscriptsStore {
     return await this.readUtterancesFromDir(await this.findSessionDirForSession(session), options);
   }
 
+  /** Read utterances directly from a known session directory. */
   async readUtterancesFromSessionDir(
     sessionDir: string,
     options: { maxUtterances?: number } = {},
@@ -176,46 +181,79 @@ export class TranscriptsStore {
     return await this.readUtterancesFromDir(sessionDir, options);
   }
 
-  async readUtterances(
-    sessionId: string,
-    options: { maxUtterances?: number } = {},
-  ): Promise<TranscriptUtterance[]> {
-    const dir = await this.findSessionDir(sessionId);
-    if (!dir) {
-      return [];
-    }
-    return await this.readUtterancesFromDir(dir, options);
-  }
-
   private async readUtterancesFromDir(
     dir: string,
     options: { maxUtterances?: number } = {},
   ): Promise<TranscriptUtterance[]> {
     const transcriptPath = path.join(dir, "transcript.jsonl");
-    const maxUtterances = normalizeMaxUtterances(options.maxUtterances);
+    const maxUtterances = resolveOptionalIntegerOption(options.maxUtterances, { min: 1 });
     if (maxUtterances !== undefined) {
-      const utterances: TranscriptUtterance[] = [];
-      try {
+      return await new Promise<TranscriptUtterance[]>((resolve, reject) => {
+        const utterances: TranscriptUtterance[] = [];
+        const stream = createReadStream(transcriptPath, { encoding: "utf8" });
         const lines = createInterface({
-          input: createReadStream(transcriptPath, { encoding: "utf8" }),
+          input: stream,
           crlfDelay: Infinity,
         });
-        for await (const line of lines) {
-          if (!line) {
-            continue;
+        let settled = false;
+        let emptyForENOENT = false;
+        let pendingError: Error | undefined;
+
+        const settle = () => {
+          if (settled) {
+            return;
           }
-          utterances.push(JSON.parse(line) as TranscriptUtterance);
+          settled = true;
+          lines.close();
+          stream.destroy();
+          if (pendingError) {
+            reject(pendingError);
+          } else if (emptyForENOENT) {
+            resolve([]);
+          } else {
+            resolve(utterances);
+          }
+        };
+        const setError = (err: unknown) => {
+          if (!pendingError) {
+            pendingError = err instanceof Error ? err : new Error(String(err));
+          }
+        };
+
+        stream.on("close", settle);
+        stream.on("error", (err) => {
+          if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
+            emptyForENOENT = true;
+            return;
+          }
+          setError(err);
+          stream.destroy();
+        });
+        lines.on("error", (err) => {
+          if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
+            emptyForENOENT = true;
+            return;
+          }
+          setError(err);
+          stream.destroy();
+        });
+        lines.on("line", (line) => {
+          if (!line) {
+            return;
+          }
+          try {
+            utterances.push(JSON.parse(line) as TranscriptUtterance);
+          } catch (err) {
+            setError(err);
+            stream.destroy();
+            return;
+          }
           if (utterances.length > maxUtterances) {
+            // Stream and keep only the tail so large transcripts do not require full-file memory.
             utterances.shift();
           }
-        }
-      } catch (err) {
-        if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
-          return [];
-        }
-        throw err;
-      }
-      return utterances;
+        });
+      });
     }
     let raw: string;
     try {
@@ -232,6 +270,7 @@ export class TranscriptsStore {
       .map((line) => JSON.parse(line) as TranscriptUtterance);
   }
 
+  /** Mark a transcript session as stopped when metadata exists. */
   async updateStopped(sessionId: string, stoppedAt: string): Promise<void> {
     const dir = await this.findSessionDir(sessionId);
     if (!dir) {
@@ -249,6 +288,7 @@ export class TranscriptsStore {
     );
   }
 
+  /** Write summary artifacts for a session and return the markdown path. */
   async writeSummary(
     summary: TranscriptsSummary,
     session?: TranscriptSessionDescriptor,
@@ -261,6 +301,7 @@ export class TranscriptsStore {
     return await this.writeSummaryToDir(summary, dir);
   }
 
+  /** Write summary JSON and markdown to a known directory. */
   async writeSummaryToDir(summary: TranscriptsSummary, dir: string): Promise<string> {
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);

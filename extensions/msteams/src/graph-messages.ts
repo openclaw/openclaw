@@ -1,5 +1,6 @@
+// Msteams plugin module implements graph messages behavior.
 import type { OpenClawConfig } from "../runtime-api.js";
-import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
+import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
 import {
   type GraphResponse,
   deleteGraphRequest,
@@ -75,7 +76,7 @@ export async function resolveGraphConversationId(to: string): Promise<string> {
   }
 
   // user:<aadId> — look up the conversation store for the real chat ID
-  const store = createMSTeamsConversationStoreFs();
+  const store = createMSTeamsConversationStoreState();
   const found = await store.findPreferredDmByUserId(cleaned);
   if (!found) {
     throw new Error(
@@ -84,18 +85,12 @@ export async function resolveGraphConversationId(to: string): Promise<string> {
     );
   }
 
-  // Prefer the cached Graph-native chat ID (19:xxx format) over the Bot Framework
-  // conversation ID, which may be in a non-Graph format (a:xxx / 8:orgid:xxx) for
-  // personal DMs. send-context.ts resolves and caches this on first send.
-  if (found.reference.graphChatId) {
-    return found.reference.graphChatId;
-  }
   if (found.conversationId.startsWith("19:")) {
     return found.conversationId;
   }
   throw new Error(
     `Conversation for user:${cleaned} uses a Bot Framework ID (${found.conversationId}) ` +
-      "that Graph API does not accept. Send a message to this user first so the Graph chat ID is cached.",
+      "that Graph API does not accept. Use a Graph-native conversation:19:... target when available.",
   );
 }
 
@@ -128,13 +123,13 @@ export function resolveConversationPath(to: string): {
   };
 }
 
-export type GetMessageMSTeamsParams = {
+type GetMessageMSTeamsParams = {
   cfg: OpenClawConfig;
   to: string;
   messageId: string;
 };
 
-export type GetMessageMSTeamsResult = {
+type GetMessageMSTeamsResult = {
   id: string;
   text: string | undefined;
   from: GraphMessageFrom | undefined;
@@ -160,7 +155,7 @@ export async function getMessageMSTeams(
   };
 }
 
-export type PinMessageMSTeamsParams = {
+type PinMessageMSTeamsParams = {
   cfg: OpenClawConfig;
   to: string;
   messageId: string;
@@ -205,7 +200,7 @@ export async function pinMessageMSTeams(
   return { ok: true, pinnedMessageId: result.id };
 }
 
-export type UnpinMessageMSTeamsParams = {
+type UnpinMessageMSTeamsParams = {
   cfg: OpenClawConfig;
   to: string;
   /** The pinned-message resource ID returned by pin or list-pins (not the message ID). */
@@ -237,12 +232,12 @@ export async function unpinMessageMSTeams(
   return { ok: true };
 }
 
-export type ListPinsMSTeamsParams = {
+type ListPinsMSTeamsParams = {
   cfg: OpenClawConfig;
   to: string;
 };
 
-export type ListPinsMSTeamsResult = {
+type ListPinsMSTeamsResult = {
   pins: Array<{ id: string; pinnedMessageId: string; messageId?: string; text?: string }>;
 };
 
@@ -303,15 +298,8 @@ export async function listPinsMSTeams(
 // Reactions
 // ---------------------------------------------------------------------------
 
-export const TEAMS_REACTION_TYPES = [
-  "like",
-  "heart",
-  "laugh",
-  "surprised",
-  "sad",
-  "angry",
-] as const;
-export type TeamsReactionType = (typeof TEAMS_REACTION_TYPES)[number];
+const TEAMS_REACTION_TYPES = ["like", "heart", "laugh", "surprised", "sad", "angry"] as const;
+type TeamsReactionType = (typeof TEAMS_REACTION_TYPES)[number];
 
 type GraphReaction = {
   reactionType?: string;
@@ -323,14 +311,14 @@ type GraphMessageWithReactions = GraphMessage & {
   reactions?: GraphReaction[];
 };
 
-export type ReactMessageMSTeamsParams = {
+type ReactMessageMSTeamsParams = {
   cfg: OpenClawConfig;
   to: string;
   messageId: string;
   reactionType: string;
 };
 
-export type ListReactionsMSTeamsParams = {
+type ListReactionsMSTeamsParams = {
   cfg: OpenClawConfig;
   to: string;
   messageId: string;
@@ -346,7 +334,7 @@ const REACTION_TYPE_EMOJI: Record<string, string> = {
   angry: "\u{1F621}",
 };
 
-export type ReactionSummary = {
+type ReactionSummary = {
   reactionType: string;
   /** Display name for the reaction (matches reactionType for known types). */
   name: string;
@@ -356,7 +344,7 @@ export type ReactionSummary = {
   users: Array<{ id: string; displayName?: string }>;
 };
 
-export type ListReactionsMSTeamsResult = {
+type ListReactionsMSTeamsResult = {
   reactions: ReactionSummary[];
 };
 
@@ -466,7 +454,7 @@ export async function listReactionsMSTeams(
 // Search
 // ---------------------------------------------------------------------------
 
-export type SearchMessagesMSTeamsParams = {
+type SearchMessagesMSTeamsParams = {
   cfg: OpenClawConfig;
   to: string;
   query: string;
@@ -474,7 +462,7 @@ export type SearchMessagesMSTeamsParams = {
   limit?: number;
 };
 
-export type SearchMessagesMSTeamsResult = {
+type SearchMessagesMSTeamsResult = {
   messages: Array<{
     id: string;
     text: string | undefined;

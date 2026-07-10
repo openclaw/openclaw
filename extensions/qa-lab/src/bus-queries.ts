@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements bus queries behavior.
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   QaBusAttachment,
@@ -60,6 +61,7 @@ export function cloneMessage(message: QaBusMessage): QaBusMessage {
     ...message,
     conversation: { ...message.conversation },
     attachments: (message.attachments ?? []).map((attachment) => cloneAttachment(attachment)),
+    ...(message.nativeCommand ? { nativeCommand: { ...message.nativeCommand } } : {}),
     toolCalls: message.toolCalls?.map((toolCall) => cloneToolCall(toolCall)),
     reactions: message.reactions.map((reaction) => ({ ...reaction })),
   };

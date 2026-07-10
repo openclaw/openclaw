@@ -1,15 +1,17 @@
+// OC Path module implements resolve behavior.
 import { isMap, isScalar, isSeq, type Node, type Pair } from "yaml";
 import type { OcPath } from "../oc-path.js";
 import {
   isPositionalSeg,
   isQuotedSeg,
+  parseArrayIndexSegment,
   resolvePositionalSeg,
   splitRespectingBrackets,
   unquoteSeg,
 } from "../oc-path.js";
 import type { YamlAst } from "./ast.js";
 
-export type YamlOcPathMatch =
+type YamlOcPathMatch =
   | { readonly kind: "root"; readonly node: YamlAst }
   | { readonly kind: "scalar"; readonly value: unknown; readonly path: readonly string[] }
   | {
@@ -116,8 +118,8 @@ function walkNode(
   }
 
   if (isSeq(node)) {
-    const idx = Number(seg);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= node.items.length) {
+    const idx = parseArrayIndexSegment(seg, node.items.length);
+    if (idx === null) {
       return null;
     }
     const child = node.items[idx];

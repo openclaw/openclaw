@@ -1,6 +1,17 @@
+// Codex tests cover thread lifecycle plugin behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
+import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
+import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
+import {
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
+import { createCodexTestModel } from "./test-support.js";
 import {
   buildDeveloperInstructions,
   buildTurnCollaborationMode,
@@ -8,26 +19,43 @@ import {
   buildThreadResumeParams,
   buildThreadStartParams,
   codexDynamicToolsFingerprint,
+  formatCodexThreadLifecycleTimingSummary,
+  resolveCodexAppServerThreadModelSelection,
   resolveReasoningEffort,
+  shouldWarnCodexThreadLifecycleTimingSummary,
+  startOrResumeThread as startOrResumeThreadImpl,
+  type CodexThreadLifecycleTimingLogger,
 } from "./thread-lifecycle.js";
+
+function startOrResumeThread(
+  params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
+) {
+  return startOrResumeThreadImpl({ ...params, bindingStore: testCodexAppServerBindingStore });
+}
+
+let tempDir: string;
 
 function createAttemptParams(params: {
   provider: string;
   authProfileId?: string;
+  authProfileType?: "oauth" | "api_key";
   authProfileProvider?: string;
   authProfileProviders?: Record<string, string>;
+  runtimeExternalProfileIds?: string[];
   bootstrapContextMode?: "full" | "lightweight";
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   images?: EmbeddedRunAttemptParams["images"];
+  modelId?: string;
 }): EmbeddedRunAttemptParams {
   const authProfileProviders =
     params.authProfileProviders ??
     (params.authProfileId
-      ? { [params.authProfileId]: params.authProfileProvider ?? "openai-codex" }
+      ? { [params.authProfileId]: params.authProfileProvider ?? "openai" }
       : {});
+  const authProfileType = params.authProfileType ?? "oauth";
   return {
     provider: params.provider,
-    modelId: "gpt-5.4",
+    modelId: params.modelId ?? "gpt-5.4",
     prompt: "test prompt",
     authProfileId: params.authProfileId,
     ...(params.bootstrapContextMode ? { bootstrapContextMode: params.bootstrapContextMode } : {}),
@@ -40,15 +68,24 @@ function createAttemptParams(params: {
       profiles: Object.fromEntries(
         Object.entries(authProfileProviders).map(([profileId, provider]) => [
           profileId,
-          {
-            type: "oauth" as const,
-            provider,
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: Date.now() + 60_000,
-          },
+          authProfileType === "api_key"
+            ? {
+                type: "api_key" as const,
+                provider,
+                key: "sk-test",
+              }
+            : {
+                type: "oauth" as const,
+                provider,
+                access: "access-token",
+                refresh: "refresh-token",
+                expires: Date.now() + 60_000,
+              },
         ]),
       ),
+      ...(params.runtimeExternalProfileIds
+        ? { runtimeExternalProfileIds: params.runtimeExternalProfileIds }
+        : {}),
     },
   } as EmbeddedRunAttemptParams;
 }
@@ -58,7 +95,138 @@ function createAppServerOptions() {
     approvalPolicy: "on-request",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
+  };
+}
+
+function createNetworkProxyAppServerOptions() {
+  const configPatch = {
+    "features.network_proxy.enabled": true,
+    default_permissions: "mock-proxy",
+    permissions: {
+      "mock-proxy": {
+        filesystem: {
+          ":minimal": "read",
+          ":project_roots": {
+            ".": "write",
+          },
+        },
+        network: {
+          enabled: true,
+          domains: {
+            "api.openai.com": "allow",
+          },
+          allow_upstream_proxy: true,
+          proxy_url: "http://127.0.0.1:3128",
+        },
+      },
+    },
   } as const;
+  return {
+    ...createAppServerOptions(),
+    networkProxy: {
+      profileName: "mock-proxy",
+      configFingerprint: fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch),
+      configPatch,
+    },
+  } as const;
+}
+
+function createThreadLifecycleParams(
+  sessionFile: string,
+  workspaceDir: string,
+): EmbeddedRunAttemptParams {
+  return {
+    prompt: "hello",
+    sessionId: "session-1",
+    sessionKey: "agent:main:session-1",
+    sessionFile,
+    workspaceDir,
+    runId: "run-1",
+    provider: "codex",
+    modelId: "gpt-5.4-codex",
+    model: createCodexTestModel("codex"),
+    thinkLevel: "medium",
+    disableTools: true,
+    timeoutMs: 5_000,
+    authStorage: {} as never,
+    authProfileStore: { version: 1, profiles: {} },
+    modelRegistry: {} as never,
+  } as EmbeddedRunAttemptParams;
+}
+
+function createThreadLifecycleAppServerOptions(): Parameters<
+  typeof startOrResumeThread
+>[0]["appServer"] {
+  return {
+    start: {
+      transport: "stdio",
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+    },
+    codeModeOnly: false,
+    requestTimeoutMs: 60_000,
+    turnCompletionIdleTimeoutMs: 60_000,
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: "workspace-write",
+    connectionClass: "local-loopback",
+    remoteAppsSubstrate: "preconfigured",
+  };
+}
+
+function threadStartResult(threadId = "thread-1") {
+  return {
+    thread: {
+      id: threadId,
+      sessionId: "session-1",
+      forkedFromId: null,
+      preview: "",
+      ephemeral: false,
+      modelProvider: "openai",
+      createdAt: 1,
+      updatedAt: 1,
+      status: { type: "idle" },
+      path: null,
+      cwd: tempDir,
+      cliVersion: "0.125.0",
+      source: "unknown",
+      agentNickname: null,
+      agentRole: null,
+      gitInfo: null,
+      name: null,
+      turns: [],
+    },
+    model: "gpt-5.4-codex",
+    modelProvider: "openai",
+    serviceTier: null,
+    cwd: tempDir,
+    instructionSources: [],
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: { type: "dangerFullAccess" },
+    permissionProfile: null,
+    reasoningEffort: null,
+  };
+}
+
+function createTimingLogger(traceEnabled: boolean): CodexThreadLifecycleTimingLogger {
+  return {
+    isEnabled: vi.fn((level: "trace") => level === "trace" && traceEnabled),
+    trace: vi.fn(),
+    warn: vi.fn(),
+  };
+}
+
+function expectSingleLogMessage(
+  log: CodexThreadLifecycleTimingLogger,
+  level: "trace" | "warn",
+): string {
+  const mock = log[level] as ReturnType<typeof vi.fn>;
+  expect(mock).toHaveBeenCalledTimes(1);
+  const message = mock.mock.calls[0]?.[0];
+  expect(typeof message).toBe("string");
+  return message as string;
 }
 
 describe("Codex app-server native code mode config", () => {
@@ -66,8 +234,14 @@ describe("Codex app-server native code mode config", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }));
 
     expect(instructions).toContain("Use Codex native `spawn_agent` for Codex subagents");
+    // Codex defers native collab tools behind tool_search on search-capable
+    // models; the instructions must teach the retrieval path or models fall
+    // back to the always-direct sessions_spawn.
     expect(instructions).toContain(
-      "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.",
+      "when `spawn_agent` is not directly listed, load it with `tool_search` before spawning",
+    );
+    expect(instructions).toContain(
+      "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.",
     );
   });
 
@@ -75,23 +249,31 @@ describe("Codex app-server native code mode config", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
       dynamicTools: [
         {
+          type: "function",
           name: "message",
           description: "Send a message",
           inputSchema: { type: "object" },
         },
         {
-          name: "music_generate",
-          description: "Create music",
-          inputSchema: { type: "object" },
-          namespace: "openclaw",
-          deferLoading: true,
-        },
-        {
-          name: "image_generate",
-          description: "Create images",
-          inputSchema: { type: "object" },
-          namespace: "openclaw",
-          deferLoading: true,
+          type: "namespace",
+          name: "openclaw",
+          description: "",
+          tools: [
+            {
+              type: "function",
+              name: "music_generate",
+              description: "Create music",
+              inputSchema: { type: "object" },
+              deferLoading: true,
+            },
+            {
+              type: "function",
+              name: "image_generate",
+              description: "Create images",
+              inputSchema: { type: "object" },
+              deferLoading: true,
+            },
+          ],
         },
       ],
     });
@@ -103,10 +285,38 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).not.toContain("message,");
   });
 
+  it("uses the shared Skill Workshop guidance when skill_workshop is available", () => {
+    const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
+      dynamicTools: [
+        {
+          type: "namespace",
+          name: "openclaw",
+          description: "",
+          tools: [
+            {
+              type: "function",
+              name: "skill_workshop",
+              description: "Manage skill proposals",
+              inputSchema: { type: "object" },
+              deferLoading: true,
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(instructions).toContain("## Skill Workshop");
+    expect(instructions).toContain("Route durable skill work");
+    expect(instructions).toContain("through the `skill_workshop` tool");
+    expect(instructions).toContain("Generated skills are pending proposals.");
+    expect(instructions).toContain("only when the user explicitly asks");
+  });
+
   it("keeps developer instructions compact when no dynamic tools are deferred", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
       dynamicTools: [
         {
+          type: "function",
           name: "message",
           description: "Send a message",
           inputSchema: { type: "object" },
@@ -117,7 +327,7 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).not.toContain("Deferred searchable OpenClaw dynamic tools available");
   });
 
-  it("keeps durable dynamic tool fingerprints independent from presentation mode", () => {
+  it("keeps durable dynamic tool fingerprints scoped to loading mode", () => {
     const inputSchema = {
       type: "object",
       additionalProperties: false,
@@ -128,6 +338,7 @@ describe("Codex app-server native code mode config", () => {
     };
     const directFingerprint = codexDynamicToolsFingerprint([
       {
+        type: "function",
         name: "message",
         description: "Send a visible message",
         inputSchema,
@@ -135,15 +346,22 @@ describe("Codex app-server native code mode config", () => {
     ]);
     const searchableFingerprint = codexDynamicToolsFingerprint([
       {
-        name: "message",
-        description: "Load and send a visible message",
-        inputSchema,
-        namespace: "openclaw",
-        deferLoading: true,
+        type: "namespace",
+        name: "openclaw",
+        description: "",
+        tools: [
+          {
+            type: "function",
+            name: "message",
+            description: "Load and send a visible message",
+            inputSchema,
+            deferLoading: true,
+          },
+        ],
       },
     ]);
 
-    expect(searchableFingerprint).toBe(directFingerprint);
+    expect(searchableFingerprint).not.toBe(directFingerprint);
   });
 
   it("keeps OpenClaw skill catalogs out of developer instructions", () => {
@@ -167,16 +385,175 @@ describe("Codex app-server native code mode config", () => {
       config: {
         "features.hooks": true,
         apps: { _default: { enabled: false } },
+        mcp_servers: {
+          local_docs: {
+            command: "node",
+            args: ["/opt/local-docs-mcp/dist/index.js"],
+          },
+        },
       },
     });
 
     expect(request.config).toEqual({
       "features.hooks": true,
       apps: { _default: { enabled: false } },
+      mcp_servers: {
+        local_docs: {
+          command: "node",
+          args: ["/opt/local-docs-mcp/dist/index.js"],
+        },
+      },
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
     expect(request.personality).toBe("none");
+  });
+
+  it("enables hosted Codex web search on thread/start by default", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "codex" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request.config).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "cached",
+    });
+  });
+
+  it("disables hosted Codex web search for tool-disabled runs", () => {
+    const params = createAttemptParams({ provider: "codex" });
+    params.disableTools = true;
+    const request = buildThreadStartParams(params, {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request.config).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "disabled",
+    });
+  });
+
+  it("disables hosted Codex web search when effective tool policy denies web_search", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "codex" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      webSearchAllowed: false,
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request.config).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "disabled",
+    });
+  });
+
+  it("disables native Codex search when runtime policy disables native tools", () => {
+    const request = buildThreadResumeParams(createAttemptParams({ provider: "codex" }), {
+      threadId: "thread-1",
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+      nativeCodeModeEnabled: false,
+    });
+
+    expect(request.config).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "disabled",
+    });
+  });
+
+  it("disables hosted Codex web search when the active provider lacks support", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "codex" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+      nativeProviderWebSearchSupport: "unsupported",
+    });
+
+    expect(request.config).toMatchObject({
+      "features.standalone_web_search": false,
+      web_search: "disabled",
+    });
+  });
+
+  it("selects the Codex network-proxy permissions profile in thread/start config", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createNetworkProxyAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request).not.toHaveProperty("permissions");
+    expect(request).not.toHaveProperty("sandbox");
+    expect(request.config).toMatchObject({
+      "features.network_proxy.enabled": true,
+      default_permissions: "mock-proxy",
+      permissions: {
+        "mock-proxy": {
+          network: {
+            enabled: true,
+            allow_upstream_proxy: true,
+            proxy_url: "http://127.0.0.1:3128",
+          },
+        },
+      },
+    });
+  });
+
+  it("selects the Codex network-proxy permissions profile in thread/resume config", () => {
+    const request = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      appServer: createNetworkProxyAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    });
+
+    expect(request).not.toHaveProperty("permissions");
+    expect(request).not.toHaveProperty("sandbox");
+    expect(request.config).toMatchObject({
+      "features.network_proxy.enabled": true,
+      default_permissions: "mock-proxy",
+      permissions: {
+        "mock-proxy": {
+          network: {
+            domains: {
+              "api.openai.com": "allow",
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("disables Codex tool-search features for nano models", () => {
+    const request = buildThreadStartParams(
+      createAttemptParams({ provider: "openai", modelId: "gpt-5.4-nano" }),
+      {
+        cwd: "/repo",
+        dynamicTools: [],
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+      },
+    );
+
+    expect(request.config).toEqual({
+      "features.code_mode": true,
+      "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
+      "features.multi_agent": false,
+      "features.standalone_web_search": false,
+      web_search: "cached",
+    });
   });
 
   it("removes Codex model personality on thread/resume", () => {
@@ -199,6 +576,44 @@ describe("Codex app-server native code mode config", () => {
     expect(request.personality).toBe("none");
   });
 
+  it("honors an explicit top-level reviewer on thread start and resume", () => {
+    const appServer = {
+      ...createAppServerOptions(),
+      approvalsReviewer: "auto_review" as const,
+    };
+    const config = { approvals_reviewer: "user" };
+
+    const started = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: appServer as never,
+      developerInstructions: "test instructions",
+      config,
+    });
+    const resumed = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      appServer: appServer as never,
+      developerInstructions: "test instructions",
+      config,
+    });
+
+    expect(started.approvalsReviewer).toBe("user");
+    expect(resumed.approvalsReviewer).toBe("user");
+  });
+
+  it("keeps the configured runtime reviewer on turn start", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: {
+        ...createAppServerOptions(),
+        approvalsReviewer: "auto_review",
+      } as never,
+    });
+
+    expect(request.approvalsReviewer).toBe("auto_review");
+  });
+
   it("allows thread config to opt into Codex code-mode-only", () => {
     const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
       cwd: "/repo",
@@ -213,6 +628,9 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": true,
+      "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 
@@ -231,8 +649,52 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": true,
+      "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
+
+  it.each([false, true])(
+    "keeps direct-only dynamic namespaces model-visible when code-mode-only=%s",
+    (nativeCodeModeOnlyEnabled) => {
+      const dynamicTools = [
+        {
+          type: "namespace" as const,
+          name: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+          description: "",
+          tools: [],
+        },
+      ];
+      const config = {
+        "code_mode.direct_only_tool_namespaces": ["vendor_direct"],
+      };
+      const startRequest = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+        cwd: "/repo",
+        dynamicTools,
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+        nativeCodeModeOnlyEnabled,
+        config,
+      });
+      const resumeRequest = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+        threadId: "thread-1",
+        dynamicTools,
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+        nativeCodeModeOnlyEnabled,
+        config,
+      });
+
+      for (const request of [startRequest, resumeRequest]) {
+        expect(request.config?.["code_mode.direct_only_tool_namespaces"]).toEqual([
+          "vendor_direct",
+          CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+        ]);
+        expect(request.config?.["features.code_mode_only"]).toBe(nativeCodeModeOnlyEnabled);
+      }
+    },
+  );
 
   it("enables Codex code mode on thread/resume", () => {
     const request = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
@@ -244,6 +706,9 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 
@@ -258,12 +723,15 @@ describe("Codex app-server native code mode config", () => {
       config: {
         "features.code_mode": true,
         "features.code_mode_only": true,
+        "features.apply_patch_streaming_events": true,
       },
     });
 
     expect(request.config).toEqual({
       "features.code_mode": false,
       "features.code_mode_only": false,
+      "features.standalone_web_search": false,
+      web_search: "disabled",
     });
   });
 
@@ -273,11 +741,16 @@ describe("Codex app-server native code mode config", () => {
       appServer: createAppServerOptions() as never,
       developerInstructions: "test instructions",
       nativeCodeModeEnabled: false,
+      config: {
+        "features.apply_patch_streaming_events": true,
+      },
     });
 
     expect(request.config).toEqual({
       "features.code_mode": false,
       "features.code_mode_only": false,
+      "features.standalone_web_search": false,
+      web_search: "disabled",
     });
   });
 
@@ -305,6 +778,9 @@ describe("Codex app-server native code mode config", () => {
       "features.hooks": true,
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 
@@ -325,6 +801,9 @@ describe("Codex app-server native code mode config", () => {
       project_doc_max_bytes: 64_000,
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
+      "features.standalone_web_search": false,
+      web_search: "cached",
     });
   });
 });
@@ -353,6 +832,35 @@ describe("Codex app-server turn input image sanitizing", () => {
     });
   });
 
+  it("uses Codex permissions for network-proxy turn/start requests", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createNetworkProxyAppServerOptions() as never,
+    });
+
+    expect(request).not.toHaveProperty("permissions");
+    expect(request).not.toHaveProperty("sandboxPolicy");
+  });
+
+  it("keeps explicit sandbox policy overrides ahead of network-proxy turn permissions", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createNetworkProxyAppServerOptions() as never,
+      sandboxPolicy: {
+        type: "externalSandbox",
+        networkAccess: "enabled",
+      },
+    });
+
+    expect(request).not.toHaveProperty("permissions");
+    expect(request.sandboxPolicy).toEqual({
+      type: "externalSandbox",
+      networkAccess: "enabled",
+    });
+  });
+
   it("attaches turn-scoped developer instructions without changing thread config", () => {
     const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
@@ -366,6 +874,25 @@ describe("Codex app-server turn input image sanitizing", () => {
     );
     expect(request.collaborationMode?.settings.developer_instructions).toContain(
       "SOUL.md turn-only context",
+    );
+  });
+
+  it("places memory collaboration instructions before skills", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+      turnScopedDeveloperInstructions: "SOUL.md turn-only context",
+      memoryCollaborationInstructions: "MEMORY.md pointer",
+      skillsCollaborationInstructions: "<available_skills>",
+    });
+    const developerInstructions = request.collaborationMode?.settings.developer_instructions ?? "";
+
+    expect(developerInstructions.indexOf("SOUL.md turn-only context")).toBeLessThan(
+      developerInstructions.indexOf("MEMORY.md pointer"),
+    );
+    expect(developerInstructions.indexOf("MEMORY.md pointer")).toBeLessThan(
+      developerInstructions.indexOf("<available_skills>"),
     );
   });
 
@@ -411,6 +938,8 @@ describe("Codex app-server turn params", () => {
       approvalPolicy: "on-request" as const,
       approvalsReviewer: "guardian_subagent" as const,
       sandbox: "danger-full-access" as const,
+      connectionClass: "local-loopback" as const,
+      remoteAppsSubstrate: "preconfigured" as const,
       serviceTier: "flex" as const,
     };
 
@@ -423,12 +952,14 @@ describe("Codex app-server turn params", () => {
       config: {
         "features.code_mode": true,
         "features.code_mode_only": false,
+        "features.apply_patch_streaming_events": true,
+        "features.standalone_web_search": false,
+        web_search: "cached",
       },
       sandbox: "danger-full-access",
       serviceTier: "flex",
       personality: "none",
       developerInstructions: resumeParams.developerInstructions,
-      persistExtendedHistory: true,
     });
     expect(resumeParams.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     const turnParams = buildTurnStartParams(params, {
@@ -479,6 +1010,25 @@ describe("Codex app-server turn params", () => {
       "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md.",
     );
 
+    params.bootstrapContextRunKind = "commitment-only";
+    const commitmentCollaborationMode = buildTurnCollaborationMode(params, {
+      turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
+      heartbeatCollaborationInstructions:
+        "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md. Read it before proceeding.",
+    });
+    expect(commitmentCollaborationMode.settings.developer_instructions).toContain(
+      "# Collaboration Mode: Default",
+    );
+    expect(commitmentCollaborationMode.settings.developer_instructions).toContain(
+      "Turn-only workspace instructions.",
+    );
+    expect(commitmentCollaborationMode.settings.developer_instructions).not.toContain(
+      "This is an OpenClaw heartbeat turn",
+    );
+    expect(commitmentCollaborationMode.settings.developer_instructions).not.toContain(
+      "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md.",
+    );
+
     params.trigger = "user";
     expect(
       buildTurnCollaborationMode(params, {
@@ -522,11 +1072,15 @@ describe("Codex app-server turn params", () => {
 });
 
 describe("Codex app-server model provider selection", () => {
-  it.each(["openai", "openai-codex"])(
+  it.each(["openai", "openai"])(
     "omits public %s modelProvider when forwarding native Codex auth on thread/start",
     (provider) => {
       const request = buildThreadStartParams(
-        createAttemptParams({ provider, authProfileId: "work" }),
+        createAttemptParams({
+          provider,
+          authProfileId: "work",
+          runtimeExternalProfileIds: ["work"],
+        }),
         {
           cwd: "/repo",
           dynamicTools: [],
@@ -543,7 +1097,8 @@ describe("Codex app-server model provider selection", () => {
     const request = buildThreadResumeParams(
       createAttemptParams({
         provider: "openai",
-        authProfileProviders: { bound: "openai-codex" },
+        authProfileProviders: { bound: "openai" },
+        runtimeExternalProfileIds: ["bound"],
       }),
       {
         threadId: "thread-1",
@@ -560,7 +1115,8 @@ describe("Codex app-server model provider selection", () => {
     const request = buildThreadStartParams(
       createAttemptParams({
         provider: "openai",
-        authProfileId: "openai-codex:work",
+        authProfileId: "openai:work",
+        authProfileType: "api_key",
         authProfileProvider: "openai",
       }),
       {
@@ -574,6 +1130,24 @@ describe("Codex app-server model provider selection", () => {
     expect(request.modelProvider).toBe("openai");
   });
 
+  it("omits public OpenAI modelProvider for persisted Codex OAuth profiles", () => {
+    const request = buildThreadStartParams(
+      createAttemptParams({
+        provider: "openai",
+        authProfileId: "openai:work",
+        authProfileProvider: "openai",
+      }),
+      {
+        cwd: "/repo",
+        dynamicTools: [],
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+      },
+    );
+
+    expect(request).not.toHaveProperty("modelProvider");
+  });
+
   it("keeps public OpenAI modelProvider when no native Codex auth profile is selected", () => {
     const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
       cwd: "/repo",
@@ -584,18 +1158,285 @@ describe("Codex app-server model provider selection", () => {
 
     expect(request.modelProvider).toBe("openai");
   });
+
+  it("splits provider-qualified model refs for app-server thread/start", () => {
+    const request = buildThreadStartParams(
+      createAttemptParams({ provider: "codex", modelId: "lmstudio/local-model" }),
+      {
+        cwd: "/repo",
+        dynamicTools: [],
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+      },
+    );
+
+    expect(request.model).toBe("local-model");
+    expect(request.modelProvider).toBe("lmstudio");
+  });
+
+  it("uses provider-qualified model refs for thread capability selection", () => {
+    expect(
+      resolveCodexAppServerThreadModelSelection({
+        provider: "codex",
+        model: "amazon-bedrock/local-model",
+      }),
+    ).toEqual({
+      model: "local-model",
+      modelProvider: "amazon-bedrock",
+    });
+  });
+
+  it("uses a matching bound provider for thread capability selection", () => {
+    expect(
+      resolveCodexAppServerThreadModelSelection({
+        provider: "codex",
+        model: "local-model",
+        binding: {
+          threadId: "thread-1",
+          model: "local-model",
+          modelProvider: "amazon-bedrock",
+        },
+      }),
+    ).toEqual({
+      model: "local-model",
+      modelProvider: "amazon-bedrock",
+    });
+  });
+
+  it("prefers provider-qualified models over bound providers for thread capability selection", () => {
+    expect(
+      resolveCodexAppServerThreadModelSelection({
+        provider: "codex",
+        model: "openai/gpt-5.5",
+        binding: {
+          threadId: "thread-1",
+          model: "local-model",
+          modelProvider: "amazon-bedrock",
+        },
+      }),
+    ).toEqual({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+    });
+  });
+
+  it("normalizes provider-qualified model refs for turn/start metadata", () => {
+    const request = buildTurnStartParams(
+      createAttemptParams({ provider: "codex", modelId: "lmstudio/local-model" }),
+      {
+        threadId: "thread-1",
+        cwd: "/repo",
+        appServer: createAppServerOptions() as never,
+      },
+    );
+
+    const collaborationMode = request.collaborationMode as { settings?: Record<string, unknown> };
+    expect(request.model).toBe("local-model");
+    expect(collaborationMode.settings?.model).toBe("local-model");
+  });
+});
+
+describe("Codex app-server thread lifecycle timing", () => {
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-thread-lifecycle-"));
+    // Bindings are keyed by session identity, not tempDir, so sibling tests
+    // would otherwise leak resumable threads into fresh-start expectations.
+    resetCodexTestBindingStore();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it("formats stage summaries with run, session, action, and elapsed timing", () => {
+    const message = formatCodexThreadLifecycleTimingSummary({
+      runId: "run-a",
+      sessionId: "session-a",
+      sessionKey: "agent:main:session-a",
+      action: "started",
+      summary: {
+        totalMs: 12,
+        spans: [
+          { name: "read-binding", durationMs: 4, elapsedMs: 4 },
+          { name: "thread-start-request", durationMs: 8, elapsedMs: 12 },
+        ],
+      },
+    });
+
+    expect(message).toBe(
+      "[trace:codex-app-server] thread lifecycle: runId=run-a sessionId=session-a " +
+        "sessionKey=agent:main:session-a action=started totalMs=12 " +
+        "stages=read-binding:4ms@4ms,thread-start-request:8ms@12ms",
+    );
+  });
+
+  it("warns when the total or a single stage crosses the lifecycle threshold", () => {
+    expect(
+      shouldWarnCodexThreadLifecycleTimingSummary(
+        {
+          totalMs: 9,
+          spans: [{ name: "thread-start-request", durationMs: 10, elapsedMs: 10 }],
+        },
+        { totalThresholdMs: 50, stageThresholdMs: 10 },
+      ),
+    ).toBe(true);
+    expect(
+      shouldWarnCodexThreadLifecycleTimingSummary(
+        {
+          totalMs: 50,
+          spans: [{ name: "thread-start-request", durationMs: 1, elapsedMs: 1 }],
+        },
+        { totalThresholdMs: 50, stageThresholdMs: 10 },
+      ),
+    ).toBe(true);
+  });
+
+  it("emits a trace stage summary when starting a new thread with trace enabled", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    let nowMs = 0;
+    const log = createTimingLogger(true);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        nowMs += 17;
+        return threadStartResult("thread-started");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createThreadLifecycleParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      timing: {
+        enabled: true,
+        now: () => nowMs,
+        log,
+        totalThresholdMs: 1_000,
+        stageThresholdMs: 1_000,
+      },
+    });
+
+    const message = expectSingleLogMessage(log, "trace");
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(message).toContain("action=started");
+    expect(message).toContain("thread-start-request:17ms@17ms");
+    expect(message).toContain("thread-ready:0ms@17ms");
+  });
+
+  it("emits a trace stage summary when resuming an existing thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    let nowMs = 0;
+    const log = createTimingLogger(true);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-existing");
+      }
+      if (method === "thread/resume") {
+        nowMs += 9;
+        return threadStartResult("thread-existing");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const commonParams = {
+      client: { request } as never,
+      params: createThreadLifecycleParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+    };
+
+    await startOrResumeThread({
+      ...commonParams,
+      timing: {
+        enabled: true,
+        now: () => nowMs,
+        log: createTimingLogger(false),
+      },
+    });
+    await startOrResumeThread({
+      ...commonParams,
+      timing: {
+        enabled: true,
+        now: () => nowMs,
+        log,
+        totalThresholdMs: 1_000,
+        stageThresholdMs: 1_000,
+      },
+    });
+
+    const message = expectSingleLogMessage(log, "trace");
+    expect(message).toContain("action=resumed");
+    expect(message).toContain("thread-resume-request:9ms@9ms");
+  });
+
+  it("warns on slow start even when trace logging is disabled", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    let nowMs = 0;
+    const log = createTimingLogger(false);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        nowMs += 25;
+        return threadStartResult("thread-slow");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createThreadLifecycleParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      timing: {
+        enabled: true,
+        now: () => nowMs,
+        log,
+        totalThresholdMs: 10,
+        stageThresholdMs: 10,
+      },
+    });
+
+    const message = expectSingleLogMessage(log, "warn");
+    expect(log.trace).not.toHaveBeenCalled();
+    expect(message).toContain("action=started");
+    expect(message).toContain("thread-start-request:25ms@25ms");
+  });
 });
 
 describe("resolveReasoningEffort (#71946)", () => {
   describe("modern Codex models (none/low/medium/high/xhigh enum)", () => {
-    it.each(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"] as const)(
+    it.each([
+      "gpt-5.6",
+      "gpt-5.6-sol-oai",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.5",
+      "gpt-5.4",
+      "gpt-5.4-mini",
+      "gpt-5.3-codex-spark",
+    ] as const)(
       "translates 'minimal' -> 'low' for %s so the first request is accepted",
       (modelId) => {
         expect(resolveReasoningEffort("minimal", modelId)).toBe("low");
       },
     );
 
-    it.each(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"] as const)(
+    it.each([
+      "gpt-5.6",
+      "gpt-5.6-sol-oai",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.5",
+      "gpt-5.4",
+      "gpt-5.4-mini",
+      "gpt-5.3-codex-spark",
+    ] as const)(
       "passes 'low' / 'medium' / 'high' / 'xhigh' through unchanged for %s",
       (modelId) => {
         expect(resolveReasoningEffort("low", modelId)).toBe("low");
@@ -608,6 +1449,25 @@ describe("resolveReasoningEffort (#71946)", () => {
     it("normalizes case-variant model ids", () => {
       expect(resolveReasoningEffort("minimal", "GPT-5.5")).toBe("low");
       expect(resolveReasoningEffort("minimal", " gpt-5.4-mini ")).toBe("low");
+    });
+
+    it.each(["gpt-5.5-pro", "gpt-5.4-pro"] as const)(
+      "uses the %s minimum effort when metadata is unavailable",
+      (modelId) => {
+        expect(resolveReasoningEffort("minimal", modelId)).toBe("medium");
+        expect(resolveReasoningEffort("low", modelId)).toBe("medium");
+        expect(resolveReasoningEffort("medium", modelId)).toBe("medium");
+        expect(resolveReasoningEffort("max", modelId)).toBe("xhigh");
+      },
+    );
+
+    it("honors stricter app-server reasoning metadata", () => {
+      const supported = ["medium", "high", "xhigh"];
+
+      expect(resolveReasoningEffort("minimal", "gpt-5.5-pro", supported)).toBe("medium");
+      expect(resolveReasoningEffort("low", "gpt-5.5-pro", supported)).toBe("medium");
+      expect(resolveReasoningEffort("medium", "gpt-5.5-pro", supported)).toBe("medium");
+      expect(resolveReasoningEffort("max", "gpt-5.5-pro", supported)).toBe("xhigh");
     });
   });
 
@@ -636,7 +1496,11 @@ describe("resolveReasoningEffort (#71946)", () => {
       expect(resolveReasoningEffort("adaptive", "gpt-4o")).toBeNull();
     });
 
-    it("returns null for 'max' (non-effort enum value)", () => {
+    it("passes max for the GPT-5.6 series", () => {
+      expect(resolveReasoningEffort("max", "gpt-5.6")).toBe("max");
+      expect(resolveReasoningEffort("max", "gpt-5.6-sol-oai")).toBe("max");
+      expect(resolveReasoningEffort("max", "gpt-5.6-terra")).toBe("max");
+      expect(resolveReasoningEffort("max", "gpt-5.6-luna")).toBe("max");
       expect(resolveReasoningEffort("max", "gpt-5.5")).toBeNull();
       expect(resolveReasoningEffort("max", "gpt-4o")).toBeNull();
     });

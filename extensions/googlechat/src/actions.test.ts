@@ -1,3 +1,4 @@
+// Googlechat tests cover actions plugin behavior.
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -134,6 +135,7 @@ describe("googlechat message actions", () => {
     });
     sendGoogleChatMessage.mockResolvedValue({
       messageName: "spaces/AAA/messages/msg-1",
+      threadName: "spaces/AAA/threads/thread-1",
     });
 
     if (!googlechatMessageActions.handleAction) {
@@ -173,7 +175,12 @@ describe("googlechat message actions", () => {
       thread: "thread-1",
       attachments: [{ attachmentUploadToken: "token-1", contentName: "remote.png" }],
     });
-    expectJsonResult(result, { ok: true, to: "spaces/AAA" });
+    expectJsonResult(result, {
+      ok: true,
+      to: "spaces/AAA",
+      messageName: "spaces/AAA/messages/msg-1",
+      threadName: "spaces/AAA/threads/thread-1",
+    });
   });
 
   it("routes upload-file through the same attachment upload path with filename override", async () => {
@@ -197,6 +204,7 @@ describe("googlechat message actions", () => {
     });
     sendGoogleChatMessage.mockResolvedValue({
       messageName: "spaces/BBB/messages/msg-2",
+      threadName: "spaces/BBB/threads/thread-2",
     });
 
     if (!googlechatMessageActions.handleAction) {
@@ -231,7 +239,12 @@ describe("googlechat message actions", () => {
       thread: undefined,
       attachments: [{ attachmentUploadToken: "token-2", contentName: "renamed.txt" }],
     });
-    expectJsonResult(result, { ok: true, to: "spaces/BBB" });
+    expectJsonResult(result, {
+      ok: true,
+      to: "spaces/BBB",
+      messageName: "spaces/BBB/messages/msg-2",
+      threadName: "spaces/BBB/threads/thread-2",
+    });
   });
 
   it("removes only matching app reactions on react remove", async () => {
@@ -285,5 +298,27 @@ describe("googlechat message actions", () => {
       reactionName: "reactions/2",
     });
     expectJsonResult(result, { ok: true, removed: 2 });
+  });
+
+  it("rejects fractional reaction limits before listing reactions", async () => {
+    const account = buildAccount();
+    resolveGoogleChatAccount.mockReturnValue(account);
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await expect(
+      googlechatMessageActions.handleAction({
+        action: "reactions",
+        params: {
+          messageId: "spaces/AAA/messages/msg-1",
+          limit: 2.5,
+        },
+        cfg: {},
+        accountId: "default",
+      } as never),
+    ).rejects.toThrow("limit must be a positive integer");
+
+    expect(listGoogleChatReactions).not.toHaveBeenCalled();
   });
 });

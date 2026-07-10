@@ -1,3 +1,4 @@
+// Register onboard tests cover onboarding command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerOnboardCommand } from "./register.onboard.js";
@@ -35,7 +36,7 @@ vi.mock("../../commands/onboard-core-auth-flags.js", () => ({
 }));
 
 vi.mock("../../plugins/provider-auth-choices.js", () => ({
-  resolveManifestProviderOnboardAuthFlags: () => [
+  resolveProviderOnboardAuthFlags: () => [
     {
       cliOption: "--openai-api-key <key>",
       description: "OpenAI API key",

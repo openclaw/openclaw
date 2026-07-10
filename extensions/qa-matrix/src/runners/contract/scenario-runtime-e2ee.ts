@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario runtime e2ee behavior.
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -1016,7 +1017,8 @@ async function runMatrixQaFaultedE2eeBootstrap(context: MatrixQaScenarioContext)
   result: MatrixQaE2eeBootstrapResult;
 }> {
   const proxy = await startMatrixQaFaultProxy({
-    targetBaseUrl: context.baseUrl,
+    targetBaseUrl: context.faultProxyTargetBaseUrl ?? context.baseUrl,
+    ...context.faultProxyObserver,
     rules: [buildRoomKeyBackupUnavailableFaultRule(context.driverAccessToken)],
   });
   try {
@@ -1052,7 +1054,8 @@ async function runMatrixQaFaultedRecoveryOwnerVerification(params: {
   verification: Awaited<ReturnType<MatrixQaE2eeScenarioClient["verifyWithRecoveryKey"]>>;
 }> {
   const proxy = await startMatrixQaFaultProxy({
-    targetBaseUrl: params.context.baseUrl,
+    targetBaseUrl: params.context.faultProxyTargetBaseUrl ?? params.context.baseUrl,
+    ...params.context.faultProxyObserver,
     rules: [buildOwnerSignatureUploadBlockedFaultRule(params.accessToken)],
   });
   const recoveryClient = await createMatrixQaE2eeScenarioClient({
@@ -1239,7 +1242,7 @@ async function withMatrixQaIsolatedE2eeDriverRoom<T>(
     );
   };
 
-  let patchedGateway = false;
+  let patchedGateway;
   let client: MatrixQaE2eeScenarioClient | undefined;
   try {
     await applyPatch({
@@ -1385,7 +1388,8 @@ export async function runMatrixQaE2eeStateAfterMissingEncryptionScenario(
     configPath,
   });
   const proxy = await startMatrixQaFaultProxy({
-    targetBaseUrl: context.baseUrl,
+    targetBaseUrl: context.faultProxyTargetBaseUrl ?? context.baseUrl,
+    ...context.faultProxyObserver,
     rules: [buildSyncStateAfterMissingEncryptionFaultRule(context.sutAccessToken)],
   });
   let gatewayPatched = false;
@@ -1535,6 +1539,8 @@ export async function runMatrixQaE2eeBootstrapSuccessScenario(
 ): Promise<MatrixQaScenarioExecution> {
   requireMatrixQaPassword(context, "driver");
   return await withMatrixQaE2eeDriver(context, "matrix-e2ee-bootstrap-success", async (client) => {
+    const initial = await client.bootstrapOwnDeviceVerification();
+    assertMatrixQaBootstrapSucceeded("driver initial", initial);
     const result = await client.bootstrapOwnDeviceVerification({
       forceResetCrossSigning: true,
     });
@@ -1549,7 +1555,7 @@ export async function runMatrixQaE2eeBootstrapSuccessScenario(
         recoveryKeyStored: result.verification.recoveryKeyStored,
       },
       details: [
-        "driver bootstrap succeeded through real Matrix crypto bootstrap",
+        "driver bootstrap and guarded cross-signing reset succeeded through real Matrix crypto bootstrap",
         `device verified: ${result.verification.verified ? "yes" : "no"}`,
         `cross-signing verified: ${result.verification.crossSigningVerified ? "yes" : "no"}`,
         `signed by owner: ${result.verification.signedByOwner ? "yes" : "no"}`,
@@ -2233,7 +2239,8 @@ export async function runMatrixQaE2eeCliEncryptionSetupBootstrapFailureScenario(
     throw new Error("Matrix E2EE CLI bootstrap-failure login did not return a device id");
   }
   const proxy = await startMatrixQaFaultProxy({
-    targetBaseUrl: context.baseUrl,
+    targetBaseUrl: context.faultProxyTargetBaseUrl ?? context.baseUrl,
+    ...context.faultProxyObserver,
     rules: [buildRoomKeyBackupUnavailableFaultRule(cliDevice.accessToken)],
   });
   const cli = await createMatrixQaCliE2eeSetupRuntime({

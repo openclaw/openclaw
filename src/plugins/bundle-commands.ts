@@ -1,13 +1,17 @@
+// Bundles plugin command metadata for package output.
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readRootJsonObjectSync } from "../infra/json-files.js";
-import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
-import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  parseFrontmatterBlock,
+  stripFrontmatterBlock,
+} from "../../packages/markdown-core/src/frontmatter.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readRootJsonObjectSync } from "../infra/json-files.js";
+import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import {
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
   mergeBundlePathLists,
@@ -40,18 +44,6 @@ function parseFrontmatterBool(value: string | undefined, fallback: boolean): boo
     return false;
   }
   return fallback;
-}
-
-function stripFrontmatter(content: string): string {
-  const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  if (!normalized.startsWith("---")) {
-    return normalized.trim();
-  }
-  const endIndex = normalized.indexOf("\n---", 3);
-  if (endIndex === -1) {
-    return normalized.trim();
-  }
-  return normalized.slice(endIndex + 4).trim();
 }
 
 function readClaudeBundleManifest(rootDir: string): Record<string, unknown> {
@@ -132,7 +124,7 @@ function loadBundleCommandsFromRoot(params: {
     if (parseFrontmatterBool(frontmatter["disable-model-invocation"], false)) {
       continue;
     }
-    const promptTemplate = stripFrontmatter(raw);
+    const promptTemplate = stripFrontmatterBlock(raw);
     if (!promptTemplate) {
       continue;
     }

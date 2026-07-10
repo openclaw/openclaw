@@ -39,9 +39,10 @@ if [[ -z "$VERSION" ]]; then
 fi
 
 TMP_DIR="$(mktemp -d)"
+NOTES_HTML=""
 cleanup() {
   rm -rf "$TMP_DIR"
-  if [[ "${KEEP_SPARKLE_NOTES:-0}" != "1" ]]; then
+  if [[ -n "$NOTES_HTML" && "${KEEP_SPARKLE_NOTES:-0}" != "1" ]]; then
     rm -f "$NOTES_HTML"
   fi
 }

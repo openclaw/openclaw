@@ -4,10 +4,8 @@
  * Unit-level regression tests for issue #80374 — three of the four code paths
  * fixed in `fix(anthropic): pass system prompt on every turn for claude-cli
  * backend`. These tests assert the argv-level behavior directly, which is the
- * authoritative before/after proof (the matching live test in
- * `src/gateway/gateway-cli-backend.system-prompt-resume.live.test.ts` is a
- * smoke test only — model context retention can mask the bug at the response
- * level).
+ * authoritative before/after proof; model context retention can mask this bug
+ * at the live response level.
  *
  * Two scenarios are exercised for each function:
  *
@@ -136,6 +134,21 @@ describe("buildCliArgs — issue #80374", () => {
     });
     expect(args).not.toContain("--append-system-prompt-file");
     expect(args).not.toContain(PROMPT_FILE);
+  });
+
+  it("soft system-prompt drift includes --append-system-prompt-file on legacy resume", () => {
+    const args = buildCliArgs({
+      backend: BACKEND_FIRST as CliBackendConfig,
+      baseArgs: BASE_ARGS,
+      modelId: "claude-haiku-4-5",
+      sessionId: "test-session-id",
+      systemPrompt: SYSTEM_PROMPT,
+      systemPromptFilePath: PROMPT_FILE,
+      useResume: true,
+      sendSystemPromptOnResume: true,
+    });
+    expect(args).toContain("--append-system-prompt-file");
+    expect(args).toContain(PROMPT_FILE);
   });
 
   it("new 'always': includes --append-system-prompt-file on resume (issue #80374)", () => {

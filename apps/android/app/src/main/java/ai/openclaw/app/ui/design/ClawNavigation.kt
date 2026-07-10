@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.design
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,9 +25,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+/**
+ * Stable bottom-navigation destination descriptor.
+ */
 @Immutable
 internal data class ClawNavItem(
   val key: String,
@@ -34,6 +39,9 @@ internal data class ClawNavItem(
   val icon: ImageVector,
 )
 
+/**
+ * Compact app bar that keeps title, optional subtitle, navigation, and actions aligned.
+ */
 @Composable
 internal fun ClawTopBar(
   title: String,
@@ -73,6 +81,9 @@ internal fun ClawTopBar(
   }
 }
 
+/**
+ * Bottom navigation shell that applies navigation-bar insets before laying out destinations.
+ */
 @Composable
 internal fun ClawBottomNav(
   items: List<ClawNavItem>,
@@ -82,27 +93,32 @@ internal fun ClawBottomNav(
 ) {
   val safeInsets = WindowInsets.navigationBars.only(androidx.compose.foundation.layout.WindowInsetsSides.Bottom)
 
-  Surface(
-    modifier = modifier.fillMaxWidth(),
-    color = ClawTheme.colors.surface.copy(alpha = 0.96f),
-    border = BorderStroke(1.dp, ClawTheme.colors.border),
-    shape = RoundedCornerShape(topStart = ClawTheme.radii.sheet, topEnd = ClawTheme.radii.sheet),
-  ) {
-    Row(
-      modifier =
-        Modifier
-          .windowInsetsPadding(safeInsets)
-          .padding(horizontal = 8.dp, vertical = 8.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(4.dp),
+  Box(modifier = modifier.fillMaxWidth().background(ClawTheme.colors.canvas)) {
+    Surface(
+      modifier = Modifier.fillMaxWidth(),
+      color = ClawTheme.colors.surface.copy(alpha = 0.92f),
+      border = BorderStroke(1.dp, ClawTheme.colors.border.copy(alpha = 0.42f)),
+      shape = RoundedCornerShape(topStart = ClawTheme.radii.sheet, topEnd = ClawTheme.radii.sheet),
+      tonalElevation = 2.dp,
+      shadowElevation = 8.dp,
     ) {
-      items.forEach { item ->
-        ClawBottomNavItem(
-          item = item,
-          selected = item.key == selectedKey,
-          onClick = { onSelect(item.key) },
-          modifier = Modifier.weight(1f),
-        )
+      Row(
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .windowInsetsPadding(safeInsets)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        items.forEach { item ->
+          ClawBottomNavItem(
+            item = item,
+            selected = item.key == selectedKey,
+            onClick = { onSelect(item.key) },
+            modifier = Modifier.weight(1f),
+          )
+        }
       }
     }
   }
@@ -117,22 +133,32 @@ private fun ClawBottomNavItem(
 ) {
   Surface(
     onClick = onClick,
-    modifier = modifier.heightIn(min = 48.dp),
+    modifier = modifier.heightIn(min = 52.dp),
     shape = RoundedCornerShape(ClawTheme.radii.control),
-    color = if (selected) ClawTheme.colors.primary else Color.Transparent,
-    contentColor = if (selected) ClawTheme.colors.primaryText else ClawTheme.colors.textSubtle,
+    color = if (selected) ClawTheme.colors.surfacePressed.copy(alpha = 0.72f) else Color.Transparent,
+    contentColor = if (selected) ClawTheme.colors.text else ClawTheme.colors.textMuted,
   ) {
     Column(
-      modifier = Modifier.padding(horizontal = 5.dp, vertical = 6.dp),
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 5.dp, vertical = 5.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(3.dp),
+      verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-      Icon(imageVector = item.icon, contentDescription = item.label, modifier = Modifier.size(18.dp))
-      Text(text = item.label, style = ClawTheme.type.caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      Icon(imageVector = item.icon, contentDescription = item.label, modifier = Modifier.size(20.dp))
+      Text(
+        modifier = Modifier.fillMaxWidth(),
+        text = item.label,
+        style = ClawTheme.type.caption,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        textAlign = TextAlign.Center,
+      )
     }
   }
 }
 
+/**
+ * Two-character identity mark for users, agents, or nodes in compact UI rows.
+ */
 @Composable
 internal fun ClawAvatarMark(
   text: String,

@@ -1,3 +1,4 @@
+// Browser tests cover cdp plugin behavior.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
@@ -11,7 +12,7 @@ import {
   isWebSocketUrl,
   parseBrowserHttpUrl as parseHttpUrl,
 } from "./cdp.helpers.js";
-import { createTargetViaCdp, evaluateJavaScript, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
+import { createTargetViaCdp, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
 import {
   BROWSER_ENDPOINT_BLOCKED_MESSAGE,
   BROWSER_NAVIGATION_BLOCKED_MESSAGE,
@@ -27,7 +28,9 @@ describe("cdp", () => {
 
   const startWsServer = async () => {
     wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-    await new Promise<void>((resolve) => wsServer?.once("listening", resolve));
+    await new Promise<void>((resolve) => {
+      wsServer?.once("listening", resolve);
+    });
     return (wsServer.address() as { port: number }).port;
   };
 
@@ -77,7 +80,9 @@ describe("cdp", () => {
       res.statusCode = 404;
       res.end("not found");
     });
-    await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      httpServer?.listen(0, "127.0.0.1", resolve);
+    });
     return (httpServer.address() as { port: number }).port;
   };
 
@@ -85,14 +90,16 @@ describe("cdp", () => {
     vi.unstubAllEnvs();
     await new Promise<void>((resolve) => {
       if (!httpServer) {
-        return resolve();
+        resolve();
+        return;
       }
       httpServer.close(() => resolve());
       httpServer = null;
     });
     await new Promise<void>((resolve) => {
       if (!wsServer) {
-        return resolve();
+        resolve();
+        return;
       }
       wsServer.close(() => resolve());
       wsServer = null;
@@ -190,7 +197,9 @@ describe("cdp", () => {
       res.statusCode = 404;
       res.end("not found");
     });
-    await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      httpServer?.listen(0, "127.0.0.1", resolve);
+    });
     const httpPort = (httpServer.address() as AddressInfo).port;
 
     await expect(
@@ -210,7 +219,9 @@ describe("cdp", () => {
       heldSockets.push(socket);
       // Hold the TCP connection open without completing the WebSocket handshake.
     });
-    await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      httpServer?.listen(0, "127.0.0.1", resolve);
+    });
     const port = (httpServer.address() as AddressInfo).port;
 
     try {
@@ -401,32 +412,6 @@ describe("cdp", () => {
     ).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
   });
 
-  it("evaluates javascript via CDP", async () => {
-    const wsPort = await startWsServerWithMessages((msg, socket) => {
-      if (msg.method === "Runtime.enable") {
-        socket.send(JSON.stringify({ id: msg.id, result: {} }));
-        return;
-      }
-      if (msg.method === "Runtime.evaluate") {
-        expect(msg.params?.expression).toBe("1+1");
-        socket.send(
-          JSON.stringify({
-            id: msg.id,
-            result: { result: { type: "number", value: 2 } },
-          }),
-        );
-      }
-    });
-
-    const res = await evaluateJavaScript({
-      wsUrl: `ws://127.0.0.1:${wsPort}`,
-      expression: "1+1",
-    });
-
-    expect(res.result.type).toBe("number");
-    expect(res.result.value).toBe(2);
-  });
-
   it("fails when /json/version omits webSocketDebuggerUrl for an HTTP cdpUrl", async () => {
     const httpPort = await startVersionHttpServer({});
     await expect(
@@ -507,7 +492,9 @@ describe("cdp", () => {
         }
       });
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     try {
       const addr = server.address() as AddressInfo;
       const created = await createTargetViaCdp({
@@ -516,8 +503,12 @@ describe("cdp", () => {
       });
       expect(created.targetId).toBe("ROOT_FALLBACK");
     } finally {
-      await new Promise<void>((resolve) => wss.close(() => resolve()));
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 

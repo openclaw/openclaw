@@ -1,3 +1,4 @@
+// Agent run control tests cover talk-driven agent pause and resume behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   classifyRealtimeVoiceAgentControlText,
@@ -19,7 +20,11 @@ function createDeps(options: {
   return {
     abortEmbeddedAgentRun: vi.fn(() => options.abortResult ?? true),
     queueEmbeddedAgentMessageWithOutcomeAsync: vi.fn(
-      async (sessionId: string, _text: string, _options?: { steeringMode?: "all" }) =>
+      async (
+        sessionId: string,
+        _text: string,
+        _options?: { steeringMode?: "all"; taskSuggestionDeliveryMode?: undefined },
+      ) =>
         options.queued === false
           ? {
               queued: false as const,
@@ -142,7 +147,7 @@ describe("controlRealtimeVoiceAgentRun", () => {
     expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).toHaveBeenCalledWith(
       "session-active",
       "use the safer path",
-      { steeringMode: "all", debounceMs: 0 },
+      { steeringMode: "all", debounceMs: 0, taskSuggestionDeliveryMode: undefined },
     );
   });
 

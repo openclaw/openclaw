@@ -1,3 +1,6 @@
+/**
+ * Tests lazy cron startup behavior in the gateway server.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -40,7 +43,7 @@ describe("createLazyGatewayCronState", () => {
     await lazy.cron.status();
 
     expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
-    expect(cron.status).toHaveBeenCalledTimes(1);
+    expect(cron["status"]).toHaveBeenCalledTimes(1);
   });
 
   it("loads the cron service for direct job reads", async () => {
@@ -51,7 +54,19 @@ describe("createLazyGatewayCronState", () => {
     await lazy.cron.readJob("demo");
 
     expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
-    expect(cron.readJob).toHaveBeenCalledWith("demo");
+    expect(cron["readJob"]).toHaveBeenCalledWith("demo");
+  });
+
+  it("forwards run payload overrides to the loaded cron service", async () => {
+    const cron = createCronService();
+    hoisted.setState(createCronState(cron));
+
+    const lazy = createLazyGatewayCronState(createParams());
+    const payload = { kind: "systemEvent" as const, text: "done" };
+    await lazy.cron.run("demo", "force", { payload });
+
+    expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
+    expect(cron["run"]).toHaveBeenCalledWith("demo", "force", { payload });
   });
 
   it("starts the loaded cron service once", async () => {
@@ -64,7 +79,7 @@ describe("createLazyGatewayCronState", () => {
     await lazy.cron.start();
 
     expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
-    expect(cron.start).toHaveBeenCalledTimes(1);
+    expect(cron["start"]).toHaveBeenCalledTimes(1);
   });
 
   it("does not start cron after stop wins the lazy startup race", async () => {
@@ -77,8 +92,8 @@ describe("createLazyGatewayCronState", () => {
     lazy.cron.stop();
     await startPromise;
 
-    expect(cron.start).not.toHaveBeenCalled();
-    expect(cron.stop).toHaveBeenCalledTimes(1);
+    expect(cron["start"]).not.toHaveBeenCalled();
+    expect(cron["stop"]).toHaveBeenCalledTimes(1);
   });
 
   it("allows a stopped loaded cron service to start again", async () => {
@@ -92,8 +107,8 @@ describe("createLazyGatewayCronState", () => {
     await lazy.cron.start();
 
     expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
-    expect(cron.stop).toHaveBeenCalledTimes(1);
-    expect(cron.start).toHaveBeenCalledTimes(2);
+    expect(cron["stop"]).toHaveBeenCalledTimes(1);
+    expect(cron["start"]).toHaveBeenCalledTimes(2);
   });
 
   it("keeps synchronous wake non-blocking before the cron service is loaded", async () => {
@@ -107,7 +122,7 @@ describe("createLazyGatewayCronState", () => {
     await vi.waitFor(() => {
       expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
     });
-    expect(cron.wake).not.toHaveBeenCalled();
+    expect(cron["wake"]).not.toHaveBeenCalled();
   });
 
   it("preserves the startup cron enabled flag without loading cron runtime", () => {
@@ -117,6 +132,22 @@ describe("createLazyGatewayCronState", () => {
 
     expect(lazy.cronEnabled).toBe(false);
     expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
+  });
+
+  it("does not reconcile exit watchers when cron is disabled", async () => {
+    const cron = createCronService();
+    const reconcileExitWatchers = vi.fn(async () => {});
+    hoisted.setState({
+      ...createCronState(cron),
+      cronEnabled: false,
+      reconcileExitWatchers,
+    });
+
+    const lazy = createLazyGatewayCronState(createParams({ cron: { enabled: false } }));
+    await lazy.cron.start();
+
+    expect(cron["start"]).toHaveBeenCalledTimes(1);
+    expect(reconcileExitWatchers).not.toHaveBeenCalled();
   });
 });
 
@@ -147,6 +178,7 @@ function createCronService(): CronServiceContract {
     listPage: vi.fn(async () => ({ items: [], total: 0 }) as never),
     add: vi.fn(async () => ({ ok: true }) as never),
     update: vi.fn(async () => ({ ok: true }) as never),
+    updateWithPrecondition: vi.fn(async () => ({ ok: true }) as never),
     remove: vi.fn(async () => ({ ok: true }) as never),
     run: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     enqueueRun: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),

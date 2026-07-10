@@ -1,26 +1,41 @@
+// Gateway session reset/delete service.
+// Rotates transcripts and coordinates lifecycle cleanup across runtimes/hooks.
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
+import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
-import { readAcpSessionEntry, upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import {
+  readAcpSessionMeta,
+  upsertAcpSessionMeta,
+  writeAcpSessionMetaForMigration,
+} from "../acp/runtime/session-meta.js";
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
 import { abortEmbeddedAgentRun, waitForEmbeddedAgentRunEnd } from "../agents/embedded-agent.js";
+import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import {
   buildSessionEndHookPayload,
   buildSessionStartHookPayload,
 } from "../auto-reply/reply/session-hooks.js";
 import { clearSessionResetRuntimeState } from "../auto-reply/reply/session-reset-cleanup.js";
+import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
+  resolveSessionWorkStartError,
   snapshotSessionOrigin,
   type SessionEntry,
-  updateSessionStore,
+  resetSessionEntryLifecycle,
 } from "../config/sessions.js";
+import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
 import {
@@ -28,12 +43,10 @@ import {
   rewriteSessionFileForNewSessionId,
 } from "../config/sessions/session-file-rotation.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
-import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
-import { closeTrackedBrowserTabsForSessions } from "../plugin-sdk/browser-maintenance.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -43,23 +56,29 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import {
+  hasOnlySessionLifecycleMutationKindActive,
+  interruptSessionWorkAdmissions,
+  isSessionLifecycleMutationActive,
+  runExclusiveSessionLifecycleMutation,
+  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+} from "../sessions/session-lifecycle-admission.js";
+import {
   forgetActiveSessionForShutdown,
   listActiveSessionsForShutdown,
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
-import { ErrorCodes, errorShape } from "./protocol/index.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
 import {
   archiveSessionTranscriptsDetailed,
+  extractGeneratedTranscriptSessionId,
   resolveStableSessionEndTranscript,
   type ArchivedSessionTranscript,
 } from "./session-transcript-files.fs.js";
+import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 import {
   loadSessionEntry,
-  migrateAndPruneGatewaySessionStoreKey,
-  readSessionMessagesAsync,
   resolveGatewaySessionStoreTarget,
-  resolveSessionModelRef,
+  resolveSessionStoreKey,
 } from "./session-utils.js";
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
@@ -71,10 +90,16 @@ function resolveResetSessionFile(params: {
   agentId: string;
 }): string {
   const currentEntry = params.currentEntry;
-  const rewrittenSessionFile = currentEntry?.sessionId
+  // Rotate generated transcript names by the file's *embedded* id, not the logical
+  // session id: a post-upgrade sessionFile can embed a stale id, so keying off
+  // currentEntry.sessionId would orphan the reset session on the old file. Explicit
+  // custom placements have no embedded id and stay preserved.
+  const rotationPreviousSessionId =
+    extractGeneratedTranscriptSessionId(currentEntry?.sessionFile) ?? currentEntry?.sessionId;
+  const rewrittenSessionFile = rotationPreviousSessionId
     ? rewriteSessionFileForNewSessionId({
-        sessionFile: currentEntry.sessionFile,
-        previousSessionId: currentEntry.sessionId,
+        sessionFile: currentEntry?.sessionFile,
+        previousSessionId: rotationPreviousSessionId,
         nextSessionId: params.nextSessionId,
       })
     : undefined;
@@ -91,31 +116,6 @@ function resolveResetSessionFile(params: {
       agentId: params.agentId,
     }),
   );
-}
-
-function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined {
-  if (!entry) {
-    return entry;
-  }
-  return {
-    ...entry,
-    model: undefined,
-    modelProvider: undefined,
-    contextTokens: undefined,
-    contextBudgetStatus: undefined,
-    systemPromptReport: undefined,
-  };
-}
-
-export function archiveSessionTranscriptsForSession(params: {
-  sessionId: string | undefined;
-  storePath: string;
-  sessionFile?: string;
-  agentId?: string;
-  reason: "reset" | "deleted";
-  onArchiveError?: (err: unknown, sourcePath: string) => void;
-}): string[] {
-  return archiveSessionTranscriptsForSessionDetailed(params).map((entry) => entry.archivedPath);
 }
 
 export function archiveSessionTranscriptsForSessionDetailed(params: {
@@ -188,7 +188,7 @@ export function emitGatewaySessionEndPluginHook(params: {
     nextSessionId: params.nextSessionId,
     nextSessionKey: params.nextSessionKey,
   });
-  void hookRunner.runSessionEnd(payload.event, payload.context).catch((err) => {
+  void hookRunner.runSessionEnd(payload.event, payload.context).catch((err: unknown) => {
     logVerbose(`session_end hook failed: ${String(err)}`);
   });
 }
@@ -231,7 +231,7 @@ export function emitGatewaySessionStartPluginHook(params: {
     cfg: params.cfg,
     resumedFrom: params.resumedFrom,
   });
-  void hookRunner.runSessionStart(payload.event, payload.context).catch((err) => {
+  void hookRunner.runSessionStart(payload.event, payload.context).catch((err: unknown) => {
     logVerbose(`session_start hook failed: ${String(err)}`);
   });
 }
@@ -362,36 +362,47 @@ async function ensureSessionRuntimeCleanup(params: {
   key: string;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   sessionId?: string;
+  assertCurrent?: () => void;
 }) {
   const closeTrackedBrowserTabs = async () => {
+    params.assertCurrent?.();
     const closeKeys = new Set<string>([
       params.key,
       params.target.canonicalKey,
       ...params.target.storeKeys,
       params.sessionId ?? "",
     ]);
-    return await closeTrackedBrowserTabsForSessions({
+    await cleanupBrowserSessionsForLifecycleEnd({
+      cfg: params.cfg,
       sessionKeys: [...closeKeys],
       onWarn: (message) => logVerbose(message),
     });
+    params.assertCurrent?.();
   };
 
+  params.assertCurrent?.();
   const queueKeys = new Set<string>(params.target.storeKeys);
   queueKeys.add(params.target.canonicalKey);
   if (params.sessionId) {
     queueKeys.add(params.sessionId);
   }
-  clearSessionResetRuntimeState([...queueKeys]);
+  clearSessionResetRuntimeState([...queueKeys], {
+    activeReplySessionId: params.sessionId,
+  });
   stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
   if (!params.sessionId) {
+    params.assertCurrent?.();
     clearBootstrapSnapshot(params.target.canonicalKey);
     await closeTrackedBrowserTabs();
     return undefined;
   }
+  params.assertCurrent?.();
   abortEmbeddedAgentRun(params.sessionId);
   const ended = await waitForEmbeddedAgentRunEnd(params.sessionId, 15_000);
+  params.assertCurrent?.();
   clearBootstrapSnapshot(params.target.canonicalKey);
   if (ended) {
+    params.assertCurrent?.();
     await retireSessionMcpRuntime({
       sessionId: params.sessionId,
       reason: "gateway-session-cleanup",
@@ -401,6 +412,7 @@ async function ensureSessionRuntimeCleanup(params: {
         );
       },
     });
+    params.assertCurrent?.();
     await closeTrackedBrowserTabs();
     return undefined;
   }
@@ -431,22 +443,55 @@ async function runAcpCleanupStep(params: {
 async function closeAcpRuntimeForSession(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
-  entry?: SessionEntry;
+  fallbackSessionKeys?: Array<string | undefined>;
   reason: "session-reset" | "session-delete";
+  onResetMeta?: (params: { sessionKey: string; meta: SessionAcpMeta }) => void;
+  deferResetState?: boolean;
+  onDeferredResetState?: (params: { sessionKey: string; meta: SessionAcpMeta }) => void;
+  assertCurrent?: () => void;
+  shouldCleanup?: () => boolean;
 }) {
-  if (!params.entry?.acp) {
+  if (params.shouldCleanup && !params.shouldCleanup()) {
+    return undefined;
+  }
+  params.assertCurrent?.();
+  const sessionKeys = Array.from(
+    new Set(
+      [params.sessionKey, ...(params.fallbackSessionKeys ?? [])]
+        .map((key) => (typeof key === "string" ? key.trim() : ""))
+        .filter(Boolean),
+    ),
+  );
+  let acpMeta: SessionAcpMeta | undefined;
+  let acpSessionKey = params.sessionKey;
+  for (const sessionKey of sessionKeys) {
+    acpMeta = readAcpSessionMeta({ sessionKey });
+    if (acpMeta) {
+      acpSessionKey = sessionKey;
+      break;
+    }
+  }
+  if (!acpMeta) {
     return undefined;
   }
   const acpManager = getAcpSessionManager();
+  if (params.shouldCleanup && !params.shouldCleanup()) {
+    return undefined;
+  }
+  params.assertCurrent?.();
   const cancelOutcome = await runAcpCleanupStep({
     op: async () => {
       await acpManager.cancelSession({
         cfg: params.cfg,
-        sessionKey: params.sessionKey,
+        sessionKey: acpSessionKey,
         reason: params.reason,
       });
     },
   });
+  if (params.shouldCleanup && !params.shouldCleanup()) {
+    return undefined;
+  }
+  params.assertCurrent?.();
   if (cancelOutcome.status === "timeout") {
     return errorShape(
       ErrorCodes.UNAVAILABLE,
@@ -459,11 +504,15 @@ async function closeAcpRuntimeForSession(params: {
     );
   }
 
+  if (params.shouldCleanup && !params.shouldCleanup()) {
+    return undefined;
+  }
+  params.assertCurrent?.();
   const closeOutcome = await runAcpCleanupStep({
     op: async () => {
       await acpManager.closeSession({
         cfg: params.cfg,
-        sessionKey: params.sessionKey,
+        sessionKey: acpSessionKey,
         reason: params.reason,
         discardPersistentState: true,
         requireAcpSession: false,
@@ -471,6 +520,10 @@ async function closeAcpRuntimeForSession(params: {
       });
     },
   });
+  if (params.shouldCleanup && !params.shouldCleanup()) {
+    return undefined;
+  }
+  params.assertCurrent?.();
   if (closeOutcome.status === "timeout") {
     return errorShape(
       ErrorCodes.UNAVAILABLE,
@@ -482,12 +535,32 @@ async function closeAcpRuntimeForSession(params: {
       `sessions.${params.reason}: ACP runtime close failed for ${params.sessionKey}: ${String(closeOutcome.error)}`,
     );
   }
-  await ensureFreshAcpResetState({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    reason: params.reason,
-    entry: params.entry,
-  });
+  if (params.reason === "session-delete") {
+    params.assertCurrent?.();
+    await upsertAcpSessionMeta({
+      cfg: params.cfg,
+      sessionKey: acpSessionKey,
+      mutate: () => null,
+    });
+    params.assertCurrent?.();
+  } else if (params.deferResetState) {
+    params.onDeferredResetState?.({
+      sessionKey: acpSessionKey,
+      meta: acpMeta,
+    });
+  } else {
+    const resetMeta = await ensureFreshAcpResetState({
+      cfg: params.cfg,
+      sessionKey: acpSessionKey,
+      reason: params.reason,
+      acpMeta,
+      assertCurrent: params.assertCurrent,
+      shouldApply: params.shouldCleanup,
+    });
+    if (resetMeta) {
+      params.onResetMeta?.({ sessionKey: acpSessionKey, meta: resetMeta });
+    }
+  }
   return undefined;
 }
 
@@ -518,52 +591,72 @@ async function ensureFreshAcpResetState(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   reason: "session-reset" | "session-delete";
-  entry?: SessionEntry;
-}): Promise<void> {
-  if (params.reason !== "session-reset" || !params.entry?.acp) {
-    return;
+  acpMeta: SessionAcpMeta;
+  assertCurrent?: () => void;
+  shouldApply?: () => boolean;
+}): Promise<SessionAcpMeta | undefined> {
+  if (params.reason !== "session-reset") {
+    return undefined;
   }
-  const latestMeta = readAcpSessionEntry({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-  })?.acp;
+  const latestMeta =
+    readAcpSessionMeta({
+      sessionKey: params.sessionKey,
+    }) ?? params.acpMeta;
   if (
     !latestMeta?.identity ||
     latestMeta.identity.state !== "resolved" ||
     (!latestMeta.identity.acpxSessionId && !latestMeta.identity.agentSessionId)
   ) {
-    return;
+    return undefined;
   }
 
   const backendId = (latestMeta.backend || params.cfg.acp?.backend || "").trim() || undefined;
+  if (params.shouldApply && !params.shouldApply()) {
+    return undefined;
+  }
   try {
+    params.assertCurrent?.();
     await getAcpRuntimeBackend(backendId)?.runtime.prepareFreshSession?.({
       sessionKey: params.sessionKey,
     });
+    if (params.shouldApply && !params.shouldApply()) {
+      return undefined;
+    }
+    params.assertCurrent?.();
   } catch (error) {
+    params.assertCurrent?.();
     logVerbose(
       `sessions.${params.reason}: ACP prepareFreshSession failed for ${params.sessionKey}: ${String(error)}`,
     );
   }
 
   const now = Date.now();
+  let resetMeta: SessionAcpMeta | undefined;
+  if (params.shouldApply && !params.shouldApply()) {
+    return undefined;
+  }
+  params.assertCurrent?.();
   await upsertAcpSessionMeta({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
-    mutate: (current, entry) => {
-      const base = current ?? entry?.acp;
-      if (!base) {
-        return null;
+    mutate: (current) => {
+      if (params.shouldApply && !params.shouldApply()) {
+        return current;
       }
-      return buildPendingAcpMeta(base, now);
+      resetMeta = buildPendingAcpMeta(current ?? latestMeta, now);
+      return resetMeta;
     },
   });
+  params.assertCurrent?.();
+  return resetMeta;
 }
 
 async function closeChildAcpRuntimesForParent(params: {
   cfg: OpenClawConfig;
   parentKey: string;
   reason: "session-reset" | "session-delete";
+  assertCurrent?: () => void;
+  shouldCleanup?: () => boolean;
 }): Promise<void> {
   // Enumerate across every agent session store, not just the parent's: ACP
   // spawns create child keys under the target agent (`agent:<targetAgentId>:acp:…`)
@@ -571,12 +664,19 @@ async function closeChildAcpRuntimesForParent(params: {
   // parent's under the default per-agent layout. The combined gateway store
   // aggregates all agent stores under canonical keys (same source the dashboard
   // session list uses).
-  let children: Array<{ sessionKey: string; entry: SessionEntry }>;
+  let children: Array<{ sessionKey: string }>;
   try {
+    if (params.shouldCleanup && !params.shouldCleanup()) {
+      return;
+    }
+    params.assertCurrent?.();
     children = findDirectChildSessionsForParent({
       cfg: params.cfg,
       parentKey: params.parentKey,
-    }).filter(({ entry }) => entry.acp);
+    }).flatMap(({ sessionKey }) => {
+      const acpMeta = readAcpSessionMeta({ sessionKey });
+      return acpMeta ? [{ sessionKey }] : [];
+    });
   } catch (error) {
     logVerbose(
       `sessions.${params.reason}: failed to enumerate sessions for child ACP cleanup: ${String(error)}`,
@@ -590,13 +690,18 @@ async function closeChildAcpRuntimesForParent(params: {
   // cleanup timeout window rather than scaling with the number of stuck
   // children; per-child failures are logged best-effort and never propagated,
   // so a stuck child cannot block or fail the parent mutation.
+  if (params.shouldCleanup && !params.shouldCleanup()) {
+    return;
+  }
+  params.assertCurrent?.();
   await Promise.allSettled(
-    children.map(({ sessionKey, entry }) =>
+    children.map(({ sessionKey }) =>
       closeAcpRuntimeForSession({
         cfg: params.cfg,
         sessionKey,
-        entry,
         reason: params.reason,
+        assertCurrent: params.assertCurrent,
+        shouldCleanup: params.shouldCleanup,
       }).then((childError) => {
         if (childError) {
           logVerbose(`sessions.${params.reason}: child ACP cleanup incomplete for ${sessionKey}`);
@@ -604,6 +709,10 @@ async function closeChildAcpRuntimesForParent(params: {
       }),
     ),
   );
+  if (params.shouldCleanup && !params.shouldCleanup()) {
+    return;
+  }
+  params.assertCurrent?.();
 }
 
 export async function cleanupSessionBeforeMutation(params: {
@@ -614,12 +723,15 @@ export async function cleanupSessionBeforeMutation(params: {
   legacyKey?: string;
   canonicalKey?: string;
   reason: "session-reset" | "session-delete";
+  onAcpResetMeta?: (params: { sessionKey: string; meta: SessionAcpMeta }) => void;
+  assertCurrent?: () => void;
 }) {
   const cleanupError = await ensureSessionRuntimeCleanup({
     cfg: params.cfg,
     key: params.key,
     target: params.target,
     sessionId: params.entry?.sessionId,
+    assertCurrent: params.assertCurrent,
   });
   if (cleanupError) {
     return cleanupError;
@@ -629,24 +741,51 @@ export async function cleanupSessionBeforeMutation(params: {
     registry: getActivePluginRegistry(),
     reason: params.reason === "session-reset" ? "reset" : "delete",
     sessionKey: params.target.canonicalKey ?? params.key,
+    shouldCleanup: () => {
+      params.assertCurrent?.();
+      return true;
+    },
   });
+  params.assertCurrent?.();
   for (const failure of pluginCleanup.failures) {
     logVerbose(
       `plugin host cleanup failed for ${failure.pluginId}/${failure.hookId}: ${String(failure.error)}`,
     );
   }
+  const parentSessionKey = params.target.canonicalKey ?? params.canonicalKey ?? params.key;
   const parentAcpError = await closeAcpRuntimeForSession({
     cfg: params.cfg,
-    sessionKey: params.legacyKey ?? params.canonicalKey ?? params.target.canonicalKey ?? params.key,
-    entry: params.entry,
+    sessionKey: parentSessionKey,
+    fallbackSessionKeys: [params.canonicalKey, params.legacyKey, params.key],
     reason: params.reason,
+    onResetMeta: params.onAcpResetMeta,
+    assertCurrent: params.assertCurrent,
   });
+  params.assertCurrent?.();
   await closeChildAcpRuntimesForParent({
     cfg: params.cfg,
     parentKey: params.target.canonicalKey ?? params.canonicalKey ?? params.key,
     reason: params.reason,
+    assertCurrent: params.assertCurrent,
   });
-  return parentAcpError;
+  params.assertCurrent?.();
+  if (parentAcpError) {
+    return parentAcpError;
+  }
+  if (params.entry?.sessionId) {
+    // Clear physical harness ownership after the old run drains but before the
+    // store can expose a successor generation to a new turn.
+    const resetParams = {
+      agentId: normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg)),
+      sessionId: params.entry.sessionId,
+      sessionKey: params.target.canonicalKey ?? params.key,
+      sessionFile: params.entry.sessionFile,
+      reason: params.reason === "session-reset" ? "reset" : "deleted",
+    } satisfies Parameters<typeof resetRegisteredAgentHarnessSessions>[0];
+    await resetRegisteredAgentHarnessSessions(resetParams);
+    params.assertCurrent?.();
+  }
+  return undefined;
 }
 
 export async function emitGatewayBeforeResetPluginHook(params: {
@@ -670,10 +809,19 @@ export async function emitGatewayBeforeResetPluginHook(params: {
   let messages: unknown[] = [];
   try {
     if (typeof sessionId === "string" && sessionId.trim().length > 0) {
-      messages = await readSessionMessagesAsync(sessionId, params.storePath, sessionFile, {
-        mode: "full",
-        reason: "before_reset hook payload",
-      });
+      messages = await readSessionMessagesAsync(
+        {
+          agentId,
+          sessionEntry: params.entry,
+          sessionId,
+          sessionKey,
+          storePath: params.storePath,
+        },
+        {
+          mode: "full",
+          reason: "before_reset hook payload",
+        },
+      );
     }
   } catch (err) {
     logVerbose(
@@ -695,226 +843,425 @@ export async function emitGatewayBeforeResetPluginHook(params: {
         workspaceDir,
       },
     )
-    .catch((err) => {
+    .catch((err: unknown) => {
       logVerbose(`before_reset hook failed: ${String(err)}`);
     });
 }
 
 export async function performGatewaySessionReset(params: {
   key: string;
+  agentId?: string;
+  spawnedCwd?: string;
+  // A plain New Chat must return to the agent workspace instead of inheriting the previous
+  // turn's session worktree cwd; only worktree-requested resets carry a spawnedCwd forward.
+  clearSpawnedCwd?: boolean;
   reason: "new" | "reset";
   commandSource: string;
+  assertCurrent?: () => void;
+  onCommitted?: (commit: { key: string; sessionId: string }) => void;
 }): Promise<
-  | { ok: true; key: string; entry: SessionEntry }
+  | {
+      ok: true;
+      key: string;
+      entry: SessionEntry;
+      resolved: { modelProvider: string; model: string };
+      agentId: string;
+      storePath: string;
+    }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
-  const { cfg, target, storePath } = (() => {
+  const resetTarget = (() => {
     const cfg = getRuntimeConfig();
-    const target = resolveGatewaySessionStoreTarget({ cfg, key: params.key });
-    return { cfg, target, storePath: target.storePath };
-  })();
-  const { entry, legacyKey, canonicalKey } = loadSessionEntry(params.key);
-  const hadExistingEntry = Boolean(entry);
-  const agentId = normalizeAgentId(target.agentId ?? resolveDefaultAgentId(cfg));
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const hookEvent = createInternalHookEvent(
-    "command",
-    params.reason,
-    target.canonicalKey ?? params.key,
-    {
-      sessionEntry: entry,
-      previousSessionEntry: entry,
-      commandSource: params.commandSource,
-      cfg,
-      workspaceDir,
-    },
-  );
-  await triggerInternalHook(hookEvent);
-  const mutationCleanupError = await cleanupSessionBeforeMutation({
-    cfg,
-    key: params.key,
-    target,
-    entry,
-    legacyKey,
-    canonicalKey,
-    reason: "session-reset",
-  });
-  if (mutationCleanupError) {
-    return { ok: false, error: mutationCleanupError };
-  }
-
-  let oldSessionId: string | undefined;
-  let oldSessionFile: string | undefined;
-  let resetSourceEntry: SessionEntry | undefined;
-  const next = await updateSessionStore(storePath, (store) => {
-    const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+    const explicitAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
+    const parsedKey = parseAgentSessionKey(params.key);
+    const inferredGlobalAgentId =
+      !explicitAgentId &&
+      parsedKey &&
+      resolveSessionStoreKey({ cfg, sessionKey: params.key }) === "global"
+        ? normalizeAgentId(parsedKey.agentId)
+        : undefined;
+    const requestedAgentId = explicitAgentId ?? inferredGlobalAgentId;
+    if (requestedAgentId && !listAgentIds(cfg).includes(requestedAgentId)) {
+      return {
+        ok: false as const,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id: ${requestedAgentId}`),
+      };
+    }
+    if (
+      explicitAgentId &&
+      parsedKey?.agentId &&
+      normalizeAgentId(parsedKey.agentId) !== explicitAgentId
+    ) {
+      return {
+        ok: false as const,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
+      };
+    }
+    const target = resolveGatewaySessionStoreTarget({
       cfg,
       key: params.key,
-      store,
+      ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
     });
-    const currentEntry = store[primaryKey];
-    resetSourceEntry = currentEntry ? { ...currentEntry } : undefined;
-    const parsed = parseAgentSessionKey(primaryKey);
-    const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
-    const resetPreservedSelection = resolveResetPreservedSelection({
-      entry: currentEntry,
-    });
-    const resetEntry = {
-      ...stripRuntimeModelState(currentEntry),
-      providerOverride: undefined,
-      modelOverride: undefined,
-      modelOverrideSource: undefined,
-      authProfileOverride: undefined,
-      authProfileOverrideSource: undefined,
-      authProfileOverrideCompactionCount: undefined,
-      ...resetPreservedSelection,
+    return { ok: true as const, cfg, target, storePath: target.storePath, requestedAgentId };
+  })();
+  if (!resetTarget.ok) {
+    return resetTarget;
+  }
+  const initialResetEntry = loadSessionEntry(
+    params.key,
+    resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
+  ).entry;
+  const resetLifecycleIdentities = [
+    resetTarget.target.canonicalKey,
+    params.key,
+    initialResetEntry?.sessionId,
+  ];
+  const activeLifecycleMutation = isSessionLifecycleMutationActive(
+    resetTarget.storePath,
+    resetLifecycleIdentities,
+  );
+  const activeCompaction = hasOnlySessionLifecycleMutationKindActive(
+    resetTarget.storePath,
+    resetLifecycleIdentities,
+    "compaction",
+  );
+  if (activeLifecycleMutation && !activeCompaction) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `Session ${params.key} has another lifecycle mutation in progress; try again.`,
+      ),
     };
-    const resolvedModel = resolveSessionModelRef(cfg, resetEntry, sessionAgentId);
-    oldSessionId = currentEntry?.sessionId;
-    oldSessionFile = currentEntry?.sessionFile;
-    const now = Date.now();
-    const nextSessionId = randomUUID();
-    const sessionFile = resolveResetSessionFile({
-      nextSessionId,
-      currentEntry,
-      storePath,
-      agentId: sessionAgentId,
-    });
-    const nextEntry: SessionEntry = {
-      sessionId: nextSessionId,
-      sessionFile,
-      updatedAt: now,
-      systemSent: false,
-      abortedLastRun: false,
-      thinkingLevel: currentEntry?.thinkingLevel,
-      fastMode: currentEntry?.fastMode,
-      verboseLevel: currentEntry?.verboseLevel,
-      traceLevel: currentEntry?.traceLevel,
-      reasoningLevel: currentEntry?.reasoningLevel,
-      elevatedLevel: currentEntry?.elevatedLevel,
-      ttsAuto: currentEntry?.ttsAuto,
-      execHost: currentEntry?.execHost,
-      execSecurity: currentEntry?.execSecurity,
-      execAsk: currentEntry?.execAsk,
-      execNode: currentEntry?.execNode,
-      responseUsage: currentEntry?.responseUsage,
-      // Resets should keep the user's explicit selection, but clear any
-      // temporary fallback model that was pinned during the previous run.
-      ...resetPreservedSelection,
-      groupActivation: currentEntry?.groupActivation,
-      groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
-      chatType: currentEntry?.chatType,
-      model: resolvedModel.model,
-      modelProvider: resolvedModel.provider,
-      contextTokens: resetEntry?.contextTokens,
-      compactionCount: currentEntry?.compactionCount,
-      compactionCheckpoints: currentEntry?.compactionCheckpoints,
-      sendPolicy: currentEntry?.sendPolicy,
-      queueMode: currentEntry?.queueMode,
-      queueDebounceMs: currentEntry?.queueDebounceMs,
-      queueCap: currentEntry?.queueCap,
-      queueDrop: currentEntry?.queueDrop,
-      spawnedBy: currentEntry?.spawnedBy,
-      spawnedWorkspaceDir: currentEntry?.spawnedWorkspaceDir,
-      spawnedCwd: currentEntry?.spawnedCwd,
-      parentSessionKey: currentEntry?.parentSessionKey,
-      forkedFromParent: currentEntry?.forkedFromParent,
-      spawnDepth: currentEntry?.spawnDepth,
-      subagentRole: currentEntry?.subagentRole,
-      subagentControlScope: currentEntry?.subagentControlScope,
-      label: currentEntry?.label,
-      displayName: currentEntry?.displayName,
-      channel: currentEntry?.channel,
-      groupId: currentEntry?.groupId,
-      subject: currentEntry?.subject,
-      groupChannel: currentEntry?.groupChannel,
-      space: currentEntry?.space,
-      origin: snapshotSessionOrigin(currentEntry),
-      deliveryContext: currentEntry?.deliveryContext,
-      cliSessionBindings: currentEntry?.cliSessionBindings,
-      cliSessionIds: currentEntry?.cliSessionIds,
-      claudeCliSessionId: currentEntry?.claudeCliSessionId,
-      lastChannel: currentEntry?.lastChannel,
-      lastTo: currentEntry?.lastTo,
-      lastAccountId: currentEntry?.lastAccountId,
-      lastThreadId: currentEntry?.lastThreadId,
-      // Do not carry the cached skills catalog across /new. Long-lived channel
-      // sessions (Signal DMs/groups in particular) otherwise keep advertising a
-      // stale <available_skills> block even after reset/restart, because the
-      // skills snapshot version is runtime-local and may reset to 0.
-      acp: currentEntry?.acp,
-      inputTokens: 0,
-      outputTokens: 0,
-      totalTokens: 0,
-      totalTokensFresh: true,
-    };
-    // Drop CLI provider bindings so the next turn after reset starts a fresh
-    // CLI conversation on the provider side. Preserved only for spawned
-    // subagents (canonical `:subagent:` keys), where Tak Hoffman's fa56682b3ced
-    // regression fix intentionally protects CLI continuity for
-    // orchestration-driven resets. Non-subagent sessions that happen to set
-    // `parentSessionKey` (e.g. dashboard children) are not exempt.
-    if (!isSubagentSessionKey(primaryKey)) {
-      clearAllCliSessions(nextEntry);
-    }
-    store[primaryKey] = nextEntry;
-    return nextEntry;
-  });
-  await emitGatewayBeforeResetPluginHook({
-    cfg,
-    key: params.key,
-    target,
-    storePath,
-    entry: resetSourceEntry,
-    reason: params.reason,
-  });
+  }
+  let admittedWorkReleased = true;
+  return await runExclusiveSessionLifecycleMutation({
+    scope: resetTarget.storePath,
+    identities: resetLifecycleIdentities,
+    // Mark the mutation first, then interrupt outside the identity lock. This
+    // lets aborted runs finish admission cleanup without deadlocking reset.
+    prepare: async () => {
+      params.assertCurrent?.();
+      admittedWorkReleased = await interruptSessionWorkAdmissions({
+        scope: resetTarget.storePath,
+        identities: resetLifecycleIdentities,
+        timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+      });
+    },
+    run: async () => {
+      const { cfg, target, storePath, requestedAgentId } = resetTarget;
+      if (!admittedWorkReleased) {
+        return {
+          ok: false,
+          error: errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `Session ${params.key} is still active; try again in a moment.`,
+          ),
+        };
+      }
+      const { entry, legacyKey, canonicalKey } = loadSessionEntry(
+        params.key,
+        requestedAgentId ? { agentId: requestedAgentId } : undefined,
+      );
+      const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry);
+      if (archivedSessionError) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError),
+        };
+      }
+      const hadExistingEntry = Boolean(entry);
+      const agentId = normalizeAgentId(target.agentId ?? resolveDefaultAgentId(cfg));
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+      const resetPluginRegistry = getActivePluginRegistry();
+      const isResetLifecycleCurrent = () => {
+        try {
+          params.assertCurrent?.();
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      let deferredAcpResetState: { sessionKey: string; meta: SessionAcpMeta } | undefined;
+      const hookEvent = createInternalHookEvent(
+        "command",
+        params.reason,
+        target.canonicalKey ?? params.key,
+        {
+          sessionEntry: entry,
+          previousSessionEntry: entry,
+          commandSource: params.commandSource,
+          cfg,
+          workspaceDir,
+        },
+      );
+      params.assertCurrent?.();
+      await triggerInternalHook(hookEvent);
+      params.assertCurrent?.();
+      // Cleanup below is destructive. Once it starts, finish rotating the same
+      // session even if gateway ownership changes; otherwise runtime state can be
+      // reset while the persisted session still points at the old conversation.
+      const runtimeCleanupError = await ensureSessionRuntimeCleanup({
+        cfg,
+        key: params.key,
+        target,
+        sessionId: entry?.sessionId,
+      });
+      if (runtimeCleanupError) {
+        return { ok: false, error: runtimeCleanupError };
+      }
+      const parentSessionKey = target.canonicalKey ?? canonicalKey ?? params.key;
+      const parentAcpError = await closeAcpRuntimeForSession({
+        cfg,
+        sessionKey: parentSessionKey,
+        fallbackSessionKeys: [canonicalKey, legacyKey, params.key],
+        reason: "session-reset",
+        deferResetState: true,
+        onDeferredResetState: (state) => {
+          deferredAcpResetState = state;
+        },
+      });
+      if (parentAcpError) {
+        return { ok: false, error: parentAcpError };
+      }
+      const pluginCleanup = await runPluginHostCleanup({
+        cfg,
+        registry: resetPluginRegistry,
+        reason: "reset",
+        sessionKey: target.canonicalKey ?? params.key,
+        skipPersistentSessionState: true,
+      });
+      for (const failure of pluginCleanup.failures) {
+        logVerbose(
+          `plugin host cleanup failed for ${failure.pluginId}/${failure.hookId}: ${String(failure.error)}`,
+        );
+      }
+      await closeChildAcpRuntimesForParent({
+        cfg,
+        parentKey: target.canonicalKey ?? canonicalKey ?? params.key,
+        reason: "session-reset",
+      });
+      if (entry?.sessionId) {
+        await resetRegisteredAgentHarnessSessions({
+          agentId,
+          sessionId: entry.sessionId,
+          sessionKey: target.canonicalKey ?? params.key,
+          sessionFile: entry.sessionFile,
+          reason: "reset",
+        });
+      }
 
-  const archivedTranscripts = archiveSessionTranscriptsForSessionDetailed({
-    sessionId: oldSessionId,
-    storePath,
-    sessionFile: oldSessionFile,
-    agentId: target.agentId,
-    reason: "reset",
+      const lifecycle = await resetSessionEntryLifecycle({
+        agentId: target.agentId,
+        storePath,
+        target: {
+          canonicalKey: target.canonicalKey,
+          storeKeys: target.storeKeys,
+        },
+        buildNextEntry: ({ currentEntry, primaryKey }) => {
+          if (!isResetLifecycleCurrent() && currentEntry?.sessionId !== entry?.sessionId) {
+            // A newer owner already replaced or removed the session while cleanup
+            // targeted the old id. Preserve that newer state instead of resetting it.
+            params.assertCurrent?.();
+          }
+          const parsed = parseAgentSessionKey(primaryKey);
+          const sessionAgentId = normalizeAgentId(
+            parsed?.agentId ?? target.agentId ?? requestedAgentId ?? resolveDefaultAgentId(cfg),
+          );
+          const resetPreservedSelection = resolveResetPreservedSelection({
+            entry: currentEntry,
+          });
+          const now = Date.now();
+          const nextSessionId = randomUUID();
+          const sessionFile = resolveResetSessionFile({
+            nextSessionId,
+            currentEntry,
+            storePath,
+            agentId: sessionAgentId,
+          });
+          const nextEntry: SessionEntry = {
+            sessionId: nextSessionId,
+            sessionFile,
+            updatedAt: now,
+            systemSent: false,
+            abortedLastRun: false,
+            thinkingLevel: currentEntry?.thinkingLevel,
+            fastMode: currentEntry?.fastMode,
+            verboseLevel: currentEntry?.verboseLevel,
+            traceLevel: currentEntry?.traceLevel,
+            reasoningLevel: currentEntry?.reasoningLevel,
+            elevatedLevel: currentEntry?.elevatedLevel,
+            ttsAuto: currentEntry?.ttsAuto,
+            execHost: currentEntry?.execHost,
+            execSecurity: currentEntry?.execSecurity,
+            execAsk: currentEntry?.execAsk,
+            execNode: currentEntry?.execNode,
+            responseUsage: currentEntry?.responseUsage,
+            pinnedAt: currentEntry?.pinnedAt,
+            // Resets should keep the user's explicit selection, but clear any
+            // temporary fallback model that was pinned during the previous run.
+            ...resetPreservedSelection,
+            groupActivation: currentEntry?.groupActivation,
+            groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
+            chatType: currentEntry?.chatType,
+            compactionCount: currentEntry?.compactionCount,
+            compactionCheckpoints: currentEntry?.compactionCheckpoints,
+            sendPolicy: currentEntry?.sendPolicy,
+            queueMode: currentEntry?.queueMode,
+            queueDebounceMs: currentEntry?.queueDebounceMs,
+            queueCap: currentEntry?.queueCap,
+            queueDrop: currentEntry?.queueDrop,
+            spawnedBy: currentEntry?.spawnedBy,
+            spawnedWorkspaceDir: currentEntry?.spawnedWorkspaceDir,
+            spawnedCwd: params.clearSpawnedCwd
+              ? undefined
+              : (params.spawnedCwd ?? currentEntry?.spawnedCwd),
+            parentSessionKey: currentEntry?.parentSessionKey,
+            forkedFromParent: currentEntry?.forkedFromParent,
+            spawnDepth: currentEntry?.spawnDepth,
+            subagentRole: currentEntry?.subagentRole,
+            subagentControlScope: currentEntry?.subagentControlScope,
+            label: currentEntry?.label,
+            displayName: currentEntry?.displayName,
+            channel: currentEntry?.channel,
+            groupId: currentEntry?.groupId,
+            subject: currentEntry?.subject,
+            groupChannel: currentEntry?.groupChannel,
+            space: currentEntry?.space,
+            origin: snapshotSessionOrigin(currentEntry),
+            deliveryContext: currentEntry?.deliveryContext,
+            cliSessionBindings: currentEntry?.cliSessionBindings,
+            cliSessionIds: currentEntry?.cliSessionIds,
+            claudeCliSessionId: currentEntry?.claudeCliSessionId,
+            lastChannel: currentEntry?.lastChannel,
+            lastTo: currentEntry?.lastTo,
+            lastAccountId: currentEntry?.lastAccountId,
+            lastThreadId: currentEntry?.lastThreadId,
+            // Do not carry the cached skills catalog across /new. Long-lived channel
+            // sessions (Signal DMs/groups in particular) otherwise keep advertising a
+            // stale <available_skills> block even after reset/restart, because the
+            // skills snapshot version is runtime-local and may reset to 0.
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            totalTokensFresh: true,
+          };
+          // Drop CLI provider bindings so the next turn after reset starts a fresh
+          // CLI conversation on the provider side. Preserved only for spawned
+          // subagents (canonical `:subagent:` keys), where Tak Hoffman's fa56682b3ced
+          // regression fix intentionally protects CLI continuity for
+          // orchestration-driven resets. Non-subagent sessions that happen to set
+          // `parentSessionKey` (e.g. dashboard children) are not exempt.
+          if (!isSubagentSessionKey(primaryKey)) {
+            clearAllCliSessions(nextEntry);
+          } else {
+            nextEntry.cliSessionBindings = rebindCliSessionReseedReceiptsForReset(
+              nextEntry.cliSessionBindings,
+              nextSessionId,
+            );
+          }
+          return nextEntry;
+        },
+        afterEntryMutation: async (mutation) => {
+          let committedAcpResetState: { sessionKey: string; meta: SessionAcpMeta } | undefined;
+          if (deferredAcpResetState) {
+            const identity = deferredAcpResetState.meta.identity;
+            if (
+              identity?.state === "resolved" &&
+              (identity.acpxSessionId || identity.agentSessionId)
+            ) {
+              committedAcpResetState = {
+                sessionKey: deferredAcpResetState.sessionKey,
+                meta: buildPendingAcpMeta(deferredAcpResetState.meta, Date.now()),
+              };
+              // The JSON session rotation and SQLite metadata cannot share a transaction.
+              // Bind captured ACP state before acknowledging the committed reset so the
+              // new session never observes an unreadable old-session row.
+              writeAcpSessionMetaForMigration({
+                sessionKey: committedAcpResetState.sessionKey,
+                sessionId: mutation.nextEntry.sessionId,
+                meta: committedAcpResetState.meta,
+              });
+            }
+          }
+          params.onCommitted?.({
+            key: target.canonicalKey,
+            sessionId: mutation.nextEntry.sessionId,
+          });
+          if (committedAcpResetState && isResetLifecycleCurrent()) {
+            try {
+              await getAcpRuntimeBackend(
+                (committedAcpResetState.meta.backend || cfg.acp?.backend || "").trim() || undefined,
+              )?.runtime.prepareFreshSession?.({
+                sessionKey: committedAcpResetState.sessionKey,
+              });
+            } catch (error) {
+              logVerbose(
+                `sessions.session-reset: ACP prepareFreshSession failed for ${committedAcpResetState.sessionKey}: ${String(error)}`,
+              );
+            }
+          }
+          await emitGatewayBeforeResetPluginHook({
+            cfg,
+            key: params.key,
+            target,
+            storePath,
+            entry: mutation.previousEntry,
+            reason: params.reason,
+          });
+        },
+      });
+      const next = lifecycle.nextEntry;
+      const selectedModel = resolveSessionModelRef(cfg, next, target.agentId);
+      const resolved = {
+        modelProvider: selectedModel.provider,
+        model: selectedModel.model,
+      };
+      // Runtime model identity is a response projection, not reset persistence. Keep the
+      // established RPC entry shape while the stored row retains selection intent only.
+      const responseEntry: SessionEntry = {
+        ...next,
+        modelProvider: resolved.modelProvider,
+        model: resolved.model,
+      };
+      const oldSessionId = lifecycle.previousSessionId;
+      const oldSessionFile = lifecycle.previousSessionFile;
+
+      const archivedTranscripts = lifecycle.archivedTranscripts;
+      emitGatewaySessionEndPluginHook({
+        cfg,
+        sessionKey: target.canonicalKey ?? params.key,
+        sessionId: oldSessionId,
+        storePath,
+        sessionFile: oldSessionFile,
+        agentId: target.agentId,
+        reason: params.reason,
+        archivedTranscripts,
+        nextSessionId: next.sessionId,
+      });
+      emitGatewaySessionStartPluginHook({
+        cfg,
+        sessionKey: target.canonicalKey ?? params.key,
+        sessionId: next.sessionId,
+        resumedFrom: oldSessionId,
+        storePath,
+        sessionFile: next.sessionFile,
+        agentId: target.agentId,
+      });
+      if (hadExistingEntry) {
+        await emitSessionUnboundLifecycleEvent({
+          targetSessionKey: target.canonicalKey ?? params.key,
+          reason: "session-reset",
+        });
+      }
+      return {
+        ok: true,
+        key: target.canonicalKey,
+        entry: responseEntry,
+        resolved,
+        agentId: target.agentId,
+        storePath,
+      };
+    },
   });
-  fs.mkdirSync(path.dirname(next.sessionFile as string), { recursive: true });
-  if (!fs.existsSync(next.sessionFile as string)) {
-    const header = {
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: next.sessionId,
-      timestamp: new Date().toISOString(),
-      cwd: process.cwd(),
-    };
-    fs.writeFileSync(next.sessionFile as string, `${JSON.stringify(header)}\n`, {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
-  }
-  emitGatewaySessionEndPluginHook({
-    cfg,
-    sessionKey: target.canonicalKey ?? params.key,
-    sessionId: oldSessionId,
-    storePath,
-    sessionFile: oldSessionFile,
-    agentId: target.agentId,
-    reason: params.reason,
-    archivedTranscripts,
-    nextSessionId: next.sessionId,
-  });
-  emitGatewaySessionStartPluginHook({
-    cfg,
-    sessionKey: target.canonicalKey ?? params.key,
-    sessionId: next.sessionId,
-    resumedFrom: oldSessionId,
-    storePath,
-    sessionFile: next.sessionFile,
-    agentId: target.agentId,
-  });
-  if (hadExistingEntry) {
-    await emitSessionUnboundLifecycleEvent({
-      targetSessionKey: target.canonicalKey ?? params.key,
-      reason: "session-reset",
-    });
-  }
-  return { ok: true, key: target.canonicalKey, entry: next };
 }

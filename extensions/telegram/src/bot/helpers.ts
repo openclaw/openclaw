@@ -1,3 +1,4 @@
+// Telegram helper module supports helpers behavior.
 import type { Chat, Message } from "grammy/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -12,6 +13,10 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "../access-groups.js";
@@ -29,12 +34,16 @@ import {
   buildSenderName,
   extractTelegramLocation,
   getTelegramTextParts,
+  hasBotMentionInText,
   hasBotMention,
   isBinaryContent,
   normalizeForwardedContext,
   renderTelegramTextEntities,
   resolveTelegramTextContent,
   resolveTelegramMediaPlaceholder,
+  resolveTelegramRichMessageBody,
+  resolveTelegramRichMessagePlaceholder,
+  resolveTelegramRichMessageText,
   type TelegramForwardedContext,
   type TelegramTextEntity,
 } from "./body-helpers.js";
@@ -46,11 +55,15 @@ export {
   buildSenderName,
   extractTelegramLocation,
   getTelegramTextParts,
+  hasBotMentionInText,
   hasBotMention,
   isBinaryContent,
   normalizeForwardedContext,
   renderTelegramTextEntities,
   resolveTelegramMediaPlaceholder,
+  resolveTelegramRichMessageBody,
+  resolveTelegramRichMessagePlaceholder,
+  resolveTelegramRichMessageText,
 };
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
@@ -64,6 +77,13 @@ export function resetTelegramForumFlagCacheForTest(): void {
 
 function cacheTelegramForumFlag(chatId: string | number, isForum: boolean, nowMs = Date.now()) {
   const cacheKey = String(chatId);
+  const expiresAtMs = resolveExpiresAtMsFromDurationMs(TELEGRAM_FORUM_FLAG_CACHE_TTL_MS, {
+    nowMs,
+  });
+  if (expiresAtMs === undefined) {
+    telegramForumFlagByChatId.delete(cacheKey);
+    return;
+  }
   if (
     !telegramForumFlagByChatId.has(cacheKey) &&
     telegramForumFlagByChatId.size >= TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS
@@ -74,7 +94,7 @@ function cacheTelegramForumFlag(chatId: string | number, isForum: boolean, nowMs
     }
   }
   telegramForumFlagByChatId.set(cacheKey, {
-    expiresAtMs: nowMs + TELEGRAM_FORUM_FLAG_CACHE_TTL_MS,
+    expiresAtMs,
     isForum,
   });
 }
@@ -146,17 +166,22 @@ export async function resolveTelegramForumFlag(params: {
     return false;
   }
   const cacheKey = String(params.chatId);
-  const nowMs = Date.now();
+  const rawNowMs = Date.now();
+  const nowMs = asDateTimestampMs(rawNowMs);
   const cached = telegramForumFlagByChatId.get(cacheKey);
-  if (cached && cached.expiresAtMs > nowMs) {
-    return cached.isForum;
-  }
   if (cached) {
+    if (
+      nowMs !== undefined &&
+      asDateTimestampMs(cached.expiresAtMs) !== undefined &&
+      cached.expiresAtMs > nowMs
+    ) {
+      return cached.isForum;
+    }
     telegramForumFlagByChatId.delete(cacheKey);
   }
   try {
     const resolved = extractTelegramForumFlag(await params.getChat(params.chatId)) === true;
-    cacheTelegramForumFlag(params.chatId, resolved, nowMs);
+    cacheTelegramForumFlag(params.chatId, resolved, rawNowMs);
     return resolved;
   } catch {
     return false;
@@ -182,7 +207,7 @@ export function withResolvedTelegramForumFlag<T extends { chat: object }>(
 }
 
 export async function resolveTelegramGroupAllowFromContext(params: {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   chatId: string | number;
   accountId?: string;
   dmPolicy?: DmPolicy;
@@ -199,7 +224,8 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   readChannelAllowFromStore?: typeof readChannelAllowFromStore;
   resolveTelegramGroupConfig: (
     chatId: string | number,
-    messageThreadId?: number,
+    messageThreadId: number | undefined,
+    cfg: OpenClawConfig,
   ) => {
     groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
     topicConfig?: TelegramTopicConfig;
@@ -227,6 +253,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
     params.chatId,
     threadIdForConfig,
+    params.cfg,
   );
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
   const effectiveDmPolicy = resolveTelegramEffectiveDmPolicy({
@@ -408,6 +435,10 @@ export function buildTelegramThreadParams(thread?: TelegramThreadSpec | null) {
     return normalized > 0 ? { message_thread_id: normalized } : undefined;
   }
 
+  if (thread.scope === "none") {
+    return undefined;
+  }
+
   // Telegram rejects message_thread_id=1 for General forum topic
   if (normalized === TELEGRAM_GENERAL_TOPIC_ID) {
     return undefined;
@@ -586,7 +617,7 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
     msg.quote ?? (externalReply as (Message & { quote?: Message["quote"] }) | undefined)?.quote;
   const rawQuoteText = quote?.text;
   const quoteText = resolveTelegramTextContent(rawQuoteText);
-  let body = "";
+  let body;
   let kind: TelegramReplyTarget["kind"] = "reply";
   const filteredQuoteText = hadUnsafeTelegramText(rawQuoteText, quoteText);
 
@@ -602,11 +633,11 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
       : replyLike && typeof replyLike.caption === "string"
         ? replyLike.caption
         : undefined;
-  const safeReplyText = resolveTelegramTextContent(rawReplyText);
-  const replyTextParts = replyLike && safeReplyText ? getTelegramTextParts(replyLike) : undefined;
+  const replyTextParts = replyLike ? getTelegramTextParts(replyLike) : undefined;
+  const safeReplyText = replyTextParts?.text ?? "";
   let filteredReplyText = false;
   if (!body && replyLike) {
-    const replyBody = safeReplyText.trim();
+    const replyBody = safeReplyText.trim() || resolveTelegramRichMessageBody(replyLike) || "";
     filteredReplyText = hadUnsafeTelegramText(rawReplyText, replyBody);
     body = replyBody;
     if (!body) {

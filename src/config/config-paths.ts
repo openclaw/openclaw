@@ -1,8 +1,23 @@
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+// Resolves and classifies config paths for reads, writes, and metadata.
 import { isPlainObject } from "../utils.js";
-import { isBlockedObjectKey } from "./prototype-keys.js";
 
 type PathNode = Record<string, unknown>;
 
+function setOwnConfigProperty(node: PathNode, key: string, value: unknown): void {
+  if (Object.hasOwn(node, key)) {
+    node[key] = value;
+    return;
+  }
+  Object.defineProperty(node, key, {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
+}
+
+/** Parses CLI/config dot-notation paths and rejects unsafe object-key segments. */
 export function parseConfigPath(raw: string): {
   ok: boolean;
   path?: string[];
@@ -22,30 +37,38 @@ export function parseConfigPath(raw: string): {
       error: "Invalid path. Use dot notation (e.g. foo.bar).",
     };
   }
+  // These helpers mutate plain objects; block prototype-bearing keys before any setter can create
+  // or traverse them.
   if (parts.some((part) => isBlockedObjectKey(part))) {
     return { ok: false, error: "Invalid path segment." };
   }
   return { ok: true, path: parts };
 }
 
+/** Sets a value at a validated config path, creating missing plain-object parents. */
 export function setConfigValueAtPath(root: PathNode, path: string[], value: unknown): void {
   let cursor: PathNode = root;
   for (let idx = 0; idx < path.length - 1; idx += 1) {
     const key = path[idx];
-    const next = cursor[key];
-    if (!isPlainObject(next)) {
-      cursor[key] = {};
+    const existing = Object.hasOwn(cursor, key) ? cursor[key] : undefined;
+    const next: PathNode = isPlainObject(existing) ? existing : {};
+    if (next !== existing) {
+      setOwnConfigProperty(cursor, key, next);
     }
-    cursor = cursor[key] as PathNode;
+    cursor = next;
   }
-  cursor[path[path.length - 1]] = value;
+  setOwnConfigProperty(cursor, path[path.length - 1], value);
 }
 
+/** Removes a value at a config path and prunes empty parent objects created by setters. */
 export function unsetConfigValueAtPath(root: PathNode, path: string[]): boolean {
   const stack: Array<{ node: PathNode; key: string }> = [];
   let cursor: PathNode = root;
   for (let idx = 0; idx < path.length - 1; idx += 1) {
     const key = path[idx];
+    if (!Object.hasOwn(cursor, key)) {
+      return false;
+    }
     const next = cursor[key];
     if (!isPlainObject(next)) {
       return false;
@@ -54,10 +77,12 @@ export function unsetConfigValueAtPath(root: PathNode, path: string[]): boolean 
     cursor = next;
   }
   const leafKey = path[path.length - 1];
-  if (!(leafKey in cursor)) {
+  if (!Object.hasOwn(cursor, leafKey)) {
     return false;
   }
   delete cursor[leafKey];
+  // Keep config writes tidy: removing foo.bar should also remove foo when it became empty, while
+  // preserving any parent that still carries sibling config.
   for (let idx = stack.length - 1; idx >= 0; idx -= 1) {
     const { node, key } = stack[idx];
     const child = node[key];
@@ -70,10 +95,11 @@ export function unsetConfigValueAtPath(root: PathNode, path: string[]): boolean 
   return true;
 }
 
+/** Reads a value from a config path, stopping at the first non-plain-object parent. */
 export function getConfigValueAtPath(root: PathNode, path: string[]): unknown {
   let cursor: unknown = root;
   for (const key of path) {
-    if (!isPlainObject(cursor)) {
+    if (!isPlainObject(cursor) || !Object.hasOwn(cursor, key)) {
       return undefined;
     }
     cursor = cursor[key];

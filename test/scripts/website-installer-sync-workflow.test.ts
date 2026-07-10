@@ -1,3 +1,4 @@
+// Website Installer Sync Workflow tests cover website installer sync workflow script behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -29,7 +30,7 @@ describe("website installer sync workflow", () => {
     expect(workflow).not.toContain("bash /tmp/install.sh --no-prompt --no-onboard");
     expect(workflow).toContain("bash /tmp/install-cli.sh --prefix /tmp/openclaw");
     expect(workflow).toContain("macos-installer:");
-    expect(workflow).toContain("runs-on: macos-latest");
+    expect(workflow).toContain("runs-on: macos-15");
     expect(workflow).toContain("node-version: 24");
     expect(workflow).toContain('OPENCLAW_NO_ONBOARD: "1"');
     expect(workflow).toContain('OPENCLAW_NO_PROMPT: "1"');

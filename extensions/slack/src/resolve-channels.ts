@@ -1,3 +1,4 @@
+// Slack plugin module implements resolve channels behavior.
 import type { WebClient } from "@slack/web-api";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createSlackWebClient } from "./client.js";
@@ -101,6 +102,18 @@ export async function resolveSlackChannelAllowlist(params: {
   entries: string[];
   client?: WebClient;
 }): Promise<SlackChannelResolution[]> {
+  const parsedEntries = params.entries.map((input) => ({
+    input,
+    parsed: parseSlackChannelMention(input),
+  }));
+  if (parsedEntries.every((entry) => Boolean(entry.parsed.id))) {
+    return parsedEntries.map(({ input, parsed }) => ({
+      input,
+      resolved: true,
+      id: parsed.id,
+      name: parsed.name,
+    }));
+  }
   const client = params.client ?? createSlackWebClient(params.token);
   const channels = await listSlackChannels(client);
   return resolveSlackAllowlistEntries<

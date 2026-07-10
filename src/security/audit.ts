@@ -1,7 +1,15 @@
+// Orchestrates security audit collection and report formatting.
+import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
-import { normalizeProviderId } from "../agents/provider-id.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
@@ -9,7 +17,12 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { CliBackendConfig } from "../config/types.agent-defaults.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { SecurityAuditSuppression } from "../config/types.openclaw.js";
+import {
+  canMaterializeGatewayAuthSecretRefsWithoutExec,
+  materializeGatewayAuthSecretRefs,
+} from "../gateway/auth-config-utils.js";
 import { isInterpreterLikeAllowlistPattern } from "../infra/command-analysis/inline-eval.js";
+import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
   type ExecApprovalsFile,
   loadExecApprovals,
@@ -18,15 +31,16 @@ import {
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import {
+  normalizeConfiguredSafeBins,
+  normalizeConfiguredTrustedSafeBinDirs,
+} from "../infra/exec-safe-bin-config.js";
+import {
   listInterpreterLikeSafeBins,
   resolveMergedSafeBinProfileFixtures,
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
-import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
-import { asNullableRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import {
@@ -55,6 +69,17 @@ type SecurityAuditGatewayAuthOverride = Pick<GatewayAuthConfig, "mode" | "token"
 type ClaudePermissionModeHit = {
   argSet: "args" | "resumeArgs";
   mode: string;
+};
+type McpServerSourceSummary = {
+  label: string;
+  names: string[];
+};
+type AgentSkillMcpBoundaryScope = {
+  id: string;
+  skillSource: string;
+  execHost: string;
+  execSecurity: string;
+  execAsk: string;
 };
 
 export type {
@@ -123,70 +148,32 @@ export type AuditExecutionContext = {
   workspaceDir?: string;
 };
 
-let readOnlyChannelPluginsModulePromise:
-  | Promise<typeof import("../channels/plugins/read-only.js")>
-  | undefined;
-let auditNonDeepModulePromise: Promise<typeof import("./audit.nondeep.runtime.js")> | undefined;
-let auditChannelModulePromise:
-  | Promise<typeof import("./audit-channel.collect.runtime.js")>
-  | undefined;
-let pluginMetadataRegistryLoaderModulePromise:
-  | Promise<typeof import("../plugins/runtime/metadata-registry-loader.js")>
-  | undefined;
-let pluginAutoEnableModulePromise:
-  | Promise<typeof import("../config/plugin-auto-enable.js")>
-  | undefined;
-let channelPluginIdsModulePromise:
-  | Promise<typeof import("../plugins/channel-plugin-ids.js")>
-  | undefined;
-let pluginRuntimeModulePromise: Promise<typeof import("../plugins/runtime.js")> | undefined;
-let gatewayProbeDepsPromise:
-  | Promise<{
-      buildGatewayConnectionDetails: typeof import("../gateway/call.js").buildGatewayConnectionDetails;
-      resolveGatewayProbeAuthSafe: typeof import("../gateway/probe-auth.js").resolveGatewayProbeAuthSafe;
-      resolveGatewayProbeTarget: typeof import("../gateway/probe-auth.js").resolveGatewayProbeTarget;
-      probeGateway: typeof import("../gateway/probe.js").probeGateway;
-    }>
-  | undefined;
+const loadReadOnlyChannelPlugins = createLazyRuntimeModule(
+  () => import("../channels/plugins/read-only.js"),
+);
 
-async function loadReadOnlyChannelPlugins() {
-  readOnlyChannelPluginsModulePromise ??= import("../channels/plugins/read-only.js");
-  return await readOnlyChannelPluginsModulePromise;
-}
+const loadAuditNonDeepModule = createLazyRuntimeModule(() => import("./audit.nondeep.runtime.js"));
 
-async function loadAuditNonDeepModule() {
-  auditNonDeepModulePromise ??= import("./audit.nondeep.runtime.js");
-  return await auditNonDeepModulePromise;
-}
+const loadAuditChannelModule = createLazyRuntimeModule(
+  () => import("./audit-channel.collect.runtime.js"),
+);
 
-async function loadAuditChannelModule() {
-  auditChannelModulePromise ??= import("./audit-channel.collect.runtime.js");
-  return await auditChannelModulePromise;
-}
+const loadPluginMetadataRegistryLoaderModule = createLazyRuntimeModule(
+  () => import("../plugins/runtime/metadata-registry-loader.js"),
+);
 
-async function loadPluginMetadataRegistryLoaderModule() {
-  pluginMetadataRegistryLoaderModulePromise ??=
-    import("../plugins/runtime/metadata-registry-loader.js");
-  return await pluginMetadataRegistryLoaderModulePromise;
-}
+const loadPluginAutoEnableModule = createLazyRuntimeModule(
+  () => import("../config/plugin-auto-enable.js"),
+);
 
-async function loadPluginAutoEnableModule() {
-  pluginAutoEnableModulePromise ??= import("../config/plugin-auto-enable.js");
-  return await pluginAutoEnableModulePromise;
-}
+const loadChannelPluginIdsModule = createLazyRuntimeModule(
+  () => import("../plugins/channel-plugin-ids.js"),
+);
 
-async function loadChannelPluginIdsModule() {
-  channelPluginIdsModulePromise ??= import("../plugins/channel-plugin-ids.js");
-  return await channelPluginIdsModulePromise;
-}
+const loadPluginRuntimeModule = createLazyRuntimeModule(() => import("../plugins/runtime.js"));
 
-async function loadPluginRuntimeModule() {
-  pluginRuntimeModulePromise ??= import("../plugins/runtime.js");
-  return await pluginRuntimeModulePromise;
-}
-
-async function loadGatewayProbeDeps() {
-  gatewayProbeDepsPromise ??= Promise.all([
+const loadGatewayProbeDeps = createLazyRuntimeModule(() =>
+  Promise.all([
     import("../gateway/call.js"),
     import("../gateway/probe-auth.js"),
     import("../gateway/probe.js"),
@@ -195,9 +182,8 @@ async function loadGatewayProbeDeps() {
     resolveGatewayProbeAuthSafe: probeAuthModule.resolveGatewayProbeAuthSafe,
     resolveGatewayProbeTarget: probeAuthModule.resolveGatewayProbeTarget,
     probeGateway: probeModule.probeGateway,
-  }));
-  return await gatewayProbeDepsPromise;
-}
+  })),
+);
 
 function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary {
   let critical = 0;
@@ -215,8 +201,74 @@ function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary
   return { critical, warn, info };
 }
 
+function emitSecurityAuditReportEvent(params: {
+  summary: SecurityAuditSummary;
+  deep: boolean;
+  includeFilesystem: boolean;
+  includeChannelSecurity: boolean;
+  suppressedCount: number;
+}) {
+  const hasCritical = params.summary.critical > 0;
+  const hasWarnings = params.summary.warn > 0;
+  emitTrustedSecurityEvent({
+    category: "audit",
+    action: "security.audit.completed",
+    outcome: hasCritical || hasWarnings ? "failure" : "success",
+    severity: hasCritical ? "critical" : hasWarnings ? "medium" : "info",
+    actor: {
+      kind: "operator",
+    },
+    target: {
+      kind: "config",
+      name: "security.audit",
+    },
+    policy: {
+      id: "security.audit",
+      decision: "not_applicable",
+    },
+    control: {
+      id: "security.audit",
+      family: "authorization",
+    },
+    attributes: {
+      critical_count: params.summary.critical,
+      warn_count: params.summary.warn,
+      info_count: params.summary.info,
+      suppressed_count: params.suppressedCount,
+      deep: params.deep,
+      include_filesystem: params.includeFilesystem,
+      include_channel_security: params.includeChannelSecurity,
+    },
+  });
+}
+
 function normalizeSuppressionText(value: string | undefined): string {
   return (value ?? "").trim().toLowerCase();
+}
+
+async function materializeAuditGatewayAuthRefs(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<OpenClawConfig> {
+  const materializeParams = {
+    cfg: params.cfg,
+    env: params.env,
+    mode: params.cfg.gateway?.auth?.mode,
+    hasTokenCandidate: Boolean(normalizeOptionalString(params.env.OPENCLAW_GATEWAY_TOKEN)),
+    hasPasswordCandidate: Boolean(normalizeOptionalString(params.env.OPENCLAW_GATEWAY_PASSWORD)),
+  };
+  if (!canMaterializeGatewayAuthSecretRefsWithoutExec(materializeParams)) {
+    return params.cfg;
+  }
+  try {
+    return await materializeGatewayAuthSecretRefs(materializeParams);
+  } catch {
+    return params.cfg;
+  }
+}
+
+function shouldMaterializeHooksGatewayAuthRefs(cfg: OpenClawConfig): boolean {
+  return cfg.hooks?.enabled === true && Boolean(normalizeOptionalString(cfg.hooks.token));
 }
 
 function findingMatchesSuppression(
@@ -254,7 +306,7 @@ function buildSecurityAuditSuppressionsActiveFinding(params: {
   };
 }
 
-export function applySecurityAuditSuppressions(
+function applySecurityAuditSuppressions(
   findings: SecurityAuditFinding[],
   suppressions: SecurityAuditSuppression[] | undefined,
 ): { findings: SecurityAuditFinding[]; suppressedFindings: SecurityAuditSuppressedFinding[] } {
@@ -853,26 +905,6 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
     });
   }
 
-  const normalizeConfiguredSafeBins = (entries: unknown): string[] => {
-    if (!Array.isArray(entries)) {
-      return [];
-    }
-    return Array.from(
-      new Set(
-        entries
-          .map((entry) => normalizeOptionalLowercaseString(entry) ?? "")
-          .filter((entry) => entry.length > 0),
-      ),
-    ).toSorted();
-  };
-  const normalizeConfiguredTrustedDirs = (entries: unknown): string[] => {
-    if (!Array.isArray(entries)) {
-      return [];
-    }
-    return normalizeTrustedSafeBinDirs(
-      entries.filter((entry): entry is string => typeof entry === "string"),
-    );
-  };
   const classifyRiskySafeBinTrustedDir = (entry: string): string | null => {
     const raw = entry.trim();
     if (!raw) {
@@ -916,7 +948,7 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
   const globalExec = cfg.tools?.exec;
   const riskyTrustedDirHits: string[] = [];
   const collectRiskyTrustedDirHits = (scopePath: string, entries: unknown): void => {
-    for (const entry of normalizeConfiguredTrustedDirs(entries)) {
+    for (const entry of normalizeConfiguredTrustedSafeBinDirs(entries)) {
       const reason = classifyRiskySafeBinTrustedDir(entry);
       if (!reason) {
         continue;
@@ -1026,6 +1058,148 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
   return findings;
 }
 
+function formatNamesPreview(names: readonly string[]): string {
+  const visible = names.slice(0, 6);
+  const suffix = names.length > visible.length ? `, +${names.length - visible.length} more` : "";
+  return `${visible.join(", ")}${suffix}`;
+}
+
+function listConfiguredMcpServerNames(cfg: OpenClawConfig): string[] {
+  return Object.entries(cfg.mcp?.servers ?? {})
+    .filter(([, server]) => server?.enabled !== false)
+    .map(([name]) => name)
+    .toSorted();
+}
+
+async function readGlobalMcporterRegistrySummary(
+  stateDir: string,
+): Promise<McpServerSourceSummary | null> {
+  const registryPath = path.join(stateDir, "skills", "config", "mcporter.json");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await fs.readFile(registryPath, "utf8")) as unknown;
+  } catch {
+    return null;
+  }
+  const mcpServers = asNullableRecord(asNullableRecord(parsed)?.mcpServers);
+  if (!mcpServers) {
+    return null;
+  }
+  const names = Object.entries(mcpServers)
+    .filter(([, value]) => asNullableRecord(value)?.enabled !== false)
+    .map(([name]) => name)
+    .toSorted();
+  return names.length > 0 ? { label: "skills/config/mcporter.json", names } : null;
+}
+
+function hasOwnSkillsAllowlist(entry: object | undefined): boolean {
+  return Boolean(entry && Object.hasOwn(entry, "skills"));
+}
+
+function collectAgentSkillMcpBoundaryScopes(cfg: OpenClawConfig): AgentSkillMcpBoundaryScope[] {
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const defaultsHaveSkillAllowlist = hasOwnSkillsAllowlist(cfg.agents?.defaults);
+  const candidates = [
+    ...(defaultsHaveSkillAllowlist
+      ? [
+          {
+            id: DEFAULT_AGENT_ID,
+            skillSource: "agents.defaults.skills",
+            agentId: undefined,
+          },
+        ]
+      : []),
+    ...agents
+      .filter(
+        (entry): entry is NonNullable<(typeof agents)[number]> =>
+          Boolean(entry) && typeof entry === "object" && typeof entry.id === "string",
+      )
+      .flatMap((entry) => {
+        if (hasOwnSkillsAllowlist(entry)) {
+          return [{ id: entry.id, skillSource: "agents.list[].skills", agentId: entry.id }];
+        }
+        if (defaultsHaveSkillAllowlist) {
+          return [
+            {
+              id: entry.id,
+              skillSource: "agents.defaults.skills (inherited)",
+              agentId: entry.id,
+            },
+          ];
+        }
+        return [];
+      }),
+  ];
+
+  return candidates.flatMap((candidate) => {
+    const sandboxMode = resolveSandboxConfigForAgent(cfg, candidate.agentId).mode;
+    const exec = resolveExecDefaults({
+      cfg,
+      agentId: candidate.agentId,
+      sandboxAvailable: sandboxMode !== "off",
+    });
+    if (exec.security === "deny" || exec.effectiveHost === "sandbox") {
+      return [];
+    }
+    return [
+      {
+        id: candidate.id,
+        skillSource: candidate.skillSource,
+        execHost: exec.effectiveHost,
+        execSecurity: exec.security,
+        execAsk: exec.ask,
+      },
+    ];
+  });
+}
+
+async function collectAgentSkillMcpBoundaryFindings(params: {
+  cfg: OpenClawConfig;
+  stateDir: string;
+}): Promise<SecurityAuditFinding[]> {
+  const sources: McpServerSourceSummary[] = [];
+  const configServerNames = listConfiguredMcpServerNames(params.cfg);
+  if (configServerNames.length > 0) {
+    sources.push({ label: "mcp.servers", names: configServerNames });
+  }
+  const globalMcporterRegistry = await readGlobalMcporterRegistrySummary(params.stateDir);
+  if (globalMcporterRegistry) {
+    sources.push(globalMcporterRegistry);
+  }
+  if (sources.length === 0) {
+    return [];
+  }
+
+  const scopes = collectAgentSkillMcpBoundaryScopes(params.cfg);
+  if (scopes.length === 0) {
+    return [];
+  }
+
+  return [
+    {
+      checkId: "tools.exec.agent_skill_mcp_boundary_drift",
+      severity: "warn",
+      title: "Agent skill allowlists do not constrain host exec MCP clients",
+      detail:
+        `Detected agent skill allowlists on host-exec-capable scopes:\n${scopes
+          .slice(0, 8)
+          .map(
+            (scope) =>
+              `- ${scope.id}: ${scope.skillSource}, exec.host=${scope.execHost}, security=${scope.execSecurity}, ask=${scope.execAsk}`,
+          )
+          .join("\n")}` +
+        (scopes.length > 8 ? `\n- +${scopes.length - 8} more scopes.` : "") +
+        `\nMCP server registries visible to the gateway configuration/state:\n${sources
+          .map((source) => `- ${source.label}: ${formatNamesPreview(source.names)}`)
+          .join("\n")}\n` +
+        "agents.*.skills filters OpenClaw skill visibility and snapshots; it is not a shell-time authorization boundary. " +
+        "A host exec process can run external MCP clients or read a global mcporter registry unless sandbox, filesystem, network, or MCP credential boundaries block it.",
+      remediation:
+        'For agents that need per-agent MCP isolation, set their exec policy to security="deny" or a tight allowlist, run them in sandbox/container/OS-user isolation where the global MCP registry is not readable, split sensitive MCP servers into a separate gateway/trust boundary, or require per-agent MCP credentials at the server layer.',
+    },
+  ];
+}
+
 function collectOpenExecSurfacePaths(cfg: OpenClawConfig): string[] {
   const channels = asNullableRecord(cfg.channels);
   if (!channels) {
@@ -1117,7 +1291,7 @@ async function maybeProbeGateway(params: {
   });
   const res = await params
     .probe({ url, auth: authResolution.auth, timeoutMs: params.timeoutMs })
-    .catch((err) => ({
+    .catch((err: unknown) => ({
       ok: false,
       url,
       connectLatencyMs: null,
@@ -1210,8 +1384,15 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
   findings.push(...collectExecRuntimeFindings(cfg));
+  findings.push(...(await collectAgentSkillMcpBoundaryFindings({ cfg, stateDir })));
+  const hooksGatewayAuthCfg = shouldMaterializeHooksGatewayAuthRefs(cfg)
+    ? await materializeAuditGatewayAuthRefs({
+        cfg,
+        env,
+      })
+    : cfg;
   findings.push(
-    ...auditNonDeep.collectHooksHardeningFindings(cfg, env, {
+    ...auditNonDeep.collectHooksHardeningFindings(hooksGatewayAuthCfg, env, {
       gatewayAuthOverride: context.auditGatewayAuthOverride,
     }),
   );
@@ -1348,6 +1529,13 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
         ]
       : filtered.findings;
   const summary = countBySeverity(activeFindings);
+  emitSecurityAuditReportEvent({
+    summary,
+    deep: context.deep,
+    includeFilesystem: context.includeFilesystem,
+    includeChannelSecurity: context.includeChannelSecurity,
+    suppressedCount: filtered.suppressedFindings.length,
+  });
   return {
     ts: Date.now(),
     summary,

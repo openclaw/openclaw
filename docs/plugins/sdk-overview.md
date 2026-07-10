@@ -14,13 +14,12 @@ reference for **what to import** and **what you can register**.
 <Note>
   This page is for plugin authors using `openclaw/plugin-sdk/*` inside
   OpenClaw. For external apps, scripts, dashboards, CI jobs, and IDE extensions
-  that want to run agents through the Gateway, use the
-  [OpenClaw App SDK](/concepts/openclaw-sdk) and the `@openclaw/sdk` package
-  instead.
+  that want to run agents through the Gateway, use
+  [Gateway integrations for external apps](/gateway/external-apps) instead.
 </Note>
 
 <Tip>
-Looking for a how-to guide instead? Start with [Building plugins](/plugins/building-plugins), use [Channel plugins](/plugins/sdk-channel-plugins) for channel plugins, [Provider plugins](/plugins/sdk-provider-plugins) for provider plugins, [CLI backend plugins](/plugins/cli-backend-plugins) for local AI CLI backends, and [Plugin hooks](/plugins/hooks) for tool or lifecycle hook plugins.
+Looking for a how-to guide instead? Start with [Building plugins](/plugins/building-plugins). Use [Channel plugins](/plugins/sdk-channel-plugins) for channels, [Provider plugins](/plugins/sdk-provider-plugins) for model providers, [CLI backend plugins](/plugins/cli-backend-plugins) for local AI CLI backends, [Agent harness plugins](/plugins/sdk-agent-harness) for native agent executors, and [Plugin hooks](/plugins/hooks) for tool or lifecycle hooks.
 </Tip>
 
 ## Import convention
@@ -89,22 +88,25 @@ methods:
 
 ### Capability registration
 
-| Method                                           | What it registers                     |
-| ------------------------------------------------ | ------------------------------------- |
-| `api.registerProvider(...)`                      | Text inference (LLM)                  |
-| `api.registerAgentHarness(...)`                  | Experimental low-level agent executor |
-| `api.registerCliBackend(...)`                    | Local CLI inference backend           |
-| `api.registerChannel(...)`                       | Messaging channel                     |
-| `api.registerEmbeddingProvider(...)`             | Reusable vector embedding provider    |
-| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis        |
-| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription      |
-| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions        |
-| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis            |
-| `api.registerImageGenerationProvider(...)`       | Image generation                      |
-| `api.registerMusicGenerationProvider(...)`       | Music generation                      |
-| `api.registerVideoGenerationProvider(...)`       | Video generation                      |
-| `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider           |
-| `api.registerWebSearchProvider(...)`             | Web search                            |
+| Method                                           | What it registers                                                                 |
+| ------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `api.registerProvider(...)`                      | Text inference (LLM)                                                              |
+| `api.registerModelCatalogProvider(...)`          | Model catalog rows for text and media generation                                  |
+| `api.registerAgentHarness(...)`                  | [Experimental](/plugins/sdk-agent-harness) native agent executor (Codex, Copilot) |
+| `api.registerCliBackend(...)`                    | Local CLI inference backend                                                       |
+| `api.registerChannel(...)`                       | Messaging channel                                                                 |
+| `api.registerEmbeddingProvider(...)`             | Reusable vector embedding provider                                                |
+| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis                                                    |
+| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription                                                  |
+| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions                                                    |
+| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis                                                        |
+| `api.registerTranscriptSourceProvider(...)`      | Live or imported meeting transcript source                                        |
+| `api.registerImageGenerationProvider(...)`       | Image generation                                                                  |
+| `api.registerMusicGenerationProvider(...)`       | Music generation                                                                  |
+| `api.registerVideoGenerationProvider(...)`       | Video generation                                                                  |
+| `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider                                                       |
+| `api.registerWebSearchProvider(...)`             | Web search                                                                        |
+| `api.registerCompactionProvider(...)`            | Pluggable transcript-compaction backend                                           |
 
 Embedding providers registered with `api.registerEmbeddingProvider(...)` must
 also be listed in `contracts.embeddingProviders` in the plugin manifest. This
@@ -113,6 +115,16 @@ can consume this generic provider surface. The older
 `api.registerMemoryEmbeddingProvider(...)` and
 `contracts.memoryEmbeddingProviders` seam is deprecated compatibility while
 existing memory-specific providers migrate.
+
+Memory-specific providers that still expose a runtime `batchEmbed(...)` stay on
+the existing per-file batching contract unless their runtime explicitly sets
+`sourceWideBatchEmbed: true`. That opt-in lets the memory host submit chunks from
+multiple dirty memory files and enabled sources in one `batchEmbed(...)` call up
+to the host batch limits. Batch adapters that upload JSONL request files must
+split provider jobs before their upload-size cap as well as their request-count
+cap. The provider must return one embedding per input chunk in the same order as
+`batch.chunks`; omit the flag when the provider expects file-local batches or
+cannot preserve input ordering across a larger source-wide job.
 
 ### Tools and commands
 
@@ -152,19 +164,42 @@ guidance remain available to non-Codex prompt surfaces for compatibility.
 
 ### Infrastructure
 
-| Method                                         | What it registers                       |
-| ---------------------------------------------- | --------------------------------------- |
-| `api.registerHook(events, handler, opts?)`     | Event hook                              |
-| `api.registerHttpRoute(params)`                | Gateway HTTP endpoint                   |
-| `api.registerGatewayMethod(name, handler)`     | Gateway RPC method                      |
-| `api.registerGatewayDiscoveryService(service)` | Local Gateway discovery advertiser      |
-| `api.registerCli(registrar, opts?)`            | CLI subcommand                          |
-| `api.registerNodeCliFeature(registrar, opts?)` | Node feature CLI under `openclaw nodes` |
-| `api.registerService(service)`                 | Background service                      |
-| `api.registerInteractiveHandler(registration)` | Interactive handler                     |
-| `api.registerAgentToolResultMiddleware(...)`   | Runtime tool-result middleware          |
-| `api.registerMemoryPromptSupplement(builder)`  | Additive memory-adjacent prompt section |
-| `api.registerMemoryCorpusSupplement(adapter)`  | Additive memory search/read corpus      |
+| Method                                          | What it registers                                            |
+| ----------------------------------------------- | ------------------------------------------------------------ |
+| `api.registerHook(events, handler, opts?)`      | Event hook                                                   |
+| `api.registerHttpRoute(params)`                 | Gateway HTTP endpoint                                        |
+| `api.registerGatewayMethod(name, handler)`      | Gateway RPC method                                           |
+| `api.registerGatewayDiscoveryService(service)`  | Local Gateway discovery advertiser                           |
+| `api.registerCli(registrar, opts?)`             | CLI subcommand                                               |
+| `api.registerNodeCliFeature(registrar, opts?)`  | Node feature CLI under `openclaw nodes`                      |
+| `api.registerService(service)`                  | Background service                                           |
+| `api.registerInteractiveHandler(registration)`  | Interactive handler                                          |
+| `api.registerAgentToolResultMiddleware(...)`    | Runtime tool-result middleware                               |
+| `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section                      |
+| `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus                           |
+| `api.registerHostedMediaResolver(resolver)`     | Resolver for browser-style hosted media URLs                 |
+| `api.registerTextTransforms(transforms)`        | Plugin-owned prompt/message compatibility text rewrites      |
+| `api.registerConfigMigration(migrate)`          | Lightweight config migration run before plugin runtime loads |
+| `api.registerMigrationProvider(provider)`       | Importer for `openclaw migrate`                              |
+| `api.registerAutoEnableProbe(probe)`            | Config probe that can auto-enable this plugin                |
+| `api.registerReload(registration)`              | Restart/hot/noop config-prefix policy for reload handling    |
+| `api.registerNodeHostCommand(command)`          | Command handler exposed to paired nodes                      |
+| `api.registerNodeInvokePolicy(policy)`          | Allowlist/approval policy for node-invoked commands          |
+| `api.registerSecurityAuditCollector(collector)` | Findings collector for `openclaw security audit`             |
+
+Memory prompt supplement builders receive optional `agentId`,
+`agentSessionKey`, and `sandboxed` context. Memory corpus supplement `search`
+and `get` calls receive optional `agentId` and `sandboxed` context. Plugins with
+agent-owned storage should resolve that storage for each call instead of
+capturing one global path during registration. If an agent id is required but
+missing in a multi-agent operation, fail closed rather than choosing an
+arbitrary agent.
+
+Telegram interactive handlers can return `{ submitText }` to route text through
+Telegram's normal inbound agent path after the handler succeeds. OpenClaw keeps
+the callback button when inbound policy skips the text or processing fails, so
+the user can retry after the blocking condition changes. This result field is
+Telegram-specific; other channels keep their own interactive result contracts.
 
 ### Host hooks for workflow plugins
 
@@ -174,21 +209,43 @@ generic contracts; Plan Mode can use them, but so can approval workflows,
 workspace policy gates, background monitors, setup wizards, and UI companion
 plugins.
 
-| Method                                                                               | Contract it owns                                                                                                                  |
-| ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `api.session.state.registerSessionExtension(...)`                                    | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                    |
-| `api.session.workflow.enqueueNextTurnInjection(...)`                                 | Durable exactly-once context injected into the next agent turn for one session                                                    |
-| `api.registerTrustedToolPolicy(...)`                                                 | Bundled/trusted pre-plugin tool policy that can block or rewrite tool params                                                      |
-| `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                            |
-| `api.registerCommand(...)`                                                           | Scoped plugin commands; command results can set `continueAgent: true`; Discord native commands support `descriptionLocalizations` |
-| `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors for session, tool, run, or settings surfaces                                                  |
-| `api.lifecycle.registerRuntimeLifecycle(...)`                                        | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                 |
-| `api.agent.events.registerAgentEventSubscription(...)`                               | Sanitized event subscriptions for workflow state and monitors                                                                     |
-| `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`  | Per-run plugin scratch state cleared on terminal run lifecycle                                                                    |
-| `api.session.workflow.registerSessionSchedulerJob(...)`                              | Cleanup metadata for plugin-owned scheduler jobs; does not schedule work or create task records                                   |
-| `api.session.workflow.sendSessionAttachment(...)`                                    | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                   |
-| `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                           |
-| `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                    |
+| Method                                                                               | Contract it owns                                                                                                                                           |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.session.state.registerSessionExtension(...)`                                    | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                                             |
+| `api.session.workflow.enqueueNextTurnInjection(...)`                                 | Durable exactly-once context injected into the next agent turn for one session                                                                             |
+| `api.registerTrustedToolPolicy(...)`                                                 | Manifest-gated trusted pre-plugin tool policy that can block or rewrite tool params                                                                        |
+| `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                                                     |
+| `api.registerCommand(...)`                                                           | Scoped plugin commands; command results can set `continueAgent: true` or `suppressReply: true`; Discord native commands support `descriptionLocalizations` |
+| `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors for session, tool, run, settings, or tab surfaces                                                                      |
+| `api.lifecycle.registerRuntimeLifecycle(...)`                                        | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                                          |
+| `api.agent.events.registerAgentEventSubscription(...)`                               | Sanitized event subscriptions for workflow state and monitors                                                                                              |
+| `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`  | Per-run plugin scratch state cleared on terminal run lifecycle                                                                                             |
+| `api.session.workflow.registerSessionSchedulerJob(...)`                              | Cleanup metadata for plugin-owned scheduler jobs; does not schedule work or create task records                                                            |
+| `api.session.workflow.sendSessionAttachment(...)`                                    | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                                            |
+| `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                                                    |
+| `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                                             |
+
+A `surface: "tab"` descriptor adds a sidebar tab to the Control UI. Active
+plugins' tab descriptors are advertised to dashboard clients in the gateway
+hello (`controlUiTabs`), so the tab appears only while the plugin is enabled.
+Bundled plugins may ship a first-class dashboard view for their tab; other
+plugins can set `path` to a plugin HTTP route (see
+`api.registerHttpRoute(...)`) that the dashboard renders in a sandboxed frame.
+`icon` is a dashboard icon name hint, `group` picks the sidebar section
+(`control` or `agent`), `order` sorts among plugin tabs, and `requiredScopes`
+hides the tab from connections lacking those operator scopes:
+
+```typescript
+api.session.controls.registerControlUiDescriptor({
+  surface: "tab",
+  id: "logbook",
+  label: "Logbook",
+  description: "Your day as a timeline, built from screen snapshots.",
+  icon: "sun",
+  group: "control",
+  requiredScopes: ["operator.write"],
+});
+```
 
 Use the grouped namespaces for new plugin code:
 
@@ -226,7 +283,10 @@ The contracts intentionally split authority:
 - External plugins can own session extensions, UI descriptors, commands, tool
   metadata, next-turn injections, and normal hooks.
 - Trusted tool policies run before ordinary `before_tool_call` hooks and are
-  bundled-only because they participate in host safety policy.
+  host-trusted. Bundled policies run first; installed-plugin policies require
+  explicit enablement plus their local ids in
+  `contracts.trustedToolPolicies`, and run next in plugin-load order. Policy ids
+  are scoped to the registering plugin.
 - Reserved command ownership is bundled-only. External plugins should use their
   own command names or aliases.
 - `allowPromptInjection=false` disables prompt-mutating hooks including
@@ -251,16 +311,18 @@ Examples of non-Plan consumers:
 </Note>
 
 <Accordion title="When to use tool-result middleware">
-  Bundled plugins can use `api.registerAgentToolResultMiddleware(...)` when
+  Bundled plugins and explicitly enabled installed plugins with matching
+  manifest contracts can use `api.registerAgentToolResultMiddleware(...)` when
   they need to rewrite a tool result after execution and before the runtime
   feeds that result back into the model. This is the trusted runtime-neutral
   seam for async output reducers such as tokenjuice.
 
-Bundled plugins must declare `contracts.agentToolResultMiddleware` for each
-targeted runtime, for example `["openclaw", "codex"]`. External plugins
-cannot register this middleware; keep normal OpenClaw plugin hooks for work
-that does not need pre-model tool-result timing. The old embedded-runner-only
-extension factory registration path has been removed.
+Plugins must declare `contracts.agentToolResultMiddleware` for each targeted
+runtime, for example `["openclaw", "codex"]`. Installed plugins without that
+contract, or without explicit enablement, cannot register this middleware; keep
+normal OpenClaw plugin hooks for work that does not need pre-model tool-result
+timing. The old
+embedded-runner-only extension factory registration path has been removed.
 </Accordion>
 
 ### Gateway discovery registration
@@ -364,20 +426,23 @@ AI CLI backend such as `claude-cli` or `my-cli`.
   (for example normalizing old flag shapes).
 - Use `resolveExecutionArgs` for request-scoped argv rewrites that belong to
   the CLI dialect, such as mapping OpenClaw thinking levels to a native effort
-  flag.
+  flag. The hook receives `ctx.executionMode`; use `"side-question"` to add
+  backend-native isolation flags for ephemeral `/btw` calls. If those flags
+  reliably disable native tools for an otherwise always-on CLI, declare
+  `sideQuestionToolMode: "disabled"` too.
 
 For an end-to-end authoring guide, see
 [CLI backend plugins](/plugins/cli-backend-plugins).
 
 ### Exclusive slots
 
-| Method                                     | What it registers                                                                                                                                         |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). The `assemble()` callback receives `availableTools` and `citationsMode` so the engine can tailor prompt additions. |
-| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                 |
-| `api.registerMemoryPromptSection(builder)` | Memory prompt section builder                                                                                                                             |
-| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver                                                                                                                                |
-| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                                                                                                                                    |
+| Method                                     | What it registers                                                                                                                                                                                  |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Lifecycle callbacks receive `runtimeSettings` when the host can provide model/provider/mode diagnostics; older strict engines are retried without that key. |
+| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                          |
+| `api.registerMemoryPromptSection(builder)` | Memory prompt section builder                                                                                                                                                                      |
+| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver                                                                                                                                                                         |
+| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                                                                                                                                                                             |
 
 ### Deprecated memory embedding adapters
 
@@ -414,6 +479,10 @@ semantics.
 
 ### Hook decision semantics
 
+`before_install` is a plugin-runtime lifecycle hook, not the operator install
+policy surface. Use `security.installPolicy` when an allow/block decision must
+cover CLI and Gateway-backed install or update paths.
+
 - `before_tool_call`: returning `{ block: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
 - `before_tool_call`: returning `{ block: false }` is treated as no decision (same as omitting `block`), not as an override.
 - `before_install`: returning `{ block: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
@@ -447,7 +516,7 @@ semantics.
 
 Within your plugin, use local barrel files for internal imports:
 
-```
+```text
 my-plugin/
   api.ts            # Public exports for external consumers
   runtime-api.ts    # Internal-only runtime exports

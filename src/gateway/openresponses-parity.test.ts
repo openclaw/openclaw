@@ -6,6 +6,7 @@
  */
 
 import { beforeAll, describe, it, expect } from "vitest";
+import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
 import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 
 let InputImageContentPartSchema: typeof import("./open-responses.schema.js").InputImageContentPartSchema;
@@ -373,6 +374,67 @@ describe("OpenResponses Feature Parity", () => {
       expect(result.message).toContain("weather");
       expect(result.message).toContain("72°F");
       expect(result.message).toContain("Thanks");
+    });
+
+    it("substitutes a placeholder for an image-only active user turn", () => {
+      const result = buildAgentPrompt([
+        {
+          type: "message" as const,
+          role: "user" as const,
+          content: [
+            {
+              type: "input_image" as const,
+              source: { type: "url" as const, url: "https://example.com/cat.png" },
+            },
+          ],
+        },
+      ]);
+
+      expect(result.message).toBe(IMAGE_ONLY_USER_MESSAGE);
+    });
+
+    it("substitutes a placeholder for a file-only active user turn", () => {
+      const result = buildAgentPrompt([
+        {
+          type: "message" as const,
+          role: "user" as const,
+          content: [
+            {
+              type: "input_file" as const,
+              source: { type: "url" as const, url: "https://example.com/report.pdf" },
+            },
+          ],
+        },
+      ]);
+
+      expect(result.message).not.toBe("");
+      expect(result.message.toLowerCase()).toContain("file");
+    });
+
+    it("keeps the user text when a file-only turn also carries text", () => {
+      const result = buildAgentPrompt([
+        {
+          type: "message" as const,
+          role: "user" as const,
+          content: [
+            { type: "input_text" as const, text: "summarize this" },
+            {
+              type: "input_file" as const,
+              source: { type: "url" as const, url: "https://example.com/report.pdf" },
+            },
+          ],
+        },
+      ]);
+
+      expect(result.message).toBe("summarize this");
+    });
+
+    it("keeps an empty message when the active turn has neither text, image, nor file", () => {
+      const result = buildAgentPrompt([
+        { type: "message" as const, role: "user" as const, content: [] },
+      ]);
+
+      expect(result.message).toBe("");
     });
   });
 

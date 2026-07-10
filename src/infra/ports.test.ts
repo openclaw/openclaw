@@ -1,7 +1,13 @@
+// Covers gateway port availability and diagnostics behavior.
 import net from "node:net";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { stripAnsi } from "../terminal/ansi.js";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import {
+  getWindowsPowerShellExePath,
+  getWindowsSystem32ExePath,
+  getWindowsWmicExePath,
+} from "./windows-install-roots.js";
 
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 
@@ -72,7 +78,22 @@ describe("ports helpers", () => {
     }
     const port = address.port;
     await expect(ensurePortAvailable(port)).rejects.toBeInstanceOf(PortInUseError);
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  });
+
+  it("ensurePortAvailable rejects when an explicitly scoped IPv4 loopback is busy", async () => {
+    const server = net.createServer();
+    const address = await listenServer(server, 0, "127.0.0.1");
+    if (!address) {
+      return;
+    }
+    const port = address.port;
+    await expect(ensurePortAvailable(port, "127.0.0.1")).rejects.toBeInstanceOf(PortInUseError);
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   });
 
   it("handlePortError exits nicely on EADDRINUSE", async () => {
@@ -129,7 +150,9 @@ describeUnix("inspectPortUsage", () => {
       const enoentErrors = (result.errors ?? []).filter((err) => err.includes("ENOENT"));
       expect(enoentErrors.length).toBeGreaterThan(0);
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 
@@ -190,8 +213,66 @@ describeUnix("inspectPortUsage", () => {
       expect(result.listeners[0]?.commandLine).toContain("openclaw");
       expect(result.errors).toBeUndefined();
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
+  });
+
+  it("does not match ss listener ports by substring", async () => {
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command !== "string") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (command.includes("lsof")) {
+        throw Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" });
+      }
+      if (command === "ss") {
+        return {
+          stdout: 'LISTEN 0 4096 127.0.0.1:18789 0.0.0.0:* users:(("openclaw",pid=123,fd=12))',
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortUsage(1878);
+
+    expect(result.listeners).toEqual([]);
+  });
+
+  it("matches ss listener on exact port within multi-listener output", async () => {
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command !== "string") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (command.includes("lsof")) {
+        throw Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" });
+      }
+      if (command === "ss") {
+        return {
+          stdout: [
+            'LISTEN 0 4096 127.0.0.1:8080 0.0.0.0:* users:(("app",pid=100,fd=3))',
+            'LISTEN 0 4096 127.0.0.1:18789 0.0.0.0:* users:(("openclaw",pid=123,fd=12))',
+            'LISTEN 0 4096 127.0.0.1:18790 0.0.0.0:* users:(("other",pid=456,fd=7))',
+          ].join("\n"),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortUsage(18789);
+
+    expect(result.listeners).toHaveLength(1);
+    expect(result.listeners[0]).toMatchObject({
+      pid: 123,
+      address: "127.0.0.1:18789",
+    });
   });
 
   it("reports established gateway client connections from lsof", async () => {
@@ -206,6 +287,8 @@ describeUnix("inspectPortUsage", () => {
             "p111\ncnode\nnTCP 127.0.0.1:50123->127.0.0.1:18789 (ESTABLISHED)\n" +
             "p222\ncnode\nnTCP 127.0.0.1:18789->127.0.0.1:50123 (ESTABLISHED)\n" +
             "p444\ncnode\nnTCP 127.0.0.1:50125->[::ffff:127.0.0.1]:18789 (ESTABLISHED)\n" +
+            "p555\ncnode\nnTCP 127.0.0.1:50126->127.0.0.1:18789abc (ESTABLISHED)\n" +
+            "p666\ncnode\nnTCP 127.0.0.1:50127->127.0.0.1:99999 (ESTABLISHED)\n" +
             "p333\ncBrowser\nnTCP 127.0.0.1:50124->198.51.100.7:18789 (ESTABLISHED)\n",
           stderr: "",
           code: 0,
@@ -291,6 +374,83 @@ describeUnix("inspectPortUsage", () => {
       pid: 111,
       address: "TCP *:18789 (LISTEN)",
     });
+  });
+
+  it("preserves malformed lsof pid records as unknown-pid listener diagnostics", async () => {
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command !== "string") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (command.includes("lsof")) {
+        return {
+          stdout: "p\ncnode\nnTCP *:18789 (LISTEN)\np111\ncbun\nnTCP 127.0.0.1:18789 (LISTEN)\n",
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "ps") {
+        if (argv.includes("command=")) {
+          return {
+            stdout: "bun /tmp/openclaw/dist/index.js gateway run\n",
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (argv.includes("user=")) {
+          return { stdout: "tester\n", stderr: "", code: 0 };
+        }
+        if (argv.includes("ppid=")) {
+          return { stdout: "1\n", stderr: "", code: 0 };
+        }
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortUsage(18789);
+
+    expect(result.status).toBe("busy");
+    expect(result.listeners).toHaveLength(2);
+    expect(result.listeners[0]).toMatchObject({
+      command: "node",
+      address: "TCP *:18789 (LISTEN)",
+    });
+    expect(result.listeners[0]?.pid).toBeUndefined();
+    expect(result.listeners[1]).toMatchObject({
+      pid: 111,
+      command: "bun",
+      address: "TCP 127.0.0.1:18789 (LISTEN)",
+    });
+  });
+
+  it("rejects lsof pid tokens with trailing garbage instead of truncating them", async () => {
+    // Number.parseInt("111abc", 10) === 111, which would silently accept a
+    // corrupted pid field. Keep the socket evidence without fabricating pid 111.
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command !== "string") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (command.includes("lsof")) {
+        return {
+          stdout: "p111abc\ncnode\nnTCP *:18789 (LISTEN)\n",
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortUsage(18789);
+
+    expect(result.status).toBe("busy");
+    expect(result.listeners).toEqual([
+      {
+        command: "node",
+        address: "TCP *:18789 (LISTEN)",
+      },
+    ]);
+    expect(result.hints).toContain("Another process is listening on this port.");
   });
 
   it("reports multiple lsof socket records for one process", async () => {
@@ -400,7 +560,7 @@ describe("inspectPortUsage on Windows", () => {
     setPlatform("win32");
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const [command] = argv;
-      if (command === "netstat") {
+      if (command === getWindowsSystem32ExePath("netstat.exe")) {
         return {
           stdout:
             "  TCP    127.0.0.1:50123    127.0.0.1:18789    ESTABLISHED    4242\r\n" +
@@ -409,10 +569,10 @@ describe("inspectPortUsage on Windows", () => {
           code: 0,
         };
       }
-      if (command === "tasklist") {
+      if (command === getWindowsSystem32ExePath("tasklist.exe")) {
         return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
       }
-      if (command === "powershell") {
+      if (command === getWindowsPowerShellExePath()) {
         return {
           stdout:
             '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js logs --follow\r\n',
@@ -438,17 +598,17 @@ describe("inspectPortUsage on Windows", () => {
     setPlatform("win32");
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const [command] = argv;
-      if (command === "netstat") {
+      if (command === getWindowsSystem32ExePath("netstat.exe")) {
         return {
           stdout: "  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n",
           stderr: "",
           code: 0,
         };
       }
-      if (command === "tasklist") {
+      if (command === getWindowsSystem32ExePath("tasklist.exe")) {
         return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
       }
-      if (command === "powershell") {
+      if (command === getWindowsPowerShellExePath()) {
         return {
           stdout:
             '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js gateway run\r\n',
@@ -470,11 +630,49 @@ describe("inspectPortUsage on Windows", () => {
     );
   });
 
+  it("reports localized Windows listener rows without requiring English state text", async () => {
+    setPlatform("win32");
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const [command] = argv;
+      if (command === getWindowsSystem32ExePath("netstat.exe")) {
+        return {
+          stdout:
+            "  TCP    127.0.0.1:18789    0.0.0.0:0        ABHOEREN       4242\r\n" +
+            "  TCP    [::1]:18789        [::]:0           ABHOEREN       4243\r\n" +
+            "  TCP    127.0.0.1:18789    127.0.0.1:0      ABHOEREN       8999\r\n" +
+            "  TCP    127.0.0.1:18789    127.0.0.1:50123  HERGESTELLT    9000\r\n",
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === getWindowsSystem32ExePath("tasklist.exe")) {
+        return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
+      }
+      if (command === getWindowsPowerShellExePath()) {
+        return {
+          stdout: "node.exe C:\\openclaw\\dist\\index.js gateway run\r\n",
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortUsage(18789);
+
+    expect(result.status).toBe("busy");
+    expect(result.listeners.map((listener) => listener.pid)).toEqual([4242, 4243]);
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+      [getWindowsSystem32ExePath("netstat.exe"), "-ano"],
+      expect.anything(),
+    );
+  });
+
   it("does not match Windows listener ports by substring", async () => {
     setPlatform("win32");
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const [command] = argv;
-      if (command === "netstat") {
+      if (command === getWindowsSystem32ExePath("netstat.exe")) {
         return {
           stdout:
             "  TCP    127.0.0.1:187890    0.0.0.0:0    LISTENING    9000\r\n" +
@@ -495,20 +693,20 @@ describe("inspectPortUsage on Windows", () => {
     setPlatform("win32");
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const [command] = argv;
-      if (command === "netstat") {
+      if (command === getWindowsSystem32ExePath("netstat.exe")) {
         return {
           stdout: "  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n",
           stderr: "",
           code: 0,
         };
       }
-      if (command === "tasklist") {
+      if (command === getWindowsSystem32ExePath("tasklist.exe")) {
         return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
       }
-      if (command === "powershell") {
+      if (command === getWindowsPowerShellExePath()) {
         return { stdout: "", stderr: "access denied", code: 1 };
       }
-      if (command === "wmic") {
+      if (command === getWindowsWmicExePath()) {
         return {
           stdout: "CommandLine=node.exe C:\\openclaw\\dist\\index.js gateway run\r\n",
           stderr: "",
@@ -522,6 +720,6 @@ describe("inspectPortUsage on Windows", () => {
 
     expect(result.listeners[0]?.commandLine).toContain("openclaw");
     const commandNames = runCommandWithTimeoutMock.mock.calls.map(([argv]) => argv[0]);
-    expect(commandNames).toContain("wmic");
+    expect(commandNames).toContain(getWindowsWmicExePath());
   });
 });

@@ -1,3 +1,4 @@
+// Subagent format tests cover concise subagent status and duration formatting.
 import { describe, expect, it } from "vitest";
 import {
   formatDurationCompact,
@@ -25,13 +26,50 @@ describe("shared/subagents-format", () => {
     expect(formatTokenShort(1_500)).toBe("1.5k");
     expect(formatTokenShort(10_000)).toBe("10k");
     expect(formatTokenShort(15_400)).toBe("15k");
+    // Rollover boundary: rounding to thousands must not emit an out-of-scheme
+    // "1000k" — it has to advance to the million branch.
+    expect(formatTokenShort(999_499)).toBe("999k");
+    expect(formatTokenShort(999_500)).toBe("1m");
+    expect(formatTokenShort(999_999)).toBe("1m");
     expect(formatTokenShort(1_000_000)).toBe("1m");
     expect(formatTokenShort(1_250_000)).toBe("1.3m");
   });
 
   it("truncates lines only when needed", () => {
     expect(truncateLine("short", 10)).toBe("short");
-    expect(truncateLine("trim me   ", 7)).toBe("trim me...");
+    expect(truncateLine("abc   ", 5)).toBe("abc");
+    expect(truncateLine("trim me   ", 7)).toBe("trim me");
+    expect(truncateLine("abcdefghij", 5)).toBe("ab...");
+  });
+
+  it("keeps truncated lines within the requested max length", () => {
+    for (const maxLength of [0, 1, 2, 3, 4, 5, 7, 12]) {
+      const result = truncateLine("abcdefghij", maxLength);
+      expect(result.length).toBeLessThanOrEqual(maxLength);
+    }
+    expect(truncateLine("abcdefghij", 0)).toBe("");
+    expect(truncateLine("abcdefghij", 1)).toBe(".");
+    expect(truncateLine("abcdefghij", 2)).toBe("..");
+    expect(truncateLine("abcdefghij", 3)).toBe("...");
+  });
+
+  it("truncates without breaking surrogate pairs", () => {
+    // Emoji at the cut point: the surrogate pair must not be split.
+    expect(truncateLine("AB🤖CDEF", 6)).toBe("AB...");
+    // Cut point in the middle of a 3-emoji string.
+    expect(truncateLine("🤖🤖🤖", 5)).toBe("🤖...");
+    // CJK Extension B (surrogate pair) at boundary: character stays intact.
+    expect(truncateLine("AB𠮷CDEF", 7)).toBe("AB𠮷...");
+    // No broken surrogates in output.
+    for (const result of [
+      truncateLine("AB🤖CDEF", 6),
+      truncateLine("🤖🤖🤖", 5),
+      truncateLine("AB𠮷CDEF", 7),
+    ]) {
+      expect(result).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+      );
+    }
   });
 
   it("resolves token totals and io breakdowns from valid numeric fields only", () => {

@@ -1,3 +1,6 @@
+/**
+ * Shared messaging-tool metadata types captured from embedded-agent runs.
+ */
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 
 export type MessagingToolSend = {
@@ -10,6 +13,7 @@ export type MessagingToolSend = {
   threadSuppressed?: boolean;
   text?: string;
   mediaUrls?: string[];
+  hasRichContent?: true;
 };
 
 export type MessagingToolSourceReplyPayload = Pick<

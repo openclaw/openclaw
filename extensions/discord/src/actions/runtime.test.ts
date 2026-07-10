@@ -1,3 +1,4 @@
+// Discord tests cover runtime plugin behavior.
 import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -54,13 +55,18 @@ const discordSendMocks = {
     id: guildId,
     name: "Guild",
   })),
+  fetchMemberInfoDiscord: vi.fn(async () => ({ user: { id: "U1" } })),
   hasAnyChannelPermissionDiscord: vi.fn(async () => true),
   hasAnyGuildPermissionDiscord: vi.fn(async () => true),
   fetchMessageDiscord: vi.fn(async () => ({})),
   fetchReactionsDiscord: vi.fn(async () => ({})),
+  fetchRoleInfoDiscord: vi.fn(async () => []),
+  fetchVoiceStatusDiscord: vi.fn(async () => ({})),
   kickMemberDiscord: vi.fn(async () => ({})),
   listGuildChannelsDiscord: vi.fn(async () => []),
+  listGuildEmojisDiscord: vi.fn(async () => []),
   listPinsDiscord: vi.fn(async () => ({})),
+  listScheduledEventsDiscord: vi.fn(async () => []),
   listThreadsDiscord: vi.fn(async () => ({})),
   moveChannelDiscord: vi.fn(async () => ({ ok: true })),
   pinMessageDiscord: vi.fn(async () => ({})),
@@ -93,13 +99,19 @@ const {
   fetchChannelInfoDiscord,
   fetchChannelPermissionsDiscord,
   fetchGuildInfoDiscord,
+  fetchMemberInfoDiscord,
   fetchReactionsDiscord,
   fetchMessageDiscord,
+  fetchRoleInfoDiscord,
+  fetchVoiceStatusDiscord,
   hasAnyChannelPermissionDiscord,
   hasAnyGuildPermissionDiscord,
   kickMemberDiscord,
   listGuildChannelsDiscord,
+  listGuildEmojisDiscord,
   listPinsDiscord,
+  listScheduledEventsDiscord,
+  listThreadsDiscord,
   moveChannelDiscord,
   reactMessageDiscord,
   readMessagesDiscord,
@@ -124,6 +136,18 @@ const DISCORD_TEST_CFG = {
     },
   },
 } as OpenClawConfig;
+
+function discordAllowlistCfg(guilds: Record<string, unknown>): OpenClawConfig {
+  return {
+    channels: {
+      discord: {
+        token: "token",
+        groupPolicy: "allowlist",
+        guilds,
+      },
+    },
+  } as OpenClawConfig;
+}
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
@@ -270,6 +294,203 @@ describe("handleDiscordMessagingAction", () => {
     ]);
   });
 
+  it("surfaces incomplete archived thread pages at the action boundary", async () => {
+    listThreadsDiscord.mockResolvedValueOnce({
+      threads: [
+        {
+          id: "thread-1",
+          name: "Old project",
+          thread_metadata: {
+            archive_timestamp: "2026-05-25T17:00:00.000Z",
+          },
+        },
+      ],
+      members: [],
+      has_more: true,
+    });
+
+    const result = await handleMessagingAction(
+      "threadList",
+      {
+        guildId: "G1",
+        channelId: "C1",
+        includeArchived: true,
+        before: "2026-05-26T17:00:00.000Z",
+        limit: 1,
+      },
+      enableAllActions,
+    );
+
+    expect(mockCall(listThreadsDiscord, "listThreadsDiscord")).toEqual([
+      {
+        guildId: "G1",
+        channelId: "C1",
+        includeArchived: true,
+        before: "2026-05-26T17:00:00.000Z",
+        limit: 1,
+      },
+      { cfg: DISCORD_TEST_CFG },
+    ]);
+    expect(result.details).toMatchObject({
+      ok: true,
+      complete: false,
+      hasMore: true,
+      returnedCount: 1,
+      source: "discord.threadList.archived",
+      nextBefore: "2026-05-25T17:00:00.000Z",
+      query: {
+        guildId: "G1",
+        channelId: "C1",
+        includeArchived: true,
+        before: "2026-05-26T17:00:00.000Z",
+        limit: 1,
+      },
+    });
+    expect((result.details as { threads?: unknown }).threads).toEqual({
+      threads: [
+        {
+          id: "thread-1",
+          name: "Old project",
+          thread_metadata: {
+            archive_timestamp: "2026-05-25T17:00:00.000Z",
+          },
+        },
+      ],
+      members: [],
+      has_more: true,
+    });
+  });
+
+  it("omits archived thread pagination cursors when Discord omits archive timestamps", async () => {
+    listThreadsDiscord.mockResolvedValueOnce({
+      threads: [
+        {
+          id: "thread-without-archive-timestamp",
+          name: "Legacy project",
+        },
+      ],
+      members: [],
+      has_more: true,
+    });
+
+    const result = await handleMessagingAction(
+      "threadList",
+      {
+        guildId: "G1",
+        channelId: "C1",
+        includeArchived: true,
+        limit: 1,
+      },
+      enableAllActions,
+    );
+
+    expect(result.details).toMatchObject({
+      ok: true,
+      complete: false,
+      hasMore: true,
+      returnedCount: 1,
+      source: "discord.threadList.archived",
+    });
+    expect(result.details).not.toHaveProperty("nextBefore");
+  });
+
+  it("marks active thread results complete when Discord returns no pagination state", async () => {
+    listThreadsDiscord.mockResolvedValueOnce({
+      threads: [{ id: "thread-active", name: "Current project" }],
+      members: [{ id: "member-1" }],
+    });
+
+    const result = await handleMessagingAction(
+      "threadList",
+      {
+        guildId: "G1",
+      },
+      enableAllActions,
+    );
+
+    expect(result.details).toMatchObject({
+      ok: true,
+      complete: true,
+      hasMore: false,
+      returnedCount: 1,
+      source: "discord.threadList.active",
+      query: {
+        guildId: "G1",
+        includeArchived: false,
+      },
+    });
+    expect((result.details as { threads?: unknown }).threads).toEqual({
+      threads: [{ id: "thread-active", name: "Current project" }],
+      members: [{ id: "member-1" }],
+    });
+    expect(result.details).not.toHaveProperty("nextBefore");
+  });
+
+  it("rejects archived Discord thread lists for non-allowlisted target channels", async () => {
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "222": { enabled: true },
+        },
+      },
+    });
+
+    await expect(
+      handleMessagingAction(
+        "threadList",
+        { guildId: "111", channelId: "333", includeArchived: true },
+        enableAllActions,
+        cfg,
+      ),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(listThreadsDiscord).not.toHaveBeenCalled();
+  });
+
+  it("requires guild-wide authorization for active Discord thread lists", async () => {
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "222": { enabled: true },
+        },
+      },
+    });
+
+    await expect(
+      handleMessagingAction(
+        "threadList",
+        { guildId: "111", channelId: "222" },
+        enableAllActions,
+        cfg,
+      ),
+    ).rejects.toThrow(
+      "Discord active thread lists require a wildcard channel allowlist so each read target can be authorized.",
+    );
+    expect(listThreadsDiscord).not.toHaveBeenCalled();
+  });
+
+  it("allows guild-wide Discord thread lists when the guild has a wildcard channel allowlist", async () => {
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "*": { enabled: true },
+        },
+      },
+    });
+
+    await handleMessagingAction("threadList", { guildId: "111" }, enableAllActions, cfg);
+
+    expect(listThreadsDiscord).toHaveBeenCalledWith(
+      {
+        guildId: "111",
+        channelId: undefined,
+        includeArchived: undefined,
+        before: undefined,
+        limit: undefined,
+      },
+      { cfg },
+    );
+  });
+
   it("resolves Discord DM targets for reaction adds", async () => {
     const resolveReactionTarget = vi.fn(async () => "DM1");
     discordMessagingActionRuntime.resolveDiscordReactionTargetChannelId = resolveReactionTarget;
@@ -318,6 +539,21 @@ describe("handleDiscordMessagingAction", () => {
       accountId: "default",
       limit: undefined,
     });
+  });
+
+  it("rejects fractional Discord reaction limits before fetching reactions", async () => {
+    await expect(
+      handleMessagingAction(
+        "reactions",
+        {
+          channelId: "C1",
+          messageId: "M1",
+          limit: 2.5,
+        },
+        enableAllActions,
+      ),
+    ).rejects.toThrow("limit must be a positive integer");
+    expect(fetchReactionsDiscord).not.toHaveBeenCalled();
   });
 
   it("rejects Discord reaction reads for non-allowlisted target channels", async () => {
@@ -499,6 +735,20 @@ describe("handleDiscordMessagingAction", () => {
       { limit: undefined, before: undefined, after: undefined, around: undefined },
       { cfg },
     );
+  });
+
+  it("rejects fractional Discord read limits before reading messages", async () => {
+    await expect(
+      handleMessagingAction(
+        "readMessages",
+        {
+          channelId: "C1",
+          limit: "3.5",
+        },
+        enableAllActions,
+      ),
+    ).rejects.toThrow("limit must be a positive integer");
+    expect(readMessagesDiscord).not.toHaveBeenCalled();
   });
 
   it("reads from allowlisted Discord target channels", async () => {
@@ -976,6 +1226,72 @@ describe("handleDiscordMessagingAction", () => {
     );
   });
 
+  it("resolves guildId from channel info when guildId is omitted in searchMessages", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "C1",
+      type: 0,
+      guild_id: "resolved-guild",
+    });
+    searchMessagesDiscord.mockResolvedValueOnce({ total_results: 0, messages: [] });
+
+    await handleMessagingAction(
+      "searchMessages",
+      { channelId: "C1", content: "hello" },
+      enableAllActions,
+    );
+
+    expect(fetchChannelInfoDiscord).toHaveBeenCalledWith("C1", expect.anything());
+    expect(searchMessagesDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({ guildId: "resolved-guild", content: "hello" }),
+      expect.anything(),
+    );
+  });
+
+  it("normalizes channel: prefixed channelId before resolving guildId in searchMessages", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "C1",
+      type: 0,
+      guild_id: "resolved-guild",
+    });
+    searchMessagesDiscord.mockResolvedValueOnce({ total_results: 0, messages: [] });
+
+    await handleMessagingAction(
+      "searchMessages",
+      { channelId: "channel:C1", content: "hello" },
+      enableAllActions,
+    );
+
+    expect(fetchChannelInfoDiscord).toHaveBeenCalledWith("C1", expect.anything());
+    expect(searchMessagesDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({ guildId: "resolved-guild", content: "hello", channelIds: ["C1"] }),
+      expect.anything(),
+    );
+  });
+
+  it("accepts query as alias for content in searchMessages", async () => {
+    searchMessagesDiscord.mockResolvedValueOnce({ total_results: 0, messages: [] });
+
+    await handleMessagingAction(
+      "searchMessages",
+      { guildId: "G1", query: "find this" },
+      enableAllActions,
+    );
+
+    expect(searchMessagesDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({ guildId: "G1", content: "find this" }),
+      expect.anything(),
+    );
+  });
+
+  it("throws descriptive error when guildId cannot be resolved in searchMessages", async () => {
+    await expect(
+      handleMessagingAction("searchMessages", { content: "hello" }, enableAllActions),
+    ).rejects.toThrow(
+      "Discord search requires guildId. Provide guildId explicitly, or provide channelId so the guild can be resolved from the channel.",
+    );
+    expect(searchMessagesDiscord).not.toHaveBeenCalled();
+  });
+
   it("sends voice messages from a local file path", async () => {
     sendVoiceMessageDiscord.mockClear();
     sendMessageDiscord.mockClear();
@@ -993,7 +1309,7 @@ describe("handleDiscordMessagingAction", () => {
 
     expect(sendVoiceMessageDiscord).toHaveBeenCalledWith("channel:123", "/tmp/voice.mp3", {
       cfg: DISCORD_TEST_CFG,
-      replyTo: undefined,
+      reply: undefined,
       silent: true,
     });
     expect(sendMessageDiscord).not.toHaveBeenCalled();
@@ -1129,7 +1445,7 @@ describe("handleDiscordMessagingAction", () => {
       filename: undefined,
       mediaLocalRoots: undefined,
       mediaReadFile: undefined,
-      replyTo: undefined,
+      reply: undefined,
       components: undefined,
       embeds: undefined,
       silent: false,
@@ -1384,6 +1700,115 @@ describe("handleDiscordGuildAction", () => {
     expect(details.ok).toBe(true);
     expect(details.status).toBe("online");
     expect(details.activities).toEqual([]);
+  });
+
+  it.each([
+    {
+      action: "memberInfo",
+      params: { guildId: "333", userId: "U1" },
+      runtimeCall: fetchMemberInfoDiscord,
+    },
+    { action: "roleInfo", params: { guildId: "333" }, runtimeCall: fetchRoleInfoDiscord },
+    { action: "emojiList", params: { guildId: "333" }, runtimeCall: listGuildEmojisDiscord },
+    { action: "channelList", params: { guildId: "333" }, runtimeCall: listGuildChannelsDiscord },
+    {
+      action: "voiceStatus",
+      params: { guildId: "333", userId: "U1" },
+      runtimeCall: fetchVoiceStatusDiscord,
+    },
+    { action: "eventList", params: { guildId: "333" }, runtimeCall: listScheduledEventsDiscord },
+  ])(
+    "rejects Discord guild metadata action $action for non-allowlisted guilds",
+    async ({ action, params, runtimeCall }) => {
+      const cfg = discordAllowlistCfg({
+        "111": {
+          channels: {
+            "*": { enabled: true },
+          },
+        },
+      });
+
+      await expect(handleGuildAction(action, params, enableAllActions, cfg)).rejects.toThrow(
+        "Discord read target channel is not allowed.",
+      );
+      expect(runtimeCall).not.toHaveBeenCalled();
+    },
+  );
+
+  it("requires a guild-wide allowlist for Discord guild metadata reads", async () => {
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "222": { enabled: true },
+        },
+      },
+    });
+
+    await expect(
+      handleGuildAction("memberInfo", { guildId: "111", userId: "U1" }, enableAllActions, cfg),
+    ).rejects.toThrow(
+      "Discord guild metadata reads require a wildcard channel allowlist for this guild.",
+    );
+    expect(fetchMemberInfoDiscord).not.toHaveBeenCalled();
+  });
+
+  it("allows Discord guild metadata reads when the guild has a wildcard channel allowlist", async () => {
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "*": { enabled: true },
+        },
+      },
+    });
+
+    await handleGuildAction("roleInfo", { guildId: "111" }, enableAllActions, cfg);
+
+    expect(fetchRoleInfoDiscord).toHaveBeenCalledWith("111", { cfg });
+  });
+
+  it("rejects Discord channel info reads for non-allowlisted target channels", async () => {
+    fetchChannelInfoDiscord.mockResolvedValue({
+      id: "333",
+      guild_id: "111",
+      name: "private",
+      type: 0,
+    });
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "222": { enabled: true },
+        },
+      },
+    });
+
+    await expect(
+      handleGuildAction("channelInfo", { channelId: "333" }, channelInfoEnabled, cfg),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(fetchChannelInfoDiscord).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows Discord channel info reads for allowlisted target channels", async () => {
+    fetchChannelInfoDiscord.mockResolvedValue({
+      id: "222",
+      guild_id: "111",
+      name: "allowed",
+      type: 0,
+    });
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "222": { enabled: true },
+        },
+      },
+    });
+
+    await handleGuildAction("channelInfo", { channelId: "222" }, channelInfoEnabled, cfg);
+
+    expect(fetchChannelInfoDiscord).toHaveBeenCalledTimes(2);
+    expect(mockCall(fetchChannelInfoDiscord, "fetchChannelInfoDiscord", 1)).toEqual([
+      "222",
+      { cfg },
+    ]);
   });
 });
 
@@ -1758,6 +2183,20 @@ describe("handleDiscordGuildAction - channel management", () => {
     );
   });
 
+  it("rejects fractional Discord channel edit integers before editing channels", async () => {
+    await expect(
+      handleGuildAction(
+        "channelEdit",
+        {
+          channelId: "C1",
+          position: 1.5,
+        },
+        channelsEnabled,
+      ),
+    ).rejects.toThrow("position must be a non-negative integer");
+    expect(editChannelDiscord).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["parentId is null", { parentId: null }],
     ["clearParent is true", { clearParent: true }],
@@ -1812,6 +2251,21 @@ describe("handleDiscordGuildAction - channel management", () => {
       },
       { cfg: DISCORD_TEST_CFG },
     );
+  });
+
+  it("rejects fractional Discord channel move positions before moving channels", async () => {
+    await expect(
+      handleGuildAction(
+        "channelMove",
+        {
+          guildId: "G1",
+          channelId: "C1",
+          position: "5.5",
+        },
+        channelsEnabled,
+      ),
+    ).rejects.toThrow("position must be a non-negative integer");
+    expect(moveChannelDiscord).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -2007,6 +2461,36 @@ describe("handleDiscordModerationAction", () => {
       cfg: DISCORD_TEST_CFG,
       accountId: "ops",
     });
+  });
+
+  it("rejects fractional Discord moderation durations before timing out members", async () => {
+    await expect(
+      handleModerationAction(
+        "timeout",
+        {
+          guildId: "G1",
+          userId: "U1",
+          durationMinutes: 5.5,
+        },
+        moderationEnabled,
+      ),
+    ).rejects.toThrow("durationMinutes must be a non-negative integer");
+    expect(timeoutMemberDiscord).not.toHaveBeenCalled();
+  });
+
+  it("preserves zero-minute Discord timeouts for clearing existing timeouts", async () => {
+    await handleModerationAction(
+      "timeout",
+      {
+        guildId: "G1",
+        userId: "U1",
+        durationMinutes: 0,
+      },
+      moderationEnabled,
+    );
+    expect(timeoutMemberDiscord).toHaveBeenCalledTimes(1);
+    const params = mockObjectArg(timeoutMemberDiscord, "timeoutMemberDiscord", 0, 0);
+    expect(params.durationMinutes).toBe(0);
   });
 });
 

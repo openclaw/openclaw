@@ -1,93 +1,35 @@
+/**
+ * Effective tool inventory resolver.
+ *
+ * Builds model-visible tool lists after profile, provider, plugin, policy, and compatibility filters.
+ */
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/config.js";
 import { extractModelCompat } from "../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { normalizeProviderTransportWithPlugin } from "../plugins/provider-runtime.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { buildPluginToolMetadataKey, getPluginToolMeta } from "../plugins/tools.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
-import { getChannelAgentToolMeta } from "./channel-tools.js";
 import { resolveModel } from "./embedded-agent-runner/model.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
-import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
-import { summarizeToolDescriptionText } from "./tool-description-summary.js";
-import { resolveToolDisplay } from "./tool-display.js";
 import { normalizeToolName } from "./tool-policy.js";
-import {
-  filterRuntimeCompatibleTools,
-  type RuntimeToolSchemaDiagnostic,
-} from "./tool-schema-projection.js";
+import { buildRuntimeCompatibleToolInventory } from "./tools-effective-inventory-build.js";
+import { buildEffectiveToolInventoryGroups } from "./tools-effective-inventory-groups.js";
 import type {
   EffectiveToolInventoryNotice,
   EffectiveToolInventoryEntry,
-  EffectiveToolInventoryGroup,
   EffectiveToolInventoryResult,
-  EffectiveToolSource,
   ResolveEffectiveToolInventoryParams,
 } from "./tools-effective-inventory.types.js";
-import type { AnyAgentTool } from "./tools/common.js";
-
-function resolveEffectiveToolLabel(tool: AnyAgentTool): string {
-  const rawLabel = normalizeOptionalString(tool.label) ?? "";
-  if (
-    rawLabel &&
-    normalizeLowercaseStringOrEmpty(rawLabel) !== normalizeLowercaseStringOrEmpty(tool.name)
-  ) {
-    return rawLabel;
-  }
-  return resolveToolDisplay({ name: tool.name }).title;
-}
-
-function resolveRawToolDescription(tool: AnyAgentTool): string {
-  return normalizeOptionalString(tool.description) ?? "";
-}
-
-function summarizeToolDescription(tool: AnyAgentTool): string {
-  return summarizeToolDescriptionText({
-    rawDescription: resolveRawToolDescription(tool),
-    displaySummary: tool.displaySummary,
-  });
-}
-
-function resolveEffectiveToolSource(
-  tool: AnyAgentTool,
-  fallbackTool?: AnyAgentTool,
-): {
-  source: EffectiveToolSource;
-  pluginId?: string;
-  channelId?: string;
-} {
-  const pluginMeta =
-    getPluginToolMeta(tool) ?? (fallbackTool ? getPluginToolMeta(fallbackTool) : undefined);
-  if (pluginMeta) {
-    return { source: "plugin", pluginId: pluginMeta.pluginId };
-  }
-  const channelMeta =
-    getChannelAgentToolMeta(tool as never) ??
-    (fallbackTool ? getChannelAgentToolMeta(fallbackTool as never) : undefined);
-  if (channelMeta) {
-    return { source: "channel", channelId: channelMeta.channelId };
-  }
-  return { source: "core" };
-}
-
-function groupLabel(source: EffectiveToolSource): string {
-  switch (source) {
-    case "plugin":
-      return "Connected tools";
-    case "channel":
-      return "Channel tools";
-    default:
-      return "Built-in tools";
-  }
-}
 
 function listIncludesTool(list: string[] | undefined, toolName: string): boolean {
   if (!Array.isArray(list)) {
@@ -120,6 +62,7 @@ function buildToolInventoryNotices(params: {
     return undefined;
   }
 
+  // Browser can be configured yet absent after policy/profile/plugin filtering; surface why.
   const browserDenied = [
     params.effectivePolicy.globalPolicy,
     params.effectivePolicy.globalProviderPolicy,
@@ -163,55 +106,6 @@ function buildToolInventoryNotices(params: {
   }
 
   return undefined;
-}
-
-function buildUnsupportedToolSchemaNotice(params: {
-  diagnostic: RuntimeToolSchemaDiagnostic;
-  tool: AnyAgentTool | undefined;
-  fallbackTool: AnyAgentTool | undefined;
-}): EffectiveToolInventoryNotice {
-  const source = params.tool
-    ? resolveEffectiveToolSource(params.tool, params.fallbackTool)
-    : { source: "core" as const };
-  const owner =
-    source.source === "plugin" && source.pluginId
-      ? ` from plugin "${source.pluginId}"`
-      : source.source === "channel" && source.channelId
-        ? ` from channel "${source.channelId}"`
-        : "";
-  return {
-    id: `unsupported-tool-schema:${params.diagnostic.toolName}`,
-    severity: "warning",
-    message: `Tool "${params.diagnostic.toolName}"${owner} has an unsupported runtime input schema (${params.diagnostic.violations.join(", ")}) and was quarantined before model projection. Fix or disable the owner, or remove the tool from active allowlists.`,
-  };
-}
-
-function buildUnsupportedToolSchemaNotices(params: {
-  diagnostics: readonly RuntimeToolSchemaDiagnostic[];
-  tools: readonly AnyAgentTool[];
-  rawToolsByName: ReadonlyMap<string, AnyAgentTool>;
-}): EffectiveToolInventoryNotice[] {
-  return params.diagnostics.map((diagnostic) =>
-    buildUnsupportedToolSchemaNotice({
-      diagnostic,
-      tool: params.tools[diagnostic.toolIndex],
-      fallbackTool: params.rawToolsByName.get(diagnostic.toolName),
-    }),
-  );
-}
-
-function disambiguateLabels(entries: EffectiveToolInventoryEntry[]): EffectiveToolInventoryEntry[] {
-  const counts = new Map<string, number>();
-  for (const entry of entries) {
-    counts.set(entry.label, (counts.get(entry.label) ?? 0) + 1);
-  }
-  return entries.map((entry) => {
-    if ((counts.get(entry.label) ?? 0) < 2) {
-      return entry;
-    }
-    const suffix = entry.pluginId ?? entry.channelId ?? entry.id;
-    return { ...entry, label: `${entry.label} (${suffix})` };
-  });
 }
 
 function applyProviderTransportNormalization(params: {
@@ -273,6 +167,7 @@ function resolveDynamicRuntimeModelContext(params: {
   };
 }
 
+/** Resolves the runtime model metadata needed to filter model-compatible tools. */
 export function resolveEffectiveToolInventoryRuntimeModelContext(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -305,8 +200,9 @@ export function resolveEffectiveToolInventoryRuntimeModelContext(params: {
     modelId,
     cfg: params.cfg,
     workspaceDir,
-  }) as ProviderRuntimeModel | undefined;
+  });
   if (configuredModel) {
+    // Configured model entries override the bundled catalog but inherit missing transport details.
     const configuredApi =
       normalizeOptionalString(configuredModel.api) ??
       normalizeOptionalString(providerConfig?.api) ??
@@ -359,7 +255,8 @@ export function resolveEffectiveToolInventoryRuntimeModelContext(params: {
   };
 }
 
-function resolveEffectiveModelCompat(params: {
+/** Resolves compatibility metadata explicitly configured for a provider/model pair. */
+export function resolveConfiguredModelCompat(params: {
   cfg: OpenClawConfig;
   modelProvider?: string;
   modelId?: string;
@@ -387,6 +284,7 @@ function resolveEffectiveModelCompat(params: {
   return extractModelCompat(match);
 }
 
+/** Resolves the grouped effective tool inventory and user-visible filtering notices. */
 export function resolveEffectiveToolInventory(
   params: ResolveEffectiveToolInventoryParams,
 ): EffectiveToolInventoryResult {
@@ -409,7 +307,7 @@ export function resolveEffectiveToolInventory(
           modelProvider: params.modelProvider,
           modelId: params.modelId,
         });
-  const modelCompat = resolveEffectiveModelCompat({
+  const modelCompat = resolveConfiguredModelCompat({
     cfg: params.cfg,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
@@ -443,17 +341,15 @@ export function resolveEffectiveToolInventory(
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     disableMessageTool: params.disableMessageTool,
   });
-  const rawToolsByName = new Map(effectiveTools.map((tool) => [tool.name, tool]));
-  const normalizedEffectiveTools = normalizeAgentRuntimeTools({
+  const projectedInventory = buildRuntimeCompatibleToolInventory({
     tools: effectiveTools,
-    provider: params.modelProvider ?? "",
-    config: params.cfg,
+    cfg: params.cfg,
     workspaceDir,
+    modelProvider: params.modelProvider,
     modelId: params.modelId,
     modelApi: runtimeModelContext.modelApi,
-    model: runtimeModelContext.runtimeModel,
+    runtimeModel: runtimeModelContext.runtimeModel,
   });
-  const toolSchemaProjection = filterRuntimeCompatibleTools(normalizedEffectiveTools);
   const effectivePolicy = resolveEffectiveToolPolicy({
     config: params.cfg,
     agentId,
@@ -462,70 +358,12 @@ export function resolveEffectiveToolInventory(
     modelId: params.modelId,
   });
   const profile = effectivePolicy.providerProfile ?? effectivePolicy.profile ?? "full";
-  // Key metadata by plugin ownership and tool name so only the owning plugin can
-  // project display/risk metadata for its own tool.
-  const pluginToolMetadata = new Map(
-    (getActivePluginRegistry()?.toolMetadata ?? []).map((entry) => [
-      buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName),
-      entry.metadata,
-    ]),
-  );
-
-  const entries = disambiguateLabels(
-    toolSchemaProjection.tools
-      .map((tool) => {
-        const source = resolveEffectiveToolSource(tool, rawToolsByName.get(tool.name));
-        const metadata = source.pluginId
-          ? pluginToolMetadata.get(buildPluginToolMetadataKey(source.pluginId, tool.name))
-          : undefined;
-        return Object.assign(
-          {
-            id: tool.name,
-            label:
-              normalizeOptionalString(metadata?.displayName) ?? resolveEffectiveToolLabel(tool),
-            description:
-              normalizeOptionalString(metadata?.description) ?? summarizeToolDescription(tool),
-            rawDescription:
-              normalizeOptionalString(metadata?.description) ??
-              resolveRawToolDescription(tool) ??
-              summarizeToolDescription(tool),
-            ...(metadata?.risk ? { risk: metadata.risk } : {}),
-            ...(metadata?.tags ? { tags: metadata.tags } : {}),
-          },
-          source,
-        ) satisfies EffectiveToolInventoryEntry;
-      })
-      .toSorted((a, b) => a.label.localeCompare(b.label)),
-  );
+  const entries = projectedInventory.entries;
   const notices = [
-    ...buildUnsupportedToolSchemaNotices({
-      diagnostics: toolSchemaProjection.diagnostics,
-      tools: normalizedEffectiveTools,
-      rawToolsByName,
-    }),
+    ...projectedInventory.notices,
     ...(buildToolInventoryNotices({ cfg: params.cfg, profile, entries, effectivePolicy }) ?? []),
   ];
-  const groupsBySource = new Map<EffectiveToolSource, EffectiveToolInventoryEntry[]>();
-  for (const entry of entries) {
-    const tools = groupsBySource.get(entry.source) ?? [];
-    tools.push(entry);
-    groupsBySource.set(entry.source, tools);
-  }
-
-  const groups = (["core", "plugin", "channel"] as const)
-    .map((source) => {
-      const tools = groupsBySource.get(source);
-      if (!tools || tools.length === 0) {
-        return null;
-      }
-      return {
-        id: source,
-        label: groupLabel(source),
-        source,
-        tools,
-      } satisfies EffectiveToolInventoryGroup;
-    })
-    .filter((group): group is EffectiveToolInventoryGroup => group !== null);
+  const groups = buildEffectiveToolInventoryGroups(entries);
 
   return { agentId, profile, groups, ...(notices.length > 0 ? { notices } : {}) };
 }

@@ -1,3 +1,7 @@
+/**
+ * Browser profile availability operations: reachability probes, managed Chrome
+ * launch/restart, Chrome MCP attach, and profile stop handling.
+ */
 import fs from "node:fs";
 import { resolveCdpReachabilityPolicy } from "./cdp-reachability-policy.js";
 import {
@@ -18,7 +22,8 @@ import {
   stopOpenClawChrome,
 } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
-import { BrowserProfileUnavailableError } from "./errors.js";
+import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
+import { getExtensionRelayModule } from "./extension-relay.runtime.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import {
   CDP_READY_AFTER_LAUNCH_MAX_TIMEOUT_MS,
@@ -133,6 +138,7 @@ function assertManagedLaunchNotCoolingDown(profileName: string, profileState: Pr
   );
 }
 
+/** Builds reachability, ensure, and stop operations for one resolved browser profile. */
 export function createProfileAvailability({
   opts,
   profile,
@@ -153,10 +159,28 @@ export function createProfileAvailability({
 
   const getCdpReachabilityPolicy = () =>
     resolveCdpReachabilityPolicy(profile, state().resolved.ssrfPolicy);
+  // Extension profiles probe against the relay server, so it must be listening
+  // before any reachability check; starting it reconciles port/token drift and
+  // is cheap and idempotent. Pruning here reaps relays for profiles removed or
+  // renamed since the last refresh.
+  const ensureExtensionRelay = async () => {
+    if (capabilities.mode !== "local-extension") {
+      return;
+    }
+    const { ensureExtensionRelayForProfile, pruneRemovedExtensionRelays } =
+      await getExtensionRelayModule();
+    const current = state();
+    await pruneRemovedExtensionRelays(
+      current,
+      (name) => current.resolved.profiles[name]?.driver === "extension",
+    );
+    await ensureExtensionRelayForProfile(current, profile);
+  };
   const isReachable = async (
     timeoutMs?: number,
     options?: { ephemeral?: boolean; signal?: AbortSignal },
   ) => {
+    await ensureExtensionRelay();
     if (capabilities.usesChromeMcp) {
       // listChromeMcpTabs creates the session if needed — no separate ensureChromeMcpAvailable call required.
       // Status probes opt into ephemeral so they reuse a cached attach session if one exists,
@@ -200,6 +224,7 @@ export function createProfileAvailability({
     if (capabilities.usesChromeMcp) {
       return await isTransportAvailable(timeoutMs);
     }
+    await ensureExtensionRelay();
     const { httpTimeoutMs } = resolveTimeouts(timeoutMs);
     return await isChromeReachable(profile.cdpUrl, httpTimeoutMs, getCdpReachabilityPolicy());
   };
@@ -286,7 +311,9 @@ export function createProfileAvailability({
       if (await isReachable(attemptTimeoutMs)) {
         return;
       }
-      await new Promise((r) => setTimeout(r, CDP_READY_AFTER_LAUNCH_POLL_MS));
+      await new Promise((r) => {
+        setTimeout(r, CDP_READY_AFTER_LAUNCH_POLL_MS);
+      });
     }
     throw new Error(
       `Chrome CDP websocket for profile "${profile.name}" is not reachable after start. ${await describeCdpFailure(
@@ -306,7 +333,9 @@ export function createProfileAvailability({
       } catch (err) {
         lastError = err;
       }
-      await new Promise((r) => setTimeout(r, CHROME_MCP_ATTACH_READY_POLL_MS));
+      await new Promise((r) => {
+        setTimeout(r, CHROME_MCP_ATTACH_READY_POLL_MS);
+      });
     }
     throw new BrowserProfileUnavailableError(formatChromeMcpAttachFailure(lastError));
   };
@@ -320,7 +349,16 @@ export function createProfileAvailability({
     try {
       return await launchOpenClawChrome(current.resolved, profile, launchOptions);
     } catch (err) {
-      recordManagedLaunchFailure(profileState, err);
+      // Missing-display rejection happens before a process launch. Do not let
+      // repeated headed requests block the explicit headless recovery path.
+      if (
+        !(
+          err instanceof BrowserProfileUnavailableError &&
+          err.metadata?.reason === BROWSER_ERROR_REASONS.noDisplayForHeadedProfile
+        )
+      ) {
+        recordManagedLaunchFailure(profileState, err);
+      }
       throw err;
     }
   };
@@ -365,6 +403,13 @@ export function createProfileAvailability({
         }
       }
       if (attachOnly || remoteCdp) {
+        if (capabilities.mode === "local-extension") {
+          const { EXTENSION_PAIRING_HINT } = await getExtensionRelayModule();
+          throw new BrowserProfileUnavailableError(
+            `The OpenClaw Chrome extension is not connected for profile "${profile.name}". ` +
+              `Open Chrome on this machine and check the extension popup shows "Connected". ${EXTENSION_PAIRING_HINT}`,
+          );
+        }
         throw new BrowserProfileUnavailableError(
           remoteCdp
             ? `Remote CDP for profile "${profile.name}" is not reachable at ${redactedProfileCdpUrl}.`
@@ -402,6 +447,12 @@ export function createProfileAvailability({
       }
       if (remoteCdp && (await isReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS))) {
         return;
+      }
+      if (capabilities.mode === "local-extension") {
+        const { EXTENSION_PAIRING_HINT } = await getExtensionRelayModule();
+        throw new BrowserProfileUnavailableError(
+          `The extension relay for profile "${profile.name}" is running but the OpenClaw Chrome extension is not connected. ${EXTENSION_PAIRING_HINT}`,
+        );
       }
       const detail = await describeCdpFailure(PROFILE_ATTACH_RETRY_TIMEOUT_MS);
       throw new BrowserProfileUnavailableError(

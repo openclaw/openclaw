@@ -1,4 +1,7 @@
+// Shared provider HTTP/audio helpers for media-understanding integrations,
+// including guarded fetches, deadlines, retries, and multipart upload bodies.
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   assertOkOrThrowHttpError,
   createProviderHttpError,
@@ -9,6 +12,11 @@ export {
   readProviderJsonObjectResponse,
   readProviderJsonResponse,
 } from "../agents/provider-http-errors.js";
+import {
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type {
   ProviderRequestCapability,
   ProviderRequestTransport,
@@ -34,11 +42,12 @@ export { normalizeBaseUrl } from "../agents/provider-request-config.js";
 export { sanitizeConfiguredModelProviderRequest } from "../agents/provider-request-config.js";
 
 const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
-const MAX_ERROR_CHARS = 300;
-const MAX_ERROR_RESPONSE_BYTES = 4096;
 const MAX_AUDIT_CONTEXT_CHARS = 80;
 
+/** Resolves the multipart upload filename, mapping AAC inputs to provider-friendly `.m4a`. */
 export function resolveAudioTranscriptionUploadFileName(fileName?: string, mime?: string): string {
+  // Some providers reject raw `.aac` names even when the bytes are AAC; `.m4a`
+  // preserves intent while matching their accepted upload extensions.
   const trimmed = fileName?.trim();
   const baseName = trimmed ? path.basename(trimmed) : "audio";
   const lowerMime = mime?.trim().toLowerCase();
@@ -52,6 +61,7 @@ export function resolveAudioTranscriptionUploadFileName(fileName?: string, mime?
   return baseName;
 }
 
+/** Builds provider-compatible multipart form data for audio transcription requests. */
 export function buildAudioTranscriptionFormData(params: {
   buffer: Buffer;
   fileName?: string;
@@ -73,12 +83,14 @@ export function buildAudioTranscriptionFormData(params: {
   return form;
 }
 
+/** Shared absolute deadline state for long-running provider operations and polling loops. */
 export type ProviderOperationDeadline = {
   deadlineAtMs?: number;
   label: string;
   timeoutMs?: number;
 };
 
+/** Static or per-call timeout resolver used by provider HTTP helpers. */
 export type ProviderOperationTimeoutMs = number | (() => number);
 
 type GuardedProviderRequestParams = {
@@ -87,9 +99,15 @@ type GuardedProviderRequestParams = {
   ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   auditContext?: string;
+  /**
+   * Override the guarded-fetch mode. Defaults to an auto-upgrade to
+   * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
+   * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
+   */
   mode?: GuardedFetchMode;
 };
 
+/** Creates a timer-safe absolute operation deadline from an optional total timeout. */
 export function createProviderOperationDeadline(params: {
   timeoutMs?: number;
   label: string;
@@ -101,29 +119,34 @@ export function createProviderOperationDeadline(params: {
   ) {
     return { label: params.label };
   }
-  const timeoutMs = Math.floor(params.timeoutMs);
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+  const deadlineAtMs =
+    resolveExpiresAtMsFromDurationMs(timeoutMs) ?? resolveDateTimestampMs(Date.now());
   return {
-    deadlineAtMs: Date.now() + timeoutMs,
+    deadlineAtMs,
     label: params.label,
     timeoutMs,
   };
 }
 
+/** Resolves a per-request timeout without exceeding the remaining operation deadline. */
 export function resolveProviderOperationTimeoutMs(params: {
   deadline: ProviderOperationDeadline;
   defaultTimeoutMs: number;
 }): number {
+  const defaultTimeoutMs = resolveTimerTimeoutMs(params.defaultTimeoutMs, 1);
   const deadlineAtMs = params.deadline.deadlineAtMs;
   if (typeof deadlineAtMs !== "number") {
-    return params.defaultTimeoutMs;
+    return defaultTimeoutMs;
   }
   const remainingMs = deadlineAtMs - Date.now();
   if (remainingMs <= 0) {
     throw new Error(`${params.deadline.label} timed out after ${params.deadline.timeoutMs}ms`);
   }
-  return Math.max(1, Math.min(params.defaultTimeoutMs, remainingMs));
+  return Math.max(1, Math.min(defaultTimeoutMs, remainingMs));
 }
 
+/** Returns a lazy timeout resolver for code paths that retry or poll multiple HTTP calls. */
 export function createProviderOperationTimeoutResolver(params: {
   deadline: ProviderOperationDeadline;
   defaultTimeoutMs: number;
@@ -131,20 +154,26 @@ export function createProviderOperationTimeoutResolver(params: {
   return () => resolveProviderOperationTimeoutMs(params);
 }
 
+/** Waits for the next poll interval while respecting the total provider operation deadline. */
 export async function waitProviderOperationPollInterval(params: {
   deadline: ProviderOperationDeadline;
   pollIntervalMs: number;
 }): Promise<void> {
+  const pollIntervalMs = resolveTimerTimeoutMs(params.pollIntervalMs, 1);
   const deadlineAtMs = params.deadline.deadlineAtMs;
   if (typeof deadlineAtMs !== "number") {
-    await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, pollIntervalMs);
+    });
     return;
   }
   const remainingMs = deadlineAtMs - Date.now();
   if (remainingMs <= 0) {
     throw new Error(`${params.deadline.label} timed out after ${params.deadline.timeoutMs}ms`);
   }
-  await new Promise((resolve) => setTimeout(resolve, Math.min(params.pollIntervalMs, remainingMs)));
+  await new Promise((resolve) => {
+    setTimeout(resolve, Math.min(pollIntervalMs, remainingMs));
+  });
 }
 
 export async function pollProviderOperationJson<TPayload>(
@@ -293,10 +322,22 @@ function sanitizeAuditContext(auditContext: string | undefined): string | undefi
   if (!cleaned) {
     return undefined;
   }
-  return cleaned.slice(0, MAX_AUDIT_CONTEXT_CHARS);
+  return truncateUtf16Safe(cleaned, MAX_AUDIT_CONTEXT_CHARS);
 }
 
-export function resolveProviderHttpRequestConfig(params: {
+type ResolvedProviderHttpRequestConfig = {
+  baseUrl: string;
+  allowPrivateNetwork: boolean;
+  headers: Headers;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  requestConfig: ResolvedProviderRequestConfig;
+};
+
+type ResolvedProviderHttpRequestConfigWithOriginTrust = ResolvedProviderHttpRequestConfig & {
+  trustConfiguredBaseUrlOrigin: boolean;
+};
+
+function resolveProviderHttpRequestConfigWithOriginTrustInternal(params: {
   baseUrl?: string;
   defaultBaseUrl: string;
   allowPrivateNetwork?: boolean;
@@ -307,13 +348,7 @@ export function resolveProviderHttpRequestConfig(params: {
   api?: string;
   capability?: ProviderRequestCapability;
   transport?: ProviderRequestTransport;
-}): {
-  baseUrl: string;
-  allowPrivateNetwork: boolean;
-  headers: Headers;
-  dispatcherPolicy?: PinnedDispatcherPolicy;
-  requestConfig: ResolvedProviderRequestConfig;
-} {
+}): ResolvedProviderHttpRequestConfigWithOriginTrust {
   const requestConfig = resolveProviderRequestPolicyConfig({
     provider: params.provider ?? "",
     baseUrl: params.baseUrl,
@@ -340,7 +375,30 @@ export function resolveProviderHttpRequestConfig(params: {
     headers,
     dispatcherPolicy: buildProviderRequestDispatcherPolicy(requestConfig),
     requestConfig,
+    trustConfiguredBaseUrlOrigin:
+      !requestConfig.privateNetworkExplicitlyDenied &&
+      (requestConfig.policy.endpointClass === "custom" ||
+        requestConfig.policy.endpointClass === "local"),
   };
+}
+
+export function resolveProviderHttpRequestConfig(
+  params: Parameters<typeof resolveProviderHttpRequestConfigWithOriginTrustInternal>[0],
+): ResolvedProviderHttpRequestConfig {
+  const resolved = resolveProviderHttpRequestConfigWithOriginTrustInternal(params);
+  return {
+    baseUrl: resolved.baseUrl,
+    allowPrivateNetwork: resolved.allowPrivateNetwork,
+    headers: resolved.headers,
+    dispatcherPolicy: resolved.dispatcherPolicy,
+    requestConfig: resolved.requestConfig,
+  };
+}
+
+export function resolveProviderHttpRequestConfigWithOriginTrust(
+  params: Parameters<typeof resolveProviderHttpRequestConfigWithOriginTrustInternal>[0],
+): ResolvedProviderHttpRequestConfigWithOriginTrust {
+  return resolveProviderHttpRequestConfigWithOriginTrustInternal(params);
 }
 
 /**
@@ -519,26 +577,16 @@ type GuardedPostRequestRetryOptions = {
   retry?: TransientProviderRetryConfig;
 };
 
-export async function postTranscriptionRequest(
-  params: {
+type GuardedPostRequestParams<TBody> = GuardedProviderRequestParams &
+  GuardedPostRequestRetryOptions & {
     url: string;
     headers: Headers;
-    body: BodyInit;
+    body: TBody;
     timeoutMs?: number;
     fetchFn: typeof fetch;
-    pinDns?: boolean;
-    allowPrivateNetwork?: boolean;
-    ssrfPolicy?: SsrFPolicy;
-    dispatcherPolicy?: PinnedDispatcherPolicy;
-    auditContext?: string;
-    /**
-     * Override the guarded-fetch mode. Defaults to an auto-upgrade to
-     * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
-     * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
-     */
-    mode?: GuardedFetchMode;
-  } & GuardedPostRequestRetryOptions,
-) {
+  };
+
+export async function postTranscriptionRequest(params: GuardedPostRequestParams<BodyInit>) {
   return await postGuardedRequest({
     url: params.url,
     init: {
@@ -597,26 +645,7 @@ function isTransientProviderHttpStatus(status: number): boolean {
   return status === 500 || status === 502 || status === 503 || status === 504;
 }
 
-export async function postJsonRequest(
-  params: {
-    url: string;
-    headers: Headers;
-    body: unknown;
-    timeoutMs?: number;
-    fetchFn: typeof fetch;
-    pinDns?: boolean;
-    allowPrivateNetwork?: boolean;
-    ssrfPolicy?: SsrFPolicy;
-    dispatcherPolicy?: PinnedDispatcherPolicy;
-    auditContext?: string;
-    /**
-     * Override the guarded-fetch mode. Defaults to an auto-upgrade to
-     * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
-     * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
-     */
-    mode?: GuardedFetchMode;
-  } & GuardedPostRequestRetryOptions,
-) {
+export async function postJsonRequest(params: GuardedPostRequestParams<unknown>) {
   return await postGuardedRequest({
     url: params.url,
     init: {
@@ -632,26 +661,7 @@ export async function postJsonRequest(
   });
 }
 
-export async function postMultipartRequest(
-  params: {
-    url: string;
-    headers: Headers;
-    body: BodyInit;
-    timeoutMs?: number;
-    fetchFn: typeof fetch;
-    pinDns?: boolean;
-    allowPrivateNetwork?: boolean;
-    ssrfPolicy?: SsrFPolicy;
-    dispatcherPolicy?: PinnedDispatcherPolicy;
-    auditContext?: string;
-    /**
-     * Override the guarded-fetch mode. Defaults to an auto-upgrade to
-     * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
-     * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
-     */
-    mode?: GuardedFetchMode;
-  } & GuardedPostRequestRetryOptions,
-) {
+export async function postMultipartRequest(params: GuardedPostRequestParams<BodyInit>) {
   return await postGuardedRequest({
     url: params.url,
     init: {
@@ -665,62 +675,6 @@ export async function postMultipartRequest(
     retryStage: params.retryStage,
     retry: params.retry,
   });
-}
-
-export async function readErrorResponse(res: Response): Promise<string | undefined> {
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  try {
-    if (!res.body) {
-      return undefined;
-    }
-    reader = res.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    let sawBytes = false;
-    while (total < MAX_ERROR_RESPONSE_BYTES) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (!value || value.length === 0) {
-        continue;
-      }
-      sawBytes = true;
-      const remaining = MAX_ERROR_RESPONSE_BYTES - total;
-      const chunk = value.length <= remaining ? value : value.subarray(0, remaining);
-      chunks.push(chunk);
-      total += chunk.length;
-      if (chunk.length < value.length) {
-        break;
-      }
-    }
-    if (!sawBytes) {
-      return undefined;
-    }
-    const bytes = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.length;
-    }
-    const text = new TextDecoder().decode(bytes);
-    const collapsed = text.replace(/\s+/g, " ").trim();
-    if (!collapsed) {
-      return undefined;
-    }
-    if (collapsed.length <= MAX_ERROR_CHARS) {
-      return collapsed;
-    }
-    return `${collapsed.slice(0, MAX_ERROR_CHARS)}…`;
-  } catch {
-    return undefined;
-  } finally {
-    try {
-      await reader?.cancel();
-    } catch {
-      // Ignore stream-cancel failures while reporting the original HTTP error.
-    }
-  }
 }
 
 export function requireTranscriptionText(

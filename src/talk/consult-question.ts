@@ -1,3 +1,13 @@
+/**
+ * Realtime voice consult-question extraction and result summarization helpers.
+ *
+ * These utilities connect Talk tool calls to spoken follow-up answers by
+ * pulling human-readable questions/results out of provider-owned payloads.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readTrimmedStringAlias } from "../utils/string-readers.js";
+
 const REALTIME_VOICE_CONSULT_QUESTION_STOPWORDS = new Set([
   "a",
   "an",
@@ -30,36 +40,36 @@ const DEFAULT_REALTIME_VOICE_SPEAKABLE_RESULT_KEYS = ["text", "result", "output"
 const DEFAULT_REALTIME_VOICE_SPEAKABLE_RESULT_MAX_CHARS = 1_800;
 
 export type RealtimeVoiceConsultQuestionMatchOptions = {
+  /** Minimum overlap ratio against the smaller token set for fuzzy matches. */
   minTokenOverlapRatio?: number;
+  /** Minimum number of non-stopword tokens that must overlap. */
   minTokenOverlapCount?: number;
 };
 
 export type RealtimeVoiceSpeakableToolResultOptions = {
+  /** Candidate result keys to read from object-shaped tool output. */
   keys?: readonly string[];
+  /** Maximum spoken result length before appending a truncation marker. */
   maxChars?: number;
+  /** Whether a raw string result is allowed as speakable output. */
   stringResult?: boolean;
 };
 
+/** Read the consult question from a raw string or selected object keys. */
 export function readRealtimeVoiceConsultQuestion(
   args: unknown,
   keys: readonly string[] = DEFAULT_REALTIME_VOICE_CONSULT_QUESTION_KEYS,
 ): string | undefined {
   if (typeof args === "string") {
-    return args.trim() || undefined;
+    return normalizeOptionalString(args);
   }
   if (!args || typeof args !== "object" || Array.isArray(args)) {
     return undefined;
   }
-  const record = args as Record<string, unknown>;
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
+  return readTrimmedStringAlias(args as Record<string, unknown>, keys);
 }
 
+/** Normalize consult questions for stable matching across punctuation/casing. */
 export function normalizeRealtimeVoiceConsultQuestion(
   value: string | undefined,
 ): string | undefined {
@@ -72,6 +82,7 @@ export function normalizeRealtimeVoiceConsultQuestion(
   );
 }
 
+/** Compare two consult questions with exact, containment, and token-overlap matching. */
 export function matchRealtimeVoiceConsultQuestions(
   left: string | undefined,
   right: string | undefined,
@@ -82,6 +93,8 @@ export function matchRealtimeVoiceConsultQuestions(
   if (!normalizedLeft || !normalizedRight) {
     return false;
   }
+  // Containment catches common provider rewrites such as adding "please" or
+  // "can you" around the same short question.
   if (
     normalizedLeft === normalizedRight ||
     normalizedLeft.includes(normalizedRight) ||
@@ -108,6 +121,7 @@ export function matchRealtimeVoiceConsultQuestions(
   return overlap / Math.min(leftTokens.size, rightTokens.size) >= minTokenOverlapRatio;
 }
 
+/** Extract a bounded speakable string from a tool result payload. */
 export function readSpeakableRealtimeVoiceToolResult(
   result: unknown,
   options: RealtimeVoiceSpeakableToolResultOptions = {},
@@ -123,16 +137,13 @@ export function readSpeakableRealtimeVoiceToolResult(
   }
   const record = result as Record<string, unknown>;
   const keys = options.keys ?? DEFAULT_REALTIME_VOICE_SPEAKABLE_RESULT_KEYS;
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
-      return limitSpeakableRealtimeVoiceToolResult(value, options.maxChars);
-    }
-  }
-  return undefined;
+  const value = readTrimmedStringAlias(record, keys);
+  return value ? limitSpeakableRealtimeVoiceToolResult(value, options.maxChars) : undefined;
 }
 
 function realtimeVoiceConsultQuestionTokens(value: string): Set<string> {
+  // Drop short/stopword tokens so overlap is based on the semantic parts of the
+  // question instead of assistant boilerplate.
   return new Set(
     value
       .split(/[^\p{L}\p{N}]+/gu)
@@ -154,5 +165,7 @@ function limitSpeakableRealtimeVoiceToolResult(
   if (trimmed.length <= maxChars) {
     return trimmed;
   }
-  return `${trimmed.slice(0, Math.max(0, maxChars - 16)).trimEnd()} [truncated]`;
+  // Reserve space for the marker so callers can keep audio replies under a
+  // provider or UX limit without losing the truncation signal.
+  return `${truncateUtf16Safe(trimmed, Math.max(0, maxChars - 16)).trimEnd()} [truncated]`;
 }

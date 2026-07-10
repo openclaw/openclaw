@@ -1,4 +1,7 @@
+// Feishu plugin module implements lifecycle support behavior.
 import { vi, type Mock } from "vitest";
+import { testingHooks as dedupTestingHooks } from "./dedup.js";
+import { testingHooks as processingClaimTestingHooks } from "./processing-claims.js";
 
 type BoundConversation = {
   bindingId: string;
@@ -19,11 +22,13 @@ type DispatchReplyContext = Record<string, unknown> & {
 };
 type DispatchReplyDispatcher = {
   sendFinalReply: (payload: { text: string }) => unknown;
+  getFailedCounts?: UnknownMock;
 };
 type FeishuReplyDispatcherMockValue = {
   dispatcher: DispatchReplyDispatcher;
   replyOptions: Record<string, never>;
   markDispatchIdle: () => unknown;
+  ensureNoVisibleReplyFallback?: AsyncUnknownMock;
 };
 type CreateFeishuReplyDispatcherMock = Mock<(params?: unknown) => FeishuReplyDispatcherMockValue>;
 type DispatchReplyFromConfigMock = Mock<
@@ -86,6 +91,8 @@ export function getFeishuLifecycleTestMocks(): FeishuLifecycleTestMocks {
 }
 
 export function resetFeishuLifecycleTestMocks(): void {
+  dedupTestingHooks.resetFeishuDedupForTests();
+  processingClaimTestingHooks.resetFeishuMessageProcessingClaimsForTests();
   for (const mock of Object.values(feishuLifecycleTestMocks)) {
     mock.mockReset();
   }
@@ -137,7 +144,6 @@ vi.mock("./client.js", () => {
       start: vi.fn(),
     })),
     createEventDispatcher: createEventDispatcherMock,
-    getFeishuClient: vi.fn(() => null),
     getFeishuUserAgent: vi.fn(() => "openclaw-feishu-test"),
     pluginVersion: "test",
     setFeishuClientRuntimeForTest: vi.fn(),

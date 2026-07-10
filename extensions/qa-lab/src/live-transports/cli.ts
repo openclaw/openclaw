@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements cli behavior.
 import { listQaRunnerCliContributions } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { discordQaCliRegistration } from "./discord/cli.js";
 import type { LiveTransportQaCliRegistration } from "./shared/live-transport-cli.js";
@@ -53,4 +54,10 @@ export function listLiveTransportQaCliRegistrations(): readonly LiveTransportQaC
   }
 
   return liveRegistrations;
+}
+
+export function listLiveTransportQaAdapterFactories() {
+  return listLiveTransportQaCliRegistrations().flatMap((registration) =>
+    registration.adapterFactory ? [registration.adapterFactory] : [],
+  );
 }

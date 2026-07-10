@@ -1,3 +1,4 @@
+// Openai tests cover realtime transcription provider plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 
@@ -179,32 +180,51 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     expect(resolved?.vadThreshold).toBe(0);
   });
 
+  it("drops malformed VAD timing settings", () => {
+    const provider = buildOpenAIRealtimeTranscriptionProvider();
+    const resolved = provider.resolveConfig?.({
+      cfg: {} as never,
+      rawConfig: {
+        providers: {
+          openai: {
+            silenceDurationMs: -1,
+            vadThreshold: 1.5,
+          },
+        },
+      },
+    });
+
+    expect(resolved?.silenceDurationMs).toBeUndefined();
+    expect(resolved?.vadThreshold).toBeUndefined();
+  });
+
   it("accepts the legacy openai-realtime alias", () => {
     const provider = buildOpenAIRealtimeTranscriptionProvider();
     expect(provider.aliases).toContain("openai-realtime");
   });
 
-  it("treats a Codex OAuth profile as configured when no API key is present", () => {
+  it("treats an OpenAI API-key profile as configured", () => {
     const provider = buildOpenAIRealtimeTranscriptionProvider();
-    const cfg = { auth: { order: { "openai-codex": ["openai-codex:default"] } } };
+    const cfg = { auth: { order: { openai: ["openai:default"] } } };
     providerAuthMocks.isProviderAuthProfileConfigured.mockReturnValue(true);
 
     expect(provider.isConfigured({ cfg: cfg as never, providerConfig: {} })).toBe(true);
     expect(providerAuthMocks.isProviderAuthProfileConfigured).toHaveBeenCalledWith({
-      provider: "openai-codex",
+      provider: "openai",
       cfg,
+      profileTypes: ["api_key"],
     });
   });
 
-  it("mints a Codex OAuth client secret for realtime transcription sockets", async () => {
+  it("mints an API-key client secret for realtime transcription sockets", async () => {
     const provider = buildOpenAIRealtimeTranscriptionProvider();
     const release = vi.fn();
-    providerAuthMocks.resolveProviderAuthProfileApiKey.mockResolvedValue("oauth-token");
+    providerAuthMocks.resolveProviderAuthProfileApiKey.mockResolvedValue("sk-profile"); // pragma: allowlist secret
     ssrfMocks.fetchWithSsrFGuard.mockResolvedValue({
       response: new Response(JSON.stringify({ value: "ek-test" }), { status: 200 }),
       release,
     });
-    const cfg = { auth: { order: { "openai-codex": ["openai-codex:default"] } } };
+    const cfg = { auth: { order: { openai: ["openai:default"] } } };
     const session = provider.createSession({
       cfg: cfg as never,
       providerConfig: {},
@@ -215,32 +235,40 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
 
     expect(socket.headers?.Authorization).toBe("Bearer ek-test");
     expect(providerAuthMocks.resolveProviderAuthProfileApiKey).toHaveBeenCalledWith({
-      provider: "openai-codex",
+      provider: "openai",
       cfg,
+      profileTypes: ["api_key"],
     });
     const request = mockCallArg(ssrfMocks.fetchWithSsrFGuard);
     expect(request.auditContext).toBe("openai-realtime-transcription-session");
-    expect(request.url).toBe("https://api.openai.com/v1/realtime/transcription_sessions");
+    expect(request.url).toBe("https://api.openai.com/v1/realtime/client_secrets");
+    expect(request.policy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: ["api.openai.com"],
+    });
     const init = request.init as {
       method?: string;
       headers?: Record<string, string>;
       body?: unknown;
     };
     expect(init.method).toBe("POST");
-    expect(init.headers?.Authorization).toBe("Bearer oauth-token");
+    expect(init.headers?.Authorization).toBe("Bearer sk-profile");
     expect(init.headers?.["Content-Type"]).toBe("application/json");
     expect(typeof init.body).toBe("string");
     expect(JSON.parse(init.body as string)).toEqual({
-      type: "transcription",
-      audio: {
-        input: {
-          format: { type: "audio/pcmu" },
-          transcription: { model: "gpt-4o-transcribe" },
-          turn_detection: {
-            type: "server_vad",
-            threshold: 0.5,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 800,
+      session: {
+        type: "transcription",
+        audio: {
+          input: {
+            format: { type: "audio/pcmu" },
+            transcription: { model: "gpt-4o-transcribe" },
+            turn_detection: {
+              type: "server_vad",
+              threshold: 0.5,
+              prefix_padding_ms: 300,
+              silence_duration_ms: 800,
+            },
           },
         },
       },
@@ -270,6 +298,48 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
         },
       },
     });
+    session.close();
+  });
+
+  it("does not use Codex OAuth for realtime transcription", async () => {
+    const provider = buildOpenAIRealtimeTranscriptionProvider();
+    const cfg = { auth: { order: { openai: ["openai:default"] } } };
+    const session = provider.createSession({ cfg: cfg as never, providerConfig: {} });
+
+    await expect(session.connect()).rejects.toThrow(
+      "OpenAI Realtime transcription requires an OpenAI Platform API key",
+    );
+    expect(providerAuthMocks.resolveProviderAuthProfileApiKey).toHaveBeenCalledWith({
+      provider: "openai",
+      cfg,
+      profileTypes: ["api_key"],
+    });
+    expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it("prefers an API-key profile over OPENAI_API_KEY", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "sk-env"); // pragma: allowlist secret
+    providerAuthMocks.resolveProviderAuthProfileApiKey.mockResolvedValue("sk-profile"); // pragma: allowlist secret
+    ssrfMocks.fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response(JSON.stringify({ value: "ek-test" }), { status: 200 }),
+      release: vi.fn(),
+    });
+    const provider = buildOpenAIRealtimeTranscriptionProvider();
+    const session = provider.createSession({ providerConfig: {} });
+
+    const connecting = session.connect();
+    const socket = await waitForFakeSocket();
+
+    expect(socket.headers?.Authorization).toBe("Bearer ek-test");
+    const request = mockCallArg(ssrfMocks.fetchWithSsrFGuard);
+    const init = request.init as { headers?: Record<string, string> };
+    expect(init.headers?.Authorization).toBe("Bearer sk-profile");
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "transcription_session.updated" })));
+    await connecting;
     session.close();
   });
 

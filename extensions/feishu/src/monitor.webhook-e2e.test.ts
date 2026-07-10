@@ -1,7 +1,14 @@
+// Feishu tests cover monitor.webhook e2e plugin behavior.
 import crypto from "node:crypto";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import type { Server } from "node:http";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createFeishuRuntimeMockModule } from "./monitor.test-mocks.js";
-import { withRunningWebhookMonitor } from "./monitor.webhook.test-helpers.js";
+import {
+  buildWebhookConfig,
+  getFreePort,
+  waitUntilServerReady,
+  withRunningWebhookMonitor,
+} from "./monitor.webhook.test-helpers.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
 
@@ -20,6 +27,11 @@ vi.mock("./client.js", async () => {
 vi.mock("./runtime.js", () => createFeishuRuntimeMockModule());
 
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
+import { httpServers } from "./monitor.state.js";
+
+beforeAll(async () => {
+  await import("./monitor.account.js");
+});
 
 function signFeishuPayload(params: {
   encryptKey: string;
@@ -59,8 +71,8 @@ async function postSignedPayload(url: string, payload: Record<string, unknown>) 
   });
 }
 
-afterEach(() => {
-  stopFeishuMonitor();
+afterEach(async () => {
+  await stopFeishuMonitor();
 });
 
 afterAll(() => {
@@ -71,6 +83,108 @@ afterAll(() => {
 });
 
 describe("Feishu webhook signed-request e2e", () => {
+  it("waits for HTTP close before resolving webhook abort cleanup", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    const accountId = "abort-delayed-close";
+    const path = "/hook-e2e-abort-delayed-close";
+    const port = await getFreePort();
+    const abortController = new AbortController();
+    const monitorPromise = monitorFeishuProvider({
+      config: buildWebhookConfig({
+        accountId,
+        path,
+        port,
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      }),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      abortSignal: abortController.signal,
+      accountId,
+    });
+    await waitUntilServerReady(`http://127.0.0.1:${port}${path}`);
+
+    const server = httpServers.get(accountId);
+    expect(server).toBeDefined();
+    if (!server) {
+      throw new Error("expected webhook server to be tracked");
+    }
+
+    const originalClose = server.close.bind(server);
+    let releaseClose: (() => void) | undefined;
+    const closeGate = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    const closeSpy = vi.fn((callback?: (err?: Error) => void) => {
+      void closeGate.then(() => {
+        originalClose(callback);
+      });
+      return server;
+    });
+    server.close = closeSpy as unknown as Server["close"];
+
+    let monitorSettled = false;
+    const observedMonitorPromise = monitorPromise.finally(() => {
+      monitorSettled = true;
+    });
+
+    try {
+      abortController.abort();
+      await vi.waitFor(() => {
+        expect(closeSpy).toHaveBeenCalledTimes(1);
+      });
+      expect(monitorSettled).toBe(false);
+      expect(httpServers.get(accountId)).toBe(server);
+
+      releaseClose?.();
+      await observedMonitorPromise;
+
+      expect(httpServers.has(accountId)).toBe(false);
+    } finally {
+      releaseClose?.();
+    }
+  });
+
+  it("rejects webhook monitor when abort cleanup close fails", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    const accountId = "abort-close-fails";
+    const path = "/hook-e2e-abort-close-fails";
+    const port = await getFreePort();
+    const abortController = new AbortController();
+    const monitorPromise = monitorFeishuProvider({
+      config: buildWebhookConfig({
+        accountId,
+        path,
+        port,
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      }),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      abortSignal: abortController.signal,
+      accountId,
+    });
+    await waitUntilServerReady(`http://127.0.0.1:${port}${path}`);
+
+    const server = httpServers.get(accountId);
+    expect(server).toBeDefined();
+    if (!server) {
+      throw new Error("expected webhook server to be tracked");
+    }
+
+    const originalClose = server.close.bind(server);
+    server.close = vi.fn((callback?: (err?: Error) => void) => {
+      originalClose(() => {
+        callback?.(new Error("close failed"));
+      });
+      return server;
+    }) as unknown as Server["close"];
+
+    abortController.abort();
+    await expect(monitorPromise).rejects.toThrow("close failed");
+    expect(httpServers.has(accountId)).toBe(false);
+  });
+
   it("rejects invalid signatures with 401 instead of empty 200", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
 
@@ -245,6 +359,32 @@ describe("Feishu webhook signed-request e2e", () => {
 
         expect(response.status).toBe(200);
         expect(await response.text()).toContain("no unknown.event event handle");
+      },
+    );
+  });
+
+  it("does not emit unhandled-event warning for bot_p2p_chat_entered_v1", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "p2p-chat-entered",
+        path: "/hook-e2e-p2p-chat-entered",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const payload = {
+          schema: "2.0",
+          header: { event_type: "im.chat.access_event.bot_p2p_chat_entered_v1" },
+          event: {},
+        };
+        const response = await postSignedPayload(url, payload);
+
+        expect(response.status).toBe(200);
+        const body = await response.text();
+        expect(body).not.toContain("no im.chat.access_event.bot_p2p_chat_entered_v1 event handle");
       },
     );
   });

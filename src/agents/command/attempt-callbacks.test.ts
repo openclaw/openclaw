@@ -1,15 +1,21 @@
+// Verifies the small lifecycle callback adapter used during agent attempts.
 import { describe, expect, it } from "vitest";
-import { createAgentAttemptLifecycleCallbacks } from "./attempt-callbacks.js";
+import {
+  createAgentAttemptLifecycleCallbacks,
+  type AgentAttemptLifecycleState,
+} from "./attempt-callbacks.js";
 
 describe("createAgentAttemptLifecycleCallbacks", () => {
   it("tracks user-message persistence without closing over the agent command scope", () => {
-    const state = {
+    const state: AgentAttemptLifecycleState = {
       currentTurnUserMessagePersisted: false,
       lifecycleFinishing: false,
       lifecycleEnded: false,
     };
     const callbacks = createAgentAttemptLifecycleCallbacks(state);
 
+    // The callback mutates only the shared lifecycle state object; it should not
+    // need access to the wider runAgentAttempt closure.
     callbacks.onUserMessagePersisted?.({
       role: "user",
       content: "hello",
@@ -33,5 +39,23 @@ describe("createAgentAttemptLifecycleCallbacks", () => {
 
     callbacks.onAgentEvent({ stream: "lifecycle", data: { phase: "end" } });
     expect(state.lifecycleEnded).toBe(true);
+  });
+
+  it("retains deferred lifecycle errors without marking the attempt terminal", () => {
+    const state: AgentAttemptLifecycleState = {
+      currentTurnUserMessagePersisted: false,
+      lifecycleFinishing: false,
+      lifecycleEnded: false,
+    };
+    const callbacks = createAgentAttemptLifecycleCallbacks(state);
+
+    callbacks.onAgentEvent({
+      stream: "lifecycle",
+      data: { phase: "finishing", error: "provider failed" },
+    });
+
+    expect(state.lifecycleError).toBe("provider failed");
+    expect(state.lifecycleFinishing).toBe(true);
+    expect(state.lifecycleEnded).toBe(false);
   });
 });

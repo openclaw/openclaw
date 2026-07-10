@@ -1,3 +1,4 @@
+// Moonshot tests cover index plugin behavior.
 import fs from "node:fs";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -43,7 +44,7 @@ describe("moonshot provider plugin", () => {
     });
   });
 
-  it("owns replay policy for OpenAI-compatible Moonshot transports without mangling native Kimi tool_call IDs", async () => {
+  it("rewrites duplicate tool-call ids with OpenAI-style ids for Moonshot replay", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     const policy = provider.buildReplayPolicy?.({
@@ -56,10 +57,28 @@ describe("moonshot provider plugin", () => {
       applyAssistantFirstOrderingFix: true,
       validateGeminiTurns: true,
       validateAnthropicTurns: true,
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      duplicateToolCallIdStyle: "openai",
     });
     expect(policy).not.toHaveProperty("dropReasoningFromHistory");
-    expect(policy).not.toHaveProperty("sanitizeToolCallIds");
-    expect(policy).not.toHaveProperty("toolCallIdMode");
+  });
+
+  it("preserves responses-family replay behavior", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    const policy = provider.buildReplayPolicy?.({
+      provider: "moonshot",
+      modelApi: "openai-responses",
+      modelId: "kimi-k2.6",
+    } as never);
+
+    expect(policy).toEqual({
+      applyAssistantFirstOrderingFix: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: false,
+      allowSyntheticToolResults: true,
+    });
   });
 
   it("wires moonshot-thinking stream hooks", async () => {
@@ -87,5 +106,61 @@ describe("moonshot provider plugin", () => {
       config: { thinkingConfig: { thinkingBudget: -1 } },
       thinking: { type: "disabled" },
     });
+  });
+
+  it("keeps Kimi K2.7 Code thinking always on without sending a thinking field", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const capturedStream = createCapturedThinkingConfigStream();
+
+    const wrapped = provider.wrapSimpleCompletionStreamFn?.({
+      provider: "moonshot",
+      modelId: "kimi-k2.7-code",
+      thinkingLevel: "off",
+      streamFn: capturedStream.streamFn,
+    } as never);
+
+    void wrapped?.(
+      {
+        api: "openai-completions",
+        provider: "moonshot",
+        id: "kimi-k2.7-code",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(capturedStream.getCapturedPayload()).toEqual({
+      config: { thinkingConfig: { thinkingBudget: -1 } },
+    });
+    expect(
+      provider.wrapSimpleCompletionStreamFn?.({
+        provider: "moonshot",
+        modelId: "kimi-k2.6",
+        streamFn: capturedStream.streamFn,
+      } as never),
+    ).toBe(capturedStream.streamFn);
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "moonshot",
+        modelId: "kimi-k2.7-code",
+        reasoning: true,
+      } as never),
+    ).toEqual({
+      levels: [{ id: "low", label: "on" }],
+      defaultLevel: "low",
+      preserveWhenCatalogReasoningFalse: true,
+    });
+    expect(
+      provider.isModernModelRef?.({
+        provider: "moonshot",
+        modelId: "kimi-k2.7-code",
+      }),
+    ).toBe(true);
+    expect(
+      provider.isModernModelRef?.({
+        provider: "moonshot",
+        modelId: "kimi-k2.6",
+      }),
+    ).toBe(false);
   });
 });

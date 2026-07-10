@@ -1,3 +1,4 @@
+// Memory Wiki plugin module implements query behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
@@ -84,6 +85,12 @@ const ROUTE_QUESTION_STOP_WORDS = new Set([
   "with",
   "would",
 ]);
+
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(1, Math.floor(value))
+    : fallback;
+}
 
 export const WIKI_SEARCH_MODES = [
   "auto",
@@ -238,12 +245,17 @@ async function listWikiMarkdownFiles(rootDir: string): Promise<string[]> {
     await Promise.all(
       QUERY_DIRS.map(async (relativeDir) => {
         const dirPath = path.join(rootDir, relativeDir);
-        const entries = await fs.readdir(dirPath, { withFileTypes: true }).catch(() => []);
+        const entries = await fs
+          .readdir(dirPath, { withFileTypes: true, recursive: true })
+          .catch(() => []);
         return entries
           .filter(
             (entry) => entry.isFile() && entry.name.endsWith(".md") && entry.name !== "index.md",
           )
-          .map((entry) => path.join(relativeDir, entry.name));
+          .map((entry) => {
+            const absPath = path.join(entry.parentPath ?? dirPath, entry.name);
+            return path.relative(rootDir, absPath).split(path.sep).join("/");
+          });
       }),
     )
   ).flat();
@@ -1067,6 +1079,16 @@ async function resolveActiveMemoryManager(params: {
   }
 }
 
+// Registered managers come from the active memory plugin; nothing enforces
+// the MemorySearchManager contract at runtime, so a partial manager would
+// otherwise surface as "... is not a function" from inside the bundle.
+function buildMemoryManagerContractError(method: "search" | "readFile"): Error {
+  return new Error(
+    `The active memory plugin's search manager does not implement ${method}() from the MemorySearchManager contract. ` +
+      `Set search.backend to "local" for wiki-only access, or use a memory plugin that implements the contract.`,
+  );
+}
+
 function buildMemorySearchTitle(resultPath: string): string {
   const basename = path.basename(resultPath, path.extname(resultPath));
   return basename.length > 0 ? basename : resultPath;
@@ -1467,7 +1489,7 @@ export async function searchMemoryWiki(params: {
     operation: "wiki_search",
   });
   await initializeMemoryWikiVault(effectiveConfig);
-  const maxResults = Math.max(1, params.maxResults ?? 10);
+  const maxResults = normalizePositiveInteger(params.maxResults, 10);
   const mode = params.mode ?? "auto";
 
   const wikiResults = shouldSearchWiki(effectiveConfig)
@@ -1486,6 +1508,9 @@ export async function searchMemoryWiki(params: {
         agentSessionKey: params.agentSessionKey,
       })
     : null;
+  if (sharedMemoryManager && typeof sharedMemoryManager.search !== "function") {
+    throw buildMemoryManagerContractError("search");
+  }
   let rawMemoryResults = sharedMemoryManager
     ? await sharedMemoryManager.search(params.query, { maxResults })
     : [];
@@ -1534,8 +1559,8 @@ export async function getMemoryWikiPage(params: {
     operation: "wiki_get",
   });
   await initializeMemoryWikiVault(effectiveConfig);
-  const fromLine = Math.max(1, params.fromLine ?? 1);
-  const lineCount = Math.max(1, params.lineCount ?? 200);
+  const fromLine = normalizePositiveInteger(params.fromLine, 1);
+  const lineCount = normalizePositiveInteger(params.lineCount, 200);
 
   if (shouldSearchWiki(effectiveConfig)) {
     const digest = await readQueryDigestBundle(effectiveConfig.vault.path);
@@ -1582,6 +1607,9 @@ export async function getMemoryWikiPage(params: {
   });
   if (!manager) {
     return null;
+  }
+  if (typeof manager.readFile !== "function") {
+    throw buildMemoryManagerContractError("readFile");
   }
 
   const lookupCandidates = buildLookupCandidates(params.lookup);

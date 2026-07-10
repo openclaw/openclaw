@@ -1,4 +1,5 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
+/** Resolves synthetic and external auth provider refs from active runtime state or persisted manifests. */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry.js";
 import type { LoadPluginRegistryParams, PluginRegistrySnapshot } from "./plugin-registry.js";
@@ -60,12 +61,14 @@ function resolveManifestExternalAuthProviderRefs(
   );
 }
 
+/** Lists provider refs that can satisfy synthetic auth profile lookups. */
 export function resolveRuntimeSyntheticAuthProviderRefs(
   params: SyntheticAuthProviderRefParams = {},
 ): string[] {
   return resolveRuntimeSyntheticAuthProviderRefState(params).refs;
 }
 
+/** Returns synthetic-auth refs plus whether the control-plane data source was complete. */
 export function resolveRuntimeSyntheticAuthProviderRefState(
   params: SyntheticAuthProviderRefParams = {},
 ): { refs: string[]; complete: boolean } {
@@ -81,7 +84,7 @@ export function resolveRuntimeSyntheticAuthProviderRefState(
               typeof entry.provider.resolveSyntheticAuth === "function",
           )
           .map((entry) => entry.provider.id),
-        ...(registry.cliBackends ?? [])
+        ...registry.cliBackends
           .filter(
             (entry) =>
               "resolveSyntheticAuth" in entry.backend &&
@@ -95,6 +98,7 @@ export function resolveRuntimeSyntheticAuthProviderRefState(
   return resolveManifestSyntheticAuthProviderRefState(params);
 }
 
+/** Lists provider refs that can expose external auth profiles to runtime consumers. */
 export function resolveRuntimeExternalAuthProviderRefs(
   params: SyntheticAuthProviderRefParams = {},
 ): string[] {
@@ -111,7 +115,7 @@ export function resolveRuntimeExternalAuthProviderRefs(
               typeof entry.provider.resolveExternalOAuthProfiles === "function"),
         )
         .map((entry) => entry.provider.id),
-      ...(registry.cliBackends ?? [])
+      ...registry.cliBackends
         .filter(
           (entry) =>
             ("resolveExternalAuthProfiles" in entry.backend &&

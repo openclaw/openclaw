@@ -1,3 +1,4 @@
+// Elevenlabs provider module implements model/runtime integration.
 import {
   createRealtimeTranscriptionWebSocketSession,
   type RealtimeTranscriptionProviderConfig,
@@ -78,6 +79,23 @@ function normalizeCommitStrategy(value: unknown): "manual" | "vad" | undefined {
   throw new Error(`Invalid ElevenLabs realtime transcription commit strategy: ${normalized}`);
 }
 
+function normalizePositiveSafeInteger(value: unknown): number | undefined {
+  const parsed = readFiniteNumber(value);
+  return parsed !== undefined && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function normalizeFiniteRange(value: unknown, min: number, max: number): number | undefined {
+  const parsed = readFiniteNumber(value);
+  return parsed !== undefined && parsed >= min && parsed <= max ? parsed : undefined;
+}
+
+function normalizeIntegerRange(value: unknown, min: number, max: number): number | undefined {
+  const parsed = readFiniteNumber(value);
+  return parsed !== undefined && Number.isSafeInteger(parsed) && parsed >= min && parsed <= max
+    ? parsed
+    : undefined;
+}
+
 function normalizeProviderConfig(
   config: RealtimeTranscriptionProviderConfig,
 ): ElevenLabsRealtimeTranscriptionProviderConfig {
@@ -90,15 +108,25 @@ function normalizeProviderConfig(
     baseUrl: normalizeOptionalString(raw.baseUrl),
     modelId: normalizeOptionalString(raw.modelId ?? raw.model ?? raw.sttModel),
     audioFormat: normalizeOptionalString(raw.audioFormat ?? raw.audio_format ?? raw.encoding),
-    sampleRate: readFiniteNumber(raw.sampleRate ?? raw.sample_rate),
+    sampleRate: normalizePositiveSafeInteger(raw.sampleRate ?? raw.sample_rate),
     languageCode: normalizeOptionalString(raw.languageCode ?? raw.language),
     commitStrategy: normalizeCommitStrategy(raw.commitStrategy ?? raw.commit_strategy),
-    vadSilenceThresholdSecs: readFiniteNumber(
+    vadSilenceThresholdSecs: normalizeFiniteRange(
       raw.vadSilenceThresholdSecs ?? raw.vad_silence_threshold_secs,
+      0.3,
+      3,
     ),
-    vadThreshold: readFiniteNumber(raw.vadThreshold ?? raw.vad_threshold),
-    minSpeechDurationMs: readFiniteNumber(raw.minSpeechDurationMs ?? raw.min_speech_duration_ms),
-    minSilenceDurationMs: readFiniteNumber(raw.minSilenceDurationMs ?? raw.min_silence_duration_ms),
+    vadThreshold: normalizeFiniteRange(raw.vadThreshold ?? raw.vad_threshold, 0.1, 0.9),
+    minSpeechDurationMs: normalizeIntegerRange(
+      raw.minSpeechDurationMs ?? raw.min_speech_duration_ms,
+      50,
+      2_000,
+    ),
+    minSilenceDurationMs: normalizeIntegerRange(
+      raw.minSilenceDurationMs ?? raw.min_silence_duration_ms,
+      50,
+      2_000,
+    ),
   };
 }
 
@@ -197,7 +225,6 @@ function createElevenLabsRealtimeTranscriptionSession(
         if (event.message_type?.includes("error")) {
           config.onError?.(new Error(readErrorDetail(event)));
         }
-        return;
     }
   };
 

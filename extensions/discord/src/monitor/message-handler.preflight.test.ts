@@ -1,3 +1,4 @@
+// Discord tests cover message handler.preflight plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, MessageType } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
@@ -568,6 +569,46 @@ describe("preflightDiscordMessage", () => {
     expect(preflight.preflightAudioTranscript).toBe("hello openclaw from dm audio");
   });
 
+  it("downloads attachments during preflight, before the message reaches the run queue", async () => {
+    // Regression for #96165: Discord CDN attachment URLs expire. Downloading
+    // must happen at receipt time (preflight), not after a possible run-queue
+    // delay, or queued messages lose their media.
+    const result = await runDmPreflight({
+      channelId: "dm-channel-image-1",
+      message: createDiscordMessage({
+        id: "m-dm-image-1",
+        channelId: "dm-channel-image-1",
+        content: "look at this",
+        attachments: [
+          {
+            id: "att-dm-image-1",
+            url: "https://cdn.discordapp.com/attachments/1/photo.png?ex=expired",
+            content_type: "image/png",
+            filename: "photo.png",
+          },
+        ],
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "alice",
+        },
+      }),
+      discordConfig: {
+        dmPolicy: "open",
+      } as DiscordConfig,
+    });
+
+    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
+    const preflight = expectPreflightResult(result);
+    expect(preflight.preparedMedia).toEqual([
+      {
+        path: "/tmp/openclaw-discord-test/photo.png",
+        contentType: "image/png",
+        placeholder: "<media:image>",
+      },
+    ]);
+  });
+
   it("keeps no-guild messages direct when channel lookup is unavailable", async () => {
     const result = await runUnresolvedDmPreflight({
       cfg: {
@@ -653,7 +694,7 @@ describe("preflightDiscordMessage", () => {
     ).toBe("default");
   });
 
-  it("passes bot-loop protection facts for accepted bot-authored Discord messages (#58789)", async () => {
+  it("suppresses repeated bot messages before downloading attachments (#58789)", async () => {
     const channelId = "channel-bot-loop";
     const guildId = "guild-bot-loop";
     const senderBotId = "relay-bot-1";
@@ -674,7 +715,7 @@ describe("preflightDiscordMessage", () => {
           allowBots: true,
           botLoopProtection: {
             enabled: true,
-            maxEventsPerWindow: 3,
+            maxEventsPerWindow: 1,
             cooldownSeconds: 60,
           },
         } as DiscordConfig,
@@ -688,58 +729,77 @@ describe("preflightDiscordMessage", () => {
       }),
     );
 
-    expect(expectPreflightResult(result).botLoopProtection).toEqual({
-      scopeId: "default",
-      conversationId: channelId,
-      senderId: senderBotId,
-      receiverId: "openclaw-bot",
-      config: {
-        enabled: true,
-        maxEventsPerWindow: 3,
-        cooldownSeconds: 60,
-      },
-      defaultsConfig: undefined,
-      defaultEnabled: true,
-      nowMs: Date.parse(messageTimestamp),
+    expect(result).not.toBeNull();
+
+    const repeatedMessage = createDiscordMessage({
+      id: "m-loop-2",
+      channelId,
+      content: "more chatter <@openclaw-bot>",
+      mentionedUsers: [{ id: "openclaw-bot" }],
+      attachments: [
+        {
+          id: "att-loop",
+          url: "https://cdn.discordapp.com/attachments/1/loop.png",
+          content_type: "image/png",
+          filename: "loop.png",
+        },
+      ],
+      author: { id: senderBotId, bot: true, username: "Relay" },
+      timestamp: "2026-05-13T05:00:00.001Z",
     });
+
+    expect(
+      await runGuildPreflight({
+        channelId,
+        guildId,
+        message: repeatedMessage,
+        discordConfig: {
+          allowBots: true,
+          botLoopProtection: {
+            enabled: true,
+            maxEventsPerWindow: 1,
+            cooldownSeconds: 60,
+          },
+        } as DiscordConfig,
+      }),
+    ).toBeNull();
+    expect(saveRemoteMediaMock).not.toHaveBeenCalled();
   });
 
   it("passes generic channel defaults for Discord bot loop budgets", async () => {
     const channelId = "channel-bot-loop-defaults";
     const guildId = "guild-bot-loop-defaults";
     const discordConfig = { allowBots: true } as DiscordConfig;
-    const message = createDiscordMessage({
-      id: "m-loop-default-1",
-      channelId,
-      content: "relay <@openclaw-bot>",
-      mentionedUsers: [{ id: "openclaw-bot" }],
-      author: { id: "relay-bot-defaults", bot: true, username: "Relay" },
-    });
-    const result = await runGuildPreflight({
-      channelId,
-      guildId,
-      message,
-      discordConfig,
-      cfg: {
-        ...DEFAULT_PREFLIGHT_CFG,
-        channels: {
-          defaults: {
-            botLoopProtection: {
-              maxEventsPerWindow: 1,
-              cooldownSeconds: 60,
+    const runBotMessage = async (id: string) =>
+      await runGuildPreflight({
+        channelId,
+        guildId,
+        message: createDiscordMessage({
+          id,
+          channelId,
+          content: "relay <@openclaw-bot>",
+          mentionedUsers: [{ id: "openclaw-bot" }],
+          author: { id: "relay-bot-defaults", bot: true, username: "Relay" },
+        }),
+        discordConfig,
+        cfg: {
+          ...DEFAULT_PREFLIGHT_CFG,
+          channels: {
+            defaults: {
+              botLoopProtection: {
+                maxEventsPerWindow: 1,
+                cooldownSeconds: 60,
+              },
             },
           },
         },
-      },
-    });
+      });
 
-    expect(expectPreflightResult(result).botLoopProtection?.defaultsConfig).toEqual({
-      maxEventsPerWindow: 1,
-      cooldownSeconds: 60,
-    });
+    expect(await runBotMessage("m-loop-default-1")).not.toBeNull();
+    expect(await runBotMessage("m-loop-default-2")).toBeNull();
   });
 
-  it("does not prepare loop-guard facts for bot messages that later preflight gates drop (#58789)", async () => {
+  it("does not count bot messages that earlier preflight gates drop (#58789)", async () => {
     const channelId = "channel-bot-loop-dropped";
     const guildId = "guild-bot-loop-dropped";
     const senderBotId = "relay-bot-dropped";
@@ -961,6 +1021,65 @@ describe("preflightDiscordMessage", () => {
     expect(preflight.canonicalMessageId).toBe("orig-123");
   });
 
+  it("uses the resolved PluralKit member id when creating DM pairing requests", async () => {
+    fetchPluralKitMessageInfoMock.mockResolvedValue({
+      id: "proxy-dm-1",
+      original: "orig-dm-1",
+      member: { id: "pk-member-1", name: "Echo" },
+      system: { id: "system-1", name: "System" },
+    });
+    resolveDiscordDmCommandAccessMock.mockResolvedValue({
+      senderAccess: {
+        allowed: false,
+        decision: "pairing",
+        reasonCode: "dm_policy_pairing_required",
+      },
+      commandAccess: {
+        authorized: false,
+      },
+    });
+
+    const result = await runDmPreflight({
+      channelId: "dm-channel-pk-1",
+      message: createDiscordMessage({
+        id: "proxy-dm-1",
+        channelId: "dm-channel-pk-1",
+        content: "hello",
+        webhookId: "pluralkit-webhook-1",
+        author: {
+          id: "webhook-author",
+          bot: true,
+          username: "PluralKit",
+        },
+      }),
+      discordConfig: {
+        allowBots: true,
+        dmPolicy: "pairing",
+        pluralkit: { enabled: true },
+      } as DiscordConfig,
+    });
+
+    expect(result).toBeNull();
+    expect(resolveDiscordDmCommandAccessMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sender: {
+          id: "pk-member-1",
+          name: "Echo",
+          tag: "Echo",
+        },
+      }),
+    );
+    expect(handleDiscordDmCommandDecisionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sender: {
+          id: "pk:pk-member-1",
+          tag: "Echo",
+          name: "Echo",
+        },
+      }),
+    );
+  });
+
   it("skips PluralKit lookup for bound-thread webhook echoes", async () => {
     const threadBinding = createThreadBinding({
       targetKind: "session",
@@ -1037,6 +1156,7 @@ describe("preflightDiscordMessage", () => {
     const preflight = expectPreflightResult(result);
     expect(preflight.boundSessionKey).toBe(threadBinding.targetSessionKey);
     expect(preflight.shouldRequireMention).toBe(false);
+    expect(preflight.groupRequireMention).toBe(true);
   });
 
   it("drops bot messages without mention when allowBots=mentions", async () => {
@@ -1467,6 +1587,7 @@ describe("preflightDiscordMessage", () => {
     expect(preflight.threadParentId).toBe(parentId);
     expect(preflight.channelConfig?.allowed).toBe(true);
     expect(preflight.shouldRequireMention).toBe(false);
+    expect(preflight.groupRequireMention).toBe(false);
   });
 
   it("handles partial thread channel owner getters during mention preflight", async () => {
@@ -2251,5 +2372,41 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
         webhookId: "wh-1",
       }),
     ).toBe(true);
+  });
+
+  it("does not suppress unbound thread webhook echoes when echo expiry overflows", async () => {
+    const manager = createThreadBindingManager({
+      cfg: DEFAULT_PREFLIGHT_CFG,
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+    const binding = await manager.bindTarget({
+      threadId: "thread-overflow",
+      channelId: "parent-1",
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:child-1",
+      agentId: "main",
+      webhookId: "wh-overflow",
+      webhookToken: "tok-1",
+    });
+    expect(binding).not.toBeNull();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    try {
+      manager.unbindThread({
+        threadId: "thread-overflow",
+        sendFarewell: false,
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(
+      shouldIgnoreBoundThreadWebhookMessage({
+        accountId: "default",
+        threadId: "thread-overflow",
+        webhookId: "wh-overflow",
+      }),
+    ).toBe(false);
   });
 });

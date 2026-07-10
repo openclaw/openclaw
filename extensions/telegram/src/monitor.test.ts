@@ -1,3 +1,4 @@
+// Telegram tests cover monitor plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type MonitorTelegramOpts = import("./monitor.js").MonitorTelegramOpts;
@@ -325,7 +326,7 @@ vi.mock("./bot.js", () => ({
     createTelegramBotCalls.push(opts);
     const nextError = createTelegramBotErrors.shift();
     if (nextError) {
-      throw nextError;
+      throw toLintErrorObject(nextError, "Non-Error thrown");
     }
     const stop = vi.fn<() => void>();
     createdBotStops.push(stop);
@@ -390,6 +391,8 @@ describe("monitorTelegramProvider (grammY)", () => {
   beforeAll(async () => {
     ({ monitorTelegramProvider } = await import("./monitor.js"));
     ({ resetTelegramPollingLeasesForTests } = await import("./polling-lease.js"));
+    resetTelegramPollingLeasesForTests();
+    await monitorWithAutoAbort();
   });
 
   beforeEach(() => {
@@ -1110,3 +1113,17 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(runSpy).not.toHaveBeenCalled();
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

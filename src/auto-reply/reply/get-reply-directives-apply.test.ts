@@ -1,5 +1,30 @@
-import { describe, expect, it } from "vitest";
-import { formatModelOverrideResetEvent } from "./get-reply-directives-apply.js";
+// Tests applying parsed directives to get-reply execution options.
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { parseInlineDirectives } from "./directive-handling.parse.js";
+import {
+  applyInlineDirectiveOverrides,
+  formatModelOverrideResetEvent,
+} from "./get-reply-directives-apply.js";
+import { createFastTestModelSelectionState } from "./model-selection.js";
+import { buildTestCtx } from "./test-ctx.js";
+
+const mocks = vi.hoisted(() => ({
+  fastLane: vi.fn(),
+  persist: vi.fn(),
+}));
+
+vi.mock("./directive-handling.fast-lane.js", () => ({
+  applyInlineDirectivesFastLane: (...args: unknown[]) => mocks.fastLane(...args),
+}));
+
+vi.mock("./directive-handling.persist.runtime.js", () => ({
+  persistInlineDirectives: (...args: unknown[]) => mocks.persist(...args),
+}));
+
+beforeEach(() => {
+  mocks.fastLane.mockReset();
+  mocks.persist.mockReset();
+});
 
 describe("formatModelOverrideResetEvent", () => {
   it("names the rejected model override and allowlist recovery path", () => {
@@ -19,5 +44,97 @@ describe("formatModelOverrideResetEvent", () => {
         initialModelLabel: "github-copilot/gpt-4o",
       }),
     ).toBe("Model override not allowed for this agent; reverted to github-copilot/gpt-4o.");
+  });
+
+  it("does not tell users to edit the allowlist for stale session overrides", () => {
+    expect(
+      formatModelOverrideResetEvent({
+        rejectedRef: "openai/gpt-5.5",
+        initialModelLabel: "openai/gpt-5.4",
+        reason: "stale",
+      }),
+    ).toBe(
+      "Stored model override openai/gpt-5.5 is stale for this session; reverted to openai/gpt-5.4. Pick a model again with /model if you still want to override the default.",
+    );
+  });
+});
+
+describe("applyInlineDirectiveOverrides", () => {
+  it("stops a mixed inline turn when final directive persistence loses", async () => {
+    const directives = parseInlineDirectives("hello /elevated full");
+    mocks.fastLane.mockResolvedValue({
+      directiveAck: { text: "Elevated FULL enabled." },
+      provider: "openai",
+      model: "gpt-5.5",
+      sessionChangesApplied: true,
+    });
+    mocks.persist.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-5.5",
+      contextTokens: 8192,
+      sessionChangesApplied: false,
+    });
+    const typing = {
+      onReplyStart: async () => {},
+      startTypingLoop: async () => {},
+      startTypingOnText: async () => {},
+      refreshTypingTtl: () => {},
+      isActive: () => false,
+      markRunComplete: () => {},
+      markDispatchIdle: () => {},
+      cleanup: vi.fn(),
+    };
+    const sessionEntry = { sessionId: "session-1", updatedAt: 1 };
+
+    const result = await applyInlineDirectiveOverrides({
+      ctx: buildTestCtx({ Body: "hello /elevated full", CommandAuthorized: true }),
+      cfg: {},
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      agentCfg: {},
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      sessionScope: undefined,
+      isGroup: false,
+      allowTextCommands: true,
+      command: {
+        surface: "webchat",
+        channel: "webchat",
+        ownerList: [],
+        senderIsOwner: true,
+        isAuthorizedSender: true,
+        rawBodyNormalized: "hello /elevated full",
+        commandBodyNormalized: "hello /elevated full",
+      },
+      directives,
+      messageProviderKey: "webchat",
+      elevatedEnabled: true,
+      elevatedAllowed: true,
+      elevatedFailures: [],
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      provider: "openai",
+      model: "gpt-5.5",
+      modelState: createFastTestModelSelectionState({
+        agentCfg: {},
+        provider: "openai",
+        model: "gpt-5.5",
+      }),
+      initialModelLabel: "openai/gpt-5.5",
+      formatModelSwitchEvent: (label) => label,
+      resolvedElevatedLevel: "full",
+      defaultActivation: () => "always",
+      contextTokens: 8192,
+      typing,
+    });
+
+    expect(result).toEqual({
+      kind: "reply",
+      reply: { text: "Session settings were not applied because the session changed. Retry." },
+    });
+    expect(typing.cleanup).toHaveBeenCalledOnce();
   });
 });

@@ -1,12 +1,19 @@
-import fs from "node:fs";
+// Verifies SQLite-backed outbound queue storage, metadata, failure updates,
+// recovery-state markers, and failed-entry moves.
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   ackDelivery,
   enqueueDelivery,
   failDelivery,
+  failDeliveryAfterPlatformSend,
+  failDeliveryBeforePlatformSend,
+  failPendingDelivery,
+  loadPendingDelivery,
   loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
+  markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
   moveToFailed,
 } from "./delivery-queue.js";
@@ -14,10 +21,18 @@ import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-que
 
 describe("delivery-queue storage", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
-  const queueDir = () => path.join(tmpDir(), "delivery-queue");
-  const queueJsonFiles = () => fs.readdirSync(queueDir()).filter((file) => file.endsWith(".json"));
   const enqueueTextDelivery = (params: Parameters<typeof enqueueDelivery>[0], rootDir = tmpDir()) =>
     enqueueDelivery(params, rootDir);
+
+  function readStatus(id: string): string | undefined {
+    const { db } = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
+    });
+    const row = db
+      .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = ?")
+      .get(id) as { status?: string } | undefined;
+    return row?.status;
+  }
 
   describe("enqueue + ack lifecycle", () => {
     it("creates and removes a queue entry", async () => {
@@ -25,6 +40,8 @@ describe("delivery-queue storage", () => {
         {
           channel: "directchat",
           to: "+1555",
+          queuePolicy: "required",
+          requireUnknownSendReconciliation: true,
           payloads: [{ text: "hello" }],
           renderedBatchPlan: {
             payloadCount: 1,
@@ -54,13 +71,12 @@ describe("delivery-queue storage", () => {
         },
         tmpDir(),
       );
-
-      expect(queueJsonFiles()).toEqual([`${id}.json`]);
-
       const entry = readQueuedEntry(tmpDir(), id);
       expect(entry.id).toBe(id);
       expect(entry.channel).toBe("directchat");
       expect(entry.to).toBe("+1555");
+      expect(entry.queuePolicy).toBe("required");
+      expect(entry.requireUnknownSendReconciliation).toBe(true);
       expect(entry.renderedBatchPlan).toEqual({
         payloadCount: 1,
         textCount: 1,
@@ -90,47 +106,24 @@ describe("delivery-queue storage", () => {
       expect(entry.payloads).toEqual([{ text: "hello" }]);
 
       await ackDelivery(id, tmpDir());
-      expect(queueJsonFiles()).toHaveLength(0);
+      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     });
 
     it("ack is idempotent (no error on missing file)", async () => {
       await expect(ackDelivery("nonexistent-id", tmpDir())).resolves.toBeUndefined();
     });
 
-    it.each([
-      {
-        name: "ack cleans up leftover .delivered marker when .json is already gone",
-        payload: { channel: "directchat", to: "+1", payloads: [{ text: "stale-marker" }] },
-        prepareDeliveredMarker: true,
-        action: (id: string) => ackDelivery(id, tmpDir()),
-      },
-      {
-        name: "ack removes .delivered marker so recovery does not replay",
-        payload: { channel: "directchat", to: "+1", payloads: [{ text: "ack-test" }] },
-        action: (id: string) => ackDelivery(id, tmpDir()),
-      },
-      {
-        name: "loadPendingDeliveries cleans up stale .delivered markers without replaying",
-        payload: { channel: "forum", to: "99", payloads: [{ text: "stale" }] },
-        prepareDeliveredMarker: true,
-        action: () => loadPendingDeliveries(tmpDir()),
-        expectedEntriesLength: 0,
-      },
-    ])("$name", async ({ payload, prepareDeliveredMarker, action, expectedEntriesLength }) => {
-      const id = await enqueueTextDelivery(payload);
-      const deliveredPath = path.join(queueDir(), `${id}.delivered`);
+    it("removes acked entries from pending recovery", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "directchat",
+        to: "+1",
+        payloads: [{ text: "ack-test" }],
+      });
 
-      if (prepareDeliveredMarker) {
-        fs.renameSync(path.join(queueDir(), `${id}.json`), deliveredPath);
-      }
+      await ackDelivery(id, tmpDir());
 
-      const entries = await action(id);
-
-      if (expectedEntriesLength !== undefined) {
-        expect(entries).toHaveLength(expectedEntriesLength);
-      }
-      expect(fs.existsSync(deliveredPath)).toBe(false);
-      expect(fs.existsSync(path.join(queueDir(), `${id}.json`))).toBe(false);
+      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+      expect(readStatus(id)).toBeUndefined();
     });
   });
 
@@ -145,12 +138,15 @@ describe("delivery-queue storage", () => {
         tmpDir(),
       );
 
-      await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), {
+        replyToId: "1782584644.377229",
+      });
 
       const entry = readQueuedEntry(tmpDir(), id);
       expect(typeof entry.platformSendStartedAt).toBe("number");
       expect((entry.platformSendStartedAt as number) > 0).toBe(true);
       expect(entry.recoveryState).toBe("send_attempt_started");
+      expect(entry.effectiveReplyToId).toBe("1782584644.377229");
       expect(entry.retryCount).toBe(0);
     });
 
@@ -174,6 +170,31 @@ describe("delivery-queue storage", () => {
       expect(entry.retryCount).toBe(0);
     });
 
+    it("refreshes the attempt timestamp immediately before provider I/O", async () => {
+      const id = await enqueueTextDelivery(
+        {
+          channel: "forum",
+          to: "123",
+          payloads: [{ text: "test" }],
+        },
+        tmpDir(),
+      );
+
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(1_000);
+        await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+        vi.setSystemTime(9_000);
+        await markDeliveryPlatformSendDispatched(id, tmpDir());
+      } finally {
+        vi.useRealTimers();
+      }
+
+      const entry = readQueuedEntry(tmpDir(), id);
+      expect(entry.platformSendStartedAt).toBe(9_000);
+      expect(entry.recoveryState).toBe("send_attempt_started");
+    });
+
     it("increments retryCount, records attempt time, and sets lastError", async () => {
       const id = await enqueueTextDelivery(
         {
@@ -192,6 +213,96 @@ describe("delivery-queue storage", () => {
       expect((entry.lastAttemptAt as number) > 0).toBe(true);
       expect(entry.lastError).toBe("connection refused");
     });
+
+    it("keeps post-send failure evidence while recording the retry failure", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "forum",
+        to: "123",
+        payloads: [{ text: "test" }],
+      });
+
+      await failDeliveryAfterPlatformSend(id, "state update failed", tmpDir());
+
+      const entry = readQueuedEntry(tmpDir(), id);
+      expect(entry.retryCount).toBe(1);
+      expect(entry.lastError).toBe("state update failed");
+      expect(entry.recoveryState).toBe("unknown_after_send");
+      expect(typeof entry.platformSendStartedAt).toBe("number");
+    });
+
+    it("atomically records a pre-send failure without retaining send evidence", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "forum",
+        to: "123",
+        payloads: [{ text: "test" }],
+      });
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+
+      await failDeliveryBeforePlatformSend(id, "connect refused", tmpDir());
+
+      const entry = readQueuedEntry(tmpDir(), id);
+      expect(entry.retryCount).toBe(1);
+      expect(entry.lastError).toBe("connect refused");
+      expect(entry.recoveryState).toBeUndefined();
+      expect(entry.platformSendStartedAt).toBeUndefined();
+    });
+  });
+
+  describe("failPendingDelivery", () => {
+    it("atomically writes the failed status and immutable reason into row and entry JSON", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "slack",
+        to: "C123",
+        accountId: "enterprise",
+        payloads: [{ text: "blocked" }],
+      });
+      const entry = await loadPendingDelivery(id, tmpDir());
+      if (!entry) {
+        throw new Error("expected pending entry");
+      }
+
+      await expect(
+        failPendingDelivery(
+          {
+            id,
+            expectedStatus: "pending",
+            lastError: "unsupported_enterprise_slack_delivery",
+            entry,
+          },
+          tmpDir(),
+        ),
+      ).resolves.toEqual({ status: "failed" });
+
+      expect(await loadPendingDelivery(id, tmpDir())).toBeNull();
+      expect(readStatus(id)).toBe("failed");
+      expect(readQueuedEntry(tmpDir(), id).lastError).toBe("unsupported_enterprise_slack_delivery");
+    });
+
+    it("returns a typed no-op when a status race already moved the row", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "slack",
+        to: "C123",
+        payloads: [{ text: "blocked" }],
+      });
+      const entry = await loadPendingDelivery(id, tmpDir());
+      if (!entry) {
+        throw new Error("expected pending entry");
+      }
+      await moveToFailed(id, tmpDir());
+
+      await expect(
+        failPendingDelivery(
+          {
+            id,
+            expectedStatus: "pending",
+            lastError: "unsupported_enterprise_slack_delivery",
+            entry,
+          },
+          tmpDir(),
+        ),
+      ).resolves.toEqual({ status: "not_pending" });
+      expect(readQueuedEntry(tmpDir(), id).lastError).toBeUndefined();
+    });
   });
 
   describe("moveToFailed", () => {
@@ -207,14 +318,29 @@ describe("delivery-queue storage", () => {
 
       await moveToFailed(id, tmpDir());
 
-      const failedDir = path.join(queueDir(), "failed");
-      expect(fs.existsSync(path.join(queueDir(), `${id}.json`))).toBe(false);
-      expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
+      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+      expect(readStatus(id)).toBe("failed");
+    });
+
+    it("does not remove failed entries when a stale ack arrives", async () => {
+      const id = await enqueueTextDelivery(
+        {
+          channel: "workspace",
+          to: "#general",
+          payloads: [{ text: "hi" }],
+        },
+        tmpDir(),
+      );
+
+      await moveToFailed(id, tmpDir());
+      await ackDelivery(id, tmpDir());
+
+      expect(readStatus(id)).toBe("failed");
     });
   });
 
   describe("loadPendingDeliveries", () => {
-    it("returns empty array when queue directory does not exist", async () => {
+    it("returns empty array for an empty state database", async () => {
       expect(await loadPendingDeliveries(path.join(tmpDir(), "no-such-dir"))).toStrictEqual([]);
     });
 
@@ -269,26 +395,6 @@ describe("delivery-queue storage", () => {
         requesterSenderUsername: "sender.one",
         requesterSenderE164: "+15551234567",
       });
-    });
-
-    it("backfills lastAttemptAt for legacy retry entries during load", async () => {
-      const id = await enqueueTextDelivery({
-        channel: "directchat",
-        to: "+1",
-        payloads: [{ text: "legacy" }],
-      });
-      const filePath = path.join(queueDir(), `${id}.json`);
-      const legacyEntry = readQueuedEntry(tmpDir(), id);
-      legacyEntry.retryCount = 2;
-      delete legacyEntry.lastAttemptAt;
-      fs.writeFileSync(filePath, JSON.stringify(legacyEntry), "utf-8");
-
-      const entries = await loadPendingDeliveries(tmpDir());
-      expect(entries).toHaveLength(1);
-      expect(entries[0]?.lastAttemptAt).toBe(entries[0]?.enqueuedAt);
-
-      const persisted = readQueuedEntry(tmpDir(), id);
-      expect(persisted.lastAttemptAt).toBe(persisted.enqueuedAt);
     });
   });
 });

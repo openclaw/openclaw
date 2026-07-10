@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Builds browser runtime bundles for the diffs viewer assets.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,20 +8,63 @@ import { build } from "esbuild";
 
 const modulePath = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(modulePath), "..");
+const pierreDiffsEmptySideEffectNamespace = "openclaw-diffs-empty-side-effect";
+const pierreDiffsEmptySideEffectPath = "pierre-diffs-parse-decorations-side-effect";
 
 const targets = {
   curated: {
     entry: "extensions/diffs/src/viewer-client.ts",
     output: "extensions/diffs/assets/viewer-runtime.js",
     shikiAlias: "scripts/diffs-shiki-curated.ts",
+    languagePackAvailable: false,
   },
   full: {
     entry: "extensions/diffs/src/viewer-client.ts",
     output: "extensions/diffs-language-pack/assets/viewer-runtime.js",
+    languagePackAvailable: true,
   },
 };
 
-export async function buildDiffsViewerRuntime(targetName) {
+function toPosixPath(value) {
+  return String(value ?? "").replaceAll("\\", "/");
+}
+
+/**
+ * Creates the esbuild plugin that neutralizes Pierre diffs' browser side-effect import.
+ */
+export function createPierreDiffsSideEffectImportPlugin() {
+  return {
+    name: "openclaw-diffs-pierre-side-effect-imports",
+    setup(buildContext) {
+      buildContext.onResolve({ filter: /^diff$/ }, (args) => {
+        const importer = toPosixPath(args.importer);
+        if (!importer.endsWith("/@pierre/diffs/dist/utils/parseDiffDecorations.js")) {
+          return undefined;
+        }
+        return {
+          path: pierreDiffsEmptySideEffectPath,
+          namespace: pierreDiffsEmptySideEffectNamespace,
+          sideEffects: true,
+        };
+      });
+      buildContext.onLoad(
+        {
+          filter: /^pierre-diffs-parse-decorations-side-effect$/,
+          namespace: pierreDiffsEmptySideEffectNamespace,
+        },
+        () => ({
+          contents: "export {};\n",
+          loader: "js",
+        }),
+      );
+    },
+  };
+}
+
+/**
+ * Builds one configured diffs viewer runtime target.
+ */
+async function buildDiffsViewerRuntime(targetName) {
   const target = targets[targetName];
   if (!target) {
     throw new Error(
@@ -39,23 +83,27 @@ export async function buildDiffsViewerRuntime(targetName) {
     format: "esm",
     minify: true,
     define: {
+      __OPENCLAW_DIFFS_LANGUAGE_PACK__: String(target.languagePackAvailable),
       NaN: "Number.NaN",
     },
     legalComments: "none",
     outfile: outputPath,
     write: false,
-    plugins: target.shikiAlias
-      ? [
-          {
-            name: "openclaw-diffs-curated-shiki",
-            setup(buildContext) {
-              buildContext.onResolve({ filter: /^shiki$/ }, () => ({
-                path: path.join(repoRoot, target.shikiAlias),
-              }));
+    plugins: [
+      createPierreDiffsSideEffectImportPlugin(),
+      ...(target.shikiAlias
+        ? [
+            {
+              name: "openclaw-diffs-curated-shiki",
+              setup(buildContext) {
+                buildContext.onResolve({ filter: /^shiki$/ }, () => ({
+                  path: path.join(repoRoot, target.shikiAlias),
+                }));
+              },
             },
-          },
-        ]
-      : [],
+          ]
+        : []),
+    ],
   });
 
   const outputFile = result.outputFiles?.[0];

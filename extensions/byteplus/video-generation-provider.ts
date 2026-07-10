@@ -1,3 +1,7 @@
+/**
+ * BytePlus Seedance video generation provider implementation.
+ */
+import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -8,12 +12,18 @@ import {
   fetchProviderDownloadResponse,
   fetchProviderOperationResponse,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   waitProviderOperationPollInterval,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import {
+  asSafeIntegerInRange,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -25,6 +35,10 @@ const DEFAULT_BYTEPLUS_VIDEO_MODEL = "seedance-1-0-lite-t2v-250428";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
+const BYTEPLUS_SEED_MAX = 2_147_483_647;
+const BYTEPLUS_MIN_DURATION_SECONDS = 2;
+const BYTEPLUS_MAX_DURATION_SECONDS = 12;
+const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 
 type BytePlusTaskCreateResponse = {
   id?: unknown;
@@ -43,16 +57,13 @@ type BytePlusTaskResponse = {
 
 type BytePlusTaskStatus = "running" | "failed" | "queued" | "succeeded" | "cancelled";
 
-async function readBytePlusJsonResponse<T>(
-  response: Pick<Response, "json">,
-  label: string,
-): Promise<T> {
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch (cause) {
-    throw new Error(`${label}: malformed JSON response`, { cause });
-  }
+async function readBytePlusJsonResponse<T>(response: Response, label: string): Promise<T> {
+  // BytePlus submit/poll task bodies are read through the shared byte-bounded reader
+  // (readResponseWithLimit, via readProviderJsonResponse) so a hostile or buggy endpoint
+  // that streams an unbounded JSON body cannot force the runtime to buffer the whole
+  // payload before parsing. Overflow cancels the stream and throws a bounded error;
+  // malformed JSON keeps the existing `${label}: malformed JSON response` wrapping.
+  const payload = await readProviderJsonResponse<unknown>(response, label);
   if (!isRecord(payload)) {
     throw new Error(`${label}: malformed JSON response`);
   }
@@ -97,8 +108,12 @@ function resolveBytePlusVideoBaseUrl(req: VideoGenerationRequest): string {
   );
 }
 
-function toDataUrl(buffer: Buffer, mimeType: string): string {
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
+function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
+  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured * 1024 * 1024);
+  }
+  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
 function resolveBytePlusImageUrl(req: VideoGenerationRequest): string | undefined {
@@ -113,7 +128,28 @@ function resolveBytePlusImageUrl(req: VideoGenerationRequest): string | undefine
   if (!input.buffer) {
     throw new Error("BytePlus reference image is missing image data.");
   }
-  return toDataUrl(input.buffer, normalizeOptionalString(input.mimeType) ?? "image/png");
+  return toImageDataUrl({ ...input, buffer: input.buffer, defaultMimeType: "image/png" });
+}
+
+function resolveBytePlusSeed(value: unknown): number | undefined {
+  return asSafeIntegerInRange(value, { min: -1, max: BYTEPLUS_SEED_MAX });
+}
+
+function resolveBytePlusDurationSeconds(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return asSafeIntegerInRange(Math.round(value), {
+    min: BYTEPLUS_MIN_DURATION_SECONDS,
+    max: BYTEPLUS_MAX_DURATION_SECONDS,
+  });
+}
+
+function readBytePlusDurationSeconds(value: unknown): number | undefined {
+  return asSafeIntegerInRange(value, {
+    min: BYTEPLUS_MIN_DURATION_SECONDS,
+    max: BYTEPLUS_MAX_DURATION_SECONDS,
+  });
 }
 
 async function pollBytePlusTask(params: {
@@ -155,8 +191,6 @@ async function pollBytePlusTask(params: {
         throw new Error(
           readBytePlusErrorMessage(payload.error) || "BytePlus video generation failed",
         );
-      case "queued":
-      case "running":
       default:
         await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
         break;
@@ -169,6 +203,7 @@ async function downloadBytePlusVideo(params: {
   url: string;
   timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
+  maxBytes: number;
 }): Promise<GeneratedVideoAsset> {
   const response = await fetchProviderDownloadResponse({
     url: params.url,
@@ -179,14 +214,18 @@ async function downloadBytePlusVideo(params: {
     requestFailedMessage: "BytePlus generated video download failed",
   });
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-  const arrayBuffer = await response.arrayBuffer();
+  const buffer = await readResponseWithLimit(response, params.maxBytes, {
+    onOverflow: ({ maxBytes }) =>
+      new Error(`BytePlus generated video download exceeds ${maxBytes} bytes`),
+  });
   return {
-    buffer: Buffer.from(arrayBuffer),
+    buffer,
     mimeType,
     fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
   };
 }
 
+/** Builds the BytePlus video generation provider registered by the plugin. */
 export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider {
   return {
     id: "byteplus",
@@ -297,8 +336,9 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
       if (resolution) {
         body.resolution = resolution;
       }
-      if (typeof req.durationSeconds === "number" && Number.isFinite(req.durationSeconds)) {
-        body.duration = Math.max(1, Math.round(req.durationSeconds));
+      const duration = resolveBytePlusDurationSeconds(req.durationSeconds);
+      if (duration !== undefined) {
+        body.duration = duration;
       }
       if (typeof req.audio === "boolean") {
         body.generate_audio = req.audio;
@@ -310,7 +350,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
       // Forward declared providerOptions: seed, draft, camerafixed.
       // draft=true forces 480p resolution for faster generation.
       const opts = req.providerOptions ?? {};
-      const seed = typeof opts.seed === "number" ? opts.seed : undefined;
+      const seed = resolveBytePlusSeed(opts.seed);
       const draft = opts.draft === true;
       // Official JSON body field is camera_fixed (with underscore).
       const cameraFixed = typeof opts.camera_fixed === "boolean" ? opts.camera_fixed : undefined;
@@ -364,6 +404,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
             defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           }),
           fetchFn,
+          maxBytes: resolveGeneratedVideoMaxBytes(req),
         });
         return {
           videos: [video],
@@ -374,7 +415,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
             videoUrl,
             ratio: normalizeOptionalString(completed.ratio),
             resolution: normalizeOptionalString(completed.resolution),
-            duration: typeof completed.duration === "number" ? completed.duration : undefined,
+            duration: readBytePlusDurationSeconds(completed.duration),
           },
         };
       } finally {

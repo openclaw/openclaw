@@ -1,3 +1,4 @@
+// Covers strict finite number parsing helpers.
 import { describe, expect, it } from "vitest";
 import {
   parseFiniteNumber,
@@ -21,7 +22,7 @@ describe("parseFiniteNumber", () => {
     expectParserCases(parseFiniteNumber, [
       { value: 42, expected: 42 },
       { value: "3.14", expected: 3.14 },
-      { value: " 3.14ms", expected: 3.14 },
+      { value: " 3.14ms", expected: undefined },
       { value: "+7", expected: 7 },
       { value: "1e3", expected: 1000 },
       { value: Number.NaN, expected: undefined },

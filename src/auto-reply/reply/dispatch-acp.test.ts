@@ -1,15 +1,16 @@
+// Tests ACP dispatch wiring, command bypass, and runtime event handling.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MediaUnderstandingSkipError } from "../../../packages/media-understanding-common/src/errors.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
-import type { MediaUnderstandingSkipError } from "../../media-understanding/errors.js";
+import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import {
-  resolveAgentAttachments,
   resolveAgentTurnAttachments,
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
@@ -31,6 +32,13 @@ const managerMocks = vi.hoisted(() => ({
   })),
 }));
 
+const auditMocks = vi.hoisted(() => ({
+  emitAcpLifecycleStart: vi.fn(),
+  emitAcpRuntimeEvent: vi.fn(),
+  emitAcpLifecycleEnd: vi.fn(),
+  emitAcpLifecycleError: vi.fn(),
+}));
+
 const policyMocks = vi.hoisted(() => ({
   resolveAcpDispatchPolicyError: vi.fn<(cfg: OpenClawConfig) => AcpRuntimeError | null>(() => null),
   resolveAcpAgentPolicyError: vi.fn<(cfg: OpenClawConfig, agent: string) => AcpRuntimeError | null>(
@@ -50,6 +58,10 @@ const channelPluginMocks = vi.hoisted(() => ({
       return undefined;
     }
     return {
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
       outbound: {
         shouldTreatDeliveredTextAsVisible: ({
           kind,
@@ -76,7 +88,9 @@ const ttsMocks = vi.hoisted(() => ({
 }));
 
 const mediaUnderstandingMocks = vi.hoisted(() => ({
-  applyMediaUnderstanding: vi.fn(async (_params: unknown) => undefined),
+  applyMediaUnderstanding: vi.fn<
+    (_params: unknown) => Promise<ApplyMediaUnderstandingResult | undefined>
+  >(async () => undefined),
 }));
 
 const acpAttachmentBuffers = vi.hoisted(() => new Map<string, Buffer>());
@@ -107,6 +121,18 @@ vi.mock("./dispatch-acp-manager.runtime.js", () => ({
       bindingServiceMocks.listBySession(targetSessionKey),
     unbind: (input: unknown) => bindingServiceMocks.unbind(input),
   }),
+}));
+
+vi.mock("../../agents/command/attempt-execution.runtime.js", () => ({
+  createAcpToolLifecycleTracker: () => ({
+    active: new Map(),
+    terminalToolCallIds: new Set(),
+    saturated: false,
+  }),
+  emitAcpLifecycleStart: auditMocks.emitAcpLifecycleStart,
+  emitAcpRuntimeEvent: auditMocks.emitAcpRuntimeEvent,
+  emitAcpLifecycleEnd: auditMocks.emitAcpLifecycleEnd,
+  emitAcpLifecycleError: auditMocks.emitAcpLifecycleError,
 }));
 
 vi.mock("../../acp/policy.js", () => ({
@@ -169,13 +195,13 @@ vi.mock("./dispatch-acp-media.runtime.js", () => ({
     constructor(private readonly attachments: Array<{ path?: string; index: number }>) {}
     async getBuffer({ attachmentIndex }: { attachmentIndex: number }) {
       const attachment = this.attachments.find((item) => item.index === attachmentIndex);
-      const path = attachment?.path;
-      const buffer = path ? acpAttachmentBuffers.get(path) : undefined;
+      const pathLocal = attachment?.path;
+      const buffer = pathLocal ? acpAttachmentBuffers.get(pathLocal) : undefined;
       if (buffer) {
         return {
           buffer,
           mime: "image/png",
-          fileName: path,
+          fileName: pathLocal,
           size: buffer.length,
         };
       }
@@ -193,6 +219,11 @@ vi.mock("./dispatch-acp-session.runtime.js", () => ({
 
 vi.mock("../../logging/diagnostic.js", () => ({
   markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
+  isStuckSessionRecoveryEnabled: (config?: { diagnostics?: { enabled?: boolean } }) =>
+    config?.diagnostics?.enabled !== false,
+  requestStuckDiagnosticSessionRecovery: vi.fn(),
+  resolveStuckSessionWarnMs: () => 120_000,
+  resolveStuckSessionAbortMs: () => 360_000,
 }));
 
 vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
@@ -212,7 +243,7 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function mockArg(source: MockCallSource, callIndex: number, argIndex: number, label: string) {
+function mockArg(source: MockCallSource, callIndex: number, argIndex: number, _label: string) {
   return source.mock.calls[callIndex]?.[argIndex];
 }
 
@@ -292,6 +323,7 @@ function createAcpConfigWithVisibleToolTags(): OpenClawConfig {
 
 async function runDispatch(params: {
   bodyForAgent: string;
+  runId?: string;
   cfg?: OpenClawConfig;
   dispatcher?: ReplyDispatcher;
   shouldRouteToOriginating?: boolean;
@@ -299,11 +331,13 @@ async function runDispatch(params: {
   originatingTo?: string;
   onReplyStart?: () => void;
   images?: Array<{ data: string; mimeType: string }>;
+  abortSignal?: AbortSignal;
   ctxOverrides?: Record<string, unknown>;
   sessionKeyOverride?: string;
   suppressUserDelivery?: boolean;
   suppressReplyLifecycle?: boolean;
   sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+  toolsAllow?: string[];
 }) {
   const targetSessionKey = params.sessionKeyOverride ?? sessionKey;
   return tryDispatchAcpReply({
@@ -316,8 +350,10 @@ async function runDispatch(params: {
     }),
     cfg: params.cfg ?? createAcpTestConfig(),
     dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
+    ...(params.runId ? { runId: params.runId } : {}),
     sessionKey: targetSessionKey,
     images: params.images,
+    abortSignal: params.abortSignal,
     inboundAudio: false,
     suppressUserDelivery: params.suppressUserDelivery,
     suppressReplyLifecycle: params.suppressReplyLifecycle,
@@ -331,6 +367,7 @@ async function runDispatch(params: {
       : {}),
     shouldSendToolSummaries: true,
     bypassForCommand: false,
+    toolsAllow: params.toolsAllow,
     ...(params.onReplyStart ? { onReplyStart: params.onReplyStart } : {}),
     recordProcessed: vi.fn(),
     markIdle: vi.fn(),
@@ -420,6 +457,10 @@ function expectRoutedPayload(callIndex: number, payload: Partial<MockTtsReply>) 
 
 describe("tryDispatchAcpReply", () => {
   beforeEach(() => {
+    auditMocks.emitAcpLifecycleStart.mockReset();
+    auditMocks.emitAcpRuntimeEvent.mockReset();
+    auditMocks.emitAcpLifecycleEnd.mockReset();
+    auditMocks.emitAcpLifecycleError.mockReset();
     managerMocks.resolveSession.mockReset();
     managerMocks.runTurn.mockReset();
     managerMocks.runTurn.mockImplementation(
@@ -460,6 +501,74 @@ describe("tryDispatchAcpReply", () => {
     bindingServiceMocks.unbind.mockReset();
     bindingServiceMocks.unbind.mockResolvedValue([]);
     globalThis.fetch = originalFetch;
+  });
+
+  it("projects normal ACP dispatch lifecycle and tool events into audit diagnostics", async () => {
+    setReadyAcpResolution();
+    mockToolLifecycleTurn("tool-audit");
+
+    await runDispatch({ bodyForAgent: "audit this turn" });
+
+    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: expect.any(String),
+        sessionKey,
+        startedAt: expect.any(Number),
+        auditOnly: true,
+      }),
+    );
+    expect(auditMocks.emitAcpRuntimeEvent).toHaveBeenCalledTimes(3);
+    expect(auditMocks.emitAcpRuntimeEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: expect.any(String),
+        sessionKey,
+        auditOnly: true,
+        event: expect.objectContaining({ type: "tool_call", toolCallId: "tool-audit" }),
+      }),
+    );
+    expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: expect.any(String), sessionKey, auditOnly: true }),
+    );
+    expect(auditMocks.emitAcpLifecycleError).not.toHaveBeenCalled();
+  });
+
+  it("keeps caller-owned run ids on the shared lifecycle path", async () => {
+    setReadyAcpResolution();
+
+    await runDispatch({ bodyForAgent: "audit this turn", runId: "caller-run" });
+
+    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "caller-run", auditOnly: false }),
+    );
+    expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "caller-run", auditOnly: false }),
+    );
+  });
+
+  it("keeps audit run ids unique when channel message ids repeat", async () => {
+    setReadyAcpResolution();
+
+    await runDispatch({
+      bodyForAgent: "first turn",
+      ctxOverrides: { MessageSid: "channel-local-1" },
+    });
+    await runDispatch({
+      bodyForAgent: "second turn",
+      ctxOverrides: { MessageSid: "channel-local-1" },
+    });
+
+    const auditRunIds = [0, 1].map(
+      (index) =>
+        requireRecord(
+          mockArg(auditMocks.emitAcpLifecycleStart, index, 0, `audit start ${index}`),
+          "audit start",
+        ).runId,
+    );
+    expect(new Set(auditRunIds).size).toBe(2);
+    expect([runTurnCall(0).requestId, runTurnCall(1).requestId]).toEqual([
+      "channel-local-1",
+      "channel-local-1",
+    ]);
   });
 
   it("routes default ACP output to the originating channel as a final reply", async () => {
@@ -668,6 +777,55 @@ describe("tryDispatchAcpReply", () => {
 
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
     expect(onReplyStart).not.toHaveBeenCalled();
+    expect(auditMocks.emitAcpLifecycleStart).not.toHaveBeenCalled();
+    expect(auditMocks.emitAcpLifecycleEnd).not.toHaveBeenCalled();
+    expect(auditMocks.emitAcpLifecycleError).not.toHaveBeenCalled();
+  });
+
+  it("records cancellation only after ACP output flushing", async () => {
+    setReadyAcpResolution();
+    const abortController = new AbortController();
+    managerMocks.runTurn.mockImplementationOnce(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "partial", tag: "agent_message_chunk" });
+        await onEvent({ type: "done", status: "cancelled" });
+        abortController.abort();
+      },
+    );
+
+    await runDispatch({
+      bodyForAgent: "cancel this turn",
+      abortSignal: abortController.signal,
+    });
+
+    expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        abortSignal: abortController.signal,
+        resultStatus: "cancelled",
+      }),
+    );
+    expect(auditMocks.emitAcpLifecycleError).not.toHaveBeenCalled();
+  });
+
+  it("records an ACP error when output finalization fails", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("visible output");
+    const { dispatcher } = createDispatcher();
+    vi.mocked(dispatcher.waitForIdle)
+      .mockRejectedValueOnce(new Error("output settlement failed"))
+      .mockResolvedValue(undefined);
+
+    await runDispatch({
+      bodyForAgent: "finalize this turn",
+      dispatcher,
+    });
+
+    expect(auditMocks.emitAcpLifecycleEnd).not.toHaveBeenCalled();
+    expect(auditMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: expect.objectContaining({ message: "output settlement failed" }),
+      }),
+    );
   });
 
   it("skips media understanding for text-only ACP turns", async () => {
@@ -679,6 +837,34 @@ describe("tryDispatchAcpReply", () => {
     });
 
     expect(mediaUnderstandingMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+  });
+
+  it("skips media understanding for cached stickers while preserving their attachment", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("cached sticker");
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const stickerPath = path.join(tempDir, "sticker.webp");
+    try {
+      await fs.writeFile(stickerPath, "image-bytes");
+
+      await runDispatch({
+        bodyForAgent: "[Sticker] Cached description",
+        ctxOverrides: {
+          MediaPath: stickerPath,
+          MediaPaths: [stickerPath],
+          MediaType: "image/webp",
+          MediaTypes: ["image/webp"],
+          Sticker: { cachedDescription: "Cached description" },
+          StickerMediaIncluded: true,
+          SkipStickerMediaUnderstanding: true,
+        },
+      });
+
+      expect(mediaUnderstandingMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+      expect(managerMocks.runTurn).toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("passes the ACP agent directory to media understanding", async () => {
@@ -717,60 +903,6 @@ describe("tryDispatchAcpReply", () => {
           "media understanding",
         ).agentDir,
       ).toBe(agentDir);
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("forwards normalized image attachments into agent runtime turns", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
-    const imagePath = path.join(tempDir, "inbound.png");
-    try {
-      await fs.writeFile(imagePath, "image-bytes");
-      const attachments = await resolveAgentAttachments({
-        cfg: createAcpTestConfig({
-          channels: {
-            imessage: {
-              attachmentRoots: [tempDir],
-            },
-          },
-        }),
-        ctx: buildTestCtx({
-          Provider: "imessage",
-          Surface: "imessage",
-          MediaPath: imagePath,
-          MediaType: "image/png",
-        }),
-        runtime: {
-          MediaAttachmentCache: class {
-            async getBuffer() {
-              return {
-                buffer: Buffer.from("image-bytes"),
-                mime: "image/png",
-                fileName: "inbound.png",
-                size: "image-bytes".length,
-              };
-            }
-          } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
-          isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
-            false,
-          normalizeAttachments: (ctx) => [
-            {
-              path: ctx.MediaPath,
-              mime: ctx.MediaType,
-              index: 0,
-            },
-          ],
-          resolveMediaAttachmentLocalRoots: () => [tempDir],
-        },
-      });
-
-      expect(attachments).toEqual([
-        {
-          mediaType: "image/png",
-          data: Buffer.from("image-bytes").toString("base64"),
-        },
-      ]);
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -1207,6 +1339,47 @@ describe("tryDispatchAcpReply", () => {
     ]);
   });
 
+  it("forwards media-understanding PDF page images alongside current image attachments", async () => {
+    setReadyAcpResolution();
+    const currentPath = "/tmp/openclaw-current-image.png";
+    const currentImage = Buffer.from("current-image");
+    const pdfPage = {
+      type: "image" as const,
+      mimeType: "image/png",
+      data: Buffer.from("pdf-page").toString("base64"),
+      attachmentIndex: 1,
+    };
+    acpAttachmentBuffers.set(currentPath, currentImage);
+    mediaUnderstandingMocks.applyMediaUnderstanding.mockResolvedValueOnce({
+      outputs: [],
+      decisions: [],
+      extractedFileImages: [pdfPage],
+      appliedImage: false,
+      appliedAudio: false,
+      appliedVideo: false,
+      appliedFile: true,
+    });
+
+    await runDispatch({
+      bodyForAgent: "describe current image and scanned PDF",
+      ctxOverrides: {
+        MediaPath: currentPath,
+        MediaType: "image/png",
+      },
+    });
+
+    expect(runTurnCall().attachments).toEqual([
+      {
+        mediaType: "image/png",
+        data: currentImage.toString("base64"),
+      },
+      {
+        mediaType: "image/png",
+        data: pdfPage.data,
+      },
+    ]);
+  });
+
   it("preserves chat.send inline image attachments over recent history images", async () => {
     setReadyAcpResolution();
     const image = {
@@ -1385,6 +1558,59 @@ describe("tryDispatchAcpReply", () => {
       "ACP dispatch is disabled by policy.",
     );
     expect(bindingServiceMocks.unbind).not.toHaveBeenCalled();
+    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledOnce();
+    expect(auditMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalOutcome: "blocked" }),
+    );
+    expect(auditMocks.emitAcpLifecycleEnd).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when ACP dispatch cannot enforce restrictive runtime toolsAllow", async () => {
+    setReadyAcpResolution();
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "test",
+      dispatcher,
+      toolsAllow: ["message"],
+    });
+
+    expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
+    expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain("runtime toolsAllow");
+    expect(auditMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalOutcome: "blocked" }),
+    );
+  });
+
+  it("audits ACP agent-policy rejections as blocked attempts", async () => {
+    setReadyAcpResolution();
+    policyMocks.resolveAcpAgentPolicyError.mockReturnValue(
+      new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP agent is not allowed by policy."),
+    );
+
+    await runDispatch({ bodyForAgent: "test" });
+
+    expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledOnce();
+    expect(auditMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalOutcome: "blocked" }),
+    );
+    expect(auditMocks.emitAcpLifecycleEnd).not.toHaveBeenCalled();
+  });
+
+  it("allows wildcard runtime toolsAllow through ACP dispatch", async () => {
+    setReadyAcpResolution();
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "test",
+      dispatcher,
+      toolsAllow: ["*"],
+    });
+
+    expect(managerMocks.runTurn).toHaveBeenCalledOnce();
+    expect(runTurnCall().text).toBe("test");
   });
 
   it("does not unbind stale bindings when ACP dispatch is disabled by policy", async () => {

@@ -1,3 +1,4 @@
+// Auth wizard helpers drive authentication wizard flows in tests.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
@@ -5,10 +6,11 @@ import type { RuntimeEnv } from "../../src/runtime.js";
 import { makeTempWorkspace } from "../../src/test-helpers/workspace.js";
 import { captureEnv } from "../../src/test-utils/env.js";
 import type { WizardPrompter } from "../../src/wizard/prompts.js";
+import { createWizardPrompter as createBaseWizardPrompter } from "./wizard-prompter.js";
 
-const noopAsync = async () => {};
-const noop = () => {};
+// Shared auth wizard test helpers for runtime/env setup.
 
+/** Create a RuntimeEnv whose exit method throws for assertions. */
 export function createExitThrowingRuntime(): RuntimeEnv {
   return {
     log: vi.fn(),
@@ -19,23 +21,15 @@ export function createExitThrowingRuntime(): RuntimeEnv {
   };
 }
 
+/** Create a WizardPrompter with default mock answers and caller overrides. */
 export function createWizardPrompter(
   overrides: Partial<WizardPrompter>,
   options?: { defaultSelect?: string },
 ): WizardPrompter {
-  return {
-    intro: vi.fn(noopAsync),
-    outro: vi.fn(noopAsync),
-    note: vi.fn(noopAsync),
-    select: vi.fn(async () => (options?.defaultSelect ?? "") as never),
-    multiselect: vi.fn(async () => []),
-    text: vi.fn(async () => "") as unknown as WizardPrompter["text"],
-    confirm: vi.fn(async () => false),
-    progress: vi.fn(() => ({ update: noop, stop: noop })),
-    ...overrides,
-  };
+  return createBaseWizardPrompter(overrides, { defaultSelect: options?.defaultSelect ?? "" });
 }
 
+/** Create isolated auth state and agent directories for auth tests. */
 export async function setupAuthTestEnv(
   prefix = "openclaw-auth-",
   options?: { agentSubdir?: string },
@@ -56,6 +50,7 @@ type AuthTestLifecycle = {
   cleanup: () => Promise<void>;
 };
 
+/** Capture env and track one state dir for cleanup. */
 export function createAuthTestLifecycle(envKeys: string[]): AuthTestLifecycle {
   const envSnapshot = captureEnv(envKeys);
   let stateDir: string | null = null;
@@ -73,6 +68,7 @@ export function createAuthTestLifecycle(envKeys: string[]): AuthTestLifecycle {
   };
 }
 
+/** Return OPENCLAW_AGENT_DIR or fail the test clearly. */
 export function requireOpenClawAgentDir(): string {
   const agentDir = process.env.OPENCLAW_AGENT_DIR;
   if (!agentDir) {
@@ -81,10 +77,12 @@ export function requireOpenClawAgentDir(): string {
   return agentDir;
 }
 
+/** Resolve the auth profile JSON path for an agent directory. */
 function authProfilePathForAgent(agentDir: string): string {
   return path.join(agentDir, "auth-profiles.json");
 }
 
+/** Read and parse auth profiles for an agent directory. */
 export async function readAuthProfilesForAgent<T>(agentDir: string): Promise<T> {
   const raw = await fs.readFile(authProfilePathForAgent(agentDir), "utf8");
   return JSON.parse(raw) as T;

@@ -1,3 +1,5 @@
+/** Doctor note for workspace bootstrap file size and truncation risk. */
+import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   buildBootstrapInjectionStats,
@@ -9,7 +11,6 @@ import {
   resolveBootstrapTotalMaxChars,
 } from "../agents/embedded-agent-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { note } from "../terminal/note.js";
 
 function formatInt(value: number): string {
   return new Intl.NumberFormat("en-US").format(Math.max(0, Math.floor(value)));
@@ -30,13 +31,20 @@ function formatCauses(causes: Array<"per-file-limit" | "total-limit">): string {
   return causes.map((cause) => (cause === "per-file-limit" ? "max/file" : "max/total")).join(", ");
 }
 
+/**
+ * Analyzes configured bootstrap files and emits warnings when injection will truncate content.
+ *
+ * Returns the raw budget analysis for tests and callers that need structured evidence.
+ */
 export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-  const bootstrapMaxChars = resolveBootstrapMaxChars(cfg);
-  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(cfg);
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, defaultAgentId);
+  const bootstrapMaxChars = resolveBootstrapMaxChars(cfg, defaultAgentId);
+  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(cfg, defaultAgentId);
   const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
     workspaceDir,
     config: cfg,
+    agentId: defaultAgentId,
   });
   const stats = buildBootstrapInjectionStats({
     bootstrapFiles,
@@ -90,10 +98,14 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
     lines.push("");
   }
   if (needsPerFileTip) {
-    lines.push("- Tip: tune `agents.defaults.bootstrapMaxChars` for per-file limits.");
+    lines.push(
+      "- Tip: tune `agents.list[].bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
+    );
   }
   if (needsTotalTip) {
-    lines.push("- Tip: tune `agents.defaults.bootstrapTotalMaxChars` for total-budget limits.");
+    lines.push(
+      "- Tip: tune `agents.list[].bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback, for total-budget limits.",
+    );
   }
 
   note(lines.join("\n"), "Bootstrap file size");

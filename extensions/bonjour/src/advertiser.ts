@@ -1,7 +1,12 @@
+/**
+ * Bonjour advertiser runtime. It publishes gateway/canvas/SSH service records,
+ * watches ciao state, and repairs stuck or conflicting advertisements.
+ */
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { classifyCiaoProcessError, type CiaoProcessErrorClassification } from "./ciao.js";
@@ -12,11 +17,13 @@ const childProcessModule = nodeRequire("node:child_process") as {
   exec: typeof import("node:child_process").exec;
 };
 
-export type GatewayBonjourAdvertiser = {
+/** Running Bonjour advertiser handle. */
+type GatewayBonjourAdvertiser = {
   stop: () => Promise<void>;
 };
 
-export type GatewayBonjourAdvertiseOpts = {
+/** Input data used to publish OpenClaw gateway Bonjour records. */
+type GatewayBonjourAdvertiseOpts = {
   instanceName?: string;
   gatewayPort: number;
   sshPort?: number;
@@ -107,14 +114,10 @@ const defaultLogger = {
 
 const CIAO_MODULE_ID = "@homebridge/ciao";
 const CIAO_WINDOWS_SHELL_COMMANDS = new Set(['arp -a | findstr /C:"---"']);
-let ciaoModulePromise: Promise<CiaoModule> | null = null;
 let ciaoExecHidePatchDepth = 0;
 let restoreCiaoExecHidePatchOnce: (() => void) | null = null;
 
-async function loadCiaoModule(): Promise<CiaoModule> {
-  ciaoModulePromise ??= import(CIAO_MODULE_ID) as Promise<CiaoModule>;
-  return ciaoModulePromise;
-}
+const loadCiaoModule = createLazyRuntimeModule(() => import(CIAO_MODULE_ID) as Promise<CiaoModule>);
 
 function readBonjourDisableOverride(): boolean | null {
   const raw = process.env.OPENCLAW_DISABLE_BONJOUR;
@@ -359,6 +362,7 @@ function installCiaoUnhandledRejectionListener(handler: UnhandledRejectionHandle
   };
 }
 
+/** Start Bonjour advertisements for the local gateway services. */
 export async function startGatewayBonjourAdvertiser(
   opts: GatewayBonjourAdvertiseOpts,
   deps: BonjourAdvertiserDeps = {},
@@ -495,7 +499,10 @@ export async function startGatewayBonjourAdvertiser(
       return { responder, services };
     }
 
-    async function stopCycle(cycle: BonjourCycle | null, opts?: { shutdownResponder?: boolean }) {
+    async function stopCycle(
+      cycle: BonjourCycle | null,
+      optsValue?: { shutdownResponder?: boolean },
+    ) {
       if (!cycle) {
         return;
       }
@@ -507,7 +514,7 @@ export async function startGatewayBonjourAdvertiser(
         }
       }
       try {
-        if (opts?.shutdownResponder) {
+        if (optsValue?.shutdownResponder) {
           await cycle.responder.shutdown();
         }
       } catch {
@@ -568,7 +575,7 @@ export async function startGatewayBonjourAdvertiser(
             .then(() => {
               logger.info(`bonjour: advertised ${serviceSummary(label, svc)}`);
             })
-            .catch((err) => {
+            .catch((err: unknown) => {
               handleAdvertiseFailure(label, svc, err, "failed");
             });
         } catch (err) {
@@ -615,7 +622,7 @@ export async function startGatewayBonjourAdvertiser(
       }
     };
 
-    const recreateAdvertiser = async (reason: string, opts?: { stuckState?: boolean }) => {
+    const recreateAdvertiser = async (reason: string, optsLocal?: { stuckState?: boolean }) => {
       if (stopped || disabled) {
         return;
       }
@@ -624,7 +631,9 @@ export async function startGatewayBonjourAdvertiser(
       }
       recreatePromise = (async () => {
         consecutiveRestarts += 1;
-        consecutiveStuckStateRestarts = opts?.stuckState ? consecutiveStuckStateRestarts + 1 : 0;
+        consecutiveStuckStateRestarts = optsLocal?.stuckState
+          ? consecutiveStuckStateRestarts + 1
+          : 0;
         const now = Date.now();
         while (
           restartTimestamps.length > 0 &&
@@ -742,7 +751,7 @@ export async function startGatewayBonjourAdvertiser(
           )})`,
         );
         try {
-          void svc.advertise().catch((err) => {
+          void svc.advertise().catch((err: unknown) => {
             logger.warn(
               `bonjour: watchdog re-advertise failed (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
             );

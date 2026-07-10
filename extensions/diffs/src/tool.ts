@@ -1,13 +1,15 @@
+// Diffs plugin module implements tool behavior.
 import fs from "node:fs/promises";
-import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
+import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readFiniteNumberParam } from "openclaw/plugin-sdk/param-readers";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import type { Static } from "typebox";
 import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import { PlaywrightDiffScreenshotter, type DiffScreenshotter } from "./browser.js";
 import { resolveDiffImageRenderOptions } from "./config.js";
-import { renderDiffDocument } from "./render.js";
+import { DiffRenderInputError, renderDiffDocument } from "./render.js";
 import type { DiffArtifactStore } from "./store.js";
 import type {
   DiffArtifactContext,
@@ -35,6 +37,7 @@ const MAX_PATCH_BYTES = 2 * 1024 * 1024;
 const MAX_TITLE_BYTES = 1_024;
 const MAX_PATH_BYTES = 2_048;
 const MAX_LANG_BYTES = 128;
+const MAX_DIFF_ARTIFACT_TTL_SECONDS = 21_600;
 
 const DiffsToolSchema = Type.Object(
   {
@@ -82,20 +85,16 @@ const DiffsToolSchema = Type.Object(
     fileFormat: Type.Optional(
       stringEnum(DIFF_OUTPUT_FORMATS, { description: "Rendered file format: png or pdf." }),
     ),
-    fileScale: Type.Optional(
-      Type.Number({
-        description: "Optional rendered-file device scale factor override (1-4).",
-        minimum: 1,
-        maximum: 4,
-      }),
-    ),
-    fileMaxWidth: Type.Optional(
-      Type.Number({
-        description: "Optional rendered-file max width in CSS pixels (640-2400).",
-        minimum: 640,
-        maximum: 2400,
-      }),
-    ),
+    fileScale: optionalFiniteNumberSchema({
+      description: "Optional rendered-file device scale factor override (1-4).",
+      minimum: 1,
+      maximum: 4,
+    }),
+    fileMaxWidth: optionalFiniteNumberSchema({
+      description: "Optional rendered-file max width in CSS pixels (640-2400).",
+      minimum: 640,
+      maximum: 2400,
+    }),
     /** @deprecated Use fileQuality. */
     imageQuality: Type.Optional(
       stringEnum(DIFF_IMAGE_QUALITY_PRESETS, {
@@ -111,33 +110,27 @@ const DiffsToolSchema = Type.Object(
       }),
     ),
     /** @deprecated Use fileScale. */
-    imageScale: Type.Optional(
-      Type.Number({
-        description: "Deprecated alias for fileScale.",
-        deprecated: true,
-        minimum: 1,
-        maximum: 4,
-      }),
-    ),
+    imageScale: optionalFiniteNumberSchema({
+      description: "Deprecated alias for fileScale.",
+      deprecated: true,
+      minimum: 1,
+      maximum: 4,
+    }),
     /** @deprecated Use fileMaxWidth. */
-    imageMaxWidth: Type.Optional(
-      Type.Number({
-        description: "Deprecated alias for fileMaxWidth.",
-        deprecated: true,
-        minimum: 640,
-        maximum: 2400,
-      }),
-    ),
+    imageMaxWidth: optionalFiniteNumberSchema({
+      description: "Deprecated alias for fileMaxWidth.",
+      deprecated: true,
+      minimum: 640,
+      maximum: 2400,
+    }),
     expandUnchanged: Type.Optional(
       Type.Boolean({ description: "Expand unchanged sections instead of collapsing them." }),
     ),
-    ttlSeconds: Type.Optional(
-      Type.Number({
-        description: "Artifact lifetime in seconds. Default: 1800. Maximum: 21600.",
-        minimum: 1,
-        maximum: 21_600,
-      }),
-    ),
+    ttlSeconds: optionalFiniteNumberSchema({
+      description: "Artifact lifetime in seconds. Default: 1800. Maximum: 21600.",
+      minimum: 1,
+      maximum: MAX_DIFF_ARTIFACT_TTL_SECONDS,
+    }),
     baseUrl: Type.Optional(
       Type.String({
         description:
@@ -171,21 +164,44 @@ export function createDiffsTool(params: {
     parameters: DiffsToolSchema,
     execute: async (_toolCallId, rawParams) => {
       const toolParams = rawParams as DiffsToolRawParams;
+      const rawRecord = rawParams as Record<string, unknown>;
       const artifactContext = buildArtifactContext(params.context);
       const input = normalizeDiffInput(toolParams);
+      if (input.kind === "before_after" && input.before === input.after) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Before and after are identical — no changes to render.",
+            },
+          ],
+          details: {
+            changed: false,
+            ...(artifactContext ? { context: artifactContext } : {}),
+          },
+        };
+      }
       const mode = normalizeMode(toolParams.mode, params.defaults.mode);
       const theme = normalizeTheme(toolParams.theme, params.defaults.theme);
       const layout = normalizeLayout(toolParams.layout, params.defaults.layout);
       const expandUnchanged = toolParams.expandUnchanged === true;
-      const ttlMs = normalizeTtlMs(toolParams.ttlSeconds ?? params.defaults.ttlSeconds);
+      const ttlSeconds =
+        readFiniteNumberParam(rawRecord, "ttlSeconds") ?? params.defaults.ttlSeconds;
+      const fileScale =
+        readFiniteNumberParam(rawRecord, "fileScale") ??
+        readFiniteNumberParam(rawRecord, "imageScale");
+      const fileMaxWidth =
+        readFiniteNumberParam(rawRecord, "fileMaxWidth") ??
+        readFiniteNumberParam(rawRecord, "imageMaxWidth");
+      const ttlMs = normalizeTtlMs(ttlSeconds);
       const image = resolveDiffImageRenderOptions({
         defaults: params.defaults,
         fileFormat: normalizeOutputFormat(
           toolParams.fileFormat ?? toolParams.imageFormat ?? toolParams.format,
         ),
         fileQuality: normalizeFileQuality(toolParams.fileQuality ?? toolParams.imageQuality),
-        fileScale: toolParams.fileScale ?? toolParams.imageScale,
-        fileMaxWidth: toolParams.fileMaxWidth ?? toolParams.imageMaxWidth,
+        fileScale,
+        fileMaxWidth,
       });
       const renderTarget = resolveRenderTarget(mode);
 
@@ -202,7 +218,12 @@ export function createDiffsTool(params: {
           languagePackAvailable: params.languagePackAvailable,
         },
         renderTarget,
-      );
+      ).catch((error: unknown) => {
+        if (error instanceof DiffRenderInputError) {
+          throw new PluginToolInputError(error.message);
+        }
+        throw error;
+      });
 
       const screenshotter =
         params.screenshotter ?? new PlaywrightDiffScreenshotter({ config: params.api.config });
@@ -230,6 +251,7 @@ export function createDiffsTool(params: {
           ],
           details: buildArtifactDetails({
             baseDetails: {
+              changed: true,
               ...(artifactFile.artifactId ? { artifactId: artifactFile.artifactId } : {}),
               ...(artifactFile.expiresAt ? { expiresAt: artifactFile.expiresAt } : {}),
               title: rendered.title,
@@ -260,6 +282,7 @@ export function createDiffsTool(params: {
       });
 
       const baseDetails = {
+        changed: true,
         artifactId: artifact.id,
         viewerUrl,
         viewerPath: artifact.viewerPath,
@@ -539,7 +562,7 @@ function normalizeTtlMs(ttlSeconds?: number): number | undefined {
   if (!Number.isFinite(ttlSeconds) || ttlSeconds === undefined) {
     return undefined;
   }
-  return Math.floor(ttlSeconds * 1000);
+  return Math.floor(Math.min(Math.max(ttlSeconds, 1), MAX_DIFF_ARTIFACT_TTL_SECONDS) * 1000);
 }
 
 class PluginToolInputError extends Error {

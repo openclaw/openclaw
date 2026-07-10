@@ -1,14 +1,9 @@
+// Talk client methods create browser-owned realtime voice sessions and route
+// client tool calls back into OpenClaw agent consult/control flows.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import {
-  REALTIME_VOICE_AGENT_CONSULT_TOOL,
-  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-} from "../../talk/agent-consult-tool.js";
-import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
-import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
-import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
+} from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -16,7 +11,14 @@ import {
   validateTalkClientCreateParams,
   validateTalkClientSteerParams,
   validateTalkClientToolCallParams,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
+  REALTIME_VOICE_AGENT_CONSULT_TOOL,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+} from "../../talk/agent-consult-tool.js";
+import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
+import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
+import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
 import { startTalkRealtimeAgentConsult } from "../talk-agent-consult.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -27,6 +29,12 @@ import {
 } from "./talk-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+/**
+ * Gateway methods for browser-owned realtime Talk sessions.
+ *
+ * These handlers create provider browser sessions and bridge client-owned tool
+ * calls back into OpenClaw agent consult runs.
+ */
 export const talkClientHandlers: GatewayRequestHandlers = {
   "talk.client.create": async ({ params, respond, context }) => {
     if (!validateTalkClientCreateParams(params)) {
@@ -112,6 +120,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         providerConfigs: realtimeConfig.providers,
         cfg: runtimeConfig,
         cfgForResolve: runtimeConfig,
+        defaultModel: realtimeConfig.model,
         noRegisteredProviderMessage: "No realtime voice provider registered",
       });
       const launchOptions = buildRealtimeVoiceLaunchOptions({
@@ -250,6 +259,8 @@ function hasOwnedActiveTalkClientRun(params: {
   clientConnId?: string;
   sessionKey: string;
 }): boolean {
+  // Browser steering is only allowed for the connection that owns the live
+  // browser session; agent-owned consult runs use the relay steering path.
   const connId = normalizeOptionalString(params.clientConnId);
   const sessionKey = params.sessionKey.trim();
   if (!connId || !sessionKey) {

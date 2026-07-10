@@ -1,16 +1,22 @@
-import { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
-import { requireApiKey } from "../../agents/model-auth.js";
-import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
-import { prepareModelForSimpleCompletion } from "../../agents/simple-completion-transport.js";
+// Generates short labels for sessions from conversation context.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  completeWithPreparedSimpleCompletionModel,
+  prepareSimpleCompletionModelForAgent,
+} from "../../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { completeSimple } from "../../llm/stream.js";
 import type { TextContent } from "../../llm/types.js";
-import { getRuntimeAuthForModel } from "../../plugins/runtime/runtime-model-auth.runtime.js";
 
 const DEFAULT_MAX_LABEL_LENGTH = 128;
+// Reasoning models spend output tokens before emitting the short visible label.
+// A tiny cap can leave no text, so keep the bounded title budget large enough
+// for reasoning while respecting models with a lower output limit.
+const CONVERSATION_LABEL_MAX_TOKENS = 4_096;
 const TIMEOUT_MS = 15_000;
 
+/** Inputs for generating a short conversation label from the configured utility model. */
 export type ConversationLabelParams = {
   userMessage: string;
   prompt: string;
@@ -25,7 +31,7 @@ function isTextContentBlock(block: { type: string }): block is TextContent {
 }
 
 function isCodexSimpleCompletionModel(model: { api?: string; provider?: string }): boolean {
-  return model.provider === "openai-codex" || model.api === "openai-codex-responses";
+  return model.api === "openai-chatgpt-responses";
 }
 
 function extractSimpleCompletionError(result: {
@@ -38,6 +44,7 @@ function extractSimpleCompletionError(result: {
   return result.errorMessage?.trim() || "unknown error";
 }
 
+/** Generates a bounded human-readable label for a session, or null on failure. */
 export async function generateConversationLabel(
   params: ConversationLabelParams,
 ): Promise<string | null> {
@@ -48,31 +55,35 @@ export async function generateConversationLabel(
     params.maxLength > 0
       ? Math.floor(params.maxLength)
       : DEFAULT_MAX_LABEL_LENGTH;
-  const modelRef = resolveDefaultModelForAgent({ cfg, agentId });
-  const resolved = await resolveModelAsync(modelRef.provider, modelRef.model, agentDir, cfg);
-  if (!resolved.model) {
-    logVerbose(
-      `conversation-label-generator: failed to resolve model ${modelRef.provider}/${modelRef.model}`,
-    );
+  let prepared: Awaited<ReturnType<typeof prepareSimpleCompletionModelForAgent>>;
+  try {
+    prepared = await prepareSimpleCompletionModelForAgent({
+      cfg,
+      agentId: agentId ?? resolveDefaultAgentId(cfg),
+      agentDir,
+      useUtilityModel: true,
+      useAsyncModelResolution: true,
+      allowMissingApiKeyModes: ["aws-sdk"],
+    });
+  } catch (err) {
+    logVerbose(`conversation-label-generator: model preparation failed: ${String(err)}`);
     return null;
   }
-  const completionModel = prepareModelForSimpleCompletion({ model: resolved.model, cfg });
-
-  const apiKey = requireApiKey(
-    await getRuntimeAuthForModel({
-      model: completionModel,
-      cfg,
-      workspaceDir: agentDir,
-    }),
-    modelRef.provider,
-  );
+  if ("error" in prepared) {
+    logVerbose(`conversation-label-generator: ${prepared.error}`);
+    return null;
+  }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const result = await completeSimple(
-      completionModel,
-      {
+    const maxTokens = Math.min(CONVERSATION_LABEL_MAX_TOKENS, Math.floor(prepared.model.maxTokens));
+    // Label generation should never block normal reply handling for long.
+    const result = await completeWithPreparedSimpleCompletionModel({
+      model: prepared.model,
+      auth: prepared.auth,
+      cfg,
+      context: {
         systemPrompt: prompt,
         messages: [
           {
@@ -82,13 +93,12 @@ export async function generateConversationLabel(
           },
         ],
       },
-      {
-        apiKey,
-        maxTokens: 100,
-        ...(isCodexSimpleCompletionModel(completionModel) ? {} : { temperature: 0.3 }),
+      options: {
+        maxTokens,
+        ...(isCodexSimpleCompletionModel(prepared.model) ? {} : { temperature: 0.3 }),
         signal: controller.signal,
       },
-    );
+    });
     const errorMessage = extractSimpleCompletionError(result);
     if (errorMessage) {
       logVerbose(`conversation-label-generator: completion failed: ${errorMessage}`);
@@ -105,7 +115,10 @@ export async function generateConversationLabel(
       return null;
     }
 
-    return text.slice(0, maxLength);
+    return truncateUtf16Safe(text, maxLength) || null;
+  } catch (err) {
+    logVerbose(`conversation-label-generator: completion failed: ${String(err)}`);
+    return null;
   } finally {
     clearTimeout(timeout);
   }

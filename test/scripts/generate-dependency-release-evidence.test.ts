@@ -1,4 +1,6 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+// Generate Dependency Release Evidence tests cover generate dependency release evidence script behavior.
+import { spawnSync } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,6 +8,7 @@ import {
   DEPENDENCY_EVIDENCE_REPORTS,
   collectDependencyEvidenceSummaryCounts,
   createDependencyEvidenceManifest,
+  parseArgs,
   renderDependencyEvidenceStepSummary,
   renderDependencyEvidenceSummary,
   resolvePreviousReleaseTag,
@@ -14,6 +17,22 @@ import {
 
 async function writeJson(dir: string, fileName: string, value: unknown) {
   await writeFile(path.join(dir, fileName), `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function runCli(...args: string[]) {
+  return spawnSync(
+    process.execPath,
+    ["scripts/generate-dependency-release-evidence.mjs", ...args],
+    {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+    },
+  );
+}
+
+function expectNoNodeStack(stderr: string) {
+  expect(stderr).not.toContain("Node.js");
+  expect(stderr).not.toContain("\n    at ");
 }
 
 describe("generate-dependency-release-evidence", () => {
@@ -72,6 +91,98 @@ describe("generate-dependency-release-evidence", () => {
     ).toBe("v2026.5.13-beta.1");
   });
 
+  it("rejects missing dependency evidence CLI option values", () => {
+    const requiredArgs = ["--release-ref", "v2026.5.13", "--npm-dist-tag", "latest"];
+    expect(() =>
+      parseArgs(["--output-dir", "--release-ref", "v2026.5.13", "--npm-dist-tag", "latest"]),
+    ).toThrow("Expected --output-dir <value>.");
+    expect(() => parseArgs(["--output-dir", "-h", ...requiredArgs])).toThrow(
+      "Expected --output-dir <value>.",
+    );
+    expect(() =>
+      parseArgs(["--output-dir", "evidence", "--release-ref", "--npm-dist-tag", "latest"]),
+    ).toThrow("Expected --release-ref <value>.");
+    expect(() =>
+      parseArgs(["--output-dir", "evidence", "--release-ref", "-h", "--npm-dist-tag", "latest"]),
+    ).toThrow("Expected --release-ref <value>.");
+    expect(() =>
+      parseArgs([
+        "--output-dir",
+        "evidence",
+        "--release-ref",
+        "v2026.5.13",
+        "--npm-dist-tag",
+        "-h",
+      ]),
+    ).toThrow("Expected --npm-dist-tag <value>.");
+    expect(() =>
+      parseArgs(["--output-dir", "evidence", "--release-ref", "v2026.5.13", "--base-ref"]),
+    ).toThrow("Expected --base-ref <value>.");
+    expect(() =>
+      parseArgs(["--output-dir", "evidence", ...requiredArgs, "--base-ref", "-h"]),
+    ).toThrow("Expected --base-ref <value>.");
+    expect(() =>
+      parseArgs([
+        "--output-dir",
+        "evidence",
+        "--release-ref",
+        "v2026.5.13",
+        "--npm-dist-tag",
+        "latest",
+        "--github-output",
+        "--github-step-summary",
+        "summary.md",
+      ]),
+    ).toThrow("Expected --github-output <value>.");
+    expect(() =>
+      parseArgs(["--output-dir", "evidence", ...requiredArgs, "--github-output", "-h"]),
+    ).toThrow("Expected --github-output <value>.");
+  });
+
+  it("rejects duplicate dependency evidence CLI options", () => {
+    const requiredArgs = ["--release-ref", "v2026.5.13", "--npm-dist-tag", "latest"];
+    const artifactArgs = ["--output-dir", "evidence", ...requiredArgs];
+    const duplicateCases = [
+      ["--root", ["--root", "repo-a", "--root", "repo-b", ...artifactArgs]],
+      ["--output-dir", ["--output-dir", "evidence-a", "--output-dir", "evidence-b", ...requiredArgs]],
+      [
+        "--release-ref",
+        ["--output-dir", "evidence", "--release-ref", "v2026.5.13", "--release-ref", "v2026.5.14", "--npm-dist-tag", "latest"],
+      ],
+      [
+        "--npm-dist-tag",
+        ["--output-dir", "evidence", "--release-ref", "v2026.5.13", "--npm-dist-tag", "latest", "--npm-dist-tag", "beta"],
+      ],
+      ["--base-ref", [...artifactArgs, "--base-ref", "origin/main", "--base-ref", "HEAD~1"]],
+      ["--github-output", [...artifactArgs, "--github-output", "first.out", "--github-output", "second.out"]],
+      [
+        "--github-step-summary",
+        [...artifactArgs, "--github-step-summary", "first.md", "--github-step-summary", "second.md"],
+      ],
+    ] satisfies Array<[string, string[]]>;
+
+    for (const [flag, args] of duplicateCases) {
+      expect(() => parseArgs(args)).toThrow(`${flag} was provided more than once.`);
+    }
+  });
+
+  it("prints CLI help without generating evidence", () => {
+    const result = runCli("--help");
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Usage: node scripts/generate-dependency-release-evidence.mjs");
+    expect(result.stderr).toBe("");
+  });
+
+  it("reports CLI argument errors without a Node stack trace", () => {
+    const result = runCli("--wat");
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Unsupported argument: --wat");
+    expectNoNodeStack(result.stderr);
+  });
+
   it("falls back to fetching tags when local previous-release resolution misses", () => {
     const calls: Array<{ command: string; args: string[] }> = [];
     let describeCalls = 0;
@@ -105,68 +216,72 @@ describe("generate-dependency-release-evidence", () => {
 
   it("collects report counts and renders human summaries", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-release-dependency-evidence-test-"));
-    await writeJson(dir, "dependency-vulnerability-gate.json", {
-      blockers: [{ id: "GHSA-blocker" }],
-      findings: [{ id: "GHSA-blocker" }, { id: "GHSA-report" }],
-    });
-    await writeJson(dir, "transitive-manifest-risk-report.json", {
-      findingCount: 17,
-      workspaceExcludedFindingCount: 3,
-      metadataFailures: [{ packageName: "missing" }],
-    });
-    await writeJson(dir, "dependency-ownership-surface-report.json", {
-      summary: {
-        lockfilePackageCount: 101,
-        buildRiskPackageCount: 8,
-      },
-    });
-    await writeJson(dir, "dependency-changes-report.json", {
-      summary: {
+    try {
+      await writeJson(dir, "dependency-vulnerability-gate.json", {
+        blockers: [{ id: "GHSA-blocker" }],
+        findings: [{ id: "GHSA-blocker" }, { id: "GHSA-report" }],
+      });
+      await writeJson(dir, "transitive-manifest-risk-report.json", {
+        findingCount: 17,
+        workspaceExcludedFindingCount: 3,
+        metadataFailures: [{ packageName: "missing" }],
+      });
+      await writeJson(dir, "dependency-ownership-surface-report.json", {
+        summary: {
+          lockfilePackageCount: 101,
+          buildRiskPackageCount: 8,
+        },
+      });
+      await writeJson(dir, "dependency-changes-report.json", {
+        summary: {
+          dependencyFileChanges: 4,
+          addedPackages: 5,
+          removedPackages: 6,
+          changedPackages: 7,
+        },
+      });
+
+      const counts = await collectDependencyEvidenceSummaryCounts(dir);
+      expect(counts).toEqual({
+        vulnerabilityBlockers: 1,
+        vulnerabilityFindings: 2,
+        transitiveRiskSignals: 17,
+        workspaceExcludedTransitiveSignals: 3,
+        transitiveMetadataFailures: 1,
+        ownershipLockfilePackages: 101,
+        ownershipBuildRiskPackages: 8,
         dependencyFileChanges: 4,
-        addedPackages: 5,
-        removedPackages: 6,
-        changedPackages: 7,
-      },
-    });
+        dependencyAddedPackages: 5,
+        dependencyRemovedPackages: 6,
+        dependencyChangedPackages: 7,
+      });
 
-    const counts = await collectDependencyEvidenceSummaryCounts(dir);
-    expect(counts).toEqual({
-      vulnerabilityBlockers: 1,
-      vulnerabilityFindings: 2,
-      transitiveRiskSignals: 17,
-      workspaceExcludedTransitiveSignals: 3,
-      transitiveMetadataFailures: 1,
-      ownershipLockfilePackages: 101,
-      ownershipBuildRiskPackages: 8,
-      dependencyFileChanges: 4,
-      dependencyAddedPackages: 5,
-      dependencyRemovedPackages: 6,
-      dependencyChangedPackages: 7,
-    });
+      const summary = renderDependencyEvidenceSummary({
+        releaseTag: "v2026.5.13",
+        releaseSha: "abc123",
+        baseRef: "v2026.5.1",
+        counts,
+      });
+      expect(summary).toContain("- npm advisory vulnerability hard blockers: 1");
+      expect(summary).toContain("- Transitive manifest reported risk signals: 17");
+      expect(summary).toContain("- Dependency change baseline: `v2026.5.1`");
+      expect(summary).toContain("- Resolved package changes: +5 -6 changed 7");
 
-    const summary = renderDependencyEvidenceSummary({
-      releaseTag: "v2026.5.13",
-      releaseSha: "abc123",
-      baseRef: "v2026.5.1",
-      counts,
-    });
-    expect(summary).toContain("- npm advisory vulnerability hard blockers: 1");
-    expect(summary).toContain("- Transitive manifest reported risk signals: 17");
-    expect(summary).toContain("- Dependency change baseline: `v2026.5.1`");
-    expect(summary).toContain("- Resolved package changes: +5 -6 changed 7");
+      const stepSummary = renderDependencyEvidenceStepSummary({
+        evidenceArtifactName: "openclaw-release-dependency-evidence-v2026.5.13",
+        baseRef: "v2026.5.1",
+        counts,
+      });
+      expect(stepSummary).toContain(
+        "- Evidence artifact: `openclaw-release-dependency-evidence-v2026.5.13`",
+      );
+      expect(stepSummary).toContain("- npm advisory vulnerability hard blockers: `1`");
 
-    const stepSummary = renderDependencyEvidenceStepSummary({
-      evidenceArtifactName: "openclaw-release-dependency-evidence-v2026.5.13",
-      baseRef: "v2026.5.1",
-      counts,
-    });
-    expect(stepSummary).toContain(
-      "- Evidence artifact: `openclaw-release-dependency-evidence-v2026.5.13`",
-    );
-    expect(stepSummary).toContain("- npm advisory vulnerability hard blockers: `1`");
-
-    await expect(
-      readFile(path.join(dir, "dependency-vulnerability-gate.json"), "utf8"),
-    ).resolves.toContain("GHSA-blocker");
+      await expect(
+        readFile(path.join(dir, "dependency-vulnerability-gate.json"), "utf8"),
+      ).resolves.toContain("GHSA-blocker");
+    } finally {
+      await rm(dir, { force: true, recursive: true });
+    }
   });
 });

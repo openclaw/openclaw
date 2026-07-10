@@ -1,7 +1,8 @@
+// Installs package directories under canonical plugin roots.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { runCommandWithTimeout } from "../process/exec.js";
-import { isRecord as isObjectRecord } from "../shared/record-coerce.js";
+import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { pathExists } from "./fs-safe.js";
 import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
 import { tryReadJson, writeJson } from "./json-files.js";
@@ -52,6 +53,20 @@ async function sanitizeManifestForNpmInstall(targetDir: string): Promise<void> {
     manifest.devDependencies = Object.fromEntries(filteredEntries);
   }
   await writeJson(manifestPath, manifest, { trailingNewline: true });
+}
+
+function formatNpmDependencyInstallFailure(result: SpawnResult): string {
+  const detail = result.stderr.trim() || result.stdout.trim();
+  if (detail) {
+    return detail;
+  }
+  if (result.code !== null) {
+    return `exit code ${result.code} (no output from npm)`;
+  }
+  if (result.signal) {
+    return `signal ${result.signal} (no output from npm)`;
+  }
+  return `termination ${result.termination} (no output from npm)`;
 }
 
 async function hideProjectNpmConfigForInstall(targetDir: string): Promise<HiddenProjectConfigFile> {
@@ -148,6 +163,11 @@ async function resolveInstallPublishTarget(params: {
   };
 }
 
+/**
+ * Publishes a package directory into an install target via a staged copy.
+ * Update mode backs up the existing target, runs optional validation hooks,
+ * and rolls back when copy, dependency install, or validation fails.
+ */
 export async function installPackageDir(params: {
   sourceDir: string;
   targetDir: string;
@@ -211,9 +231,9 @@ export async function installPackageDir(params: {
     }
     return { ok: false as const, error };
   };
-  const failWithCode = async (params: { error: string; code?: string }, cause?: unknown) => {
-    const failed = await fail(params.error, cause);
-    return params.code ? { ...failed, code: params.code } : failed;
+  const failWithCode = async (paramsLocal: { error: string; code?: string }, cause?: unknown) => {
+    const failed = await fail(paramsLocal.error, cause);
+    return paramsLocal.code ? { ...failed, code: paramsLocal.code } : failed;
   };
   const restoreBackup = async () => {
     if (!backupDir) {
@@ -275,7 +295,7 @@ export async function installPackageDir(params: {
         }
       })();
       if (npmRes.code !== 0) {
-        return await fail(`npm install failed: ${npmRes.stderr.trim() || npmRes.stdout.trim()}`);
+        return await fail(`npm install failed: ${formatNpmDependencyInstallFailure(npmRes)}`);
       }
     } catch (error) {
       return await fail(`npm install failed: ${String(error)}`, error);
@@ -354,6 +374,10 @@ export async function installPackageDir(params: {
   return { ok: true };
 }
 
+/**
+ * Installs a manifest-backed package directory while deriving whether npm
+ * dependencies must be installed and which hardlink policy is safe to use.
+ */
 export async function installPackageDirWithManifestDeps(params: {
   sourceDir: string;
   targetDir: string;
@@ -364,7 +388,10 @@ export async function installPackageDirWithManifestDeps(params: {
   depsLogMessage: string;
   manifestDependencies?: Record<string, unknown>;
   afterCopy?: (installedDir: string) => void | Promise<void>;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+  afterInstall?: (
+    installedDir: string,
+  ) => Promise<{ ok: true } | { ok: false; error: string; code?: string }>;
+}): Promise<{ ok: true } | { ok: false; error: string; code?: string }> {
   const hasDeps = Object.keys(params.manifestDependencies ?? {}).length > 0;
   return installPackageDir({
     ...params,

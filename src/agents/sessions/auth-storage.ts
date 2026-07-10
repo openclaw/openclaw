@@ -6,10 +6,11 @@
  * try to refresh tokens simultaneously.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { findEnvKeys, getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import lockfile from "proper-lockfile";
-import { findEnvKeys, getEnvApiKey } from "../../llm/env-api-keys.js";
+import { replaceFileAtomicSync } from "../../infra/replace-file.js";
 import {
   getOAuthApiKey,
   getOAuthProvider,
@@ -79,6 +80,19 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
     }
   }
 
+  private replaceAuthFileAtomic(content: string): void {
+    const dirMode = statSync(dirname(this.authPath)).mode & 0o7777;
+    replaceFileAtomicSync({
+      filePath: this.authPath,
+      content,
+      dirMode,
+      mode: 0o600,
+      tempPrefix: "auth.json",
+      syncTempFile: true,
+      syncParentDir: true,
+    });
+  }
+
   private acquireLockSyncWithRetry(path: string): () => void {
     const maxAttempts = 10;
     const delayMs = 20;
@@ -116,8 +130,7 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
       const current = existsSync(this.authPath) ? readFileSync(this.authPath, "utf-8") : undefined;
       const { result, next } = fn(current);
       if (next !== undefined) {
-        writeFileSync(this.authPath, next, "utf-8");
-        chmodSync(this.authPath, 0o600);
+        this.replaceAuthFileAtomic(next);
       }
       return result;
     } finally {
@@ -161,8 +174,7 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
       const { result, next } = await fn(current);
       throwIfCompromised();
       if (next !== undefined) {
-        writeFileSync(this.authPath, next, "utf-8");
-        chmodSync(this.authPath, 0o600);
+        this.replaceAuthFileAtomic(next);
       }
       throwIfCompromised();
       return result;

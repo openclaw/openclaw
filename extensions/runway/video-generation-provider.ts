@@ -1,3 +1,4 @@
+// Runway provider module implements model/runtime integration.
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -8,11 +9,13 @@ import {
   fetchProviderDownloadResponse,
   fetchProviderOperationResponse,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   waitProviderOperationPollInterval,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -33,6 +36,7 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
 const MAX_DURATION_SECONDS = 10;
+const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 
 type RunwayTaskStatus = "PENDING" | "RUNNING" | "THROTTLED" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 
@@ -62,16 +66,13 @@ const VIDEO_MODELS = new Set(["gen4_aleph"]);
 const RUNWAY_TEXT_ASPECT_RATIOS = ["16:9", "9:16"] as const;
 const RUNWAY_EDIT_ASPECT_RATIOS = ["1:1", "16:9", "9:16", "3:4", "4:3", "21:9"] as const;
 
-async function readRunwayJsonResponse<T>(
-  response: Pick<Response, "json">,
-  label: string,
-): Promise<T> {
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch (cause) {
-    throw new Error(`${label}: malformed JSON response`, { cause });
-  }
+async function readRunwayJsonResponse<T>(response: Response, label: string): Promise<T> {
+  // Runway submit/poll task bodies are read through the shared byte-bounded reader
+  // (readResponseWithLimit, via readProviderJsonResponse) so a hostile or buggy endpoint
+  // that streams an unbounded JSON body cannot force the runtime to buffer the whole
+  // payload before parsing. Overflow cancels the stream and throws a bounded error;
+  // malformed JSON keeps the existing `${label}: malformed JSON response` wrapping.
+  const payload = await readProviderJsonResponse<unknown>(response, label);
   if (!isRecord(payload)) {
     throw new Error(`${label}: malformed JSON response`);
   }
@@ -124,6 +125,14 @@ function resolveRunwayBaseUrl(req: VideoGenerationRequest): string {
   );
 }
 
+function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
+  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured * 1024 * 1024);
+  }
+  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
+}
+
 function toDataUrl(buffer: Buffer, mimeType: string): string {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
@@ -149,7 +158,10 @@ function resolveDurationSeconds(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return 5;
   }
-  return Math.max(2, Math.min(MAX_DURATION_SECONDS, Math.round(value)));
+  if (!Number.isSafeInteger(value)) {
+    return 5;
+  }
+  return Math.max(2, Math.min(MAX_DURATION_SECONDS, value));
 }
 
 function resolveRunwayRatio(req: VideoGenerationRequest): string {
@@ -297,9 +309,6 @@ async function pollRunwayTask(params: {
           readRunwayFailureMessage(payload.failure) ||
             `Runway video generation ${normalizeLowercaseStringOrEmpty(status)}`,
         );
-      case "PENDING":
-      case "RUNNING":
-      case "THROTTLED":
       default:
         await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
         break;
@@ -312,6 +321,7 @@ async function downloadRunwayVideos(params: {
   urls: string[];
   timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
+  maxBytes: number;
 }): Promise<GeneratedVideoAsset[]> {
   const videos: GeneratedVideoAsset[] = [];
   for (const [index, url] of params.urls.entries()) {
@@ -324,9 +334,12 @@ async function downloadRunwayVideos(params: {
       requestFailedMessage: "Runway generated video download failed",
     });
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-    const arrayBuffer = await response.arrayBuffer();
+    const buffer = await readResponseWithLimit(response, params.maxBytes, {
+      onOverflow: ({ maxBytes }) =>
+        new Error(`Runway generated video download exceeds ${maxBytes} bytes`),
+    });
     videos.push({
-      buffer: Buffer.from(arrayBuffer),
+      buffer,
       mimeType,
       fileName: `video-${index + 1}.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
       metadata: { sourceUrl: url },
@@ -440,6 +453,7 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
             defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           }),
           fetchFn,
+          maxBytes: resolveGeneratedVideoMaxBytes(req),
         });
         return {
           videos,

@@ -1,6 +1,11 @@
 #!/usr/bin/env node
+/**
+ * Release CI summary helper that prints parent and child workflow status for a
+ * full release run.
+ */
 import { execFileSync } from "node:child_process";
 import process from "node:process";
+import { plainGhEnv, resolvePlainGhBin } from "../../../../scripts/lib/plain-gh.mjs";
 
 const runId = process.argv[2];
 const repo = process.env.OPENCLAW_RELEASE_REPO || "openclaw/openclaw";
@@ -11,14 +16,40 @@ if (!runId) {
 }
 
 function gh(args) {
-  return execFileSync("gh", args, {
+  return execFileSync(resolvePlainGhBin(), args, {
     encoding: "utf8",
+    env: plainGhEnv(),
     stdio: ["ignore", "pipe", "pipe"],
   });
 }
 
 function jsonGh(args) {
   return JSON.parse(gh(args));
+}
+
+function githubRestJson(pathSuffix) {
+  const result = execFileSync(
+    "bash",
+    [
+      "-lc",
+      [
+        "set -euo pipefail",
+        'token="$("$OPENCLAW_PLAIN_GH_BIN" auth token)"',
+        'curl -fsS -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "${OPENCLAW_GITHUB_REST_URL}"',
+      ].join("\n"),
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...plainGhEnv(),
+        OPENCLAW_PLAIN_GH_BIN: resolvePlainGhBin(),
+        OPENCLAW_GITHUB_REST_URL: `https://api.github.com/repos/${repo}/${pathSuffix}`,
+      },
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  return JSON.parse(result);
 }
 
 function rate() {
@@ -59,12 +90,30 @@ for (const job of parent.jobs ?? []) {
 }
 
 const since = parent.createdAt;
-const runList = gh([
-  "api",
-  `repos/${repo}/actions/runs?per_page=100`,
-  "--jq",
-  `.workflow_runs[] | select(.created_at >= "${since}") | select(.name=="CI" or .name=="OpenClaw Release Checks" or .name=="Plugin Prerelease" or .name=="NPM Telegram Beta E2E" or .name=="Full Release Validation") | [.id,.name,.status,.conclusion,.head_sha,.html_url] | @tsv`,
-]).trim();
+const runsQuery = new URLSearchParams({
+  per_page: "100",
+  created: `>=${since}`,
+  exclude_pull_requests: "true",
+});
+const childWorkflowNames = new Set([
+  "CI",
+  "OpenClaw Release Checks",
+  "Plugin Prerelease",
+  "NPM Telegram Beta E2E",
+  "Full Release Validation",
+]);
+const runs = githubRestJson(`actions/runs?${runsQuery.toString()}`).workflow_runs ?? [];
+const runList = runs
+  .filter(
+    (run) =>
+      run.created_at >= since &&
+      run.head_sha === parent.headSha &&
+      childWorkflowNames.has(run.name),
+  )
+  .map((run) =>
+    [run.id, run.name, run.status, run.conclusion ?? "", run.head_sha, run.html_url].join("\t"),
+  )
+  .join("\n");
 
 if (!runList) {
   console.log("children: none found yet");

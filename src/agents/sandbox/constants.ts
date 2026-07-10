@@ -1,3 +1,8 @@
+/**
+ * Sandbox defaults and state paths.
+ *
+ * Centralizes image names, container prefixes, workspace paths, browser ports, and registry locations.
+ */
 import path from "node:path";
 import { CHANNEL_IDS } from "../../channels/ids.js";
 import { STATE_DIR } from "../../config/paths.js";
@@ -31,6 +36,7 @@ export const DEFAULT_TOOL_ALLOW = [
 export const DEFAULT_TOOL_DENY = [
   "browser",
   "canvas",
+  "computer",
   "nodes",
   "cron",
   "gateway",
@@ -41,6 +47,10 @@ export const DEFAULT_SANDBOX_BROWSER_IMAGE = "openclaw-sandbox-browser:bookworm-
 export const DEFAULT_SANDBOX_COMMON_IMAGE = "openclaw-sandbox-common:bookworm-slim";
 export const SANDBOX_BROWSER_SECURITY_HASH_EPOCH = "2026-05-12-cdp-relay-auth";
 export const SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH = "2026-05-12-cdp-relay-auth";
+
+// Bump with shared Docker create-flag changes so existing ordinary and browser
+// sandboxes roll through the hash/recreate path instead of keeping stale flags.
+export const SANDBOX_DOCKER_CREATE_ARGS_EPOCH = "2026-07-10-init";
 
 export const DEFAULT_SANDBOX_BROWSER_PREFIX = "openclaw-sbx-browser-";
 export const DEFAULT_SANDBOX_BROWSER_NETWORK = "openclaw-sandbox-browser";

@@ -1,5 +1,7 @@
+/** Auth probe planning and execution helpers for model diagnostics. */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -32,7 +34,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { normalizeUniqueStringEntries } from "../../shared/string-normalization.js";
 import { redactSecrets } from "../status-all/format.js";
 import { DEFAULT_PROVIDER, formatMs } from "./shared.js";
 
@@ -46,6 +47,7 @@ function loadEmbeddedRunnerModule() {
   return embeddedRunnerModuleLoader.load();
 }
 
+/** Normalized probe status bucket for auth/model diagnostics. */
 export type AuthProbeStatus =
   | "ok"
   | "auth"
@@ -56,6 +58,7 @@ export type AuthProbeStatus =
   | "unknown"
   | "no_model";
 
+/** Reason code for probes that never reached a model call. */
 export type AuthProbeReasonCode =
   | "excluded_by_auth_order"
   | "missing_credential"
@@ -65,6 +68,7 @@ export type AuthProbeReasonCode =
   | "ineligible_profile"
   | "no_model";
 
+/** Result for one profile/env/models.json auth probe target. */
 export type AuthProbeResult = {
   provider: string;
   model?: string;
@@ -87,6 +91,7 @@ type AuthProbeTarget = {
   mode?: string;
 };
 
+/** Summary for a full auth probe run. */
 export type AuthProbeSummary = {
   startedAt: number;
   finishedAt: number;
@@ -102,6 +107,7 @@ export type AuthProbeSummary = {
   results: AuthProbeResult[];
 };
 
+/** Runtime options controlling provider/profile filtering and probe cost. */
 export type AuthProbeOptions = {
   provider?: string;
   profileIds?: string[];
@@ -110,6 +116,7 @@ export type AuthProbeOptions = {
   maxTokens: number;
 };
 
+/** Maps runtime failover reasons into stable auth probe status buckets. */
 export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProbeStatus {
   if (!reason) {
     return "unknown";
@@ -164,11 +171,14 @@ function catalogProbePriority(provider: string, modelId: string): number {
   if (id === "claude-haiku-4-5") {
     return 1;
   }
-  if (id === "claude-sonnet-4-6" || id.startsWith("claude-sonnet-4-6-")) {
+  if (id === "claude-sonnet-5" || id.startsWith("claude-sonnet-5-")) {
     return 2;
   }
-  if (id.startsWith("claude-sonnet-4-")) {
+  if (id === "claude-sonnet-4-6" || id.startsWith("claude-sonnet-4-6-")) {
     return 3;
+  }
+  if (id.startsWith("claude-sonnet-4-")) {
+    return 4;
   }
   if (id.startsWith("claude-3-")) {
     return 100;
@@ -285,6 +295,7 @@ async function maybeResolveUnresolvedRefIssue(params: {
   }
 }
 
+/** Builds probe targets plus preflight failures for missing/invalid credentials. */
 export async function buildProbeTargets(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
@@ -334,6 +345,8 @@ export async function buildProbeTargets(params: {
       explicitOrder && explicitOrder.length > 0
         ? new Set(resolveAuthProfileOrder({ cfg, store, provider: providerKey }))
         : null;
+    // Explicit auth.order both selects and documents profile eligibility; report
+    // excluded profiles instead of silently skipping them.
     const filteredProfiles = profileFilter.size
       ? profileIds.filter((id) => profileFilter.has(id))
       : profileIds;
@@ -530,6 +543,7 @@ async function probeTarget(params: {
       verboseLevel: "off",
       streamParams: { maxTokens },
       disableTools: true,
+      modelRun: true,
       cleanupBundleMcpOnRunEnd: true,
     });
     return buildResult("ok");
@@ -604,6 +618,7 @@ async function runTargetsWithConcurrency(params: {
   return results.filter((entry): entry is AuthProbeResult => Boolean(entry));
 }
 
+/** Runs all auth probes with bounded concurrency and returns a summary. */
 export async function runAuthProbes(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -653,6 +668,7 @@ export async function runAuthProbes(params: {
   };
 }
 
+/** Formats probe latency for table output. */
 export function formatProbeLatency(latencyMs?: number | null) {
   if (!latencyMs && latencyMs !== 0) {
     return "-";
@@ -660,16 +676,7 @@ export function formatProbeLatency(latencyMs?: number | null) {
   return formatMs(latencyMs);
 }
 
-export function groupProbeResults(results: AuthProbeResult[]): Map<string, AuthProbeResult[]> {
-  const map = new Map<string, AuthProbeResult[]>();
-  for (const result of results) {
-    const list = map.get(result.provider) ?? [];
-    list.push(result);
-    map.set(result.provider, list);
-  }
-  return map;
-}
-
+/** Sorts probe results by provider and display label. */
 export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] {
   return results.slice().toSorted((a, b) => {
     const provider = a.provider.localeCompare(b.provider);
@@ -682,6 +689,7 @@ export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] 
   });
 }
 
+/** Produces the terse completion line for auth probe output. */
 export function describeProbeSummary(summary: AuthProbeSummary): string {
   if (summary.totalTargets === 0) {
     return "No probe targets.";

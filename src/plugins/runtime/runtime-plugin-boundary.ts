@@ -1,3 +1,4 @@
+// Runtime plugin boundary helpers enforce package and source boundaries for runtime loading.
 import fs from "node:fs";
 import path from "node:path";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -18,7 +19,7 @@ type PluginRuntimeRecord = {
   source: string;
 };
 
-export function readPluginBoundaryConfigSafely() {
+function readPluginBoundaryConfigSafely() {
   try {
     return getRuntimeConfig();
   } catch {

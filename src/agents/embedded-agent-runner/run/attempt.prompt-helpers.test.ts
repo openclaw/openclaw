@@ -1,6 +1,9 @@
+// Coverage for prompt helper decisions used before embedded attempts.
 import { describe, expect, it, vi } from "vitest";
 
 const musicGenerationTaskStatusMocks = vi.hoisted(() => ({
+  // Media task modules are mocked so prompt helper tests can assert trigger and
+  // session-key routing without real task stores.
   buildActiveMusicGenerationTaskPromptContextForSession: vi.fn(),
   buildMusicGenerationTaskStatusDetails: vi.fn(() => ({})),
   buildMusicGenerationTaskStatusText: vi.fn(() => "Music generation task status"),
@@ -13,8 +16,6 @@ const imageGenerationTaskStatusMocks = vi.hoisted(() => ({
   buildImageGenerationTaskStatusDetails: vi.fn(() => ({})),
   buildImageGenerationTaskStatusText: vi.fn(() => "Image generation task status"),
   findActiveImageGenerationTaskForSession: vi.fn(),
-  getImageGenerationTaskProviderId: vi.fn(),
-  isActiveImageGenerationTask: vi.fn(() => false),
   IMAGE_GENERATION_TASK_KIND: "image_generation",
 }));
 
@@ -23,8 +24,6 @@ const videoGenerationTaskStatusMocks = vi.hoisted(() => ({
   buildVideoGenerationTaskStatusDetails: vi.fn(() => ({})),
   buildVideoGenerationTaskStatusText: vi.fn(() => "Video generation task status"),
   findActiveVideoGenerationTaskForSession: vi.fn(),
-  getVideoGenerationTaskProviderId: vi.fn(),
-  isActiveVideoGenerationTask: vi.fn(() => false),
   VIDEO_GENERATION_TASK_KIND: "video_generation",
 }));
 
@@ -39,13 +38,83 @@ vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 
 import {
   forgetPromptBuildDrainCacheForRun,
+  mergeOrphanedTrailingUserPrompt,
   resolvePromptSubmissionSkipReason,
-  resolveAttemptPrependSystemContext,
+  resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
+  shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
 
-describe("resolveAttemptPrependSystemContext", () => {
-  it("prepends active video task guidance ahead of hook system context", () => {
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+      index += 1;
+      continue;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+describe("shouldInjectHeartbeatPrompt", () => {
+  it("keeps global heartbeat guidance out of commitment-only runs", () => {
+    const heartbeatParams = {
+      config: {},
+      agentId: "main",
+      defaultAgentId: "main",
+      isDefaultAgent: true,
+      trigger: "heartbeat" as const,
+    };
+
+    expect(shouldInjectHeartbeatPrompt(heartbeatParams)).toBe(true);
+    expect(
+      shouldInjectHeartbeatPrompt({
+        ...heartbeatParams,
+        bootstrapContextRunKind: "commitment-only",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("mergeOrphanedTrailingUserPrompt", () => {
+  it("keeps structured media and JSON summaries on UTF-16 boundaries", () => {
+    const result = mergeOrphanedTrailingUserPrompt({
+      prompt: "Continue.",
+      trigger: "user",
+      leafMessage: {
+        content: [
+          {
+            type: "image_url",
+            image_url: { url: `${"u".repeat(299)}😀tail` },
+          },
+          {
+            type: "custom",
+            value: `${"v".repeat(299)}😀tail`,
+          },
+          {
+            [`${"k".repeat(997)}😀tail`]: 1,
+          },
+        ],
+      },
+    });
+
+    expect(result.merged).toBe(true);
+    expect(hasLoneSurrogate(result.prompt)).toBe(false);
+    expect(result.prompt).not.toContain("\\ud83d");
+    expect(result.prompt).toContain("[image_url]");
+    expect(result.prompt).toContain("chars)");
+  });
+});
+
+describe("resolveAttemptMediaTaskSystemPromptAddition", () => {
+  it("joins active media task guidance for user triggers", () => {
     imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
       "Image task hint",
     );
@@ -56,10 +125,9 @@ describe("resolveAttemptPrependSystemContext", () => {
       "Music task hint",
     );
 
-    const result = resolveAttemptPrependSystemContext({
+    const result = resolveAttemptMediaTaskSystemPromptAddition({
       sessionKey: "agent:main:discord:direct:123",
       trigger: "user",
-      hookPrependSystemContext: "Hook system context",
     });
 
     expect(
@@ -71,12 +139,10 @@ describe("resolveAttemptPrependSystemContext", () => {
     expect(
       musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession,
     ).toHaveBeenCalledWith("agent:main:discord:direct:123");
-    expect(result).toBe(
-      "Image task hint\n\nActive task hint\n\nMusic task hint\n\nHook system context",
-    );
+    expect(result).toBe("Image task hint\n\nActive task hint\n\nMusic task hint");
   });
 
-  it("skips active video task guidance for non-user triggers", () => {
+  it("returns undefined (no media guidance) for non-user/manual triggers", () => {
     imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReset();
     imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
       "Should not be used",
@@ -90,10 +156,9 @@ describe("resolveAttemptPrependSystemContext", () => {
       "Should not be used",
     );
 
-    const result = resolveAttemptPrependSystemContext({
+    const result = resolveAttemptMediaTaskSystemPromptAddition({
       sessionKey: "agent:main:discord:direct:123",
       trigger: "heartbeat",
-      hookPrependSystemContext: "Hook system context",
     });
 
     expect(
@@ -105,12 +170,14 @@ describe("resolveAttemptPrependSystemContext", () => {
     expect(
       musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession,
     ).not.toHaveBeenCalled();
-    expect(result).toBe("Hook system context");
+    expect(result).toBeUndefined();
   });
 });
 
 describe("resolvePromptSubmissionSkipReason", () => {
   it("skips empty prompt submissions without history or images", () => {
+    // Empty visible prompt plus no useful replay context should not start a
+    // model request.
     expect(
       resolvePromptSubmissionSkipReason({
         prompt: "   ",
@@ -197,7 +264,48 @@ describe("resolvePromptSubmissionSkipReason", () => {
 });
 
 describe("resolvePromptBuildHookResult drain cache", () => {
+  it("does not drain global injections or heartbeat contributions for commitment-only runs", async () => {
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
+    const runAgentTurnPrepare = vi.fn(async () => ({ prependContext: "turn policy" }));
+    const runHeartbeatPromptContribution = vi.fn(async () => ({
+      prependContext: "global heartbeat policy",
+    }));
+    const hookRunner = {
+      hasHooks: vi.fn(
+        (hookName: string) =>
+          hookName === "agent_turn_prepare" || hookName === "heartbeat_prompt_contribution",
+      ),
+      runAgentTurnPrepare,
+      runHeartbeatPromptContribution,
+      runBeforePromptBuild: vi.fn(async () => undefined),
+      runBeforeAgentStart: vi.fn(async () => undefined),
+    };
+
+    const result = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "due commitment",
+      messages: [],
+      hookCtx: {
+        runId: "commitment-only-run",
+        trigger: "heartbeat",
+        sessionKey: "agent:main:telegram:direct:123",
+      },
+      hookRunner,
+      bootstrapContextRunKind: "commitment-only",
+    });
+
+    expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).not.toHaveBeenCalled();
+    expect(runAgentTurnPrepare).toHaveBeenCalledWith(
+      expect.objectContaining({ queuedInjections: [] }),
+      expect.any(Object),
+    );
+    expect(runHeartbeatPromptContribution).not.toHaveBeenCalled();
+    expect(result.prependContext).toBe("turn policy");
+  });
+
   it("drains plugin next-turn injections at most once per runId across retry attempts", async () => {
+    // Retry attempts reuse the first drain result so plugin-provided next-turn
+    // context is not consumed or duplicated multiple times.
     hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
     hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
       queuedInjections: [

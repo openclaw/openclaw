@@ -1,4 +1,13 @@
+// Image runtime tests cover model-backed image routing, auth/profile handling,
+// provider payload transforms, and MiniMax/Copilot special paths.
+import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  looksLikeSecretSentinel,
+  mintSecretSentinel,
+  resolveSecretSentinel,
+} from "../secrets/sentinel.js";
 
 const hoisted = vi.hoisted(() => ({
   completeMock: vi.fn(),
@@ -22,6 +31,7 @@ const hoisted = vi.hoisted(() => ({
   resolveModelAsyncMock: vi.fn(),
   resolveModelWithRegistryMock: vi.fn(),
   resolveCopilotApiTokenMock: vi.fn(),
+  unwrapSecretSentinelsForProviderEgressMock: vi.fn((value: string) => value),
 }));
 const {
   completeMock,
@@ -37,6 +47,7 @@ const {
   resolveModelAsyncMock,
   resolveModelWithRegistryMock,
   resolveCopilotApiTokenMock,
+  unwrapSecretSentinelsForProviderEgressMock,
 } = hoisted;
 
 type ResolveModelWithRegistryTestParams = {
@@ -55,6 +66,8 @@ function requireMockCallAt<const Calls extends readonly unknown[][]>(
   index: number,
   label: string,
 ): Calls[number] {
+  // Tests inspect exact dependency calls because image runtime behavior is
+  // mostly provider/auth orchestration.
   const call = mock.mock.calls[index];
   if (!call) {
     throw new Error(`Expected ${label} call ${index}`);
@@ -92,6 +105,7 @@ vi.mock("../agents/models-config.js", async () => ({
 }));
 
 vi.mock("../agents/model-auth.js", () => ({
+  applySecretRefHeaderSentinels: (model: unknown) => model,
   getApiKeyForModel: getApiKeyForModelMock,
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
   requireApiKey: requireApiKeyMock,
@@ -99,6 +113,13 @@ vi.mock("../agents/model-auth.js", () => ({
 
 vi.mock("../agents/provider-stream.js", () => ({
   registerProviderStreamForModel: registerProviderStreamForModelMock,
+}));
+
+vi.mock("../agents/provider-secret-egress.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/provider-secret-egress.js")>(
+    "../agents/provider-secret-egress.js",
+  )),
+  unwrapSecretSentinelsForProviderEgress: unwrapSecretSentinelsForProviderEgressMock,
 }));
 
 vi.mock("../agents/agent-model-discovery.js", () => ({
@@ -133,24 +154,23 @@ const { describeImageWithModel } = await import("./image.js");
 describe("describeImageWithModel", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
   beforeEach(() => {
+    // Provider endpoint policy comes from manifests. Pin source manifests so a
+    // prior local build cannot make this source-checkout test read partial dist output.
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(process.cwd(), "extensions"));
     vi.stubGlobal("fetch", fetchMock);
     vi.clearAllMocks();
-    fetchMock.mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      headers: { get: vi.fn(() => null) },
-      json: vi.fn(async () => ({
+    fetchMock.mockImplementation(async () =>
+      Response.json({
         base_resp: { status_code: 0 },
         content: "portal ok",
-      })),
-      text: vi.fn(async () => ""),
-    });
+      }),
+    );
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
         provider: "minimax-portal",
@@ -243,6 +263,36 @@ describe("describeImageWithModel", () => {
     expect(completeMock).not.toHaveBeenCalled();
   });
 
+  it("unwraps a sentinel only at the direct MiniMax VLM handoff", async () => {
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end",
+      source: "test",
+      mode: "api-key",
+    });
+    unwrapSecretSentinelsForProviderEgressMock.mockReturnValueOnce("resolved-minimax-secret");
+
+    await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "minimax-portal",
+      model: "MiniMax-VL-01",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      timeoutMs: 1000,
+    });
+
+    expect(unwrapSecretSentinelsForProviderEgressMock).toHaveBeenCalledWith(
+      "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end",
+      "MiniMax VLM request",
+    );
+    const [, fetchOptionsValue] = requireFirstMockCall(fetchMock, "fetch");
+    const fetchOptions = requireRecord(fetchOptionsValue, "fetch options");
+    expect(fetchOptions.headers).toMatchObject({
+      Authorization: "Bearer resolved-minimax-secret",
+    });
+  });
+
   it("uses generic completion for non-canonical minimax-portal image models", async () => {
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
@@ -293,6 +343,67 @@ describe("describeImageWithModel", () => {
       agentDir: "/tmp/openclaw-agent",
     });
     expect(completeMock).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("describes images keyless when amazon-bedrock resolves aws-sdk auth", async () => {
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "",
+      source: "profile:amazon-bedrock:default",
+      mode: "aws-sdk",
+    });
+    // Faithful to runtime: requireApiKey throws on an empty resolved key. The
+    // aws-sdk carve-out must return before reaching it.
+    requireApiKeyMock.mockImplementation((auth: { apiKey?: string; mode?: string }) => {
+      const key = auth.apiKey?.trim();
+      if (!key) {
+        throw new Error(
+          `No API key resolved for provider "amazon-bedrock" (auth mode: ${auth.mode}).`,
+        );
+      }
+      return key;
+    });
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "amazon-bedrock",
+        id: "us.anthropic.claude-sonnet-4-6-v1",
+        input: ["text", "image"],
+        api: "bedrock-converse-stream",
+        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "bedrock-converse-stream",
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-sonnet-4-6-v1",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "an orange tabby cat" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-sonnet-4-6-v1",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "an orange tabby cat",
+      model: "us.anthropic.claude-sonnet-4-6-v1",
+    });
+    // The carve-out returns before requireApiKey and skips persisting an
+    // empty-string secret; the empty key flows through to the model runtime.
+    expect(requireApiKeyMock).not.toHaveBeenCalled();
+    expect(setRuntimeApiKeyMock).not.toHaveBeenCalled();
+    const completeCall = requireFirstMockCall(completeMock, "complete");
+    expect(requireRecord(completeCall[2], "stream options").apiKey).toBe("");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -765,7 +876,7 @@ describe("describeImageWithModel", () => {
   it("passes image prompt as system instructions for codex image requests", async () => {
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
-        provider: "openai-codex",
+        provider: "openai",
         id: "gpt-5.4",
         input: ["text", "image"],
         baseUrl: "https://chatgpt.com/backend-api",
@@ -773,8 +884,8 @@ describe("describeImageWithModel", () => {
     });
     completeMock.mockResolvedValue({
       role: "assistant",
-      api: "openai-codex-responses",
-      provider: "openai-codex",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
       model: "gpt-5.4",
       stopReason: "stop",
       timestamp: Date.now(),
@@ -784,7 +895,7 @@ describe("describeImageWithModel", () => {
     const result = await describeImageWithModel({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       buffer: Buffer.from("png-bytes"),
       fileName: "image.png",
@@ -801,7 +912,7 @@ describe("describeImageWithModel", () => {
     const firstCall = requireFirstMockCall(completeMock, "image completion");
     const [completionModel, context, options] = firstCall;
     expect(completionModel).toEqual({
-      provider: "openai-codex",
+      provider: "openai",
       id: "gpt-5.4",
       input: ["text", "image"],
       baseUrl: "https://chatgpt.com/backend-api",
@@ -825,6 +936,47 @@ describe("describeImageWithModel", () => {
       data: Buffer.from("png-bytes").toString("base64"),
       mimeType: "image/png",
     });
+  });
+
+  it("clamps oversized image description timeouts before scheduling", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "openai",
+        id: "gpt-5.4",
+        input: ["text", "image"],
+        baseUrl: "https://chatgpt.com/backend-api",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
+      model: "gpt-5.4",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "codex ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-5.4",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(result).toEqual({
+      text: "codex ok",
+      model: "gpt-5.4",
+    });
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    const firstCall = requireFirstMockCall(completeMock, "image completion");
+    expect(firstCall[2].timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("places OpenRouter image prompts in user content before images", async () => {
@@ -869,6 +1021,59 @@ describe("describeImageWithModel", () => {
     const userMessage = context.messages[0];
     if (!userMessage) {
       throw new Error("expected OpenRouter image completion user message");
+    }
+    expect(userMessage.content).toEqual([
+      { type: "text", text: "Describe the image." },
+      {
+        type: "image",
+        data: Buffer.from("png-bytes").toString("base64"),
+        mimeType: "image/png",
+      },
+    ]);
+  });
+
+  it("places DashScope image prompts in user content before images", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        api: "openai-completions",
+        provider: "qwen",
+        id: "qwen-vl-max-latest",
+        input: ["text", "image"],
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-completions",
+      provider: "qwen",
+      model: "qwen-vl-max-latest",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "dashscope ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "qwen",
+      model: "qwen-vl-max-latest",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "dashscope ok",
+      model: "qwen-vl-max-latest",
+    });
+    const firstCall = requireFirstMockCall(completeMock, "DashScope image completion");
+    const [, context] = firstCall;
+    expect(context.systemPrompt).toBeUndefined();
+    const userMessage = context.messages[0];
+    if (!userMessage) {
+      throw new Error("expected DashScope image completion user message");
     }
     expect(userMessage.content).toEqual([
       { type: "text", text: "Describe the image." },
@@ -1025,16 +1230,81 @@ describe("describeImageWithModel", () => {
       timeoutMs: 25,
     });
 
-    const assertion = expect(result).rejects.toThrow("image description timed out after 25ms");
+    const assertion = expect(result).rejects.toThrow(
+      "image description request timed out after 25ms",
+    );
     await vi.advanceTimersByTimeAsync(25);
     await assertion;
     const firstCall = requireFirstMockCall(completeMock, "timed image completion");
-    const [, , options] = firstCall;
+    const options = firstCall[2];
     if (!options?.signal) {
       throw new Error("Expected image completion abort signal");
     }
     expect(options.signal.aborted).toBe(true);
     expect(options.timeoutMs).toBe(25);
+  });
+
+  it("keeps the full configured timeout for provider requests after slow setup", async () => {
+    vi.useFakeTimers();
+    const slowSetupMs = 400;
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        input: ["text", "image"],
+        baseUrl: "https://api.openai.com/v1",
+      })),
+    });
+    resolveModelAsyncMock.mockImplementationOnce(
+      async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, slowSetupMs);
+        });
+        const authStorage = {
+          setRuntimeApiKey: setRuntimeApiKeyMock,
+        };
+        const modelRegistry = discoverModelsMock(authStorage, agentDir);
+        const model = resolveModelWithRegistryMock({
+          provider,
+          modelId,
+          modelRegistry,
+          cfg,
+          agentDir,
+        });
+        return { authStorage, model, modelRegistry };
+      },
+    );
+    completeMock.mockImplementation(() => new Promise(() => {}));
+
+    const result = describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    await vi.advanceTimersByTimeAsync(slowSetupMs);
+    await Promise.resolve();
+    expect(completeMock).toHaveBeenCalledTimes(1);
+    const firstCall = requireFirstMockCall(completeMock, "slow setup image completion");
+    const options = firstCall[2];
+    if (!options?.signal) {
+      throw new Error("Expected image completion abort signal");
+    }
+    expect(options.timeoutMs).toBe(1000);
+
+    const assertion = expect(result).rejects.toThrow(
+      `image description request timed out after 1000ms (setup took ${slowSetupMs}ms before provider request started)`,
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+    await assertion;
+    expect(options.signal.aborted).toBe(true);
   });
 
   it("rejects when image runtime setup exceeds the request timeout", async () => {
@@ -1053,7 +1323,9 @@ describe("describeImageWithModel", () => {
       timeoutMs: 25,
     });
 
-    const assertion = expect(result).rejects.toThrow("image description timed out after 25ms");
+    const assertion = expect(result).rejects.toThrow(
+      "image description setup timed out after 25ms before provider request started",
+    );
     await vi.advanceTimersByTimeAsync(25);
     await assertion;
     expect(completeMock).not.toHaveBeenCalled();
@@ -1159,7 +1431,7 @@ describe("describeImageWithModel", () => {
       timestamp: Date.now(),
       content: [{ type: "text", text: "A solid red square." }],
     };
-    const providerStreamFn = vi.fn(() => ({
+    const providerStreamFn = vi.fn((_model: unknown, _context: unknown, _options: unknown) => ({
       result: vi.fn(async () => providerStreamResult),
     }));
     registerProviderStreamForModelMock.mockReturnValueOnce(providerStreamFn);
@@ -1189,6 +1461,7 @@ describe("describeImageWithModel", () => {
     expect(providerStreamFn).toHaveBeenCalledOnce();
     expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
       githubToken: "oauth-test",
+      config: {},
     });
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("github-copilot", "copilot-api-token");
     const [completionModel, context, options] = providerStreamFn.mock.calls[0] as unknown as [
@@ -1210,6 +1483,60 @@ describe("describeImageWithModel", () => {
     const contentTypes = userMessage!.content.map((block) => (block as { type: string }).type);
     expect(contentTypes).toContain("text");
     expect(contentTypes).toContain("image");
+  });
+
+  it("keeps an exchanged Copilot image token opaque for sentinel-backed auth", async () => {
+    const sourceSecret = "copilot-image-source-secret";
+    const sourceSentinel = mintSecretSentinel(sourceSecret, {
+      label: "model-auth:github-copilot",
+    });
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: sourceSentinel,
+      source: "test",
+      mode: "token",
+    });
+    unwrapSecretSentinelsForProviderEgressMock.mockReturnValueOnce(sourceSecret);
+    const providerStreamFn = vi.fn((_model: unknown, _context: unknown, _options: unknown) => ({
+      result: vi.fn(async () => ({
+        role: "assistant",
+        api: "openai-completions",
+        provider: "github-copilot",
+        model: "gpt-4.1",
+        stopReason: "stop",
+        timestamp: Date.now(),
+        content: [{ type: "text", text: "ok" }],
+      })),
+    }));
+    registerProviderStreamForModelMock.mockReturnValueOnce(providerStreamFn);
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "github-copilot",
+        id: "gpt-4.1",
+        input: ["text", "image"],
+        api: "openai-completions",
+      })),
+    });
+
+    await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "github-copilot",
+      model: "gpt-4.1",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      timeoutMs: 1000,
+    });
+
+    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
+      githubToken: sourceSecret,
+      config: {},
+    });
+    const storedToken = setRuntimeApiKeyMock.mock.calls[0]?.[1] as string;
+    expect(looksLikeSecretSentinel(storedToken)).toBe(true);
+    expect(resolveSecretSentinel(storedToken)).toBe("copilot-api-token");
+    const streamOptions = providerStreamFn.mock.calls[0]?.[2] as { apiKey?: string };
+    expect(streamOptions.apiKey).toBe(storedToken);
   });
 
   it("fails github-copilot image runtime setup when token exchange fails", async () => {
@@ -1322,7 +1649,7 @@ describe("describeImageWithModel", () => {
       timeoutMs: 1000,
     });
 
-    const [, , options] = requireFirstMockCall(completeMock, "image completion");
+    const options = requireFirstMockCall(completeMock, "image completion")[2];
     expect(options.maxTokens).toBe(4096);
   });
 
@@ -1359,7 +1686,7 @@ describe("describeImageWithModel", () => {
       timeoutMs: 1000,
     });
 
-    const [, , options] = requireFirstMockCall(completeMock, "image completion");
+    const options = requireFirstMockCall(completeMock, "image completion")[2];
     expect(options.maxTokens).toBe(1024);
   });
 });

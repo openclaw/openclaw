@@ -1,6 +1,8 @@
+// Qa Lab plugin module implements node exec behavior.
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
+import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
 
 type ExecFileAsync = (
   file: string,
@@ -38,9 +40,10 @@ export async function resolveQaNodeExecPath(params?: {
     return execPath;
   }
 
-  const locator = platform === "win32" ? "where" : "which";
+  const locator =
+    platform === "win32" ? resolveQaWindowsSystem32ExePath("where.exe", params?.env) : "which";
   const execFileImpl = params?.execFileImpl ?? execFileAsync;
-  let stdout = "";
+  let stdout;
   try {
     ({ stdout } = await execFileImpl(locator, ["node"], {
       encoding: "utf8",

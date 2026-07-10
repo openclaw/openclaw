@@ -1,3 +1,8 @@
+/**
+ * Fast OpenClaw tool-bundle mock.
+ *
+ * Provides lightweight built-in tool stubs for inventory-heavy tests.
+ */
 import { vi } from "vitest";
 import { stubTool } from "./fast-tool-stubs.js";
 
@@ -38,6 +43,7 @@ const coreTools = [
   stubActionTool("sessions_spawn", ["spawn", "handoff"]),
   stubActionTool("subagents", ["list", "show"]),
   stubActionTool("session_status", ["get", "show"]),
+  stubTool("skill_workshop"),
   stubActionTool("browser", ["status", "snapshot"]),
   stubTool("tts"),
   stubTool("image_generate"),
@@ -56,9 +62,16 @@ const createOpenClawToolsMock = vi.fn(
   },
 );
 
-vi.mock("../openclaw-tools.js", () => ({
-  createOpenClawTools: createOpenClawToolsMock,
-  testing: {
-    setDepsForTest: () => {},
-  },
-}));
+// Preserve action enums for tools whose tests assert schema/inventory behavior without paying the
+// cost of constructing the real tool bundle. The real capability filter stays
+// in place so client-caps gating behaves like production in these suites.
+vi.mock("../openclaw-tools.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../openclaw-tools.js")>();
+  return {
+    createOpenClawTools: createOpenClawToolsMock,
+    filterToolsByClientCaps: actual.filterToolsByClientCaps,
+    testing: {
+      setDepsForTest: () => {},
+    },
+  };
+});

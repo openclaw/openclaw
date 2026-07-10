@@ -1,3 +1,4 @@
+// Discord tests cover send.voice plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeDiscordRest } from "./send.test-harness.js";
 
@@ -59,5 +60,24 @@ describe("sendVoiceMessageDiscord", () => {
     expect(result.channelId).toBe("273512430271856640");
     expect(voiceMocks.sendDiscordVoiceMessage).toHaveBeenCalledTimes(1);
     expect(voiceMocks.sendDiscordVoiceMessage.mock.calls[0]?.[1]).toBe("273512430271856640");
+  });
+
+  it("records the native reply target in voice receipts", async () => {
+    const { rest } = makeDiscordRest();
+
+    const result = await sendVoiceMessageDiscord(
+      "273512430271856640",
+      "https://example.com/voice.ogg",
+      {
+        cfg: DISCORD_TEST_CFG,
+        rest,
+        token: "t",
+        reply: { messageId: "reply-1", scope: "first" },
+      },
+    );
+
+    expect(voiceMocks.sendDiscordVoiceMessage.mock.calls[0]?.[4]).toBe("reply-1");
+    expect(result.receipt.replyToId).toBe("reply-1");
+    expect(result.receipt.parts[0]?.replyToId).toBe("reply-1");
   });
 });

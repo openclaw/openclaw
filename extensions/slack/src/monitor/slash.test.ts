@@ -1,4 +1,10 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+// Slack tests cover slash plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSlackSlashMocks, resetSlackSlashMocks } from "./slash.test-harness.js";
 
 vi.mock("./slash-commands.runtime.js", () => {
@@ -209,10 +215,15 @@ vi.mock("./slash-commands.runtime.js", () => {
       if (params.command?.key === "reportexternal") {
         return {
           arg: { name: "period", description: "period" },
-          choices: Array.from({ length: 140 }, (_v, i) => ({
-            value: `period-${i + 1}`,
-            label: `Period ${i + 1}`,
-          })),
+          choices: [
+            ...Array.from({ length: 140 }, (_v, i) => ({
+              value: `period-${i + 1}`,
+              label: `Period ${i + 1}`,
+            })),
+            // Label whose emoji surrogate pair straddles the 75-char plain_text
+            // limit, to cover surrogate-safe truncation in served options.
+            { value: "emoji-overflow", label: `${"a".repeat(74)}😀 emojioverflow` },
+          ],
         };
       }
       if (params.command?.key === "unsafeconfirm") {
@@ -259,7 +270,12 @@ const { registerSlackMonitorSlashCommands } = (await import("./slash.js")) as {
 const { dispatchMock } = getSlackSlashMocks();
 
 beforeEach(() => {
+  clearRuntimeConfigSnapshot();
   resetSlackSlashMocks();
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
 });
 
 async function registerCommands(ctx: unknown, account: unknown, trackEvent?: () => void) {
@@ -312,7 +328,7 @@ function createArgMenusHarness() {
     action: (id: string | RegExp, handler: (args: unknown) => Promise<void>) => {
       actions.set(id, handler);
     },
-    options: function (this: unknown, id: string, handler: (args: unknown) => Promise<void>) {
+    options(this: unknown, id: string, handler: (args: unknown) => Promise<void>) {
       optionsReceiverContexts.push(this);
       options.set(id, handler);
     },
@@ -588,6 +604,7 @@ describe("Slack native command argument menus", () => {
     const commands = new Map<string, (args: unknown) => Promise<void>>();
     const actions = new Map<string | RegExp, (args: unknown) => Promise<void>>();
     const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
+    const runtimeLog = vi.fn();
     const app = {
       client: { chat: { postEphemeral } },
       command: (name: string, handler: (args: unknown) => Promise<void>) => {
@@ -603,7 +620,7 @@ describe("Slack native command argument menus", () => {
     };
     const ctx = {
       cfg: { commands: { native: true, nativeSkills: false } },
-      runtime: {},
+      runtime: { log: runtimeLog },
       botToken: "bot-token",
       botUserId: "bot",
       teamId: "T1",
@@ -636,6 +653,12 @@ describe("Slack native command argument menus", () => {
     // Registration should not throw despite app.options() throwing
     await registerCommands(ctx, account);
     expect(commands.size).toBeGreaterThan(0);
+    expect(runtimeLog).toHaveBeenCalledTimes(1);
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "slack: external arg-menu registration failed; falling back to static slash command menus.",
+      ),
+    );
     expect(
       Array.from(actions.keys()).some(
         (key) => key instanceof RegExp && String(key) === String(/^openclaw_cmdarg/),
@@ -854,6 +877,37 @@ describe("Slack native command argument menus", () => {
     expect(optionTexts.join("\n")).toContain("Period 12");
   });
 
+  it("truncates served option labels on a surrogate boundary", async () => {
+    const { blockId } = await runCommandAndResolveActionsBlock(reportExternalHandler);
+    expect(blockId).toContain("openclaw_cmdarg_ext:");
+
+    const ackOptions = vi.fn().mockResolvedValue(undefined);
+    await argMenuOptionsHandler({
+      ack: ackOptions,
+      body: {
+        user: { id: "U1" },
+        value: "emojioverflow",
+        actions: [{ block_id: blockId }],
+      },
+    });
+
+    const optionsPayload = firstCallPayload(ackOptions, "options ack") as {
+      options?: Array<{ text?: { text?: string }; value?: string }>;
+    };
+    // The "emojioverflow" query matches only the long emoji label, so exactly one
+    // option is served.
+    const served = optionsPayload.options ?? [];
+    expect(served).toHaveLength(1);
+    const text = served[0]?.text?.text ?? "";
+    // Plain_text option labels are capped at 75 chars and must not end on a lone
+    // surrogate half, which Slack rejects. The label was long enough to truncate.
+    expect(text.length).toBeGreaterThan(0);
+    expect(text.length).toBeLessThanOrEqual(75);
+    expect(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text),
+    ).toBe(false);
+  });
+
   it("tracks accepted external_select option requests", async () => {
     const trackingHarness = createArgMenusHarness();
     const trackEvent = vi.fn();
@@ -969,6 +1023,7 @@ function createPolicyHarness(overrides?: {
   channelName?: string;
   allowFrom?: string[];
   useAccessGroups?: boolean;
+  slashEphemeral?: boolean;
   shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
   resolveChannelName?: () => Promise<{ name?: string; type?: string }>;
 }) {
@@ -1002,7 +1057,7 @@ function createPolicyHarness(overrides?: {
     slashCommand: {
       enabled: true,
       name: "openclaw",
-      ephemeral: true,
+      ephemeral: overrides?.slashEphemeral ?? true,
       sessionPrefix: "slack:slash",
     },
     textLimit: 4000,
@@ -1243,7 +1298,61 @@ describe("slack slash commands access groups", () => {
 });
 
 describe("slack slash command session metadata", () => {
-  const { recordSessionMetaFromInboundMock } = getSlackSlashMocks();
+  const { deliverSlackSlashRepliesMock, recordSessionMetaFromInboundMock, resolveAgentRouteMock } =
+    getSlackSlashMocks();
+
+  it("refreshes slash routing config between invocations", async () => {
+    const harness = createPolicyHarness({
+      channelId: "D123",
+      channelName: "directmessage",
+      resolveChannelName: async () => ({ name: "directmessage", type: "im" }),
+    });
+    const sourceCfg = (harness.ctx as { cfg: OpenClawConfig }).cfg;
+    const runtimeCfg = {
+      ...sourceCfg,
+      session: { dmScope: "per-channel-peer" },
+    } as OpenClawConfig;
+    resolveAgentRouteMock.mockImplementation((params: { cfg: OpenClawConfig }) => ({
+      agentId: "main",
+      accountId: "acct",
+      sessionKey:
+        params.cfg.session?.dmScope === "per-channel-peer"
+          ? "agent:main:slack:direct:U1"
+          : "agent:main:main",
+    }));
+    await registerCommands(harness.ctx, harness.account);
+
+    await runSlashHandler({
+      commands: harness.commands,
+      command: {
+        channel_id: harness.channelId,
+        channel_name: harness.channelName,
+      },
+    });
+    setRuntimeConfigSnapshot(runtimeCfg, runtimeCfg);
+    await runSlashHandler({
+      commands: harness.commands,
+      command: {
+        channel_id: harness.channelId,
+        channel_name: harness.channelName,
+      },
+    });
+
+    expect(dispatchMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        ctx: expect.objectContaining({ CommandTargetSessionKey: "agent:main:main" }),
+      }),
+    );
+    expect(dispatchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          CommandTargetSessionKey: "agent:main:slack:direct:U1",
+        }),
+      }),
+    );
+  });
 
   it("calls recordSessionMetaFromInbound after dispatching a slash command", async () => {
     const harness = createPolicyHarness({ groupPolicy: "open" });
@@ -1263,6 +1372,50 @@ describe("slack slash command session metadata", () => {
     expect(call.ctx?.GroupSpace).toBe("T1");
     expect(call.sessionKey).toBeTypeOf("string");
     expect(call.sessionKey).not.toBe("");
+  });
+
+  it("passes canonical hook correlation to slash reply delivery", async () => {
+    const harness = createPolicyHarness({ groupPolicy: "open" });
+    await registerAndRunPolicySlash({ harness });
+    const dispatchArg = firstDispatchArg() as {
+      ctx?: { OriginatingTo?: string; SessionKey?: string };
+      dispatcherOptions?: { deliver?: (payload: { text: string }) => Promise<void> };
+    };
+
+    await dispatchArg.dispatcherOptions?.deliver?.({ text: "final answer" });
+
+    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [{ text: "final answer" }],
+        messageSentHookTarget: dispatchArg.ctx?.OriginatingTo,
+        sessionKeyForInternalHooks: dispatchArg.ctx?.SessionKey,
+        accountId: "acct",
+        isGroup: true,
+        groupId: harness.channelId,
+      }),
+    );
+  });
+
+  it("targets the channel for public slash reply hooks", async () => {
+    const harness = createPolicyHarness({
+      groupPolicy: "open",
+      slashEphemeral: false,
+    });
+    await registerAndRunPolicySlash({ harness });
+    const dispatchArg = firstDispatchArg() as {
+      dispatcherOptions?: { deliver?: (payload: { text: string }) => Promise<void> };
+    };
+
+    await dispatchArg.dispatcherOptions?.deliver?.({ text: "public answer" });
+
+    expect(firstDispatchArg().ctx?.OriginatingTo).toBe(`channel:${harness.channelId}`);
+    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageSentHookTarget: `channel:${harness.channelId}`,
+        isGroup: true,
+        groupId: harness.channelId,
+      }),
+    );
   });
 
   it("awaits session metadata persistence before dispatch", async () => {

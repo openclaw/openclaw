@@ -1,3 +1,5 @@
+// Gateway memory startup helper.
+// Starts qmd memory boot sync for eligible agents without loading every agent.
 import { listAgentEntries, listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -8,16 +10,26 @@ import {
 import { getActiveMemorySearchManager } from "../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
-function shouldRunQmdStartupBootSync(qmd: ResolvedQmdConfig): boolean {
-  return qmd.update.onBoot && qmd.update.startup !== "off";
+/** True when qmd memory config opts into Gateway startup manager work. */
+function shouldRunQmdStartupManager(qmd: ResolvedQmdConfig): boolean {
+  return (
+    qmd.update.startup !== "off" && (qmd.update.onBoot || shouldKeepQmdStartupManagerAlive(qmd))
+  );
 }
 
+/** True when startup needs the full manager to own QMD background timers. */
+function shouldKeepQmdStartupManagerAlive(qmd: ResolvedQmdConfig): boolean {
+  return qmd.update.intervalMs > 0 || qmd.update.embedIntervalMs > 0;
+}
+
+/** Check whether an agent overrides memory search instead of inheriting defaults. */
 function hasExplicitAgentMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
   return listAgentEntries(cfg).some(
     (entry) => normalizeAgentId(entry.id) === agentId && entry.memorySearch != null,
   );
 }
 
+/** Decide whether an agent's qmd memory manager should start during Gateway boot. */
 function shouldEagerlyStartAgentMemory(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -35,12 +47,14 @@ function shouldEagerlyStartAgentMemory(params: {
   return hasExplicitAgentMemorySearchConfig(params.cfg, params.agentId);
 }
 
+/** Start qmd memory boot sync for eligible agents without eagerly loading every agent. */
 export async function startGatewayMemoryBackend(params: {
   cfg: OpenClawConfig;
   log: { info?: (msg: string) => void; warn: (msg: string) => void };
 }): Promise<void> {
   const agentIds = listAgentIds(params.cfg);
-  const armedAgentIds: string[] = [];
+  const bootSyncAgentIds: string[] = [];
+  const initializedAgentIds: string[] = [];
   const deferredAgentIds: string[] = [];
   for (const agentId of agentIds) {
     if (!resolveMemorySearchConfig(params.cfg, agentId)) {
@@ -53,7 +67,7 @@ export async function startGatewayMemoryBackend(params: {
     if (resolved.backend !== "qmd" || !resolved.qmd) {
       continue;
     }
-    if (!shouldRunQmdStartupBootSync(resolved.qmd)) {
+    if (!shouldRunQmdStartupManager(resolved.qmd)) {
       continue;
     }
     if (
@@ -63,19 +77,26 @@ export async function startGatewayMemoryBackend(params: {
         agentCount: agentIds.length,
       })
     ) {
+      // Multi-agent configs keep unconfigured non-default agents lazy so
+      // Gateway startup does not initialize every possible qmd store.
       deferredAgentIds.push(agentId);
       continue;
     }
 
+    const keepManagerAlive = shouldKeepQmdStartupManagerAlive(resolved.qmd);
     const { manager, error } = await getActiveMemorySearchManager({
       cfg: params.cfg,
       agentId,
-      purpose: "cli",
+      purpose: keepManagerAlive ? "default" : "cli",
     });
     if (!manager) {
       params.log.warn(
         `qmd memory startup initialization failed for agent "${agentId}": ${error ?? "unknown error"}`,
       );
+      continue;
+    }
+    if (keepManagerAlive) {
+      initializedAgentIds.push(agentId);
       continue;
     }
     try {
@@ -84,17 +105,24 @@ export async function startGatewayMemoryBackend(params: {
       params.log.warn(`qmd memory startup boot sync failed for agent "${agentId}": ${String(err)}`);
       continue;
     } finally {
-      await manager.close?.().catch((err) => {
+      await manager.close?.().catch((err: unknown) => {
         params.log.warn(
           `qmd memory startup manager close failed for agent "${agentId}": ${String(err)}`,
         );
       });
     }
-    armedAgentIds.push(agentId);
+    bootSyncAgentIds.push(agentId);
   }
-  if (armedAgentIds.length > 0) {
+  if (bootSyncAgentIds.length > 0) {
     params.log.info?.(
-      `qmd memory startup boot sync completed for ${formatAgentCount(armedAgentIds.length)}: ${armedAgentIds
+      `qmd memory startup boot sync completed for ${formatAgentCount(bootSyncAgentIds.length)}: ${bootSyncAgentIds
+        .map((agentId) => `"${agentId}"`)
+        .join(", ")}`,
+    );
+  }
+  if (initializedAgentIds.length > 0) {
+    params.log.info?.(
+      `qmd memory startup manager initialized for ${formatAgentCount(initializedAgentIds.length)}: ${initializedAgentIds
         .map((agentId) => `"${agentId}"`)
         .join(", ")}`,
     );

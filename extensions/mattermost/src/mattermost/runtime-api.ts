@@ -1,3 +1,4 @@
+// Mattermost API module exposes the plugin public contract.
 export type {
   BaseProbeResult,
   ChannelAccountSnapshot,
@@ -47,3 +48,4 @@ export {
   parseStrictPositiveInteger,
   resolveClientIp,
 } from "openclaw/plugin-sdk/core";
+export { parseTcpPort } from "openclaw/plugin-sdk/number-runtime";

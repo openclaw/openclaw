@@ -1,3 +1,5 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+// Defines agent routing, model, and runtime configuration types.
 import type { ChatType } from "../channels/chat-type.js";
 import type {
   AgentContextLimitsConfig,
@@ -84,9 +86,9 @@ export type AgentConfig = {
   description?: string;
   workspace?: string;
   agentDir?: string;
-  /** Optional per-agent full system prompt replacement. */
-  systemPromptOverride?: AgentDefaultsConfig["systemPromptOverride"];
   model?: AgentModelConfig;
+  /** Optional per-agent model for short internal tasks such as generated session titles. */
+  utilityModel?: string;
   /**
    * @deprecated Legacy raw config accepted only by doctor/migration repair.
    * Normal schema parsing rejects this key; use per-model agentRuntime instead.
@@ -105,7 +107,7 @@ export type AgentConfig = {
   /** Optional per-agent default reasoning visibility. */
   reasoningDefault?: "on" | "off" | "stream";
   /** Optional per-agent default for fast mode. */
-  fastModeDefault?: boolean;
+  fastModeDefault?: FastMode;
   /** Optional per-agent bootstrap/context injection mode override. */
   contextInjection?: AgentDefaultsConfig["contextInjection"];
   /** Optional per-agent max chars for each injected bootstrap file. */
@@ -137,6 +139,8 @@ export type AgentConfig = {
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;
+    /** Per-agent default thinking level for spawned sub-agents. */
+    thinking?: string;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;
   };

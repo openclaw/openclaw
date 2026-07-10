@@ -1,8 +1,10 @@
+// Input file fetch guard tests cover network fetch limits for media inputs.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.fn();
 const convertHeicToJpegMock = vi.fn();
 const detectMimeMock = vi.fn();
+const extractPdfContentMock = vi.fn();
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
@@ -12,12 +14,18 @@ vi.mock("./media-services.js", () => ({
   convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
 }));
 
-vi.mock("./mime.js", () => ({
+vi.mock("@openclaw/media-core/mime", () => ({
   detectMime: (...args: unknown[]) => detectMimeMock(...args),
 }));
 
+vi.mock("./pdf-extract.js", () => ({
+  extractPdfContent: (...args: unknown[]) => extractPdfContentMock(...args),
+}));
+
 async function waitForMicrotaskTurn(): Promise<void> {
-  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  await new Promise<void>((resolve) => {
+    queueMicrotask(resolve);
+  });
 }
 
 let fetchWithGuard: typeof import("./input-files.js").fetchWithGuard;
@@ -31,6 +39,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  extractPdfContentMock.mockResolvedValue({ text: "", images: [] });
 });
 
 function createImageSourceLimits(allowedMimes: string[], allowUrl = false) {
@@ -299,6 +308,39 @@ describe("fetchWithGuard", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects malformed content-length before reading input files", async () => {
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3, 4]));
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(stream, {
+        status: 200,
+        headers: { "content-length": "1e9", "content-type": "application/octet-stream" },
+      }),
+      release,
+      finalUrl: "https://example.com/file.bin",
+    });
+
+    await expect(
+      fetchWithGuard({
+        url: "https://example.com/file.bin",
+        maxBytes: 1024,
+        timeoutMs: 1000,
+        maxRedirects: 0,
+      }),
+    ).rejects.toThrow("invalid content-length header: 1e9");
+
+    expect(canceled).toBe(true);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects oversized streamed payloads and cancels the stream", async () => {
     let canceled = false;
     let pulls = 0;
@@ -392,6 +434,31 @@ describe("input file MIME sniffing", () => {
         limits: createFileSourceLimits(["text/plain"]),
       }),
     ).rejects.toThrow("Unsupported file MIME type: application/zip");
+  });
+
+  it("times out local PDF extraction with the input file timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      detectMimeMock.mockResolvedValueOnce("application/pdf");
+      extractPdfContentMock.mockReturnValueOnce(new Promise(() => {}));
+
+      const pending = expect(
+        extractFileContentFromSource({
+          source: {
+            type: "base64",
+            data: Buffer.from("%PDF-1.4\n").toString("base64"),
+            mediaType: "application/pdf",
+            filename: "scan.pdf",
+          },
+          limits: createFileSourceLimits(["application/pdf"]),
+        }),
+      ).rejects.toThrow("PDF extraction timed out after 1ms");
+
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

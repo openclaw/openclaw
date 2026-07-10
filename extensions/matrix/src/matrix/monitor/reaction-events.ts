@@ -1,3 +1,5 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+// Matrix plugin module implements reaction events behavior.
 import { getSessionBindingService } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
   resolveMatrixApprovalReactionTargetWithPersistence,
@@ -12,26 +14,17 @@ import type { PluginRuntime } from "./runtime-api.js";
 import { resolveMatrixThreadRootId, resolveMatrixThreadRouting } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 
-let approvalReactionAuthPromise:
-  | Promise<typeof import("../../approval-reaction-auth.js")>
-  | undefined;
-let execApprovalResolverPromise:
-  | Promise<typeof import("../../exec-approval-resolver.js")>
-  | undefined;
+const loadApprovalReactionAuth = createLazyRuntimeModule(
+  () => import("../../approval-reaction-auth.js"),
+);
 
-function loadApprovalReactionAuth(): Promise<typeof import("../../approval-reaction-auth.js")> {
-  approvalReactionAuthPromise ??= import("../../approval-reaction-auth.js");
-  return approvalReactionAuthPromise;
-}
+const loadExecApprovalResolver = createLazyRuntimeModule(
+  () => import("../../exec-approval-resolver.js"),
+);
 
-function loadExecApprovalResolver(): Promise<typeof import("../../exec-approval-resolver.js")> {
-  execApprovalResolverPromise ??= import("../../exec-approval-resolver.js");
-  return execApprovalResolverPromise;
-}
+type MatrixReactionNotificationMode = "off" | "own";
 
-export type MatrixReactionNotificationMode = "off" | "own";
-
-export function resolveMatrixReactionNotificationMode(params: {
+function resolveMatrixReactionNotificationMode(params: {
   cfg: CoreConfig;
   accountId: string;
 }): MatrixReactionNotificationMode {
@@ -136,12 +129,14 @@ export async function handleInboundMatrixReaction(params: {
     return;
   }
 
-  const targetEvent = await params.client.getEvent(params.roomId, reaction.eventId).catch((err) => {
-    params.logVerboseMessage(
-      `matrix: failed resolving reaction target room=${params.roomId} id=${reaction.eventId}: ${String(err)}`,
-    );
-    return null;
-  });
+  const targetEvent = await params.client
+    .getEvent(params.roomId, reaction.eventId)
+    .catch((err: unknown) => {
+      params.logVerboseMessage(
+        `matrix: failed resolving reaction target room=${params.roomId} id=${reaction.eventId}: ${String(err)}`,
+      );
+      return null;
+    });
   const targetSender =
     targetEvent && typeof targetEvent.sender === "string" ? targetEvent.sender.trim() : "";
   if (!targetSender) {

@@ -1,3 +1,8 @@
+/**
+ * Read-only subagent registry accessors.
+ *
+ * Combines persisted snapshots with in-memory live runs for UI, announce, control, and recovery paths.
+ */
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
@@ -10,6 +15,7 @@ import {
 } from "./subagent-registry-queries.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
 export {
   getSubagentSessionRuntimeMs,
@@ -17,6 +23,7 @@ export {
   resolveSubagentSessionStatus,
 } from "./subagent-session-metrics.js";
 
+/** Builds a reusable read index from the current persisted and in-memory run state. */
 export function buildSubagentRunReadIndex(now = Date.now()): SubagentRunReadIndex {
   return buildSubagentRunReadIndexFromRuns({
     runs: getSubagentRunsSnapshotForRead(subagentRuns),
@@ -25,6 +32,7 @@ export function buildSubagentRunReadIndex(now = Date.now()): SubagentRunReadInde
   });
 }
 
+/** Lists runs controlled by a session key. */
 export function listSubagentRunsForController(controllerSessionKey: string): SubagentRunRecord[] {
   return listRunsForControllerFromRuns(
     getSubagentRunsSnapshotForRead(subagentRuns),
@@ -32,6 +40,7 @@ export function listSubagentRunsForController(controllerSessionKey: string): Sub
   );
 }
 
+/** Counts active descendant runs for a requester/session tree. */
 export function countActiveDescendantRuns(rootSessionKey: string): number {
   return countActiveDescendantRunsFromRuns(
     getSubagentRunsSnapshotForRead(subagentRuns),
@@ -39,6 +48,7 @@ export function countActiveDescendantRuns(rootSessionKey: string): number {
   );
 }
 
+/** Lists descendant runs under a requester/session tree. */
 export function listDescendantRunsForRequester(rootSessionKey: string): SubagentRunRecord[] {
   return listDescendantRunsForRequesterFromRuns(
     getSubagentRunsSnapshotForRead(subagentRuns),
@@ -46,6 +56,7 @@ export function listDescendantRunsForRequester(rootSessionKey: string): Subagent
   );
 }
 
+/** Returns the preferred run for a child session, favoring active over ended runs. */
 export function getSubagentRunByChildSessionKey(childSessionKey: string): SubagentRunRecord | null {
   return getSubagentRunByChildSessionKeyFromRuns(
     getSubagentRunsSnapshotForRead(subagentRuns),
@@ -53,6 +64,7 @@ export function getSubagentRunByChildSessionKey(childSessionKey: string): Subage
   );
 }
 
+/** Returns whether a registry entry still has a live agent run context. */
 export function isSubagentRunLive(
   entry: Pick<SubagentRunRecord, "runId" | "endedAt"> | null | undefined,
 ): boolean {
@@ -62,6 +74,7 @@ export function isSubagentRunLive(
   return Boolean(getAgentRunContext(entry.runId));
 }
 
+/** Returns the run to display for a child session, using live memory before snapshot state. */
 export function getSessionDisplaySubagentRunByChildSessionKey(
   childSessionKey: string,
 ): SubagentRunRecord | null {
@@ -77,20 +90,22 @@ export function getSessionDisplaySubagentRunByChildSessionKey(
       continue;
     }
     if (typeof entry.endedAt === "number") {
-      if (!latestInMemoryEnded || entry.createdAt > latestInMemoryEnded.createdAt) {
+      if (!latestInMemoryEnded || compareSubagentRunGeneration(entry, latestInMemoryEnded) > 0) {
         latestInMemoryEnded = entry;
       }
       continue;
     }
-    if (!latestInMemoryActive || entry.createdAt > latestInMemoryActive.createdAt) {
+    if (!latestInMemoryActive || compareSubagentRunGeneration(entry, latestInMemoryActive) > 0) {
       latestInMemoryActive = entry;
     }
   }
 
   if (latestInMemoryEnded || latestInMemoryActive) {
+    // Fresh in-memory terminal state is more accurate than an older active snapshot row.
     if (
       latestInMemoryEnded &&
-      (!latestInMemoryActive || latestInMemoryEnded.createdAt > latestInMemoryActive.createdAt)
+      (!latestInMemoryActive ||
+        compareSubagentRunGeneration(latestInMemoryEnded, latestInMemoryActive) > 0)
     ) {
       return latestInMemoryEnded;
     }
@@ -100,6 +115,7 @@ export function getSessionDisplaySubagentRunByChildSessionKey(
   return getSubagentRunByChildSessionKey(key);
 }
 
+/** Returns the most recently created run for a child session from readable registry state. */
 export function getLatestSubagentRunByChildSessionKey(
   childSessionKey: string,
 ): SubagentRunRecord | null {
@@ -113,7 +129,7 @@ export function getLatestSubagentRunByChildSessionKey(
     if (entry.childSessionKey !== key) {
       continue;
     }
-    if (!latest || entry.createdAt > latest.createdAt) {
+    if (!latest || compareSubagentRunGeneration(entry, latest) > 0) {
       latest = entry;
     }
   }

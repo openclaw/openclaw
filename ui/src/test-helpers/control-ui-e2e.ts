@@ -1,15 +1,40 @@
+// Control UI test helper supports control ui e2e setup.
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer as createNetServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Page } from "playwright";
-import { createServer, type ViteDevServer } from "vite";
+import type { ViteDevServer } from "vite";
+import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
-import { PROTOCOL_VERSION } from "../../../src/gateway/protocol/version.js";
+import {
+  controlUiBrowserOnlySharedModuleAliases,
+  resolveExternalPackageAliasesForVite,
+  resolveSourcePackageAliasesForVite,
+  resolveTsconfigPathAliasesForVite,
+} from "../../vite.config.ts";
 
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
+const commonJsOptimizeDeps = [
+  "highlight.js/lib/core",
+  "highlight.js/lib/languages/bash",
+  "highlight.js/lib/languages/cpp",
+  "highlight.js/lib/languages/css",
+  "highlight.js/lib/languages/diff",
+  "highlight.js/lib/languages/go",
+  "highlight.js/lib/languages/java",
+  "highlight.js/lib/languages/javascript",
+  "highlight.js/lib/languages/json",
+  "highlight.js/lib/languages/markdown",
+  "highlight.js/lib/languages/python",
+  "highlight.js/lib/languages/rust",
+  "highlight.js/lib/languages/typescript",
+  "highlight.js/lib/languages/xml",
+  "highlight.js/lib/languages/yaml",
+] as const;
 
 export type MockGatewayRequest = {
   id: string;
@@ -20,20 +45,28 @@ export type MockGatewayRequest = {
 export type ControlUiMockGatewayScenario = {
   assistantAgentId?: string;
   assistantName?: string;
+  controlUiTabs?: Array<{
+    group?: string;
+    icon?: string;
+    id: string;
+    label: string;
+    pluginId: string;
+  }>;
   defaultAgentId?: string;
+  deferredMethods?: string[];
+  deviceToken?: string;
+  featureMethods?: string[];
   historyMessages?: unknown[];
   methodResponses?: Record<string, unknown>;
-  models?: Array<{ id: string; name: string; provider: string }>;
+  models?: Array<{
+    id: string;
+    name: string;
+    provider: string;
+    available?: boolean;
+  }>;
   sessionKey?: string;
-};
-
-export type ControlUiMockGatewayMethodResponseCase = {
-  match?: Record<string, unknown>;
-  response: unknown;
-};
-
-export type ControlUiMockGatewayMethodResponseCases = {
-  cases: ControlUiMockGatewayMethodResponseCase[];
+  terminalEnabled?: boolean;
+  workspaceGit?: boolean;
 };
 
 type NormalizedControlUiMockGatewayScenario = Required<ControlUiMockGatewayScenario>;
@@ -44,22 +77,64 @@ export type ControlUiE2eServer = {
 };
 
 export type MockGatewayControls = {
+  closeLatest: (code?: number, reason?: string) => Promise<void>;
+  deliverLatest: (frame: unknown) => Promise<void>;
+  deferNext: (method: string) => Promise<void>;
   emitChatFinal: (params: { runId: string; sessionKey?: string; text: string }) => Promise<void>;
   emitGatewayEvent: (event: string, payload?: unknown) => Promise<void>;
   getRequests: (method?: string) => Promise<MockGatewayRequest[]>;
+  getSocketCount: () => Promise<number>;
+  getSocketUrls: () => Promise<string[]>;
+  rejectDeferred: (
+    method: string,
+    error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
+  ) => Promise<void>;
+  resolveDeferred: (method: string, payload?: unknown) => Promise<void>;
+  setHistoryMessages: (messages: unknown[]) => Promise<void>;
   waitForRequest: (method: string) => Promise<MockGatewayRequest>;
 };
+
+const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
+export const systemChromiumExecutableCandidates = [
+  "/snap/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/usr/bin/chromium",
+  "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable",
+] as const;
 
 function resolveRepoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(here, "../../..");
 }
 
+export function resolvePlaywrightChromiumExecutablePath(
+  defaultExecutablePath: string,
+  env: NodeJS.ProcessEnv = process.env,
+  canRun: (chromiumExecutablePath: string) => boolean = canRunPlaywrightChromium,
+): string {
+  const executableOverride = env[chromiumExecutableOverrideEnvKey]?.trim();
+  if (executableOverride) {
+    return executableOverride;
+  }
+  if (canRun(defaultExecutablePath)) {
+    return defaultExecutablePath;
+  }
+  return (
+    systemChromiumExecutableCandidates.find((candidate) => canRun(candidate)) ??
+    defaultExecutablePath
+  );
+}
+
 export function canRunPlaywrightChromium(chromiumExecutablePath: string): boolean {
-  return existsSync(chromiumExecutablePath);
+  if (!existsSync(chromiumExecutablePath)) {
+    return false;
+  }
+  return spawnSync(chromiumExecutablePath, ["--version"], { stdio: "ignore" }).status === 0;
 }
 
 export async function startControlUiE2eServer(): Promise<ControlUiE2eServer> {
+  const { createServer } = await import("vite");
   const repoRoot = resolveRepoRoot();
   const uiRoot = path.join(repoRoot, "ui");
   const port = await resolveAvailableLoopbackPort();
@@ -73,13 +148,22 @@ export async function startControlUiE2eServer(): Promise<ControlUiE2eServer> {
     },
     logLevel: "error",
     optimizeDeps: {
-      include: ["ipaddr.js", "lit/directives/repeat.js", "markdown-it-task-lists"],
+      include: [
+        "ipaddr.js",
+        "lit/directives/repeat.js",
+        "markdown-it-task-lists",
+        ...commonJsOptimizeDeps,
+      ],
     },
     publicDir: path.join(uiRoot, "public"),
+    plugins: [controlUiBrowserOnlySharedModuleAliases()],
     resolve: {
-      alias: {
-        json5: json5EsmPath,
-      },
+      alias: [
+        { find: "json5", replacement: json5EsmPath },
+        ...resolveExternalPackageAliasesForVite(),
+        ...resolveSourcePackageAliasesForVite(),
+        ...resolveTsconfigPathAliasesForVite(),
+      ],
     },
     root: uiRoot,
     server: {
@@ -132,11 +216,17 @@ function normalizeScenario(
   return {
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
     assistantName: scenario.assistantName?.trim() || "OpenClaw",
+    controlUiTabs: scenario.controlUiTabs ?? [],
     defaultAgentId,
+    deferredMethods: scenario.deferredMethods ?? [],
+    deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
+    featureMethods: scenario.featureMethods ?? ["chat.metadata", "chat.startup"],
     historyMessages: scenario.historyMessages ?? [],
     methodResponses: scenario.methodResponses ?? {},
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
     sessionKey,
+    terminalEnabled: scenario.terminalEnabled ?? false,
+    workspaceGit: scenario.workspaceGit ?? false,
   };
 }
 
@@ -151,6 +241,7 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
     embedSandbox: "scripts",
     localMediaPreviewRoots: [],
     serverVersion: "e2e",
+    terminalEnabled: normalizedScenario.terminalEnabled,
   };
 }
 
@@ -183,10 +274,27 @@ function installControlUiMockGateway(input: {
   type BrowserMethodResponseCases = {
     cases?: BrowserMethodResponseCase[];
   };
+  type DeferredResponse = {
+    id: string;
+    method: string;
+    params?: unknown;
+    socket: { deliver: (frame: unknown) => void };
+  };
   type ExposedGateway = {
+    closeLatest: (code?: number, reason?: string) => void;
+    deliverLatest: (frame: unknown) => void;
+    deferNext: (method: string) => void;
     emit: (event: string, payload?: unknown) => void;
     findRequests: (method?: string) => BrowserRequest[];
+    rejectDeferred: (
+      method: string,
+      error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
+    ) => void;
     requests: BrowserRequest[];
+    resolveDeferred: (method: string, payload?: unknown) => void;
+    setHistoryMessages: (messages: unknown[]) => void;
+    socketCount: () => number;
+    socketUrls: () => string[];
   };
   type WindowWithGateway = Window & {
     openclawControlUiE2eGateway?: ExposedGateway;
@@ -194,7 +302,11 @@ function installControlUiMockGateway(input: {
 
   const scenario: BrowserScenario = input.scenario;
   const protocolVersion = input.protocolVersion;
+  const deferredMethods: string[] = [...scenario.deferredMethods];
+  const deferredResponses: DeferredResponse[] = [];
   const requests: BrowserRequest[] = [];
+  const sessionPatches = new Map<string, Record<string, unknown>>();
+  const sockets: Array<{ readonly url: string }> = [];
   let seq = 0;
 
   function isRecord(value: unknown): value is Record<string, unknown> {
@@ -202,7 +314,7 @@ function installControlUiMockGateway(input: {
   }
 
   function hasOwn(record: Record<string, unknown>, key: string): boolean {
-    return Object.prototype.hasOwnProperty.call(record, key);
+    return Object.hasOwn(record, key);
   }
 
   function valuesEqual(actual: unknown, expected: unknown): boolean {
@@ -262,6 +374,35 @@ function installControlUiMockGateway(input: {
     return { found: true, value: matchingCase.response };
   }
 
+  function recordSessionPatch(params: unknown): void {
+    if (!isRecord(params) || typeof params.key !== "string") {
+      return;
+    }
+    const patch = { ...sessionPatches.get(params.key) };
+    for (const key of ["model", "thinkingLevel", "fastMode", "category", "pinned"] as const) {
+      if (hasOwn(params, key)) {
+        patch[key] = params[key];
+      }
+    }
+    sessionPatches.set(params.key, patch);
+  }
+
+  function applySessionPatches(response: unknown): unknown {
+    if (!isRecord(response) || !Array.isArray(response.sessions)) {
+      return response;
+    }
+    return {
+      ...response,
+      sessions: response.sessions.map((row) => {
+        if (!isRecord(row) || typeof row.key !== "string") {
+          return row;
+        }
+        const patch = sessionPatches.get(row.key);
+        return patch ? { ...row, ...patch } : row;
+      }),
+    };
+  }
+
   function sessionRow() {
     return {
       contextTokens: null,
@@ -279,15 +420,18 @@ function installControlUiMockGateway(input: {
   }
 
   function buildResponse(method: string, params: unknown): unknown {
+    if (method === "sessions.patch") {
+      recordSessionPatch(params);
+    }
     const configured = configuredResponse(method, params);
     if (configured.found) {
-      return configured.value;
+      return method === "sessions.list" ? applySessionPatches(configured.value) : configured.value;
     }
     switch (method) {
       case "connect":
         return {
           auth: {
-            deviceToken: "e2e-device-token",
+            deviceToken: scenario.deviceToken,
             role: "operator",
             scopes: [
               "operator.admin",
@@ -297,7 +441,8 @@ function installControlUiMockGateway(input: {
               "operator.pairing",
             ],
           },
-          features: { events: [], methods: [] },
+          features: { events: [], methods: scenario.featureMethods },
+          controlUiTabs: scenario.controlUiTabs,
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },
           snapshot: {
@@ -324,20 +469,84 @@ function installControlUiMockGateway(input: {
               id: scenario.defaultAgentId,
               identity: { name: scenario.assistantName },
               name: scenario.assistantName,
+              workspaceGit: scenario.workspaceGit,
             },
           ],
           defaultId: scenario.defaultAgentId,
           mainKey: "main",
           scope: "agent",
         };
+      case "agents.files.list":
+        return {
+          agentId:
+            isRecord(params) && typeof params.agentId === "string"
+              ? params.agentId
+              : scenario.defaultAgentId,
+          files: [],
+          workspace: "",
+        };
+      case "agents.files.get":
+        return null;
+      case "sessions.files.list":
+        return {
+          browser: {
+            entries: [],
+            path: "",
+          },
+          files: [],
+          root: "",
+          sessionKey:
+            isRecord(params) && typeof params.sessionKey === "string" ? params.sessionKey : "main",
+        };
+      case "sessions.files.get":
+        return null;
+      case "artifacts.list":
+        return { artifacts: [] };
+      case "artifacts.download":
+        return null;
       case "chat.history":
         return {
           messages: scenario.historyMessages,
           sessionId: "control-ui-e2e-session",
           thinkingLevel: null,
         };
+      case "chat.startup":
+        return {
+          agentsList: {
+            agents: [
+              {
+                id: scenario.defaultAgentId,
+                identity: { name: scenario.assistantName },
+                name: scenario.assistantName,
+                workspaceGit: scenario.workspaceGit,
+              },
+            ],
+            defaultId: scenario.defaultAgentId,
+            mainKey: "main",
+            scope: "agent",
+          },
+          messages: scenario.historyMessages,
+          metadata: {
+            models: scenario.models,
+          },
+          sessionId: "control-ui-e2e-session",
+          thinkingLevel: null,
+        };
+      case "chat.metadata":
+        return {
+          commands: [],
+          models: scenario.models,
+        };
       case "chat.send":
-        return { ok: true, queued: false, params };
+        return {
+          runId:
+            isRecord(params) && typeof params.idempotencyKey === "string"
+              ? params.idempotencyKey
+              : "control-ui-e2e-run",
+          status: "started",
+        };
+      case "chat.abort":
+        return { aborted: true };
       case "commands.list":
         return { commands: [] };
       case "health":
@@ -353,7 +562,7 @@ function installControlUiMockGateway(input: {
       case "models.list":
         return { models: scenario.models };
       case "sessions.list":
-        return {
+        return applySessionPatches({
           count: 1,
           defaults: {
             contextTokens: null,
@@ -363,12 +572,21 @@ function installControlUiMockGateway(input: {
           path: "",
           sessions: [sessionRow()],
           ts: Date.now(),
-        };
+        });
       case "sessions.subscribe":
         return { ok: true };
       default:
         return {};
     }
+  }
+
+  function shouldDefer(method: string): boolean {
+    const index = deferredMethods.indexOf(method);
+    if (index < 0) {
+      return false;
+    }
+    deferredMethods.splice(index, 1);
+    return true;
   }
 
   function parseFrame(raw: string | ArrayBufferLike | Blob | ArrayBufferView): BrowserFrame | null {
@@ -405,6 +623,7 @@ function installControlUiMockGateway(input: {
       super();
       this.url = String(url);
       MockWebSocket.latest = this;
+      sockets.push(this);
       window.setTimeout(() => {
         if (this.readyState !== MockWebSocket.CONNECTING) {
           return;
@@ -452,6 +671,10 @@ function installControlUiMockGateway(input: {
         return;
       }
       requests.push({ id, method, params: frame.params });
+      if (shouldDefer(method)) {
+        deferredResponses.push({ id, method, params: frame.params, socket: this });
+        return;
+      }
       window.setTimeout(() => {
         this.deliver({
           id,
@@ -459,6 +682,23 @@ function installControlUiMockGateway(input: {
           payload: buildResponse(method, frame.params),
           type: "res",
         });
+        if (
+          method === "chat.abort" &&
+          isRecord(frame.params) &&
+          typeof frame.params.runId === "string" &&
+          typeof frame.params.sessionKey === "string"
+        ) {
+          this.deliver({
+            event: "chat",
+            payload: {
+              runId: frame.params.runId,
+              sessionKey: frame.params.sessionKey,
+              state: "aborted",
+            },
+            seq: ++seq,
+            type: "event",
+          });
+        }
       }, 0);
     }
 
@@ -471,6 +711,15 @@ function installControlUiMockGateway(input: {
   }
 
   const exposed: ExposedGateway = {
+    closeLatest(code, reason) {
+      MockWebSocket.latest?.close(code ?? 1006, reason ?? "mock close");
+    },
+    deliverLatest(frame) {
+      MockWebSocket.latest?.deliver(frame);
+    },
+    deferNext(method) {
+      deferredMethods.push(method);
+    },
     emit(event, payload) {
       MockWebSocket.latest?.deliver({
         event,
@@ -482,7 +731,47 @@ function installControlUiMockGateway(input: {
     findRequests(method) {
       return method ? requests.filter((request) => request.method === method) : [...requests];
     },
+    rejectDeferred(method, error) {
+      const index = deferredResponses.findIndex((response) => response.method === method);
+      if (index < 0) {
+        throw new Error(`No deferred mock Gateway response for ${method}`);
+      }
+      const [response] = deferredResponses.splice(index, 1);
+      response.socket.deliver({
+        error: {
+          code: error?.code ?? "INVALID_REQUEST",
+          message: error?.message ?? "mock Gateway rejected request",
+          ...(error?.details ? { details: error.details } : {}),
+          ...(error?.retryable ? { retryable: true } : {}),
+        },
+        id: response.id,
+        ok: false,
+        type: "res",
+      });
+    },
     requests,
+    resolveDeferred(method, payload) {
+      const index = deferredResponses.findIndex((response) => response.method === method);
+      if (index < 0) {
+        throw new Error(`No deferred mock Gateway response for ${method}`);
+      }
+      const [response] = deferredResponses.splice(index, 1);
+      response.socket.deliver({
+        id: response.id,
+        ok: true,
+        payload: payload ?? buildResponse(response.method, response.params),
+        type: "res",
+      });
+    },
+    setHistoryMessages(messages) {
+      scenario.historyMessages = Array.isArray(messages) ? messages : [];
+    },
+    socketCount() {
+      return sockets.length;
+    },
+    socketUrls() {
+      return sockets.map((socket) => socket.url);
+    },
   };
 
   (window as WindowWithGateway).openclawControlUiE2eGateway = exposed;
@@ -525,6 +814,22 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
     );
   };
 
+  const deliverLatest = async (frame: unknown) => {
+    await page.evaluate((payload) => {
+      const gateway = (
+        window as Window & {
+          openclawControlUiE2eGateway?: {
+            deliverLatest: (frame: unknown) => void;
+          };
+        }
+      ).openclawControlUiE2eGateway;
+      if (!gateway) {
+        throw new Error("Mock Gateway is not installed");
+      }
+      gateway.deliverLatest(payload);
+    }, frame);
+  };
+
   const getRequests = async (method?: string) =>
     page.evaluate((targetMethod) => {
       const gateway = (
@@ -538,6 +843,40 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
     }, method);
 
   return {
+    async closeLatest(code, reason) {
+      await page.evaluate(
+        ({ closeCode, closeReason }) => {
+          const gateway = (
+            window as Window & {
+              openclawControlUiE2eGateway?: {
+                closeLatest: (code?: number, reason?: string) => void;
+              };
+            }
+          ).openclawControlUiE2eGateway;
+          if (!gateway) {
+            throw new Error("Mock Gateway is not installed");
+          }
+          gateway.closeLatest(closeCode, closeReason);
+        },
+        { closeCode: code, closeReason: reason },
+      );
+    },
+    deliverLatest,
+    async deferNext(method) {
+      await page.evaluate((targetMethod) => {
+        const gateway = (
+          window as Window & {
+            openclawControlUiE2eGateway?: {
+              deferNext: (method: string) => void;
+            };
+          }
+        ).openclawControlUiE2eGateway;
+        if (!gateway) {
+          throw new Error("Mock Gateway is not installed");
+        }
+        gateway.deferNext(targetMethod);
+      }, method);
+    },
     async emitChatFinal(params) {
       await emitGatewayEvent("chat", {
         message: {
@@ -552,6 +891,89 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
     },
     emitGatewayEvent,
     getRequests,
+    async getSocketCount() {
+      return await page.evaluate(() => {
+        const gateway = (
+          window as Window & {
+            openclawControlUiE2eGateway?: {
+              socketCount: () => number;
+            };
+          }
+        ).openclawControlUiE2eGateway;
+        return gateway?.socketCount() ?? 0;
+      });
+    },
+    async getSocketUrls() {
+      return await page.evaluate(() => {
+        const gateway = (
+          window as Window & {
+            openclawControlUiE2eGateway?: {
+              socketUrls: () => string[];
+            };
+          }
+        ).openclawControlUiE2eGateway;
+        return gateway?.socketUrls() ?? [];
+      });
+    },
+    async rejectDeferred(method, error) {
+      await page.evaluate(
+        ({ targetMethod, responseError }) => {
+          const gateway = (
+            window as Window & {
+              openclawControlUiE2eGateway?: {
+                rejectDeferred: (
+                  method: string,
+                  error?: {
+                    code?: string;
+                    message?: string;
+                    details?: unknown;
+                    retryable?: boolean;
+                  },
+                ) => void;
+              };
+            }
+          ).openclawControlUiE2eGateway;
+          if (!gateway) {
+            throw new Error("Mock Gateway is not installed");
+          }
+          gateway.rejectDeferred(targetMethod, responseError);
+        },
+        { targetMethod: method, responseError: error },
+      );
+    },
+    async resolveDeferred(method, payload) {
+      await page.evaluate(
+        ({ targetMethod, responsePayload }) => {
+          const gateway = (
+            window as Window & {
+              openclawControlUiE2eGateway?: {
+                resolveDeferred: (method: string, payload?: unknown) => void;
+              };
+            }
+          ).openclawControlUiE2eGateway;
+          if (!gateway) {
+            throw new Error("Mock Gateway is not installed");
+          }
+          gateway.resolveDeferred(targetMethod, responsePayload);
+        },
+        { targetMethod: method, responsePayload: payload },
+      );
+    },
+    async setHistoryMessages(messages) {
+      await page.evaluate((nextMessages) => {
+        const gateway = (
+          window as Window & {
+            openclawControlUiE2eGateway?: {
+              setHistoryMessages: (messages: unknown[]) => void;
+            };
+          }
+        ).openclawControlUiE2eGateway;
+        if (!gateway) {
+          throw new Error("Mock Gateway is not installed");
+        }
+        gateway.setHistoryMessages(nextMessages);
+      }, messages);
+    },
     async waitForRequest(method) {
       await page.waitForFunction(
         (targetMethod) => {

@@ -1,18 +1,24 @@
+// Plugin-provided node.invoke policy adapter.
+// Lets plugin policies gate dangerous node commands before transport dispatch.
 import { randomUUID } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
-import { DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS } from "../infra/plugin-approvals.js";
-import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
+import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
 import type {
   OpenClawPluginNodeInvokePolicyContext,
   OpenClawPluginNodeInvokePolicyResult,
   OpenClawPluginNodeInvokeTransportResult,
 } from "../plugins/types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import type { NodeSession } from "./node-registry.js";
 import { resolveApprovalRequestRecipientConnIds } from "./server-methods/approval-shared.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 
+// Plugin node.invoke policies are the last gateway-side guard before a
+// plugin-declared dangerous node command reaches the node transport.
 function parseScopes(client: GatewayClient | null): string[] {
   return Array.isArray(client?.connect?.scopes)
     ? client.connect.scopes.filter((scope): scope is string => typeof scope === "string")
@@ -30,6 +36,8 @@ function parsePayload(payloadJSON: string | null | undefined, payload: unknown):
   }
 }
 
+// Dangerous commands must have an explicit policy. Without this check, a plugin
+// could mark a command dangerous but rely on the gateway default allow path.
 function findDangerousPluginNodeCommand(registry: PluginRegistry | null, command: string) {
   const normalizedCommand = command.trim();
   if (!normalizedCommand) {
@@ -54,14 +62,11 @@ function createApprovalRuntime(params: {
   }
   return {
     async request(input) {
-      const timeoutMs =
-        typeof input.timeoutMs === "number" && Number.isFinite(input.timeoutMs)
-          ? input.timeoutMs
-          : DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS;
+      const timeoutMs = resolvePluginApprovalTimeoutMs(input.timeoutMs);
       const request: PluginApprovalRequestPayload = {
         pluginId: params.pluginId,
-        title: input.title.slice(0, 80),
-        description: input.description.slice(0, 256),
+        title: truncateUtf16Safe(input.title, 80),
+        description: truncateUtf16Safe(input.description, 256),
         severity: input.severity ?? "warning",
         toolName: normalizeOptionalString(input.toolName) ?? null,
         toolCallId: normalizeOptionalString(input.toolCallId) ?? null,
@@ -85,6 +90,8 @@ function createApprovalRuntime(params: {
         record,
         excludeConnId: params.client?.connId,
       });
+      // Approval requests are routed to eligible operator clients only. Falling
+      // back to broadcast is safe because the event payload carries no secret.
       if (approvalClientConnIds) {
         params.context.broadcastToConnIds(
           "plugin.approval.requested",
@@ -113,6 +120,7 @@ function createApprovalRuntime(params: {
   };
 }
 
+/** Applies the registered plugin policy for a node.invoke command, if one exists. */
 export async function applyPluginNodeInvokePolicy(params: {
   context: GatewayRequestContext;
   client: GatewayClient | null;
@@ -122,7 +130,7 @@ export async function applyPluginNodeInvokePolicy(params: {
   timeoutMs?: number;
   idempotencyKey?: string;
 }): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
-  const registry = getActiveRuntimePluginRegistry();
+  const registry = getActivePluginGatewayNodePolicyRegistry();
   const entry = registry?.nodeInvokePolicies?.find((candidate) =>
     candidate.policy.commands.includes(params.command),
   );
@@ -133,16 +141,50 @@ export async function applyPluginNodeInvokePolicy(params: {
         ok: false,
         code: "PLUGIN_POLICY_MISSING",
         message: `node.invoke ${params.command} is registered as dangerous by plugin ${dangerousCommand.pluginId} but has no plugin node.invoke policy`,
+        details: { nodeCommandDispatched: false },
       };
     }
     return null;
   }
 
+  let nodeCommandDispatched = false;
   const invokeNode: OpenClawPluginNodeInvokePolicyContext["invokeNode"] = async (
     override = {},
   ): Promise<OpenClawPluginNodeInvokeTransportResult> => {
+    // Policies invoke the real node through this narrowed transport wrapper so
+    // they can retry/override params without getting direct registry access.
+    const currentNode = params.context.nodeRegistry.get(params.nodeSession.nodeId);
+    if (!currentNode || currentNode.connId !== params.nodeSession.connId) {
+      return {
+        ok: false,
+        code: "ROUTE_CHANGED",
+        message: "node connection changed before dispatch",
+      };
+    }
+    const currentConfig = params.context.getRuntimeConfig();
+    const allowlist = resolveNodeCommandAllowlist(currentConfig, {
+      ...currentNode,
+      approvedCommands: currentNode.commands,
+    });
+    const allowed = isNodeCommandAllowed({
+      command: params.command,
+      declaredCommands: currentNode.commands,
+      allowlist,
+    });
+    if (!allowed.ok) {
+      return {
+        ok: false,
+        code: "NODE_COMMAND_REVOKED",
+        message: `node command not allowed at dispatch: ${allowed.reason}`,
+        details: { command: params.command, reason: allowed.reason },
+      };
+    }
+    // Once the registry owns the request, any failure is ambiguous to callers:
+    // the node may have acted before the response was lost or rejected.
+    nodeCommandDispatched = true;
     const res = await params.context.nodeRegistry.invoke({
       nodeId: params.nodeSession.nodeId,
+      expectedConnId: params.nodeSession.connId,
       command: params.command,
       params: override.params ?? params.params,
       timeoutMs: override.timeoutMs ?? params.timeoutMs,
@@ -163,7 +205,7 @@ export async function applyPluginNodeInvokePolicy(params: {
     };
   };
 
-  return await entry.policy.handle({
+  const result = await entry.policy.handle({
     nodeId: params.nodeSession.nodeId,
     command: params.command,
     params: params.params,
@@ -191,4 +233,13 @@ export async function applyPluginNodeInvokePolicy(params: {
     }),
     invokeNode,
   });
+  if (result.ok) {
+    return result;
+  }
+  return {
+    ...result,
+    // Core owns dispatch and must override a plugin-supplied claim. Callers may
+    // clear speculative state only when this value is definitively false.
+    details: { ...result.details, nodeCommandDispatched },
+  };
 }

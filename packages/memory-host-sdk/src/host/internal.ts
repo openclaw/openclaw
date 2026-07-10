@@ -1,3 +1,4 @@
+// Memory Host SDK module implements internal behavior.
 import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -24,11 +25,13 @@ import {
   detectMime,
   estimateStringChars,
   runTasksWithConcurrency,
+  truncateUtf16Safe,
 } from "./openclaw-runtime-io.js";
 import {
   resolveCanonicalRootMemoryFile,
   shouldSkipRootMemoryAuxiliaryPath,
 } from "./openclaw-runtime-memory.js";
+import { retryTransientMemoryRead } from "./read-retry.js";
 import { normalizeStringEntries, uniqueStrings } from "./string-utils.js";
 
 export { hashText } from "./hash.js";
@@ -55,7 +58,7 @@ export type MemoryChunk = {
   embeddingInput?: EmbeddingInput;
 };
 
-export type MultimodalMemoryChunk = {
+type MultimodalMemoryChunk = {
   chunk: MemoryChunk;
   structuredInputBytes: number;
 };
@@ -71,7 +74,7 @@ export function ensureDir(dir: string): string {
   return dir;
 }
 
-export function normalizeRelPath(value: string): string {
+function normalizeRelPath(value: string): string {
   const trimmed = value.trim().replace(/^[./]+/, "");
   return trimmed.replace(/\\/g, "/");
 }
@@ -245,10 +248,14 @@ export async function buildFileEntry(
     let buffer: Buffer;
     try {
       buffer = (
-        await readRegularFile({
-          filePath: absPath,
-          maxBytes: multimodalSettings.maxFileBytes,
-        })
+        await retryTransientMemoryRead(
+          () =>
+            readRegularFile({
+              filePath: absPath,
+              maxBytes: multimodalSettings.maxFileBytes,
+            }),
+          `read multimodal memory file ${absPath}`,
+        )
       ).buffer;
     } catch (err) {
       if (isFileMissingError(err)) {
@@ -285,7 +292,12 @@ export async function buildFileEntry(
   }
   let content: string;
   try {
-    content = (await readRegularFile({ filePath: absPath })).buffer.toString("utf-8");
+    content = (
+      await retryTransientMemoryRead(
+        () => readRegularFile({ filePath: absPath }),
+        `read memory index file ${absPath}`,
+      )
+    ).buffer.toString("utf-8");
   } catch (err) {
     if (isFileMissingError(err)) {
       return null;
@@ -322,7 +334,12 @@ async function loadMultimodalEmbeddingInput(
   }
   let buffer: Buffer;
   try {
-    buffer = (await readRegularFile({ filePath: entry.absPath, maxBytes: entry.size })).buffer;
+    buffer = (
+      await retryTransientMemoryRead(
+        () => readRegularFile({ filePath: entry.absPath, maxBytes: entry.size }),
+        `read multimodal indexing file ${entry.absPath}`,
+      )
+    ).buffer;
   } catch (err) {
     if (isFileMissingError(err)) {
       return null;
@@ -438,25 +455,23 @@ export function chunkMarkdown(
       // Second pass: if a segment's *weighted* size still exceeds the budget
       // (happens for CJK-heavy text where 1 char ≈ 1 token), re-split it at
       // chunking.tokens so the chunk stays within the token budget.
-      for (let start = 0; start < line.length; start += maxChars) {
-        const coarse = line.slice(start, start + maxChars);
+      for (let start = 0; start < line.length; ) {
+        const coarse = truncateUtf16Safe(line.slice(start), maxChars);
         if (estimateStringChars(coarse) > maxChars) {
           const fineStep = Math.max(1, chunking.tokens);
           for (let j = 0; j < coarse.length; ) {
             let end = Math.min(j + fineStep, coarse.length);
-            // Avoid splitting inside a UTF-16 surrogate pair (CJK Extension B+).
-            if (end < coarse.length) {
-              const code = coarse.charCodeAt(end - 1);
-              if (code >= 0xd800 && code <= 0xdbff) {
-                end += 1; // include the low surrogate
-              }
+            const lastCodeUnit = coarse.charCodeAt(end - 1);
+            if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff && end < coarse.length) {
+              end += 1;
             }
             segments.push(coarse.slice(j, end));
-            j = end; // advance cursor to the adjusted boundary
+            j = end;
           }
         } else {
           segments.push(coarse);
         }
+        start += coarse.length;
       }
     }
     for (const segment of segments) {

@@ -1,3 +1,4 @@
+// Interactive outbound tests cover channel outbound interactive payload construction.
 import { describe, expect, it } from "vitest";
 import {
   adaptMessagePresentationForChannel,
@@ -77,6 +78,94 @@ describe("presentation capability limits", () => {
       { label: "First", value: "first", priority: 1 },
       { label: "Second", value: "second", priority: 100 },
       { label: "Third", value: "third" },
+    ]);
+  });
+
+  it("applies callback byte limits to typed command actions", () => {
+    const buttons = applyPresentationActionLimits(
+      [
+        {
+          label: "Keep",
+          action: { type: "command", command: "/codex plugins menu" },
+        },
+        {
+          label: "Drop",
+          action: { type: "command", command: `/codex plugins enable ${"x".repeat(20)}` },
+        },
+      ],
+      {
+        limits: {
+          actions: {
+            maxValueBytes: 24,
+          },
+        },
+      },
+    );
+
+    expect(buttons).toEqual([
+      {
+        label: "Keep",
+        action: { type: "command", command: "/codex plugins menu" },
+      },
+    ]);
+  });
+
+  it("keeps typed button actions when only the legacy fallback exceeds value limits", () => {
+    const buttons = applyPresentationActionLimits(
+      [
+        {
+          label: "Keep",
+          value: "legacy-value-that-is-too-long",
+          action: { type: "command", command: "/short" },
+        },
+      ],
+      {
+        limits: {
+          actions: {
+            maxValueBytes: 8,
+          },
+        },
+      },
+    );
+
+    expect(buttons).toEqual([
+      {
+        label: "Keep",
+        action: { type: "command", command: "/short" },
+      },
+    ]);
+  });
+
+  it("keeps typed select actions when only the legacy fallback exceeds value limits", () => {
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: {
+        blocks: [
+          {
+            type: "select",
+            options: [
+              {
+                label: "Keep",
+                value: "legacy-value-that-is-too-long",
+                action: { type: "callback", value: "short" },
+              },
+            ],
+          },
+        ],
+      },
+      capabilities: {
+        limits: {
+          selects: {
+            maxValueBytes: 8,
+          },
+        },
+      },
+    });
+
+    expect(presentation.blocks).toEqual([
+      {
+        type: "select",
+        options: [{ label: "Keep", action: { type: "callback", value: "short" } }],
+      },
     ]);
   });
 
@@ -701,5 +790,39 @@ describe("presentation capability limits", () => {
         20,
       ),
     ).toBe(9);
+  });
+
+  it("keeps charts only for channels that explicitly advertise native support", () => {
+    const chart = {
+      type: "chart" as const,
+      chartType: "bar" as const,
+      title: "Quarterly revenue",
+      categories: ["Q1", "Q2"],
+      series: [{ name: "Revenue", values: [120, 145] }],
+    };
+
+    expect(
+      adaptMessagePresentationForChannel({
+        presentation: { blocks: [chart] },
+        capabilities: { charts: true },
+      }).blocks,
+    ).toEqual([chart]);
+    expect(
+      adaptMessagePresentationForChannel({
+        presentation: { blocks: [chart] },
+        capabilities: { context: true },
+      }).blocks,
+    ).toEqual([
+      {
+        type: "context",
+        text: "Quarterly revenue (bar chart)\n- Revenue: Q1: 120; Q2: 145",
+      },
+    ]);
+    expect(
+      adaptMessagePresentationForChannel({
+        presentation: { blocks: [chart] },
+        capabilities: { context: false },
+      }).blocks[0]?.type,
+    ).toBe("text");
   });
 });

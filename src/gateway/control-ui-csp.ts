@@ -1,5 +1,7 @@
+// Control UI content-security-policy helpers.
+// Computes inline script hashes and builds the Gateway-served CSP header.
 import { createHash } from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 const SCRIPT_ATTRIBUTE_NAME_RE = /\s([^\s=/>]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g;
 
@@ -32,22 +34,40 @@ function hasScriptSrcAttribute(openTag: string): boolean {
   );
 }
 
-export function buildControlUiCspHeader(opts?: { inlineScriptHashes?: string[] }): string {
+/** Build the CSP header applied to Gateway-served Control UI HTML. */
+export function buildControlUiCspHeader(opts?: {
+  inlineScriptHashes?: string[];
+  /**
+   * Relax the policy just enough for the embedded terminal's ghostty-web engine:
+   * `'wasm-unsafe-eval'` permits WebAssembly compilation and `data:` in
+   * connect-src lets it fetch its inlined WASM binary. Gated on the terminal
+   * being enabled so the baseline Control UI CSP stays tight otherwise.
+   */
+  allowWasm?: boolean;
+}): string {
   const hashes = opts?.inlineScriptHashes;
-  const scriptSrc = hashes?.length
-    ? `script-src 'self' ${hashes.map((h) => `'${h}'`).join(" ")}`
-    : "script-src 'self'";
+  const scriptTokens = ["'self'"];
+  if (hashes?.length) {
+    scriptTokens.push(...hashes.map((h) => `'${h}'`));
+  }
+  if (opts?.allowWasm) {
+    scriptTokens.push("'wasm-unsafe-eval'");
+  }
+  const connectTokens = ["'self'", "ws:", "wss:", "https://api.openai.com", "https://tweakcn.com"];
+  if (opts?.allowWasm) {
+    connectTokens.push("data:");
+  }
   return [
     "default-src 'self'",
     "base-uri 'none'",
     "object-src 'none'",
     "frame-ancestors 'none'",
-    scriptSrc,
+    `script-src ${scriptTokens.join(" ")}`,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "img-src 'self' data: blob:",
     "media-src 'self' data: blob:",
     "font-src 'self' https://fonts.gstatic.com",
     "worker-src 'self'",
-    "connect-src 'self' ws: wss: https://api.openai.com https://tweakcn.com",
+    `connect-src ${connectTokens.join(" ")}`,
   ].join("; ");
 }

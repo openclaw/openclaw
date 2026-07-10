@@ -1,12 +1,35 @@
+// Coverage for queued steering message commit and cancellation behavior.
 import { describe, expect, it, vi } from "vitest";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import {
   cancelQueuedSteeringMessage,
+  steerActiveSessionWithOptionalDeliveryWait,
   steerAndWaitForTranscriptCommit,
   type EmbeddedAgentActiveSessionSteerTarget,
 } from "./attempt.queue-message.js";
 
 describe("embedded OpenClaw queued steering cancellation", () => {
+  it("forwards prepared transcript context with a queued steering message", async () => {
+    const steer = vi.fn(async () => undefined);
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "visible prompt", sender: { id: "user-42" } },
+      target: { transcriptPath: "/tmp/unused-session.jsonl" },
+    });
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      steer,
+      subscribe: () => () => {},
+    };
+
+    await steerActiveSessionWithOptionalDeliveryWait(activeSession, "runtime prompt", {
+      userTurnTranscriptRecorder: recorder,
+    });
+
+    expect(steer).toHaveBeenCalledWith("runtime prompt", undefined, recorder);
+  });
+
   it("waits for the queued user message_end transcript boundary", async () => {
+    // A queued steer is only durable once the user message_end event lands in
+    // the active transcript.
     let emit!: (event: unknown) => void;
     const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
       getSteeringMessages: () => [],
@@ -45,6 +68,8 @@ describe("embedded OpenClaw queued steering cancellation", () => {
   });
 
   it("removes only the timed-out steering message and preserves unrelated payloads", async () => {
+    // Timeout cleanup must surgically remove the queued text entry without
+    // damaging rich unrelated queued content.
     const unrelatedImage = {
       type: "image",
       source: { type: "base64", data: "abc", media_type: "image/png" },
@@ -144,6 +169,8 @@ describe("embedded OpenClaw queued steering cancellation", () => {
   });
 
   it("keeps queued steering pending when auto-retry starts after agent_end", async () => {
+    // agent_end can be followed by an automatic retry; do not cancel the queued
+    // steer until the retry path either commits it or truly terminates.
     vi.useFakeTimers();
     try {
       let emit!: (event: unknown) => void;

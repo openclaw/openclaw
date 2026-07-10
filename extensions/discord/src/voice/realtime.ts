@@ -1,5 +1,10 @@
-import { PassThrough } from "node:stream";
+// Discord plugin module implements realtime behavior.
+import { PassThrough, pipeline } from "node:stream";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import {
   buildRealtimeVoiceAgentConsultChatMessage,
   buildRealtimeVoiceAgentConsultPolicyInstructions,
@@ -46,6 +51,7 @@ import {
   convertDiscordPcm48kStereoToRealtimePcm24kMono,
   convertRealtimePcm24kMonoToDiscordPcm48kStereo,
 } from "./audio.js";
+import { formatVoiceLogPreview } from "./log-preview.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 import {
@@ -76,7 +82,6 @@ const DISCORD_REALTIME_RECENT_AGENT_PROXY_CONSULT_LIMIT = 16;
 const DISCORD_REALTIME_RECENT_AGENT_PROXY_CONSULT_TTL_MS = 15_000;
 const DISCORD_REALTIME_IGNORED_WAKE_NAME_CONTEXT_TTL_MS = 10_000;
 const DISCORD_REALTIME_WAKE_NAME_FOLLOWUP_TTL_MS = 10_000;
-const DISCORD_REALTIME_LOG_PREVIEW_CHARS = 500;
 const DISCORD_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
 const DISCORD_REALTIME_FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const DISCORD_REALTIME_DUPLICATE_ERROR_SUPPRESS_MS = 60_000;
@@ -128,19 +133,12 @@ type RecentAgentProxyConsultResult =
 type AgentProxyConsultState = {
   speaker: DiscordRealtimeSpeakerContext;
   handledByForcedPlayback?: boolean;
+  providerDelivery?: Promise<boolean>;
   promise?: Promise<string>;
   result?: RecentAgentProxyConsultResult;
 };
 
 type AgentProxyConsultHandle = RealtimeVoiceForcedConsultHandle<AgentProxyConsultState>;
-
-function formatRealtimeLogPreview(text: string): string {
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  if (oneLine.length <= DISCORD_REALTIME_LOG_PREVIEW_CHARS) {
-    return oneLine;
-  }
-  return `${oneLine.slice(0, DISCORD_REALTIME_LOG_PREVIEW_CHARS)}...`;
-}
 
 function formatRealtimeInterruptionLog(event: RealtimeVoiceBridgeEvent): string | undefined {
   const detail = event.detail ? ` ${event.detail}` : "";
@@ -225,7 +223,7 @@ function isDiscordAgentProxyVoiceMode(mode: DiscordVoiceMode): boolean {
   return mode === "agent-proxy";
 }
 
-export function resolveDiscordRealtimeInterruptResponseOnInputAudio(params: {
+function resolveDiscordRealtimeInterruptResponseOnInputAudio(params: {
   realtimeConfig: DiscordRealtimeVoiceConfig;
   providerId: string;
 }): boolean {
@@ -233,7 +231,7 @@ export function resolveDiscordRealtimeInterruptResponseOnInputAudio(params: {
   return readProviderConfigBoolean(providerConfig, "interruptResponseOnInputAudio") ?? true;
 }
 
-export function resolveDiscordRealtimeBargeIn(params: {
+function resolveDiscordRealtimeBargeIn(params: {
   realtimeConfig: DiscordRealtimeVoiceConfig;
   providerId: string;
 }): boolean {
@@ -244,7 +242,7 @@ export function resolveDiscordRealtimeBargeIn(params: {
   return resolveDiscordRealtimeInterruptResponseOnInputAudio(params);
 }
 
-export function buildDiscordSpeakExactUserMessage(text: string): string {
+function buildDiscordSpeakExactUserMessage(text: string): string {
   return [
     "Internal OpenClaw voice playback result.",
     "Do not call openclaw_agent_consult or any other tool for this message.",
@@ -411,8 +409,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     | { message: string; suppressed: number; lastLoggedAt: number }
     | undefined;
   private readonly playerIdleHandler = () => {
+    const hadOutputAudio = this.isOutputAudioActive();
     this.resetOutputStream("player-idle");
-    this.completeExactSpeechResponse("player-idle");
+    if (hadOutputAudio) {
+      this.completeExactSpeechResponse("player-idle");
+    }
   };
 
   constructor(
@@ -500,6 +501,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     });
     this.bridge = createRealtimeVoiceBridgeSession({
       provider: resolved.provider,
+      cfg: this.params.cfg,
       providerConfig: resolved.providerConfig,
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       instructions,
@@ -517,7 +519,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       onTranscript: (role, text, isFinal) => {
         if (isFinal && text.trim()) {
           logger.info(
-            `discord voice: realtime ${role} transcript (${text.length} chars): ${formatRealtimeLogPreview(text)}`,
+            `discord voice: realtime ${role} transcript (${text.length} chars): ${formatVoiceLogPreview(text)}`,
           );
         }
         if (isFinal && role === "assistant") {
@@ -782,9 +784,13 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       return;
     }
     this.logOutputAudioStopped(reason);
+    this.clearOutputPlaybackWatchdog();
     this.outputStream = null;
     this.resetOutputAudioStats();
-    this.completeExactSpeechResponse(reason, { drain: false });
+    // The Opus resource can close without Discord emitting player idle. This
+    // close path releases queued exact speech, so clear the old watchdog before
+    // the next response owns exact-speech state.
+    this.completeExactSpeechResponse(reason);
   }
 
   private queueOutputAudio(stream: PassThrough, discordPcm: Buffer): void {
@@ -817,7 +823,15 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       this.resetOutputStream("opus-encode-error");
     });
     opusStream.once("close", () => this.handleOutputStreamClosed(stream, "stream-close"));
-    stream.pipe(opusStream);
+    pipeline(stream, opusStream, (err) => {
+      if (!err) {
+        return;
+      }
+      logger.warn(
+        `discord voice: realtime output pipeline failed guild=${this.params.entry.guildId} channel=${this.params.entry.channelId}: ${formatErrorMessage(err)}`,
+      );
+      this.resetOutputStream("output-pipeline-error");
+    });
     if (this.outputPacedBuffer.length > 0) {
       stream.write(this.outputPacedBuffer);
       this.outputPacedBuffer = Buffer.alloc(0);
@@ -1094,21 +1108,21 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     );
   }
 
-  private handleToolCall(
+  private async handleToolCall(
     event: RealtimeVoiceToolCallEvent,
     session: RealtimeVoiceBridgeSession,
-  ): void {
+  ): Promise<void> {
     const callId = event.callId || event.itemId || "unknown";
     if (event.name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
-      void this.handleAgentControlToolCall(event, session, callId);
+      await this.handleAgentControlToolCall(event, session, callId);
       return;
     }
     if (event.name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
-      session.submitToolResult(callId, { error: `Tool "${event.name}" not available` });
+      await session.submitToolResult(callId, { error: `Tool "${event.name}" not available` });
       return;
     }
     if (this.consultToolPolicy === "none") {
-      session.submitToolResult(callId, { error: `Tool "${event.name}" not available` });
+      await session.submitToolResult(callId, { error: `Tool "${event.name}" not available` });
       return;
     }
     const exactSpeechText = extractDiscordExactSpeechConsultText(event.args);
@@ -1116,14 +1130,34 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       logger.info(
         `discord voice: realtime exact speech consult bypassed call=${callId || "unknown"} answerChars=${exactSpeechText.length}`,
       );
-      session.submitToolResult(callId, { text: exactSpeechText });
+      await session.submitToolResult(callId, { text: exactSpeechText });
       return;
     }
-    const consultMessage = buildRealtimeVoiceAgentConsultChatMessage(event.args);
+    let consultMessage: string;
+    try {
+      consultMessage = buildRealtimeVoiceAgentConsultChatMessage(event.args);
+    } catch (error) {
+      const message = formatErrorMessage(error);
+      logger.warn(
+        `discord voice: realtime consult rejected malformed args call=${callId || "unknown"}: ${message}`,
+      );
+      await session.submitToolResult(callId, { error: message });
+      return;
+    }
     logger.info(
-      `discord voice: realtime consult requested call=${callId || "unknown"} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} question=${formatRealtimeLogPreview(consultMessage)}`,
+      `discord voice: realtime consult requested call=${callId || "unknown"} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} question=${formatVoiceLogPreview(consultMessage)}`,
     );
     const nativeConsult = this.forcedConsults.recordNativeConsult(event.args, callId);
+    if (
+      nativeConsult.kind === "already_delivered" &&
+      this.forcedConsults.isCancelled(nativeConsult.handle)
+    ) {
+      await this.submitTerminalRealtimeToolResult(callId, session, {
+        status: "cancelled",
+        message: "OpenClaw cancelled this consult before completion. Do not restart it.",
+      });
+      return;
+    }
     const pendingConsult = nativeConsult.kind === "pending" ? nativeConsult.handle : undefined;
     if (pendingConsult) {
       this.forcedConsults.rememberQuestion(pendingConsult, consultMessage);
@@ -1141,12 +1175,12 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
           logger.info(
             `discord voice: realtime consult matched recent agent result but newer speaker audio is pending call=${callId} speaker=${recentSpeaker?.speakerLabel ?? "unknown"} owner=${recentSpeaker?.senderIsOwner ?? false}`,
           );
-          session.submitToolResult(callId, {
+          await session.submitToolResult(callId, {
             error: "Discord speaker context changed before this realtime consult completed",
           });
           return;
         }
-        if (this.submitRecentAgentProxyConsultResult(callId, recentConsult, session)) {
+        if (await this.submitRecentAgentProxyConsultResult(callId, recentConsult, session)) {
           return;
         }
       }
@@ -1164,7 +1198,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       logger.warn(
         `discord voice: realtime consult has no speaker context call=${callId || "unknown"}`,
       );
-      session.submitToolResult(callId, { error: "No Discord speaker context available" });
+      await session.submitToolResult(callId, { error: "No Discord speaker context available" });
       return;
     }
     const promise = this.runAgentTurn({
@@ -1174,19 +1208,19 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     if (recent) {
       this.setRecentAgentProxyConsultPromise(recent, promise);
     }
-    void promise
-      .then((text) => {
-        logger.info(
-          `discord voice: realtime consult answer (${text.length} chars) voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} speaker=${context.speakerLabel} owner=${context.senderIsOwner}: ${formatRealtimeLogPreview(text)}`,
-        );
-        session.submitToolResult(callId, { text });
-      })
-      .catch((error: unknown) => {
-        logger.warn(
-          `discord voice: realtime consult failed call=${callId || "unknown"}: ${formatErrorMessage(error)}`,
-        );
-        session.submitToolResult(callId, { error: formatErrorMessage(error) });
-      });
+    let text: string;
+    try {
+      text = await promise;
+    } catch (error) {
+      const message = formatErrorMessage(error);
+      logger.warn(`discord voice: realtime consult failed call=${callId || "unknown"}: ${message}`);
+      await session.submitToolResult(callId, { error: message });
+      return;
+    }
+    logger.info(
+      `discord voice: realtime consult answer (${text.length} chars) voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} speaker=${context.speakerLabel} owner=${context.senderIsOwner}: ${formatVoiceLogPreview(text)}`,
+    );
+    await session.submitToolResult(callId, { text });
   }
 
   private async handleAgentControlToolCall(
@@ -1194,18 +1228,20 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     session: RealtimeVoiceBridgeSession,
     callId: string,
   ): Promise<void> {
+    let result: RealtimeVoiceAgentControlResult;
     try {
       const parsed = parseRealtimeVoiceAgentControlToolArgs(event.args);
-      const result = await controlRealtimeVoiceAgentRun({
+      result = await controlRealtimeVoiceAgentRun({
         sessionKey: this.params.entry.route.sessionKey,
         text: parsed.text,
         mode: parsed.mode,
       });
-      this.logAgentControlResult(result);
-      session.submitToolResult(callId, result);
     } catch (error) {
-      session.submitToolResult(callId, { error: formatErrorMessage(error) });
+      await session.submitToolResult(callId, { error: formatErrorMessage(error) });
+      return;
     }
+    this.logAgentControlResult(result);
+    await session.submitToolResult(callId, result);
   }
 
   private async runAgentTurn(params: {
@@ -1405,7 +1441,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     if (skipReason) {
       const context = this.consumePendingSpeakerContext();
       logger.info(
-        `discord voice: realtime forced agent consult skipped reason=${skipReason} chars=${question.length} speaker=${context?.speakerLabel ?? "unknown"} transcript=${formatRealtimeLogPreview(question)}`,
+        `discord voice: realtime forced agent consult skipped reason=${skipReason} chars=${question.length} speaker=${context?.speakerLabel ?? "unknown"} transcript=${formatVoiceLogPreview(question)}`,
       );
       return undefined;
     }
@@ -1470,17 +1506,21 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       });
       this.setRecentAgentProxyConsultPromise(pending, promise);
       const text = await promise;
+      await state.providerDelivery;
       logger.info(
-        `discord voice: realtime forced agent consult answer (${text.length} chars) elapsedMs=${Date.now() - startedAt} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId}: ${formatRealtimeLogPreview(text)}`,
+        `discord voice: realtime forced agent consult answer (${text.length} chars) elapsedMs=${Date.now() - startedAt} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId}: ${formatVoiceLogPreview(text)}`,
       );
-      if (text.trim()) {
+      if (text.trim() && state.handledByForcedPlayback) {
         this.enqueueExactSpeechMessage(text);
       }
     } catch (error) {
+      await state.providerDelivery;
       logger.warn(
         `discord voice: realtime forced agent consult failed elapsedMs=${Date.now() - startedAt}: ${formatErrorMessage(error)}`,
       );
-      this.enqueueExactSpeechMessage(DISCORD_REALTIME_FALLBACK_TEXT);
+      if (state.handledByForcedPlayback) {
+        this.enqueueExactSpeechMessage(DISCORD_REALTIME_FALLBACK_TEXT);
+      }
     }
   }
 
@@ -1497,10 +1537,14 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       );
       return;
     }
+    const expiresAt = resolveExpiresAtMsFromDurationMs(DISCORD_REALTIME_WAKE_NAME_FOLLOWUP_TTL_MS);
+    if (expiresAt === undefined) {
+      return;
+    }
     this.pendingWakeNameFollowup = {
       context,
       startedAt: turn?.startedAt ?? Date.now(),
-      expiresAt: Date.now() + DISCORD_REALTIME_WAKE_NAME_FOLLOWUP_TTL_MS,
+      expiresAt,
     };
     logger.info(
       `discord voice: realtime wake-name follow-up armed speaker=${context.speakerLabel} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId}`,
@@ -1510,7 +1554,9 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private consumePendingWakeNameFollowup(): TranscriptUtteranceAttribution | undefined {
     const pending = this.pendingWakeNameFollowup;
     this.pendingWakeNameFollowup = undefined;
-    if (!pending || Date.now() > pending.expiresAt) {
+    const now = asDateTimestampMs(Date.now());
+    const expiresAt = pending ? asDateTimestampMs(pending.expiresAt) : undefined;
+    if (!pending || now === undefined || expiresAt === undefined || now > expiresAt) {
       return undefined;
     }
     const currentTurn = this.peekPendingSpeakerTurn();
@@ -1589,41 +1635,65 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     return this.forcedConsults.findRecent(consultMessage);
   }
 
-  private submitRecentAgentProxyConsultResult(
+  private async submitTerminalRealtimeToolResult(
+    callId: string,
+    session: RealtimeVoiceBridgeSession,
+    result: Record<string, string>,
+  ): Promise<void> {
+    // Providers without suppressed results still need a terminal result; the payload tells the
+    // model not to repeat audio that Discord already played or restart cancelled work.
+    if (session.bridge.supportsToolResultSuppression === false) {
+      await session.submitToolResult(callId, result);
+      return;
+    }
+    await session.submitToolResult(callId, result, { suppressResponse: true });
+  }
+
+  private async submitRecentAgentProxyConsultResult(
     callId: string,
     recent: AgentProxyConsultHandle,
     session: RealtimeVoiceBridgeSession,
-  ): boolean {
+  ): Promise<boolean> {
     const state = recent.context;
     if (!state) {
       return false;
     }
-    const submitAlreadyDelivered = () => {
-      session.submitToolResult(
-        callId,
-        {
-          status: "already_delivered",
-          message: "OpenClaw already delivered this answer to Discord voice.",
-        },
-        { suppressResponse: true },
-      );
+    const providerOwnsDelivery = Boolean(
+      state.handledByForcedPlayback &&
+      state.promise &&
+      !state.result &&
+      session.bridge.supportsToolResultSuppression === false,
+    );
+    let resolveProviderDelivery: ((accepted: boolean) => void) | undefined;
+    if (providerOwnsDelivery) {
+      // Forced playback waits for native acceptance so a failed delivery can restore
+      // the local success/fallback path instead of losing the answer entirely.
+      state.providerDelivery = new Promise<boolean>((resolve) => {
+        resolveProviderDelivery = resolve;
+      });
+    }
+    const submitAlreadyDelivered = async (): Promise<void> => {
+      await this.submitTerminalRealtimeToolResult(callId, session, {
+        status: "already_delivered",
+        message: "OpenClaw already delivered this answer to Discord voice. Do not repeat it.",
+      });
     };
-    const submitResult = (result: RecentAgentProxyConsultResult) => {
-      if (state.handledByForcedPlayback) {
-        submitAlreadyDelivered();
+    const submitResult = async (result: RecentAgentProxyConsultResult): Promise<void> => {
+      if (state.handledByForcedPlayback && !providerOwnsDelivery) {
+        await submitAlreadyDelivered();
         return;
       }
       if (result.status === "fulfilled") {
-        session.submitToolResult(callId, { text: result.text });
+        await session.submitToolResult(callId, { text: result.text });
         return;
       }
-      session.submitToolResult(callId, { error: result.error });
+      await session.submitToolResult(callId, { error: result.error });
     };
     if (state.result) {
       logger.info(
         `discord voice: realtime consult reused recent agent result call=${callId || "unknown"} speaker=${state.speaker.speakerLabel} owner=${state.speaker.senderIsOwner}`,
       );
-      submitResult(state.result);
+      await submitResult(state.result);
       return true;
     }
     if (!state.promise) {
@@ -1632,15 +1702,27 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     logger.info(
       `discord voice: realtime consult joined in-flight agent result call=${callId || "unknown"} speaker=${state.speaker.speakerLabel} owner=${state.speaker.senderIsOwner}`,
     );
-    if (state.handledByForcedPlayback) {
-      void state.promise.then(submitAlreadyDelivered, submitAlreadyDelivered);
+    if (state.handledByForcedPlayback && !providerOwnsDelivery) {
+      await state.promise.catch(() => undefined);
+      await submitAlreadyDelivered();
       return true;
     }
-    void state.promise
-      .then((text) => session.submitToolResult(callId, { text }))
-      .catch((error: unknown) =>
-        session.submitToolResult(callId, { error: formatErrorMessage(error) }),
-      );
+    let result: RecentAgentProxyConsultResult;
+    try {
+      result = { status: "fulfilled", text: await state.promise };
+    } catch (error) {
+      result = { status: "rejected", error: formatErrorMessage(error) };
+    }
+    try {
+      await submitResult(result);
+      if (providerOwnsDelivery) {
+        state.handledByForcedPlayback = false;
+        resolveProviderDelivery?.(true);
+      }
+    } catch (error) {
+      resolveProviderDelivery?.(false);
+      throw error;
+    }
     return true;
   }
 }
@@ -1675,7 +1757,13 @@ function buildProviderConfigOverrides(
 ): RealtimeVoiceProviderConfig | undefined {
   const overrides = {
     ...(realtimeConfig?.model ? { model: realtimeConfig.model } : {}),
-    ...(realtimeConfig?.voice ? { voice: realtimeConfig.voice } : {}),
+    ...(realtimeConfig?.speakerVoice
+      ? { voice: realtimeConfig.speakerVoice }
+      : realtimeConfig?.speakerVoiceId
+        ? { voice: realtimeConfig.speakerVoiceId }
+        : realtimeConfig?.voice
+          ? { voice: realtimeConfig.voice }
+          : {}),
     ...(typeof realtimeConfig?.minBargeInAudioEndMs === "number"
       ? { minBargeInAudioEndMs: realtimeConfig.minBargeInAudioEndMs }
       : {}),

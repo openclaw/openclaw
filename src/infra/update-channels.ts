@@ -1,7 +1,10 @@
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+// Resolves OpenClaw update channels from config, tags, and versions.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { parseComparableSemver } from "./semver-compare.js";
 
-export type UpdateChannel = "stable" | "beta" | "dev";
+/** Release stream used to choose registry tags and update policy defaults. */
+export type UpdateChannel = "stable" | "extended-stable" | "beta" | "dev";
+/** Evidence source that decided the effective update channel. */
 export type UpdateChannelSource =
   | "config"
   | "git-tag"
@@ -9,22 +12,45 @@ export type UpdateChannelSource =
   | "installed-version"
   | "default";
 
+/** Default channel for npm/package installs when no config or version signal overrides it. */
 export const DEFAULT_PACKAGE_CHANNEL: UpdateChannel = "stable";
+/** Default channel for source installs where branch metadata is unavailable. */
 export const DEFAULT_GIT_CHANNEL: UpdateChannel = "dev";
+/** Machine-readable validation failure when a tag override conflicts with the exact extended-stable contract. */
+export const EXTENDED_STABLE_TAG_UNSUPPORTED_REASON = "extended-stable-tag-unsupported";
+/**
+ * Env var carrying the *effective* update channel into `openclaw update finalize`
+ * (e.g. the git/dev channel a source update actually ran on) without making it a
+ * *requested* channel. Convergence uses it as a fallback; it is never persisted
+ * to `update.channel`. Mirrors the CLI post-core resume's effective/requested
+ * channel split (`OPENCLAW_UPDATE_POST_CORE_CHANNEL` vs `…_REQUESTED_CHANNEL`).
+ */
+export const UPDATE_EFFECTIVE_CHANNEL_ENV = "OPENCLAW_UPDATE_EFFECTIVE_CHANNEL";
+/** Git branch that represents the development update stream. */
 export const DEV_BRANCH = "main";
 
+/** Normalizes config or CLI channel input to a supported update channel. */
 export function normalizeUpdateChannel(value?: string | null): UpdateChannel | null {
   const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
     return null;
   }
-  if (normalized === "stable" || normalized === "beta" || normalized === "dev") {
+  if (
+    normalized === "stable" ||
+    normalized === "extended-stable" ||
+    normalized === "beta" ||
+    normalized === "dev"
+  ) {
     return normalized;
   }
   return null;
 }
 
+/** Maps an OpenClaw update channel to the npm dist-tag used for package lookups. */
 export function channelToNpmTag(channel: UpdateChannel): string {
+  if (channel === "extended-stable") {
+    return "extended-stable";
+  }
   if (channel === "beta") {
     return "beta";
   }
@@ -34,10 +60,12 @@ export function channelToNpmTag(channel: UpdateChannel): string {
   return "latest";
 }
 
+/** Returns whether a version/tag explicitly targets the beta stream. */
 export function isBetaTag(tag: string): boolean {
   return /(?:^|[.-])beta(?:[.-]|$)/i.test(tag);
 }
 
+/** Detects prerelease tags, including legacy dot-beta tags and named prerelease channels. */
 export function isPrereleaseTag(tag: string): boolean {
   const parsed = parseComparableSemver(tag, { normalizeLegacyDotBeta: true });
   if (parsed) {
@@ -48,10 +76,12 @@ export function isPrereleaseTag(tag: string): boolean {
   );
 }
 
+/** Returns whether a tag should be treated as a stable release candidate for updates. */
 export function isStableTag(tag: string): boolean {
   return !isPrereleaseTag(tag);
 }
 
+/** Resolves registry update channel for package checks, preserving beta installs by default. */
 export function resolveRegistryUpdateChannel(params: {
   configChannel?: UpdateChannel | null;
   currentVersion?: string | null;
@@ -59,6 +89,7 @@ export function resolveRegistryUpdateChannel(params: {
   if (
     params.currentVersion &&
     isBetaTag(params.currentVersion) &&
+    params.configChannel !== "extended-stable" &&
     params.configChannel !== "beta" &&
     params.configChannel !== "dev"
   ) {
@@ -67,6 +98,7 @@ export function resolveRegistryUpdateChannel(params: {
   return params.configChannel ?? DEFAULT_PACKAGE_CHANNEL;
 }
 
+/** Resolves the effective channel and the signal that selected it. */
 export function resolveEffectiveUpdateChannel(params: {
   configChannel?: UpdateChannel | null;
   currentVersion?: string | null;
@@ -76,6 +108,7 @@ export function resolveEffectiveUpdateChannel(params: {
   if (
     params.currentVersion &&
     isBetaTag(params.currentVersion) &&
+    params.configChannel !== "extended-stable" &&
     params.configChannel !== "beta" &&
     params.configChannel !== "dev"
   ) {
@@ -108,6 +141,7 @@ export function resolveEffectiveUpdateChannel(params: {
   return { channel: DEFAULT_PACKAGE_CHANNEL, source: "default" };
 }
 
+/** Formats an operator-facing channel label that includes the deciding source. */
 export function formatUpdateChannelLabel(params: {
   channel: UpdateChannel;
   source: UpdateChannelSource;
@@ -131,6 +165,7 @@ export function formatUpdateChannelLabel(params: {
   return `${params.channel} (default)`;
 }
 
+/** Resolves channel metadata plus display label for status and update UIs. */
 export function resolveUpdateChannelDisplay(params: {
   configChannel?: UpdateChannel | null;
   currentVersion?: string | null;

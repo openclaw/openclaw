@@ -1,3 +1,4 @@
+// Slack tests cover accounts plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
@@ -7,7 +8,58 @@ import {
   resolveSlackAccount,
   resolveSlackAccountAllowFrom,
   resolveSlackAccountDmPolicy,
+  resolveSlackOperationToken,
 } from "./accounts.js";
+
+describe("resolveSlackOperationToken", () => {
+  it.each([
+    {
+      name: "prefers the user token for reads",
+      userTokenReadOnly: true,
+      operation: "read" as const,
+      expected: "xoxp-user",
+    },
+    {
+      name: "prefers the bot token for writes when user writes are enabled",
+      userTokenReadOnly: false,
+      operation: "write" as const,
+      expected: "xoxb-bot",
+    },
+    {
+      name: "uses the user token for writes only when explicitly enabled",
+      userTokenReadOnly: false,
+      operation: "write" as const,
+      hasBotToken: false,
+      expected: "xoxp-user",
+    },
+    {
+      name: "does not use the user token for writes by default",
+      userTokenReadOnly: true,
+      operation: "write" as const,
+      hasBotToken: false,
+      expected: undefined,
+    },
+  ])("$name", ({ userTokenReadOnly, operation, hasBotToken = true, expected }) => {
+    const account = resolveSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            accounts: {
+              work: {
+                ...(hasBotToken ? { botToken: "xoxb-bot" } : {}),
+                userToken: "xoxp-user",
+                userTokenReadOnly,
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "work",
+    });
+
+    expect(resolveSlackOperationToken(account, operation)).toBe(expected);
+  });
+});
 
 describe("resolveSlackAccount allowFrom precedence", () => {
   it("uses configured defaultAccount when accountId is omitted", () => {
@@ -192,6 +244,65 @@ describe("resolveSlackAccount allowFrom precedence", () => {
       windowSeconds: 120,
       cooldownSeconds: 240,
     });
+  });
+
+  it("merges canonical account streaming over top-level defaults field-by-field", () => {
+    const resolved = resolveSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            streaming: {
+              mode: "progress",
+              nativeTransport: true,
+              preview: { toolProgress: true, commandText: "raw" },
+              progress: { label: "Shelling", commandText: "status" },
+              block: { enabled: true, coalesce: { minChars: 40, maxChars: 80, idleMs: 250 } },
+            },
+            accounts: {
+              work: {
+                botToken: "xoxb-work",
+                appToken: "xapp-work",
+                streaming: {
+                  progress: { nativeTaskCards: true },
+                  block: { coalesce: { idleMs: 500 } },
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.streaming).toEqual({
+      mode: "progress",
+      nativeTransport: true,
+      preview: { toolProgress: true, commandText: "raw" },
+      progress: { label: "Shelling", commandText: "status", nativeTaskCards: true },
+      block: { enabled: true, coalesce: { minChars: 40, maxChars: 80, idleMs: 500 } },
+    });
+  });
+
+  it("preserves account legacy scalar streaming overrides", () => {
+    const resolved = resolveSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            streaming: { mode: "progress", progress: { label: "Shelling" } },
+            accounts: {
+              work: {
+                botToken: "xoxb-work",
+                appToken: "xapp-work",
+                streaming: "off",
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      accountId: "work",
+    });
+
+    expect(resolved.config.streaming).toBe("off");
   });
 
   it("does not inherit default account allowFrom for named account when top-level is absent", () => {

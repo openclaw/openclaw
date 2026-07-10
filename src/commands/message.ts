@@ -1,3 +1,12 @@
+/** CLI entrypoint for channel message actions. */
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_MESSAGE_ACTION_NAMES } from "../channels/plugins/message-action-names.js";
 import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
@@ -6,16 +15,12 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { getScopedChannelsCommandSecretTargets } from "../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
+import { parsePositiveIntOrUndefined } from "../cli/program/helpers.js";
 import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 
 function extractMessageId(payload: unknown): string | undefined {
   if (!payload || typeof payload !== "object") {
@@ -48,6 +53,7 @@ function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>
   };
 }
 
+/** Resolves config/secrets, runs a channel message action, then renders JSON or text. */
 export async function messageCommand(
   opts: Record<string, unknown>,
   deps: CliDeps,
@@ -90,6 +96,8 @@ export async function messageCommand(
 
   const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
 
+  // Keep the gateway client identity explicit so channel plugins can distinguish
+  // CLI-originated owner actions from background gateway work.
   const run = async () =>
     await runMessageAction({
       cfg,
@@ -125,7 +133,8 @@ export async function messageCommand(
   }
 
   const { formatMessageCliText } = await import("./message-format.js");
-  for (const line of formatMessageCliText(result)) {
+  const displayLimit = parsePositiveIntOrUndefined(opts.limit);
+  for (const line of formatMessageCliText(result, { displayLimit })) {
     runtime.log(line);
   }
 }

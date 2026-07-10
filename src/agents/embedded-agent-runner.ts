@@ -1,3 +1,5 @@
+// Embedded-agent runner barrel. Focused submodules own run orchestration,
+// compaction, queues, sandbox metadata, and SDK tool splitting.
 export { compactEmbeddedAgentSession } from "./embedded-agent-runner/compact.queued.js";
 export { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js";
 
@@ -6,7 +8,9 @@ export { runEmbeddedAgent } from "./embedded-agent-runner/run.js";
 export {
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
+  isEmbeddedAgentRunAbortableForCompaction,
   isEmbeddedAgentRunActive,
+  isEmbeddedAgentRunHandleActive,
   isEmbeddedAgentRunStreaming,
   queueEmbeddedAgentMessage,
   queueEmbeddedAgentMessageWithOutcome,
@@ -16,7 +20,6 @@ export {
   waitForEmbeddedAgentRunEnd,
 } from "./embedded-agent-runner/runs.js";
 export { buildEmbeddedSandboxInfo } from "./embedded-agent-runner/sandbox-info.js";
-export { createSystemPromptOverride } from "./embedded-agent-runner/system-prompt.js";
 export { splitSdkTools } from "./embedded-agent-runner/tool-split.js";
 export type {
   EmbeddedAgentMeta,

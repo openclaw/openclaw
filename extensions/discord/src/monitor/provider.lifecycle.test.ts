@@ -1,3 +1,4 @@
+// Discord tests cover provider.lifecycle plugin behavior.
 import { EventEmitter } from "node:events";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -29,17 +30,17 @@ const {
   unregisterGatewayMock,
   waitForDiscordGatewayStopMock,
 } = vi.hoisted(() => {
-  const stopGatewayLoggingMock = vi.fn();
-  const getDiscordGatewayEmitterMock = vi.fn<() => EventEmitter | undefined>(() => undefined);
+  const stopGatewayLoggingMockLocal = vi.fn();
+  const getDiscordGatewayEmitterMockLocal = vi.fn<() => EventEmitter | undefined>(() => undefined);
   return {
-    attachDiscordGatewayLoggingMock: vi.fn(() => stopGatewayLoggingMock),
-    getDiscordGatewayEmitterMock,
+    attachDiscordGatewayLoggingMock: vi.fn(() => stopGatewayLoggingMockLocal),
+    getDiscordGatewayEmitterMock: getDiscordGatewayEmitterMockLocal,
     waitForDiscordGatewayStopMock: vi.fn((_params: WaitForDiscordGatewayStopParams) =>
       Promise.resolve(),
     ),
     registerGatewayMock: vi.fn(),
     unregisterGatewayMock: vi.fn(),
-    stopGatewayLoggingMock,
+    stopGatewayLoggingMock: stopGatewayLoggingMockLocal,
   };
 });
 
@@ -233,6 +234,20 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(resolveDiscordGatewayRuntimeReadyTimeoutMs({ env: {} })).toBe(30_000);
   });
 
+  it("ignores non-integer gateway READY timeout values", () => {
+    expect(
+      resolveDiscordGatewayReadyTimeoutMs({
+        configuredTimeoutMs: 1.5,
+        env: { OPENCLAW_DISCORD_READY_TIMEOUT_MS: "0x1000" },
+      }),
+    ).toBe(15_000);
+    expect(
+      resolveDiscordGatewayRuntimeReadyTimeoutMs({
+        env: { OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS: "1e3" },
+      }),
+    ).toBe(30_000);
+  });
+
   it("cleans up thread bindings when gateway wait fails before READY", async () => {
     waitForDiscordGatewayStopMock.mockRejectedValueOnce(new Error("startup failed"));
     const { lifecycleParams, threadStop, gatewaySupervisor } = createLifecycleHarness();
@@ -259,6 +274,27 @@ describe("runDiscordGatewayLifecycle", () => {
       waitCalls: 1,
       gatewaySupervisor,
     });
+  });
+
+  it("owns and cleans up auto-join when READY preceded voice listener registration", async () => {
+    waitForDiscordGatewayStopMock.mockRejectedValueOnce(new Error("gateway wait failed"));
+    const { lifecycleParams } = createLifecycleHarness();
+    const autoJoin = vi.fn(async () => undefined);
+    const destroy = vi.fn(async () => undefined);
+    const voiceManager = {
+      autoJoin,
+      destroy,
+    } as unknown as NonNullable<LifecycleParams["voiceManager"]>;
+    lifecycleParams.voiceManager = voiceManager;
+    lifecycleParams.voiceManagerRef.current = voiceManager;
+
+    await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
+      "gateway wait failed",
+    );
+
+    expect(autoJoin).toHaveBeenCalledTimes(1);
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(lifecycleParams.voiceManagerRef.current).toBeNull();
   });
 
   it("pushes connected status when gateway is already connected at lifecycle start", async () => {
@@ -323,6 +359,14 @@ describe("runDiscordGatewayLifecycle", () => {
     emitter.emit(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, { at: 100_000 });
     emitter.emit(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, { at: 101_000 });
     emitter.emit(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, { at: 131_000 });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(200_000);
+    try {
+      emitter.emit(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, {
+        at: Number.MAX_SAFE_INTEGER,
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
 
     const transportPatches = statusSink.mock.calls
       .slice(baselinePatchCount)
@@ -331,6 +375,7 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(transportPatches).toEqual([
       { lastTransportActivityAt: 100_000 },
       { lastTransportActivityAt: 131_000 },
+      { lastTransportActivityAt: 200_000 },
     ]);
     expect(
       transportPatches.every(
@@ -704,7 +749,9 @@ describe("runDiscordGatewayLifecycle", () => {
       waitForDiscordGatewayStopMock.mockImplementationOnce(
         (params: WaitForDiscordGatewayStopParams) =>
           new Promise<void>((_resolve, reject) => {
-            params.registerForceStop?.((err) => reject(err));
+            params.registerForceStop?.((err) =>
+              reject(toLintErrorObject(err, "Non-Error rejection")),
+            );
             gateway.isConnected = false;
             emitter.emit("debug", "Gateway websocket opened");
           }),
@@ -732,3 +779,17 @@ describe("runDiscordGatewayLifecycle", () => {
     }
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

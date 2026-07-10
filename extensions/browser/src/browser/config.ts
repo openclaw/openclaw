@@ -1,14 +1,17 @@
+/**
+ * Browser config resolution.
+ *
+ * Normalizes raw browser config into resolved runtime defaults, profile
+ * records, SSRF policy, timeouts, headless mode, and managed Chrome settings.
+ */
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeOptionalString,
   normalizeOptionalTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  type BrowserConfig,
-  type BrowserProfileConfig,
-  type OpenClawConfig,
-} from "../config/config.js";
+import type { BrowserConfig, BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import {
   DEFAULT_BROWSER_CONTROL_PORT,
@@ -33,6 +36,7 @@ import {
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
+import { resolveExtensionRelayToken } from "./extension-relay/relay-auth.js";
 import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 
 export {
@@ -57,6 +61,7 @@ type BrowserSsrFPolicyCompat = NonNullable<BrowserConfig["ssrfPolicy"]> & {
   allowPrivateNetwork?: boolean;
 };
 
+/** Browser config after defaults, derived ports, and profile defaults are applied. */
 export type ResolvedBrowserConfig = {
   enabled: boolean;
   evaluateEnabled: boolean;
@@ -82,8 +87,15 @@ export type ResolvedBrowserConfig = {
   tabCleanup: ResolvedBrowserTabCleanupConfig;
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
+  /** Default loopback port for extension-driver relay servers. */
+  extensionRelayDefaultPort: number;
+  /** Assigned loopback relay port per extension-driver profile (no explicit cdpPort). */
+  extensionRelayPorts: Record<string, number>;
+  /** Derived bearer token for extension relay auth (absent until gateway auth exists). */
+  extensionRelayToken?: string;
 };
 
+/** Normalized tab-cleanup settings for session-owned browser tabs. */
 export type ResolvedBrowserTabCleanupConfig = {
   enabled: boolean;
   idleMinutes: number;
@@ -91,6 +103,7 @@ export type ResolvedBrowserTabCleanupConfig = {
   sweepMinutes: number;
 };
 
+/** Runtime browser profile settings resolved from global and profile config. */
 export type ResolvedBrowserProfile = {
   name: string;
   cdpPort: number;
@@ -101,7 +114,7 @@ export type ResolvedBrowserProfile = {
   mcpCommand?: string;
   mcpArgs?: string[];
   color: string;
-  driver: "openclaw" | "existing-session";
+  driver: "openclaw" | "existing-session" | "extension";
   executablePath?: string;
   headless: boolean;
   headlessSource?: "profile" | "config" | "default";
@@ -109,9 +122,19 @@ export type ResolvedBrowserProfile = {
 };
 
 const DEFAULT_BROWSER_CDP_PORT_RANGE_START = 18800;
+/**
+ * Default extension relay port offset from the browser control port. Sits just
+ * below the CDP allocation range (controlPort+9..) so profile port allocation
+ * can never hand this port to a managed profile.
+ */
+const EXTENSION_RELAY_PORT_OFFSET = 8;
+/** Username half of the relay's Basic credential; the password is the derived token. */
+const EXTENSION_RELAY_CDP_USER = "openclaw";
 const MAX_BROWSER_STARTUP_TIMEOUT_MS = 120_000;
+/** Environment variable that overrides managed Chrome headless mode. */
 export const OPENCLAW_BROWSER_HEADLESS_ENV = "OPENCLAW_BROWSER_HEADLESS";
 
+/** Source that determined managed Chrome headless mode. */
 export type ManagedBrowserHeadlessSource =
   | "request"
   | "env"
@@ -125,6 +148,12 @@ type ManagedBrowserHeadlessMode = {
   source: ManagedBrowserHeadlessSource;
 };
 
+export type ManagedBrowserMissingDisplayError = {
+  message: string;
+  headlessSource: Exclude<ManagedBrowserHeadlessSource, "linux-display-fallback">;
+};
+
+/** Inputs used to resolve managed Chrome headless mode. */
 export type ManagedBrowserHeadlessOptions = {
   headlessOverride?: boolean;
   env?: NodeJS.ProcessEnv;
@@ -164,6 +193,16 @@ function normalizeNonNegativeInteger(raw: number | undefined, fallback: number):
 function normalizePositiveInteger(raw: number | undefined, fallback: number): number {
   const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : fallback;
   return value <= 0 ? fallback : value;
+}
+
+const MAX_BROWSER_TIMER_MINUTES = Math.floor(MAX_TIMER_TIMEOUT_MS / 60_000);
+
+function normalizeNonNegativeTimerMinutes(raw: number | undefined, fallback: number): number {
+  return Math.min(normalizeNonNegativeInteger(raw, fallback), MAX_BROWSER_TIMER_MINUTES);
+}
+
+function normalizePositiveTimerMinutes(raw: number | undefined, fallback: number): number {
+  return Math.min(normalizePositiveInteger(raw, fallback), MAX_BROWSER_TIMER_MINUTES);
 }
 
 function normalizeExecutablePath(raw: string | undefined): string | undefined {
@@ -222,7 +261,7 @@ function resolveBrowserTabCleanupConfig(
   const raw = cfg?.tabCleanup;
   return {
     enabled: raw?.enabled ?? true,
-    idleMinutes: normalizeNonNegativeInteger(
+    idleMinutes: normalizeNonNegativeTimerMinutes(
       raw?.idleMinutes,
       DEFAULT_BROWSER_TAB_CLEANUP_IDLE_MINUTES,
     ),
@@ -230,7 +269,7 @@ function resolveBrowserTabCleanupConfig(
       raw?.maxTabsPerSession,
       DEFAULT_BROWSER_TAB_CLEANUP_MAX_TABS_PER_SESSION,
     ),
-    sweepMinutes: normalizePositiveInteger(
+    sweepMinutes: normalizePositiveTimerMinutes(
       raw?.sweepMinutes,
       DEFAULT_BROWSER_TAB_CLEANUP_SWEEP_MINUTES,
     ),
@@ -326,6 +365,69 @@ function ensureDefaultUserBrowserProfile(
   return result;
 }
 
+/** Built-in profile for the Chrome extension relay (user's signed-in browser). */
+function ensureDefaultChromeExtensionProfile(
+  profiles: Record<string, BrowserProfileConfig>,
+): Record<string, BrowserProfileConfig> {
+  const result = { ...profiles };
+  if (result.chrome) {
+    return result;
+  }
+  result.chrome = {
+    driver: "extension",
+    color: DEFAULT_OPENCLAW_BROWSER_COLOR,
+  };
+  return result;
+}
+
+/**
+ * Assign a distinct loopback relay port to each extension-driver profile that
+ * does not pin its own cdpPort. Ports count down from the default (controlPort+8)
+ * — below the managed CDP allocation band (controlPort+9..) — so extension
+ * relays and managed Chrome never contend, and two extension profiles never
+ * share one port. Deterministic (sorted names) so restarts keep the same URLs.
+ */
+function resolveExtensionRelayPorts(
+  profiles: Record<string, BrowserProfileConfig>,
+  defaultPort: number,
+): Record<string, number> {
+  const names = Object.entries(profiles)
+    .filter(([, profile]) => profile.driver === "extension" && profile.cdpPort == null)
+    .map(([name]) => name)
+    .toSorted();
+  const ports: Record<string, number> = {};
+  names.forEach((name, index) => {
+    ports[name] = defaultPort - index;
+  });
+  return ports;
+}
+
+function applyLegacyCdpUrlToExistingSessionDefaultProfile(
+  profiles: Record<string, BrowserProfileConfig>,
+  defaultProfile: string,
+  legacyCdpUrl: string | undefined,
+): Record<string, BrowserProfileConfig> {
+  if (!legacyCdpUrl) {
+    return profiles;
+  }
+  const profile = profiles[defaultProfile];
+  if (
+    !profile ||
+    profile.driver !== "existing-session" ||
+    normalizeOptionalString(profile.cdpUrl)
+  ) {
+    return profiles;
+  }
+  return {
+    ...profiles,
+    [defaultProfile]: {
+      ...profile,
+      cdpUrl: legacyCdpUrl,
+    },
+  };
+}
+
+/** Resolve raw browser config into runtime browser defaults. */
 export function resolveBrowserConfig(
   cfg: BrowserConfig | undefined,
   rootConfig?: OpenClawConfig,
@@ -389,6 +491,9 @@ export function resolveBrowserConfig(
 
   const headless = cfg?.headless === true;
   const headlessSource = typeof cfg?.headless === "boolean" ? "config" : "default";
+  // Host-local relay secret (created lazily by relay startup / pairing). Null
+  // here just means the extension driver has not been used on this host yet.
+  const extensionRelayToken = resolveExtensionRelayToken() ?? undefined;
   const noSandbox = cfg?.noSandbox === true;
   const attachOnly = cfg?.attachOnly === true;
   const executablePath = normalizeExecutablePath(cfg?.executablePath);
@@ -397,13 +502,15 @@ export function resolveBrowserConfig(
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
   const isWsUrl = cdpInfo.parsed.protocol === "ws:" || cdpInfo.parsed.protocol === "wss:";
   const legacyCdpUrl = rawCdpUrl && isWsUrl ? cdpInfo.normalized : undefined;
-  const profiles = ensureDefaultUserBrowserProfile(
-    ensureDefaultProfile(
-      cfg?.profiles,
-      defaultColor,
-      legacyCdpPort,
-      cdpPortRangeStart,
-      legacyCdpUrl,
+  let profiles = ensureDefaultChromeExtensionProfile(
+    ensureDefaultUserBrowserProfile(
+      ensureDefaultProfile(
+        cfg?.profiles,
+        defaultColor,
+        legacyCdpPort,
+        cdpPortRangeStart,
+        legacyCdpUrl,
+      ),
     ),
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
@@ -415,6 +522,11 @@ export function resolveBrowserConfig(
       : profiles[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]
         ? DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME
         : "user");
+  profiles = applyLegacyCdpUrlToExistingSessionDefaultProfile(
+    profiles,
+    defaultProfile,
+    rawCdpUrl ? cdpInfo.normalized : undefined,
+  );
 
   const extraArgs = Array.isArray(cfg?.extraArgs)
     ? cfg.extraArgs.filter(
@@ -447,9 +559,16 @@ export function resolveBrowserConfig(
     tabCleanup: resolveBrowserTabCleanupConfig(cfg),
     ssrfPolicy: resolveBrowserSsrFPolicy(cfg),
     extraArgs,
+    extensionRelayDefaultPort: controlPort + EXTENSION_RELAY_PORT_OFFSET,
+    extensionRelayPorts: resolveExtensionRelayPorts(
+      profiles,
+      controlPort + EXTENSION_RELAY_PORT_OFFSET,
+    ),
+    ...(extensionRelayToken ? { extensionRelayToken } : {}),
   };
 }
 
+/** Resolve one configured browser profile by name. */
 export function resolveProfile(
   resolved: ResolvedBrowserConfig,
   profileName: string,
@@ -462,12 +581,45 @@ export function resolveProfile(
   const rawProfileUrl = profile.cdpUrl?.trim() ?? "";
   let cdpHost = resolved.cdpHost;
   let cdpPort = profile.cdpPort ?? 0;
-  let cdpUrl = "";
-  const driver = profile.driver === "existing-session" ? "existing-session" : "openclaw";
+  let cdpUrl;
+  const driver =
+    profile.driver === "existing-session" || profile.driver === "extension"
+      ? profile.driver
+      : "openclaw";
   const headless = profile.headless ?? resolved.headless;
   const headlessSource =
     typeof profile.headless === "boolean" ? "profile" : resolved.headlessSource;
   const executablePath = normalizeExecutablePath(profile.executablePath) ?? resolved.executablePath;
+
+  if (driver === "extension") {
+    // Each extension profile needs its own loopback relay port. Explicit
+    // profile.cdpPort wins; otherwise a distinct port is assigned per profile
+    // (see resolveExtensionRelayPorts) so multiple extension profiles never
+    // collide on the same port and silently fail to bind.
+    const relayPort =
+      profile.cdpPort ??
+      resolved.extensionRelayPorts[profileName] ??
+      resolved.extensionRelayDefaultPort;
+    const token = resolved.extensionRelayToken;
+    // Userinfo credentials flow through getHeadersWithAuth into /json/version
+    // and /cdp requests, so the relay is authenticated with zero extra plumbing.
+    const relayCdpUrl = token
+      ? `http://${EXTENSION_RELAY_CDP_USER}:${encodeURIComponent(token)}@127.0.0.1:${relayPort}`
+      : `http://127.0.0.1:${relayPort}`;
+    return {
+      name: profileName,
+      cdpPort: relayPort,
+      cdpUrl: relayCdpUrl,
+      cdpHost: "127.0.0.1",
+      cdpIsLoopback: true,
+      color: profile.color,
+      driver,
+      executablePath,
+      headless: false,
+      headlessSource: "default",
+      attachOnly: true,
+    };
+  }
 
   if (driver === "existing-session") {
     const existingSessionCdp = normalizeExistingSessionCdpUrl(rawProfileUrl, profileName);
@@ -537,6 +689,7 @@ export function resolveProfile(
   };
 }
 
+/** Resolve effective headless mode for a managed browser profile. */
 export function resolveManagedBrowserHeadlessMode(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
@@ -569,11 +722,12 @@ export function resolveManagedBrowserHeadlessMode(
   return { headless: resolved.headless, source: "default" };
 }
 
+/** Return a Linux display error for headed managed Chrome when no display exists. */
 export function getManagedBrowserMissingDisplayError(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
   params: ManagedBrowserHeadlessOptions = {},
-): string | null {
+): ManagedBrowserMissingDisplayError | null {
   if (!isLocalManagedProfile(profile)) {
     return null;
   }
@@ -583,8 +737,12 @@ export function getManagedBrowserMissingDisplayError(
     return null;
   }
 
-  const mode = resolveManagedBrowserHeadlessMode(resolved, profile, { env, platform });
-  if (mode.headless) {
+  const mode = resolveManagedBrowserHeadlessMode(resolved, profile, {
+    ...params,
+    env,
+    platform,
+  });
+  if (mode.headless || mode.source === "linux-display-fallback") {
     return null;
   }
 
@@ -596,13 +754,11 @@ export function getManagedBrowserMissingDisplayError(
         : mode.source === "profile"
           ? `browser.profiles.${profile.name}.headless=false`
           : "browser.headless=false";
-  return (
-    `Headed browser start requested for profile "${profile.name}" via ${sourceHint}, ` +
-    "but no Linux display server was detected ($DISPLAY/$WAYLAND_DISPLAY unset). " +
-    `Set ${OPENCLAW_BROWSER_HEADLESS_ENV}=1, remove the headed override, or launch under Xvfb.`
-  );
-}
-
-export function shouldStartLocalBrowserServer(_resolved: unknown) {
-  return true;
+  return {
+    message:
+      `Headed browser start requested for profile "${profile.name}" via ${sourceHint}, ` +
+      "but no Linux display server was detected ($DISPLAY/$WAYLAND_DISPLAY unset). " +
+      `Set ${OPENCLAW_BROWSER_HEADLESS_ENV}=1, remove the headed override, or launch under Xvfb.`,
+    headlessSource: mode.source,
+  };
 }

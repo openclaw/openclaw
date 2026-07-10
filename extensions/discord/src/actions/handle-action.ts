@@ -1,6 +1,7 @@
+// Discord plugin module implements handle action behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
 } from "openclaw/plugin-sdk/agent-runtime";
@@ -8,12 +9,14 @@ import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
+  adaptMessagePresentationForChannel,
   normalizeInteractiveReply,
   normalizeMessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
 import { notifyDiscordInboundEventOutboundSuccess } from "../inbound-event-delivery.js";
+import { DISCORD_PRESENTATION_CAPABILITIES } from "../outbound-components.js";
 import {
   buildDiscordInteractiveComponents,
   buildDiscordPresentationComponents,
@@ -42,6 +45,7 @@ export async function handleDiscordMessageAction(
     | "cfg"
     | "accountId"
     | "requesterSenderId"
+    | "senderIsOwner"
     | "toolContext"
     | "mediaAccess"
     | "mediaLocalRoots"
@@ -90,9 +94,17 @@ export async function handleDiscordMessageAction(
   if (action === "send") {
     const to = readSendTarget();
     const asVoice = readBooleanParam(params, "asVoice") === true;
+    const presentation =
+      params.components == null ? normalizeMessagePresentation(params.presentation) : undefined;
+    const adaptedPresentation = presentation
+      ? adaptMessagePresentationForChannel({
+          presentation,
+          capabilities: DISCORD_PRESENTATION_CAPABILITIES,
+        })
+      : undefined;
     const rawComponents =
       params.components ??
-      buildDiscordPresentationComponents(normalizeMessagePresentation(params.presentation)) ??
+      buildDiscordPresentationComponents(adaptedPresentation) ??
       buildDiscordInteractiveComponents(normalizeInteractiveReply(params.interactive));
     const hasComponents =
       Boolean(rawComponents) &&
@@ -187,10 +199,7 @@ export async function handleDiscordMessageAction(
     });
     const answers = readStringArrayParam(params, "pollOption", { required: true });
     const allowMultiselect = readBooleanParam(params, "pollMulti");
-    const durationHours = readNumberParam(params, "pollDurationHours", {
-      integer: true,
-      strict: true,
-    });
+    const durationHours = readPositiveIntegerParam(params, "pollDurationHours");
     const result = await handleDiscordAction(
       {
         action: "poll",
@@ -235,7 +244,7 @@ export async function handleDiscordMessageAction(
 
   if (action === "reactions") {
     const messageId = readStringParam(params, "messageId", { required: true });
-    const limit = readNumberParam(params, "limit", { integer: true });
+    const limit = readPositiveIntegerParam(params, "limit");
     return await handleDiscordAction(
       {
         action: "reactions",
@@ -250,7 +259,7 @@ export async function handleDiscordMessageAction(
   }
 
   if (action === "read") {
-    const limit = readNumberParam(params, "limit", { integer: true });
+    const limit = readPositiveIntegerParam(params, "limit");
     return await handleDiscordAction(
       {
         action: "readMessages",
@@ -327,9 +336,7 @@ export async function handleDiscordMessageAction(
     const name = readStringParam(params, "threadName", { required: true });
     const messageId = readStringParam(params, "messageId");
     const content = readStringParam(params, "message");
-    const autoArchiveMinutes = readNumberParam(params, "autoArchiveMin", {
-      integer: true,
-    });
+    const autoArchiveMinutes = readPositiveIntegerParam(params, "autoArchiveMin");
     const appliedTags = readStringArrayParam(params, "appliedTags");
     const result = await handleDiscordAction(
       {

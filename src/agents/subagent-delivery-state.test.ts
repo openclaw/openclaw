@@ -1,3 +1,5 @@
+// Subagent delivery-state tests cover migration of legacy run fields into the
+// nested completion/delivery shape used by current registry records.
 import { describe, expect, it } from "vitest";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
 import type { LegacySubagentRunRecord } from "./subagent-delivery-state.js";
@@ -21,7 +23,65 @@ function baseRun(overrides: Partial<LegacySubagentRunRecord> = {}): LegacySubage
 }
 
 describe("normalizeSubagentRunState", () => {
+  it("normalizes durable task ownership and generation metadata", () => {
+    const entry = normalizeSubagentRunState(
+      baseRun({ taskRunId: "  run-task-owner  ", generation: 2 }),
+    );
+    const malformed = normalizeSubagentRunState(
+      baseRun({ taskRunId: "   ", generation: Number.NaN }),
+    );
+    const nonString = normalizeSubagentRunState({
+      ...baseRun(),
+      taskRunId: 42,
+    } as unknown as SubagentRunRecord);
+
+    expect(entry).toMatchObject({ taskRunId: "run-task-owner", generation: 2 });
+    expect(malformed.taskRunId).toBeUndefined();
+    expect(malformed.generation).toBeUndefined();
+    expect(nonString.taskRunId).toBeUndefined();
+  });
+
+  it("normalizes the durable delete-dispatch boundary", () => {
+    const valid = normalizeSubagentRunState(baseRun({ deleteCleanupDispatchedAt: 200 }));
+    const malformed = normalizeSubagentRunState(baseRun({ deleteCleanupDispatchedAt: Number.NaN }));
+
+    expect(valid.deleteCleanupDispatchedAt).toBe(200);
+    expect(malformed.deleteCleanupDispatchedAt).toBeUndefined();
+  });
+
+  it("preserves valid killed reconciliation ownership metadata", () => {
+    const entry = normalizeSubagentRunState(
+      baseRun({
+        suppressCompletionDelivery: true,
+        killReconciliation: {
+          killedAt: 200,
+          suppressTaskDelivery: true,
+          supersededAt: 300,
+        },
+      }),
+    );
+
+    expect(entry.killReconciliation).toEqual({
+      killedAt: 200,
+      suppressTaskDelivery: true,
+      supersededAt: 300,
+    });
+    expect(entry.suppressCompletionDelivery).toBe(true);
+  });
+
+  it("drops malformed killed reconciliation metadata", () => {
+    const entry = normalizeSubagentRunState(
+      baseRun({
+        killReconciliation: { killedAt: Number.NaN },
+      }),
+    );
+
+    expect(entry.killReconciliation).toBeUndefined();
+  });
+
   it("migrates legacy pending delivery fields into nested completion and delivery state", () => {
+    // Restored runs may still carry flat pendingFinalDelivery fields from older
+    // builds; normalization must preserve retry payloads before stripping them.
     const entry = normalizeSubagentRunState(
       baseRun({
         frozenResultText: "child output",
@@ -81,6 +141,34 @@ describe("normalizeSubagentRunState", () => {
     });
     expect(entry.pendingFinalDelivery).toBeUndefined();
     expect(entry.lastAnnounceRetryAt).toBeUndefined();
+  });
+
+  it("migrates in-progress handoff leases to steering leases", () => {
+    const entry = normalizeSubagentRunState(
+      baseRun({
+        cleanupHandled: true,
+        delivery: {
+          status: "in_progress",
+          payload: {
+            requesterSessionKey: "agent:main:parent",
+            requesterDisplayKey: "agent:main:parent",
+            childSessionKey: "agent:main:subagent:child",
+            childRunId: "run-1",
+            task: "inspect",
+          },
+          handoffLeaseId: "lease-1",
+          handoffLeasedAt: 300,
+        },
+      } as Partial<LegacySubagentRunRecord>),
+    ) as SubagentRunRecord & { delivery?: { handoffLeaseId?: string } };
+
+    expect(entry.delivery).toMatchObject({
+      status: "in_progress",
+      steeringLeaseId: "lease-1",
+      steeringLeasedAt: 300,
+    });
+    expect(entry.delivery?.handoffLeaseId).toBeUndefined();
+    expect(entry.cleanupHandled).toBe(false);
   });
 
   it("clears stale cleanupHandled locks for unfinished restored cleanup", () => {

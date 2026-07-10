@@ -1,3 +1,4 @@
+// Determines whether persisted lock-file owners are stale.
 import {
   getProcessStartTime as defaultGetProcessStartTime,
   isPidDefinitelyDead as defaultIsPidDefinitelyDead,
@@ -9,7 +10,7 @@ export type LockFileOwnerPayload = {
   starttime?: number;
 };
 
-export function readLockFileOwnerPayload(
+function readLockFileOwnerPayload(
   payload: Record<string, unknown> | null,
 ): LockFileOwnerPayload | null {
   if (!payload) {

@@ -1,6 +1,15 @@
+/**
+ * Tests shared OAuth credential overlay/replacement policy.
+ * Covers runtime-only provenance, cloned store isolation, and stale credential
+ * replacement decisions.
+ */
 import { describe, expect, it, vi } from "vitest";
-import { overlayRuntimeExternalOAuthProfiles } from "./oauth-shared.js";
-import type { AuthProfileStore } from "./types.js";
+import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
+import {
+  overlayRuntimeExternalOAuthProfiles,
+  shouldReplaceStoredOAuthCredential,
+} from "./oauth-shared.js";
+import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 describe("overlayRuntimeExternalOAuthProfiles", () => {
   it("isolates runtime OAuth overlays without structuredClone", () => {
@@ -22,10 +31,10 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
     try {
       const overlaid = overlayRuntimeExternalOAuthProfiles(store, [
         {
-          profileId: "openai-codex:default",
+          profileId: "openai:default",
           credential: {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-1",
             refresh: "refresh-1",
             expires: Date.now() + 60_000,
@@ -33,13 +42,13 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
         },
       ]);
 
-      const overlaidCodexProfile = overlaid.profiles["openai-codex:default"];
+      const overlaidCodexProfile = overlaid.profiles["openai:default"];
       expect(overlaidCodexProfile?.type).toBe("oauth");
       if (overlaidCodexProfile?.type !== "oauth") {
         throw new Error("expected overlaid Codex OAuth profile");
       }
       expect(overlaidCodexProfile.access).toBe("access-1");
-      expect(store.profiles["openai-codex:default"]).toBeUndefined();
+      expect(store.profiles["openai:default"]?.type).toBe("api_key");
 
       overlaid.profiles["openai:default"].provider = "mutated";
       overlaid.order!.openai.push("mutated");
@@ -115,5 +124,56 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
 
     expect(overlaid.runtimeExternalProfileIds).toEqual(["minimax:minimax-cli"]);
     expect(overlaid.runtimeExternalProfileIdsAuthoritative).toBe(true);
+  });
+
+  it("removes persisted provenance for every externally overlaid profile", () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      runtimePersistedProfileIds: ["openai:default"],
+      profiles: {
+        "openai:default": {
+          type: "oauth",
+          provider: "openai",
+          access: "persisted-access",
+          refresh: "persisted-refresh",
+          expires: 1,
+        },
+      },
+    };
+
+    const overlaid = overlayRuntimeExternalOAuthProfiles(store, [
+      {
+        profileId: "openai:default",
+        persistence: "persisted",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "external-access",
+          refresh: "external-refresh",
+          expires: 2,
+        },
+      },
+    ]);
+
+    expect(overlaid.runtimePersistedProfileIds).toBeUndefined();
+  });
+
+  it("replaces an existing OAuth credential with an out-of-range expiry", () => {
+    const existing: OAuthCredential = {
+      type: "oauth",
+      provider: "openai-codex",
+      access: "poisoned-access",
+      refresh: "poisoned-refresh",
+      expires: MAX_DATE_TIMESTAMP_MS + 1,
+    };
+    const incoming: OAuthCredential = {
+      type: "oauth",
+      provider: "openai-codex",
+      access: "valid-access",
+      refresh: "valid-refresh",
+      expires: Date.now() + 60_000,
+    };
+
+    expect(shouldReplaceStoredOAuthCredential(existing, incoming)).toBe(true);
   });
 });

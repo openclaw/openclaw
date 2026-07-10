@@ -1,10 +1,13 @@
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
+// Implements docs link/search output for `openclaw docs`.
+import { readResponseWithLimit } from "../infra/http-body.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { isRich, theme } from "../terminal/theme.js";
 
 const SEARCH_API = "https://docs.openclaw.ai/api/search";
 const SEARCH_TIMEOUT_MS = 30_000;
+const DOCS_SEARCH_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 
 type DocResult = {
   title: string;
@@ -74,7 +77,10 @@ async function fetchDocsSearch(query: string): Promise<DocResult[]> {
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
-    const payload = (await response.json()) as DocsSearchResponse;
+    const bytes = await readResponseWithLimit(response, DOCS_SEARCH_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ maxBytes }) => new Error(`Docs search response exceeds ${maxBytes} bytes`),
+    });
+    const payload = JSON.parse(new TextDecoder().decode(bytes)) as DocsSearchResponse;
     return parseDocsSearchResults(payload.results);
   } finally {
     clearTimeout(timeout);
@@ -104,6 +110,7 @@ function parseDocsSearchResults(raw: unknown): DocResult[] {
   return results;
 }
 
+/** Search hosted docs, or print the docs homepage when no query is provided. */
 export async function docsSearchCommand(queryParts: string[], runtime: RuntimeEnv) {
   const query = queryParts.join(" ").trim();
   if (!query) {

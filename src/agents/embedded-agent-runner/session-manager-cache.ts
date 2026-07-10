@@ -1,3 +1,6 @@
+/**
+ * Caches and prewarms session managers used by embedded-agent runs.
+ */
 import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import {
@@ -24,7 +27,7 @@ function resolveSessionManagerCachePruneInterval(ttlMs: number): number {
   );
 }
 
-export type SessionManagerCache = {
+type SessionManagerCache = {
   clear: () => void;
   isSessionManagerCached: (sessionFile: string) => boolean;
   keys: () => string[];

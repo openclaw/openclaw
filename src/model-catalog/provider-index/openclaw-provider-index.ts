@@ -1,3 +1,4 @@
+// Bundled OpenClaw provider index advertises pre-install provider metadata for model picker discovery.
 import type { OpenClawProviderIndex } from "./types.js";
 
 // OpenClaw-owned preview metadata for providers whose plugins may not be
@@ -28,6 +29,13 @@ export const OPENCLAW_PROVIDER_INDEX = {
             input: ["text", "image"],
             contextWindow: 262144,
           },
+          {
+            id: "kimi-k2.7-code",
+            name: "Kimi K2.7 Code",
+            reasoning: true,
+            input: ["text", "image"],
+            contextWindow: 262144,
+          },
         ],
       },
     },
@@ -42,17 +50,31 @@ export const OPENCLAW_PROVIDER_INDEX = {
       previewCatalog: {
         models: [
           {
+            id: "deepseek-v4-flash",
+            name: "DeepSeek V4 Flash",
+            input: ["text"],
+            reasoning: true,
+            contextWindow: 1000000,
+          },
+          {
+            id: "deepseek-v4-pro",
+            name: "DeepSeek V4 Pro",
+            input: ["text"],
+            reasoning: true,
+            contextWindow: 1000000,
+          },
+          {
             id: "deepseek-chat",
             name: "DeepSeek Chat",
             input: ["text"],
-            contextWindow: 131072,
+            contextWindow: 1000000,
           },
           {
             id: "deepseek-reasoner",
             name: "DeepSeek Reasoner",
             input: ["text"],
             reasoning: true,
-            contextWindow: 131072,
+            contextWindow: 1000000,
           },
         ],
       },

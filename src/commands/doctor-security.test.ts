@@ -1,14 +1,15 @@
+// Doctor security tests cover security audit checks, config findings, and repair output.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 
 const note = vi.hoisted(() => vi.fn());
 const pluginRegistry = vi.hoisted(() => ({ list: [] as unknown[] }));
 const listReadOnlyChannelPluginsForConfigMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 
@@ -19,6 +20,16 @@ vi.mock("../channels/plugins/read-only.js", () => ({
 vi.mock("../channels/read-only-account-inspect.js", () => ({
   inspectReadOnlyChannelAccount: vi.fn(async () => null),
 }));
+
+// These doctor assertions cover core secret fields. Registry integration tests
+// own plugin-derived targets, so avoid compiling every bundled plugin here.
+vi.mock("../secrets/target-registry-data.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../secrets/target-registry-data.js")>();
+  return {
+    ...actual,
+    getSecretTargetRegistry: actual.getCoreSecretTargetRegistry,
+  };
+});
 
 import { noteSecurityWarnings } from "./doctor-security.js";
 
@@ -71,14 +82,15 @@ describe("noteSecurityWarnings gateway exposure", () => {
     file: Record<string, unknown>,
     run: () => Promise<void>,
   ): Promise<void> {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-security-"));
-    process.env.HOME = home;
-    await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
-    await fs.writeFile(
-      path.join(home, ".openclaw", "exec-approvals.json"),
-      JSON.stringify(file, null, 2),
-    );
-    await run();
+    await withTempDir({ prefix: "openclaw-doctor-security-" }, async (home) => {
+      process.env.HOME = home;
+      await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
+      await fs.writeFile(
+        path.join(home, ".openclaw", "exec-approvals.json"),
+        JSON.stringify(file, null, 2),
+      );
+      await run();
+    });
   }
 
   async function expectAgentExecHostPolicyWarning(agentKey: "*" | "runner") {
@@ -451,6 +463,33 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain('security="full"');
     expect(message).toContain('defaults.security="allowlist"');
     expect(message).toContain("stricter side wins");
+  });
+
+  it("warns when normalized tools.exec mode is broader than host exec defaults", async () => {
+    await withExecApprovalsFile(
+      {
+        version: 1,
+        defaults: {
+          security: "allowlist",
+          ask: "on-miss",
+        },
+      },
+      async () => {
+        await noteSecurityWarnings({
+          tools: {
+            exec: {
+              mode: "full",
+            },
+          },
+        } as OpenClawConfig);
+      },
+    );
+
+    const message = lastMessage();
+    expect(message).toContain("tools.exec is broader than the host exec policy");
+    expect(message).toContain('tools.exec.mode="full"');
+    expect(message).toContain('defaults.security="allowlist"');
+    expect(message).not.toContain("OpenClaw default");
   });
 
   it("attributes broader host policy warnings to wildcard agent entries", async () => {

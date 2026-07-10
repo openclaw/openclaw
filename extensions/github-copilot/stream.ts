@@ -1,3 +1,4 @@
+// Github Copilot plugin module implements stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -7,6 +8,7 @@ import {
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { rewriteCopilotResponsePayloadConnectionBoundIds } from "./connection-bound-ids.js";
+import { stripCopilotAssistantThinkingMessages } from "./replay-policy.js";
 
 type StreamOptions = Parameters<StreamFn>[2];
 
@@ -32,7 +34,7 @@ function inferCopilotInitiator(messages: Context["messages"]): "agent" | "user" 
   return last.role === "user" ? "user" : "agent";
 }
 
-export function hasCopilotVisionInput(messages: Context["messages"]): boolean {
+function hasCopilotVisionInput(messages: Context["messages"]): boolean {
   return messages.some((message) => {
     if (message.role === "user" && Array.isArray(message.content)) {
       return message.content.some((item) => containsCopilotContentType(item, "image"));
@@ -81,6 +83,13 @@ function buildCopilotRequestHeaders(
   };
 }
 
+function patchCopilotAnthropicPayload(payload: Record<string, unknown>): void {
+  if (Array.isArray(payload.messages)) {
+    payload.messages = stripCopilotAssistantThinkingMessages(payload.messages);
+  }
+  applyAnthropicEphemeralCacheControlMarkers(payload);
+}
+
 export function wrapCopilotAnthropicStream(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn | undefined {
@@ -101,7 +110,7 @@ export function wrapCopilotAnthropicStream(
         ...options,
         headers: buildCopilotRequestHeaders(context, options?.headers),
       },
-      applyAnthropicEphemeralCacheControlMarkers,
+      patchCopilotAnthropicPayload,
     );
   };
 }

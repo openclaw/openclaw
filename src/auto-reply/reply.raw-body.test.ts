@@ -1,3 +1,4 @@
+/** Tests raw body handling for command and reply prompt paths. */
 import { describe, expect, it } from "vitest";
 import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
@@ -35,8 +36,7 @@ describe("RawBody directive parsing", () => {
     }).prefixedCommandBody;
 
     expect(prompt).toContain("Chat history since last reply (untrusted, for context):");
-    expect(prompt).toContain('"sender": "Peter"');
-    expect(prompt).toContain('"body": "hello"');
+    expect(prompt).toContain("Peter: hello");
     expect(prompt).toContain("status please");
     expect(prompt).not.toContain("/think:high");
   });

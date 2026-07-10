@@ -1,6 +1,15 @@
+// Config CLI command implementation for get/set/unset/patch/validate and secret refs.
 import fs from "node:fs";
+import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  uniqueValues,
+} from "@openclaw/normalization-core/string-normalization";
 import type { Command } from "commander";
 import JSON5 from "json5";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import {
   type ConfigFileSnapshot,
@@ -14,7 +23,6 @@ import {
   normalizeAgentModelRefForConfig,
 } from "../config/model-input.js";
 import { CONFIG_PATH } from "../config/paths.js";
-import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
@@ -23,6 +31,7 @@ import {
   coerceSecretRef,
   isValidEnvSecretRefId,
   resolveSecretInputRef,
+  type PluginIntegrationSecretProviderConfig,
   type SecretProviderConfig,
   type SecretRef,
   type SecretRefSource,
@@ -32,9 +41,19 @@ import {
   validateConfigObjectRawWithPlugins,
 } from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
-import { danger, info, success } from "../globals.js";
+import { diffConfigPaths } from "../gateway/config-diff.js";
+import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
+import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.js";
+import { danger, info, success, warn } from "../globals.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import {
+  isPluginIntegrationSecretProviderConfig,
+  resolveSecretProviderIntegrationConfig,
+} from "../secrets/provider-integrations.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
@@ -48,11 +67,7 @@ import {
   discoverConfigSecretTargets,
   resolveConfigSecretTargetByPath,
 } from "../secrets/target-registry.js";
-import { isRecord as isPlainRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeStringEntries, uniqueValues } from "../shared/string-normalization.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "./config-recovery-hints.js";
@@ -132,6 +147,7 @@ function normalizeAgentDefaultModelValueForConfigMutation(value: unknown): unkno
 }
 
 function normalizeAgentListModelRefsForConfigMutation(value: unknown): unknown {
+  // Config mutation normalizes model refs at write time so later readers see canonical ids.
   if (!Array.isArray(value)) {
     return value;
   }
@@ -143,7 +159,7 @@ function normalizeAgentListModelRefsForConfigMutation(value: unknown): unknown {
     }
 
     let nextAgent = agent;
-    if (Object.prototype.hasOwnProperty.call(agent, "model")) {
+    if (Object.hasOwn(agent, "model")) {
       const model = normalizeAgentDefaultModelValueForConfigMutation(agent.model);
       if (model !== agent.model) {
         nextAgent = { ...nextAgent, model };
@@ -319,7 +335,11 @@ class ConfigSetDryRunValidationError extends Error {
 }
 
 function isIndexSegment(raw: string): boolean {
-  return /^[0-9]+$/.test(raw);
+  return parseIndexSegment(raw) !== undefined;
+}
+
+function parseIndexSegment(raw: string): number | undefined {
+  return parseConfigPathArrayIndex(raw);
 }
 
 function parseBracketPathSegment(raw: string, fullPath: string): string {
@@ -341,6 +361,15 @@ function parseBracketPathSegment(raw: string, fullPath: string): string {
   return trimmed;
 }
 
+// A buffered key with characters that are all whitespace is stray text between a
+// "."/"]" and the next "."/"[" boundary (e.g. "agents.list[0] .id" or "agents.list[0] [1]").
+// Pushing it would silently collapse into a different key, so reject it like an empty segment.
+function assertNotWhitespaceSegment(current: string, raw: string): void {
+  if (current.length > 0 && !current.trim()) {
+    throw new Error(`Invalid path (empty segment): ${raw}`);
+  }
+}
+
 function parsePath(raw: string): PathSegment[] {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -348,6 +377,10 @@ function parsePath(raw: string): PathSegment[] {
   }
   const parts: string[] = [];
   let current = "";
+  // Tracks whether a bracket segment was emitted since the last "." boundary, so
+  // "foo[0].bar" is accepted while empty key segments (leading/trailing/double dots,
+  // whitespace-only segments) are rejected instead of silently collapsed.
+  let segmentEmitted = false;
   let i = 0;
   while (i < trimmed.length) {
     const ch = trimmed[i];
@@ -360,14 +393,26 @@ function parsePath(raw: string): PathSegment[] {
       continue;
     }
     if (ch === ".") {
+      assertNotWhitespaceSegment(current, raw);
+      if (!segmentEmitted && !current.trim()) {
+        throw new Error(`Invalid path (empty segment): ${raw}`);
+      }
       if (current) {
         parts.push(current);
       }
       current = "";
+      segmentEmitted = false;
       i += 1;
       continue;
     }
     if (ch === "[") {
+      // A bracket may start the path ("[0]"), follow a key ("foo[0]"), or follow
+      // another bracket ("foo[0][1]"), but a bracket right after a "." boundary with
+      // no key (e.g. "gateway.[port]") is an empty segment, same as a double dot.
+      assertNotWhitespaceSegment(current, raw);
+      if (!current.trim() && !segmentEmitted && parts.length > 0) {
+        throw new Error(`Invalid path (empty segment): ${raw}`);
+      }
       if (current) {
         parts.push(current);
       }
@@ -381,11 +426,15 @@ function parsePath(raw: string): PathSegment[] {
         throw new Error(`Invalid path (empty "[]"): ${raw}`);
       }
       parts.push(parseBracketPathSegment(inside, raw));
+      segmentEmitted = true;
       i = close + 1;
       continue;
     }
     current += ch;
     i += 1;
+  }
+  if (!segmentEmitted && !current.trim()) {
+    throw new Error(`Invalid path (empty segment): ${raw}`);
   }
   if (current) {
     parts.push(current);
@@ -411,7 +460,7 @@ function parseValue(raw: string, opts: ConfigSetParseOpts): unknown {
 }
 
 function hasOwnPathKey(value: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
+  return Object.hasOwn(value, key);
 }
 
 function formatDoctorHint(message: string): string {
@@ -456,8 +505,8 @@ function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?
       if (!isIndexSegment(segment)) {
         return { found: false };
       }
-      const index = Number.parseInt(segment, 10);
-      if (!Number.isFinite(index) || index < 0 || index >= current.length) {
+      const index = parseIndexSegment(segment);
+      if (index === undefined || index >= current.length) {
         return { found: false };
       }
       current = current[index];
@@ -470,6 +519,16 @@ function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?
     current = record[segment];
   }
   return { found: true, value: current };
+}
+
+function formatConfigUnsetMissingPathMessage(params: {
+  path: string;
+  runtimeOnly: boolean;
+}): string {
+  if (params.runtimeOnly) {
+    return `Config path not found in authored config: ${params.path}. It only exists after runtime defaults are applied, so there is nothing for config unset to remove. Use ${formatCliCommand("openclaw config set <path> <value>")} to override the inherited value.`;
+  }
+  return `Config path not found: ${params.path}. Nothing was changed. Run ${formatCliCommand("openclaw config get <path>")} first if you are unsure of the path.`;
 }
 
 type JsonSchemaRecord = {
@@ -544,8 +603,8 @@ function propertySchema(schema: JsonSchemaRecord, segment: PathSegment): JsonSch
   const schemas: JsonSchemaRecord[] = [];
   for (const alternative of schemaAlternatives(schema)) {
     if (schemaLooksArray(alternative)) {
-      if (isIndexSegment(segment)) {
-        const index = Number.parseInt(segment, 10);
+      const index = parseIndexSegment(segment);
+      if (index !== undefined) {
         const indexedItem = Array.isArray(alternative.items)
           ? alternative.items[index]
           : alternative.items;
@@ -642,7 +701,10 @@ function setAtPath(
       if (!isIndexSegment(segment)) {
         throw new Error(`Expected numeric index for array segment "${segment}"`);
       }
-      const index = Number.parseInt(segment, 10);
+      const index = parseIndexSegment(segment);
+      if (index === undefined) {
+        throw new Error(`Expected numeric index for array segment "${segment}"`);
+      }
       const existing = current[index];
       if (!existing || typeof existing !== "object") {
         current[index] = nextIsIndex ? [] : {};
@@ -666,7 +728,10 @@ function setAtPath(
     if (!isIndexSegment(last)) {
       throw new Error(`Expected numeric index for array segment "${last}"`);
     }
-    const index = Number.parseInt(last, 10);
+    const index = parseIndexSegment(last);
+    if (index === undefined) {
+      throw new Error(`Expected numeric index for array segment "${last}"`);
+    }
     current[index] = value;
     return;
   }
@@ -837,8 +902,8 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): UnsetA
       if (!isIndexSegment(segment)) {
         return { removed: false };
       }
-      const index = Number.parseInt(segment, 10);
-      if (!Number.isFinite(index) || index < 0 || index >= current.length) {
+      const index = parseIndexSegment(segment);
+      if (index === undefined || index >= current.length) {
         return { removed: false };
       }
       current = current[index];
@@ -856,8 +921,8 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): UnsetA
     if (!isIndexSegment(last)) {
       return { removed: false };
     }
-    const index = Number.parseInt(last, 10);
-    if (!Number.isFinite(index) || index < 0 || index >= current.length) {
+    const index = parseIndexSegment(last);
+    if (index === undefined || index >= current.length) {
       return { removed: false };
     }
     current.splice(index, 1);
@@ -949,6 +1014,114 @@ function toDotPath(path: PathSegment[]): string {
   return path.join(".");
 }
 
+const RESTART_HINT = "Restart the gateway to apply.";
+const HOT_RELOAD_HINT = "Change will apply without restarting the gateway.";
+const NO_RELOAD_HINT = "No gateway restart needed.";
+
+function isPluginEntryConfigPath(path: string): boolean {
+  // CLI hints are operator guidance. Keep plugin entry writes conservative
+  // because the CLI cannot prove every plugin's reload metadata is loaded.
+  return path === "plugins.entries" || path.startsWith("plugins.entries.");
+}
+
+function configApplyHintForPaths(paths: string[], afterConfig: OpenClawConfig): string {
+  if (paths.length === 0) {
+    return RESTART_HINT;
+  }
+  if (paths.some(isPluginEntryConfigPath)) {
+    return RESTART_HINT;
+  }
+  const plan = buildGatewayReloadPlan(paths);
+  if (plan.restartGateway) {
+    return RESTART_HINT;
+  }
+  if (plan.hotReasons.length > 0) {
+    const { mode } = resolveGatewayReloadSettings(afterConfig);
+    if (mode === "off" || mode === "restart") {
+      return RESTART_HINT;
+    }
+    return HOT_RELOAD_HINT;
+  }
+  return NO_RELOAD_HINT;
+}
+
+function configApplyHintForOperations(
+  operations: ReadonlyArray<{ requestedPath?: PathSegment[] }>,
+  beforeConfig: OpenClawConfig,
+  afterConfig: OpenClawConfig,
+): string {
+  const requestedPaths: string[] = [];
+  for (const operation of operations) {
+    if (!operation.requestedPath) {
+      return RESTART_HINT;
+    }
+    requestedPaths.push(toDotPath(operation.requestedPath));
+  }
+  return configApplyHintForPaths(
+    expandActualChangedPathsWithRequestedDescendants(
+      diffConfigPaths(beforeConfig, afterConfig),
+      requestedPaths,
+      beforeConfig,
+      afterConfig,
+    ),
+    afterConfig,
+  );
+}
+
+function expandActualChangedPathsWithRequestedDescendants(
+  actualChangedPaths: string[],
+  requestedPaths: string[],
+  beforeConfig: OpenClawConfig,
+  afterConfig: OpenClawConfig,
+): string[] {
+  const expanded = new Set<string>();
+  for (const actualPath of actualChangedPaths) {
+    const requestedDescendants = requestedPaths.filter(
+      (requestedPath) => requestedPath !== actualPath && requestedPath.startsWith(`${actualPath}.`),
+    );
+    if (requestedDescendants.length > 0) {
+      for (const requestedPath of requestedDescendants) {
+        expanded.add(requestedPath);
+      }
+      continue;
+    }
+    for (const expandedPath of expandWholeValueChangePath(actualPath, beforeConfig, afterConfig)) {
+      expanded.add(expandedPath);
+    }
+  }
+  return [...expanded];
+}
+
+function expandWholeValueChangePath(
+  actualPath: string,
+  beforeConfig: OpenClawConfig,
+  afterConfig: OpenClawConfig,
+): string[] {
+  const path = actualPath === "<root>" ? [] : actualPath.split(".");
+  const before = getAtPath(beforeConfig, path);
+  const after = getAtPath(afterConfig, path);
+  if (before.found && !after.found) {
+    return collectChangedLeafPaths(before.value, actualPath);
+  }
+  if (!before.found && after.found) {
+    return collectChangedLeafPaths(after.value, actualPath);
+  }
+  return [actualPath];
+}
+
+function collectChangedLeafPaths(value: unknown, prefix: string): string[] {
+  if (!isPlainRecord(value)) {
+    return [prefix];
+  }
+  const entries = Object.entries(value);
+  if (entries.length === 0) {
+    return [prefix];
+  }
+  return entries.flatMap(([key, child]) =>
+    collectChangedLeafPaths(child, prefix ? `${prefix}.${key}` : key),
+  );
+}
+
 function parseSecretRefSource(raw: string, label: string): SecretRefSource {
   const source = raw.trim();
   if (source === "env" || source === "file" || source === "exec") {
@@ -1003,8 +1176,8 @@ function parseOptionalPositiveInteger(raw: string | undefined, flag: string): nu
   if (!trimmed) {
     throw new Error(`${flag} must not be empty.`);
   }
-  const parsed = Number(trimmed);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
+  const parsed = parseStrictPositiveInteger(trimmed);
+  if (parsed === undefined) {
     throw new Error(`${flag} must be a positive integer.`);
   }
   return parsed;
@@ -1713,7 +1886,7 @@ function valueHasAutoManagedChild(value: unknown, childPath: ReadonlyArray<PathS
       return false;
     }
     const record = cursor as Record<string, unknown>;
-    if (!Object.prototype.hasOwnProperty.call(record, segment)) {
+    if (!Object.hasOwn(record, segment)) {
       return false;
     }
     cursor = record[segment];
@@ -1818,6 +1991,68 @@ function collectDryRunSchemaErrors(params: { config: OpenClawConfig }): ConfigSe
   }));
 }
 
+function collectPluginIntegrationProviderErrors(params: {
+  config: OpenClawConfig;
+  operations: ConfigSetOperation[];
+}): ConfigSetDryRunError[] {
+  const providers = params.config.secrets?.providers ?? {};
+  let validateAllProviders = false;
+  const touchedProviderAliases = new Set<string>();
+  for (const operation of params.operations) {
+    if (operation.touchedProviderAlias) {
+      touchedProviderAliases.add(operation.touchedProviderAlias);
+    }
+    if (operation.assignedRef) {
+      touchedProviderAliases.add(operation.assignedRef.provider);
+    }
+    for (const ref of collectSecretRefsFromUnknown(operation.value)) {
+      touchedProviderAliases.add(ref.provider);
+    }
+    if (touchesSecretProviderCollection(operation.setPath)) {
+      validateAllProviders = true;
+    }
+  }
+  if (!validateAllProviders && touchedProviderAliases.size === 0) {
+    return [];
+  }
+  const integrationProviders: Array<{
+    alias: string;
+    provider: PluginIntegrationSecretProviderConfig;
+  }> = [];
+  for (const [alias, provider] of Object.entries(providers)) {
+    if (!validateAllProviders && !touchedProviderAliases.has(alias)) {
+      continue;
+    }
+    if (isPluginIntegrationSecretProviderConfig(provider)) {
+      integrationProviders.push({ alias, provider });
+    }
+  }
+  if (integrationProviders.length === 0) {
+    return [];
+  }
+  const manifestRegistry = loadPluginMetadataSnapshot({
+    config: params.config,
+    env: process.env,
+  }).manifestRegistry;
+  const errors: ConfigSetDryRunError[] = [];
+  for (const { alias, provider } of integrationProviders) {
+    const resolved = resolveSecretProviderIntegrationConfig({
+      manifestRegistry,
+      providerAlias: alias,
+      providerConfig: provider,
+      config: params.config,
+      env: process.env,
+    });
+    if (!resolved.ok) {
+      errors.push({
+        kind: "schema",
+        message: `secrets.providers.${alias}: ${resolved.reason}`,
+      });
+    }
+  }
+  return errors;
+}
+
 function dedupeDryRunErrors(errors: ConfigSetDryRunError[]): ConfigSetDryRunError[] {
   const deduped: ConfigSetDryRunError[] = [];
   const seen = new Set<string>();
@@ -1897,6 +2132,9 @@ async function runConfigOperations(params: {
   // instead of snapshot.config (runtime-merged with defaults).
   // This prevents runtime defaults from leaking into the written config file (issue #6070)
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
+  const currentConfigForApplyHint = normalizeConfigMutationModelRefs(
+    structuredClone(snapshot.resolved) as OpenClawConfig,
+  );
   const mutationSchema = await loadConfigMutationSchema();
   const unsetPaths: PathSegment[][] = [];
   const explicitSetPaths: PathSegment[][] = [];
@@ -1935,6 +2173,10 @@ async function runConfigOperations(params: {
   const policyIssueLines = formatConfigIssueLines(policyIssues, "", { normalizeRoot: true }).map(
     (line) => line.trim(),
   );
+  const pluginIntegrationProviderErrors = collectPluginIntegrationProviderErrors({
+    config: nextConfig,
+    operations,
+  });
 
   if (options.dryRun) {
     const hasJsonMode = operations.some((operation) => operation.inputMode === "json");
@@ -1965,6 +2207,7 @@ async function runConfigOperations(params: {
         })),
       );
     }
+    errors.push(...pluginIntegrationProviderErrors);
     if (requiresFullSchemaValidation) {
       errors.push(
         ...collectDryRunSchemaErrors({
@@ -1993,7 +2236,10 @@ async function runConfigOperations(params: {
       configPath: shortenHomePath(snapshot.path),
       inputModes: uniqueValues(operations.map((operation) => operation.inputMode)),
       checks: {
-        schema: requiresFullSchemaValidation || policyIssueLines.length > 0,
+        schema:
+          requiresFullSchemaValidation ||
+          policyIssueLines.length > 0 ||
+          pluginIntegrationProviderErrors.length > 0,
         resolvability: hasJsonMode || hasBuilderMode || hasUnsetMode,
         resolvabilityComplete:
           (hasJsonMode || hasBuilderMode || hasUnsetMode) &&
@@ -2042,6 +2288,14 @@ async function runConfigOperations(params: {
   if (policyIssueLines.length > 0) {
     throw new Error(formatUnsupportedSecretRefPolicyFailureMessage(policyIssueLines));
   }
+  if (pluginIntegrationProviderErrors.length > 0) {
+    throw new Error(
+      [
+        "Config validation failed: plugin-managed SecretRef provider integration is invalid.",
+        ...pluginIntegrationProviderErrors.map((error) => `- ${error.message}`),
+      ].join("\n"),
+    );
+  }
 
   await replaceConfigFile({
     nextConfig,
@@ -2067,16 +2321,16 @@ async function runConfigOperations(params: {
   if (params.successMode === "set" && operations.length === 1) {
     const operation = operations[0];
     const action = operation?.mutation === "delete" ? "Removed" : "Updated";
-    runtime.log(
-      info(`${action} ${toDotPath(operation?.requestedPath ?? [])}. Restart the gateway to apply.`),
-    );
+    const hint = configApplyHintForOperations(operations, currentConfigForApplyHint, nextConfig);
+    runtime.log(info(`${action} ${toDotPath(operation?.requestedPath ?? [])}. ${hint}`));
     return;
   }
+  const hint = configApplyHintForOperations(operations, currentConfigForApplyHint, nextConfig);
   if (params.successMode === "set") {
-    runtime.log(info(`Updated ${operations.length} config paths. Restart the gateway to apply.`));
+    runtime.log(info(`Updated ${operations.length} config paths. ${hint}`));
     return;
   }
-  runtime.log(info(`Applied ${operations.length} config update(s). Restart the gateway to apply.`));
+  runtime.log(info(`Applied ${operations.length} config update(s). ${hint}`));
 }
 
 function handleConfigMutationError(params: {
@@ -2237,8 +2491,16 @@ export async function runConfigUnset(opts: {
     // instead of snapshot.config (runtime-merged with defaults).
     // This prevents runtime defaults from leaking into the written config file (issue #6070)
     const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
+    const currentConfigForApplyHint = normalizeConfigMutationModelRefs(
+      structuredClone(snapshot.resolved) as OpenClawConfig,
+    );
     const unsetResult = unsetAtPath(next, parsedPath);
     if (!unsetResult.removed) {
+      const runtimeOnly = getAtPath(snapshot.runtimeConfig, parsedPath).found;
+      const missingPathMessage = formatConfigUnsetMissingPathMessage({
+        path: opts.path,
+        runtimeOnly,
+      });
       if (cliOptions.dryRun && cliOptions.json) {
         throw new ConfigSetDryRunValidationError({
           ok: false,
@@ -2255,16 +2517,14 @@ export async function runConfigUnset(opts: {
           errors: [
             {
               kind: "missing-path",
-              message: `Config path not found: ${opts.path}. Nothing was changed.`,
+              message: runtimeOnly
+                ? missingPathMessage
+                : `Config path not found: ${opts.path}. Nothing was changed.`,
             },
           ],
         });
       }
-      runtime.error(
-        danger(
-          `Config path not found: ${opts.path}. Nothing was changed. Run ${formatCliCommand("openclaw config get <path>")} first if you are unsure of the path.`,
-        ),
-      );
+      runtime.error(danger(missingPathMessage));
       runtime.exit(1);
       return;
     }
@@ -2284,13 +2544,18 @@ export async function runConfigUnset(opts: {
         ? {}
         : { writeOptions: { unsetPaths: [parsedPath] } }),
     });
-    runtime.log(info(`Removed ${opts.path}. Restart the gateway to apply.`));
+    const hint = configApplyHintForOperations(
+      [buildUnsetOperation(parsedPath)],
+      currentConfigForApplyHint,
+      normalizeConfigMutationModelRefs(structuredClone(next) as OpenClawConfig),
+    );
+    runtime.log(info(`Removed ${opts.path}. ${hint}`));
   } catch (err) {
     handleConfigMutationError({ err, runtime, options: cliOptions });
   }
 }
 
-export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
+async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const snapshot = await readConfigFileSnapshot();
@@ -2315,7 +2580,7 @@ async function buildCliConfigSchema(): Promise<Record<string, unknown>> {
   return schema;
 }
 
-export async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
+async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     writeRuntimeJson(runtime, await buildCliConfigSchema());
@@ -2325,7 +2590,7 @@ export async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
   }
 }
 
-export async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
+async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
   let outputPath = CONFIG_PATH ?? "openclaw.json";
 
@@ -2367,10 +2632,17 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
       return;
     }
 
+    const warnings = normalizeConfigIssues(snapshot.warnings);
     if (opts.json) {
-      writeRuntimeJson(runtime, { valid: true, path: outputPath }, 0);
+      writeRuntimeJson(runtime, { valid: true, path: outputPath, warnings }, 0);
     } else {
       runtime.log(success(`Config valid: ${shortPath}`));
+      if (warnings.length > 0) {
+        runtime.log(warn(`${warnings.length} warning(s):`));
+        for (const line of formatConfigIssueLines(warnings, warn("!"), { normalizeRoot: true })) {
+          runtime.log(`  ${line}`);
+        }
+      }
     }
   } catch (err) {
     if (opts.json) {

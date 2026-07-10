@@ -1,3 +1,4 @@
+/** Tests core secrets runtime snapshot preparation and activation behavior. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import {
@@ -5,7 +6,7 @@ import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "../config/config.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import {

@@ -1,3 +1,12 @@
+/**
+ * pdf built-in tool.
+ *
+ * Loads local/web PDFs, extracts pages/text, and analyzes them with native or fallback media-understanding models.
+ */
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { complete } from "../../llm/stream.js";
@@ -8,17 +17,18 @@ import {
 } from "../../media/media-reference.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { ToolInputError } from "./common.js";
+import { applySecretRefHeaderSentinels } from "../model-auth.js";
+import { getModelProviderRequestTransport } from "../provider-request-config.js";
+import { registerProviderStreamForModel } from "../provider-stream.js";
+import { optionalFiniteNumberSchema } from "../schema/typebox.js";
+import { readFiniteNumberParam, ToolInputError } from "./common.js";
 import { coerceImageModelConfig, type ImageModelConfig } from "./image-tool.helpers.js";
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
+  REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
   resolveModelFromRegistry,
   resolveMediaToolLocalRoots,
   resolveModelRuntimeApiKey,
@@ -53,7 +63,6 @@ const DEFAULT_PROMPT = "Analyze this PDF document.";
 const DEFAULT_MAX_PDFS = 10;
 const DEFAULT_MAX_BYTES_MB = 10;
 const DEFAULT_MAX_PAGES = 20;
-const PDF_REMOTE_READ_IDLE_TIMEOUT_MS = 120_000;
 
 const PDF_MIN_TEXT_CHARS = 200;
 const PDF_MAX_PIXELS = 4_000_000;
@@ -71,15 +80,10 @@ export const PdfToolSchema = Type.Object({
       description: 'Pages, e.g. "1-5", "1,3,5-7"; default all.',
     }),
   ),
+  password: Type.Optional(Type.String({ description: "Password for encrypted PDFs." })),
   model: Type.Optional(Type.String()),
-  maxBytesMb: Type.Optional(Type.Number()),
+  maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
 });
-
-// ---------------------------------------------------------------------------
-// Model resolution (mirrors image tool pattern)
-// ---------------------------------------------------------------------------
-
-export { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 
 function hasExplicitPdfToolModelConfig(config?: OpenClawConfig): boolean {
   return (
@@ -119,7 +123,8 @@ function buildPdfExtractionContext(
   // Add the user prompt
   content.push({ type: "text", text: prompt });
 
-  const systemPrompt = model?.api === "openai-codex-responses" ? CODEX_PDF_INSTRUCTIONS : undefined;
+  const systemPrompt =
+    model?.api === "openai-chatgpt-responses" ? CODEX_PDF_INSTRUCTIONS : undefined;
 
   return {
     ...(systemPrompt ? { systemPrompt } : {}),
@@ -144,6 +149,7 @@ async function runPdfPrompt(params: {
   modelOverride?: string;
   prompt: string;
   pdfBuffers: Array<{ base64: string; filename: string }>;
+  password?: string;
   pageNumbers?: number[];
   getExtractions: () => Promise<PdfExtractedContent[]>;
 }): Promise<{
@@ -158,7 +164,7 @@ async function runPdfPrompt(params: {
   const modelsOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
   await ensureOpenClawModelsJson(effectiveCfg, params.agentDir, modelsOptions);
   const authStorage = discoverAuthStorage(params.agentDir);
-  const modelRegistry = discoverModels(authStorage, params.agentDir);
+  const modelRegistry = discoverModels(authStorage, params.agentDir, modelsOptions);
 
   let extractionCache: PdfExtractedContent[] | null = null;
   const getExtractions = async (): Promise<PdfExtractedContent[]> => {
@@ -172,7 +178,10 @@ async function runPdfPrompt(params: {
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
     run: async (provider, modelId) => {
-      const model = resolveModelFromRegistry({ modelRegistry, provider, modelId });
+      const model = applySecretRefHeaderSentinels(
+        resolveModelFromRegistry({ modelRegistry, provider, modelId }),
+        effectiveCfg,
+      );
       const apiKey = await resolveModelRuntimeApiKey({
         model,
         cfg: effectiveCfg,
@@ -181,6 +190,11 @@ async function runPdfPrompt(params: {
       });
 
       if (providerSupportsNativePdf(provider)) {
+        if (params.password) {
+          throw new Error(
+            `password is not supported with native PDF providers (${provider}/${modelId}). Remove password, or use a non-native model for encrypted PDFs.`,
+          );
+        }
         if (params.pageNumbers && params.pageNumbers.length > 0) {
           throw new Error(
             `pages is not supported with native PDF providers (${provider}/${modelId}). Remove pages, or use a non-native model for page filtering.`,
@@ -200,6 +214,10 @@ async function runPdfPrompt(params: {
             pdfs,
             maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
             baseUrl: model.baseUrl,
+            requestConfig: {
+              headers: model.headers,
+              request: getModelProviderRequestTransport(model),
+            },
           });
           return { text, provider, model: modelId, native: true };
         }
@@ -211,10 +229,23 @@ async function runPdfPrompt(params: {
             prompt: params.prompt,
             pdfs,
             baseUrl: model.baseUrl,
+            requestConfig: {
+              headers: model.headers,
+              request: getModelProviderRequestTransport(model),
+            },
           });
           return { text, provider, model: modelId, native: true };
         }
       }
+
+      // PDF-only model selections may not have loaded their provider plugin yet.
+      // Register before complete() so plugin-owned APIs resolve on first use.
+      registerProviderStreamForModel({
+        model,
+        cfg: effectiveCfg,
+        agentDir: params.agentDir,
+        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      });
 
       const extractions = await getExtractions();
       const hasImages = extractions.some((e) => e.images.length > 0);
@@ -347,15 +378,18 @@ export function createPdfTool(options?: {
         record,
         DEFAULT_PROMPT,
       );
-      const maxBytesMbRaw = typeof record.maxBytesMb === "number" ? record.maxBytesMb : undefined;
       const maxBytesMb =
-        typeof maxBytesMbRaw === "number" && Number.isFinite(maxBytesMbRaw) && maxBytesMbRaw > 0
-          ? maxBytesMbRaw
-          : configuredMaxBytesMb;
+        readFiniteNumberParam(record, "maxBytesMb", {
+          min: 0,
+          minExclusive: true,
+          message: "maxBytesMb must be greater than 0",
+        }) ?? configuredMaxBytesMb;
       const maxBytes = Math.floor(maxBytesMb * 1024 * 1024);
 
       // Parse page range
       const pagesRaw = normalizeOptionalString(record.pages);
+      const pageNumbers = pagesRaw ? parsePageRange(pagesRaw, configuredMaxPages) : undefined;
+      const password = typeof record.password === "string" ? record.password : undefined;
 
       const pdfModelConfig =
         registrationPdfModelConfig ??
@@ -446,7 +480,7 @@ export function createPdfTool(options?: {
           : await loadWebMediaRaw(resolvedPathInfo.resolved, {
               maxBytes,
               localRoots,
-              ...(isHttpUrl ? { readIdleTimeoutMs: PDF_REMOTE_READ_IDLE_TIMEOUT_MS } : {}),
+              ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
               ssrfPolicy: remoteMediaSsrfPolicy,
             });
 
@@ -476,8 +510,6 @@ export function createPdfTool(options?: {
         });
       }
 
-      const pageNumbers = pagesRaw ? parsePageRange(pagesRaw, configuredMaxPages) : undefined;
-
       const getExtractions = async (): Promise<PdfExtractedContent[]> => {
         const extractedAll: PdfExtractedContent[] = [];
         for (const pdf of loadedPdfs) {
@@ -486,6 +518,7 @@ export function createPdfTool(options?: {
             maxPages: configuredMaxPages,
             maxPixels: PDF_MAX_PIXELS,
             minTextChars: PDF_MIN_TEXT_CHARS,
+            ...(password ? { password } : {}),
             pageNumbers,
             config: options?.config,
           });
@@ -502,6 +535,7 @@ export function createPdfTool(options?: {
         modelOverride,
         prompt: promptRaw,
         pdfBuffers: loadedPdfs.map((p) => ({ base64: p.base64, filename: p.filename })),
+        ...(password ? { password } : {}),
         pageNumbers,
         getExtractions,
       });

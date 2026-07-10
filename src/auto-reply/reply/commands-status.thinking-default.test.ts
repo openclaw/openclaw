@@ -1,8 +1,9 @@
+// Tests status command defaults for thinking and reasoning display.
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 vi.mock("../../agents/fast-mode.js", () => ({
-  resolveFastModeState: () => ({ enabled: false }),
+  resolveFastModeState: () => ({ mode: false, enabled: false, source: "default" }),
 }));
 
 vi.mock("../../agents/model-auth-label.js", () => ({

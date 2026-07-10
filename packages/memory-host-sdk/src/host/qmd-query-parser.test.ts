@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover qmd query parser behavior.
 import { describe, expect, it } from "vitest";
 import { parseQmdQueryJson } from "./qmd-query-parser.js";
 
@@ -40,6 +41,15 @@ complete`,
     ]);
   });
 
+  it("drops non-integer qmd line metadata", () => {
+    const results = parseQmdQueryJson(
+      `[{"docid":"abc","start_line":4.5,"end_line":${Number.MAX_SAFE_INTEGER + 1}}]`,
+      "",
+    );
+
+    expect(results).toEqual([{ docid: "abc" }]);
+  });
+
   it("treats plain-text no-results from stderr as an empty result set", () => {
     const results = parseQmdQueryJson("", "No results found\n");
     expect(results).toStrictEqual([]);
@@ -48,6 +58,15 @@ complete`,
   it("treats prefixed no-results marker output as an empty result set", () => {
     expect(parseQmdQueryJson("warning: no results found", "")).toStrictEqual([]);
     expect(parseQmdQueryJson("", "[qmd] warning: no results found\n")).toStrictEqual([]);
+  });
+
+  it("keeps bounded stderr context UTF-16 safe", () => {
+    const prefix = "a".repeat(116);
+    const stderr = `${prefix}😀${"b".repeat(120)}`;
+
+    expect(() => parseQmdQueryJson("", stderr)).toThrow(
+      `qmd query returned invalid JSON: stdout empty (stderr: ${prefix}...)`,
+    );
   });
 
   it("does not treat arbitrary non-marker text as no-results output", () => {

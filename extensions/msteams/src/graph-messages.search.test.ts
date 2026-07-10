@@ -1,3 +1,4 @@
+// Msteams tests cover graph messages.search plugin behavior.
 import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
@@ -207,8 +208,8 @@ describe("searchMessagesMSTeams", () => {
 
   it("resolves user: target through conversation store", async () => {
     mockState.findPreferredDmByUserId.mockResolvedValue({
-      conversationId: "a:bot-id",
-      reference: { graphChatId: "19:dm-chat@thread.tacv2" },
+      conversationId: "19:dm-chat@thread.tacv2",
+      reference: {},
     });
     mockState.fetchGraphJson.mockResolvedValue({ value: [] });
 

@@ -1,3 +1,5 @@
+// Google Meet plugin module implements chrome browser proxy behavior.
+import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 
 type BrowserProxyResult = {
@@ -9,6 +11,19 @@ export type BrowserTab = {
   title?: string;
   url?: string;
 };
+
+// Meet automation scripts match English UI labels ("Join now", "Turn off microphone").
+// hl=en pins the Meet page language regardless of account/browser locale; without it,
+// non-English profiles render localized labels and every DOM matcher goes blind.
+export function forceMeetEnglishUi(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.searchParams.set("hl", "en");
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
 
 export function normalizeMeetUrlForReuse(url: string | undefined): string | undefined {
   if (!url) {
@@ -189,7 +204,8 @@ export async function callBrowserProxyOnNode(params: {
       body: params.body,
       timeoutMs: params.timeoutMs,
     },
-    timeoutMs: params.timeoutMs + 5_000,
+    timeoutMs: addTimerTimeoutGraceMs(params.timeoutMs) ?? 1,
+    scopes: ["operator.admin"],
   });
   return parseBrowserProxyResult(raw);
 }

@@ -1,3 +1,4 @@
+// Setup gateway config tests cover gateway prompt choices and config output.
 import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
@@ -28,17 +29,24 @@ describe("configureGatewayForSetup", () => {
   function createPrompter(params: { selectQueue: string[]; textQueue: Array<string | undefined> }) {
     const selectQueue = [...params.selectQueue];
     const textQueue = [...params.textQueue];
-    const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
+    const select = vi.fn(async (paramsLocal: WizardSelectParams<unknown>) => {
       const next = selectQueue.shift();
       if (next !== undefined) {
         return next;
       }
-      return params.initialValue ?? params.options[0]?.value;
+      return paramsLocal.initialValue ?? paramsLocal.options[0]?.value;
     }) as unknown as WizardPrompter["select"];
 
     return buildWizardPrompter({
       select,
-      text: vi.fn(async () => textQueue.shift() as string),
+      text: vi.fn(async (paramsLocal) => {
+        const value = textQueue.shift() as string;
+        const error = typeof value === "string" ? paramsLocal.validate?.(value) : undefined;
+        if (error) {
+          throw new Error(error);
+        }
+        return value;
+      }),
     });
   }
 
@@ -97,6 +105,14 @@ describe("configureGatewayForSetup", () => {
     expect(result.nextConfig.gateway?.nodes?.denyCommands).toEqual(DEFAULT_DANGEROUS_NODE_COMMANDS);
     expect(result.nextConfig.gateway?.nodes?.denyCommands).not.toContain("screen.snapshot");
     expect(result.nextConfig.gateway?.nodes?.denyCommands).toContain("screen.record");
+  });
+
+  it.each(["1e3", "0x1000"])("rejects loose gateway port input: %s", async (port) => {
+    mocks.randomToken.mockReturnValue("generated-token");
+
+    await expect(runGatewayConfig({ textQueue: [port] })).rejects.toThrow(
+      "Use a port number from 1 to 65535",
+    );
   });
 
   it("prefers OPENCLAW_GATEWAY_TOKEN during quickstart token setup", async () => {
@@ -331,7 +347,7 @@ describe("configureGatewayForSetup", () => {
       ...createQuickstartGateway("token"),
       token: {
         source: "exec" as const,
-        provider: "gatewayTokens",
+        provider: "gatewaytokens",
         id: "gateway/auth/token",
       },
     };
@@ -347,7 +363,7 @@ describe("configureGatewayForSetup", () => {
       nextConfig: {
         secrets: {
           providers: {
-            gatewayTokens: {
+            gatewaytokens: {
               source: "exec",
               command: process.execPath,
               allowInsecurePath: true,

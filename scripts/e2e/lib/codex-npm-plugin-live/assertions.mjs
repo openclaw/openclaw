@@ -1,33 +1,122 @@
+// Assertions for Codex npm plugin live E2E scenarios.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
+import {
+  assertPathInside,
+  configPath,
+  findPackageJson,
+  managedNpmRoot,
+  npmProjectRootForInstalledPackage,
+  readInstallRecords,
+  readJson,
+  realPathMaybe,
+  stateDir,
+} from "../codex-install-utils.mjs";
 
 const command = process.argv[2];
-const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const allowBetaCompatDiagnostics =
   process.env.OPENCLAW_CODEX_NPM_PLUGIN_ALLOW_BETA_COMPAT_DIAGNOSTICS === "1";
+const MAX_TEXT_FILE_BYTES = readPositiveIntEnv(
+  "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TEXT_FILE_BYTES",
+  1024 * 1024,
+);
+const MAX_ERROR_TAIL_BYTES = readPositiveIntEnv(
+  "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_ERROR_TAIL_BYTES",
+  64 * 1024,
+);
+const MAX_TRANSCRIPT_FILES = readPositiveIntEnv(
+  "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_FILES",
+  64,
+);
+const MAX_TRANSCRIPT_WALK_ENTRIES = readPositiveIntEnv(
+  "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_WALK_ENTRIES",
+  4096,
+);
+const MAX_TRANSCRIPT_SCAN_BYTES = readPositiveIntEnv(
+  "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_SCAN_BYTES",
+  2 * 1024 * 1024,
+);
+const AGENT_TURN_TIMEOUT_SECONDS = readPositiveIntEnv(
+  "OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS",
+  420,
+);
+const CODEX_BINDING_NAMESPACE = "app-server-thread-bindings";
 
-function stateDir() {
-  return process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME, ".openclaw");
+function readPositiveIntEnv(name, fallback) {
+  const text = String(process.env[name] ?? fallback).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${name} must be a positive integer; got: ${text}`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer; got: ${text}`);
+  }
+  return value;
 }
 
-function configPath() {
-  return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir(), "openclaw.json");
+function readTextFileBounded(filePath, label, maxBytes = MAX_TEXT_FILE_BYTES) {
+  const stat = fs.statSync(filePath);
+  if (stat.size > maxBytes) {
+    throw new Error(`${label} exceeded ${maxBytes} bytes: ${filePath}`);
+  }
+  return fs.readFileSync(filePath, "utf8");
 }
 
-function realPathMaybe(filePath) {
+function readTextFileTail(filePath, label, maxBytes = MAX_ERROR_TAIL_BYTES) {
+  if (!fs.existsSync(filePath)) {
+    return "";
+  }
+  const stat = fs.statSync(filePath);
+  if (stat.size <= maxBytes) {
+    return fs.readFileSync(filePath, "utf8");
+  }
+  const fd = fs.openSync(filePath, "r");
   try {
-    return fs.realpathSync(filePath);
-  } catch {
-    return path.resolve(filePath);
+    const buffer = Buffer.alloc(maxBytes);
+    fs.readSync(fd, buffer, 0, maxBytes, stat.size - maxBytes);
+    return `[${label} truncated to last ${maxBytes} bytes]\n${buffer.toString("utf8")}`;
+  } finally {
+    fs.closeSync(fd);
   }
 }
 
-function assertPathInside(parentPath, childPath, label) {
-  const parent = realPathMaybe(parentPath);
-  const child = realPathMaybe(childPath);
-  const relative = path.relative(parent, child);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`${label} resolved outside ${parentPath}: ${child}`);
+function readCodexBinding(sessionId, sessionKey) {
+  const dbPath = path.join(stateDir(), "state", "openclaw.sqlite");
+  if (!fs.existsSync(dbPath)) {
+    throw new Error(`missing OpenClaw state database: ${dbPath}`);
+  }
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const stableSessionKey = String(sessionKey ?? "").trim();
+    const key = stableSessionKey
+      ? `session-key:main:${createHash("sha256").update(stableSessionKey).digest("base64url")}`
+      : `session:main:${sessionId}`;
+    const row = db
+      .prepare(
+        `SELECT value_json
+           FROM plugin_state_entries
+          WHERE plugin_id = ? AND namespace = ? AND entry_key = ?
+            AND (expires_at IS NULL OR expires_at > ?)`,
+      )
+      .get("codex", CODEX_BINDING_NAMESPACE, key, Date.now());
+    if (!row || typeof row.value_json !== "string") {
+      throw new Error(`missing Codex app-server binding row: ${key}`);
+    }
+    const stored = JSON.parse(row.value_json);
+    if (stored?.version !== 1 || stored.state !== "active" || !stored.binding) {
+      throw new Error(`invalid Codex app-server binding row ${key}: ${row.value_json}`);
+    }
+    if (stored.sessionId && stored.sessionId !== sessionId) {
+      throw new Error(
+        `Codex app-server binding row ${key} belongs to session ${stored.sessionId}, expected ${sessionId}`,
+      );
+    }
+    return stored.binding;
+  } finally {
+    db.close();
   }
 }
 
@@ -55,7 +144,7 @@ function configure() {
             mode: "yolo",
             approvalPolicy: "never",
             sandbox: "danger-full-access",
-            requestTimeoutMs: 420_000,
+            requestTimeoutMs: AGENT_TURN_TIMEOUT_SECONDS * 1000,
           },
         },
       },
@@ -72,7 +161,7 @@ function configure() {
       },
       workspace: path.join(state, "workspace"),
       skipBootstrap: true,
-      timeoutSeconds: 420,
+      timeoutSeconds: AGENT_TURN_TIMEOUT_SECONDS,
     },
   };
   fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
@@ -80,22 +169,11 @@ function configure() {
 }
 
 function readInstallRecord() {
-  const indexPath = path.join(stateDir(), "plugins", "installs.json");
-  const index = readJson(indexPath);
-  const record = (index.installRecords || index.records || {}).codex;
+  const record = readInstallRecords().codex;
   if (!record) {
     throw new Error("missing codex install record");
   }
   return record;
-}
-
-function readInstallRecords() {
-  const indexPath = path.join(stateDir(), "plugins", "installs.json");
-  if (!fs.existsSync(indexPath)) {
-    return {};
-  }
-  const index = readJson(indexPath);
-  return index.installRecords || index.records || {};
 }
 
 function normalizePluginSpec(spec) {
@@ -198,10 +276,6 @@ function assertPlugin() {
   }
 }
 
-function managedNpmRoot() {
-  return path.join(stateDir(), "npm");
-}
-
 function codexInstallPath() {
   const record = readInstallRecord();
   if (typeof record.installPath !== "string" || record.installPath.length === 0) {
@@ -210,19 +284,13 @@ function codexInstallPath() {
   return record.installPath.replace(/^~(?=$|\/)/u, process.env.HOME);
 }
 
-function findPackageJson(packageName) {
-  const parts = packageName.split("/");
-  const candidates =
-    packageName.startsWith("@") && parts.length === 2
-      ? [
-          path.join(codexInstallPath(), "node_modules", parts[0], parts[1], "package.json"),
-          path.join(managedNpmRoot(), "node_modules", parts[0], parts[1], "package.json"),
-        ]
-      : [
-          path.join(codexInstallPath(), "node_modules", packageName, "package.json"),
-          path.join(managedNpmRoot(), "node_modules", packageName, "package.json"),
-        ];
-  return candidates.find((candidate) => fs.existsSync(candidate));
+function codexNpmProjectRoot() {
+  return npmProjectRootForInstalledPackage(codexInstallPath(), "@openclaw/codex");
+}
+
+function findCodexPackageJson(packageName) {
+  const projectRoot = codexNpmProjectRoot();
+  return findPackageJson(packageName, [projectRoot, codexInstallPath(), managedNpmRoot()]);
 }
 
 function assertNpmDeps() {
@@ -240,7 +308,7 @@ function assertNpmDeps() {
     throw new Error(`unexpected codex package name: ${pluginPackage.name}`);
   }
 
-  const openAiCodexPackageJson = findPackageJson("@openai/codex");
+  const openAiCodexPackageJson = findCodexPackageJson("@openai/codex");
   if (!openAiCodexPackageJson) {
     throw new Error("missing @openai/codex dependency under .openclaw/npm");
   }
@@ -256,6 +324,7 @@ function assertNpmDeps() {
 function resolveCodexBin() {
   const commandName = process.platform === "win32" ? "codex.cmd" : "codex";
   const candidates = [
+    path.join(codexNpmProjectRoot(), "node_modules", ".bin", commandName),
     path.join(codexInstallPath(), "node_modules", ".bin", commandName),
     path.join(managedNpmRoot(), "node_modules", ".bin", commandName),
   ];
@@ -263,7 +332,7 @@ function resolveCodexBin() {
   if (candidate) {
     return candidate;
   }
-  const packageJson = findPackageJson("@openai/codex");
+  const packageJson = findCodexPackageJson("@openai/codex");
   if (!packageJson) {
     throw new Error("cannot resolve Codex binary without @openai/codex package");
   }
@@ -288,7 +357,7 @@ function printCodexBin() {
 
 function assertPreflight() {
   const marker = process.argv[3];
-  const output = fs.readFileSync("/tmp/openclaw-codex-preflight.log", "utf8");
+  const output = readTextFileBounded("/tmp/openclaw-codex-preflight.log", "Codex preflight log");
   if (!output.includes(marker)) {
     throw new Error(`Codex CLI preflight did not contain ${marker}:\n${output}`);
   }
@@ -300,10 +369,17 @@ function listFilesRecursive(root) {
   }
   const files = [];
   const stack = [root];
+  let visited = 0;
   while (stack.length > 0) {
     const current = stack.pop();
     const entries = fs.readdirSync(current, { withFileTypes: true });
     for (const entry of entries) {
+      visited += 1;
+      if (visited > MAX_TRANSCRIPT_WALK_ENTRIES) {
+        throw new Error(
+          `native Codex session transcript walk exceeded ${MAX_TRANSCRIPT_WALK_ENTRIES} entries under ${root}`,
+        );
+      }
       const fullPath = path.join(current, entry.name);
       if (entry.isDirectory()) {
         stack.push(fullPath);
@@ -317,21 +393,29 @@ function listFilesRecursive(root) {
 
 function assertNativeCodexSessionEvidence(params) {
   const roots = params.roots.filter((root) => fs.existsSync(root));
-  const files = roots.flatMap((root) =>
-    listFilesRecursive(root).filter((filePath) => filePath.endsWith(".jsonl")),
-  );
+  const files = roots
+    .flatMap((root) => listFilesRecursive(root).filter((filePath) => filePath.endsWith(".jsonl")))
+    .map((filePath) => ({ filePath, stat: fs.statSync(filePath) }))
+    .toSorted((left, right) => right.stat.mtimeMs - left.stat.mtimeMs)
+    .slice(0, MAX_TRANSCRIPT_FILES);
   if (files.length === 0) {
     throw new Error(
       `missing native Codex session transcript files; checked ${params.roots.join(", ")}`,
     );
   }
-  const matchingFile = files.find((filePath) => {
-    const content = fs.readFileSync(filePath, "utf8");
+  let scannedBytes = 0;
+  const matchingFile = files.find(({ filePath, stat }) => {
+    const readableBytes = Math.min(stat.size, MAX_TEXT_FILE_BYTES);
+    if (scannedBytes + readableBytes > MAX_TRANSCRIPT_SCAN_BYTES) {
+      return false;
+    }
+    scannedBytes += readableBytes;
+    const content = readTextFileTail(filePath, "native Codex session transcript", readableBytes);
     return content.includes(params.marker) || content.includes(params.threadId);
-  });
+  })?.filePath;
   if (!matchingFile) {
     throw new Error(
-      `native Codex session transcripts did not contain ${params.marker} or ${params.threadId}; checked ${files.join(", ")}`,
+      `native Codex session transcripts did not contain ${params.marker} or ${params.threadId}; scanned ${scannedBytes} bytes across ${files.length} newest files: ${files.map((entry) => entry.filePath).join(", ")}`,
     );
   }
   assertPathInside(params.codexHome, matchingFile, "native Codex session transcript");
@@ -341,12 +425,10 @@ function assertAgentTurn() {
   const marker = process.argv[3];
   const sessionId = process.argv[4];
   const modelRef = process.argv[5];
-  const stdout = fs.readFileSync("/tmp/openclaw-codex-agent.json", "utf8");
-  const stderr = fs.existsSync("/tmp/openclaw-codex-agent.err")
-    ? fs.readFileSync("/tmp/openclaw-codex-agent.err", "utf8")
-    : "";
+  const stdout = readTextFileBounded("/tmp/openclaw-codex-agent.json", "OpenClaw agent JSON");
+  const stderr = readTextFileTail("/tmp/openclaw-codex-agent.err", "OpenClaw agent stderr");
   const response = JSON.parse(stdout);
-  const text = (response.payloads || []).map((payload) => payload?.text || "").join("\n");
+  const text = extractAgentReplyTexts(JSON.stringify(response)).join("\n");
   if (!text.includes(marker)) {
     throw new Error(
       `OpenClaw agent reply did not contain ${marker}:\nstdout=${stdout}\nstderr=${stderr}`,
@@ -363,10 +445,13 @@ function assertAgentTurn() {
   const sessionsDir = path.join(stateDir(), "agents", "main", "sessions");
   const storePath = path.join(sessionsDir, "sessions.json");
   const store = readJson(storePath);
-  const entry = Object.values(store).find((candidate) => candidate?.sessionId === sessionId);
-  if (!entry) {
+  const sessionMatch = Object.entries(store).find(
+    ([, candidate]) => candidate?.sessionId === sessionId,
+  );
+  if (!sessionMatch) {
     throw new Error(`missing session store entry for ${sessionId}: ${JSON.stringify(store)}`);
   }
+  const [sessionKey, entry] = sessionMatch;
   if (entry.agentHarnessId !== "codex") {
     throw new Error(`expected codex harness in session entry, got ${entry.agentHarnessId}`);
   }
@@ -377,9 +462,8 @@ function assertAgentTurn() {
     throw new Error(`missing OpenClaw session file: ${entry.sessionFile}`);
   }
 
-  const bindingPath = `${entry.sessionFile}.codex-app-server.json`;
-  const binding = readJson(bindingPath);
-  if (binding.schemaVersion !== 1 || typeof binding.threadId !== "string") {
+  const binding = readCodexBinding(sessionId, sessionKey);
+  if (typeof binding.threadId !== "string") {
     throw new Error(`invalid Codex app-server binding: ${JSON.stringify(binding)}`);
   }
   if (binding.model !== modelRef.split("/").slice(1).join("/")) {
@@ -394,8 +478,8 @@ function assertAgentTurn() {
     path.join(agentDir, "codex-home"),
     path.join(agentDir, "agent", "codex-home"),
     path.join(path.dirname(agentDir), "codex-home"),
-  ].filter((entry, index, entries) => entries.indexOf(entry) === index);
-  const codexHome = codexHomes.find((entry) => fs.existsSync(entry));
+  ].filter((entryValue, index, entries) => entries.indexOf(entryValue) === index);
+  const codexHome = codexHomes.find((entryLocal) => fs.existsSync(entryLocal));
   if (!codexHome) {
     throw new Error(`missing isolated Codex home; checked ${codexHomes.join(", ")}`);
   }
@@ -438,10 +522,16 @@ function assertAgentError() {
     );
   }
   const stdout = fs.existsSync("/tmp/openclaw-codex-agent-after-uninstall.json")
-    ? fs.readFileSync("/tmp/openclaw-codex-agent-after-uninstall.json", "utf8")
+    ? readTextFileTail(
+        "/tmp/openclaw-codex-agent-after-uninstall.json",
+        "post-uninstall agent stdout",
+      )
     : "";
   const stderr = fs.existsSync("/tmp/openclaw-codex-agent-after-uninstall.err")
-    ? fs.readFileSync("/tmp/openclaw-codex-agent-after-uninstall.err", "utf8")
+    ? readTextFileTail(
+        "/tmp/openclaw-codex-agent-after-uninstall.err",
+        "post-uninstall agent stderr",
+      )
     : "";
   const combined = `${stdout}\n${stderr}`;
   if (

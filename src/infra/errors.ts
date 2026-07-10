@@ -1,3 +1,4 @@
+// Normalizes error objects for codes, names, messages, and redacted logs.
 import { redactSensitiveText } from "../logging/redact.js";
 
 export function extractErrorCode(err: unknown): string | undefined {
@@ -85,6 +86,10 @@ export function formatErrorMessage(err: unknown): string {
       seen.add(cause);
       if (cause instanceof Error) {
         appendCauseMessage(cause.message);
+        const code = extractErrorCode(cause);
+        if (code) {
+          appendCauseMessage(code);
+        }
         cause = cause.cause;
       } else if (typeof cause === "string") {
         appendCauseMessage(cause);
@@ -129,6 +134,8 @@ export function stringifyNonErrorCause(value: unknown): string {
   }
 }
 
+export { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+
 export function formatUncaughtError(err: unknown): string {
   if (extractErrorCode(err) === "INVALID_CONFIG") {
     return formatErrorMessage(err);
@@ -157,9 +164,6 @@ export function detectErrorKind(err: unknown): ErrorKind | undefined {
   ) {
     return "refusal";
   }
-  if (message.includes("timeout") || code === "etimedout" || code === "timeout") {
-    return "timeout";
-  }
   if (
     message.includes("rate limit") ||
     message.includes("too many requests") ||
@@ -167,6 +171,9 @@ export function detectErrorKind(err: unknown): ErrorKind | undefined {
     code === "429"
   ) {
     return "rate_limit";
+  }
+  if (message.includes("timeout") || code === "etimedout" || code === "timeout") {
+    return "timeout";
   }
   if (
     message.includes("context length") ||

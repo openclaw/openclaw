@@ -1,5 +1,7 @@
+// Irc plugin module implements setup core behavior.
 import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
 import type { DmPolicy } from "openclaw/plugin-sdk/config-contracts";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   applyAccountNameToChannelSection,
@@ -40,8 +42,8 @@ export function parsePort(raw: string, fallback: number): number {
   if (!trimmed) {
     return fallback;
   }
-  const parsed = Number.parseInt(trimmed, 10);
-  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 65535) {
+  const parsed = parseStrictPositiveInteger(trimmed);
+  if (parsed === undefined || parsed > 65535) {
     return fallback;
   }
   return parsed;
@@ -52,14 +54,8 @@ function validateIrcPortInput(input: ChannelSetupInput): string | null {
   if (raw === undefined || raw === null || raw === "") {
     return null;
   }
-  const value = String(raw).trim();
-  if (!/^\+?\d+$/.test(value)) {
-    return "IRC port must be between 1 and 65535.";
-  }
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= 65535
-    ? null
-    : "IRC port must be between 1 and 65535.";
+  const parsed = parseStrictPositiveInteger(String(raw));
+  return parsed !== undefined && parsed <= 65535 ? null : "IRC port must be between 1 and 65535.";
 }
 
 export function updateIrcAccountConfig(

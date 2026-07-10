@@ -1,3 +1,4 @@
+// Msteams plugin module implements remote media behavior.
 import { saveResponseMedia, type SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import type { SsrFPolicy } from "../../runtime-api.js";
 import { getMSTeamsRuntime } from "../runtime.js";
@@ -7,17 +8,9 @@ import type { MSTeamsInboundMedia } from "./types.js";
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 /**
- * Direct fetch path used when the caller's `fetchImpl` has already validated
- * the URL against a hostname allowlist (for example `safeFetchWithPolicy`).
- *
- * Bypasses the strict SSRF dispatcher on `readRemoteMediaBuffer` because:
- *   1. The pinned undici dispatcher used by `readRemoteMediaBuffer` is incompatible
- *      with Node 24+'s built-in undici v7 (fails with "invalid onRequestStart
- *      method"), which silently breaks SharePoint/OneDrive downloads. See
- *      issue #63396.
- *   2. SSRF protection is already enforced by the caller's `fetchImpl`
- *      (`safeFetch` validates every redirect hop against the hostname
- *      allowlist before following).
+ * Direct save path used when the caller supplies the already-guarded fetch
+ * implementation. This lets Teams-specific auth fallback own the request
+ * sequence while keeping redirect and DNS pinning inside `safeFetchWithPolicy`.
  */
 async function saveRemoteMediaDirect(params: {
   url: string;
@@ -28,13 +21,19 @@ async function saveRemoteMediaDirect(params: {
   originalFilename?: string;
 }): Promise<SavedRemoteMedia> {
   const response = await params.fetchImpl(params.url, { redirect: "follow" });
-  return await saveResponseMedia(response, {
-    sourceUrl: params.url,
-    filePathHint: params.filePathHint,
-    maxBytes: params.maxBytes,
-    fallbackContentType: params.contentTypeHint,
-    originalFilename: params.originalFilename,
-  });
+  try {
+    return await saveResponseMedia(response, {
+      sourceUrl: params.url,
+      filePathHint: params.filePathHint,
+      maxBytes: params.maxBytes,
+      fallbackContentType: params.contentTypeHint,
+      originalFilename: params.originalFilename,
+    });
+  } finally {
+    // Guarded responses release their pinned dispatcher on EOF or cancel. A
+    // storage failure can happen before the body is read, so always cancel it.
+    await response.body?.cancel().catch(() => undefined);
+  }
 }
 
 export async function downloadAndStoreMSTeamsRemoteMedia(params: {
@@ -47,10 +46,8 @@ export async function downloadAndStoreMSTeamsRemoteMedia(params: {
   placeholder?: string;
   preserveFilenames?: boolean;
   /**
-   * Opt into a direct fetch path that bypasses `readRemoteMediaBuffer`'s strict
-   * SSRF dispatcher. Required for SharePoint/OneDrive downloads on Node 24+
-   * (see issue #63396). Only safe when the supplied `fetchImpl` has already
-   * validated the URL against a hostname allowlist.
+   * Opt into the Teams-specific guarded fetch path. Only safe when the
+   * supplied `fetchImpl` enforces the attachment fetch policy itself.
    */
   useDirectFetch?: boolean;
 }): Promise<MSTeamsInboundMedia> {

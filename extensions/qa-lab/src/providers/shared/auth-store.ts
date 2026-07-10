@@ -1,5 +1,7 @@
+// Qa Lab plugin module implements auth store behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type QaAuthProfileCredential =
   | {
@@ -39,7 +41,7 @@ type QaSecretRef = {
 
 type QaLegacyOAuthRef = {
   source: "openclaw-credentials";
-  provider: "openai-codex";
+  provider: "openai";
   id: string;
 };
 
@@ -166,12 +168,8 @@ function isQaLegacyOAuthRef(value: unknown): value is QaLegacyOAuthRef {
   return (
     isRecord(value) &&
     value.source === "openclaw-credentials" &&
-    value.provider === "openai-codex" &&
+    value.provider === "openai" &&
     typeof value.id === "string" &&
     /^[a-f0-9]{32}$/.test(value.id)
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

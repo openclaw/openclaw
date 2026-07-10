@@ -1,3 +1,4 @@
+// Browser tests cover pw tools core.screenshots element selector plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -107,7 +108,7 @@ describe("pw-tools-core", () => {
     await fs.writeFile(uploadPath, "fixture", "utf8");
     const canonicalUploadPath = await fs.realpath(uploadPath);
     const fileChooser = { setFiles: vi.fn(async () => {}) };
-    const waitForEvent = vi.fn(async (eventValue: string, _opts: unknown) => fileChooser);
+    const waitForEvent = vi.fn(async (_eventValue: string, _opts: unknown) => fileChooser);
     setPwToolsCoreCurrentPage({
       waitForEvent,
       keyboard: { press: vi.fn(async () => {}) },

@@ -1,3 +1,4 @@
+// Discord plugin module implements channel actions behavior.
 import { createUnionActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
@@ -5,36 +6,32 @@ import type {
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { createDiscordActionGate, listDiscordAccountIds } from "./accounts.js";
 import { readDiscordComponentSpec } from "./components.js";
 import { withDiscordInboundEventDeliveryMetadata } from "./inbound-event-delivery.js";
+import { isTrustedRequesterGuildAdminAction } from "./trusted-requester-actions.js";
 
-const trustedRequesterGuildAdminActions = new Set<ChannelMessageActionName>([
+const localExecutionActions = new Set<ChannelMessageActionName>([
+  "send",
+  "upload-file",
+  "thread-reply",
+  "sticker",
   "emoji-upload",
   "sticker-upload",
-  "role-add",
-  "role-remove",
-  "channel-create",
-  "channel-edit",
-  "channel-delete",
-  "channel-move",
-  "category-create",
-  "category-edit",
-  "category-delete",
   "event-create",
 ]);
 
-let discordChannelActionsRuntimePromise:
-  | Promise<typeof import("./channel-actions.runtime.js")>
-  | undefined;
-
-async function loadDiscordChannelActionsRuntime() {
-  discordChannelActionsRuntimePromise ??= import("./channel-actions.runtime.js");
-  return await discordChannelActionsRuntimePromise;
+function resolveDiscordActionExecutionMode({ action }: { action: ChannelMessageActionName }) {
+  return localExecutionActions.has(action) ? "local" : "gateway";
 }
+
+const loadDiscordChannelActionsRuntime = createLazyRuntimeModule(
+  () => import("./channel-actions.runtime.js"),
+);
 
 function listDiscoverableDiscordAccounts(cfg: OpenClawConfig) {
   return listDiscordAccountIds(cfg)
@@ -178,12 +175,13 @@ function describeDiscordMessageTool({
 }
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
-  resolveExecutionMode: ({ action }) =>
-    action === "read" || action === "search" ? "gateway" : "local",
+  // Credential-only Discord actions run in the gateway when one is available.
+  // Send/file-style actions stay local because core owns their thread, media,
+  // component, and client-local payload semantics.
+  resolveExecutionMode: resolveDiscordActionExecutionMode,
   describeMessageTool: describeDiscordMessageTool,
   requiresTrustedRequesterSender: ({ action, toolContext }) =>
-    normalizeOptionalString(toolContext?.currentChannelProvider)?.toLowerCase() === "discord" &&
-    trustedRequesterGuildAdminActions.has(action),
+    Boolean(toolContext) && isTrustedRequesterGuildAdminAction(action),
   extractToolSend: ({ args }) => {
     const action = normalizeOptionalString(args.action) ?? "";
     if (action === "sendMessage") {
@@ -246,6 +244,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     cfg,
     accountId,
     requesterSenderId,
+    senderIsOwner,
     toolContext,
     mediaAccess,
     mediaLocalRoots,
@@ -261,6 +260,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       cfg,
       accountId,
       requesterSenderId,
+      senderIsOwner,
       toolContext,
       mediaAccess,
       mediaLocalRoots,

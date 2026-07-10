@@ -1,3 +1,4 @@
+// Covers exec approval forwarding to channel plugins.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
@@ -261,12 +262,9 @@ const TARGETS_CFG = makeTargetsCfg([{ channel: "slack", to: "U123" }]);
 function createForwarder(params: {
   cfg: OpenClawConfig;
   deliver?: ReturnType<typeof vi.fn>;
-  resolveSessionTarget?: () => {
-    channel: string;
-    to: string;
-    accountId?: string;
-    threadId?: string | number;
-  } | null;
+  resolveSessionTarget?: NonNullable<
+    NonNullable<Parameters<typeof createExecApprovalForwarder>[0]>["resolveSessionTarget"]
+  >;
 }) {
   const deliver = params.deliver ?? vi.fn().mockResolvedValue([]);
   const deps: NonNullable<Parameters<typeof createExecApprovalForwarder>[0]> = {
@@ -528,6 +526,39 @@ describe("exec approval forwarder", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
+  it.each(["webchat", "tui"])(
+    "preserves configured session fallback for %s-originated exec approvals",
+    async (turnSourceChannel) => {
+      const resolveSessionTarget = vi.fn(async ({ request }) =>
+        request.request.turnSourceChannel
+          ? null
+          : { channel: "telegram" as const, to: "123", accountId: "default" },
+      );
+      const cfg = {
+        approvals: { exec: { enabled: true, mode: "session" } },
+      } as OpenClawConfig;
+      const { deliver, forwarder } = createForwarder({ cfg, resolveSessionTarget });
+
+      await expect(
+        forwarder.handleRequested({
+          ...baseRequest,
+          request: {
+            ...baseRequest.request,
+            turnSourceChannel,
+          },
+        }),
+      ).resolves.toBe(true);
+      expect(resolveSessionTarget).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({
+            request: expect.objectContaining({ turnSourceChannel: null }),
+          }),
+        }),
+      );
+      expect(deliver).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("attaches shared presentation approval buttons in forwarded fallback payloads", async () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({
@@ -602,7 +633,7 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("🔒 Exec approval required");
     expect(text).toContain("Command: `echo hello`");
     expect(text).toContain("Expires in: 5s");
-    expect(text).toContain("Reply with: /approve <id> allow-once|allow-always|deny");
+    expect(text).toContain("Reply with: /approve req-1 allow-once|allow-always|deny");
   });
 
   it("includes command analysis warnings in fallback delivery text", () => {
@@ -639,7 +670,7 @@ describe("exec approval forwarder", () => {
     ).resolves.toBe(true);
     await Promise.resolve();
     const text = getFirstDeliveryText(deliver);
-    expect(text).toContain("Reply with: /approve <id> allow-once|deny");
+    expect(text).toContain("Reply with: /approve req-1 allow-once|deny");
     expect(text).not.toContain("allow-once|allow-always|deny");
     expect(text).toContain("Allow Always is unavailable");
   });
@@ -763,8 +794,8 @@ describe("exec approval forwarder", () => {
 
       expect(deliver).toHaveBeenCalledTimes(1);
       const expiryText =
-        (deliver.mock.calls[0]?.[0] as { payloads?: Array<{ text?: string }> }).payloads?.[0]
-          ?.text ?? "";
+        (deliver.mock.calls[0][0] as { payloads?: Array<{ text?: string }> }).payloads?.[0]?.text ??
+        "";
       expect(expiryText).toContain("expired");
 
       // After expiry, the pending entry should be cleaned up.
@@ -791,7 +822,7 @@ describe("exec approval forwarder", () => {
             // During expiry delivery, try to resolve the same request.
             // If pending.delete happened before delivery, handleResolved
             // will not find the entry and will not deliver a resolved notice.
-            const resolveResult = await forwarder.handleResolved({
+            await forwarder.handleResolved({
               id: baseRequest.id,
               decision: "allow-once",
               resolvedBy: "slack:U123",

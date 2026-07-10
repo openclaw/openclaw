@@ -1,3 +1,4 @@
+// Whatsapp tests cover inbound.media plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -66,6 +67,7 @@ function createInMemoryKeyedStore<T>() {
 const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
 const upsertPairingRequestMock = vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true });
 const saveMediaStreamSpy = vi.fn();
+const downloadMediaMessageMock = vi.hoisted(() => vi.fn());
 let currentMockSocket:
   | {
       ev: import("node:events").EventEmitter;
@@ -140,15 +142,27 @@ vi.mock("openclaw/plugin-sdk/media-store", async () => {
   };
 });
 
-vi.mock("./runtime.js", () => ({
-  getOptionalWhatsAppRuntime: () => undefined,
-  getWhatsAppRuntime: () => ({
-    state: {
-      openKeyedStore: () => createInMemoryKeyedStore(),
-    },
-  }),
-  setWhatsAppRuntime: vi.fn(),
-}));
+vi.mock("./runtime.js", async () => {
+  const { createChannelIngressQueueForTests: createChannelIngressQueue } = await Promise.resolve(
+    vi.importActual<typeof import("openclaw/plugin-sdk/plugin-state-test-runtime")>(
+      "openclaw/plugin-sdk/plugin-state-test-runtime",
+    ),
+  );
+  const stateDir = `/tmp/openclaw-whatsapp-inbound-media-${Date.now()}-${Math.random()}`;
+  return {
+    getOptionalWhatsAppRuntime: () => undefined,
+    getWhatsAppRuntime: () => ({
+      state: {
+        resolveStateDir: () => stateDir,
+        openKeyedStore: () => createInMemoryKeyedStore(),
+        openChannelIngressQueue: (
+          options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
+        ) => createChannelIngressQueue({ ...options, channelId: "whatsapp" }),
+      },
+    }),
+    setWhatsAppRuntime: vi.fn(),
+  };
+});
 
 const HOME = path.join(os.tmpdir(), `openclaw-inbound-media-${crypto.randomUUID()}`);
 const ORIGINAL_HOME = process.env.HOME;
@@ -172,7 +186,9 @@ vi.mock("baileys", async () => {
   return {
     ...actual,
     DisconnectReason: actual.DisconnectReason ?? { loggedOut: 401 },
-    downloadMediaMessage: vi.fn().mockImplementation(() => Readable.from([jpegBuffer])),
+    downloadMediaMessage: downloadMediaMessageMock.mockImplementation(() =>
+      Readable.from([jpegBuffer]),
+    ),
     extractMessageContent: vi.fn((message: MockMessageInput) => mockExtractMessageContent(message)),
     getContentType: vi.fn((message: MockMessageInput) => mockGetContentType(message)),
     isJidGroup: vi.fn((jid: string | undefined | null) => mockIsJidGroup(jid)),
@@ -209,6 +225,7 @@ vi.mock("./session.js", async () => {
 let monitorWebInbox: typeof import("./inbound.js").monitorWebInbox;
 let resetWebInboundDedupe: typeof import("./inbound.js").resetWebInboundDedupe;
 let createWaSocket: typeof import("./session.js").createWaSocket;
+let waitForWaConnection: typeof import("./session.js").waitForWaConnection;
 
 async function waitForMessage(onMessage: ReturnType<typeof vi.fn>) {
   await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(1), {
@@ -243,6 +260,7 @@ describe("web inbound media saves with extension", () => {
   beforeEach(() => {
     vi.useRealTimers();
     currentMockSocket = undefined;
+    downloadMediaMessageMock.mockClear();
     saveMediaStreamSpy.mockClear();
     resetWebInboundDedupe();
   });
@@ -250,7 +268,7 @@ describe("web inbound media saves with extension", () => {
   beforeAll(async () => {
     await fs.rm(HOME, { recursive: true, force: true });
     ({ monitorWebInbox, resetWebInboundDedupe } = await import("./inbound.js"));
-    ({ createWaSocket } = await import("./session.js"));
+    ({ createWaSocket, waitForWaConnection } = await import("./session.js"));
   });
 
   afterAll(async () => {
@@ -260,6 +278,30 @@ describe("web inbound media saves with extension", () => {
     } else {
       process.env.HOME = ORIGINAL_HOME;
     }
+  });
+
+  it("closes the socket when connection wait fails before inbox attach", async () => {
+    const error = new Error("connection timeout");
+    vi.mocked(waitForWaConnection).mockRejectedValueOnce(error);
+
+    await expect(
+      monitorWebInbox({
+        cfg: {
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          messages: { messagePrefix: undefined, responsePrefix: undefined },
+          web: { whatsapp: { connectTimeoutMs: 12_345 } },
+        } as never,
+        verbose: false,
+        onMessage: vi.fn(),
+        accountId: "default",
+        authDir: path.join(HOME, "wa-auth"),
+      }),
+    ).rejects.toThrow("connection timeout");
+
+    expect(vi.mocked(waitForWaConnection)).toHaveBeenCalledWith(currentMockSocket, {
+      timeoutMs: 12_345,
+    });
+    expect(currentMockSocket?.ws.close).toHaveBeenCalledOnce();
   });
 
   it("stores image extension and keeps document filename", async () => {
@@ -288,7 +330,7 @@ describe("web inbound media saves with extension", () => {
     });
 
     const first = await waitForMessage(onMessage);
-    const mediaPath = requireMediaPath(first.mediaPath);
+    const mediaPath = requireMediaPath(first.payload.media?.path);
     expect(path.extname(mediaPath)).toBe(".jpg");
     const stat = await fs.stat(mediaPath);
     expect(stat.size).toBeGreaterThan(0);
@@ -307,7 +349,7 @@ describe("web inbound media saves with extension", () => {
     });
 
     const second = await waitForMessage(onMessage);
-    expect(second.mediaFileName).toBe(fileName);
+    expect(second.payload.media?.fileName).toBe(fileName);
     expect(saveMediaStreamSpy).toHaveBeenCalled();
     const lastCall = latestSaveMediaStreamCall();
     expect(lastCall[4]).toBe(fileName);
@@ -353,8 +395,8 @@ describe("web inbound media saves with extension", () => {
     });
 
     const inbound = await waitForMessage(onMessage);
-    expect(inbound.replyToBody).toBe("<media:image>");
-    const mediaPath = requireMediaPath(inbound.mediaPath);
+    expect(inbound.quote?.body).toBe("<media:image>");
+    const mediaPath = requireMediaPath(inbound.payload.media?.path);
     expect(path.extname(mediaPath)).toBe(".jpg");
     expect(saveMediaStreamSpy).toHaveBeenCalled();
     const lastCall = latestSaveMediaStreamCall();
@@ -395,6 +437,40 @@ describe("web inbound media saves with extension", () => {
     expect(saveMediaStreamSpy).toHaveBeenCalled();
     const lastCall = latestSaveMediaStreamCall();
     expect(lastCall[3]).toBe(1 * 1024 * 1024);
+
+    await listener.close();
+  });
+
+  it("replaces a failed image placeholder with an unavailable notice", async () => {
+    downloadMediaMessageMock.mockRejectedValueOnce(new Error("expired media reference"));
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        messages: { messagePrefix: undefined, responsePrefix: undefined },
+      } as never,
+      verbose: false,
+      onMessage,
+      accountId: "default",
+      authDir: path.join(HOME, "wa-auth"),
+    });
+    const realSock = await getMockSocket();
+
+    realSock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "img-failed", fromMe: false, remoteJid: "111@s.whatsapp.net" },
+          message: { imageMessage: { mimetype: "image/jpeg" } },
+          messageTimestamp: 1_700_000_006,
+        },
+      ],
+    });
+
+    const inbound = await waitForMessage(onMessage);
+    expect(inbound.payload.body).toBe("[whatsapp attachment unavailable]");
+    expect(inbound.payload.commandBody).toBe("<media:image>");
+    expect(inbound.payload.media).toBeUndefined();
 
     await listener.close();
   });

@@ -1,3 +1,4 @@
+// Context-engine public types define the pluggable context-management lifecycle.
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 
@@ -13,11 +14,13 @@ export type AssembleResult = {
    * preemptive overflow prechecks. The returned `messages` are always the
    * prompt sent to the model; this only affects the precheck's token comparison.
    *
-   * - "assembled": the precheck uses only the assembled prompt's estimate.
+   * - "assembled": the generic precheck uses only the assembled prompt's estimate
+   *   unless the engine owns compaction; owning engines manage prompt admission.
    * - "preassembly_may_overflow": the precheck takes the maximum of the
    *   assembled estimate and the pre-assembly (unwindowed) session-history
    *   estimate. Engines opt into this when their assembled view can hide an
-   *   overflow that would still affect the underlying transcript.
+   *   overflow that would still affect the underlying transcript. This opt-in
+   *   keeps the generic precheck active even for engines that own compaction.
    *
    * Defaults to "assembled".
    */
@@ -46,6 +49,18 @@ export type ContextEngineProjection = {
 
 export type ContextEngineOperation = "agent-run" | "manual-compact" | "subagent-spawn";
 
+export type ContextEngineRuntimeMode = "normal" | "fallback" | "degraded";
+
+export type ContextEngineSelectionSource = "configured" | "default" | "unknown";
+
+export type ContextEngineRuntimeReasonCode =
+  | "provider_timeout"
+  | "provider_unavailable"
+  | "rate_limited"
+  | "context_overflow"
+  | "runtime_unavailable"
+  | "unknown";
+
 export type ContextEngineHostCapability =
   | "bootstrap"
   | "assemble-before-prompt"
@@ -62,6 +77,73 @@ export type ContextEngineHostRequirements = {
   unsupportedMessage?: string;
 };
 
+export type ContextEngineRuntimeSettings = {
+  schemaVersion: 1;
+  runtime: {
+    host: "openclaw";
+    mode: ContextEngineRuntimeMode;
+    harnessId: string | null;
+    runtimeId: string | null;
+  };
+  model: {
+    requested: string | null;
+    resolved: string | null;
+    provider: string | null;
+    family: string | null;
+  };
+  contextEngineSelection: {
+    selectedId: string | null;
+    source: ContextEngineSelectionSource;
+  };
+  executionHost: {
+    id: string | null;
+    label: string | null;
+  };
+  limits: {
+    promptTokenBudget: number | null;
+    maxOutputTokens: number | null;
+  };
+  diagnostics: {
+    fallbackReason: ContextEngineRuntimeReasonCode | null;
+    degradedReason: ContextEngineRuntimeReasonCode | null;
+  };
+};
+
+export class ContextEngineRuntimeSettingsUnavailableError extends Error {
+  readonly code = "context_engine_runtime_settings_unavailable";
+  constructor(message?: string) {
+    super(message);
+    this.name = "ContextEngineRuntimeSettingsUnavailableError";
+  }
+}
+
+export class ContextEngineRuntimeSettingsUnsupportedError extends Error {
+  readonly code = "context_engine_runtime_settings_unsupported";
+  constructor(message?: string) {
+    super(message);
+    this.name = "ContextEngineRuntimeSettingsUnsupportedError";
+  }
+}
+
+/**
+ * Typed session target for compaction results.
+ *
+ * Makes the storage mode explicit and carries precise session identity
+ * instead of a raw file path string. File-backed is the only storage mode
+ * today; new storage modes extend this union when they ship.
+ */
+export type ContextEngineSessionTarget = {
+  kind: "file";
+  /** Agent that owns the session, when the caller resolved it. */
+  agentId?: string;
+  /** Runtime session id for the post-compaction live session. */
+  sessionId: string;
+  /** Stable session key used for aliases, policy, and store resolution. */
+  sessionKey?: string;
+  /** Live transcript artifact path for the file-backed session. */
+  sessionFile: string;
+};
+
 export type CompactResult = {
   ok: boolean;
   compacted: boolean;
@@ -74,10 +156,37 @@ export type CompactResult = {
     details?: unknown;
     /** Session id after compaction, when the runtime rotated transcripts. */
     sessionId?: string;
-    /** Session file after compaction, when the runtime rotated transcripts. */
+    /** Typed post-compaction live session target; successor when the runtime rotated transcripts. */
+    sessionTarget?: ContextEngineSessionTarget;
+    /**
+     * Raw session file path after compaction.
+     *
+     * @deprecated Use `sessionTarget`. Shipped plugin-sdk contract: released
+     * third-party context engines (v2026.6.x and earlier) report rotated
+     * transcripts through this field. Remove once typed session targets are
+     * the only successor contract.
+     */
     sessionFile?: string;
   };
 };
+
+/**
+ * Resolve the post-compaction live transcript identity from a compact result.
+ *
+ * Prefers the typed `sessionTarget`. Reading the raw fields is the named
+ * compat path for shipped third-party engines that predate `sessionTarget`;
+ * it is removed together with the deprecated `sessionFile` result field.
+ */
+export function resolveCompactionSuccessorTranscript(result: CompactResult): {
+  sessionId?: string;
+  sessionFile?: string;
+} {
+  const target = result.result?.sessionTarget;
+  return {
+    sessionId: target?.sessionId ?? result.result?.sessionId,
+    sessionFile: target?.sessionFile ?? result.result?.sessionFile,
+  };
+}
 
 export type IngestResult = {
   /** Whether the message was ingested (false if duplicate or no-op) */
@@ -159,6 +268,9 @@ type ContextEnginePromptCacheUsage = {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  contextUsage?:
+    | { state: "available"; promptTokens: number; totalTokens: number }
+    | { state: "unavailable" };
   total?: number;
 };
 
@@ -205,6 +317,8 @@ export type ContextEngineRuntimeContext = Record<string, unknown> & {
   allowDeferredCompactionExecution?: boolean;
   /** Runtime-resolved context window budget for the active model call. */
   tokenBudget?: number;
+  /** Selected agent harness id when compaction delegates back to the runtime. */
+  agentHarnessId?: string;
   /** Best-effort current prompt/context token estimate for this turn. */
   currentTokenCount?: number;
   /** Optional prompt-cache telemetry for cache-aware engines. */
@@ -243,6 +357,7 @@ export interface ContextEngine {
     sessionId: string;
     sessionKey?: string;
     sessionFile: string;
+    runtimeSettings?: ContextEngineRuntimeSettings;
   }): Promise<BootstrapResult>;
 
   /**
@@ -255,6 +370,7 @@ export interface ContextEngine {
     sessionId: string;
     sessionKey?: string;
     sessionFile: string;
+    runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<ContextEngineMaintenanceResult>;
 
@@ -299,6 +415,7 @@ export interface ContextEngine {
     /** Optional model context token budget for proactive compaction. */
     tokenBudget?: number;
     /** Optional runtime-owned context for engines that need caller state. */
+    runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<void>;
 
@@ -320,6 +437,7 @@ export interface ContextEngine {
     model?: string;
     /** The incoming user prompt for this turn (useful for retrieval-oriented engines). */
     prompt?: string;
+    runtimeSettings?: ContextEngineRuntimeSettings;
   }): Promise<AssembleResult>;
 
   /**
@@ -345,6 +463,7 @@ export interface ContextEngine {
     compactionTarget?: "budget" | "threshold";
     customInstructions?: string;
     /** Optional runtime-owned context for engines that need caller state. */
+    runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
     /**
      * Optional abort signal honored before and during compaction. The host

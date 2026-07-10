@@ -10,11 +10,9 @@ Providers:
 - **Mock** (dev/no network)
 
 Docs: `https://docs.openclaw.ai/plugins/voice-call`
-Plugin system: `https://docs.openclaw.ai/plugin`
+Plugin system: `https://docs.openclaw.ai/tools/plugin`
 
-## Install (local dev)
-
-### Option A: install via OpenClaw (recommended)
+## Install
 
 ```bash
 openclaw plugins install @openclaw/voice-call
@@ -22,7 +20,7 @@ openclaw plugins install @openclaw/voice-call
 
 Restart the Gateway afterwards.
 
-### Option B: copy into your global extensions folder (dev)
+## Local dev install
 
 ```bash
 PLUGIN_HOME=~/.openclaw/extensions
@@ -100,6 +98,7 @@ Put under `plugins.entries.voice-call.config`:
 Notes:
 
 - Twilio/Telnyx/Plivo require a **publicly reachable** webhook URL.
+- Twilio defaults to US1. For a non-US Region, set `twilio.region` to `ie1` or `au1` and use credentials created in that Region; see [Twilio's regional REST API guide](https://www.twilio.com/docs/global-infrastructure/using-the-twilio-rest-api-in-a-non-us-region).
 - `mock` is a local dev provider (no network calls).
 - Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.
 - If older configs still use `provider: "log"`, `twilio.from`, or legacy `streaming.*` OpenAI keys, run `openclaw doctor --fix` to rewrite them.

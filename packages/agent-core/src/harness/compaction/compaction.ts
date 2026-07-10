@@ -1,21 +1,26 @@
-import type {
-  AssistantMessage,
-  Context,
-  Model,
-  SimpleStreamOptions,
-  StreamFn,
-  Usage,
-} from "../../llm.js";
+// Agent Core module implements compaction behavior.
+import {
+  resolveClaudeFable5ModelIdentity,
+  type AssistantMessage,
+  type Context,
+  type Model,
+  type SimpleStreamOptions,
+  type StreamFn,
+  type Usage,
+} from "../../../../llm-core/src/index.js";
+import { resolveAgentReasoningOption } from "../../reasoning.js";
 import {
   type AgentCoreCompletionRuntimeDeps,
   resolveAgentCoreCompleteFn,
 } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
 import {
+  asAgentMessage,
   convertToLlm,
   createBranchSummaryMessage,
   createCompactionSummaryMessage,
   createCustomMessage,
+  type HarnessMessage,
 } from "../messages.js";
 import { buildSessionContext } from "../session/session.js";
 import {
@@ -32,6 +37,7 @@ import {
   extractFileOpsFromMessage,
   type FileOperations,
   formatFileOperations,
+  getCompactionContentBlockText,
   serializeConversation,
 } from "./utils.js";
 
@@ -83,19 +89,23 @@ function getMessageFromEntry(entry: SessionTreeEntry): AgentMessage | undefined 
     return entry.message;
   }
   if (entry.type === "custom_message") {
-    return createCustomMessage(
-      entry.customType,
-      entry.content,
-      entry.display,
-      entry.details,
-      entry.timestamp,
+    return asAgentMessage(
+      createCustomMessage(
+        entry.customType,
+        entry.content,
+        entry.display,
+        entry.details,
+        entry.timestamp,
+      ),
     );
   }
   if (entry.type === "branch_summary") {
-    return createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp);
+    return asAgentMessage(createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp));
   }
   if (entry.type === "compaction") {
-    return createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp);
+    return asAgentMessage(
+      createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp),
+    );
   }
   return undefined;
 }
@@ -138,6 +148,9 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 
 /** Calculate total context tokens from provider usage. */
 export function calculateContextTokens(usage: Usage): number {
+  if (usage.contextUsage?.state === "available") {
+    return usage.contextUsage.totalTokens;
+  }
   return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
 }
 function getAssistantUsage(msg: AgentMessage): Usage | undefined {
@@ -174,7 +187,7 @@ export interface ContextUsageEstimate {
   tokens: number;
   /** Tokens reported by the most recent assistant usage block. */
   usageTokens: number;
-  /** Estimated tokens after the most recent assistant usage block. */
+  /** Estimated tokens not covered by usable provider usage. */
   trailingTokens: number;
   /** Index of the message that provided usage, or null when none exists. */
   lastUsageIndex: number | null;
@@ -185,7 +198,7 @@ function getLastAssistantUsageInfo(
 ): { usage: Usage; index: number } | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const usage = getAssistantUsage(messages[i]);
-    if (usage) {
+    if (usage && usage.contextUsage?.state !== "unavailable") {
       return { usage, index: i };
     }
   }
@@ -235,27 +248,41 @@ export function shouldCompact(
   return contextTokens > contextWindow - settings.reserveTokens;
 }
 
+const IMAGE_BLOCK_CHARS = 4800;
+
+function countContentBlockChars(
+  content: Array<{ type: string; content?: unknown; text?: string }>,
+): number {
+  let chars = 0;
+  for (const block of content) {
+    if (block.type === "image") {
+      chars += IMAGE_BLOCK_CHARS;
+    } else {
+      chars += getCompactionContentBlockText(block).length;
+    }
+  }
+  return chars;
+}
+
 /** Estimate token count for one message using a conservative character heuristic. */
 export function estimateTokens(message: AgentMessage): number {
   let chars = 0;
+  const harnessMessage = message as HarnessMessage;
 
-  switch (message.role) {
+  switch (harnessMessage.role) {
     case "user": {
-      const content = (message as { content: string | Array<{ type: string; text?: string }> })
-        .content;
+      const content = (
+        harnessMessage as { content: string | Array<{ type: string; text?: string }> }
+      ).content;
       if (typeof content === "string") {
         chars = content.length;
       } else if (Array.isArray(content)) {
-        for (const block of content) {
-          if (block.type === "text" && block.text) {
-            chars += block.text.length;
-          }
-        }
+        chars = countContentBlockChars(content);
       }
       return Math.ceil(chars / 4);
     }
     case "assistant": {
-      const assistant = message;
+      const assistant = harnessMessage;
       for (const block of assistant.content) {
         if (block.type === "text") {
           chars += block.text.length;
@@ -269,27 +296,20 @@ export function estimateTokens(message: AgentMessage): number {
     }
     case "custom":
     case "toolResult": {
-      if (typeof message.content === "string") {
-        chars = message.content.length;
+      if (typeof harnessMessage.content === "string") {
+        chars = harnessMessage.content.length;
       } else {
-        for (const block of message.content) {
-          if (block.type === "text" && block.text) {
-            chars += block.text.length;
-          }
-          if (block.type === "image") {
-            chars += 4800;
-          }
-        }
+        chars = countContentBlockChars(harnessMessage.content);
       }
       return Math.ceil(chars / 4);
     }
     case "bashExecution": {
-      chars = message.command.length + message.output.length;
+      chars = harnessMessage.command.length + harnessMessage.output.length;
       return Math.ceil(chars / 4);
     }
     case "branchSummary":
     case "compactionSummary": {
-      chars = message.summary.length;
+      chars = harnessMessage.summary.length;
       return Math.ceil(chars / 4);
     }
   }
@@ -306,7 +326,7 @@ function findValidCutPoints(
     const entry = entries[i];
     switch (entry.type) {
       case "message": {
-        const role = entry.message.role;
+        const role = (entry.message as HarnessMessage).role;
         switch (role) {
           case "bashExecution":
           case "custom":
@@ -351,7 +371,7 @@ export function findTurnStartIndex(
       return i;
     }
     if (entry.type === "message") {
-      const role = entry.message.role;
+      const role = (entry.message as HarnessMessage).role;
       if (role === "user" || role === "bashExecution") {
         return i;
       }
@@ -361,7 +381,7 @@ export function findTurnStartIndex(
 }
 
 /** Cut point selected for compaction. */
-export interface CutPointResult {
+interface CutPointResult {
   /** Index of the first entry retained after compaction. */
   firstKeptEntryIndex: number;
   /** Index of the turn-start entry when the cut splits a turn, otherwise -1. */
@@ -393,9 +413,10 @@ export function findCutPoint(
     const messageTokens = estimateTokens(entry.message);
     accumulatedTokens += messageTokens;
     if (accumulatedTokens >= keepRecentTokens) {
-      for (let c = 0; c < cutPoints.length; c++) {
-        if (cutPoints[c] >= i) {
-          cutIndex = cutPoints[c];
+      cutIndex = cutPoints[cutPoints.length - 1];
+      for (const cutPoint of cutPoints) {
+        if (cutPoint >= i) {
+          cutIndex = cutPoint;
           break;
         }
       }
@@ -423,7 +444,7 @@ export function findCutPoint(
   };
 }
 
-export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI coding assistant, then produce a structured summary following the exact format specified.
+export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
 
 Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
 
@@ -508,8 +529,11 @@ function createSummarizationOptions(
   thinkingLevel: ThinkingLevel | undefined,
 ): SimpleStreamOptions {
   const options: SimpleStreamOptions = { maxTokens, signal, apiKey, headers };
-  if (model.reasoning && thinkingLevel && thinkingLevel !== "off") {
-    options.reasoning = thinkingLevel;
+  const fableReasoning =
+    (model.api === "anthropic-messages" || model.api === "bedrock-converse-stream") &&
+    resolveClaudeFable5ModelIdentity(model) !== undefined;
+  if ((model.reasoning || fableReasoning) && thinkingLevel) {
+    options.reasoning = resolveAgentReasoningOption(model, thinkingLevel);
   }
   return options;
 }
@@ -525,6 +549,63 @@ async function completeSummarization(
     return (await streamFn(model, context, options)).result();
   }
   return await resolveAgentCoreCompleteFn(runtime)(model, context, options);
+}
+
+/** Runs one summarization completion and maps abort/error stops to CompactionError. */
+async function runSummarizationCompletion(params: {
+  promptText: string;
+  model: Model;
+  maxTokens: number;
+  apiKey: string | undefined;
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+  thinkingLevel?: ThinkingLevel;
+  streamFn?: StreamFn;
+  runtime?: AgentCoreCompletionRuntimeDeps;
+  errorLabel: string;
+}): Promise<Result<string, CompactionError>> {
+  const summarizationMessages = [
+    {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: params.promptText }],
+      timestamp: Date.now(),
+    },
+  ];
+
+  const response = await completeSummarization(
+    params.model,
+    { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
+    createSummarizationOptions(
+      params.model,
+      params.maxTokens,
+      params.apiKey,
+      params.headers,
+      params.signal,
+      params.thinkingLevel,
+    ),
+    params.streamFn,
+    params.runtime,
+  );
+  if (response.stopReason === "aborted") {
+    return err(
+      new CompactionError("aborted", response.errorMessage || `${params.errorLabel} aborted`),
+    );
+  }
+  if (response.stopReason === "error") {
+    return err(
+      new CompactionError(
+        "summarization_failed",
+        `${params.errorLabel} failed: ${response.errorMessage || "Unknown error"}`,
+      ),
+    );
+  }
+
+  return ok(
+    response.content
+      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .map((c) => c.text)
+      .join("\n"),
+  );
 }
 
 /** Generate or update a conversation summary for compaction. */
@@ -557,39 +638,18 @@ export async function generateSummary(
   }
   promptText += basePrompt;
 
-  const summarizationMessages = [
-    {
-      role: "user" as const,
-      content: [{ type: "text" as const, text: promptText }],
-      timestamp: Date.now(),
-    },
-  ];
-
-  const response = await completeSummarization(
+  return await runSummarizationCompletion({
+    promptText,
     model,
-    { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-    createSummarizationOptions(model, maxTokens, apiKey, headers, signal, thinkingLevel),
+    maxTokens,
+    apiKey,
+    headers,
+    signal,
+    thinkingLevel,
     streamFn,
     runtime,
-  );
-  if (response.stopReason === "aborted") {
-    return err(new CompactionError("aborted", response.errorMessage || "Summarization aborted"));
-  }
-  if (response.stopReason === "error") {
-    return err(
-      new CompactionError(
-        "summarization_failed",
-        `Summarization failed: ${response.errorMessage || "Unknown error"}`,
-      ),
-    );
-  }
-
-  const textContent = response.content
-    .filter((c): c is { type: "text"; text: string } => c.type === "text")
-    .map((c) => c.text)
-    .join("\n");
-
-  return ok(textContent);
+    errorLabel: "Summarization",
+  });
 }
 
 /** Prepared inputs for a compaction run. */
@@ -743,9 +803,9 @@ export async function compact(
   let summary: string;
 
   if (isSplitTurn && turnPrefixMessages.length > 0) {
-    const [historyResult, turnPrefixResult] = await Promise.all([
+    const historyResult =
       messagesToSummarize.length > 0
-        ? generateSummary(
+        ? await generateSummary(
             messagesToSummarize,
             model,
             settings.reserveTokens,
@@ -758,22 +818,21 @@ export async function compact(
             streamFn,
             runtime,
           )
-        : Promise.resolve(ok<string, CompactionError>("No prior history.")),
-      generateTurnPrefixSummary(
-        turnPrefixMessages,
-        model,
-        settings.reserveTokens,
-        apiKey,
-        headers,
-        signal,
-        thinkingLevel,
-        streamFn,
-        runtime,
-      ),
-    ]);
+        : ok<string, CompactionError>("No prior history.");
     if (!historyResult.ok) {
       return err(historyResult.error);
     }
+    const turnPrefixResult = await generateTurnPrefixSummary(
+      turnPrefixMessages,
+      model,
+      settings.reserveTokens,
+      apiKey,
+      headers,
+      signal,
+      thinkingLevel,
+      streamFn,
+      runtime,
+    );
     if (!turnPrefixResult.ok) {
       return err(turnPrefixResult.error);
     }
@@ -826,39 +885,16 @@ async function generateTurnPrefixSummary(
   const llmMessages = convertToLlm(messages);
   const conversationText = serializeConversation(llmMessages);
   const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
-  const summarizationMessages = [
-    {
-      role: "user" as const,
-      content: [{ type: "text" as const, text: promptText }],
-      timestamp: Date.now(),
-    },
-  ];
-
-  const response = await completeSummarization(
+  return await runSummarizationCompletion({
+    promptText,
     model,
-    { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-    createSummarizationOptions(model, maxTokens, apiKey, headers, signal, thinkingLevel),
+    maxTokens,
+    apiKey,
+    headers,
+    signal,
+    thinkingLevel,
     streamFn,
     runtime,
-  );
-  if (response.stopReason === "aborted") {
-    return err(
-      new CompactionError("aborted", response.errorMessage || "Turn prefix summarization aborted"),
-    );
-  }
-  if (response.stopReason === "error") {
-    return err(
-      new CompactionError(
-        "summarization_failed",
-        `Turn prefix summarization failed: ${response.errorMessage || "Unknown error"}`,
-      ),
-    );
-  }
-
-  return ok(
-    response.content
-      .filter((c): c is { type: "text"; text: string } => c.type === "text")
-      .map((c) => c.text)
-      .join("\n"),
-  );
+    errorLabel: "Turn prefix summarization",
+  });
 }

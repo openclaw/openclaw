@@ -1,3 +1,5 @@
+// Feishu plugin module implements bot content behavior.
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -91,7 +93,7 @@ export function resolveFeishuGroupSession(params: {
         (replyInThread ? messageId : null))
       : null;
 
-  let peerId = chatId;
+  let peerId;
   switch (groupSessionScope) {
     case "group_sender":
       peerId = buildFeishuConversationId({ chatId, scope: "group_sender", senderOpenId });
@@ -111,7 +113,6 @@ export function resolveFeishuGroupSession(params: {
           })
         : buildFeishuConversationId({ chatId, scope: "group_sender", senderOpenId });
       break;
-    case "group":
     default:
       peerId = chatId;
       break;
@@ -140,17 +141,8 @@ export function parseMessageContent(content: string, messageType: string): strin
     if (messageType === "text") {
       return parsed.text || "";
     }
-    if (["image", "file", "audio", "video", "media", "sticker"].includes(messageType)) {
-      if (messageType === "audio") {
-        const speechToText =
-          typeof parsed.speech_to_text === "string" ? parsed.speech_to_text.trim() : "";
-        if (speechToText) {
-          return speechToText;
-        }
-      }
-      const placeholder = inferPlaceholder(messageType);
-      const fileName = typeof parsed.file_name === "string" ? parsed.file_name.trim() : "";
-      return fileName ? `${placeholder} (${fileName})` : placeholder;
+    if (FEISHU_MEDIA_MESSAGE_TYPES.has(messageType)) {
+      return formatFeishuMediaContent(parsed, messageType).body;
     }
     if (messageType === "share_chat") {
       if (parsed && typeof parsed === "object") {
@@ -173,6 +165,60 @@ export function parseMessageContent(content: string, messageType: string): strin
     return content;
   } catch {
     return content;
+  }
+}
+
+const FEISHU_MEDIA_MESSAGE_TYPES = new Set(["image", "file", "audio", "video", "media", "sticker"]);
+
+function formatFeishuMediaContent(
+  parsed: Record<string, unknown>,
+  messageType: string,
+): { body: string; mediaPlaceholder?: string; unavailableBody?: string } {
+  const speechToText =
+    messageType === "audio" && typeof parsed.speech_to_text === "string"
+      ? parsed.speech_to_text.trim()
+      : "";
+  if (speechToText) {
+    return { body: speechToText };
+  }
+
+  const placeholder = inferPlaceholder(messageType);
+  const fileName = typeof parsed.file_name === "string" ? parsed.file_name.trim() : "";
+  const body = fileName ? `${placeholder} (${fileName})` : placeholder;
+  return {
+    body,
+    mediaPlaceholder: placeholder,
+    unavailableBody: fileName || undefined,
+  };
+}
+
+export function resolveFeishuMediaFailurePresentation(
+  content: string,
+  messageType: string,
+): { mediaPlaceholder?: string; unavailableBody?: string } {
+  if (messageType === "post") {
+    return {
+      unavailableBody: parsePostContent(content, {
+        renderMediaPlaceholders: false,
+        emptyTextFallback: "",
+      }).textContent,
+    };
+  }
+  if (!FEISHU_MEDIA_MESSAGE_TYPES.has(messageType)) {
+    return {};
+  }
+  try {
+    const parsed: unknown = JSON.parse(content);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    const presentation = formatFeishuMediaContent(parsed as Record<string, unknown>, messageType);
+    return {
+      mediaPlaceholder: presentation.mediaPlaceholder,
+      unavailableBody: presentation.unavailableBody,
+    };
+  } catch {
+    return {};
   }
 }
 
@@ -233,7 +279,9 @@ export function parseMergeForwardContent(params: { content: string; log?: Feishu
 
   log?.(`feishu: merge_forward contains ${subMessages.length} sub-messages`);
   subMessages.sort(
-    (a, b) => Number.parseInt(a.create_time || "0", 10) - Number.parseInt(b.create_time || "0", 10),
+    (a, b) =>
+      (parseStrictNonNegativeInteger(a.create_time) ?? 0) -
+      (parseStrictNonNegativeInteger(b.create_time) ?? 0),
   );
 
   const lines = ["[Merged and Forwarded Messages]"];
@@ -377,18 +425,19 @@ export async function resolveFeishuMediaList(params: {
   maxBytes: number;
   log?: (msg: string) => void;
   accountId?: string;
-}): Promise<FeishuMediaInfo[]> {
+}): Promise<{ media: FeishuMediaInfo[]; unavailableCount: number }> {
   const { cfg, messageId, messageType, content, maxBytes, log, accountId } = params;
   const mediaTypes = ["image", "file", "audio", "video", "media", "sticker", "post"];
   if (!mediaTypes.includes(messageType)) {
-    return [];
+    return { media: [], unavailableCount: 0 };
   }
 
   const out: FeishuMediaInfo[] = [];
+  let unavailableCount = 0;
   if (messageType === "post") {
     const { imageKeys, mediaKeys } = parsePostContent(content);
     if (imageKeys.length === 0 && mediaKeys.length === 0) {
-      return [];
+      return { media: [], unavailableCount: 0 };
     }
     if (imageKeys.length > 0) {
       log?.(`feishu: post message contains ${imageKeys.length} embedded image(s)`);
@@ -415,6 +464,7 @@ export async function resolveFeishuMediaList(params: {
         });
         log?.(`feishu: downloaded embedded image ${imageKey}, saved to ${saved.path}`);
       } catch (err) {
+        unavailableCount += 1;
         log?.(`feishu: failed to download embedded image ${imageKey}: ${String(err)}`);
       }
     }
@@ -442,21 +492,22 @@ export async function resolveFeishuMediaList(params: {
         });
         log?.(`feishu: downloaded embedded media ${media.fileKey}, saved to ${saved.path}`);
       } catch (err) {
+        unavailableCount += 1;
         log?.(`feishu: failed to download embedded media ${media.fileKey}: ${String(err)}`);
       }
     }
-    return out;
+    return { media: out, unavailableCount };
   }
 
   const mediaKeys = parseMediaKeys(content, messageType);
   if (!mediaKeys.imageKey && !mediaKeys.fileKey) {
-    return [];
+    return { media: [], unavailableCount: 1 };
   }
 
   try {
     const fileKey = mediaKeys.fileKey || mediaKeys.imageKey;
     if (!fileKey) {
-      return [];
+      return { media: [], unavailableCount: 1 };
     }
     const result = await saveMessageResourceFeishu({
       cfg,
@@ -479,7 +530,8 @@ export async function resolveFeishuMediaList(params: {
     });
     log?.(`feishu: downloaded ${messageType} media, saved to ${saved.path}`);
   } catch (err) {
+    unavailableCount += 1;
     log?.(`feishu: failed to download ${messageType} media: ${String(err)}`);
   }
-  return out;
+  return { media: out, unavailableCount };
 }

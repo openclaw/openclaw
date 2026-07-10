@@ -1,3 +1,4 @@
+// Declarative CLI command catalog for startup policy and fast-path routing.
 import { hasFlag } from "./argv.js";
 
 export type CliCommandPluginLoadPolicy =
@@ -35,6 +36,7 @@ export type CliCommandPathPolicy = {
   routeConfigGuard: CliRouteConfigGuardPolicy;
   loadPlugins: CliCommandPluginLoadPolicy;
   pluginRegistry: CliPluginRegistryPolicy;
+  ownsProtocolStdout: boolean;
   hideBanner: boolean;
   ensureCliPath: boolean;
   networkProxy: CliNetworkProxyPolicyResolver;
@@ -50,6 +52,7 @@ export type CliCommandCatalogEntry = {
   };
 };
 
+/** Command path registry used before Commander registration has loaded all plugins. */
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["crestodian"],
@@ -124,7 +127,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: {
       loadPlugins: "never",
       pluginRegistry: { scope: "channels" },
-      routeConfigGuard: "when-suppressed",
       ensureCliPath: false,
       networkProxy: "bypass",
     },
@@ -180,7 +182,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["commitments"],
     policy: {
       ensureCliPath: false,
-      routeConfigGuard: "when-suppressed",
       loadPlugins: "never",
       networkProxy: "bypass",
     },
@@ -225,7 +226,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: {
       ensureCliPath: false,
-      routeConfigGuard: "when-suppressed",
       loadPlugins: "never",
       networkProxy: "bypass",
     },
@@ -236,7 +236,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: {
       ensureCliPath: false,
-      routeConfigGuard: "when-suppressed",
       loadPlugins: "never",
       networkProxy: "bypass",
     },
@@ -246,7 +245,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["tasks"],
     policy: {
       ensureCliPath: false,
-      routeConfigGuard: "when-suppressed",
       loadPlugins: "never",
       networkProxy: "bypass",
     },
@@ -261,6 +259,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { loadPlugins: "never", ensureCliPath: false, networkProxy: "bypass" },
   },
   { commandPath: ["acp"], policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["acp"],
+    exact: true,
+    policy: { ownsProtocolStdout: true },
+  },
   { commandPath: ["approvals"], policy: { networkProxy: "bypass" } },
   { commandPath: ["backup"], policy: { bypassConfigGuard: true, networkProxy: "bypass" } },
   { commandPath: ["chat"], policy: { networkProxy: "bypass" } },
@@ -270,16 +273,26 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["daemon"], policy: { networkProxy: "bypass" } },
   { commandPath: ["devices"], policy: { networkProxy: "bypass" } },
   {
+    commandPath: ["worktrees"],
+    policy: { loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
     commandPath: ["doctor"],
     policy: {
       bypassConfigGuard: true,
       loadPlugins: "never",
     },
   },
+  { commandPath: ["exec-approvals"], policy: { networkProxy: "bypass" } },
   { commandPath: ["exec-policy"], policy: { networkProxy: "bypass" } },
   { commandPath: ["hooks"], policy: { networkProxy: "bypass" } },
   { commandPath: ["logs"], policy: { networkProxy: "bypass" } },
   { commandPath: ["mcp"], policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["mcp", "serve"],
+    exact: true,
+    policy: { ownsProtocolStdout: true },
+  },
   {
     commandPath: ["node"],
     policy: { networkProxy: "bypass" },

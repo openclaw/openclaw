@@ -1,10 +1,21 @@
+// Tool handler tests cover tool lifecycle events, read-path diagnostics,
+// messaging tool capture, approvals, and emitted summaries.
 import type { AgentEvent } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   onAgentEvent as registerAgentEventListener,
   resetAgentEventsForTest,
 } from "../infra/agent-events.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  buildBlockedToolResult,
+  recordAdjustedParamsForToolCall,
+  recordStructuredReplayTrustForToolCall,
+  testing as beforeToolCallTesting,
+} from "./agent-tools.before-tool-call.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
+import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
@@ -17,17 +28,22 @@ import type {
 
 type ToolExecutionStartEvent = Extract<AgentEvent, { type: "tool_execution_start" }>;
 type ToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>;
+type PayloadToolMetas = Parameters<typeof buildEmbeddedRunPayloads>[0]["toolMetas"];
 
 function createTestContext(): {
   ctx: ToolHandlerContext;
   warn: ReturnType<typeof vi.fn>;
-  onBlockReplyFlush: ReturnType<typeof vi.fn>;
+  onBlockReplyFlush: ReturnType<
+    typeof vi.fn<NonNullable<ToolHandlerContext["params"]["onBlockReplyFlush"]>>
+  >;
   onAgentEvent: ReturnType<typeof vi.fn>;
   onExecutionPhase: ReturnType<typeof vi.fn>;
   trace: ReturnType<typeof vi.fn>;
   isEnabled: ReturnType<typeof vi.fn>;
 } {
-  const onBlockReplyFlush = vi.fn();
+  // Shared tool-handler fixture exposes the callbacks and state maps mutated by
+  // start/update/end handlers without booting a full subscription.
+  const onBlockReplyFlush = vi.fn<NonNullable<ToolHandlerContext["params"]["onBlockReplyFlush"]>>();
   const onAgentEvent = vi.fn();
   const onExecutionPhase = vi.fn();
   const warn = vi.fn();
@@ -73,10 +89,12 @@ function createTestContext(): {
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
       messagingToolSourceReplyPayloads: [],
+      messageToolOnlySourceReplyDelivered: false,
       messagingToolSentTargets: [],
       successfulCronAdds: 0,
       deterministicApprovalPromptSent: false,
       toolExecutionSinceLastBlockReply: false,
+      assistantMessageIndex: 0,
     },
     shouldEmitToolResult: () => false,
     shouldEmitToolOutput: () => false,
@@ -95,11 +113,26 @@ function requireEvent(
   predicate: (event: CapturedAgentEvent) => boolean,
   label: string,
 ): CapturedAgentEvent {
+  // Tool lifecycle tests emit multiple event streams; this helper makes the
+  // expected event kind explicit before field assertions.
   const event = events.find(predicate);
   if (!event) {
     throw new Error(`expected ${label} event`);
   }
   return event;
+}
+
+function requirePayloadToolMetas(
+  toolMetas: ToolHandlerContext["state"]["toolMetas"],
+): PayloadToolMetas {
+  return toolMetas.map((toolMeta) => {
+    if (!toolMeta.toolName) {
+      throw new Error("expected tool metadata to include toolName");
+    }
+    return toolMeta.meta === undefined
+      ? { toolName: toolMeta.toolName }
+      : { toolName: toolMeta.toolName, meta: toolMeta.meta };
+  });
 }
 
 function requireString(value: unknown, label: string): string {
@@ -224,6 +257,10 @@ describe("handleToolExecutionStart read path checks", () => {
     await handleToolExecutionStart(ctx, evt);
 
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
+    expect(onBlockReplyFlush).toHaveBeenCalledWith({
+      reason: "tool_start",
+      assistantMessageIndex: 0,
+    });
     expect(onExecutionPhase).toHaveBeenCalledWith({
       phase: "tool_execution_started",
       tool: "read",
@@ -319,9 +356,115 @@ describe("handleToolExecutionStart read path checks", () => {
     expect(ctx.state.itemActiveIds.has("tool:tool-await-flush")).toBe(true);
     expect(ctx.state.itemActiveIds.has("command:tool-await-flush")).toBe(true);
   });
+
+  it("keeps processing tool start when progress callbacks throw", async () => {
+    const { ctx, warn, onExecutionPhase, onAgentEvent } = createTestContext();
+    onExecutionPhase.mockImplementation(() => {
+      throw new Error("phase exploded");
+    });
+    onAgentEvent.mockImplementation(() => {
+      throw new Error("event exploded");
+    });
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-callback-throws",
+      args: { command: "echo hi" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    expect(ctx.state.toolMetaById.has("tool-callback-throws")).toBe(true);
+    expect(ctx.state.itemStartedCount).toBe(2);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("tool execution phase callback failed"),
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("tool agent event callback failed"));
+  });
+
+  it("does not leak unhandled rejections when tool start progress rejects", async () => {
+    const { ctx, warn, onAgentEvent } = createTestContext();
+    onAgentEvent.mockRejectedValue(new Error("progress failed"));
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-callback-rejects",
+      args: { command: "echo hi" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+    await Promise.resolve();
+
+    expect(ctx.state.toolMetaById.has("tool-callback-rejects")).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("tool agent event callback failed"));
+  });
+
+  it("preserves hidden tool telemetry while marking its channel progress private", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "wait",
+      toolCallId: "tool-code-wait",
+      args: { runId: "cm_1" },
+      hideFromChannelProgress: true,
+    });
+    handleToolExecutionUpdate(ctx, {
+      type: "tool_execution_update",
+      toolName: "wait",
+      toolCallId: "tool-code-wait",
+      args: { runId: "cm_1" },
+      partialResult: { status: "waiting" },
+      hideFromChannelProgress: true,
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "wait",
+      toolCallId: "tool-code-wait",
+      isError: false,
+      result: { details: { status: "completed" } },
+      hideFromChannelProgress: true,
+    });
+
+    const lifecycleEvents = onAgentEvent.mock.calls
+      .map((call) => call[0] as CapturedAgentEvent)
+      .filter((event) => event.data?.name === "wait");
+    expect(lifecycleEvents).not.toHaveLength(0);
+    expect(lifecycleEvents.every((event) => event.data?.hideFromChannelProgress === true)).toBe(
+      true,
+    );
+  });
+
+  it("keeps an unmarked catalog tool named wait visible", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "wait",
+      toolCallId: "tool-catalog-wait",
+      args: {},
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "wait",
+      toolCallId: "tool-catalog-wait",
+      isError: false,
+      result: { details: { status: "completed" } },
+    });
+
+    const lifecycleEvents = onAgentEvent.mock.calls
+      .map((call) => call[0] as CapturedAgentEvent)
+      .filter((event) => event.data?.name === "wait");
+    expect(lifecycleEvents).not.toHaveLength(0);
+    expect(lifecycleEvents.every((event) => event.data?.hideFromChannelProgress !== true)).toBe(
+      true,
+    );
+  });
 });
 
-describe("handleToolExecutionEnd cron.add commitment tracking", () => {
+describe("handleToolExecutionEnd cron mutation tracking", () => {
   it("increments successfulCronAdds when cron add succeeds", async () => {
     const { ctx } = createTestContext();
     await handleToolExecutionStart(
@@ -346,6 +489,7 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     );
 
     expect(ctx.state.successfulCronAdds).toBe(1);
+    expect(ctx.state.replayState.hadPotentialSideEffects).toBe(true);
   });
 
   it("does not increment successfulCronAdds when cron add fails", async () => {
@@ -374,6 +518,348 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     expect(ctx.state.successfulCronAdds).toBe(0);
     expect(ctx.state.itemCompletedCount).toBe(1);
     expect(ctx.state.itemActiveIds.size).toBe(0);
+  });
+
+  it.each([
+    ["exec", "openclaw cron add --at +1h --message 'follow up' --name reminder"],
+    ["exec", "npx openclaw cron add --at=+1h --message 'follow up'"],
+    ["exec", "bunx openclaw cron add --at +1h --message 'follow up'"],
+    ["exec", "pnpm exec openclaw cron add --at +1h --message 'follow up'"],
+    ["exec", "pnpm dlx openclaw cron add --at +1h --message 'follow up'"],
+    ["exec", "npx -y openclaw cron add --at +1h --message 'follow up'"],
+    ["exec", "bunx --bun openclaw cron add --at +1h --message 'follow up'"],
+    ["exec", "pnpm dlx openclaw@latest cron add --at +1h --message 'follow up'"],
+    ["exec", "npx openclaw@latest cron add --at +1h --message 'follow up'"],
+    ["exec", "bunx openclaw@latest cron add --at +1h --message 'follow up'"],
+    ["exec", "/usr/local/bin/openclaw cron add --at +1h --message 'follow up'"],
+    ["bash", "corepack pnpm exec openclaw cron add --at +1h --message 'follow up'"],
+    ["exec", "env OPENCLAW_PROFILE=test openclaw cron add --at +1h --message 'follow up'"],
+    ["exec", "openclaw cron create --at +1h --message 'follow up'"],
+    ["exec", "openclaw --profile work cron create --at +1h --message 'follow up'"],
+    ["exec", "openclaw --dev cron add --at +1h --message 'follow up'"],
+    ["exec", "openclaw --log-level debug --no-color cron add --at +1h --message 'follow up'"],
+    ["exec", "openclaw --container helper cron add --at +1h --message 'follow up'"],
+    ["exec", "openclaw cron add --at +1h --message 'follow up || wait'"],
+    ["exec", "openclaw cron add --at +1h --message 'follow up' 2>&1"],
+  ] as const)("increments successfulCronAdds when %s runs %s", async (toolName, command) => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName,
+        toolCallId: "tool-shell-cron-add",
+        args: { command },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName,
+        toolCallId: "tool-shell-cron-add",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            exitCode: 0,
+            durationMs: 12,
+            aggregated: "warning text and human-readable success output",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.successfulCronAdds).toBe(1);
+  });
+
+  it("does not increment successfulCronAdds when shell cron add fails", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-cron-add-failed",
+        args: {
+          command: "openclaw cron add --at +1h --message 'follow up' --name reminder",
+        },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-cron-add-failed",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            exitCode: 1,
+            aggregated: "Cron job name is required.",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.successfulCronAdds).toBe(0);
+  });
+
+  it.each([
+    ["openclaw cron list --json", "a different cron action"],
+    ["echo openclaw cron add --at +1h", "a command that only mentions cron add"],
+    ["openclaw cron add --at '+1h", "an unterminated shell argument"],
+    ["cd /tmp && openclaw cron add --at +1h", "a compound command"],
+    ["openclaw cron add --help", "the add command help"],
+    ["openclaw cron create -h", "the create alias help"],
+    ["openclaw cron add --bad||true", "a masked cron failure"],
+    ["openclaw cron add --at +1h; true", "a semicolon suffix"],
+    ["openclaw cron add --at +1h | cat", "a pipeline suffix"],
+    ["openclaw cron add --at +1h & true", "a background suffix"],
+    ["openclaw cron add --at +1h\ntrue", "a newline-separated suffix"],
+    ["openclaw cron add --bad # ignored\ntrue", "a comment-masked cron failure"],
+    ["npx -y echo openclaw cron add --at +1h", "a package runner for another executable"],
+    ["pnpm openclaw cron add --at +1h", "a bare pnpm package script"],
+    ["corepack pnpm openclaw cron add --at +1h", "a corepack pnpm package script"],
+    ["openclaw@latest cron add --at +1h", "a package spec without a package runner"],
+    ["pnpm exec openclaw@latest cron add --at +1h", "a package spec passed to pnpm exec"],
+    ["openclaw cron add --bad &>/tmp/cron.log", "a bash-only combined redirection"],
+    ["openclaw cron add --bad &>>/tmp/cron.log", "a bash-only append redirection"],
+  ])("does not count %s (%s)", async (command) => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-not-cron-add",
+        args: { command },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-not-cron-add",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            exitCode: 0,
+            durationMs: 12,
+            aggregated: "completed",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.successfulCronAdds).toBe(0);
+  });
+
+  it("keeps pre-execution cron failures replay-safe", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId: "tool-cron-invalid",
+        args: { action: "add" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId: "tool-cron-invalid",
+        isError: true,
+        executionStarted: false,
+        result: { details: { status: "error", error: "job required" } },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    });
+    expect(ctx.state.lastToolError?.mutatingAction).toBe(false);
+  });
+
+  it("keeps a policy-blocked cron mutation replay-safe", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-cron-blocked";
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId,
+        args: { action: "add", job: { name: "reminder" } },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId,
+        isError: false,
+        result: buildBlockedToolResult({
+          reason: "blocked by policy",
+          toolCallId,
+          runId: "run-test",
+        }),
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    });
+    expect(ctx.state.lastToolError?.mutatingAction).toBe(false);
+  });
+
+  it("keeps executed mutations replay-unsafe when middleware rewrites the result as blocked", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-cron-rewritten-blocked";
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId,
+        args: { action: "add", job: { name: "reminder" } },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId,
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "blocked by middleware" }],
+          details: {
+            status: "blocked",
+            deniedReason: "plugin-before-tool-call",
+            reason: "blocked by middleware",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+    expect(ctx.state.lastToolError?.mutatingAction).toBe(true);
+  });
+
+  it("records structured core read actions as replay-safe", async () => {
+    for (const [toolName, action] of [
+      ["cron", "status"],
+      ["gateway", "config.get"],
+      ["gateway", "config.schema.lookup"],
+      ["nodes", "status"],
+      ["nodes", "describe"],
+      ["nodes", "pending"],
+    ] as const) {
+      const { ctx } = createTestContext();
+      const toolCallId = `tool-${toolName}-${action}`;
+      recordStructuredReplayTrustForToolCall(
+        toolCallId,
+        { name: toolName, execute: vi.fn() } as never,
+        "run-test",
+      );
+      await handleToolExecutionStart(
+        ctx as never,
+        {
+          type: "tool_execution_start",
+          toolName,
+          toolCallId,
+          args: { action },
+        } as never,
+      );
+      await handleToolExecutionEnd(
+        ctx as never,
+        {
+          type: "tool_execution_end",
+          toolName,
+          toolCallId,
+          isError: false,
+          result: { details: { ok: true } },
+        } as never,
+      );
+
+      expect(ctx.state.replayState.hadPotentialSideEffects, `${toolName}.${action}`).toBe(false);
+    }
+  });
+
+  it("does not trust replay-safe names without concrete instance provenance", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "search",
+        toolCallId: "tool-shadowed-search",
+        args: { query: "scheduler" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "search",
+        toolCallId: "tool-shadowed-search",
+        isError: false,
+        result: { matches: [] },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+  });
+});
+
+describe("handleToolExecutionEnd private result observer", () => {
+  it("reports the sanitized original tool result", async () => {
+    const { ctx } = createTestContext();
+    const onAgentToolResult = vi.fn();
+    ctx.params.onAgentToolResult = onAgentToolResult;
+    const result = {
+      content: [{ type: "text", text: '{"results":[{"text":"ramen"}]}' }],
+      details: { results: [{ text: "ramen" }] },
+    };
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "memory_search",
+        toolCallId: "tool-memory-search",
+        isError: false,
+        result,
+      } as never,
+    );
+
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "memory_search",
+      result,
+      isError: false,
+    });
   });
 });
 
@@ -550,6 +1036,76 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     expect(ctx.state.lastToolError).toBeUndefined();
   });
 
+  it("emits a prepared validation diagnostic without model arguments", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+    const error =
+      'Validation failed for tool "edit":\n  - edits: must have required properties edits\n\nReceived arguments:\n{"path":"secret.txt","contents":"PTY_PLANTED_SECRET"}';
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "edit",
+        toolCallId: "tool-edit-validation",
+        args: { path: "secret.txt" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "edit",
+        toolCallId: "tool-edit-validation",
+        isError: true,
+        executionStarted: false,
+        errorKind: "argument-validation",
+        result: { details: { status: "error", error } },
+      } as never,
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "tool",
+      data: expect.objectContaining({
+        phase: "result",
+        toolErrorSummary: "edit tool validation failed: invalid arguments",
+      }),
+    });
+    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("PTY_PLANTED_SECRET");
+  });
+
+  it("does not export a validation-lookalike error from an executed tool", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+    const error =
+      'Validation failed for tool "edit":\n  - secret tool output\n\nReceived arguments:\n{}';
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "edit",
+        toolCallId: "tool-edit-spoof",
+        args: {},
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "edit",
+        toolCallId: "tool-edit-spoof",
+        isError: true,
+        executionStarted: true,
+        result: { details: { status: "error", error } },
+      } as never,
+    );
+
+    const resultEvent = onAgentEvent.mock.calls.find(
+      ([event]) => event.stream === "tool" && event.data.phase === "result",
+    )?.[0];
+    expect(resultEvent?.data).not.toHaveProperty("toolErrorSummary");
+    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("secret tool output");
+  });
+
   it("marks successful mutating tool results as replay-invalid for terminal lifecycle truth", async () => {
     const { ctx } = createTestContext();
 
@@ -582,6 +1138,380 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
       replayInvalid: true,
       hadPotentialSideEffects: true,
     });
+  });
+
+  it("keeps failed mutating tool attempts replay-invalid", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-partial-failure",
+        args: { command: "printf changed > /tmp/demo.txt && false" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-partial-failure",
+        isError: true,
+        result: { error: "Command exited with code 1" },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+  });
+
+  it("keeps unclassified interactive tool calls replay-invalid", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "browser",
+        toolCallId: "tool-browser-click",
+        args: { action: "act", kind: "click", ref: "e12" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "browser",
+        toolCallId: "tool-browser-click",
+        isError: false,
+        result: { details: { ok: true } },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+  });
+
+  it("uses hook-adjusted args for replay safety", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-cron-hook-rewrite";
+    const adjustedParamsKey = beforeToolCallTesting.buildAdjustedParamsKey({
+      runId: "run-test",
+      toolCallId,
+    });
+    beforeToolCallTesting.adjustedParamsByToolCallId.set(adjustedParamsKey, {
+      action: "add",
+      job: { name: "rewritten mutation" },
+    });
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId,
+        args: { action: "status" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId,
+        isError: false,
+        result: { ok: true },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+    expect(ctx.state.successfulCronAdds).toBe(1);
+    expect(beforeToolCallTesting.adjustedParamsByToolCallId.has(adjustedParamsKey)).toBe(false);
+  });
+
+  it("snapshots hook-adjusted args before result middleware can mutate them", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-cron-mutable-adjusted-args";
+    const executedArgs = {
+      action: "add",
+      job: { name: "rewritten mutation" },
+    };
+    recordAdjustedParamsForToolCall(toolCallId, executedArgs, "run-test");
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId,
+        args: { action: "status" },
+      } as never,
+    );
+    executedArgs.action = "status";
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId,
+        isError: false,
+        result: { ok: true },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+    expect(ctx.state.successfulCronAdds).toBe(1);
+  });
+
+  it("uses hook-adjusted message arguments for delivery telemetry", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-message-hook-rewrite";
+    const adjustedParamsKey = beforeToolCallTesting.buildAdjustedParamsKey({
+      runId: "run-test",
+      toolCallId,
+    });
+    beforeToolCallTesting.adjustedParamsByToolCallId.set(adjustedParamsKey, {
+      action: "send",
+      provider: "telegram",
+      to: "chat-rewritten",
+      text: "rewritten delivery",
+      mediaUrl: "/tmp/rewritten.png",
+    });
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: { action: "status" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result: { details: { messageId: "message-rewritten" } },
+      } as never,
+    );
+
+    expect(ctx.state.messagingToolSentTexts).toEqual(["rewritten delivery"]);
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual(["/tmp/rewritten.png"]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      {
+        tool: "message",
+        provider: "telegram",
+        to: "chat-rewritten",
+        threadId: undefined,
+        text: "rewritten delivery",
+        mediaUrls: ["/tmp/rewritten.png"],
+      },
+    ]);
+  });
+
+  it("records rich-content delivery when visible text is blank", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-message-rich-content";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: {
+          action: "send",
+          provider: "telegram",
+          to: "chat-rich",
+          text: "  ",
+          presentation: JSON.stringify({
+            blocks: [{ type: "buttons", buttons: [{ label: "OK", value: "ok" }] }],
+          }),
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result: { details: { messageId: "message-rich" } },
+      } as never,
+    );
+
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "telegram",
+        to: "chat-rich",
+        hasRichContent: true,
+      }),
+    ]);
+  });
+
+  it("records reply target evidence without treating it as terminal send evidence", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-message-reply-target";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: {
+          action: "reply",
+          provider: "telegram",
+          target: "chat-reply",
+          message: "visible reply",
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result: { ok: true },
+      } as never,
+    );
+
+    expect(ctx.state.messagingToolSentTexts).toEqual([]);
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual([]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "telegram",
+        to: "chat-reply",
+      }),
+    ]);
+  });
+
+  it("records conversation creation target evidence", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-message-thread-create-target";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: {
+          action: "thread-create",
+          provider: "telegram",
+          target: "chat-thread",
+          message: "new thread",
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result: { ok: true, thread: { id: "thread-1" } },
+      } as never,
+    );
+
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "telegram",
+        to: "chat-thread",
+      }),
+    ]);
+  });
+
+  it.each([
+    { name: "dry-run", result: { ok: true, dryRun: true } },
+    { name: "suppressed", result: { ok: true, status: "suppressed" } },
+  ])("does not record target evidence for $name reply results", async ({ result }) => {
+    const { ctx } = createTestContext();
+    const toolCallId = `tool-message-reply-${result.status ?? "dry-run"}`;
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: {
+          action: "reply",
+          provider: "telegram",
+          target: "chat-reply",
+          message: "visible reply",
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result,
+      } as never,
+    );
+
+    expect(ctx.state.messagingToolSentTexts).toEqual([]);
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual([]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([]);
+  });
+
+  it("does not treat text or media arguments on non-messaging tools as delivery", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId: "tool-cron-wake",
+        args: {
+          action: "wake",
+          text: "not an outbound message",
+          mediaUrl: "/tmp/not-an-outbound-message.png",
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId: "tool-cron-wake",
+        isError: false,
+        result: { details: { status: "ok" } },
+      } as never,
+    );
+
+    expect(ctx.state.messagingToolSentTexts).toEqual([]);
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual([]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([]);
   });
 
   it("marks successful legacy subagents control actions as replay-invalid", async () => {
@@ -617,7 +1547,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     });
   });
 
-  it("keeps read-only subagents list actions replay-safe", async () => {
+  it("keeps action-dependent subagents calls replay-unsafe", async () => {
     const { ctx } = createTestContext();
 
     await handleToolExecutionStart(
@@ -643,6 +1573,39 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
       } as never,
     );
 
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+  });
+
+  it("keeps audited core read-only tools replay-safe", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.replaySafeToolNames = new Set(["search"]);
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "search",
+        toolCallId: "tool-search",
+        args: { query: "scheduler" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "search",
+        toolCallId: "tool-search",
+        isError: false,
+        result: { matches: [] },
+      } as never,
+    );
+
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({ toolName: "search", replaySafe: true }),
+    ]);
     expect(ctx.state.replayState).toEqual({
       replayInvalid: false,
       hadPotentialSideEffects: false,
@@ -711,6 +1674,33 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
 });
 
 describe("handleToolExecutionEnd timeout metadata", () => {
+  it("retains every failed call after later successes change the last-error slot", async () => {
+    const { ctx } = createTestContext();
+
+    for (const [toolCallId, isError] of [
+      ["tool-read-failed", true],
+      ["tool-read-succeeded", false],
+      ["tool-exec-failed", true],
+    ] as const) {
+      await handleToolExecutionEnd(
+        ctx as never,
+        {
+          type: "tool_execution_end",
+          toolName: toolCallId.includes("read") ? "read" : "exec",
+          toolCallId,
+          isError,
+          result: isError ? { error: `${toolCallId} failed` } : { content: "ok" },
+        } as never,
+      );
+    }
+
+    expect(ctx.state.toolMetas.map(({ toolName, isError }) => ({ toolName, isError }))).toEqual([
+      { toolName: "read", isError: true },
+      { toolName: "read", isError: undefined },
+      { toolName: "exec", isError: true },
+    ]);
+  });
+
   it("records timeout metadata for failed exec results", async () => {
     const { ctx } = createTestContext();
 
@@ -743,6 +1733,249 @@ describe("handleToolExecutionEnd timeout metadata", () => {
       toolName: "exec",
       timedOut: true,
     });
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({ toolName: "exec", isError: true }),
+    ]);
+  });
+
+  it("uses raw exec metadata for failed tool payload warnings", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.toolProgressDetail = "raw";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-raw-command",
+        args: { command: "python3 /tmp/audit.py" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-raw-command",
+        isError: true,
+        result: {
+          error: "Command exited with code 1",
+          content: [{ type: "text", text: "Command exited with code 1" }],
+          details: { status: "failed", exitCode: 1 },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      meta: "run python3 /tmp/audit.py, `python3 /tmp/audit.py`",
+    });
+
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
+      lastAssistant: undefined,
+      lastToolError: ctx.state.lastToolError,
+      sessionKey: "agent:unit-session",
+      toolResultFormat: "markdown",
+      inlineToolResultsAllowed: false,
+    });
+
+    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec failed: `python3 /tmp/audit.py` (exit 1)");
+  });
+
+  it("uses raw exec metadata for payload warnings when commands contain backticks", async () => {
+    const { ctx } = createTestContext();
+    const command = "node -e 'console.log(1, `x`)'";
+    ctx.params.toolProgressDetail = "raw";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-raw-command-backticks",
+        args: { command },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-raw-command-backticks",
+        isError: true,
+        result: {
+          error: "Command exited with code 1",
+          content: [{ type: "text", text: "Command exited with code 1" }],
+          details: { status: "failed", exitCode: 1 },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      meta: "run node inline script, ``node -e 'console.log(1, `x`)'``",
+    });
+
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
+      lastAssistant: undefined,
+      lastToolError: ctx.state.lastToolError,
+      sessionKey: "agent:unit-session",
+      toolResultFormat: "markdown",
+      inlineToolResultsAllowed: false,
+    });
+
+    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec failed: ``node -e 'console.log(1, `x`)'`` (exit 1)");
+  });
+
+  it("preserves node context in raw exec metadata payload warnings", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.toolProgressDetail = "raw";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-node-raw-command",
+        args: { command: "python3 /tmp/audit.py", host: "node", node: "mac-1" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-node-raw-command",
+        isError: true,
+        result: {
+          error: "Command exited with code 1",
+          content: [{ type: "text", text: "Command exited with code 1" }],
+          details: { status: "failed", exitCode: 1 },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      meta: "run python3 /tmp/audit.py, node: mac-1, `python3 /tmp/audit.py`",
+    });
+
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
+      lastAssistant: undefined,
+      lastToolError: ctx.state.lastToolError,
+      sessionKey: "agent:unit-session",
+      toolResultFormat: "markdown",
+      inlineToolResultsAllowed: false,
+    });
+
+    expect(payloads[0]?.text).toBe(
+      "⚠️ 🛠️ Exec failed: `node: mac-1 · python3 /tmp/audit.py` (exit 1)",
+    );
+  });
+
+  it("preserves cwd context in raw exec metadata payload warnings", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.toolProgressDetail = "raw";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-cwd-raw-command",
+        args: { command: "python3 audit.py", workdir: "/tmp/build" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-cwd-raw-command",
+        isError: true,
+        result: {
+          error: "Command exited with code 1",
+          content: [{ type: "text", text: "Command exited with code 1" }],
+          details: { status: "failed", exitCode: 1 },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      meta: "run python3 audit.py (in /tmp/build), `python3 audit.py`",
+    });
+
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
+      lastAssistant: undefined,
+      lastToolError: ctx.state.lastToolError,
+      sessionKey: "agent:unit-session",
+      toolResultFormat: "markdown",
+      inlineToolResultsAllowed: false,
+    });
+
+    expect(payloads[0]?.text).toBe(
+      "⚠️ 🛠️ Exec failed: `python3 audit.py (in /tmp/build)` (exit 1)",
+    );
+  });
+
+  it("preserves compact cwd labels in semantic raw exec metadata payload warnings", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.toolProgressDetail = "raw";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-repo-raw-command",
+        args: { command: "git status", workdir: "/Users/agent/Projects/OpenClaw" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-repo-raw-command",
+        isError: true,
+        result: {
+          error: "Command exited with code 1",
+          content: [{ type: "text", text: "Command exited with code 1" }],
+          details: { status: "failed", exitCode: 1 },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      meta: "check git status (repo), `git status`",
+    });
+
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
+      lastAssistant: undefined,
+      lastToolError: ctx.state.lastToolError,
+      sessionKey: "agent:unit-session",
+      toolResultFormat: "markdown",
+      inlineToolResultsAllowed: false,
+    });
+
+    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec failed: `git status (repo)` (exit 1)");
   });
 
   it("records structured error codes for failed tool results", async () => {
@@ -924,7 +2157,9 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
   it("emits a deterministic unavailable payload when the initiating surface cannot approve", async () => {
     const { ctx } = createTestContext();
     const onToolResult = vi.fn();
+    const onAgentToolResult = vi.fn();
     ctx.params.onToolResult = onToolResult;
+    ctx.params.onAgentToolResult = onAgentToolResult;
 
     await handleToolExecutionEnd(
       ctx as never,
@@ -954,6 +2189,13 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     expect(text).not.toContain("Pending command:");
     expect(text).not.toContain("Host:");
     expect(text).not.toContain("CWD:");
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: "exec",
+      result: expect.objectContaining({
+        details: expect.objectContaining({ status: "approval-unavailable" }),
+      }),
+      isError: true,
+    });
     expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
   });
 
@@ -1087,6 +2329,138 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
 });
 
 describe("handleToolExecutionEnd derived tool events", () => {
+  it("surfaces typed public tool progress for any non-exec tool", () => {
+    resetAgentEventsForTest();
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx, onAgentEvent } = createTestContext();
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "custom_fetcher",
+        toolCallId: "tool-custom-progress",
+        partialResult: {
+          content: [],
+          details: undefined,
+          progress: {
+            text: "Loading remote resource...",
+            visibility: "channel",
+            privacy: "public",
+          },
+        },
+      } as never,
+    );
+
+    expect(
+      events.filter(
+        (event) =>
+          event.stream === "tool" &&
+          (event.data as { phase?: string } | undefined)?.phase === "update",
+      ),
+    ).toHaveLength(0);
+    const itemEvent = requireRecord(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .find((event) => (event as { stream?: string })?.stream === "item"),
+      "progress item event",
+    );
+    expectRecordFields(itemEvent.data, "progress item event data", {
+      itemId: "tool:tool-custom-progress",
+      phase: "update",
+      kind: "tool",
+      name: "custom_fetcher",
+      progressText: "Loading remote resource...",
+      status: "running",
+    });
+    expect(requireRecord(itemEvent.data, "progress item event data").meta).toBeUndefined();
+
+    resetAgentEventsForTest();
+  });
+
+  it("does not promote untyped non-exec content into channel progress", () => {
+    resetAgentEventsForTest();
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx, onAgentEvent } = createTestContext();
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "web_fetch",
+        toolCallId: "tool-web-fetch-untyped",
+        partialResult: {
+          content: [{ type: "text", text: "Fetching page content..." }],
+          details: undefined,
+        },
+      } as never,
+    );
+
+    expect(
+      events.filter(
+        (event) =>
+          event.stream === "tool" &&
+          (event.data as { phase?: string } | undefined)?.phase === "update",
+      ),
+    ).toHaveLength(1);
+    const itemEvent = requireRecord(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .find((event) => (event as { stream?: string })?.stream === "item"),
+      "tool item event",
+    );
+    expect(requireRecord(itemEvent.data, "tool item event data").progressText).toBeUndefined();
+    expect(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .filter((event) => (event as { stream?: string })?.stream === "tool"),
+    ).toHaveLength(1);
+
+    resetAgentEventsForTest();
+  });
+
+  it("caps typed public tool progress before channel item events", () => {
+    const { ctx, onAgentEvent } = createTestContext();
+    const largeProgress = "x".repeat(9000);
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "custom_fetcher",
+        toolCallId: "tool-large-progress",
+        partialResult: {
+          content: [],
+          details: undefined,
+          progress: {
+            text: largeProgress,
+            visibility: "channel",
+            privacy: "public",
+          },
+        },
+      } as never,
+    );
+
+    const itemEvent = requireRecord(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .find((event) => (event as { stream?: string })?.stream === "item"),
+      "large progress item event",
+    );
+    const progressText = requireString(
+      requireRecord(itemEvent.data, "large progress item event data").progressText,
+      "progress text",
+    );
+    expect(progressText).toContain("...(live output truncated)...");
+    expect(progressText.length).toBeLessThan(largeProgress.length);
+  });
+
   it("emits command output deltas for exec update results", async () => {
     const { ctx, onAgentEvent } = createTestContext();
 
@@ -1338,6 +2712,199 @@ describe("handleToolExecutionEnd derived tool events", () => {
 });
 
 describe("messaging tool media URL tracking", () => {
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry());
+  });
+
+  it("uses the current provider and thread for implicit message sends", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack" }),
+            messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
+            threading: {
+              resolveAutoThreadId: ({
+                to,
+                toolContext,
+              }: {
+                to: string;
+                toolContext?: {
+                  currentChannelId?: string;
+                  currentMessagingTarget?: string;
+                  currentThreadTs?: string;
+                  replyToMode?: "off" | "first" | "all" | "batched";
+                };
+              }) =>
+                toolContext?.replyToMode === "all" &&
+                (to === toolContext.currentMessagingTarget || to === toolContext.currentChannelId)
+                  ? toolContext.currentThreadTs
+                  : undefined,
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const { ctx } = createTestContext();
+    ctx.params.messageChannel = "slack";
+    ctx.params.currentChannelId = "D1";
+    ctx.params.currentMessagingTarget = "user:u1";
+    ctx.params.currentThreadId = "171.222";
+    ctx.params.replyToMode = "all";
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-threaded-message",
+      args: {
+        action: "send",
+        to: "user:U1",
+        content: "hi",
+      },
+    });
+
+    expect(ctx.state.pendingMessagingTargets.get("tool-threaded-message")).toMatchObject({
+      provider: "slack",
+      to: "user:u1",
+      threadId: "171.222",
+      threadImplicit: true,
+    });
+  });
+
+  it("preserves the pre-send reply state when committing implicit thread evidence", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack" }),
+            messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
+            threading: {
+              resolveAutoThreadId: ({
+                toolContext,
+              }: {
+                toolContext?: {
+                  currentThreadTs?: string;
+                  replyToMode?: "off" | "first" | "all" | "batched";
+                  hasRepliedRef?: { value: boolean };
+                };
+              }) =>
+                toolContext?.replyToMode === "first" && !toolContext.hasRepliedRef?.value
+                  ? toolContext.currentThreadTs
+                  : undefined,
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const { ctx } = createTestContext();
+    ctx.params.currentChannelId = "D1";
+    ctx.params.currentMessagingTarget = "user:u1";
+    ctx.params.currentThreadId = "171.222";
+    ctx.params.replyToMode = "first";
+    ctx.params.hasRepliedRef = { value: false };
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-first-threaded-message",
+      args: {
+        action: "send",
+        provider: "slack",
+        to: "user:U1",
+        content: "hi",
+      },
+    });
+    ctx.params.hasRepliedRef.value = true;
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-first-threaded-message",
+      isError: false,
+      result: { details: { messageId: "message-1" } },
+    });
+
+    expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
+      provider: "slack",
+      to: "user:u1",
+      threadId: "171.222",
+      threadImplicit: true,
+      text: "hi",
+    });
+  });
+
+  it("reconciles unresolved send targets from successful provider results", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "mattermost",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "mattermost" }),
+            actions: {
+              extractToolSend: ({ args }: { args: Record<string, unknown> }) =>
+                args.action === "send" && typeof args.to === "string"
+                  ? { to: args.to, threadImplicit: true }
+                  : null,
+              extractToolSendResult: ({ result }: { result: unknown }) => {
+                const providerResult = result as {
+                  status?: string;
+                  details?: { redacted?: boolean; toolSend?: unknown };
+                };
+                if (providerResult.status !== "sent" || providerResult.details?.redacted !== true) {
+                  return null;
+                }
+                const details = providerResult.details;
+                return (details?.toolSend as { to: string; threadId?: string } | undefined) ?? null;
+              },
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const { ctx } = createTestContext();
+    ctx.consumeToolSendReceipt = () => ({
+      details: {
+        toolSend: {
+          to: "channel:resolved-id",
+          threadId: "root-1",
+        },
+      },
+    });
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-mattermost-name",
+      args: {
+        action: "send",
+        provider: "mattermost",
+        to: "town-square",
+        content: "hi",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-mattermost-name",
+      isError: false,
+      result: {
+        status: "sent",
+        details: { redacted: true },
+      },
+    });
+
+    expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
+      provider: "mattermost",
+      to: "channel:resolved-id",
+      threadId: "root-1",
+      text: "hi",
+    });
+  });
+
   it("tracks media arg from messaging tool as pending", async () => {
     const { ctx } = createTestContext();
 
@@ -1407,6 +2974,7 @@ describe("messaging tool media URL tracking", () => {
           {
             type: "text",
             text: JSON.stringify({
+              ok: true,
               mediaUrls: ["file:///img-a.jpg", "file:///img-b.jpg"],
             }),
           },
@@ -1850,5 +3418,28 @@ describe("control UI credential redaction (issue #72283)", () => {
     }
     expect(emittedResult).not.toContain("sk-or-v1-abcdef0123456789");
     expect(emittedResult).toContain("OPENROUTER_API_KEY=");
+  });
+
+  it("emits primitive string results as visible tool output", async () => {
+    const { ctx } = createTestContext();
+    ctx.shouldEmitToolOutput = () => true;
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "gateway",
+        toolCallId: "tool-string-output",
+        isError: false,
+        result: "plain result",
+      } as never,
+    );
+
+    expect(ctx.emitToolOutput).toHaveBeenCalledWith(
+      "gateway",
+      undefined,
+      "plain result",
+      "plain result",
+    );
   });
 });

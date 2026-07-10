@@ -1,12 +1,22 @@
+/**
+ * Estimates prompt pressure and decides pre-prompt compaction routing.
+ */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionContextBudgetStatus } from "../../../config/sessions.js";
-import { isRecord } from "../../../shared/record-coerce.js";
 import { estimateStringChars } from "../../../utils/cjk-chars.js";
 import {
   MIN_PROMPT_BUDGET_RATIO,
   MIN_PROMPT_BUDGET_TOKENS,
 } from "../../agent-compaction-constants.js";
 import { SAFETY_MARGIN } from "../../compaction.js";
-import type { AgentMessage } from "../../runtime/index.js";
+import type { AgentMessage, BashExecutionMessage } from "../../runtime/index.js";
+import {
+  BRANCH_SUMMARY_PREFIX,
+  BRANCH_SUMMARY_SUFFIX,
+  bashExecutionToText,
+  COMPACTION_SUMMARY_PREFIX,
+  COMPACTION_SUMMARY_SUFFIX,
+} from "../../runtime/index.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
@@ -21,8 +31,7 @@ const CONTENT_BLOCK_OVERHEAD_TOKENS = 6;
 const IMAGE_BLOCK_TOKENS = 2_000;
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
 
-export type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
-
+/** Pre-prompt routing decision plus the budget facts used to explain it in logs and session state. */
 export type PreemptiveCompactionDecision = {
   route: PreemptiveCompactionRoute;
   shouldCompact: boolean;
@@ -34,6 +43,7 @@ export type PreemptiveCompactionDecision = {
   effectiveReserveTokens: number;
 };
 
+/** Token pressure reported by the rendered provider-boundary prompt when available. */
 export type LlmBoundaryTokenPressure = {
   estimatedPromptTokens: number;
   source: string;
@@ -102,18 +112,50 @@ function estimateContentBlockTokenPressure(
   return CONTENT_BLOCK_OVERHEAD_TOKENS + estimateJsonPayloadTokenPressure(block, charsPerToken);
 }
 
+function estimateToolResultStringTokenPressure(text: string): number {
+  const conservativeToolResultEstimate = Math.ceil(text.length / TOOL_RESULT_CHARS_PER_TOKEN);
+  const cjkAwareEstimate = estimateStringTokenPressure(text);
+  return Math.max(conservativeToolResultEstimate, cjkAwareEstimate);
+}
+
+function estimateToolResultJsonTokenPressure(value: unknown): number {
+  try {
+    const serialized = JSON.stringify(value);
+    return typeof serialized === "string" ? estimateToolResultStringTokenPressure(serialized) : 1;
+  } catch {
+    return 256;
+  }
+}
+
+function estimateToolResultBlockTokenPressure(block: unknown): number {
+  if (typeof block === "string") {
+    return estimateToolResultStringTokenPressure(block);
+  }
+  if (!isRecord(block)) {
+    return estimateToolResultJsonTokenPressure(block);
+  }
+
+  if (block.type === "text" && typeof block.text === "string") {
+    return CONTENT_BLOCK_OVERHEAD_TOKENS + estimateToolResultStringTokenPressure(block.text);
+  }
+  if (block.type === "thinking" && typeof block.thinking === "string") {
+    return CONTENT_BLOCK_OVERHEAD_TOKENS + estimateToolResultStringTokenPressure(block.thinking);
+  }
+  if (block.type === "image") {
+    return IMAGE_BLOCK_TOKENS;
+  }
+  return CONTENT_BLOCK_OVERHEAD_TOKENS + estimateToolResultJsonTokenPressure(block);
+}
+
 function estimateToolResultContentTokenPressure(content: unknown): number {
   if (typeof content === "string") {
-    return estimateStringTokenPressure(content, TOOL_RESULT_CHARS_PER_TOKEN);
+    return estimateToolResultStringTokenPressure(content);
   }
   if (Array.isArray(content)) {
-    return content.reduce(
-      (sum, block) => sum + estimateContentBlockTokenPressure(block, TOOL_RESULT_CHARS_PER_TOKEN),
-      0,
-    );
+    return content.reduce((sum, block) => sum + estimateToolResultBlockTokenPressure(block), 0);
   }
   if (content !== undefined) {
-    return estimateJsonPayloadTokenPressure(content, TOOL_RESULT_CHARS_PER_TOKEN);
+    return estimateToolResultJsonTokenPressure(content);
   }
   return 0;
 }
@@ -155,6 +197,30 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
     return tokens;
   }
 
+  if (record.role === "bashExecution") {
+    if (record.excludeFromContext === true) {
+      return 0;
+    }
+    tokens += estimateStringTokenPressure(
+      bashExecutionToText(record as unknown as BashExecutionMessage),
+    );
+    return tokens;
+  }
+
+  if (record.role === "branchSummary") {
+    const summary = typeof record.summary === "string" ? record.summary : "";
+    tokens += estimateStringTokenPressure(BRANCH_SUMMARY_PREFIX + summary + BRANCH_SUMMARY_SUFFIX);
+    return tokens;
+  }
+
+  if (record.role === "compactionSummary") {
+    const summary = typeof record.summary === "string" ? record.summary : "";
+    tokens += estimateStringTokenPressure(
+      COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX,
+    );
+    return tokens;
+  }
+
   if (record.role === "assistant") {
     const content = record.content;
     if (Array.isArray(content)) {
@@ -184,6 +250,11 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
   return tokens;
 }
 
+/**
+ * Estimates the prompt pressure at the LLM boundary from transcript messages,
+ * optional system prompt, and current prompt text. The result intentionally
+ * includes a safety margin because this path runs before provider tokenization.
+ */
 export function estimateLlmBoundaryTokenPressure(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
@@ -202,6 +273,7 @@ export function estimateLlmBoundaryTokenPressure(params: {
   return Math.max(0, Math.ceil((historyTokens + systemTokens + promptTokens) * SAFETY_MARGIN));
 }
 
+/** Estimates only the rendered prompt/system portion when history has already been accounted for. */
 export function estimateRenderedLlmBoundaryTokenPressure(params: {
   systemPrompt?: string;
   prompt: string;
@@ -213,14 +285,6 @@ export function estimateRenderedLlmBoundaryTokenPressure(params: {
   const promptTokens =
     MESSAGE_BOUNDARY_OVERHEAD_TOKENS + estimateStringTokenPressure(params.prompt);
   return Math.max(0, Math.ceil((systemTokens + promptTokens) * SAFETY_MARGIN));
-}
-
-export function estimatePrePromptTokens(params: {
-  messages: AgentMessage[];
-  systemPrompt?: string;
-  prompt: string;
-}): number {
-  return estimateLlmBoundaryTokenPressure(params);
 }
 
 function normalizeLlmBoundaryTokenPressure(
@@ -239,6 +303,11 @@ function normalizeLlmBoundaryTokenPressure(
   };
 }
 
+/**
+ * Decides whether a run should compact before submitting the prompt, and
+ * whether reducible tool results can avoid or follow compaction. Rendered LLM
+ * boundary pressure wins over local transcript estimates when supplied.
+ */
 export function shouldPreemptivelyCompactBeforePrompt(params: {
   messages: AgentMessage[];
   unwindowedMessages?: AgentMessage[];
@@ -255,14 +324,14 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   );
   let estimatedPromptTokens =
     llmBoundaryTokenPressure?.estimatedPromptTokens ??
-    estimatePrePromptTokens({
+    estimateLlmBoundaryTokenPressure({
       messages: params.messages,
       systemPrompt: params.systemPrompt,
       prompt: params.prompt,
     });
   let pressureSource = llmBoundaryTokenPressure?.source ?? "transcript_estimate";
   if (params.unwindowedMessages && params.unwindowedMessages !== params.messages) {
-    const unwindowedEstimatedPromptTokens = estimatePrePromptTokens({
+    const unwindowedEstimatedPromptTokens = estimateLlmBoundaryTokenPressure({
       messages: params.unwindowedMessages,
       systemPrompt: params.systemPrompt,
       prompt: params.prompt,
@@ -279,6 +348,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     MIN_PROMPT_BUDGET_TOKENS,
     Math.max(1, Math.floor(contextTokenBudget * MIN_PROMPT_BUDGET_RATIO)),
   );
+  // Keep a minimum prompt budget even when reserveTokens asks for most of the context window.
   const effectiveReserveTokens = Math.min(
     requestedReserveTokens,
     Math.max(0, contextTokenBudget - minPromptBudget),
@@ -300,6 +370,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
 
   let route: PreemptiveCompactionRoute = "fits";
   if (overflowTokens > 0) {
+    // Choose truncate-only only when available reduction comfortably exceeds the overflow.
     if (toolResultReducibleChars <= 0) {
       route = "compact_only";
     } else if (toolResultReducibleChars >= truncateOnlyThresholdChars) {
@@ -320,6 +391,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   };
 }
 
+/** Formats the compact operator log line for one pre-prompt budget check. */
 export function formatPrePromptPrecheckLog(params: {
   result: PreemptiveCompactionDecision;
   sessionKey?: string;
@@ -352,6 +424,7 @@ export function formatPrePromptPrecheckLog(params: {
   );
 }
 
+/** Converts the pre-prompt decision into the persisted session context-budget status record. */
 export function buildPrePromptContextBudgetStatus(params: {
   result: PreemptiveCompactionDecision;
   provider: string;

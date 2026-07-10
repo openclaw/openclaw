@@ -1,10 +1,15 @@
+// Discord API module exposes the plugin public contract.
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   resolveRetryConfig,
   retryAsync,
   type RetryConfig,
 } from "openclaw/plugin-sdk/retry-runtime";
 import { isDiscordHtmlResponseBody, summarizeDiscordResponseBody } from "./error-body.js";
+import { parseDiscordRetryAfterBodySeconds, parseRetryAfterHeaderSeconds } from "./retry-after.js";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DISCORD_API_RETRY_DEFAULTS = {
@@ -14,6 +19,8 @@ const DISCORD_API_RETRY_DEFAULTS = {
   jitter: 0.1,
 };
 const DISCORD_API_429_FALLBACK_RETRY_AFTER_SECONDS = 60;
+const DISCORD_API_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const DISCORD_API_RESPONSE_BODY_LIMIT_BYTES = 4 * 1024 * 1024;
 
 type DiscordApiErrorPayload = {
   message?: string;
@@ -40,10 +47,7 @@ function parseDiscordApiErrorPayload(text: string): DiscordApiErrorPayload | nul
 
 function parseRetryAfterSeconds(text: string, response: Response): number | undefined {
   const payload = parseDiscordApiErrorPayload(text);
-  const retryAfter =
-    payload && typeof payload.retry_after === "number" && Number.isFinite(payload.retry_after)
-      ? payload.retry_after
-      : undefined;
+  const retryAfter = parseDiscordRetryAfterBodySeconds(payload?.retry_after);
   if (retryAfter !== undefined) {
     return retryAfter;
   }
@@ -51,15 +55,7 @@ function parseRetryAfterSeconds(text: string, response: Response): number | unde
   if (!header) {
     return undefined;
   }
-  const parsed = Number(header);
-  if (Number.isFinite(parsed) && parsed >= 0) {
-    return parsed;
-  }
-  const retryAt = Date.parse(header);
-  if (!Number.isFinite(retryAt)) {
-    return undefined;
-  }
-  return Math.max(0, (retryAt - Date.now()) / 1000);
+  return parseRetryAfterHeaderSeconds(header);
 }
 
 function formatRetryAfterSeconds(value: number | undefined): string | undefined {
@@ -95,7 +91,7 @@ function formatDiscordApiErrorText(text: string, response: Response): string | u
       ? payload.message.trim()
       : "unknown error";
   const retryAfter = formatRetryAfterSeconds(
-    typeof payload.retry_after === "number" ? payload.retry_after : undefined,
+    parseDiscordRetryAfterBodySeconds(payload.retry_after),
   );
   return retryAfter ? `${message} (retry after ${retryAfter})` : message;
 }
@@ -156,7 +152,7 @@ function resolveDiscordRequestSignal(options: DiscordApiRequestOptions) {
   if (options.signal || typeof options.timeoutMs !== "number") {
     return options.signal;
   }
-  return AbortSignal.timeout(options.timeoutMs);
+  return AbortSignal.timeout(resolveTimerTimeoutMs(options.timeoutMs, 1));
 }
 
 export async function requestDiscord<T>(
@@ -181,8 +177,10 @@ export async function requestDiscord<T>(
         body,
         signal: resolveDiscordRequestSignal(options ?? {}),
       });
-      const text = await res.text().catch(() => "");
       if (!res.ok) {
+        const text = await readResponseTextLimited(res, DISCORD_API_ERROR_BODY_LIMIT_BYTES).catch(
+          () => "",
+        );
         const detail = formatDiscordApiErrorText(text, res);
         const suffix = detail ? `: ${detail}` : "";
         const retryAfter =
@@ -195,10 +193,24 @@ export async function requestDiscord<T>(
           retryAfter,
         );
       }
+      const responseBody = await readResponseWithLimit(res, DISCORD_API_RESPONSE_BODY_LIMIT_BYTES, {
+        onOverflow: ({ size, maxBytes }) =>
+          new Error(
+            `Discord API ${path} response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+          ),
+      });
+      const text = new TextDecoder().decode(responseBody);
       if (!text.trim()) {
         return undefined as T;
       }
-      return JSON.parse(text) as T;
+      try {
+        return JSON.parse(text) as T;
+      } catch {
+        throw new DiscordApiError(
+          `Discord API ${path} returned malformed JSON`,
+          0,
+        );
+      }
     },
     {
       ...retryConfig,

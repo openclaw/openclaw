@@ -1,5 +1,7 @@
+// Chat transcript parent-id tests protect gateway-injected assistant appends so
+// compaction history remains connected and transcript listeners receive updates.
 import fs from "node:fs";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import { createTranscriptFixtureSync } from "./chat.test-helpers.js";
@@ -14,9 +16,75 @@ function readTranscriptLines(transcriptPath: string): string[] {
   return lines;
 }
 
+async function appendHelloAndRequireId(transcriptPath: string): Promise<string> {
+  const appended = await appendInjectedAssistantMessageToTranscript({
+    transcriptPath,
+    message: "hello",
+  });
+  expect(appended.ok).toBe(true);
+  expect(appended.messageId).toBeTypeOf("string");
+  const messageId = appended.messageId;
+  if (!messageId) {
+    throw new Error("expected appended message id");
+  }
+  expect(messageId.length).toBeGreaterThan(0);
+  return messageId;
+}
+
+function readLastTranscriptRecord(transcriptPath: string): Record<string, unknown> {
+  const lines = readTranscriptLines(transcriptPath);
+  expect(lines.length).toBeGreaterThanOrEqual(2);
+  return JSON.parse(lines.at(-1) as string) as Record<string, unknown>;
+}
+
+function readLastTranscriptRecordFromTail(transcriptPath: string): Record<string, unknown> {
+  const size = fs.statSync(transcriptPath).size;
+  const length = Math.min(size, 64 * 1024);
+  const buffer = Buffer.allocUnsafe(length);
+  const fd = fs.openSync(transcriptPath, "r");
+  let bytesRead = 0;
+  try {
+    bytesRead = fs.readSync(fd, buffer, 0, length, size - length);
+  } finally {
+    fs.closeSync(fd);
+  }
+  const lines = buffer.subarray(0, bytesRead).toString("utf8").trimEnd().split(/\r?\n/);
+  return JSON.parse(lines.at(-1) as string) as Record<string, unknown>;
+}
+
 // Guardrail: Gateway-injected assistant transcript messages must attach to the
 // current leaf with a `parentId` and must not sever compaction history.
 describe("gateway chat.inject transcript writes", () => {
+  let oversizedDir = "";
+  let oversizedTranscriptPath = "";
+
+  beforeAll(() => {
+    const fixture = createTranscriptFixtureSync({
+      prefix: "openclaw-chat-inject-large-",
+      sessionId: "sess-1",
+    });
+    oversizedDir = fixture.dir;
+    oversizedTranscriptPath = fixture.transcriptPath;
+    fs.appendFileSync(
+      oversizedTranscriptPath,
+      `${JSON.stringify({
+        type: "message",
+        id: "legacy-large-message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "x".repeat(9 * 1024 * 1024) }],
+        },
+      })}\n`,
+      "utf-8",
+    );
+  });
+
+  afterAll(() => {
+    if (oversizedDir) {
+      fs.rmSync(oversizedDir, { recursive: true, force: true });
+    }
+  });
+
   it("appends a agent session entry that includes parentId", async () => {
     const { dir, transcriptPath } = createTranscriptFixtureSync({
       prefix: "openclaw-chat-inject-",
@@ -24,26 +92,12 @@ describe("gateway chat.inject transcript writes", () => {
     });
 
     try {
-      const appended = await appendInjectedAssistantMessageToTranscript({
-        transcriptPath,
-        message: "hello",
-      });
-      expect(appended.ok).toBe(true);
-      expect(appended.messageId).toBeTypeOf("string");
-      const messageId = appended.messageId;
-      if (!messageId) {
-        throw new Error("expected appended message id");
-      }
-      expect(messageId.length).toBeGreaterThan(0);
-
-      const lines = readTranscriptLines(transcriptPath);
-      expect(lines.length).toBeGreaterThanOrEqual(2);
-
-      const last = JSON.parse(lines.at(-1) as string) as Record<string, unknown>;
+      await appendHelloAndRequireId(transcriptPath);
+      const last = readLastTranscriptRecord(transcriptPath);
       expect(last.type).toBe("message");
 
       // The regression we saw: raw jsonl appends omitted this field entirely.
-      expect(Object.prototype.hasOwnProperty.call(last, "parentId")).toBe(true);
+      expect(Object.hasOwn(last, "parentId")).toBe(true);
       expect(last).toHaveProperty("id");
       expect(last).toHaveProperty("message");
     } finally {
@@ -52,47 +106,15 @@ describe("gateway chat.inject transcript writes", () => {
   });
 
   it("uses raw append for oversized append-only transcripts", async () => {
-    const { dir, transcriptPath } = createTranscriptFixtureSync({
-      prefix: "openclaw-chat-inject-large-",
-      sessionId: "sess-1",
-    });
+    const sizeBefore = fs.statSync(oversizedTranscriptPath).size;
+    const messageId = await appendHelloAndRequireId(oversizedTranscriptPath);
+    const last = readLastTranscriptRecordFromTail(oversizedTranscriptPath);
 
-    try {
-      fs.appendFileSync(
-        transcriptPath,
-        `${JSON.stringify({
-          type: "message",
-          id: "legacy-large-message",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "x".repeat(9 * 1024 * 1024) }],
-          },
-        })}\n`,
-        "utf-8",
-      );
-
-      const appended = await appendInjectedAssistantMessageToTranscript({
-        transcriptPath,
-        message: "hello",
-      });
-      expect(appended.ok).toBe(true);
-      expect(appended.messageId).toBeTypeOf("string");
-      const messageId = appended.messageId;
-      if (!messageId) {
-        throw new Error("expected appended message id");
-      }
-      expect(messageId.length).toBeGreaterThan(0);
-
-      const lines = readTranscriptLines(transcriptPath);
-      const last = JSON.parse(lines.at(-1) as string) as Record<string, unknown>;
-
-      expect(last.type).toBe("message");
-      expect(last).toHaveProperty("id", messageId);
-      expect(last).toHaveProperty("message");
-      expect(Object.prototype.hasOwnProperty.call(last, "parentId")).toBe(false);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(fs.statSync(oversizedTranscriptPath).size).toBeGreaterThan(sizeBefore);
+    expect(last.type).toBe("message");
+    expect(last).toHaveProperty("id", messageId);
+    expect(last).toHaveProperty("message");
+    expect(Object.hasOwn(last, "parentId")).toBe(false);
   });
 
   it("emits and returns the redacted injected assistant message", async () => {
@@ -101,12 +123,14 @@ describe("gateway chat.inject transcript writes", () => {
       sessionId: "sess-redact",
     });
     const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
-    const updates: Array<{ message?: unknown }> = [];
+    const updates: Array<{ message?: unknown; sessionKey?: string; agentId?: string }> = [];
     const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
 
     try {
       const appended = await appendInjectedAssistantMessageToTranscript({
         transcriptPath,
+        sessionKey: "global",
+        agentId: "work",
         message: `Here is your key: ${fakeApiKey}`,
         config: { logging: { redactSensitive: "tools" } },
       });
@@ -114,6 +138,7 @@ describe("gateway chat.inject transcript writes", () => {
       expect(appended.ok).toBe(true);
       expect(JSON.stringify(appended.message)).not.toContain(fakeApiKey);
       expect(updates).toHaveLength(1);
+      expect(updates[0]).toMatchObject({ sessionKey: "global", agentId: "work" });
 
       const lines = readTranscriptLines(transcriptPath);
       const last = JSON.parse(lines.at(-1) as string) as { message?: unknown };

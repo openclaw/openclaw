@@ -1,11 +1,17 @@
+/** macOS LaunchAgent installer, runtime inspection, and lifecycle controls. */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { probePortUsage } from "../infra/ports-probe.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
+import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
+import { sleep } from "../utils.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
   GATEWAY_SERVICE_KIND,
@@ -15,14 +21,14 @@ import {
   resolveLegacyGatewayLaunchAgentLabels,
 } from "./constants.js";
 import { execFileUtf8 } from "./exec-file.js";
+import { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
 import {
+  LAUNCH_AGENT_ENV_WRAPPER_SHELL,
   buildLaunchAgentPlist as buildLaunchAgentPlistImpl,
+  LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
   readLaunchAgentProgramArgumentsFromFile,
 } from "./launchd-plist.js";
-import {
-  isCurrentProcessLaunchdServiceLabel,
-  scheduleDetachedLaunchdRestartHandoff,
-} from "./launchd-restart-handoff.js";
+import { scheduleDetachedLaunchdRestartHandoff } from "./launchd-restart-handoff.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
 import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
@@ -46,6 +52,14 @@ const LAUNCH_AGENT_ENV_WRAPPER_MODE = 0o700;
 const LAUNCH_AGENT_ENV_DIR_NAME = "service-env";
 const LAUNCH_AGENT_STDERR_PATH = "/dev/null";
 const OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX = "ai.openclaw.update.";
+const OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN = /^ai\.openclaw\.manual-update\.\d+$/;
+const OPENCLAW_PROFILE_UPDATE_LAUNCHD_LABEL_PATTERN =
+  /^ai\.openclaw\.[A-Za-z0-9._-]+\.update\.[A-Za-z0-9._-]+$/;
+const OPENCLAW_DIRECT_CLI_NAMES = new Set(["openclaw", "openclaw.mjs"]);
+const OPENCLAW_NODE_RUNTIME_NAMES = new Set(["bun", "bun.exe", "node", "node.exe"]);
+const OPENCLAW_SCRIPT_NAMES = new Set(["openclaw.mjs"]);
+const LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000;
+const LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS = 100;
 
 export type StaleOpenClawUpdateLaunchdJob = {
   label: string;
@@ -53,12 +67,38 @@ export type StaleOpenClawUpdateLaunchdJob = {
   lastExitStatus?: number;
 };
 
+type OpenClawUpdateLaunchdLabelCandidate = {
+  label: string;
+  requiresMetadata: boolean;
+};
+
 function normalizeOpenClawUpdateLaunchdLabel(label: unknown): string | null {
   if (typeof label !== "string") {
     return null;
   }
   const trimmed = label.trim();
-  return trimmed.startsWith(OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX) ? trimmed : null;
+  if (trimmed.startsWith(OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX)) {
+    return trimmed;
+  }
+  // Manual update jobs include a timestamp-like suffix and should be cleaned up
+  // without matching arbitrary ai.openclaw labels.
+  return OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN.test(trimmed) ? trimmed : null;
+}
+
+function normalizeOpenClawUpdateLaunchdLabelCandidate(
+  label: unknown,
+): OpenClawUpdateLaunchdLabelCandidate | null {
+  const normalized = normalizeOpenClawUpdateLaunchdLabel(label);
+  if (normalized) {
+    return { label: normalized, requiresMetadata: false };
+  }
+  if (typeof label !== "string") {
+    return null;
+  }
+  const trimmed = label.trim();
+  return OPENCLAW_PROFILE_UPDATE_LAUNCHD_LABEL_PATTERN.test(trimmed)
+    ? { label: trimmed, requiresMetadata: true }
+    : null;
 }
 
 function isCurrentGatewayLaunchdLabel(label: string, env: NodeJS.ProcessEnv): boolean {
@@ -76,25 +116,21 @@ function isCurrentGatewayLaunchdLabel(label: string, env: NodeJS.ProcessEnv): bo
   return Boolean(configuredLabel && label === configuredLabel);
 }
 
-export function isOpenClawUpdateLaunchdLabel(label: unknown): label is string {
-  return normalizeOpenClawUpdateLaunchdLabel(label) !== null;
-}
-
 function resolveCurrentOpenClawUpdateLaunchdJobLabel(
   env: NodeJS.ProcessEnv = process.env,
-): string | null {
+): OpenClawUpdateLaunchdLabelCandidate | null {
   for (const label of [
     env.LAUNCH_JOB_LABEL,
     env.LAUNCH_JOB_NAME,
     env.XPC_SERVICE_NAME,
     env.OPENCLAW_LAUNCHD_LABEL,
   ]) {
-    const normalized = normalizeOpenClawUpdateLaunchdLabel(label);
-    if (normalized) {
-      if (isCurrentGatewayLaunchdLabel(normalized, env)) {
+    const candidate = normalizeOpenClawUpdateLaunchdLabelCandidate(label);
+    if (candidate) {
+      if (isCurrentGatewayLaunchdLabel(candidate.label, env)) {
         continue;
       }
-      return normalized;
+      return candidate;
     }
   }
   return null;
@@ -175,14 +211,47 @@ exec "$@"
 `;
 }
 
+async function resolveLaunchAgentEnvironmentWrapperOverwriteWarnings(params: {
+  wrapperPath: string;
+  generatedWrapper: string;
+}): Promise<string[]> {
+  const existingWrapper = await fs.readFile(params.wrapperPath, "utf8").catch(() => null);
+  if (existingWrapper === null || existingWrapper === params.generatedWrapper) {
+    return [];
+  }
+  return [
+    `Existing generated LaunchAgent env wrapper at ${params.wrapperPath} contains custom behavior and will be overwritten; move custom behavior to openclaw gateway install --wrapper <path> or OPENCLAW_WRAPPER.`,
+  ];
+}
+
+function writeLaunchAgentOverwriteWarnings(
+  stdout: NodeJS.WritableStream | undefined,
+  warn: ((message: string) => void) | undefined,
+  warnings: readonly string[],
+): void {
+  for (const warning of warnings) {
+    if (warn) {
+      warn(warning);
+      continue;
+    }
+    if (!stdout) {
+      continue;
+    }
+    stdout.write(`${formatLine("Warning", warning)}\n`);
+  }
+}
+
 function isLaunchAgentEnvironmentWrapperArgs(params: {
   programArguments: string[];
   envFilePath: string;
   wrapperPath: string;
 }): boolean {
   return (
-    params.programArguments[0] === params.wrapperPath &&
-    params.programArguments[1] === params.envFilePath
+    (params.programArguments[0] === params.wrapperPath &&
+      params.programArguments[1] === params.envFilePath) ||
+    (params.programArguments[0] === LAUNCH_AGENT_ENV_WRAPPER_SHELL &&
+      params.programArguments[1] === params.wrapperPath &&
+      params.programArguments[2] === params.envFilePath)
   );
 }
 
@@ -191,22 +260,35 @@ async function prepareLaunchAgentProgramArguments(params: {
   label: string;
   programArguments: string[];
   environment: GatewayServiceEnv | undefined;
-}): Promise<{ programArguments: string[]; inlineEnvironment?: GatewayServiceEnv }> {
+  stdout?: NodeJS.WritableStream;
+  warn?: (message: string) => void;
+}): Promise<{
+  programArguments: string[];
+  inlineEnvironment?: GatewayServiceEnv;
+}> {
   const entries = collectLaunchAgentEnvironmentEntries(params.environment);
   if (entries.length === 0) {
     return { programArguments: params.programArguments };
   }
 
+  // Environment values with secrets live in an owner-only env file instead of
+  // inline plist XML, which can be harder to rotate and audit.
   const envDir = resolveLaunchAgentEnvDir(params.env);
   const envFilePath = resolveLaunchAgentEnvFilePath(params.env, params.label);
   const wrapperPath = resolveLaunchAgentEnvWrapperPath(params.env, params.label);
+  const generatedWrapper = buildLaunchAgentEnvironmentWrapper();
   await ensureSecureDirectory(envDir, LAUNCH_AGENT_PRIVATE_DIR_MODE);
   await fs.writeFile(envFilePath, buildLaunchAgentEnvironmentFile(entries), {
     encoding: "utf8",
     mode: LAUNCH_AGENT_ENV_FILE_MODE,
   });
   await fs.chmod(envFilePath, LAUNCH_AGENT_ENV_FILE_MODE).catch(() => undefined);
-  await fs.writeFile(wrapperPath, buildLaunchAgentEnvironmentWrapper(), {
+  const overwriteWarnings = await resolveLaunchAgentEnvironmentWrapperOverwriteWarnings({
+    wrapperPath,
+    generatedWrapper,
+  });
+  writeLaunchAgentOverwriteWarnings(params.stdout, params.warn, overwriteWarnings);
+  await fs.writeFile(wrapperPath, generatedWrapper, {
     encoding: "utf8",
     mode: LAUNCH_AGENT_ENV_WRAPPER_MODE,
   });
@@ -223,7 +305,12 @@ async function prepareLaunchAgentProgramArguments(params: {
   }
 
   return {
-    programArguments: [wrapperPath, envFilePath, ...params.programArguments],
+    programArguments: [
+      LAUNCH_AGENT_ENV_WRAPPER_SHELL,
+      wrapperPath,
+      envFilePath,
+      ...params.programArguments,
+    ],
   };
 }
 
@@ -283,7 +370,7 @@ async function execLaunchctl(
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   const isWindows = process.platform === "win32";
-  const file = isWindows ? (process.env.ComSpec ?? "cmd.exe") : "launchctl";
+  const file = isWindows ? getWindowsCmdExePath() : "launchctl";
   const fileArgs = isWindows ? ["/d", "/s", "/c", "launchctl", ...args] : args;
   return await execFileUtf8(file, fileArgs, isWindows ? { windowsHide: true } : {});
 }
@@ -291,7 +378,15 @@ async function execLaunchctl(
 export function parseLaunchctlListOpenClawUpdateJobs(
   output: string,
 ): StaleOpenClawUpdateLaunchdJob[] {
-  const jobs: StaleOpenClawUpdateLaunchdJob[] = [];
+  return parseLaunchctlListOpenClawUpdateJobCandidates(output)
+    .filter((job) => !job.requiresMetadata)
+    .map(({ requiresMetadata: _requiresMetadata, ...job }) => job);
+}
+
+function parseLaunchctlListOpenClawUpdateJobCandidates(
+  output: string,
+): Array<StaleOpenClawUpdateLaunchdJob & OpenClawUpdateLaunchdLabelCandidate> {
+  const jobs: Array<StaleOpenClawUpdateLaunchdJob & OpenClawUpdateLaunchdLabelCandidate> = [];
   for (const rawLine of output.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line) {
@@ -299,14 +394,15 @@ export function parseLaunchctlListOpenClawUpdateJobs(
     }
     const parts = line.split(/\s+/);
     const [pidRaw, statusRaw, ...labelParts] = parts;
-    const label = labelParts.join(" ");
-    if (!label.startsWith(OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX)) {
+    const candidate = normalizeOpenClawUpdateLaunchdLabelCandidate(labelParts.join(" "));
+    if (!candidate) {
       continue;
     }
     const pid = pidRaw === "-" ? undefined : parseStrictPositiveInteger(pidRaw ?? "");
     const lastExitStatus = parseStrictInteger(statusRaw ?? "");
     jobs.push({
-      label,
+      label: candidate.label,
+      requiresMetadata: candidate.requiresMetadata,
       ...(pid !== undefined ? { pid } : {}),
       ...(lastExitStatus !== undefined ? { lastExitStatus } : {}),
     });
@@ -314,9 +410,52 @@ export function parseLaunchctlListOpenClawUpdateJobs(
   return jobs.toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
-export async function findStaleOpenClawUpdateLaunchdJobs(): Promise<
-  StaleOpenClawUpdateLaunchdJob[]
-> {
+function hasOpenClawUpdateLaunchdMarker(env: Record<string, string | undefined> | undefined) {
+  return env?.OPENCLAW_UPDATE_RUN_HANDOFF?.trim() === "1";
+}
+
+function isOpenClawUpdateCommandPrefix(programArguments: string[], updateIndex: number): boolean {
+  if (updateIndex === 1) {
+    const cliName = path.basename(programArguments[0] ?? "").toLowerCase();
+    return OPENCLAW_DIRECT_CLI_NAMES.has(cliName);
+  }
+  if (updateIndex !== 2) {
+    return false;
+  }
+  const runtimeName = path.basename(programArguments[0] ?? "").toLowerCase();
+  const entryName = path.basename(programArguments[1] ?? "").toLowerCase();
+  return OPENCLAW_NODE_RUNTIME_NAMES.has(runtimeName) && OPENCLAW_SCRIPT_NAMES.has(entryName);
+}
+
+function isOpenClawUpdateProgramArguments(programArguments: string[] | undefined): boolean {
+  if (!Array.isArray(programArguments) || programArguments.length === 0) {
+    return false;
+  }
+  const updateIndex = programArguments.findIndex((arg) => arg.trim() === "update");
+  if (updateIndex < 0 || !programArguments.slice(updateIndex + 1).includes("--yes")) {
+    return false;
+  }
+  return (
+    isOpenClawUpdateCommandPrefix(programArguments, updateIndex) &&
+    !programArguments.some((arg) => arg.trim() === "gateway")
+  );
+}
+
+async function isLaunchdJobConfirmedOpenClawUpdater(params: {
+  label: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  const plistPath = resolveLaunchAgentPlistPathForLabel(params.env, params.label);
+  const command = await readLaunchAgentProgramArgumentsFromFile(plistPath);
+  return (
+    hasOpenClawUpdateLaunchdMarker(command?.environment) ||
+    isOpenClawUpdateProgramArguments(command?.programArguments)
+  );
+}
+
+export async function findStaleOpenClawUpdateLaunchdJobs(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<StaleOpenClawUpdateLaunchdJob[]> {
   if (process.platform !== "darwin") {
     return [];
   }
@@ -324,36 +463,84 @@ export async function findStaleOpenClawUpdateLaunchdJobs(): Promise<
   if (result.code !== 0) {
     return [];
   }
-  return parseLaunchctlListOpenClawUpdateJobs(result.stdout);
+  // Never report the active gateway label as stale even when a wrapper exposes
+  // update-like launchd metadata through the current environment.
+  const jobs: StaleOpenClawUpdateLaunchdJob[] = [];
+  for (const job of parseLaunchctlListOpenClawUpdateJobCandidates(result.stdout)) {
+    if (isCurrentGatewayLaunchdLabel(job.label, env)) {
+      continue;
+    }
+    if (
+      job.requiresMetadata &&
+      !(await isLaunchdJobConfirmedOpenClawUpdater({ label: job.label, env }))
+    ) {
+      continue;
+    }
+    jobs.push({
+      label: job.label,
+      ...(job.pid !== undefined ? { pid: job.pid } : {}),
+      ...(job.lastExitStatus !== undefined ? { lastExitStatus: job.lastExitStatus } : {}),
+    });
+  }
+  return jobs;
 }
 
-export async function removeOpenClawUpdateLaunchdJob(label: string): Promise<boolean> {
-  const normalizedLabel = normalizeOpenClawUpdateLaunchdLabel(label);
-  if (process.platform !== "darwin" || !normalizedLabel) {
+async function disableOpenClawUpdateLaunchdJobCandidate(params: {
+  candidate: OpenClawUpdateLaunchdLabelCandidate;
+  env: NodeJS.ProcessEnv;
+  trustCurrentEnvMarker: boolean;
+}): Promise<boolean> {
+  if (process.platform !== "darwin") {
     return false;
   }
-  const result = await execLaunchctl(["remove", assertValidLaunchAgentLabel(normalizedLabel)]);
-  return result.code === 0;
-}
-
-export async function disableOpenClawUpdateLaunchdJob(label: string): Promise<boolean> {
-  const normalizedLabel = normalizeOpenClawUpdateLaunchdLabel(label);
-  if (process.platform !== "darwin" || !normalizedLabel) {
+  if (
+    params.candidate.requiresMetadata &&
+    !(
+      (params.trustCurrentEnvMarker && hasOpenClawUpdateLaunchdMarker(params.env)) ||
+      (await isLaunchdJobConfirmedOpenClawUpdater({
+        label: params.candidate.label,
+        env: params.env,
+      }))
+    )
+  ) {
     return false;
   }
-  const serviceTarget = `${resolveGuiDomain()}/${assertValidLaunchAgentLabel(normalizedLabel)}`;
+  const serviceTarget = `${resolveGuiDomain()}/${assertValidLaunchAgentLabel(params.candidate.label)}`;
   const result = await execLaunchctl(["disable", serviceTarget]);
   return result.code === 0;
+}
+
+export async function disableOpenClawUpdateLaunchdJob(
+  label: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  const candidate = normalizeOpenClawUpdateLaunchdLabelCandidate(label);
+  if (!candidate) {
+    return false;
+  }
+  return await disableOpenClawUpdateLaunchdJobCandidate({
+    candidate,
+    env,
+    trustCurrentEnvMarker: false,
+  });
 }
 
 export async function disableCurrentOpenClawUpdateLaunchdJob(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<boolean> {
-  const label = resolveCurrentOpenClawUpdateLaunchdJobLabel(env);
-  if (!label) {
+  const candidate = resolveCurrentOpenClawUpdateLaunchdJobLabel(env);
+  if (!candidate) {
     return false;
   }
-  return await disableOpenClawUpdateLaunchdJob(label);
+  return await disableOpenClawUpdateLaunchdJobCandidate({
+    candidate,
+    env,
+    // Detached handoffs preserve the configured label, so only launchd-backed
+    // current-process identity may turn the ambient marker into proof.
+    trustCurrentEnvMarker: isCurrentProcessLaunchdServiceLabel(candidate.label, env, {
+      allowConfiguredLabelFallback: false,
+    }),
+  });
 }
 
 function parseGatewayPortFromProgramArguments(
@@ -368,15 +555,15 @@ function parseGatewayPortFromProgramArguments(
       continue;
     }
     if (current === "--port") {
-      const next = parseStrictPositiveInteger(programArguments[index + 1] ?? "");
-      if (next !== undefined) {
+      const next = parseTcpPort(programArguments[index + 1] ?? "");
+      if (next !== null) {
         return next;
       }
       continue;
     }
     if (current.startsWith("--port=")) {
-      const value = parseStrictPositiveInteger(current.slice("--port=".length));
-      if (value !== undefined) {
+      const value = parseTcpPort(current.slice("--port=".length));
+      if (value !== null) {
         return value;
       }
     }
@@ -390,14 +577,11 @@ async function resolveLaunchAgentGatewayPort(env: GatewayServiceEnv): Promise<nu
   if (fromArgs !== null) {
     return fromArgs;
   }
-  const fromServiceEnv = parseStrictPositiveInteger(
-    command?.environment?.OPENCLAW_GATEWAY_PORT ?? "",
-  );
-  if (fromServiceEnv !== undefined) {
+  const fromServiceEnv = parseTcpPort(command?.environment?.OPENCLAW_GATEWAY_PORT ?? "");
+  if (fromServiceEnv !== null) {
     return fromServiceEnv;
   }
-  const fromEnv = parseStrictPositiveInteger(env.OPENCLAW_GATEWAY_PORT ?? "");
-  return fromEnv ?? null;
+  return parseTcpPort(env.OPENCLAW_GATEWAY_PORT ?? "");
 }
 
 function resolveGuiDomain(): string {
@@ -412,16 +596,22 @@ function throwBootstrapGuiSessionError(params: {
   domain: string;
   actionHint: string;
 }) {
-  throw new Error(
-    [
-      `launchctl bootstrap failed: ${params.detail}`,
-      `LaunchAgent ${params.actionHint} requires a logged-in macOS GUI session for this user (${params.domain}).`,
-      "This usually means you are running from SSH/headless context or as the wrong user (including sudo).",
-      `Fix: sign in to the macOS desktop as the target user and rerun \`${params.actionHint}\`.`,
-      "For headless VM setups, enable auto-login for the target user so macOS creates the GUI session after boot.",
-      "Headless deployments should use a dedicated logged-in user session or a custom LaunchDaemon (not shipped): https://docs.openclaw.ai/gateway",
-    ].join("\n"),
-  );
+  throw new Error(formatLaunchAgentGuiSessionError(params));
+}
+
+export function formatLaunchAgentGuiSessionError(params: {
+  detail: string;
+  domain: string;
+  actionHint: string;
+}): string {
+  return [
+    `launchctl bootstrap failed: ${params.detail}`,
+    `LaunchAgent ${params.actionHint} requires a logged-in macOS GUI session for this user (${params.domain}).`,
+    "This usually means you are running from SSH/headless context or as the wrong user (including sudo).",
+    `Fix: sign in to the macOS desktop as the target user and rerun \`${params.actionHint}\`.`,
+    "For headless VM setups, enable auto-login for the target user so macOS creates the GUI session after boot.",
+    "Headless deployments should use a dedicated logged-in user session or a custom LaunchDaemon (not shipped): https://docs.openclaw.ai/gateway",
+  ].join("\n");
 }
 
 function writeLaunchAgentActionLine(
@@ -537,15 +727,6 @@ export async function isLaunchAgentLoaded(args: GatewayServiceEnvArgs): Promise<
   return res.code === 0;
 }
 
-export async function isLaunchAgentListed(args: GatewayServiceEnvArgs): Promise<boolean> {
-  const label = resolveLaunchAgentLabel({ env: args.env });
-  const res = await execLaunchctl(["list"]);
-  if (res.code !== 0) {
-    return false;
-  }
-  return res.stdout.split(/\r?\n/).some((line) => line.trim().split(/\s+/).at(-1) === label);
-}
-
 export async function launchAgentPlistExists(env: GatewayServiceEnv): Promise<boolean> {
   try {
     const plistPath = resolveLaunchAgentPlistPath(env);
@@ -564,10 +745,14 @@ export async function readLaunchAgentRuntime(
   const res = await execLaunchctl(["print", `${domain}/${label}`]);
   if (res.code !== 0) {
     const plistExists = await launchAgentPlistExists(env);
+    const detail = (res.stderr || res.stdout).trim() || undefined;
+    const missingGuiSession = plistExists && isUnsupportedGuiDomain(detail ?? "");
     return {
       status: "unknown",
-      detail: (res.stderr || res.stdout).trim() || undefined,
-      ...(plistExists ? { missingSupervision: true } : { missingUnit: true }),
+      detail,
+      ...(plistExists
+        ? { missingSupervision: true, ...(missingGuiSession ? { missingGuiSession } : {}) }
+        : { missingUnit: true }),
     };
   }
   const parsed = parseLaunchctlPrint(res.stdout || res.stderr || "");
@@ -586,7 +771,12 @@ export async function readLaunchAgentRuntime(
 
 type LaunchAgentBootstrapRepairResult =
   | { ok: true; status: "repaired" | "already-loaded" }
-  | { ok: false; status: "bootstrap-failed" | "kickstart-failed"; detail?: string };
+  | {
+      ok: false;
+      status: "bootstrap-failed" | "kickstart-failed";
+      detail?: string;
+    }
+  | { ok: false; status: "gui-session-unavailable"; detail: string; domain: string };
 
 function isLaunchctlAlreadyLoaded(res: { stdout: string; stderr: string; code: number }): boolean {
   const detail = normalizeLowercaseStringOrEmpty(res.stderr || res.stdout);
@@ -606,6 +796,14 @@ export async function repairLaunchAgentBootstrap(args: {
   let repairStatus: "repaired" | "already-loaded" = "repaired";
   if (boot.code !== 0) {
     const detail = (boot.stderr || boot.stdout).trim();
+    if (isUnsupportedGuiDomain(detail)) {
+      return {
+        ok: false,
+        status: "gui-session-unavailable",
+        detail,
+        domain,
+      };
+    }
     if (!isLaunchctlAlreadyLoaded(boot)) {
       return { ok: false, status: "bootstrap-failed", detail: detail || undefined };
     }
@@ -675,6 +873,7 @@ function isUnsupportedGuiDomain(detail: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     normalized.includes("domain does not support specified action") ||
+    normalized.includes("could not find domain for user gui") ||
     normalized.includes("bootstrap failed: 125")
   );
 }
@@ -692,10 +891,10 @@ function formatLaunchctlResultDetail(res: {
   stderr: string;
   code: number;
 }): string {
-  return sanitizeForLog((res.stderr || res.stdout).replace(/[\r\n\t]+/g, " "))
+  const sanitized = sanitizeForLog((res.stderr || res.stdout).replace(/[\r\n\t]+/g, " "))
     .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 1000);
+    .trim();
+  return truncateUtf16Safe(sanitized, 1000);
 }
 
 async function bootoutLaunchAgentOrThrow(params: {
@@ -758,6 +957,18 @@ async function waitForLaunchAgentStopped(serviceTarget: string): Promise<LaunchA
   return lastUnknown ?? { state: "running" };
 }
 
+async function waitForGatewayPortRelease(port: number): Promise<boolean> {
+  const deadline = Date.now() + LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await sleep(Math.min(LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS, deadline - Date.now()));
+    const status = await probePortUsage(port);
+    if (status === "free") {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function assertGatewayPortReleasedAfterStop(env: GatewayServiceEnv): Promise<void> {
   const port = await resolveLaunchAgentGatewayPort(env);
   if (port === null) {
@@ -766,6 +977,9 @@ async function assertGatewayPortReleasedAfterStop(env: GatewayServiceEnv): Promi
   cleanStaleGatewayProcessesSync(port);
   const diagnostics = await inspectPortUsage(port).catch(() => null);
   if (diagnostics?.status !== "busy") {
+    return;
+  }
+  if (await waitForGatewayPortRelease(port)) {
     return;
   }
   throw new Error(
@@ -785,6 +999,14 @@ export async function stopLaunchAgent({
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const serviceTarget = `${domain}/${label}`;
+
+  if (
+    isCurrentProcessLaunchdServiceLabel(label, process.env, { allowConfiguredLabelFallback: false })
+  ) {
+    throw new Error(
+      `Refusing to stop LaunchAgent ${label} from inside the same launchd service; run this command from an external shell.`,
+    );
+  }
 
   if (!persistDisable) {
     // Default: bootout only. Removes the job from the current launchd domain without
@@ -848,7 +1070,9 @@ async function writeLaunchAgentPlist({
   workingDirectory,
   environment,
   description,
-}: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{ plistPath: string; stdoutPath: string }> {
+  stdout,
+  warn,
+}: GatewayServiceInstallArgs): Promise<{ plistPath: string; stdoutPath: string }> {
   const { logDir, stdoutPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
   await ensureSecureDirectory(logDir);
 
@@ -877,6 +1101,8 @@ async function writeLaunchAgentPlist({
     label,
     programArguments,
     environment,
+    stdout,
+    warn,
   });
 
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
@@ -898,7 +1124,7 @@ export async function stageLaunchAgent({
   stdout,
   ...args
 }: GatewayServiceInstallArgs): Promise<{ plistPath: string }> {
-  const { plistPath, stdoutPath } = await writeLaunchAgentPlist(args);
+  const { plistPath, stdoutPath } = await writeLaunchAgentPlist({ ...args, stdout });
   writeFormattedLines(
     stdout,
     [
@@ -948,10 +1174,14 @@ async function rewriteLaunchAgentPlistForRestart({
   env,
   label,
   plistPath,
+  stdout,
+  warn,
 }: {
   env: GatewayServiceEnv;
   label: string;
   plistPath: string;
+  stdout?: NodeJS.WritableStream;
+  warn?: (message: string) => void;
 }): Promise<boolean> {
   const existing = await readLaunchAgentProgramArgumentsFromFile(
     plistPath,
@@ -973,6 +1203,8 @@ async function rewriteLaunchAgentPlistForRestart({
     label,
     programArguments: existing.programArguments,
     environment: existing.environment,
+    stdout,
+    warn,
   });
   const plist = buildLaunchAgentPlist({
     label,
@@ -1016,6 +1248,7 @@ async function ensureLaunchAgentLoadedAfterFailure(params: {
 export async function restartLaunchAgent({
   stdout,
   env,
+  warn,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveGuiDomain();
@@ -1031,6 +1264,8 @@ export async function restartLaunchAgent({
       env: serviceEnv,
       label,
       plistPath,
+      stdout,
+      warn,
     });
     const handoff = scheduleDetachedLaunchdRestartHandoff({
       env: serviceEnv,
@@ -1061,6 +1296,8 @@ export async function restartLaunchAgent({
     env: serviceEnv,
     label,
     plistPath,
+    stdout,
+    warn,
   });
 
   // `openclaw gateway restart` is an explicit operator request to bring the

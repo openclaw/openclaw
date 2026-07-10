@@ -1,3 +1,5 @@
+// Sandbox env sanitizer tests cover credential filtering for inherited and
+// explicitly configured sandbox environment variables.
 import { describe, expect, it } from "vitest";
 import { sanitizeEnvVars, sanitizeExplicitSandboxEnvVars } from "./sanitize-env-vars.js";
 
@@ -6,6 +8,9 @@ describe("sanitizeEnvVars", () => {
     const result = sanitizeEnvVars({
       NODE_ENV: "test",
       OPENAI_API_KEY: "sk-live-xxx", // pragma: allowlist secret
+      OPENAI_ADMIN_KEY: "sk-admin-live-xxx", // pragma: allowlist secret
+      ANTHROPIC_ADMIN_KEY: "sk-ant-admin-live-xxx", // pragma: allowlist secret
+      ANTHROPIC_ADMIN_API_KEY: "sk-ant-admin-api-live-xxx", // pragma: allowlist secret
       FOO: "bar",
       GITHUB_TOKEN: "gh-token", // pragma: allowlist secret
     });
@@ -14,7 +19,13 @@ describe("sanitizeEnvVars", () => {
       NODE_ENV: "test",
       FOO: "bar",
     });
-    expect(result.blocked).toStrictEqual(["OPENAI_API_KEY", "GITHUB_TOKEN"]);
+    expect(result.blocked).toStrictEqual([
+      "OPENAI_API_KEY",
+      "OPENAI_ADMIN_KEY",
+      "ANTHROPIC_ADMIN_KEY",
+      "ANTHROPIC_ADMIN_API_KEY",
+      "GITHUB_TOKEN",
+    ]);
   });
 
   it("blocks credentials even when suffix pattern matches", () => {
@@ -67,6 +78,8 @@ describe("sanitizeEnvVars", () => {
   });
 
   it("allows explicit configured sandbox env names that look like credentials", () => {
+    // Explicit sandbox env config is operator intent; value validation still
+    // runs, but name-based credential blocking does not.
     const result = sanitizeExplicitSandboxEnvVars({
       GEMINI_API_KEY: "dummy-gemini-api-key",
       GOOGLE_CLIENT_SECRET: "dummy-google-client-secret",

@@ -1,6 +1,25 @@
+// Google Meet tests cover chrome browser proxy plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { callBrowserProxyOnNode } from "./chrome-browser-proxy.js";
+import { callBrowserProxyOnNode, forceMeetEnglishUi } from "./chrome-browser-proxy.js";
+
+describe("forceMeetEnglishUi", () => {
+  it("pins hl=en on Meet URLs", () => {
+    expect(forceMeetEnglishUi("https://meet.google.com/abc-defg-hij")).toBe(
+      "https://meet.google.com/abc-defg-hij?hl=en",
+    );
+    expect(forceMeetEnglishUi("https://meet.google.com/new")).toBe(
+      "https://meet.google.com/new?hl=en",
+    );
+  });
+
+  it("overrides an existing hl and keeps other params", () => {
+    expect(forceMeetEnglishUi("https://meet.google.com/abc-defg-hij?hl=zh-TW&authuser=1")).toBe(
+      "https://meet.google.com/abc-defg-hij?hl=en&authuser=1",
+    );
+  });
+});
 
 describe("Google Meet Chrome browser proxy", () => {
   it("reports malformed node proxy payloadJSON with an owned error", async () => {
@@ -34,6 +53,33 @@ describe("Google Meet Chrome browser proxy", () => {
         timeoutMs: 100,
       },
       timeoutMs: 5_100,
+      scopes: ["operator.admin"],
     });
+  });
+
+  it("caps oversized node proxy gateway timeouts", async () => {
+    const invoke = vi.fn(async () => ({
+      ok: true,
+      payloadJSON: JSON.stringify({ result: { ok: true } }),
+    }));
+    const runtime = {
+      nodes: {
+        invoke,
+      },
+    } as unknown as PluginRuntime;
+
+    await callBrowserProxyOnNode({
+      runtime,
+      nodeId: "node-1",
+      method: "GET",
+      path: "/tabs",
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: MAX_TIMER_TIMEOUT_MS,
+      }),
+    );
   });
 });

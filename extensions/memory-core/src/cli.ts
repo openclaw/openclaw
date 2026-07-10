@@ -1,9 +1,15 @@
+// Memory Core plugin module implements cli behavior.
 import type { Command } from "commander";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   formatDocsLink,
   formatHelpExamples,
   theme,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import type {
   MemoryCommandOptions,
   MemoryPromoteCommandOptions,
@@ -18,14 +24,9 @@ import {
   DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
 } from "./short-term-promotion.js";
 
-type MemoryCliRuntime = typeof import("./cli.runtime.js");
+const loadMemoryCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime.js"));
 
-let memoryCliRuntimePromise: Promise<MemoryCliRuntime> | null = null;
-
-async function loadMemoryCliRuntime(): Promise<MemoryCliRuntime> {
-  memoryCliRuntimePromise ??= import("./cli.runtime.js");
-  return await memoryCliRuntimePromise;
-}
+const DECIMAL_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/;
 
 export async function runMemoryStatus(opts: MemoryCommandOptions) {
   const runtime = await loadMemoryCliRuntime();
@@ -75,7 +76,8 @@ function invalidCliArgument(message: string): Error & { code: string; exitCode: 
 }
 
 function parseMemoryCliNumberOption(value: string, flag: string): number {
-  const parsed = Number(value);
+  const trimmed = value.trim();
+  const parsed = DECIMAL_NUMBER_RE.test(trimmed) ? Number(trimmed) : Number.NaN;
   if (!Number.isFinite(parsed)) {
     throw invalidCliArgument(`${flag} must be a finite number.`);
   }
@@ -83,16 +85,16 @@ function parseMemoryCliNumberOption(value: string, flag: string): number {
 }
 
 function parseMemoryCliPositiveIntegerOption(value: string, flag: string): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
     throw invalidCliArgument(`${flag} must be a positive integer.`);
   }
   return parsed;
 }
 
 function parseMemoryCliNonNegativeIntegerOption(value: string, flag: string): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+  const parsed = parseStrictNonNegativeInteger(value);
+  if (parsed === undefined) {
     throw invalidCliArgument(`${flag} must be a non-negative integer.`);
   }
   return parsed;

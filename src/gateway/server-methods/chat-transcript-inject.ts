@@ -1,17 +1,24 @@
+// Chat transcript injection appends gateway-authored assistant rows while
+// preserving agent-session parent links and transcript update notifications.
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
-import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
+import {
+  findTranscriptEvent,
+  persistSessionTranscriptTurn,
+  type TranscriptEvent,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
 
+/** Metadata persisted on gateway-injected assistant messages that mark a stopped run. */
 export type GatewayInjectedAbortMeta = {
   aborted: true;
   origin: "rpc" | "stop-command";
   runId: string;
 };
 
+/** Result shape returned after appending an assistant row to a session transcript. */
 export type GatewayInjectedTranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
@@ -19,6 +26,7 @@ export type GatewayInjectedTranscriptAppendResult = {
   error?: string;
 };
 
+/** Hash marker used to dedupe companion TTS text/audio supplements. */
 export type GatewayInjectedTtsSupplementMarker = {
   textSha256: string;
 };
@@ -29,6 +37,8 @@ function resolveInjectedAssistantContent(params: {
   content?: Array<Record<string, unknown>>;
 }): Array<Record<string, unknown>> {
   const labelPrefix = params.label ? `[${params.label}]\n\n` : "";
+  // Preserve rich content arrays when callers already prepared media blocks;
+  // only the first text block is rewritten so block ordering stays intact.
   if (params.content && params.content.length > 0) {
     if (!labelPrefix) {
       return params.content;
@@ -47,8 +57,73 @@ function resolveInjectedAssistantContent(params: {
   return [{ type: "text", text: `${labelPrefix}${params.message}` }];
 }
 
+function transcriptEventRecord(event: TranscriptEvent): Record<string, unknown> | undefined {
+  return event && typeof event === "object" && !Array.isArray(event)
+    ? (event as Record<string, unknown>)
+    : undefined;
+}
+
+function transcriptEventMessage(event: TranscriptEvent): Record<string, unknown> | undefined {
+  const message = transcriptEventRecord(event)?.message;
+  return message && typeof message === "object" && !Array.isArray(message)
+    ? (message as Record<string, unknown>)
+    : undefined;
+}
+
+function transcriptEventId(event: TranscriptEvent): string | undefined {
+  const id = transcriptEventRecord(event)?.id;
+  return typeof id === "string" && id.trim().length > 0 ? id : undefined;
+}
+
+type InjectedAssistantIdempotencyTarget = {
+  agentId?: string;
+  sessionFile?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  storePath?: string;
+};
+
+async function findInjectedAssistantMessageByIdempotencyKey(params: {
+  idempotencyKey: string;
+  target: InjectedAssistantIdempotencyTarget;
+}): Promise<{ messageId: string; message: Record<string, unknown> } | undefined> {
+  if (!params.target.sessionId || !params.target.sessionKey) {
+    return undefined;
+  }
+  // The in-lock duplicate check resolves through the already-resolved
+  // sessionFile when present so the lookup reads the file being appended to.
+  // findTranscriptEvent scans newest-first with early exit, keeping the hot
+  // idempotent append path from materializing the whole transcript.
+  const found = await findTranscriptEvent(
+    {
+      ...(params.target.agentId ? { agentId: params.target.agentId } : {}),
+      ...(params.target.sessionFile ? { sessionFile: params.target.sessionFile } : {}),
+      sessionId: params.target.sessionId,
+      sessionKey: params.target.sessionKey,
+      ...(params.target.storePath ? { storePath: params.target.storePath } : {}),
+    },
+    (candidate) => {
+      const message = transcriptEventMessage(candidate);
+      return message?.role === "assistant" && message.idempotencyKey === params.idempotencyKey;
+    },
+  );
+  const message = found ? transcriptEventMessage(found.event) : undefined;
+  if (!message) {
+    return undefined;
+  }
+  // Legacy shipped transcripts can carry assistant rows without top-level ids;
+  // fall back to the idempotency key so re-issued aborts still dedupe there.
+  const messageId = (found ? transcriptEventId(found.event) : undefined) ?? params.idempotencyKey;
+  return { messageId, message };
+}
+
+/** Append a gateway-authored assistant message while preserving transcript parent links. */
 export async function appendInjectedAssistantMessageToTranscript(params: {
-  transcriptPath: string;
+  transcriptPath?: string;
+  storePath?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  agentId?: string;
   message: string;
   label?: string;
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
@@ -109,19 +184,67 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   };
 
   try {
-    const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
-      transcriptPath: params.transcriptPath,
-      message: messageBody,
-      now,
-      useRawWhenLinear: true,
-      config: params.config,
-    });
-    emitSessionTranscriptUpdate({
-      sessionFile: params.transcriptPath,
-      message: appendedMessage,
-      messageId,
-    });
-    return { ok: true, messageId, message: appendedMessage as unknown as Record<string, unknown> };
+    if (!params.transcriptPath && (!params.storePath || !params.sessionId || !params.sessionKey)) {
+      return { ok: false, error: "transcript identity not resolved" };
+    }
+    const assistantScopedIdempotency =
+      params.idempotencyKey && params.storePath && params.sessionId && params.sessionKey
+        ? {
+            idempotencyKey: params.idempotencyKey,
+            target: {
+              ...(params.agentId ? { agentId: params.agentId } : {}),
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              storePath: params.storePath,
+            },
+          }
+        : undefined;
+    const turn = await persistSessionTranscriptTurn(
+      {
+        sessionKey: params.sessionKey ?? "",
+        ...(params.transcriptPath ? { sessionFile: params.transcriptPath } : {}),
+        ...(params.storePath ? { storePath: params.storePath } : {}),
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+      },
+      {
+        updateMode: "inline",
+        touchSessionEntry: Boolean(params.storePath && params.sessionId && params.sessionKey),
+        ...(params.config ? { config: params.config } : {}),
+        messages: [
+          {
+            message: messageBody,
+            idempotencyLookup: assistantScopedIdempotency ? "caller-checked" : "scan",
+            now,
+            useRawWhenLinear: true,
+            shouldAppend: assistantScopedIdempotency
+              ? async (target) =>
+                  !(await findInjectedAssistantMessageByIdempotencyKey({
+                    idempotencyKey: assistantScopedIdempotency.idempotencyKey,
+                    target,
+                  }))
+              : undefined,
+          },
+        ],
+      },
+    );
+    const appended = turn.messages[0];
+    if (!appended) {
+      if (assistantScopedIdempotency) {
+        const existing = await findInjectedAssistantMessageByIdempotencyKey(
+          assistantScopedIdempotency,
+        );
+        if (existing) {
+          return { ok: true, messageId: existing.messageId, message: existing.message };
+        }
+      }
+      return { ok: false, error: "gateway-injected assistant message was not appended" };
+    }
+    return {
+      ok: true,
+      messageId: appended.messageId,
+      message: appended.message as Record<string, unknown>,
+    };
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
   }

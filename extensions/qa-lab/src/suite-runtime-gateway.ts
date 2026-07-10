@@ -1,9 +1,14 @@
+// Qa Lab plugin module implements suite runtime gateway behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { QaSuiteInfraError, toQaErrorObject } from "./errors.js";
+import { applyQaMergePatch } from "./suite-merge-patch.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaConfigSnapshot, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
+import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
 
 type QaGatewayMutationEnv = Pick<
   QaSuiteRuntimeEnv,
@@ -20,7 +25,7 @@ async function fetchJson<T>(url: string): Promise<T> {
     if (!response.ok) {
       throw new Error(`request failed ${response.status}: ${url}`);
     }
-    return (await response.json()) as T;
+    return await readProviderJsonResponse<T>(response, "qa-lab-suite-fetch-json");
   } finally {
     await release();
   }
@@ -47,7 +52,7 @@ async function waitForGatewayHealthy(env: Pick<QaSuiteRuntimeEnv, "gateway">, ti
     }
     await sleep(250);
   }
-  throw new Error(`timed out after ${timeoutMs}ms`);
+  throw new QaSuiteInfraError("gateway_ready_timeout", `timed out after ${timeoutMs}ms`);
 }
 
 async function waitForTransportReady(
@@ -71,11 +76,20 @@ async function waitForConfigRestartSettle(
   env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">,
   restartDelayMs = 1_000,
   timeoutMs = 60_000,
+  settleBufferMs = 750,
 ) {
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
-  const readyAfterMs = restartDelayMs + 750;
+  const readyAfterMs = restartDelayMs + settleBufferMs;
   let lastHealthError: unknown = null;
+
+  // A delay beyond this mutation's observation window intentionally keeps the
+  // current process alive so scenarios can prove config reads without restart.
+  if (restartDelayMs >= timeoutMs) {
+    await waitForGatewayHealthy(env, timeoutMs);
+    await waitForTransportReady(env, timeoutMs);
+    return;
+  }
 
   while (Date.now() < deadline) {
     try {
@@ -91,7 +105,8 @@ async function waitForConfigRestartSettle(
     await sleep(Math.min(250, Math.max(1, deadline - Date.now())));
   }
 
-  throw new Error(
+  throw new QaSuiteInfraError(
+    "transport_ready_timeout",
     `timed out after ${timeoutMs}ms waiting for config restart readiness${
       lastHealthError ? `: ${formatErrorMessage(lastHealthError)}` : ""
     }`,
@@ -135,48 +150,6 @@ function getGatewayRetryAfterMs(error: unknown) {
     }
   }
   return null;
-}
-
-function isObjectWithStringId(value: unknown): value is { id: string } & Record<string, unknown> {
-  return isPlainObject(value) && typeof value.id === "string";
-}
-
-function applyQaMergePatch(target: unknown, patch: unknown): unknown {
-  if (Array.isArray(target) && Array.isArray(patch)) {
-    const merged = target.map((entry) => structuredClone(entry));
-    const indexById = new Map<string, number>();
-    for (const [index, entry] of merged.entries()) {
-      if (isObjectWithStringId(entry)) {
-        indexById.set(entry.id, index);
-      }
-    }
-    for (const patchEntry of patch) {
-      if (!isObjectWithStringId(patchEntry)) {
-        merged.push(structuredClone(patchEntry));
-        continue;
-      }
-      const existingIndex = indexById.get(patchEntry.id);
-      if (existingIndex === undefined) {
-        merged.push(structuredClone(patchEntry));
-        indexById.set(patchEntry.id, merged.length - 1);
-        continue;
-      }
-      merged[existingIndex] = applyQaMergePatch(merged[existingIndex], patchEntry);
-    }
-    return merged;
-  }
-  if (!isPlainObject(patch)) {
-    return structuredClone(patch);
-  }
-  const base = isPlainObject(target) ? structuredClone(target) : {};
-  for (const [key, value] of Object.entries(patch)) {
-    if (value === null) {
-      delete base[key];
-      continue;
-    }
-    base[key] = applyQaMergePatch(base[key], value);
-  }
-  return base;
 }
 
 function areJsonValuesEqual(left: unknown, right: unknown): boolean {
@@ -242,6 +215,16 @@ function isConfigPatchNoopForSnapshot(config: Record<string, unknown>, raw: stri
   return areJsonValuesEqual(applyQaMergePatch(config, patch), config);
 }
 
+function isConfigMutationNoopForSnapshot(
+  action: "config.patch" | "config.apply",
+  config: Record<string, unknown>,
+  raw: string,
+) {
+  return action === "config.patch"
+    ? isConfigPatchNoopForSnapshot(config, raw)
+    : isConfigApplyNoopForSnapshot(config, raw);
+}
+
 async function readConfigSnapshot(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
   const snapshot = (await env.gateway.call(
     "config.get",
@@ -270,25 +253,18 @@ async function runConfigMutation(params: {
   };
   note?: string;
   restartDelayMs?: number;
+  restartSettleBufferMs?: number;
+  replacePaths?: readonly string[];
 }) {
   const restartDelayMs = params.restartDelayMs ?? 1_000;
   const timeoutMs = liveTurnTimeoutMs(params.env, 180_000);
   let lastConflict: unknown = null;
   for (let attempt = 1; attempt <= 8; attempt += 1) {
     const snapshot = await readConfigSnapshot(params.env);
-    if (
-      params.action === "config.patch" &&
-      isConfigPatchNoopForSnapshot(snapshot.config, params.raw)
-    ) {
+    if (isConfigMutationNoopForSnapshot(params.action, snapshot.config, params.raw)) {
       // QA scenarios do best-effort cleanup in finally blocks. Skipping
       // client-known no-op patches keeps that cleanup from burning the
       // control-plane write budget and making later capability checks flaky.
-      return { ok: true, noop: true };
-    }
-    if (
-      params.action === "config.apply" &&
-      isConfigApplyNoopForSnapshot(snapshot.config, params.raw)
-    ) {
       return { ok: true, noop: true };
     }
     try {
@@ -301,10 +277,16 @@ async function runConfigMutation(params: {
           ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
           ...(params.note ? { note: params.note } : {}),
           restartDelayMs,
+          ...(params.replacePaths?.length ? { replacePaths: params.replacePaths } : {}),
         },
         { timeoutMs },
       );
-      await waitForConfigRestartSettle(params.env, restartDelayMs, timeoutMs);
+      await waitForConfigRestartSettle(
+        params.env,
+        restartDelayMs,
+        timeoutMs,
+        params.restartSettleBufferMs,
+      );
       return result;
     } catch (error) {
       if (isConfigHashConflict(error)) {
@@ -316,7 +298,7 @@ async function runConfigMutation(params: {
       }
       const retryAfterMs = getGatewayRetryAfterMs(error);
       if (retryAfterMs && attempt < 8) {
-        await sleep(retryAfterMs + 500);
+        await sleep(resolveQaGatewayTimeoutWithGraceMs(retryAfterMs, 500));
         await waitForGatewayHealthy(params.env, Math.max(15_000, restartDelayMs + 10_000)).catch(
           () => undefined,
         );
@@ -325,11 +307,26 @@ async function runConfigMutation(params: {
       if (!isGatewayRestartRace(error)) {
         throw error;
       }
-      await waitForConfigRestartSettle(params.env, restartDelayMs, timeoutMs);
-      return { ok: true, restarted: true };
+      await waitForConfigRestartSettle(
+        params.env,
+        restartDelayMs,
+        timeoutMs,
+        params.restartSettleBufferMs,
+      );
+      const postRestartSnapshot = await readConfigSnapshot(params.env);
+      if (isConfigMutationNoopForSnapshot(params.action, postRestartSnapshot.config, params.raw)) {
+        return { ok: true, restarted: true };
+      }
+      lastConflict = new Error(
+        `${params.action} restart race settled before the config mutation was visible`,
+      );
+      continue;
     }
   }
-  throw lastConflict ?? new Error(`${params.action} failed after retrying config hash conflicts`);
+  throw toQaErrorObject(
+    lastConflict ?? new Error(`${params.action} failed after retrying config hash conflicts`),
+    "Non-Error thrown",
+  );
 }
 
 async function patchConfig(params: {
@@ -344,6 +341,8 @@ async function patchConfig(params: {
   };
   note?: string;
   restartDelayMs?: number;
+  restartSettleBufferMs?: number;
+  replacePaths?: readonly string[];
 }) {
   return await runConfigMutation({
     env: params.env,
@@ -353,6 +352,8 @@ async function patchConfig(params: {
     deliveryContext: params.deliveryContext,
     note: params.note,
     restartDelayMs: params.restartDelayMs,
+    restartSettleBufferMs: params.restartSettleBufferMs,
+    replacePaths: params.replacePaths,
   });
 }
 

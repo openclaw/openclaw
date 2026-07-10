@@ -1,9 +1,12 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+// Imessage tests cover catchup bridge plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
 import { runIMessageCatchup } from "./catchup-bridge.js";
-import { resolveCatchupConfig } from "./catchup.js";
+import {
+  resetIMessageCatchupCursorStoreForTest,
+  resolveCatchupConfig,
+  saveIMessageCatchupCursor,
+} from "./catchup.js";
 import type { IMessagePayload } from "./types.js";
 
 type RpcCall = {
@@ -51,17 +54,14 @@ function makeRow(opts: {
 }
 
 describe("runIMessageCatchup", () => {
-  let tempDir: string;
-
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-catchup-bridge-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+    installIMessageStateRuntimeForTest();
+    resetIMessageCatchupCursorStoreForTest();
   });
 
   afterEach(() => {
-    vi.unstubAllEnvs();
+    resetIMessageCatchupCursorStoreForTest();
     vi.useRealTimers();
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it("fetches chats then per-chat history and dispatches each row in rowid order", async () => {
@@ -155,6 +155,32 @@ describe("runIMessageCatchup", () => {
     expect(summary.querySucceeded).toBe(true);
     expect(historyCalls).toBe(1);
     expect(summary.replayed).toBe(1);
+  });
+
+  it("does not crash on Date-invalid persisted cursor timestamps", async () => {
+    const log = vi.fn();
+    await saveIMessageCatchupCursor("default", {
+      lastSeenMs: 8_700_000_000_000_000,
+      lastSeenRowid: 10,
+    });
+    const { client, calls } = makeFakeClient(() => {
+      throw new Error("unexpected rpc");
+    });
+
+    const summary = await runIMessageCatchup({
+      client: client as never,
+      accountId: "default",
+      config: resolveCatchupConfig({ enabled: true, perRunLimit: 50, maxAgeMinutes: 60 }),
+      includeAttachments: false,
+      dispatchPayload: async () => {},
+      runtime: { log },
+    });
+
+    expect(summary.querySucceeded).toBe(false);
+    expect(calls).toEqual([]);
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("imessage catchup: invalid since timestamp"),
+    );
   });
 
   it("returns querySucceeded=false when chats.list throws", async () => {

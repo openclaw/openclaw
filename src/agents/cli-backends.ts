@@ -1,3 +1,9 @@
+/**
+ * Resolves CLI runtime backends registered by plugins or setup metadata.
+ */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { CliBackendConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
@@ -13,12 +19,10 @@ import type {
   CliBundleMcpMode,
   CliBackendPlugin,
   CliBackendNativeToolMode,
+  CliBackendSideQuestionToolMode,
   PluginTextTransforms,
 } from "../plugins/types.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 type CliBackendsDeps = {
   resolvePluginSetupCliBackend: typeof resolvePluginSetupCliBackend;
@@ -34,6 +38,7 @@ const defaultCliBackendsDeps: CliBackendsDeps = {
 
 let cliBackendsDeps: CliBackendsDeps = defaultCliBackendsDeps;
 
+/** Fully merged CLI backend definition used by agent runner execution. */
 export type ResolvedCliBackend = {
   id: string;
   modelProvider?: string;
@@ -46,9 +51,11 @@ export type ResolvedCliBackend = {
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
   contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
+  ownsNativeCompaction?: boolean;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
   nativeToolMode?: CliBackendNativeToolMode;
+  sideQuestionToolMode?: CliBackendSideQuestionToolMode;
 };
 
 type ResolvedCliBackendLiveTest = {
@@ -59,6 +66,7 @@ type ResolvedCliBackendLiveTest = {
   dockerBinaryName?: string;
 };
 
+/** Binding between a model provider and the CLI runtime that serves it. */
 export type CliRuntimeModelBackendBinding = {
   provider: string;
   runtime: string;
@@ -79,9 +87,11 @@ type FallbackCliBackendPolicy = {
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
   contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
+  ownsNativeCompaction?: boolean;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
   nativeToolMode?: CliBackendNativeToolMode;
+  sideQuestionToolMode?: CliBackendSideQuestionToolMode;
 };
 
 const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = {};
@@ -119,9 +129,11 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     defaultAuthProfileId: entry.backend.defaultAuthProfileId,
     authEpochMode: entry.backend.authEpochMode,
     contextEngineHostCapabilities: entry.backend.contextEngineHostCapabilities,
+    ownsNativeCompaction: entry.backend.ownsNativeCompaction,
     prepareExecution: entry.backend.prepareExecution,
     resolveExecutionArgs: entry.backend.resolveExecutionArgs,
     nativeToolMode: entry.backend.nativeToolMode,
+    sideQuestionToolMode: entry.backend.sideQuestionToolMode,
   };
 }
 
@@ -181,6 +193,7 @@ function addCliRuntimeModelBinding(
   });
 }
 
+/** Lists model-provider to CLI-runtime bindings from runtime and optional setup registries. */
 export function listCliRuntimeModelBackendBindings(
   params: {
     config?: OpenClawConfig;
@@ -213,6 +226,7 @@ export function listCliRuntimeModelBackendBindings(
   );
 }
 
+/** Lists CLI runtime ids that alias canonical model providers. */
 export function listCliRuntimeProviderIds(
   params: {
     config?: OpenClawConfig;
@@ -232,6 +246,35 @@ export function listCliRuntimeProviderIds(
   ].toSorted();
 }
 
+/** Resolves the canonical model provider served by a CLI runtime id. */
+export function resolveCliRuntimeCanonicalProvider(params: {
+  runtime: string | undefined;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  includeSetupRegistry?: boolean;
+}): string | undefined {
+  const runtime = normalizeBackendKey(params.runtime ?? "");
+  if (!runtime) {
+    return undefined;
+  }
+  const runtimeBinding = listCliRuntimeModelBackendBindings().find(
+    (binding) => binding.runtime === runtime,
+  );
+  if (runtimeBinding) {
+    return runtimeBinding.provider;
+  }
+  if (params.includeSetupRegistry !== true) {
+    return undefined;
+  }
+  const setupBackend = cliBackendsDeps.resolvePluginSetupCliBackend({
+    backend: runtime,
+    config: params.config,
+    env: params.env,
+  });
+  return setupBackend ? resolveCliBackendModelProvider(setupBackend.backend) : undefined;
+}
+
+/** Resolves the binding for one provider/runtime pair when registered. */
 export function resolveCliRuntimeModelBackendBinding(params: {
   provider: string | undefined;
   runtime: string | undefined;
@@ -253,13 +296,25 @@ export function resolveCliRuntimeModelBackendBinding(params: {
   if (!includeSetupRegistry) {
     return undefined;
   }
-  return listCliRuntimeModelBackendBindings({
+  const setupBackend = cliBackendsDeps.resolvePluginSetupCliBackend({
+    backend: runtime,
     config: params.config,
     env: params.env,
-    includeSetupRegistry: true,
-  }).find((binding) => binding.provider === provider && binding.runtime === runtime);
+  });
+  if (!setupBackend) {
+    return undefined;
+  }
+  const setupProvider = resolveCliBackendModelProvider(setupBackend.backend);
+  return setupProvider === provider
+    ? {
+        provider,
+        runtime,
+        ...(setupBackend.pluginId ? { pluginId: setupBackend.pluginId } : {}),
+      }
+    : undefined;
 }
 
+/** Checks whether a runtime is registered to serve a model provider. */
 export function isCliRuntimeModelBackendForProvider(params: {
   provider: string | undefined;
   runtime: string | undefined;
@@ -312,6 +367,7 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
   };
 }
 
+/** Resolves live-test defaults advertised by a CLI backend plugin. */
 export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendLiveTest | null {
   const normalized = normalizeBackendKey(provider);
   const entry =
@@ -332,6 +388,7 @@ export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendL
   };
 }
 
+/** Resolves the executable CLI backend config after plugin defaults and user overrides. */
 export function resolveCliBackendConfig(
   provider: string,
   cfg?: OpenClawConfig,
@@ -373,9 +430,11 @@ export function resolveCliBackendConfig(
       defaultAuthProfileId: registered.defaultAuthProfileId,
       authEpochMode: registered.authEpochMode,
       contextEngineHostCapabilities: registered.contextEngineHostCapabilities,
+      ownsNativeCompaction: registered.ownsNativeCompaction,
       prepareExecution: registered.prepareExecution,
       resolveExecutionArgs: registered.resolveExecutionArgs,
       nativeToolMode: registered.nativeToolMode,
+      sideQuestionToolMode: registered.sideQuestionToolMode,
     };
   }
 
@@ -405,9 +464,11 @@ export function resolveCliBackendConfig(
       defaultAuthProfileId: fallbackPolicy.defaultAuthProfileId,
       authEpochMode: fallbackPolicy.authEpochMode,
       contextEngineHostCapabilities: fallbackPolicy.contextEngineHostCapabilities,
+      ownsNativeCompaction: fallbackPolicy.ownsNativeCompaction,
       prepareExecution: fallbackPolicy.prepareExecution,
       resolveExecutionArgs: fallbackPolicy.resolveExecutionArgs,
       nativeToolMode: fallbackPolicy.nativeToolMode,
+      sideQuestionToolMode: fallbackPolicy.sideQuestionToolMode,
     };
   }
   const mergedFallback = fallbackPolicy?.baseConfig
@@ -434,12 +495,15 @@ export function resolveCliBackendConfig(
     defaultAuthProfileId: fallbackPolicy?.defaultAuthProfileId,
     authEpochMode: fallbackPolicy?.authEpochMode,
     contextEngineHostCapabilities: fallbackPolicy?.contextEngineHostCapabilities,
+    ownsNativeCompaction: fallbackPolicy?.ownsNativeCompaction,
     prepareExecution: fallbackPolicy?.prepareExecution,
     resolveExecutionArgs: fallbackPolicy?.resolveExecutionArgs,
     nativeToolMode: fallbackPolicy?.nativeToolMode,
+    sideQuestionToolMode: fallbackPolicy?.sideQuestionToolMode,
   };
 }
 
+/** Test-only dependency controls for CLI backend registry resolution. */
 export const testing = {
   resetDepsForTest(): void {
     cliBackendsDeps = defaultCliBackendsDeps;

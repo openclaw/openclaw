@@ -1,3 +1,5 @@
+// Gateway HTTP/WebSocket runtime state factory.
+// Builds one server runtime with pinned plugin registries and lazy route handlers.
 import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
@@ -7,8 +9,10 @@ import type { PluginRegistry } from "../plugins/registry.js";
 import {
   pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
+  pinActivePluginSessionExtensionRegistry,
   releasePinnedPluginChannelRegistry,
   releasePinnedPluginHttpRouteRegistry,
+  releasePinnedPluginSessionExtensionRegistry,
 } from "../plugins/runtime.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -21,6 +25,7 @@ import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-b
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   type ChatRunEntry,
+  type ChatRunRegistration,
   createChatRunState,
   createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
@@ -64,6 +69,9 @@ type GatewayPluginUpgradeHandler = (
   },
 ) => Promise<boolean>;
 
+const loadGatewayPluginsHttpModule = async () => await import("./server/plugins-http.js");
+
+/** Creates the HTTP/WebSocket runtime state and pinned plugin registries for one gateway start. */
 export async function createGatewayRuntimeState(params: {
   cfg: import("../config/config.js").OpenClawConfig;
   bindHost: string;
@@ -92,6 +100,8 @@ export async function createGatewayRuntimeState(params: {
   logHooks: ReturnType<typeof createSubsystemLogger>;
   logPlugins: ReturnType<typeof createSubsystemLogger>;
   getReadiness?: ReadinessChecker;
+  isTerminalEnabled: () => boolean;
+  handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 }): Promise<{
   releasePluginRouteRegistry: () => void;
   httpServer: HttpServer;
@@ -109,16 +119,18 @@ export async function createGatewayRuntimeState(params: {
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
-  addChatRun: (sessionId: string, entry: ChatRunEntry) => void;
+  addChatRun: (sessionId: string, entry: ChatRunRegistration) => void;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
     sessionKey?: string,
   ) => ChatRunEntry | undefined;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
+  chatQueuedTurns: Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>;
   toolEventRecipients: ReturnType<typeof createToolEventRecipientRegistry>;
 }> {
   pinActivePluginHttpRouteRegistry(params.pluginRegistry);
+  pinActivePluginSessionExtensionRegistry(params.pluginRegistry);
   if (params.pinChannelRegistry !== false) {
     pinActivePluginChannelRegistry(params.pluginRegistry);
   } else {
@@ -142,6 +154,8 @@ export async function createGatewayRuntimeState(params: {
         return false;
       }
       if (!loadedHooksRequestHandler) {
+        // Hooks are cold for most gateway starts; create the handler only after a request
+        // matches the configured base path so startup avoids importing hook runtime code.
         const { createGatewayHooksRequestHandler } = await import("./server/hooks.js");
         loadedHooksRequestHandler = createGatewayHooksRequestHandler({
           deps: params.deps,
@@ -168,7 +182,9 @@ export async function createGatewayRuntimeState(params: {
         return false;
       }
       if (!loadedPluginRequestHandler) {
-        const { createGatewayPluginRequestHandler } = await import("./server/plugins-http.js");
+        // Route registries can be re-pinned after bootstrap; keep the handler lazy and route
+        // lookup dynamic so plugin HTTP routes follow the active registry snapshot.
+        const { createGatewayPluginRequestHandler } = await loadGatewayPluginsHttpModule();
         loadedPluginRequestHandler = createGatewayPluginRequestHandler({
           registry: params.pluginRegistry,
           getRouteRegistry: resolvePluginRouteRegistry,
@@ -190,7 +206,9 @@ export async function createGatewayRuntimeState(params: {
         return false;
       }
       if (!loadedPluginUpgradeHandler) {
-        const { createGatewayPluginUpgradeHandler } = await import("./server/plugins-http.js");
+        // WebSocket upgrades share the same dynamic route registry as HTTP requests; this keeps
+        // reloads from serving stale plugin upgrade handlers.
+        const { createGatewayPluginUpgradeHandler } = await loadGatewayPluginsHttpModule();
         loadedPluginUpgradeHandler = createGatewayPluginUpgradeHandler({
           registry: params.pluginRegistry,
           getRouteRegistry: resolvePluginRouteRegistry,
@@ -204,6 +222,8 @@ export async function createGatewayRuntimeState(params: {
       return shouldEnforceGatewayAuthForPluginPath(resolvePluginRouteRegistry(), pathContext);
     };
     const resolvePluginNodeCapabilityRoute = (pathContext: PluginRoutePathContext) =>
+      // Capability routes are selected from the current pinned registry so auth decisions and
+      // node-capability dispatch agree when plugin routes are reloaded.
       findMatchingPluginNodeCapabilityRoute(resolvePluginRouteRegistry(), pathContext)
         ?.nodeCapability;
 
@@ -242,6 +262,7 @@ export async function createGatewayRuntimeState(params: {
         openResponsesEnabled: params.openResponsesEnabled,
         openResponsesConfig: params.openResponsesConfig,
         strictTransportSecurityHeader: params.strictTransportSecurityHeader,
+        handleWatchNodeRequest: params.handleWatchNodeRequest,
         handleHooksRequest,
         handlePluginRequest,
         shouldEnforcePluginGatewayAuth,
@@ -250,6 +271,7 @@ export async function createGatewayRuntimeState(params: {
         getResolvedAuth: params.getResolvedAuth,
         rateLimiter: params.rateLimiter,
         getReadiness: params.getReadiness,
+        isTerminalEnabled: params.isTerminalEnabled,
         tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
       });
       // Attach upgrade handler BEFORE listening to prevent race condition
@@ -278,6 +300,8 @@ export async function createGatewayRuntimeState(params: {
         await startListeningPromise;
         return;
       }
+      // Listening is idempotent for callers racing startup; reset the promise only on failure so
+      // a transient bind error can be retried after the caller handles it.
       startListeningPromise = (async () => {
         for (const [index, host] of bindHosts.entries()) {
           const server = httpServers[index];
@@ -321,15 +345,15 @@ export async function createGatewayRuntimeState(params: {
     const addChatRun = chatRunRegistry.add;
     const removeChatRun = chatRunRegistry.remove;
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const chatQueuedTurns = new Map<string, import("./chat-queued-turns.js").QueuedChatTurnEntry>();
     const toolEventRecipients = createToolEventRecipientRegistry();
 
     return {
       releasePluginRouteRegistry: () => {
-        // Releases both pinned HTTP-route and channel registries set at startup.
-        // Release unconditionally: plugin startup/reload can re-pin these
-        // surfaces to a registry that differs from the original runtime-state
-        // bootstrap registry.
+        // Releases pinned HTTP-route, session-extension, and channel registries.
+        // Startup/reload can re-pin them to a registry that differs from bootstrap.
         releasePinnedPluginHttpRouteRegistry();
+        releasePinnedPluginSessionExtensionRegistry();
         // Release unconditionally (no registry arg): the channel pin may have
         // been re-pinned to a deferred-reload registry that differs from the
         // original params.pluginRegistry, so an identity-guarded release would
@@ -354,10 +378,14 @@ export async function createGatewayRuntimeState(params: {
       addChatRun,
       removeChatRun,
       chatAbortControllers,
+      chatQueuedTurns,
       toolEventRecipients,
     };
   } catch (err) {
+    // If state creation fails after pins are installed, release them immediately so later
+    // in-process gateway starts do not inherit a half-created plugin runtime.
     releasePinnedPluginHttpRouteRegistry();
+    releasePinnedPluginSessionExtensionRegistry();
     releasePinnedPluginChannelRegistry();
     throw err;
   }

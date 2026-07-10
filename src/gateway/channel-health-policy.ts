@@ -1,3 +1,5 @@
+// Gateway channel health policy.
+// Evaluates channel lifecycle snapshots for restart/readiness decisions.
 import type { ChannelId } from "../channels/plugins/types.public.js";
 
 type ChannelHealthSnapshot = {
@@ -15,12 +17,14 @@ type ChannelHealthSnapshot = {
   lastStartAt?: number | null;
   reconnectAttempts?: number;
   mode?: string;
+  terminalDisconnect?: boolean;
 };
 
 type ChannelHealthEvaluationReason =
   | "healthy"
   | "unmanaged"
   | "not-running"
+  | "terminal-disconnect"
   | "busy"
   | "stuck"
   | "startup-connect-grace"
@@ -57,6 +61,9 @@ export function evaluateChannelHealth(
 ): ChannelHealthEvaluation {
   if (!isManagedAccount(snapshot)) {
     return { healthy: true, reason: "unmanaged" };
+  }
+  if (!snapshot.running && snapshot.terminalDisconnect) {
+    return { healthy: false, reason: "terminal-disconnect" };
   }
   if (!snapshot.running) {
     return { healthy: false, reason: "not-running" };
@@ -131,6 +138,8 @@ export function resolveChannelRestartReason(
   snapshot: ChannelHealthSnapshot,
   evaluation: ChannelHealthEvaluation,
 ): ChannelRestartReason {
+  // Restart reasons are intentionally coarse: downstream logs/UI need stable
+  // categories, while detailed channel state stays in the health snapshot.
   if (evaluation.reason === "stale-socket") {
     return "stale-socket";
   }

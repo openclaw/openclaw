@@ -9,6 +9,7 @@ import ai.openclaw.app.gateway.isLoopbackGatewayHost
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawCapability
+import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawPhotosCommand
@@ -123,6 +124,20 @@ class ConnectionManagerTest {
   }
 
   @Test
+  fun resolveTlsParamsForEndpoint_manualMdnsRespectsManualTlsToggle() {
+    val endpoint = GatewayEndpoint.manual(host = "gateway.local", port = 18789)
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertNull(params)
+  }
+
+  @Test
   fun resolveTlsParamsForEndpoint_manualPrivateLanCleartextCanOverrideStoredPin() {
     val endpoint = GatewayEndpoint.manual(host = "192.168.1.20", port = 18789)
 
@@ -167,6 +182,30 @@ class ConnectionManagerTest {
         stableId = "_openclaw-gw._tcp.|local.|Test",
         name = "Test",
         host = "192.168.1.20",
+        port = 18789,
+        tlsEnabled = false,
+        tlsFingerprintSha256 = null,
+      )
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertEquals(true, params?.required)
+    assertNull(params?.expectedFingerprint)
+    assertEquals(false, params?.allowTOFU)
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_discoveryMdnsWithoutHintsStillRequiresTls() {
+    val endpoint =
+      GatewayEndpoint(
+        stableId = "_openclaw-gw._tcp.|local.|Test",
+        name = "Test",
+        host = "gateway.local",
         port = 18789,
         tlsEnabled = false,
         tlsFingerprintSha256 = null,
@@ -257,9 +296,16 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun isLocalCleartextGatewayHost_acceptsLanIpsButRejectsMdnsAndTailnetHosts() {
+  fun isLocalCleartextGatewayHost_acceptsLanIpsAndMdnsButRejectsRemoteHosts() {
     assertTrue(isLocalCleartextGatewayHost("192.168.1.20"))
-    assertFalse(isLocalCleartextGatewayHost("gateway.local"))
+    assertTrue(isLocalCleartextGatewayHost("gateway.local"))
+    assertTrue(isLocalCleartextGatewayHost("GATEWAY.LOCAL."))
+    assertFalse(isLocalCleartextGatewayHost("gateway.local.evil.com"))
+    assertFalse(isLocalCleartextGatewayHost("gatewaylocal"))
+    assertFalse(isLocalCleartextGatewayHost("local"))
+    assertFalse(isLocalCleartextGatewayHost(".local"))
+    assertFalse(isLocalCleartextGatewayHost("gateway..local"))
+    assertFalse(isLocalCleartextGatewayHost("gateway.local%25wlan0"))
     assertFalse(isLocalCleartextGatewayHost("100.64.0.9"))
     assertFalse(isLocalCleartextGatewayHost("gateway.tailnet.ts.net"))
   }
@@ -381,16 +427,36 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun buildOperatorConnectOptions_requestsQrBootstrapHandoffScopes() {
+  fun buildOperatorConnectOptions_requestsNativeClientOperatorScopes() {
     val options = newManager().buildOperatorConnectOptions()
 
     assertEquals(
       listOf(
+        "operator.admin",
         "operator.approvals",
         "operator.read",
+        "operator.talk.secrets",
         "operator.write",
       ),
       options.scopes,
+    )
+  }
+
+  @Test
+  fun operatorScopesForStoredDeviceToken_preservesRecordedScopes() {
+    assertEquals(
+      listOf("operator.read", "operator.write"),
+      ConnectionManager.operatorScopesForStoredDeviceToken(
+        listOf("operator.read", "operator.write", "operator.read", " "),
+      ),
+    )
+  }
+
+  @Test
+  fun operatorScopesForStoredDeviceToken_fallsBackToLegacyScopesWhenMetadataMissing() {
+    assertEquals(
+      ConnectionManager.legacyOperatorScopes,
+      ConnectionManager.operatorScopesForStoredDeviceToken(emptyList()),
     )
   }
 
@@ -476,6 +542,15 @@ class ConnectionManagerTest {
   }
 
   @Test
+  fun buildNodeConnectOptions_advertisesDeviceAppsOnlyWhenUserOptedIn() {
+    val disabled = newManager(installedAppsSharingEnabled = false).buildNodeConnectOptions()
+    val enabled = newManager(installedAppsSharingEnabled = true).buildNodeConnectOptions()
+
+    assertFalse(disabled.commands.contains(OpenClawDeviceCommand.Apps.rawValue))
+    assertTrue(enabled.commands.contains(OpenClawDeviceCommand.Apps.rawValue))
+  }
+
+  @Test
   fun buildNodeConnectOptions_omitsVoiceWakeWithoutMicrophonePermission() {
     val options =
       newManager(
@@ -546,6 +621,7 @@ class ConnectionManagerTest {
     callLogAvailable: Boolean = false,
     photosAvailable: Boolean = false,
     hasRecordAudioPermission: Boolean = false,
+    installedAppsSharingEnabled: Boolean = false,
   ): ConnectionManager {
     val context = RuntimeEnvironment.getApplication()
     val prefs =
@@ -567,6 +643,7 @@ class ConnectionManagerTest {
       callLogAvailable = { callLogAvailable },
       photosAvailable = { photosAvailable },
       hasRecordAudioPermission = { hasRecordAudioPermission },
+      installedAppsSharingEnabled = { installedAppsSharingEnabled },
       manualTls = { false },
     )
   }

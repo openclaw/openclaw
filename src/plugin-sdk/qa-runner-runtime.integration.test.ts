@@ -1,7 +1,11 @@
+/**
+ * Integration tests for QA runner runtime public surface loading.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { setTestEnvValue } from "../test-utils/env.js";
 import * as activationCheckRuntime from "./facade-activation-check.runtime.js";
 import {
   testing as facadeRuntimeTesting,
@@ -45,7 +49,7 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
       if (value === undefined) {
         delete process.env[key];
       } else {
-        process.env[key] = value;
+        setTestEnvValue(key, value);
       }
     }
   });
@@ -105,6 +109,7 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
         "export const qaRunnerCliRegistrations = [",
         "  {",
         '    commandName: "linked",',
+        '    adapterFactory: { id: "linked", matches() { return true; }, async create(context) { return { id: "linked", label: "Linked", accountId: "sut", requiredPluginIds: [], supportedActions: [], async sendInbound(input) { return await context.messages.addInboundMessage(input); }, createGatewayConfig() { return {}; }, async waitReady() {}, buildAgentDelivery({ target }) { return { channel: "linked", to: target, replyChannel: "linked", replyTo: target }; }, async handleAction() {}, createReportNotes() { return []; } }; } },',
         "    register() {}",
         "  }",
         "];",
@@ -118,7 +123,7 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
     if (!contribution || contribution.status !== "available") {
       throw new Error("Expected linked QA runner contribution to be available");
     }
-    const register = contribution.registration.register;
+    const register = contribution.registration["register"];
     expect(typeof register).toBe("function");
     expect(contributions).toEqual([
       {
@@ -128,6 +133,9 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
         status: "available",
         registration: {
           commandName: "linked",
+          adapterFactory: expect.objectContaining({
+            id: "linked",
+          }),
           register,
         },
       },

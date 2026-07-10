@@ -1,3 +1,4 @@
+// Package manager config tests validate workspace package manager settings.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -60,6 +61,7 @@ describe("package manager build policy", () => {
 
     expect(packageJson.pnpm).toBeUndefined();
     expect(workspace.allowBuilds?.["@discordjs/opus"]).toBe(false);
+    expect(workspace.allowBuilds?.["node-llama-cpp"]).toBe(false);
     expect(workspace.blockExoticSubdeps).toBe(true);
     expect(workspace.onlyBuiltDependencies).toBeUndefined();
   });
@@ -68,6 +70,17 @@ describe("package manager build policy", () => {
     const packageJson = readJson("package.json") as RootPackageJson;
 
     expect(packageJson.files).toContain("THIRD_PARTY_NOTICES.md");
+  });
+
+  it("includes the Crabbox wrapper runtime modules in the published root package", () => {
+    const packageJson = readJson("package.json") as RootPackageJson;
+
+    expect(packageJson.files).toEqual(
+      expect.arrayContaining([
+        "scripts/crabbox-wrapper.mjs",
+        "scripts/crabbox-wrapper-providers.mjs",
+      ]),
+    );
   });
 
   it("keeps npm shrinkwrap aligned with workspace overrides", () => {
@@ -86,11 +99,15 @@ describe("package manager build policy", () => {
   it("pins forked transitive dependencies with parent-scoped shrinkwrap overrides", () => {
     const overrides = readShrinkwrapOverrides() as Record<string, unknown>;
 
+    const packages = collectPnpmLockPackages();
+
     expect(overrides["lru-cache"]).toBeUndefined();
     expect(overrides["lru-memoizer@2.3.0"]).toMatchObject({
       "lru-cache": { ".": "6.0.0", yallist: "4.0.0" },
     });
-    expect(overrides["lru-memoizer@3.0.0"]).toMatchObject({ "lru-cache": "11.5.0" });
+    if (packages.has("lru-memoizer@3.0.0")) {
+      expect(overrides["lru-memoizer@3.0.0"]).toMatchObject({ "lru-cache": "11.5.0" });
+    }
   });
 
   it("can preserve current forked shrinkwrap dependencies with parent-scoped overrides", () => {
@@ -220,7 +237,7 @@ describe("package manager build policy", () => {
         .filter((entry) => entry.isDirectory())
         .map((entry) => `extensions/${entry.name}/npm-shrinkwrap.json`)
         .filter((shrinkwrapPath) => fs.existsSync(shrinkwrapPath))
-        .sort((left, right) => left.localeCompare(right)),
+        .toSorted((left, right) => left.localeCompare(right)),
     ];
 
     for (const shrinkwrapPath of shrinkwrapPaths) {

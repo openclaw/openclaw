@@ -1,3 +1,7 @@
+/**
+ * Hosts the local OpenClaw sandbox exec-server that Codex app-server native
+ * execution can register as an external environment.
+ */
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import type { IncomingMessage } from "node:http";
@@ -5,7 +9,7 @@ import { isIP, type AddressInfo } from "node:net";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { compareCodexAppServerVersions, type CodexAppServerClient } from "./client.js";
+import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import type { JsonValue } from "./protocol.js";
 import {
@@ -35,15 +39,17 @@ import type {
   ManagedProcess,
   OpenClawExecServer,
 } from "./sandbox-exec-server/types.js";
-import { MIN_CODEX_SANDBOX_EXEC_SERVER_APP_SERVER_VERSION } from "./version.js";
 
+/** Codex environment metadata registered for one sandbox exec-server lease. */
 export type CodexSandboxExecEnvironment = {
   environmentId: string;
   cwd: string;
 };
 
 const SANDBOX_EXEC_SERVERS = new Map<string, Promise<OpenClawExecServer>>();
+export const CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES = 100 * 1024 * 1024;
 
+/** Closes all cached sandbox exec-server instances for deterministic tests. */
 export async function closeCodexSandboxExecServersForTests(): Promise<void> {
   const servers = await Promise.allSettled(SANDBOX_EXEC_SERVERS.values());
   SANDBOX_EXEC_SERVERS.clear();
@@ -57,6 +63,7 @@ export async function closeCodexSandboxExecServersForTests(): Promise<void> {
   );
 }
 
+/** Starts or reuses a sandbox exec-server and registers it with Codex app-server. */
 export async function ensureCodexSandboxExecServerEnvironment(params: {
   client: CodexAppServerClient;
   sandbox: SandboxContext | null;
@@ -72,7 +79,6 @@ export async function ensureCodexSandboxExecServerEnvironment(params: {
       "OpenClaw Codex exec-server uses a local loopback URL and cannot be registered with a remote Codex app-server.",
     );
   }
-  assertCodexSandboxExecServerSupported(params.client);
   const execServer = await acquireOpenClawExecServer(params.sandbox);
   try {
     await params.client.request(
@@ -99,6 +105,7 @@ export async function ensureCodexSandboxExecServerEnvironment(params: {
   };
 }
 
+/** Releases the sandbox exec-server lease associated with a sandbox runtime. */
 export async function releaseCodexSandboxExecServerEnvironment(
   sandbox: SandboxContext | null | undefined,
 ): Promise<void> {
@@ -108,23 +115,6 @@ export async function releaseCodexSandboxExecServerEnvironment(
   const server = await SANDBOX_EXEC_SERVERS.get(sandbox.runtimeId)?.catch(() => undefined);
   if (server) {
     await releaseOpenClawExecServer(server);
-  }
-}
-
-function assertCodexSandboxExecServerSupported(client: CodexAppServerClient): void {
-  const detectedVersion = client.getServerVersion();
-  if (
-    !detectedVersion ||
-    compareCodexAppServerVersions(
-      detectedVersion,
-      MIN_CODEX_SANDBOX_EXEC_SERVER_APP_SERVER_VERSION,
-    ) < 0
-  ) {
-    throw new Error(
-      `Codex app-server ${MIN_CODEX_SANDBOX_EXEC_SERVER_APP_SERVER_VERSION} or newer is required for OpenClaw sandbox exec-server environments, but detected ${
-        detectedVersion ?? "an unknown version"
-      }. Disable appServer.experimental.sandboxExecServer or configure a newer Codex app-server binary.`,
-    );
   }
 }
 
@@ -185,7 +175,13 @@ function startAndRememberOpenClawExecServer(sandbox: SandboxContext): Promise<Op
 }
 
 async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenClawExecServer> {
-  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  const server = new WebSocketServer({
+    host: "127.0.0.1",
+    port: 0,
+    // Match ws' historical default: Codex fs/writeFile sends one base64 JSON-RPC
+    // frame, while the socket error handler below makes oversize frames nonfatal.
+    maxPayload: CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES,
+  });
   await once(server, "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
@@ -204,6 +200,8 @@ async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenCla
     server,
   };
   server.on("connection", (socket, request) => {
+    // ws emits error for maxPayload rejections before auth or JSON-RPC sees the frame.
+    socket.on("error", handleExecServerSocketError);
     if (!isAuthorizedExecServerRequest(execServer, request)) {
       socket.close(1008, "unauthorized");
       return;
@@ -276,6 +274,10 @@ function handleConnection(execServer: OpenClawExecServer, socket: WebSocket): vo
       process.abortController.abort();
     }
   });
+}
+
+function handleExecServerSocketError(error: unknown): void {
+  embeddedAgentLog.debug("codex sandbox exec-server websocket failed", { error });
 }
 
 async function handleMessage(

@@ -1,14 +1,23 @@
+// Msteams tests cover graph plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   loadMSTeamsSdkWithAuthMock,
   createMSTeamsTokenProviderMock,
+  fetchWithSsrFGuardMock,
   readAccessTokenMock,
   resolveMSTeamsCredentialsMock,
 } = vi.hoisted(() => {
   return {
     loadMSTeamsSdkWithAuthMock: vi.fn(),
     createMSTeamsTokenProviderMock: vi.fn(),
+    fetchWithSsrFGuardMock: vi.fn(
+      async (params: { url: string; init?: RequestInit; timeoutMs?: number }) => ({
+        response: await globalThis.fetch(params.url, params.init),
+        finalUrl: params.url,
+        release: async () => undefined,
+      }),
+    ),
     readAccessTokenMock: vi.fn(),
     resolveMSTeamsCredentialsMock: vi.fn(),
   };
@@ -31,11 +40,7 @@ vi.mock("../runtime-api.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../runtime-api.js")>();
   return {
     ...original,
-    fetchWithSsrFGuard: async (params: { url: string; init?: RequestInit }) => ({
-      response: await globalThis.fetch(params.url, params.init),
-      finalUrl: params.url,
-      release: async () => undefined,
-    }),
+    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
   };
 });
 
@@ -44,6 +49,7 @@ import {
   deleteGraphRequest,
   escapeOData,
   fetchAllGraphPages,
+  fetchGraphAbsoluteUrl,
   fetchGraphJson,
   listChannelsForTeam,
   listTeamsByName,
@@ -89,6 +95,33 @@ function mockJsonFetchResponse(body: unknown, init?: ResponseInit) {
 
 function mockTextFetchResponse(body: string, init?: ResponseInit) {
   mockFetch(async () => textResponse(body, init));
+}
+
+function graphStreamResponse(body: unknown): {
+  response: Response;
+  arrayBuffer: ReturnType<typeof vi.fn>;
+} {
+  const encoded = new TextEncoder().encode(JSON.stringify(body));
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoded);
+      controller.close();
+    },
+  });
+  const arrayBuffer = vi.fn(async () => {
+    throw new Error("Graph response must stay streaming");
+  });
+  return {
+    response: {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: new Headers({ "content-type": "application/json" }),
+      body: stream,
+      arrayBuffer,
+    } as unknown as Response,
+    arrayBuffer,
+  };
 }
 
 function graphCollection<T>(...items: T[]) {
@@ -203,6 +236,10 @@ describe("msteams graph helpers", () => {
     expect(fetchCallUrl(0)).toBe("https://graph.microsoft.com/v1.0/groups?$select=id");
     expect(fetchCallHeader(0, "Authorization")).toBe(`Bearer ${graphToken}`);
     expect(fetchCallHeader(0, "ConsistencyLevel")).toBe("eventual");
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ timeoutMs: 30_000 }),
+    );
 
     mockTextFetchResponse("forbidden", { status: 403 });
 
@@ -225,6 +262,52 @@ describe("msteams graph helpers", () => {
         path: "/teams/team-1/channels",
       }),
       "Graph /teams/team-1/channels failed: malformed JSON response",
+    );
+  });
+
+  it("keeps successful Graph responses streaming for bounded JSON parsing", async () => {
+    const { response, arrayBuffer } = graphStreamResponse(graphCollection(groupOne));
+    mockFetch(async () => response);
+
+    await expect(
+      fetchGraphJson<{ value: Array<{ id: string }> }>({
+        token: graphToken,
+        path: "/groups?$select=id",
+      }),
+    ).resolves.toEqual(graphCollection(groupOne));
+
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it("passes the remaining operation deadline to the guarded Graph transport", async () => {
+    mockGraphCollection(groupOne);
+    const remainingMs = 5_000;
+
+    await fetchGraphJson({
+      token: graphToken,
+      path: "/groups?$select=id",
+      deadline: {
+        label: "MS Teams inbound preprocessing",
+        timeoutMs: remainingMs,
+        deadlineAtMs: Date.now() + remainingMs,
+      },
+    });
+
+    const timeoutMs = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.timeoutMs;
+    expect(timeoutMs).toBeGreaterThan(0);
+    expect(timeoutMs).toBeLessThanOrEqual(remainingMs);
+  });
+
+  it("bounds absolute Graph pagination requests", async () => {
+    mockGraphCollection(groupOne);
+
+    await fetchGraphAbsoluteUrl({
+      token: graphToken,
+      url: "https://graph.microsoft.com/v1.0/groups?$skiptoken=next",
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 30_000 }),
     );
   });
 
@@ -298,6 +381,17 @@ describe("msteams graph helpers", () => {
 
     expect(createMSTeamsTokenProviderMock).toHaveBeenCalledWith(mockApp);
     expect(getAccessToken).toHaveBeenCalledWith("https://graph.microsoft.com");
+  });
+
+  it("fails closed for China cloud Graph token resolution", async () => {
+    mockGraphTokenResolution();
+
+    await expectRejectsToThrow(
+      resolveGraphToken({ channels: { msteams: { cloud: "China" } } }),
+      "Microsoft Teams Graph operations are not supported for channels.msteams.cloud=China",
+    );
+
+    expect(loadMSTeamsSdkWithAuthMock).not.toHaveBeenCalled();
   });
 
   it("fails when credentials or access tokens are unavailable", async () => {

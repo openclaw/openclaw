@@ -1,3 +1,4 @@
+/** Type contracts for plugin-owned CLI backend integrations. */
 import type { CliBackendConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
@@ -26,11 +27,17 @@ export type CliBackendPrepareExecutionContext = {
   provider: string;
   modelId: string;
   authProfileId?: string;
+  executionMode?: CliBackendExecutionMode;
 };
 
 export type CliBackendPreparedExecution = {
   env?: Record<string, string>;
   clearEnv?: string[];
+  /**
+   * Backend-owned staging that must run after the core CLI queue admits the turn.
+   * Use this for mutable per-profile CLI homes that the launched process also owns.
+   */
+  beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
 };
 
@@ -44,6 +51,8 @@ export type CliBackendThinkingLevel =
   | "adaptive"
   | "max";
 
+export type CliBackendExecutionMode = "agent" | "side-question";
+
 export type CliBackendResolveExecutionArgsContext = {
   config?: OpenClawConfig;
   workspaceDir: string;
@@ -51,6 +60,7 @@ export type CliBackendResolveExecutionArgsContext = {
   modelId: string;
   authProfileId?: string;
   thinkingLevel?: CliBackendThinkingLevel;
+  executionMode?: CliBackendExecutionMode;
   useResume: boolean;
   baseArgs: readonly string[];
 };
@@ -62,6 +72,8 @@ export type CliBackendResolveExecutionArgs = (
 export type CliBackendAuthEpochMode = "combined" | "profile-only";
 
 export type CliBackendNativeToolMode = "none" | "always-on";
+
+export type CliBackendSideQuestionToolMode = "disabled";
 
 export type CliBackendNormalizeConfigContext = {
   config?: OpenClawConfig;
@@ -82,6 +94,11 @@ export type CliBackendPlugin = {
    * driven through the generic CLI runner.
    */
   contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
+  /**
+   * Backend-owned compaction for non-harness CLI sessions.
+   * Set only when the backend bounds its own transcript and persists resumable state.
+   */
+  ownsNativeCompaction?: boolean;
   /**
    * Optional live-smoke metadata owned by the backend plugin.
    *
@@ -189,4 +206,12 @@ export type CliBackendPlugin = {
    * closed instead of launching a native harness.
    */
   nativeToolMode?: CliBackendNativeToolMode;
+  /**
+   * Side-question native tool behavior.
+   *
+   * Set to `disabled` only when `executionMode: "side-question"` reliably
+   * launches the CLI without native tools, even if normal agent turns expose
+   * backend-owned tools.
+   */
+  sideQuestionToolMode?: CliBackendSideQuestionToolMode;
 };

@@ -1,3 +1,4 @@
+// Diagnostic support export tests cover support bundle generation and contents.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -61,6 +62,9 @@ describe("diagnostic support export", () => {
     ].join(".");
     const privateChat = "private user said diagnose my bank transfer";
     const webhookBody = "raw webhook body with message contents";
+    const requestAuthValue = "support-request-auth-value";
+    const requestTlsPassphrase = "support-request-tls-passphrase";
+    const proxyTlsPassphrase = "support-proxy-tls-passphrase";
     const credentialUrl =
       "wss://support-user:support-password@gateway.example/ws?token=short-token&ok=1";
     const configPath = path.join(tempDir, "openclaw.json");
@@ -79,6 +83,31 @@ describe("diagnostic support export", () => {
           },
           logging: {
             redactSensitive: "off",
+          },
+          models: {
+            providers: {
+              supportProxy: {
+                baseUrl: "https://models.example.test/v1",
+                request: {
+                  auth: {
+                    mode: "header",
+                    headerName: "X-Support-Auth",
+                    value: requestAuthValue,
+                  },
+                  tls: {
+                    passphrase: requestTlsPassphrase,
+                  },
+                  proxy: {
+                    mode: "explicit-proxy",
+                    url: "http://127.0.0.1:8080",
+                    tls: {
+                      passphrase: proxyTlsPassphrase,
+                    },
+                  },
+                },
+                models: [{ id: "support-model" }],
+              },
+            },
           },
           channels: {
             telegram: {
@@ -263,6 +292,10 @@ describe("diagnostic support export", () => {
     expect(combined).not.toContain("QWxhZGRpbjpvcGVuIHNlc2FtZQ==");
     expect(combined).not.toContain("sid=secret");
     expect(combined).not.toContain("structured secret payload");
+    expect(combined).not.toContain(requestAuthValue);
+    expect(combined).not.toContain(requestTlsPassphrase);
+    expect(combined).not.toContain(proxyTlsPassphrase);
+    expect(combined).not.toContain("__OPENCLAW_REDACTED__");
     expect(combined).not.toContain("gateway-session-15555551212");
     expect(combined).not.toContain("supportEventSecret");
     expect(combined).not.toContain(fakeAwsKey);
@@ -364,6 +397,25 @@ describe("diagnostic support export", () => {
         redactSensitive?: string;
       };
       agents?: Array<{ name?: string; instructions?: string }>;
+      models?: {
+        providers?: {
+          supportProxy?: {
+            request?: {
+              auth?: {
+                value?: string;
+              };
+              tls?: {
+                passphrase?: string;
+              };
+              proxy?: {
+                tls?: {
+                  passphrase?: string;
+                };
+              };
+            };
+          };
+        };
+      };
     };
     expect(sanitizedConfig.gateway).toEqual({
       mode: "local",
@@ -375,6 +427,15 @@ describe("diagnostic support export", () => {
       },
     });
     expect(sanitizedConfig.logging?.redactSensitive).toBe("off");
+    expect(sanitizedConfig.models?.providers?.supportProxy?.request?.auth?.value).toBe(
+      "<redacted>",
+    );
+    expect(sanitizedConfig.models?.providers?.supportProxy?.request?.tls?.passphrase).toBe(
+      "<redacted>",
+    );
+    expect(sanitizedConfig.models?.providers?.supportProxy?.request?.proxy?.tls?.passphrase).toBe(
+      "<redacted>",
+    );
     expect(Object.keys(sanitizedConfig.channels?.telegram?.accounts ?? {})).toEqual([
       "<redacted-account-1>",
     ]);
@@ -476,6 +537,94 @@ describe("diagnostic support export", () => {
     ]) {
       expect(combined).not.toContain(secret);
     }
+  });
+
+  it("includes mDNS config state and recent Bonjour log summary", async () => {
+    const configPath = path.join(tempDir, "openclaw.json");
+    const outputPath = path.join(tempDir, "support-bonjour.zip");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        discovery: {
+          mdns: {
+            mode: "minimal",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await writeDiagnosticSupportExport({
+      env: {
+        ...process.env,
+        HOME: tempDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_DISABLE_BONJOUR: "1",
+        OPENCLAW_STATE_DIR: tempDir,
+      },
+      stateDir: tempDir,
+      outputPath,
+      now: new Date("2026-04-22T12:00:01.000Z"),
+      readLogTail: async () => ({
+        file: path.join(tempDir, "logs", "openclaw.log"),
+        cursor: 0,
+        size: 0,
+        truncated: false,
+        reset: false,
+        lines: [
+          JSON.stringify({
+            time: "2026-04-22T12:00:00.000Z",
+            level: "warn",
+            subsystem: "gateway/discovery/bonjour",
+            msg: "bonjour: suppressing ciao interface assertion: AssertionError",
+          }),
+          JSON.stringify({
+            time: "2026-04-22T12:00:00.500Z",
+            level: "warn",
+            msg: "bonjour: disabling advertiser after 3 failed restarts",
+          }),
+        ],
+      }),
+    });
+
+    const entries = await readZipTextEntries(outputPath);
+    const configShape = JSON.parse(entries["config/shape.json"] ?? "{}") as {
+      discovery?: {
+        mdnsMode?: string;
+        bonjourEnvOverride?: string;
+      };
+    };
+    expect(configShape.discovery).toEqual({
+      mdnsMode: "minimal",
+      bonjourEnvOverride: "force-disabled",
+    });
+
+    const diagnostics = JSON.parse(entries["diagnostics.json"] ?? "{}") as {
+      bonjour?: {
+        count?: number;
+        warnings?: number;
+        last?: { kind?: string };
+        flags?: {
+          disabled?: boolean;
+          restarted?: boolean;
+          ciaoSuppressed?: boolean;
+        };
+      };
+    };
+    expect(diagnostics.bonjour).toEqual({
+      count: 2,
+      warnings: 2,
+      last: {
+        time: "2026-04-22T12:00:00.500Z",
+        level: "warn",
+        kind: "disabled",
+      },
+      flags: {
+        disabled: true,
+        restarted: false,
+        ciaoSuppressed: true,
+      },
+    });
   });
 
   it("redacts numeric private fields in support snapshots and config", () => {

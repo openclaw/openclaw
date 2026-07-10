@@ -1,3 +1,4 @@
+// Feishu plugin module implements doctor behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +15,7 @@ import {
   updateSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const FEISHU_STATE_DIR = "feishu";
 const BACKUP_PREFIX = "feishu-state-repair";
@@ -62,14 +64,14 @@ type FeishuDoctorSessionEntry = {
   entry: FeishuSessionEntry;
 };
 
-export type FeishuDoctorInspection = {
+type FeishuDoctorInspection = {
   stateDir: string;
   feishuStateDir: string;
   findings: FeishuDoctorFinding[];
   sessionEntries: FeishuDoctorSessionEntry[];
 };
 
-export type FeishuDoctorRepairReport = {
+type FeishuDoctorRepairReport = {
   backupDir: string;
   stateDirRepairAttempted: boolean;
   rebuiltStateDir: boolean;
@@ -81,10 +83,6 @@ export type FeishuDoctorRepairReport = {
 
 function timestampForPath(now = new Date()): string {
   return now.toISOString().replaceAll(":", "-");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function toFeishuSessionEntry(value: unknown): FeishuSessionEntry {
@@ -129,7 +127,7 @@ function isPathWithinRoot(targetPath: string, rootPath: string): boolean {
   const resolvedTarget = path.resolve(targetPath);
   const resolvedRoot = path.resolve(rootPath);
   const relative = path.relative(resolvedRoot, resolvedTarget);
-  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
 function formatDisplayPath(filePath: string): string {
@@ -400,7 +398,7 @@ function inspectSessionTranscript(params: {
     return null;
   }
 
-  let raw = "";
+  let raw;
   try {
     raw = fs.readFileSync(params.transcriptPath, "utf-8");
   } catch {
@@ -546,7 +544,7 @@ function collectRepairSessionEntries(
   );
 }
 
-export function inspectFeishuDoctorState(params: {
+function inspectFeishuDoctorState(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): FeishuDoctorInspection {
@@ -740,7 +738,7 @@ async function repairFeishuDoctorState(params: {
         (store) => {
           const removed: typeof group.entries = [];
           for (const key of keys) {
-            if (Object.prototype.hasOwnProperty.call(store, key)) {
+            if (Object.hasOwn(store, key)) {
               delete store[key];
               const entry = group.entries.find((candidate) => candidate.key === key);
               if (entry) {
@@ -752,7 +750,6 @@ async function repairFeishuDoctorState(params: {
         },
         {
           skipMaintenance: true,
-          allowDropAcpMetaSessionKeys: [...keys],
         },
       );
       const removed = removedEntries.length;

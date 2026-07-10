@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor inbox harness behavior.
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import os from "node:os";
@@ -20,7 +21,7 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
   channels: {
     whatsapp: {
       // Allow all in tests by default.
-      allowFrom: ["*"],
+      allowFrom: ["*"] as string[],
     },
   },
   messages: {
@@ -38,6 +39,7 @@ export type MockSock = {
   ws: { close: AnyMockFn };
   sendPresenceUpdate: AnyMockFn;
   sendMessage: AnyMockFn;
+  fetchAccountReachoutTimelock: AnyMockFn;
   readMessages: AnyMockFn;
   groupMetadata: AnyMockFn;
   groupFetchAllParticipating: AnyMockFn;
@@ -63,6 +65,7 @@ const pluginRuntimeMocks = vi.hoisted(() => {
   type StoreEntry = { key: string; value: unknown; createdAt: number };
   const stores = new Map<string, Map<string, StoreEntry>>();
   let nextRegisterIfAbsentError: Error | undefined;
+  let stateDir = `/tmp/openclaw-whatsapp-ingress-${Date.now()}-${Math.random()}`;
 
   const openKeyedStore = vi.fn((options: { namespace: string }) => {
     let store = stores.get(options.namespace);
@@ -102,6 +105,7 @@ const pluginRuntimeMocks = vi.hoisted(() => {
 
   return {
     openKeyedStore,
+    stateDir: () => stateDir,
     failNextRegisterIfAbsent: (error: Error) => {
       nextRegisterIfAbsentError = error;
     },
@@ -109,6 +113,7 @@ const pluginRuntimeMocks = vi.hoisted(() => {
       stores.clear();
       nextRegisterIfAbsentError = undefined;
       openKeyedStore.mockClear();
+      stateDir = `/tmp/openclaw-whatsapp-ingress-${Date.now()}-${Math.random()}`;
     },
   };
 });
@@ -132,14 +137,25 @@ vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
   };
 });
 
-vi.mock("./runtime.js", () => ({
-  getWhatsAppRuntime: () => ({
-    state: {
-      openKeyedStore: pluginRuntimeMocks.openKeyedStore,
-    },
-  }),
-  setWhatsAppRuntime: vi.fn(),
-}));
+vi.mock("./runtime.js", async () => {
+  const { createChannelIngressQueueForTests: createChannelIngressQueue } = await Promise.resolve(
+    vi.importActual<typeof import("openclaw/plugin-sdk/plugin-state-test-runtime")>(
+      "openclaw/plugin-sdk/plugin-state-test-runtime",
+    ),
+  );
+  return {
+    getWhatsAppRuntime: () => ({
+      state: {
+        resolveStateDir: pluginRuntimeMocks.stateDir,
+        openKeyedStore: pluginRuntimeMocks.openKeyedStore,
+        openChannelIngressQueue: (
+          options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
+        ) => createChannelIngressQueue({ ...options, channelId: "whatsapp" }),
+      },
+    }),
+    setWhatsAppRuntime: vi.fn(),
+  };
+});
 
 const inboundRuntimeMocks = vi.hoisted(() => {
   const wrapperKeys = [
@@ -171,8 +187,12 @@ const inboundRuntimeMocks = vi.hoisted(() => {
     return current;
   }
 
+  async function* fakeMediaStream() {
+    yield Buffer.from("fake-media-data");
+  }
+
   return {
-    downloadMediaMessage: vi.fn().mockResolvedValue(Buffer.from("fake-media-data")),
+    downloadMediaMessage: vi.fn(() => fakeMediaStream()),
     isJidGroup: vi.fn((jid: string | undefined | null) =>
       typeof jid === "string" ? jid.endsWith("@g.us") : false,
     ),
@@ -198,6 +218,7 @@ function createMockSock(): MockSock {
     ws: { close: vi.fn() },
     sendPresenceUpdate: createResolvedMock(),
     sendMessage: createResolvedMock(),
+    fetchAccountReachoutTimelock: vi.fn().mockResolvedValue({ isActive: false }),
     readMessages: createResolvedMock(),
     groupMetadata: vi.fn().mockImplementation(async (jid: string) => ({
       id: jid,
@@ -279,8 +300,12 @@ export function getMonitorWebInbox(): MonitorWebInbox {
 }
 
 export async function settleInboundWork() {
-  await new Promise((resolve) => setImmediate(resolve));
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 export function resetWebInboundDedupeForTests() {

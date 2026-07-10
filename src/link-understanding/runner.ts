@@ -3,6 +3,8 @@ import { applyTemplate } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { LinkModelConfig, LinkToolsConfig } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+// Link-understanding runner fetches allowed URLs and invokes configured commands with bounded content.
+import { readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
 import { CLI_OUTPUT_MAX_BUFFER } from "../media-understanding/defaults.js";
 import { resolveTimeoutMs } from "../media-understanding/resolve.js";
@@ -10,7 +12,6 @@ import {
   normalizeMediaUnderstandingChatType,
   resolveMediaUnderstandingScope,
 } from "../media-understanding/scope.js";
-import { readResponseWithLimit } from "../media/read-response-with-limit.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { DEFAULT_LINK_TIMEOUT_SECONDS } from "./defaults.js";
 import { extractLinksFromMessage } from "./detect.js";
@@ -38,6 +39,21 @@ function resolveTimeoutMsFromConfig(params: {
 }): number {
   const configured = params.entry.timeoutSeconds ?? params.config?.timeoutSeconds;
   return resolveTimeoutMs(configured, DEFAULT_LINK_TIMEOUT_SECONDS);
+}
+
+function resolveFetchTimeoutMsFromConfig(params: {
+  config?: LinkToolsConfig;
+  entries: LinkModelConfig[];
+}): number {
+  // The HTTP fetch phase is independent of any single CLI execution, so honor
+  // an explicit global link-tools timeout first. Otherwise use the largest
+  // per-entry timeout so slower entries are not capped by the first entry.
+  if (params.config?.timeoutSeconds != null) {
+    return resolveTimeoutMs(params.config.timeoutSeconds, DEFAULT_LINK_TIMEOUT_SECONDS);
+  }
+  return Math.max(
+    ...params.entries.map((entry) => resolveTimeoutMsFromConfig({ config: params.config, entry })),
+  );
 }
 
 function isLinkUrlTemplate(value: string): boolean {
@@ -117,6 +133,7 @@ async function runCliEntry(params: {
   const args = params.entry.args ?? [];
   const timeoutMs = resolveTimeoutMsFromConfig({ config: params.config, entry: params.entry });
   if (isUrlFetcherCommand(command) && args.some(isLinkUrlTemplate)) {
+    // curl/wget URL templates mark the entry as a fetcher; guarded fetch already supplied content.
     return params.content;
   }
 
@@ -184,6 +201,10 @@ async function runLinkEntries(params: {
   return null;
 }
 
+/**
+ * Fetches detected links through the SSRF guard and runs configured CLI processors.
+ * Returns detected URLs even when processors are absent so callers can report discovery.
+ */
 export async function runLinkUnderstanding(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
@@ -214,8 +235,8 @@ export async function runLinkUnderstanding(params: {
   }
 
   const outputs: string[] = [];
+  const timeoutMs = resolveFetchTimeoutMsFromConfig({ config, entries });
   for (const url of links) {
-    const timeoutMs = resolveTimeoutMsFromConfig({ config, entry: entries[0] });
     let fetched: Awaited<ReturnType<typeof fetchLinkContent>>;
     try {
       fetched = await fetchLinkContent({ url, timeoutMs });

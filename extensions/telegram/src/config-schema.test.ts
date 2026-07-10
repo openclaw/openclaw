@@ -1,3 +1,4 @@
+// Telegram tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { TelegramConfigSchema } from "../config-api.js";
 
@@ -53,6 +54,19 @@ describe("telegram custom commands schema", () => {
     }
   });
 
+  it("rejects retired group history context mode keys", () => {
+    const res = TelegramConfigSchema.safeParse({ includeGroupHistoryContext: "mention-only" });
+
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues[0]).toMatchObject({
+        code: "unrecognized_keys",
+        keys: ["includeGroupHistoryContext"],
+        path: [],
+      });
+    }
+  });
+
   it("accepts pollingStallThresholdMs overrides per account", () => {
     const res = TelegramConfigSchema.safeParse({
       pollingStallThresholdMs: 120_000,
@@ -84,22 +98,16 @@ describe("telegram custom commands schema", () => {
     expectTelegramConfigIssue({ mediaGroupFlushMs: 60_001 }, "mediaGroupFlushMs");
   });
 
-  it("accepts Telegram native tool-progress draft config only on Telegram", () => {
+  it("accepts Telegram progress commentary config", () => {
     expectTelegramConfigValid({
       streaming: {
-        preview: {
-          toolProgress: true,
-          nativeToolProgress: true,
-          nativeToolProgressAllowFrom: ["123456789"],
-        },
+        mode: "progress",
+        progress: { commentary: true },
       },
       accounts: {
         ops: {
           streaming: {
-            preview: {
-              nativeToolProgress: true,
-              nativeToolProgressAllowFrom: [123456789],
-            },
+            progress: { commentary: true },
           },
         },
       },
@@ -138,6 +146,32 @@ describe("telegram custom commands schema", () => {
     expect(res.success).toBe(true);
     if (res.success) {
       expect(res.data.textChunkLimit).toBe(3333);
+    }
+  });
+
+  it("accepts rich message opt-in per account", () => {
+    const res = TelegramConfigSchema.safeParse({
+      richMessages: true,
+      accounts: { ops: { richMessages: false } },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.richMessages).toBe(true);
+      expect(res.data.accounts?.ops?.richMessages).toBe(false);
+    }
+  });
+
+  it("preserves rich message inheritance for account overrides", () => {
+    const res = TelegramConfigSchema.safeParse({
+      richMessages: true,
+      accounts: { ops: {} },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.richMessages).toBe(true);
+      expect(res.data.accounts?.ops?.richMessages).toBeUndefined();
     }
   });
 

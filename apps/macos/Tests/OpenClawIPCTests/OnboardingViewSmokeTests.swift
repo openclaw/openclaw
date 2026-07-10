@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawDiscovery
+import OpenClawIPC
 import SwiftUI
 import Testing
 @testable import OpenClaw
@@ -17,14 +18,144 @@ struct OnboardingViewSmokeTests {
     }
 
     @Test func `page order omits workspace and identity steps`() {
-        let order = OnboardingView.pageOrder(for: .local, showOnboardingChat: false)
+        let order = OnboardingView.pageOrder(
+            for: .local,
+            showOnboardingChat: false,
+            requiresCLIInstall: false)
         #expect(!order.contains(7))
         #expect(order.contains(3))
     }
 
     @Test func `page order omits onboarding chat when identity known`() {
-        let order = OnboardingView.pageOrder(for: .local, showOnboardingChat: false)
+        let order = OnboardingView.pageOrder(
+            for: .local,
+            showOnboardingChat: false,
+            requiresCLIInstall: false)
         #expect(!order.contains(8))
+    }
+
+    @Test func `fresh local setup installs CLI before inference setup`() {
+        let order = OnboardingView.pageOrder(
+            for: .local,
+            showOnboardingChat: false,
+            requiresCLIInstall: true)
+
+        #expect(order.firstIndex(of: 2) == 2)
+        #expect(order.firstIndex(of: 3) == 3)
+    }
+
+    @Test func `configured local setup skips CLI install page`() {
+        let order = OnboardingView.pageOrder(
+            for: .local,
+            showOnboardingChat: false,
+            requiresCLIInstall: false)
+
+        #expect(!order.contains(2))
+    }
+
+    @Test func `only full page chat uses compact hero`() {
+        #expect(!OnboardingView.shouldUseCompactHero(
+            activePageIndex: 3,
+            onboardingChatPageIndex: 8))
+        #expect(OnboardingView.shouldUseCompactHero(
+            activePageIndex: 8,
+            onboardingChatPageIndex: 8))
+    }
+
+    @Test func `fresh onboarding defaults to this Mac`() {
+        let state = AppState(preview: true)
+        state.onboardingSeen = false
+        state.connectionMode = .unconfigured
+        let view = OnboardingView(state: state)
+
+        #expect(view.selectedConnectionMode == .local)
+        #expect(view.isConnectionSelectionBlocking)
+        #expect(state.connectionMode == .unconfigured)
+    }
+
+    @Test func `reopened onboarding preserves configure later selection`() {
+        let state = AppState(preview: true)
+        state.onboardingSeen = true
+        state.connectionMode = .unconfigured
+        let view = OnboardingView(state: state)
+
+        #expect(view.selectedConnectionMode == .unconfigured)
+        #expect(!view.isConnectionSelectionBlocking)
+        #expect(state.connectionMode == .unconfigured)
+    }
+
+    @Test func `advancing from recommended this Mac commits local mode`() {
+        let state = AppState(preview: true)
+        state.onboardingSeen = false
+        state.connectionMode = .unconfigured
+        let view = OnboardingView(state: state)
+
+        view.commitRecommendedConnectionIfNeeded(for: view.connectionPageIndex)
+
+        #expect(state.connectionMode == .local)
+    }
+
+    @Test func `automatic CLI setup waits for the initial status probe`() {
+        #expect(!OnboardingView.shouldAutoInstallCLI(
+            onCLIPage: true,
+            isLocal: true,
+            visible: true,
+            statusKnown: false,
+            installed: false,
+            installing: false))
+        #expect(OnboardingView.shouldAutoInstallCLI(
+            onCLIPage: true,
+            isLocal: true,
+            visible: true,
+            statusKnown: true,
+            installed: false,
+            installing: false))
+        #expect(!OnboardingView.shouldAutoInstallCLI(
+            onCLIPage: true,
+            isLocal: true,
+            visible: false,
+            statusKnown: true,
+            installed: false,
+            installing: false))
+    }
+
+    @Test func `connection mode change restarts full page monitoring`() {
+        let state = AppState(preview: true)
+        let view = OnboardingView(state: state)
+        var monitoredPage: Int?
+        let previousCrestodianChat = view.crestodianState.chat
+        view.aiSetup.manualKey = "route-bound"
+        view.crestodianState.isPresented = true
+
+        view.handleConnectionModeChange { pageIndex in
+            monitoredPage = pageIndex
+        }
+
+        #expect(view.aiSetup.manualKey.isEmpty)
+        #expect(!view.crestodianState.isPresented)
+        #expect(view.crestodianState.chat !== previousCrestodianChat)
+        #expect(monitoredPage == view.activePageIndex)
+    }
+
+    @Test func `gateway route reset returns later pages to inference setup`() throws {
+        let order = OnboardingView.pageOrder(
+            for: .remote,
+            showOnboardingChat: false,
+            requiresCLIInstall: false)
+        let permissionsCursor = try #require(order.firstIndex(of: 5))
+        let aiCursor = try #require(order.firstIndex(of: 3))
+        let resetCursor = OnboardingView.pageCursorAfterGatewayReset(
+            currentPage: permissionsCursor,
+            pageOrder: order,
+            aiPageIndex: 3)
+
+        #expect(resetCursor == aiCursor)
+        #expect(OnboardingView.shouldBlockAISetup(
+            currentPage: resetCursor,
+            pageOrder: order,
+            aiPageIndex: 3,
+            connectionMode: .remote,
+            connected: false))
     }
 
     @Test func `select remote gateway clears stale ssh target when endpoint unresolved`() async {
@@ -57,5 +188,16 @@ struct OnboardingViewSmokeTests {
             view.selectRemoteGateway(gateway)
             #expect(state.remoteTarget.isEmpty)
         }
+    }
+
+    @Test
+    func `permission list covers every capability in importance order`() {
+        #expect(Set(Capability.importanceOrdered) == Set(Capability.allCases))
+        #expect(Capability.importanceOrdered.count == Capability.allCases.count)
+        // App control and context capture lead; location stays last.
+        #expect(Capability.importanceOrdered.first == .appleScript)
+        #expect(Array(Capability.importanceOrdered.prefix(3))
+            == [.appleScript, .accessibility, .screenRecording])
+        #expect(Capability.importanceOrdered.last == Capability.location)
     }
 }

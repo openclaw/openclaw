@@ -1,8 +1,14 @@
+/**
+ * Send-keys support for process-controlled PTY sessions.
+ * Encodes symbolic keys, hex bytes, and literal input before writing to a
+ * live process stdin.
+ */
 import type { ProcessSession } from "./bash-process-registry.js";
 import { deriveSessionName } from "./bash-tools.shared.js";
 import { encodeKeySequence, hasCursorModeSensitiveKeys } from "./pty-keys.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
+/** Writable stdin surface shared by child-process and PTY session records. */
 export type WritableStdin = {
   write: (data: string, cb?: (err?: Error | null) => void) => void;
   end: () => void;
@@ -24,7 +30,7 @@ function failText(text: string): AgentToolResult<unknown> {
   };
 }
 
-async function writeToStdin(stdin: WritableStdin, data: string) {
+export async function writeProcessStdin(stdin: WritableStdin, data: string) {
   await new Promise<void>((resolve, reject) => {
     stdin.write(data, (err) => {
       if (err) {
@@ -36,6 +42,7 @@ async function writeToStdin(stdin: WritableStdin, data: string) {
   });
 }
 
+/** Encode and write requested key data into a running process session. */
 export async function handleProcessSendKeys(params: {
   sessionId: string;
   session: ProcessSession;
@@ -50,6 +57,8 @@ export async function handleProcessSendKeys(params: {
     literal: params.literal,
   };
   if (params.session.cursorKeyMode === "unknown" && hasCursorModeSensitiveKeys(request)) {
+    // Arrow/keypad encodings depend on cursor key mode. Wait for startup output
+    // to identify the mode before sending potentially wrong bytes.
     return failText(
       `Session ${params.sessionId} cursor key mode is not known yet. Poll or log until startup output appears, then retry send-keys.`,
     );
@@ -60,7 +69,7 @@ export async function handleProcessSendKeys(params: {
   if (!data) {
     return failText("No key data provided.");
   }
-  await writeToStdin(params.stdin, data);
+  await writeProcessStdin(params.stdin, data);
   return {
     content: [
       {

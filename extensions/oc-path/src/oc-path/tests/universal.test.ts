@@ -1,3 +1,4 @@
+// OC Path tests cover universal plugin behavior.
 import { describe, expect, it } from "vitest";
 import { emitMd } from "../emit.js";
 import { emitJsonc } from "../jsonc/emit.js";
@@ -7,6 +8,7 @@ import { parseJsonl } from "../jsonl/parse.js";
 import { parseOcPath } from "../oc-path.js";
 import { parseMd } from "../parse.js";
 import { detectInsertion, resolveOcPath, setOcPath } from "../universal.js";
+import { parseYaml } from "../yaml/parse.js";
 
 function expectLeaf(
   match: ReturnType<typeof resolveOcPath>,
@@ -184,6 +186,16 @@ describe("resolveOcPath — insertion-point detection", () => {
     const ast = parseJsonc('{ "k": 42 }').ast;
     const m = resolveOcPath(ast, parseOcPath("oc://config/k/+"));
     expect(m).toBeNull();
+  });
+});
+
+describe("resolveOcPath — yaml AST", () => {
+  it("preserves source line lookup for numeric map keys", () => {
+    const ast = parseYaml("name: x\n1: one\n").ast;
+    const m = resolveOcPath(ast, parseOcPath("oc://workflow.yaml/1"));
+
+    expectLeaf(m, { valueText: "one", leafType: "string" });
+    expect(m?.line).toBe(2);
   });
 });
 

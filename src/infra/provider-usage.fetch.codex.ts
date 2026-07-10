@@ -1,6 +1,9 @@
+// Fetches Codex provider usage windows.
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
+import { parseStrictFiniteNumber } from "./parse-finite-number.js";
 import {
   buildUsageHttpErrorSnapshot,
+  discardUsageResponseBody,
   fetchJson,
   readUsageJson,
 } from "./provider-usage.fetch.shared.js";
@@ -58,16 +61,20 @@ export async function fetchCodexUsage(
   timeoutMs: number,
   fetchFn: typeof fetch,
 ): Promise<ProviderUsageSnapshot> {
+  const version = process.env.OPENCLAW_VERSION?.trim();
   const defaultHeaders: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     Accept: "application/json",
+    originator: "openclaw",
+    ...(version ? { version } : {}),
+    "User-Agent": `openclaw/${version || "dev"}`,
   };
   if (accountId) {
     defaultHeaders["ChatGPT-Account-Id"] = accountId;
   }
   const headers =
     resolveProviderRequestHeaders({
-      provider: "openai-codex",
+      provider: "openai",
       baseUrl: "https://chatgpt.com/backend-api/wham/usage",
       capability: "other",
       transport: "http",
@@ -82,14 +89,15 @@ export async function fetchCodexUsage(
   );
 
   if (!res.ok) {
+    await discardUsageResponseBody(res);
     return buildUsageHttpErrorSnapshot({
-      provider: "openai-codex",
+      provider: "openai",
       status: res.status,
       tokenExpiredStatuses: [401, 403],
     });
   }
 
-  const parsed = await readUsageJson("openai-codex", res);
+  const parsed = await readUsageJson("openai", res);
   if (!parsed.ok) {
     return parsed.snapshot;
   }
@@ -121,19 +129,23 @@ export async function fetchCodexUsage(
     });
   }
 
-  let plan = data.plan_type;
+  const plan = data.plan_type;
+  let billing: ProviderUsageSnapshot["billing"];
   if (data.credits?.balance !== undefined && data.credits.balance !== null) {
     const balance =
       typeof data.credits.balance === "number"
         ? data.credits.balance
-        : Number.parseFloat(data.credits.balance) || 0;
-    plan = plan ? `${plan} ($${balance.toFixed(2)})` : `$${balance.toFixed(2)}`;
+        : parseStrictFiniteNumber(data.credits.balance);
+    if (balance !== undefined && balance >= 0) {
+      billing = [{ type: "balance", amount: balance, unit: "credits" }];
+    }
   }
 
   return {
-    provider: "openai-codex",
-    displayName: PROVIDER_LABELS["openai-codex"],
+    provider: "openai",
+    displayName: PROVIDER_LABELS.openai,
     windows,
     plan,
+    ...(billing ? { billing } : {}),
   };
 }

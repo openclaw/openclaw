@@ -5,12 +5,12 @@
  * These commands are processed before built-in commands and before agent invocation.
  */
 
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveBoundAgentIdForSession } from "../agents/session-agent-binding.js";
 import { resolveConversationBindingContext } from "../channels/conversation-binding-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ADMIN_SCOPE, isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
@@ -22,6 +22,7 @@ import {
   validatePluginCommandDefinition,
 } from "./command-registration.js";
 import {
+  canExposeSenderIsOwner,
   isTrustedReservedCommandOwner,
   listRegisteredPluginAgentPromptGuidance,
   pluginCommands,
@@ -72,10 +73,13 @@ export function matchPluginCommand(
     return null;
   }
 
-  // Extract command name and args
-  const spaceIndex = trimmed.indexOf(" ");
-  const commandName = spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex);
-  const args = spaceIndex === -1 ? undefined : trimmed.slice(spaceIndex + 1).trim();
+  // Accept whitespace after the slash so `/ pair qr` keeps `/pair` ownership.
+  const commandMatch = trimmed.match(/^\/\s*([^\s]+)(?:\s+([\s\S]*))?$/);
+  if (!commandMatch) {
+    return null;
+  }
+  const commandName = `/${commandMatch[1]}`;
+  const args = commandMatch[2]?.trim();
 
   const key = normalizeLowercaseStringOrEmpty(commandName);
   const alternateKeys = [key];
@@ -307,7 +311,7 @@ export async function executePluginCommand(params: {
   });
   const effectiveAccountId = bindingConversation?.accountId ?? params.accountId;
   const senderIsOwnerForCommand =
-    requiredScopes.length > 0 ||
+    canExposeSenderIsOwner(command) ||
     (isTrustedReservedCommandOwner(command) &&
       command.ownership === "reserved" &&
       isReservedCommandName(command.name) &&
@@ -343,6 +347,7 @@ export async function executePluginCommand(params: {
     isAuthorizedSender,
     ...(senderIsOwnerForCommand === undefined ? {} : { senderIsOwner: senderIsOwnerForCommand }),
     gatewayClientScopes: params.gatewayClientScopes,
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     sessionFile: params.sessionFile,

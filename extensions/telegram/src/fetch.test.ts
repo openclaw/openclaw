@@ -1,7 +1,9 @@
+// Telegram tests cover fetch plugin behavior.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
+import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
@@ -678,6 +680,38 @@ describe("resolveTelegramFetch", () => {
     expect(typeof pinnedPolicy?.connect?.lookup).toBe("function");
   });
 
+  it("skips sticky IPv4 fallback when user explicitly configures network settings", async () => {
+    undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
+    const transport = resolveTelegramTransport(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "verbatim",
+      },
+    });
+
+    await expect(
+      transport.sourceFetch("https://api.telegram.org/botTOKEN/getFile"),
+    ).resolves.toEqual({ ok: true });
+    // Only the default dispatcher — no IPv4 fallback or pinned IP attempts
+    expect(transport.dispatcherAttempts).toHaveLength(1);
+    const [defaultAttempt] = transport.dispatcherAttempts as Array<{
+      dispatcherPolicy?: DirectTelegramDispatcherPolicy;
+    }>;
+    expect(defaultAttempt.dispatcherPolicy?.mode).toBe("direct");
+    expect(defaultAttempt.dispatcherPolicy?.connect?.autoSelectFamily).toBe(true);
+  });
+
+  it("skips sticky IPv4 fallback when the DNS result order env override is verbatim", async () => {
+    vi.stubEnv("OPENCLAW_TELEGRAM_DNS_RESULT_ORDER", "verbatim");
+    undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
+    const transport = resolveTelegramTransport();
+
+    await expect(
+      transport.sourceFetch("https://api.telegram.org/botTOKEN/getFile"),
+    ).resolves.toEqual({ ok: true });
+    expect(transport.dispatcherAttempts).toHaveLength(1);
+  });
+
   it("does not blind-retry when sticky IPv4 fallback is disallowed for explicit proxy paths", async () => {
     const { makeProxyFetch } = await import("./proxy.js");
     const proxyFetch = makeProxyFetch("http://127.0.0.1:7890");
@@ -923,7 +957,7 @@ describe("resolveTelegramFetch", () => {
     expect(eighthDispatcher).toBe(firstDispatcher);
     expect(ninthDispatcher).toBe(firstDispatcher);
     expectPinnedFallbackIpDispatcher(3);
-    expectLoggerMessageContaining(loggerWarn, "fetch fallback: DNS-resolved IP unreachable");
+    expectLoggerMessageContaining(loggerWarn, "fetch fallback: primary connection path failed");
     expectLoggerMessageContaining(
       loggerDebug,
       "fetch fallback: recovered from attempt 2 to attempt 0",
@@ -1048,6 +1082,56 @@ describe("resolveTelegramFetch", () => {
     expectLoggerMessageContaining(loggerDebug, "fetch fallback: re-probing primary dispatcher");
   });
 
+  it("does not treat fresh transport attempts as unhealthy when the process clock is invalid", async () => {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
+
+      const resolved = resolveTelegramFetchOrThrow(undefined, {
+        network: {
+          autoSelectFamily: true,
+        },
+      });
+
+      await resolved("https://api.telegram.org/botx/getMe");
+
+      expect(undiciFetch).toHaveBeenCalledTimes(1);
+      expectNoLoggerMessageContaining(loggerWarn, "temporarily unhealthy");
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
+  it("does not cool down transport attempts when the expiry exceeds the Date range", async () => {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+    try {
+      for (let i = 0; i < 10; i += 1) {
+        undiciFetch.mockRejectedValueOnce(buildFetchFallbackError("ENETUNREACH"));
+      }
+
+      const resolved = resolveTelegramFetchOrThrow(undefined, {
+        network: {
+          autoSelectFamily: true,
+          dnsResultOrder: "ipv4first",
+        },
+      });
+
+      await expect(resolved("https://api.telegram.org/botx/deleteWebhook")).rejects.toThrow(
+        "fetch failed",
+      );
+      for (let i = 0; i < 5; i += 1) {
+        await expect(resolved("https://api.telegram.org/botx/getUpdates")).rejects.toThrow(
+          "fetch failed",
+        );
+      }
+
+      expect(undiciFetch).toHaveBeenCalledTimes(8);
+      expectNoLoggerMessageContaining(loggerWarn, "temporarily unhealthy");
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
   it("preserves caller-provided dispatcher across fallback retry", async () => {
     const fetchError = buildFetchFallbackError("EHOSTUNREACH");
     undiciFetch.mockRejectedValueOnce(fetchError).mockResolvedValueOnce({ ok: true } as Response);
@@ -1107,6 +1191,31 @@ describe("resolveTelegramFetch", () => {
     );
 
     expect(undiciFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not automatically retry structured EADDRNOTAVAIL fetch failures", async () => {
+    const fetchError = buildFetchFallbackError("EADDRNOTAVAIL");
+    undiciFetch.mockRejectedValue(fetchError);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, STICKY_IPV4_FALLBACK_NETWORK);
+
+    await expect(resolved("https://api.telegram.org/botx/sendMessage")).rejects.toThrow(
+      "fetch failed",
+    );
+
+    expect(undiciFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves EADDRNOTAVAIL in forced fallback diagnostics", () => {
+    const transport = resolveTelegramTransport(undefined, STICKY_IPV4_FALLBACK_NETWORK);
+    const fetchError = buildFetchFallbackError("EADDRNOTAVAIL");
+
+    expect(transport.forceFallback?.("probe timeout/network error", fetchError)).toBe(true);
+    expect(transport.forceFallback?.("probe timeout/network error", fetchError)).toBe(true);
+
+    expectLoggerMessageContaining(loggerWarn, "primary connection path failed");
+    expectLoggerMessageContaining(loggerWarn, "codes=EADDRNOTAVAIL");
+    expectNoLoggerMessageContaining(loggerWarn, "DNS-resolved IP unreachable");
   });
 
   it("retries sticky fallback when the local network is down during connect", async () => {

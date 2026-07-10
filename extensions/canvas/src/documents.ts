@@ -1,3 +1,7 @@
+/**
+ * Canvas document materialization helpers for hosted HTML, media, documents,
+ * and asset manifests.
+ */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -27,6 +31,9 @@ type CanvasDocumentCreateInput = {
   entrypoint?: CanvasDocumentEntrypoint;
   assets?: CanvasDocumentAsset[];
   surface?: "assistant_message" | "tool_card" | "sidebar";
+  retentionScope?: string;
+  /** Serve the document with a CSP sandbox header so direct opens get an opaque origin. */
+  cspSandbox?: "scripts";
 };
 
 type CanvasDocumentManifest = {
@@ -39,6 +46,8 @@ type CanvasDocumentManifest = {
   localEntrypoint?: string;
   externalUrl?: string;
   surface?: "assistant_message" | "tool_card" | "sidebar";
+  retentionScope?: string;
+  cspSandbox?: "scripts";
   assets: Array<{
     logicalPath: string;
     contentType?: string;
@@ -122,6 +131,52 @@ function resolveCanvasDocumentsDir(rootDir?: string, stateDir = resolveStateDir(
   return path.join(resolveCanvasRootDir(rootDir, stateDir), CANVAS_DOCUMENTS_DIR_NAME);
 }
 
+async function pruneCanvasDocumentsForScope(params: {
+  documentsDir: string;
+  retentionScope: string;
+  maxDocuments: number;
+}): Promise<void> {
+  const entries = await fs.readdir(params.documentsDir, { withFileTypes: true });
+  const scopedDocuments = (
+    await Promise.all(
+      entries
+        .filter((entry) => entry.isDirectory())
+        .map(async (entry) => {
+          try {
+            const manifest = JSON.parse(
+              await fs.readFile(
+                path.join(params.documentsDir, entry.name, "manifest.json"),
+                "utf8",
+              ),
+            ) as { createdAt?: unknown; retentionScope?: unknown };
+            if (
+              manifest.retentionScope !== params.retentionScope ||
+              typeof manifest.createdAt !== "string"
+            ) {
+              return null;
+            }
+            return { id: entry.name, createdAt: manifest.createdAt };
+          } catch {
+            return null;
+          }
+        }),
+    )
+  ).filter((entry): entry is { id: string; createdAt: string } => entry !== null);
+  const deleteCount = Math.max(0, scopedDocuments.length - params.maxDocuments);
+  const oldest = scopedDocuments
+    .toSorted(
+      (left, right) =>
+        left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+    )
+    .slice(0, deleteCount);
+  await Promise.all(
+    oldest.map((entry) =>
+      fs.rm(path.join(params.documentsDir, entry.id), { recursive: true, force: true }),
+    ),
+  );
+}
+
+/** Resolves the on-disk directory for one Canvas document id. */
 export function resolveCanvasDocumentDir(
   documentId: string,
   options?: { rootDir?: string; stateDir?: string },
@@ -129,6 +184,7 @@ export function resolveCanvasDocumentDir(
   return path.join(resolveCanvasDocumentsDir(options?.rootDir, options?.stateDir), documentId);
 }
 
+/** Builds the hosted URL path for a Canvas document entrypoint. */
 export function buildCanvasDocumentEntryUrl(documentId: string, entrypoint: string): string {
   const normalizedEntrypoint = normalizeLogicalPath(entrypoint);
   const encodedEntrypoint = normalizedEntrypoint
@@ -142,6 +198,7 @@ function buildCanvasDocumentAssetUrl(documentId: string, logicalPath: string): s
   return buildCanvasDocumentEntryUrl(documentId, logicalPath);
 }
 
+/** Maps a Canvas hosted document URL path back to a local file path. */
 export function resolveCanvasHttpPathToLocalPath(
   requestPath: string,
   options?: { rootDir?: string; stateDir?: string },
@@ -289,9 +346,15 @@ async function materializeEntrypoint(
   };
 }
 
+/** Creates a Canvas document directory, copies assets, and writes its manifest. */
 export async function createCanvasDocument(
   input: CanvasDocumentCreateInput,
-  options?: { stateDir?: string; workspaceDir?: string; canvasRootDir?: string },
+  options?: {
+    stateDir?: string;
+    workspaceDir?: string;
+    canvasRootDir?: string;
+    maxDocumentsPerScope?: number;
+  },
 ): Promise<CanvasDocumentManifest> {
   const workspaceDir = options?.workspaceDir ?? process.cwd();
   const id = input.id?.trim() ? normalizeCanvasDocumentId(input.id) : canvasDocumentId();
@@ -312,6 +375,8 @@ export async function createCanvasDocument(
       ? { preferredHeight: input.preferredHeight }
       : {}),
     ...(input.surface ? { surface: input.surface } : {}),
+    ...(input.retentionScope ? { retentionScope: input.retentionScope } : {}),
+    ...(input.cspSandbox ? { cspSandbox: input.cspSandbox } : {}),
     createdAt: new Date().toISOString(),
     entryUrl: entry.entryUrl,
     ...(entry.localEntrypoint ? { localEntrypoint: entry.localEntrypoint } : {}),
@@ -319,9 +384,18 @@ export async function createCanvasDocument(
     assets,
   };
   await writeManifest(root, manifest);
+  if (input.retentionScope && options?.maxDocumentsPerScope) {
+    // Bounded transcript widgets cannot grow managed Canvas storage without limit.
+    await pruneCanvasDocumentsForScope({
+      documentsDir: resolveCanvasDocumentsDir(options.canvasRootDir, options.stateDir),
+      retentionScope: input.retentionScope,
+      maxDocuments: options.maxDocumentsPerScope,
+    });
+  }
   return manifest;
 }
 
+/** Resolves manifest assets to local paths and hosted URLs. */
 export function resolveCanvasDocumentAssets(
   manifest: CanvasDocumentManifest,
   options?: { baseUrl?: string; stateDir?: string; canvasRootDir?: string },

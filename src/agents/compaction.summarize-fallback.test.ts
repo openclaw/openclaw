@@ -1,3 +1,4 @@
+// Covers final fallback behavior when model-backed summarization fails.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import type { UserMessage } from "openclaw/plugin-sdk/llm";
@@ -72,7 +73,74 @@ describe("summarizeWithFallback", () => {
     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
   });
 
+  it("retries provider-side AbortError and returns a real summary when caller signal is not aborted", async () => {
+    // Reproduce the undici AbortError("This operation was aborted") shape thrown
+    // when the LLM API closes the connection mid-stream without the caller signal
+    // being fired. Before the fix, isAbortError() + isTimeoutError() both matched
+    // this error shape, so shouldRetry returned false and no retry was attempted —
+    // the compaction fell back to the "Summary unavailable" placeholder instead.
+    const providerAbortErr = Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+    });
+    agentSessionMocks.generateSummary
+      .mockRejectedValueOnce(providerAbortErr)
+      .mockResolvedValueOnce("recovered summary after provider disconnect");
+
+    const result = await summarizeWithFallback({
+      messages: [
+        {
+          role: "user",
+          content: "hello",
+          timestamp: 1,
+        } satisfies UserMessage,
+      ],
+      model: testModel,
+      apiKey: "test-key", // pragma: allowlist secret
+      signal: new AbortController().signal, // not aborted
+      reserveTokens: 1000,
+      maxChunkTokens: 50_000,
+      contextWindow: 200_000,
+    });
+
+    expect(result).toBe("recovered summary after provider disconnect");
+    // Two calls: first fails with provider-side AbortError, second succeeds.
+    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry and propagates AbortError immediately when caller signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const providerAbortErr = Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+    });
+    agentSessionMocks.generateSummary.mockRejectedValueOnce(providerAbortErr);
+
+    await expect(
+      summarizeWithFallback({
+        messages: [
+          {
+            role: "user",
+            content: "hello",
+            timestamp: 1,
+          } satisfies UserMessage,
+        ],
+        model: testModel,
+        apiKey: "test-key", // pragma: allowlist secret
+        signal: controller.signal, // already aborted
+        reserveTokens: 1000,
+        maxChunkTokens: 50_000,
+        contextWindow: 200_000,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    // Caller abort is terminal — no retry, no fallback to placeholder.
+    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
+  });
+
   it("still attempts partial summarization when oversized messages were excluded", async () => {
+    // Oversized-message fallback tries the safe subset so a huge attachment or
+    // tool output does not prevent summarizing the rest of the transcript.
     agentSessionMocks.estimateTokens.mockImplementation((message: unknown) => {
       const content =
         typeof (message as { content?: unknown }).content === "string"

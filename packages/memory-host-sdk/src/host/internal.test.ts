@@ -1,4 +1,6 @@
+// Memory Host SDK tests cover internal behavior.
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,10 +14,7 @@ import {
   normalizeExtraMemoryPaths,
   remapChunkLines,
 } from "./internal.js";
-import {
-  DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES,
-  type MemoryMultimodalSettings,
-} from "./multimodal.js";
+import { normalizeMemoryMultimodalSettings, type MemoryMultimodalSettings } from "./multimodal.js";
 
 type FileEntry = NonNullable<Awaited<ReturnType<typeof buildFileEntry>>>;
 type MultimodalIndexingChunk = NonNullable<
@@ -73,11 +72,7 @@ function expectEmbeddingInput(
   return chunk.embeddingInput;
 }
 
-const multimodal: MemoryMultimodalSettings = {
-  enabled: true,
-  modalities: ["image", "audio"],
-  maxFileBytes: DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES,
-};
+const multimodal: MemoryMultimodalSettings = normalizeMemoryMultimodalSettings({ enabled: true });
 
 describe("memory host SDK package internals", () => {
   const getTmpDir = setupTempDirLifecycle("memory-package-");
@@ -122,6 +117,7 @@ describe("memory host SDK package internals", () => {
     fsSync.mkdirSync(extraDir, { recursive: true });
     fsSync.writeFileSync(path.join(extraDir, "note.md"), "# Note");
     fsSync.writeFileSync(path.join(extraDir, "diagram.png"), Buffer.from("png"));
+    fsSync.writeFileSync(path.join(extraDir, "recording.m2a"), Buffer.from("audio"));
     fsSync.writeFileSync(path.join(extraDir, "ignore.txt"), "ignored");
 
     const files = await listMemoryFiles(
@@ -134,6 +130,7 @@ describe("memory host SDK package internals", () => {
       "MEMORY.md",
       path.join("extra", "diagram.png"),
       path.join("extra", "note.md"),
+      path.join("extra", "recording.m2a"),
     ]);
   });
 
@@ -161,6 +158,38 @@ describe("memory host SDK package internals", () => {
     expect(imageEntry.modality).toBe("image");
     expect(imageEntry.mimeType).toBe("image/png");
     expect(imageEntry.contentText).toBe("Image file: diagram.png");
+  });
+
+  it("retries transient markdown reads while building file entries", async () => {
+    const tmpDir = getTmpDir();
+    const notePath = path.join(tmpDir, "note.md");
+    fsSync.writeFileSync(notePath, "hello", "utf-8");
+
+    const realOpen = fs.open;
+    let attempts = 0;
+    const openSpy = vi
+      .spyOn(fs, "open")
+      .mockImplementation(async (...args: Parameters<typeof realOpen>) => {
+        const [target, flags, mode] = args;
+        if (typeof target === "string" && path.resolve(target) === notePath && attempts++ === 0) {
+          const err = new Error(
+            "Unknown system error -11: Unknown system error -11, open",
+          ) as NodeJS.ErrnoException;
+          err.code = "UNKNOWN";
+          err.errno = -11;
+          throw err;
+        }
+        return await realOpen(target, flags, mode);
+      });
+
+    try {
+      const entry = expectFileEntry(await buildFileEntry(notePath, tmpDir));
+      expect(entry.path).toBe("note.md");
+      expect(entry.kind).toBe("markdown");
+      expect(attempts).toBe(2);
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 
   it("builds multimodal chunks lazily and rejects changed files", async () => {
@@ -197,7 +226,19 @@ describe("memory host SDK package internals", () => {
       overlap: 0,
     });
     for (const chunk of surrogateChunks) {
-      expect(chunk.text).not.toContain("\uFFFD");
+      expect(() => encodeURIComponent(chunk.text)).not.toThrow();
+    }
+  });
+
+  it("preserves a surrogate pair at the coarse split boundary", () => {
+    const text = `${"a".repeat(39)}🌸${"b".repeat(39)}`;
+
+    const chunks = chunkMarkdown(text, { tokens: 10, overlap: 0 });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe(text);
+    for (const chunk of chunks) {
+      expect(() => encodeURIComponent(chunk.text)).not.toThrow();
     }
   });
 

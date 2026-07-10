@@ -1,3 +1,4 @@
+// Amazon Bedrock tests cover embedding provider plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { testing, hasAwsCredentials } from "./embedding-provider.js";
 
@@ -105,5 +106,49 @@ describe("bedrock embedding response parsers", () => {
     expect(() =>
       testing.parseCohereBatch("cohere-v3", '{"embeddings":[[1],{"bad":true}]}'),
     ).toThrow("Amazon Bedrock embedding response returned malformed JSON");
+  });
+});
+
+describe("stripInferenceProfilePrefix", () => {
+  it("strips global prefix", () => {
+    expect(testing.stripInferenceProfilePrefix("global.cohere.embed-v4:0")).toBe(
+      "cohere.embed-v4:0",
+    );
+  });
+
+  it("strips us prefix", () => {
+    expect(testing.stripInferenceProfilePrefix("us.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
+  });
+
+  it("strips eu prefix", () => {
+    expect(testing.stripInferenceProfilePrefix("eu.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
+  });
+
+  it("strips ap prefix", () => {
+    expect(testing.stripInferenceProfilePrefix("ap.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
+  });
+
+  it("strips apac prefix", () => {
+    expect(testing.stripInferenceProfilePrefix("apac.cohere.embed-v4:0")).toBe(
+      "cohere.embed-v4:0",
+    );
+  });
+
+  it("strips au prefix", () => {
+    expect(testing.stripInferenceProfilePrefix("au.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
+  });
+
+  it("strips jp prefix", () => {
+    expect(testing.stripInferenceProfilePrefix("jp.cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
+  });
+
+  it("returns unchanged model ID without prefix", () => {
+    expect(testing.stripInferenceProfilePrefix("cohere.embed-v4:0")).toBe("cohere.embed-v4:0");
+  });
+
+  it("returns unchanged model ID for amazon.titan-embed-text-v2:0", () => {
+    expect(testing.stripInferenceProfilePrefix("amazon.titan-embed-text-v2:0")).toBe(
+      "amazon.titan-embed-text-v2:0",
+    );
   });
 });

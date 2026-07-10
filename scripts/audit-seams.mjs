@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Audits repo ownership seams, optional plugin leaks, and nearby test coverage signals.
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -9,6 +10,7 @@ import {
   BUNDLED_PLUGIN_ROOT_DIR,
 } from "./lib/bundled-plugin-paths.mjs";
 import { optionalBundledClusterSet } from "./lib/optional-bundled-clusters.mjs";
+import { escapeRegExp } from "./lib/regexp.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const srcRoot = path.join(repoRoot, "src");
@@ -125,7 +127,7 @@ async function walkAllCodeFiles(rootDir, options = {}) {
   const includeTests = options.includeTests === true;
 
   async function walk(dir) {
-    let entries = [];
+    let entries;
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
     } catch {
@@ -547,12 +549,8 @@ function splitNameTokens(name) {
     .filter(Boolean);
 }
 
-function escapeForRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function hasImportSource(source, specifier) {
-  const escaped = escapeForRegExp(specifier);
+  const escaped = escapeRegExp(specifier);
   return new RegExp(`from\\s+["']${escaped}["']|import\\s*\\(\\s*["']${escaped}["']\\s*\\)`).test(
     source,
   );
@@ -839,7 +837,7 @@ async function buildTestIndex(testFiles) {
 }
 
 function hasExecutableImportReference(source, importPath) {
-  const escapedImportPath = escapeForRegExp(importPath);
+  const escapedImportPath = escapeRegExp(importPath);
   const suffix = String.raw`(?:\.[^"'\\\`]+)?`;
   const patterns = [
     new RegExp(String.raw`\bfrom\s*["'\`]${escapedImportPath}${suffix}["'\`]`),
@@ -851,7 +849,7 @@ function hasExecutableImportReference(source, importPath) {
 }
 
 function hasModuleMockReference(source, importPath) {
-  const escapedImportPath = escapeForRegExp(importPath);
+  const escapedImportPath = escapeRegExp(importPath);
   const suffix = String.raw`(?:\.[^"'\\\`]+)?`;
   const patterns = [
     new RegExp(String.raw`\bvi\.mock\s*\(\s*["'\`]${escapedImportPath}${suffix}["'\`]`),

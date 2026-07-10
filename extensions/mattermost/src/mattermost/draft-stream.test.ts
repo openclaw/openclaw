@@ -1,6 +1,7 @@
+// Mattermost tests cover draft stream plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
-import { buildMattermostToolStatusText, createMattermostDraftStream } from "./draft-stream.js";
+import { createMattermostDraftStream } from "./draft-stream.js";
 
 type RequestRecord = {
   path: string;
@@ -204,6 +205,32 @@ describe("createMattermostDraftStream", () => {
     expect(stream.postId()).toBeUndefined();
   });
 
+  it("truncates on a code-point boundary so a straddling emoji is dropped whole", async () => {
+    const { client, calls } = createMockClient();
+    // maxChars=12 => cut point is maxChars-3=9. The emoji 😀 occupies UTF-16
+    // indices 8-9, so a raw slice(0,9) would keep the lone high surrogate at
+    // index 8 and drop its low surrogate at index 9, leaking a dangling half.
+    const stream = createMattermostDraftStream({
+      client,
+      channelId: "channel-1",
+      throttleMs: 0,
+      maxChars: 12,
+    });
+
+    const input = `${"a".repeat(8)}\u{1F600}${"b".repeat(5)}`;
+    stream.update(input);
+    await stream.flush();
+
+    expect(calls).toHaveLength(1);
+    const message = parseRequestJson(calls[0]?.init).message;
+    expect(typeof message).toBe("string");
+    const sent = message as string;
+    // The straddling emoji must be dropped whole, leaving no dangling surrogate half.
+    expect(/[\uD800-\uDFFF]/u.test(sent)).toBe(false);
+    expect(sent.length).toBeLessThanOrEqual(12);
+    expect(sent).toBe("aaaaaaaa...");
+  });
+
   it("does not resend after an update failure followed by stop", async () => {
     const warn = vi.fn();
     const calls: RequestRecord[] = [];
@@ -250,32 +277,5 @@ describe("createMattermostDraftStream", () => {
     expect(calls).toHaveLength(2);
     expect(calls[0]?.path).toBe("/posts");
     expect(calls[1]?.path).toBe("/posts/post-1");
-  });
-});
-
-describe("buildMattermostToolStatusText", () => {
-  it("renders a status with the shared tool label", () => {
-    expect(buildMattermostToolStatusText({ name: "read" })).toBe("📖 Read");
-  });
-
-  it("honors raw exec detail mode", () => {
-    expect(
-      buildMattermostToolStatusText({
-        name: "exec",
-        args: { command: "pnpm test -- --watch=false" },
-        detailMode: "raw",
-      }),
-    ).toBe("🛠️ run tests, `pnpm test -- --watch=false`");
-  });
-
-  it("can hide raw exec detail from status text", () => {
-    expect(
-      buildMattermostToolStatusText({
-        name: "exec",
-        args: { command: "pnpm test -- --watch=false" },
-        detailMode: "raw",
-        config: { streaming: { preview: { commandText: "status" } } },
-      }),
-    ).toBe("🛠️ Exec");
   });
 });

@@ -1,5 +1,11 @@
+// Handshake auth helpers classify browser security context, pairing locality, and connect auth details.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../../packages/gateway-protocol/src/client-info.js";
+import type { ConnectParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { verifyDeviceSignature } from "../../../infra/device-identity.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
 import { buildDeviceAuthPayload, buildDeviceAuthPayloadV3 } from "../../device-auth.js";
@@ -10,20 +16,18 @@ import {
   isPrivateOrLoopbackHost,
   resolveHostName,
 } from "../../net.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
-import type { ConnectParams } from "../../protocol/index.js";
 import type { AuthProvidedKind } from "./auth-messages.js";
 
 export const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
 export const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
-export type PairingLocalityKind =
+type PairingLocalityKind =
   | "direct_local"
   | "cli_container_local"
   | "browser_container_local"
   | "shared_secret_loopback_local"
   | "remote";
 
-export type HandshakeBrowserSecurityContext = {
+type HandshakeBrowserSecurityContext = {
   hasBrowserOriginHeader: boolean;
   enforceOriginCheckForAnyClient: boolean;
   rateLimitClientIp: string | undefined;
@@ -36,6 +40,7 @@ type HandshakeConnectAuth = {
   deviceToken?: string;
   password?: string;
   approvalRuntimeToken?: string;
+  agentRuntimeIdentityToken?: string;
 };
 
 function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
@@ -276,6 +281,24 @@ export function shouldSkipLocalBackendSelfPairing(params: {
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   const usesDeviceTokenAuth = params.authMethod === "device-token";
   return (params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth;
+}
+
+export function shouldPreserveLocalCliSharedAuthScopes(params: {
+  connectParams: ConnectParams;
+  locality: PairingLocalityKind;
+  hasBrowserOriginHeader: boolean;
+  sharedAuthOk: boolean;
+  authMethod: GatewayAuthResult["method"];
+}): boolean {
+  const isCliClient =
+    params.connectParams.client.id === GATEWAY_CLIENT_IDS.CLI &&
+    params.connectParams.client.mode === GATEWAY_CLIENT_MODES.CLI;
+  if (!isCliClient) {
+    return false;
+  }
+  const isLocal = params.locality === "direct_local" || params.locality === "cli_container_local";
+  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
+  return isLocal && !params.hasBrowserOriginHeader && params.sharedAuthOk && usesSharedSecretAuth;
 }
 
 function resolveSignatureToken(connectParams: ConnectParams): string | null {

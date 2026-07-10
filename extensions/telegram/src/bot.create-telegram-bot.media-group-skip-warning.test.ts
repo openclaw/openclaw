@@ -1,3 +1,5 @@
+// Telegram tests cover bot.create telegram bot.media group skip warning plugin behavior.
+import { setTimeout as delay } from "node:timers/promises";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const saveRemoteMedia = vi.fn();
@@ -104,10 +106,15 @@ function resolveFlushTimer(setTimeoutSpy: ReturnType<typeof vi.spyOn>) {
   return flushTimer;
 }
 
+async function waitForBufferedProcessing() {
+  await delay(75);
+}
+
 async function flushChannelPostMediaGroup(setTimeoutSpy: ReturnType<typeof vi.spyOn>) {
   const flushTimer = resolveFlushTimer(setTimeoutSpy);
   expect(flushTimer).toBeTypeOf("function");
   await flushTimer?.();
+  await waitForBufferedProcessing();
 }
 
 function createChannelPostContext(params: {
@@ -133,13 +140,17 @@ function createChannelPostContext(params: {
 
 async function queueChannelPostAlbum(
   handler: (ctx: Record<string, unknown>) => Promise<void>,
-  params: { caption: string; mediaGroupId: string; photoFileIds: string[] },
+  params: {
+    baseMessageId: number;
+    caption: string;
+    mediaGroupId: string;
+    photoFileIds: string[];
+  },
 ) {
-  const baseMessageId = 600;
   const calls = params.photoFileIds.map((fileId, index) =>
     handler(
       createChannelPostContext({
-        messageId: baseMessageId + index,
+        messageId: params.baseMessageId + index,
         date: 1736380800 + index,
         ...(index === 0 ? { caption: params.caption } : {}),
         mediaGroupId: params.mediaGroupId,
@@ -148,7 +159,7 @@ async function queueChannelPostAlbum(
     ),
   );
   await Promise.all(calls);
-  return baseMessageId;
+  return params.baseMessageId;
 }
 
 function urlOf(args: unknown[]): string {
@@ -193,6 +204,7 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
     try {
       const handler = getChannelPostHandler();
       const baseMessageId = await queueChannelPostAlbum(handler, {
+        baseMessageId: 600,
         caption: "album caption",
         mediaGroupId: "skip-warn-album-1",
         photoFileIds: ["p1", "p2"],
@@ -200,7 +212,7 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
       expect(sendMessageSpy).not.toHaveBeenCalled();
       await flushChannelPostMediaGroup(setTimeoutSpy);
 
-      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(sendMessageSpy).toHaveBeenCalledTimes(1));
       expect(sendMessageSpy).toHaveBeenCalledWith(
         CHANNEL_ID,
         expect.stringContaining("1 of 2 images"),
@@ -228,13 +240,14 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
     try {
       const handler = getChannelPostHandler();
       await queueChannelPostAlbum(handler, {
+        baseMessageId: 700,
         caption: "all-fail album",
         mediaGroupId: "skip-warn-album-2",
         photoFileIds: ["p1", "p2"],
       });
       await flushChannelPostMediaGroup(setTimeoutSpy);
 
-      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(sendMessageSpy).toHaveBeenCalledTimes(1));
       const warningText = String(sendMessageSpy.mock.calls[0]?.[1]);
       expect(warningText).toContain("0 of 2 images");
       expect(warningText).toContain("2 could not be fetched and were skipped");
@@ -257,13 +270,14 @@ describe("createTelegramBot media-group skip warning (#55216)", () => {
     try {
       const handler = getChannelPostHandler();
       await queueChannelPostAlbum(handler, {
+        baseMessageId: 800,
         caption: "plural album",
         mediaGroupId: "skip-warn-album-3",
         photoFileIds: ["p1", "p2", "p3"],
       });
       await flushChannelPostMediaGroup(setTimeoutSpy);
 
-      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(sendMessageSpy).toHaveBeenCalledTimes(1));
       const warningText = String(sendMessageSpy.mock.calls[0]?.[1]);
       expect(warningText).toContain("1 of 3 images");
       expect(warningText).toContain("2 could not be fetched and were skipped");

@@ -1,3 +1,5 @@
+// Covers channel/target inference, legacy target rewrite, target validation,
+// and plugin alias-aware message-action normalization.
 import { describe, expect, it, vi } from "vitest";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 
@@ -63,6 +65,28 @@ describe("normalizeMessageActionInput", () => {
         },
       },
       expectedFields: { target: "channel:C1", to: "channel:C1" },
+    },
+    {
+      input: {
+        action: "send",
+        args: {},
+        toolContext: {
+          currentChannelId: "user:U1",
+          currentChannelProvider: "slack",
+        },
+      },
+      expectedFields: { target: "user:U1", to: "user:U1" },
+    },
+    {
+      input: {
+        action: "send",
+        args: {},
+        toolContext: {
+          currentMessagingTarget: "user:U1",
+          currentChannelProvider: "slack",
+        },
+      },
+      expectedFields: { target: "user:U1", to: "user:U1" },
     },
     {
       input: {
@@ -136,6 +160,30 @@ describe("normalizeMessageActionInput", () => {
     },
     {
       input: {
+        action: "poll",
+        args: {
+          channel: "imessage",
+          chatGuid: "iMessage;+;chat0000",
+        },
+      },
+      expectedFields: {
+        target: "chat_guid:iMessage;+;chat0000",
+        to: "chat_guid:iMessage;+;chat0000",
+        chatGuid: "iMessage;+;chat0000",
+      },
+    },
+    {
+      input: {
+        action: "poll-vote",
+        args: {
+          channel: "imessage",
+          chatId: 42,
+        },
+      },
+      expectedFields: { target: "chat_id:42", to: "chat_id:42", chatId: 42 },
+    },
+    {
+      input: {
         action: "read",
         args: {
           channel: "workspace",
@@ -180,5 +228,18 @@ describe("normalizeMessageActionInput", () => {
         args: {},
       }),
     ).toThrow(/requires a target/);
+  });
+
+  it("rejects conflicting canonical and plugin delivery targets", () => {
+    expect(() =>
+      normalizeMessageActionInput({
+        action: "poll-vote",
+        args: {
+          channel: "imessage",
+          target: "chat_guid:iMessage;-;+15550001111",
+          chatGuid: "iMessage;-;+15559998888",
+        },
+      }),
+    ).toThrow(/conflicting target and delivery alias/);
   });
 });

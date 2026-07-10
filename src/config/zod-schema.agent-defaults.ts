@@ -1,3 +1,4 @@
+// Defines Zod schema fragments for agent default configuration.
 import { z } from "zod";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
@@ -53,10 +54,12 @@ export const AgentDefaultsSchema = z
     /** Global default provider params applied to all models before per-model and per-agent overrides. */
     params: z.record(z.string(), z.unknown()).optional(),
     model: AgentModelSchema.optional(),
+    utilityModel: z.string().optional(),
     imageModel: AgentToolModelSchema.optional(),
     imageGenerationModel: AgentToolModelSchema.optional(),
     videoGenerationModel: AgentToolModelSchema.optional(),
     musicGenerationModel: AgentToolModelSchema.optional(),
+    voiceModel: AgentToolModelSchema.optional(),
     mediaGenerationAutoProviderFallback: z.boolean().optional(),
     pdfModel: AgentToolModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
@@ -66,7 +69,6 @@ export const AgentDefaultsSchema = z
     skills: z.array(z.string()).optional(),
     silentReply: SilentReplyPolicyConfigSchema.optional(),
     repoRoot: z.string().optional(),
-    systemPromptOverride: z.string().optional(),
     promptOverlays: z
       .object({
         gpt5: z
@@ -227,7 +229,8 @@ export const AgentDefaultsSchema = z
     blockStreamingChunk: BlockStreamingChunkSchema.optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     humanDelay: HumanDelaySchema.optional(),
-    timeoutSeconds: z.number().int().positive().optional(),
+    // 0 = unlimited run budget; stream liveness watchdogs still apply.
+    timeoutSeconds: z.number().int().nonnegative().optional(),
     mediaMaxMb: z.number().positive().optional(),
     imageMaxDimensionPx: z.number().int().positive().optional(),
     imageQuality: z.enum(["auto", "efficient", "balanced", "high"]).optional(),

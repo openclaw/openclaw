@@ -1,28 +1,83 @@
+// Systemd tests cover Linux service install, start, stop, and status behavior.
+import type { ExecFileOptionsWithStringEncoding } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const execFileMock = vi.hoisted(() => vi.fn());
+type ExecFileError = Error & {
+  stderr?: string;
+  code?: string | number;
+};
+type ExecFileCallback = (error: ExecFileError | null, stdout: string, stderr: string) => void;
+type ExecFileMock = (
+  command: string,
+  args: string[],
+  options: ExecFileOptionsWithStringEncoding,
+  callback: ExecFileCallback,
+) => unknown;
+
+const execFileMock = vi.hoisted(() => vi.fn<ExecFileMock>());
 const existsSyncMock = vi.hoisted(() => vi.fn(() => false));
+const findSystemGatewayServicesMock = vi.hoisted(() =>
+  vi.fn<
+    () => Promise<
+      Array<{
+        platform: "linux";
+        label: string;
+        detail: string;
+        scope: "user" | "system";
+        marker?: "openclaw" | "clawdbot";
+        legacy?: boolean;
+      }>
+    >
+  >(async () => []),
+);
+
+vi.mock("./inspect.js", () => ({
+  findSystemGatewayServices: () => findSystemGatewayServicesMock(),
+}));
 
 vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),
   existsSync: existsSyncMock,
 }));
 
-vi.mock("node:child_process", async () => {
-  const { mockNodeChildProcessExecFile } = await import("openclaw/plugin-sdk/test-node-mocks");
-  return mockNodeChildProcessExecFile(
-    Object.assign(execFileMock, {
-      __promisify__: vi.fn(),
-    }) as typeof import("node:child_process").execFile,
-  );
+vi.mock("./exec-file.js", () => {
+  return {
+    execFileUtf8: async (
+      command: string,
+      args: string[],
+      options: Omit<ExecFileOptionsWithStringEncoding, "encoding"> = {},
+    ) => {
+      let settled:
+        | {
+            stdout: string;
+            stderr: string;
+            code: number;
+          }
+        | undefined;
+
+      execFileMock(command, args, { ...options, encoding: "utf8" }, (error, stdout, stderr) => {
+        settled = {
+          stdout: stdout ?? "",
+          stderr: stderr || error?.message || "",
+          code: error && typeof error.code === "number" ? error.code : error ? 1 : 0,
+        };
+      });
+
+      if (!settled) {
+        throw new Error(`execFile mock did not settle for ${command} ${args.join(" ")}`);
+      }
+      return settled;
+    },
+  };
 });
 
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { parseSystemdEnvAssignments, parseSystemdExecStart } from "./systemd-unit.js";
 import {
+  findInstalledSystemdGatewayScope,
   installSystemdService,
   isNonFatalSystemdInstallProbeError,
   isSystemdServiceEnabled,
@@ -37,11 +92,6 @@ import {
   stopSystemdService,
   uninstallSystemdService,
 } from "./systemd.js";
-
-type ExecFileError = Error & {
-  stderr?: string;
-  code?: string | number;
-};
 
 const TEST_SERVICE_HOME = "/home/test";
 const TEST_MANAGED_HOME = "/tmp/openclaw-test-home";
@@ -167,6 +217,9 @@ describe("systemd availability", () => {
     existsSyncMock.mockReturnValue(true);
     execFileMock.mockImplementation((_cmd, args, opts, cb) => {
       assertUserSystemctlArgs(args, "status");
+      if (!opts.env) {
+        throw new Error("expected systemctl env");
+      }
       expect(opts.env.XDG_RUNTIME_DIR).toBe("/run/user/1000");
       expect(opts.env.DBUS_SESSION_BUS_ADDRESS).toBe("unix:path=/run/user/1000/bus");
       cb(null, "", "");
@@ -267,6 +320,26 @@ describe("systemd availability", () => {
         SUDO_USER: "debian",
         USER: "root-env-stale",
         LOGNAME: "root-env-stale",
+      }),
+    ).resolves.toBe(true);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps root user scope when stale SUDO_USER is paired with root bus environment", async () => {
+    mockEffectiveUid(0);
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      assertUserSystemctlArgs(args, "status");
+      cb(null, "", "");
+    });
+
+    await expect(
+      isSystemdUserServiceAvailable({
+        HOME: "/root",
+        USER: "root",
+        LOGNAME: "root",
+        SUDO_USER: "debian",
+        XDG_RUNTIME_DIR: "/run/user/0",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
       }),
     ).resolves.toBe(true);
     expect(execFileMock).toHaveBeenCalledTimes(1);
@@ -418,7 +491,7 @@ describe("isSystemdServiceEnabled", () => {
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         expect(args[0]).toBe("--machine");
-        expect(String(args[1])).toMatch(/^[^@]+@$/);
+        expect(args[1]).toMatch(/^[^@]+@$/);
         expect(args.slice(2)).toEqual(["--user", "is-enabled", "openclaw-gateway.service"]);
         const err = new Error("permission denied") as Error & { code?: number };
         err.code = 1;
@@ -474,6 +547,224 @@ describe("isSystemdUnitActive", () => {
   });
 });
 
+describe("system-scope gateway unit detection (openclaw#87577)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    execFileMock.mockReset();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function mockUnitFileLayout(layout: { user?: boolean; system?: string | false }) {
+    vi.spyOn(fs, "access").mockImplementation(async (pathArg) => {
+      const p = pathLikeToString(pathArg);
+      if (layout.user && p.includes("/.config/systemd/user/")) {
+        return undefined;
+      }
+      if (typeof layout.system === "string" && p === layout.system) {
+        return undefined;
+      }
+      const err = new Error("ENOENT") as NodeJS.ErrnoException;
+      err.code = "ENOENT";
+      throw err;
+    });
+  }
+
+  it("findInstalledSystemdGatewayScope prefers user scope when both exist", async () => {
+    mockUnitFileLayout({
+      user: true,
+      system: "/etc/systemd/system/openclaw-gateway.service",
+    });
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+    expect(result?.scope).toBe("user");
+    expect(result?.unitName).toBe(GATEWAY_SERVICE);
+    expect(result?.unitPath).toContain("/.config/systemd/user/openclaw-gateway.service");
+  });
+
+  it("findInstalledSystemdGatewayScope detects system-scope unit in /etc/systemd/system", async () => {
+    mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-gateway.service" });
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+    expect(result).toEqual({
+      scope: "system",
+      unitName: GATEWAY_SERVICE,
+      unitPath: "/etc/systemd/system/openclaw-gateway.service",
+    });
+  });
+
+  it("findInstalledSystemdGatewayScope falls back to /usr/lib/systemd/system", async () => {
+    mockUnitFileLayout({ system: "/usr/lib/systemd/system/openclaw-gateway.service" });
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+    expect(result?.scope).toBe("system");
+    expect(result?.unitPath).toBe("/usr/lib/systemd/system/openclaw-gateway.service");
+  });
+
+  it("findInstalledSystemdGatewayScope returns null when no unit file exists", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([]);
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+    expect(result).toBeNull();
+  });
+
+  it("findInstalledSystemdGatewayScope falls back to marker-owned system unit with custom name", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw.service",
+        detail: "unit: /etc/systemd/system/openclaw.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+    expect(result).toEqual({
+      scope: "system",
+      unitName: "openclaw.service",
+      unitPath: "/etc/systemd/system/openclaw.service",
+    });
+  });
+
+  it("findInstalledSystemdGatewayScope ignores legacy clawdbot system units in the marker fallback", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "clawdbot.service",
+        detail: "unit: /etc/systemd/system/clawdbot.service",
+        scope: "system",
+        marker: "clawdbot",
+        legacy: true,
+      },
+    ]);
+    const result = await findInstalledSystemdGatewayScope({ HOME: TEST_MANAGED_HOME });
+    expect(result).toBeNull();
+  });
+
+  it("isSystemdServiceEnabled queries the marker-owned custom system unit name", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw.service",
+        detail: "unit: /etc/systemd/system/openclaw.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["is-enabled", "openclaw.service"]);
+      cb(null, "enabled\n", "");
+    });
+    await expect(isSystemdServiceEnabled({ env: { HOME: TEST_MANAGED_HOME } })).resolves.toBe(true);
+  });
+
+  it("restartSystemdService surfaces sudo guidance using the marker-owned custom unit name", async () => {
+    mockUnitFileLayout({ system: false });
+    findSystemGatewayServicesMock.mockResolvedValueOnce([
+      {
+        platform: "linux",
+        label: "openclaw.service",
+        detail: "unit: /etc/systemd/system/openclaw.service",
+        scope: "system",
+        marker: "openclaw",
+      },
+    ]);
+    mockEffectiveUid(1000);
+    const { stdout, write } = createWritableStreamMock();
+    await expect(
+      restartSystemdService({ stdout, env: { HOME: TEST_MANAGED_HOME } }),
+    ).rejects.toThrow(
+      /openclaw\.service is a system-scope unit \(\/etc\/systemd\/system\/openclaw\.service\); run `sudo systemctl restart openclaw\.service`/,
+    );
+    expect(execFileMock).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("isSystemdServiceEnabled reports true for an enabled system-scope unit", async () => {
+    mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-gateway.service" });
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["is-enabled", GATEWAY_SERVICE]);
+      cb(null, "enabled\n", "");
+    });
+    await expect(isSystemdServiceEnabled({ env: { HOME: TEST_MANAGED_HOME } })).resolves.toBe(true);
+  });
+
+  it("isSystemdServiceEnabled reports false for a disabled system-scope unit", async () => {
+    mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-gateway.service" });
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["is-enabled", GATEWAY_SERVICE]);
+      cb(createExecFileError("disabled", { code: 1 }), "disabled\n", "");
+    });
+    await expect(isSystemdServiceEnabled({ env: { HOME: TEST_MANAGED_HOME } })).resolves.toBe(
+      false,
+    );
+  });
+
+  it("readSystemdServiceRuntime queries the system manager for system-scope units", async () => {
+    mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-gateway.service" });
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args[0]).toBe("show");
+      expect(args).not.toContain("--user");
+      cb(
+        null,
+        [
+          "Id=openclaw-gateway.service",
+          "ActiveState=active",
+          "SubState=running",
+          "MainPID=4242",
+        ].join("\n"),
+        "",
+      );
+    });
+    const runtime = await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME });
+    expect(runtime.status).toBe("running");
+    expect(runtime.pid).toBe(4242);
+    expect(runtime.systemd?.unit).toBe("openclaw-gateway.service");
+  });
+
+  it("restartSystemdService refuses to use the user manager when the unit is system-scope and the caller is not root", async () => {
+    mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-gateway.service" });
+    mockEffectiveUid(1000);
+    const { stdout, write } = createWritableStreamMock();
+    await expect(
+      restartSystemdService({ stdout, env: { HOME: TEST_MANAGED_HOME } }),
+    ).rejects.toThrow(
+      /system-scope unit .* run `sudo systemctl restart openclaw-gateway\.service`/,
+    );
+    expect(execFileMock).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("restartSystemdService restarts the system unit directly when running as root", async () => {
+    mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-gateway.service" });
+    mockEffectiveUid(0);
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["reset-failed", GATEWAY_SERVICE]);
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["restart", GATEWAY_SERVICE]);
+        cb(null, "", "");
+      });
+    const { stdout, write } = createWritableStreamMock();
+    const result = await restartSystemdService({ stdout, env: { HOME: TEST_MANAGED_HOME } });
+    expect(result).toEqual({ outcome: "completed" });
+    expect(requireFirstWrite(write)).toContain("Restarted systemd service");
+  });
+
+  it("stopSystemdService surfaces sudo guidance for system-scope units without root", async () => {
+    mockUnitFileLayout({ system: "/etc/systemd/system/openclaw-gateway.service" });
+    mockEffectiveUid(1000);
+    const { stdout } = createWritableStreamMock();
+    await expect(stopSystemdService({ stdout, env: { HOME: TEST_MANAGED_HOME } })).rejects.toThrow(
+      /sudo systemctl stop openclaw-gateway\.service/,
+    );
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("isNonFatalSystemdInstallProbeError", () => {
   it("matches wrapper-only WSL install probe failures", () => {
     expect(
@@ -513,6 +804,31 @@ describe("systemd runtime parsing", () => {
       activeState: "inactive",
       subState: "dead",
       execMainStatus: 2,
+      execMainCode: "exited",
+    });
+  });
+
+  it("parses Result and the restart counter for crash-loop give-up detection", () => {
+    // Real systemd 249 give-up shape: a crash-looped unit keeps Result=exit-code
+    // (start-limit-hit never overwrites an exec failure), so the counter reaching
+    // StartLimitBurst is what flags the give-up.
+    const output = [
+      "ActiveState=failed",
+      "SubState=failed",
+      "Result=exit-code",
+      "NRestarts=5",
+      "StartLimitBurst=5",
+      "MainPID=0",
+      "ExecMainStatus=1",
+      "ExecMainCode=exited",
+    ].join("\n");
+    expect(parseSystemdShow(output)).toEqual({
+      activeState: "failed",
+      subState: "failed",
+      result: "exit-code",
+      nRestarts: 5,
+      startLimitBurst: 5,
+      execMainStatus: 1,
       execMainCode: "exited",
     });
   });
@@ -568,7 +884,7 @@ describe("readSystemdServiceRuntime", () => {
           GATEWAY_SERVICE,
           "--no-page",
           "--property",
-          "Id,ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
+          "Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
         );
         cb(
           null,
@@ -600,6 +916,67 @@ describe("readSystemdServiceRuntime", () => {
         tasksCurrent: 807,
         memoryCurrent: 11_918_534_246,
       },
+    });
+  });
+
+  // Regression for #84698: status probes must bound the systemctl subprocess so a
+  // wedged systemd socket cannot hang `openclaw status` (which advertises --timeout).
+  it("passes a kill-backed timeout to systemctl when a read deadline is set", async () => {
+    execFileMock.mockReset();
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => cb(null, "", ""));
+    await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME }, { timeoutMs: 1234 });
+    expect(execFileMock).toHaveBeenCalled();
+    for (const call of execFileMock.mock.calls) {
+      const opts = call[2] as { timeout?: number; killSignal?: string };
+      expect(opts.timeout).toBe(1234);
+      expect(opts.killSignal).toBe("SIGKILL");
+    }
+  });
+
+  it("leaves systemctl unbounded when no read deadline is set", async () => {
+    execFileMock.mockReset();
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => cb(null, "", ""));
+    await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME });
+    expect(execFileMock).toHaveBeenCalled();
+    for (const call of execFileMock.mock.calls) {
+      const opts = call[2] as { timeout?: number; killSignal?: string };
+      expect(opts.timeout).toBeUndefined();
+      expect(opts.killSignal).toBeUndefined();
+    }
+  });
+
+  it("carries the supervision counters through a crash-looped failed unit", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        cb(
+          null,
+          [
+            "Id=openclaw-gateway.service",
+            "ActiveState=failed",
+            "SubState=failed",
+            "Result=exit-code",
+            "NRestarts=5",
+            "StartLimitBurst=5",
+            "MainPID=0",
+            "ExecMainStatus=1",
+            "ExecMainCode=exited",
+          ].join("\n"),
+          "",
+        );
+      });
+    const runtime = await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME });
+    // ActiveState=failed collapses to the generic "stopped" status, so the raw
+    // state + restart counters are what let callers detect the crash-loop give-up.
+    expect(runtime.status).toBe("stopped");
+    expect(runtime.state).toBe("failed");
+    expect(runtime.systemd).toMatchObject({
+      result: "exit-code",
+      nRestarts: 5,
+      startLimitBurst: 5,
     });
   });
 });
@@ -821,7 +1198,9 @@ describe("readSystemdServiceExecStart", () => {
           "# comment",
           "; another comment",
           'OPENCLAW_GATEWAY_TOKEN="quoted token"', // pragma: allowlist secret
-          "OPENCLAW_GATEWAY_PASSWORD=quoted-password", // pragma: allowlist secret
+          'OPENCLAW_GATEWAY_PASSWORD="symbol \\" \\\\ \\$ \\`"', // pragma: allowlist secret
+          'MIXED_API_KEY="55\\"55" "FIVE" cinco',
+          'UNQUOTED_QUOTES_API_KEY=foo"bar"',
         ].join("\n");
       }
       throw new Error(`unexpected readFile path: ${pathValue}`);
@@ -830,11 +1209,15 @@ describe("readSystemdServiceExecStart", () => {
     const command = await readSystemdServiceExecStart({ HOME: "/home/test" });
     expect(command?.environment).toEqual({
       OPENCLAW_GATEWAY_TOKEN: "quoted token",
-      OPENCLAW_GATEWAY_PASSWORD: "quoted-password", // pragma: allowlist secret
+      OPENCLAW_GATEWAY_PASSWORD: 'symbol " \\ $ `', // pragma: allowlist secret
+      MIXED_API_KEY: '55"55FIVEcinco',
+      UNQUOTED_QUOTES_API_KEY: 'foo"bar"',
     });
     expect(command?.environmentValueSources).toEqual({
       OPENCLAW_GATEWAY_TOKEN: "file",
       OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
+      MIXED_API_KEY: "file",
+      UNQUOTED_QUOTES_API_KEY: "file",
     });
   });
 });
@@ -921,6 +1304,7 @@ describe("stageSystemdService", () => {
   it("writes node file-backed managed values to the node env file instead of the unit", async () => {
     await withStageFixture(async ({ env, stateDir, unitPath, envFilePath, nodeEnvFilePath }) => {
       await fs.rm(stateDir, { recursive: true, force: true });
+      const gatewayPassword = 'symbol " \\ $ `'; // pragma: allowlist secret
 
       mockSystemctlStatusOk();
 
@@ -931,11 +1315,15 @@ describe("stageSystemdService", () => {
         workingDirectory: "/tmp",
         environment: {
           OPENCLAW_GATEWAY_TOKEN: "file-backed-token",
+          OPENCLAW_GATEWAY_PASSWORD: gatewayPassword,
           OPENCLAW_GATEWAY_PORT: "18789",
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENCLAW_GATEWAY_PASSWORD,OPENCLAW_GATEWAY_TOKEN", // pragma: allowlist secret
           OPENCLAW_SERVICE_KIND: "node",
         },
         environmentValueSources: {
           OPENCLAW_GATEWAY_TOKEN: "file",
+          OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
+          OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "inline",
         },
       });
 
@@ -948,8 +1336,16 @@ describe("stageSystemdService", () => {
       expect(unit).toContain(`EnvironmentFile=-${nodeEnvFilePath}`);
       expect(unit).toContain("Environment=OPENCLAW_GATEWAY_PORT=18789");
       expect(unit).not.toContain("Environment=OPENCLAW_GATEWAY_TOKEN=file-backed-token");
-      expect(envFile).toBe("OPENCLAW_GATEWAY_TOKEN=file-backed-token\n");
+      expect(unit).not.toContain("Environment=OPENCLAW_GATEWAY_PASSWORD=");
+      expect(envFile).toBe(
+        'OPENCLAW_GATEWAY_TOKEN=file-backed-token\nOPENCLAW_GATEWAY_PASSWORD="symbol \\" \\\\ \\$ \\`"\n',
+      );
       expect(envFileStat.mode & 0o777).toBe(0o600);
+      await expect(readSystemdServiceExecStart(env)).resolves.toMatchObject({
+        environment: {
+          OPENCLAW_GATEWAY_PASSWORD: gatewayPassword,
+        },
+      });
       await expect(fs.access(envFilePath)).rejects.toThrow();
     });
   });
@@ -1030,6 +1426,37 @@ describe("stageSystemdService", () => {
       await expect(fs.readFile(envFilePath, "utf8")).resolves.toBe(
         "OPENCLAW_GATEWAY_TOKEN=stale-token\n",
       );
+    });
+  });
+
+  it("does not re-stage unresolved inline-and-file values from preserved service env (#88274)", async () => {
+    await withStageFixture(async ({ env, unitPath, envFilePath }) => {
+      await fs.writeFile(envFilePath, "LLM_API_KEY=$SECRET_FROM_SHELL\n", {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          LLM_API_KEY: "$SECRET_FROM_SHELL",
+          OPENCLAW_GATEWAY_PORT: "18789",
+        },
+        environmentValueSources: {
+          LLM_API_KEY: "inline-and-file",
+        },
+      });
+
+      const unit = await fs.readFile(unitPath, "utf8");
+      expect(unit).not.toContain("EnvironmentFile=");
+      expect(unit).not.toContain("LLM_API_KEY");
+      expect(unit).not.toContain("$SECRET_FROM_SHELL");
+      await expect(fs.access(envFilePath)).rejects.toThrow();
     });
   });
 
@@ -1224,6 +1651,130 @@ describe("stageSystemdService", () => {
       expect(envFile).toContain("ANTHROPIC_API_KEY=sk-ant-operator-secret");
       expect(envFile).toContain("OPENROUTER_API_KEY=or-operator-key");
       expect(envFile).toContain("LLM_API_KEY=new-value");
+    });
+  });
+
+  it("preserves explicit literal shell references and mixed quoted values", async () => {
+    await withStageFixture(async ({ env, envFilePath }) => {
+      await fs.writeFile(
+        envFilePath,
+        [
+          "OPENROUTER_API_KEY=\\$SECRET_FROM_SHELL",
+          "SINGLE_QUOTED_LITERAL_API_KEY='$SECRET_FROM_SHELL'",
+          'DOUBLE_QUOTED_LITERAL_API_KEY="$SECRET_FROM_SHELL"',
+          'MIXED_API_KEY="foo"bar',
+        ].join("\n") + "\n",
+        { encoding: "utf8", mode: 0o600 },
+      );
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      const envFile = await fs.readFile(envFilePath, "utf8");
+      expect(envFile).toContain('OPENROUTER_API_KEY="\\$SECRET_FROM_SHELL"');
+      expect(envFile).toContain('SINGLE_QUOTED_LITERAL_API_KEY="\\$SECRET_FROM_SHELL"');
+      expect(envFile).toContain('DOUBLE_QUOTED_LITERAL_API_KEY="\\$SECRET_FROM_SHELL"');
+      expect(envFile).toContain("MIXED_API_KEY=foobar");
+    });
+  });
+
+  it("removes a stale literal reference on re-stage when state-dir .env now skips that key (#88274)", async () => {
+    await withStageFixture(async ({ env, stateDir, envFilePath }) => {
+      // A prior install generated a literal reference for LLM_API_KEY (an unexpanded
+      // $VAR that dotenv stored verbatim) and an operator-managed provider secret.
+      await fs.writeFile(
+        envFilePath,
+        ["LLM_API_KEY=$SECRET_FROM_SHELL", "OPENROUTER_API_KEY=or-operator-key"].join("\n") + "\n",
+        { encoding: "utf8", mode: 0o600 },
+      );
+
+      // The state-dir .env still declares LLM_API_KEY but now as an unresolved
+      // shell reference, so the parser skips it from the managed environment.
+      await fs.writeFile(path.join(stateDir, ".env"), "LLM_API_KEY=$SECRET_FROM_SHELL\n", "utf8");
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      const envFile = await fs.readFile(envFilePath, "utf8");
+      // The stale literal reference for the skipped managed key is dropped...
+      expect(envFile).not.toContain("LLM_API_KEY");
+      expect(envFile).not.toContain("$SECRET_FROM_SHELL");
+      // ...while operator-only secrets (never in state-dir .env) are preserved.
+      expect(envFile).toContain("OPENROUTER_API_KEY=or-operator-key");
+    });
+  });
+
+  it("removes a stale literal reference after the state-dir .env line is removed (#88274)", async () => {
+    await withStageFixture(async ({ env, envFilePath }) => {
+      await fs.writeFile(
+        envFilePath,
+        ["LLM_API_KEY=$SECRET_FROM_SHELL", "OPENROUTER_API_KEY=or-operator-key"].join("\n") + "\n",
+        { encoding: "utf8", mode: 0o600 },
+      );
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      const envFile = await fs.readFile(envFilePath, "utf8");
+      expect(envFile).not.toContain("LLM_API_KEY");
+      expect(envFile).not.toContain("$SECRET_FROM_SHELL");
+      expect(envFile).toContain("OPENROUTER_API_KEY=or-operator-key");
+    });
+  });
+
+  it("keeps an operator secret that merely shares a name absent from state-dir .env (#88274)", async () => {
+    await withStageFixture(async ({ env, stateDir, envFilePath }) => {
+      // Operator-managed env file holds two secrets; neither is in state-dir .env.
+      await fs.writeFile(
+        envFilePath,
+        [
+          "ANTHROPIC_API_KEY=sk-ant-operator-secret",
+          "OPENROUTER_API_KEY=or-operator-key",
+          "LOWERCASE_LITERAL_API_KEY=$ecret123",
+        ].join("\n") + "\n",
+        { encoding: "utf8", mode: 0o600 },
+      );
+
+      // State-dir .env only skips an unrelated key (LLM_API_KEY). Operator keys must
+      // not be treated as stale just because they are absent from the staged env.
+      await fs.writeFile(path.join(stateDir, ".env"), "LLM_API_KEY=${UNRESOLVED}\n", "utf8");
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      const envFile = await fs.readFile(envFilePath, "utf8");
+      expect(envFile).toContain("ANTHROPIC_API_KEY=sk-ant-operator-secret");
+      expect(envFile).toContain("OPENROUTER_API_KEY=or-operator-key");
+      expect(envFile).toContain('LOWERCASE_LITERAL_API_KEY="\\$ecret123"');
+      expect(envFile).not.toContain("LLM_API_KEY");
     });
   });
 });
@@ -1482,7 +2033,15 @@ describe("systemd service install and uninstall", () => {
       await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Node\n", "utf8");
       await fs.writeFile(
         nodeEnvFilePath,
-        "OPENCLAW_GATEWAY_TOKEN=stale-node-token\nOPENROUTER_API_KEY=operator-key\n",
+        [
+          "OPENCLAW_GATEWAY_TOKEN=stale-node-token",
+          "OPENCLAW_GATEWAY_PASSWORD=stale-password",
+          "OPENROUTER_API_KEY=operator-key",
+          "LLM_API_KEY=$SECRET_FROM_SHELL",
+          "LITERAL_API_KEY=\\$SECRET_FROM_SHELL",
+          "SINGLE_QUOTED_LITERAL_API_KEY='$SECRET_FROM_SHELL'",
+          'DOUBLE_QUOTED_LITERAL_API_KEY="$SECRET_FROM_SHELL"',
+        ].join("\n") + "\n",
         { encoding: "utf8", mode: 0o600 },
       );
 
@@ -1507,9 +2066,41 @@ describe("systemd service install and uninstall", () => {
       }
       expect(accessError?.code).toBe("ENOENT");
       await expect(fs.readFile(nodeEnvFilePath, "utf8")).resolves.toBe(
-        "OPENROUTER_API_KEY=operator-key\n",
+        [
+          "OPENROUTER_API_KEY=operator-key",
+          'LITERAL_API_KEY="\\$SECRET_FROM_SHELL"',
+          'SINGLE_QUOTED_LITERAL_API_KEY="\\$SECRET_FROM_SHELL"',
+          'DOUBLE_QUOTED_LITERAL_API_KEY="\\$SECRET_FROM_SHELL"',
+        ].join("\n") + "\n",
       );
       expect(requireFirstWrite(write)).toContain("Removed systemd service");
+      expect(execFileMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("removes a password-only node environment file during uninstall", async () => {
+    await withNodeSystemdFixture(async ({ env, unitPath, nodeEnvFilePath }) => {
+      await fs.mkdir(path.dirname(unitPath), { recursive: true });
+      await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Node\n", "utf8");
+      await fs.writeFile(nodeEnvFilePath, "OPENCLAW_GATEWAY_PASSWORD=stale-password\n", {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+
+      execFileMock
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "status");
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "disable", "--now", NODE_SERVICE);
+          cb(null, "", "");
+        });
+
+      const { stdout } = createWritableStreamMock();
+      await uninstallSystemdService({ env, stdout });
+
+      await expect(fs.access(nodeEnvFilePath)).rejects.toThrow();
       expect(execFileMock).toHaveBeenCalledTimes(2);
     });
   });
@@ -1597,14 +2188,25 @@ describe("systemd service control", () => {
     });
   });
 
-  it("restarts a profile-specific user unit", async () => {
+  it("runs reset-failed before restarting a profile-specific user unit", async () => {
+    const restartSequence: string[] = [];
     execFileMock
       .mockImplementationOnce((_cmd, _args, _opts, cb) => cb(null, "", ""))
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "reset-failed", "openclaw-gateway-work.service");
+        // args[0] is the "--user" scope flag; the systemctl verb is args[1].
+        restartSequence.push(args[1] ?? "");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
         assertUserSystemctlArgs(args, "restart", "openclaw-gateway-work.service");
+        restartSequence.push(args[1] ?? "");
         cb(null, "", "");
       });
     await assertRestartSuccess({ OPENCLAW_PROFILE: "work" });
+    // reset-failed must clear any start-limit-hit latch before the restart so a
+    // crash-looped unit can recover.
+    expect(restartSequence).toEqual(["reset-failed", "restart"]);
   });
 
   it("surfaces stop failures with systemctl detail", async () => {
@@ -1652,16 +2254,49 @@ describe("systemd service control", () => {
         cb(null, "", "");
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertMachineUserSystemctlArgs(args, "debian", "reset-failed", GATEWAY_SERVICE);
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
         assertMachineRestartArgs(args);
         cb(null, "", "");
       });
     await assertRestartSuccess({ SUDO_USER: "debian" });
   });
 
+  it("restarts root user services directly when stale SUDO_USER is paired with root bus environment", async () => {
+    mockEffectiveUid(0);
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "reset-failed", GATEWAY_SERVICE);
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "restart", GATEWAY_SERVICE);
+        cb(null, "", "");
+      });
+    await assertRestartSuccess({
+      HOME: "/root",
+      USER: "root",
+      LOGNAME: "root",
+      SUDO_USER: "debian",
+      XDG_RUNTIME_DIR: "/run/user/0",
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
+    });
+  });
+
   it("keeps direct --user scope when SUDO_USER is root", async () => {
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "reset-failed", GATEWAY_SERVICE);
         cb(null, "", "");
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -1683,6 +2318,17 @@ describe("systemd service control", () => {
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         assertMachineUserSystemctlArgs(args, "debian", "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "reset-failed", GATEWAY_SERVICE);
+        const err = createExecFileError("Failed to connect to user scope bus", {
+          stderr: "Failed to connect to user scope bus",
+        });
+        cb(err, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertMachineUserSystemctlArgs(args, "debian", "reset-failed", GATEWAY_SERVICE);
         cb(null, "", "");
       })
       .mockImplementationOnce((_cmd, args, _opts, cb) => {

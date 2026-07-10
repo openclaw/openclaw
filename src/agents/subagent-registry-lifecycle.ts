@@ -1,3 +1,9 @@
+/**
+ * Subagent registry lifecycle transitions.
+ *
+ * Completes/fails task runs, clears delivery state, emits lifecycle events, and cleans attached resources.
+ */
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { callGateway as defaultCallGateway } from "../gateway/call.js";
@@ -6,16 +12,14 @@ import { defaultRuntime } from "../runtime.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
+import type { DetachedTaskFindResult } from "../tasks/detached-task-runtime-contract.js";
 import {
   completeTaskRunByRunId,
   failTaskRunByRunId,
   setDetachedTaskDeliveryStatusByRunId,
 } from "../tasks/detached-task-runtime.js";
-import {
-  resolveRequiredCompletionDeliveryFailureTerminalResult,
-  resolveRequiredCompletionTerminalResult,
-} from "../tasks/task-completion-contract.js";
+import { isProvisionalSubagentKillTask } from "../tasks/task-cancellation-state.js";
+import { resolveRequiredCompletionDeliveryFailureTerminalResult } from "../tasks/task-completion-contract.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { retireSessionMcpRuntimeForSessionKey } from "./agent-bundle-mcp-tools.js";
 import {
@@ -34,13 +38,18 @@ import {
 } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import {
   resolveCleanupCompletionReason,
   resolveDeferredCleanupDecision,
 } from "./subagent-registry-cleanup.js";
-import { shouldUpdateRunOutcome } from "./subagent-registry-completion.js";
+import {
+  resolveKilledSubagentTaskEndedAt,
+  resolveFinalizedSubagentTaskState,
+  shouldUpdateRunOutcome,
+} from "./subagent-registry-completion.js";
 import {
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
   ANNOUNCE_EXPIRY_MS,
@@ -53,6 +62,11 @@ import {
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
+import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
+import {
+  resolveSubagentRunDeadlineMs,
+  resolveSubagentRunEffectiveEndedAt,
+} from "./subagent-run-timeout.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 
 type CaptureSubagentCompletionReply =
@@ -75,14 +89,77 @@ async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
   return (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd;
 }
 
+function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunRecord }): boolean {
+  if (
+    typeof params.entry.runTimeoutSeconds !== "number" ||
+    !Number.isFinite(params.entry.runTimeoutSeconds) ||
+    params.entry.runTimeoutSeconds <= 0 ||
+    params.entry.outcome?.status !== "timeout" ||
+    typeof params.entry.endedAt !== "number"
+  ) {
+    return false;
+  }
+  const deadlineMs = resolveSubagentRunDeadlineMs(params.entry);
+  if (deadlineMs === undefined || params.entry.endedAt < deadlineMs) {
+    return false;
+  }
+  if (
+    params.entry.cleanupHandled ||
+    typeof params.entry.cleanupCompletedAt === "number" ||
+    typeof params.entry.endedHookEmittedAt === "number" ||
+    params.entry.delivery?.status === "delivered" ||
+    typeof params.entry.delivery?.announcedAt === "number"
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function resolveExpiredExplicitRunDeadlineMs(params: {
+  entry: SubagentRunRecord;
+  nextEndedAt: number;
+  observedStartedAt?: number;
+}): number | undefined {
+  const effectiveEndedAt = resolveSubagentRunEffectiveEndedAt(
+    params.entry,
+    params.nextEndedAt,
+    params.observedStartedAt,
+  );
+  return effectiveEndedAt < params.nextEndedAt ? effectiveEndedAt : undefined;
+}
+
+function isOlderEquivalentTerminalCallback(params: {
+  entry: SubagentRunRecord;
+  endedAt: number;
+  outcome: SubagentRunOutcome;
+  reason: SubagentLifecycleEndedReason;
+}): boolean {
+  const current = params.entry.outcome;
+  if (
+    typeof params.entry.endedAt !== "number" ||
+    params.endedAt >= params.entry.endedAt ||
+    params.entry.endedReason !== params.reason ||
+    current?.status !== params.outcome.status
+  ) {
+    return false;
+  }
+  return (
+    current.status !== "error" ||
+    params.outcome.status !== "error" ||
+    current.error === params.outcome.error
+  );
+}
+
 export function createSubagentRegistryLifecycleController(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
   subagentAnnounceTimeoutMs: number;
   persist(): void;
+  persistOrThrow(): void;
   clearPendingLifecycleError(runId: string): void;
   countPendingDescendantRuns(rootSessionKey: string): number;
   suppressAnnounceForSteerRestart(entry?: SubagentRunRecord): boolean;
+  resolveSubagentTask(entry: SubagentRunRecord): DetachedTaskFindResult;
   shouldEmitEndedHookForRun(args: {
     entry: SubagentRunRecord;
     reason: SubagentLifecycleEndedReason;
@@ -92,6 +169,7 @@ export function createSubagentRegistryLifecycleController(params: {
     reason?: SubagentLifecycleEndedReason;
     sendFarewell?: boolean;
     accountId?: string;
+    isCurrent?: () => boolean;
   }): Promise<void>;
   notifyContextEngineSubagentEnded(args: {
     childSessionKey: string;
@@ -99,6 +177,7 @@ export function createSubagentRegistryLifecycleController(params: {
     agentDir?: string;
     workspaceDir?: string;
   }): Promise<void>;
+  retireSupersededRun(runId: string, entry: SubagentRunRecord): Promise<void>;
   resumeSubagentRun(runId: string): void;
   callGateway: typeof defaultCallGateway;
   captureSubagentCompletionReply: CaptureSubagentCompletionReply;
@@ -107,6 +186,34 @@ export function createSubagentRegistryLifecycleController(params: {
   warn(message: string, meta?: Record<string, unknown>): void;
 }) {
   const scheduledResumeTimers = new Set<ReturnType<typeof setTimeout>>();
+  const terminalCompletionLocks = new Map<string, Promise<void>>();
+  const terminalGenerations = new WeakMap<SubagentRunRecord, number>();
+  const cleanupGenerations = new WeakMap<SubagentRunRecord, number>();
+
+  const newerGenerationOwnsSession = (entry: SubagentRunRecord): boolean =>
+    entry.killReconciliation?.supersededAt !== undefined ||
+    Array.from(params.runs.values()).some(
+      (candidate) =>
+        candidate.runId !== entry.runId &&
+        candidate.childSessionKey === entry.childSessionKey &&
+        compareSubagentRunGeneration(candidate, entry) > 0,
+    );
+
+  const acquireTerminalCompletionLock = async (runId: string): Promise<() => void> => {
+    const previous = terminalCompletionLocks.get(runId) ?? Promise.resolve();
+    let releaseLock = () => {};
+    const current = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    terminalCompletionLocks.set(runId, current);
+    await previous;
+    return () => {
+      releaseLock();
+      if (terminalCompletionLocks.get(runId) === current) {
+        terminalCompletionLocks.delete(runId);
+      }
+    };
+  };
 
   const scheduleResumeSubagentRun = (runId: string, entry: SubagentRunRecord, delayMs: number) => {
     const timer = setTimeout(() => {
@@ -248,25 +355,42 @@ export function createSubagentRegistryLifecycleController(params: {
     }
   };
 
+  const resolveSubagentTaskTarget = (
+    entry: SubagentRunRecord,
+    resolution = params.resolveSubagentTask(entry),
+  ) => {
+    const durableTaskRunId = entry.taskRunId ?? entry.runId;
+    return {
+      runId:
+        resolution.lookup === "available"
+          ? (resolution.task?.runId ?? durableTaskRunId)
+          : durableTaskRunId,
+      sessionKey:
+        resolution.lookup === "available"
+          ? (resolution.task?.childSessionKey ?? entry.childSessionKey)
+          : entry.childSessionKey,
+    };
+  };
+
   const safeSetSubagentTaskDeliveryStatus = (args: {
-    runId: string;
-    childSessionKey: string;
+    entry: SubagentRunRecord;
     deliveryStatus: "delivered" | "failed";
     deliveryError?: string;
   }) => {
+    const target = resolveSubagentTaskTarget(args.entry);
     try {
       setDetachedTaskDeliveryStatusByRunId({
-        runId: args.runId,
+        runId: target.runId,
         runtime: "subagent",
-        sessionKey: args.childSessionKey,
+        sessionKey: target.sessionKey,
         deliveryStatus: args.deliveryStatus,
         error: args.deliveryStatus === "failed" ? args.deliveryError : undefined,
       });
     } catch (err) {
       params.warn("failed to update subagent background task delivery state", {
         error: buildSafeLifecycleErrorMeta(err),
-        runId: maskRunId(args.runId),
-        childSessionKey: maskSessionKey(args.childSessionKey),
+        runId: maskRunId(target.runId),
+        childSessionKey: maskSessionKey(target.sessionKey),
         deliveryStatus: args.deliveryStatus,
       });
     }
@@ -275,38 +399,34 @@ export function createSubagentRegistryLifecycleController(params: {
   const safeFinalizeSubagentTaskRun = (args: {
     entry: SubagentRunRecord;
     outcome: SubagentRunOutcome;
-  }) => {
-    const endedAt = args.entry.endedAt ?? Date.now();
-    const lastEventAt = endedAt;
+    taskResolution?: DetachedTaskFindResult;
+  }): ReturnType<typeof completeTaskRunByRunId> => {
+    const terminal = resolveFinalizedSubagentTaskState(args.entry);
+    if (!terminal) {
+      return [];
+    }
+    const target = resolveSubagentTaskTarget(args.entry, args.taskResolution);
+    const { status, error, terminalOutcome, ...details } = terminal;
+    const suppressDelivery = args.entry.suppressCompletionDelivery === true;
     try {
-      if (args.outcome.status === "ok") {
-        const completion = ensureCompletionState(args.entry);
-        const terminalResult =
-          args.entry.expectsCompletionMessage === true
-            ? resolveRequiredCompletionTerminalResult(completion.resultText)
-            : {};
-        completeTaskRunByRunId({
-          runId: args.entry.runId,
+      if (status === "succeeded") {
+        return completeTaskRunByRunId({
+          runId: target.runId,
           runtime: "subagent",
-          sessionKey: args.entry.childSessionKey,
-          endedAt,
-          lastEventAt,
-          progressSummary: completion.resultText ?? undefined,
-          terminalSummary: terminalResult.terminalSummary ?? null,
-          terminalOutcome: terminalResult.terminalOutcome,
+          sessionKey: target.sessionKey,
+          ...details,
+          terminalOutcome,
+          suppressDelivery,
         });
-        return;
       }
-      failTaskRunByRunId({
-        runId: args.entry.runId,
+      return failTaskRunByRunId({
+        runId: target.runId,
         runtime: "subagent",
-        sessionKey: args.entry.childSessionKey,
-        status: args.outcome.status === "timeout" ? "timed_out" : "failed",
-        endedAt,
-        lastEventAt,
-        error: args.outcome.status === "error" ? args.outcome.error : undefined,
-        progressSummary: ensureCompletionState(args.entry).resultText ?? undefined,
-        terminalSummary: null,
+        sessionKey: target.sessionKey,
+        ...details,
+        status,
+        error,
+        suppressDelivery,
       });
     } catch (err) {
       params.warn("failed to finalize subagent background task state", {
@@ -315,6 +435,7 @@ export function createSubagentRegistryLifecycleController(params: {
         childSessionKey: maskSessionKey(args.entry.childSessionKey),
         outcomeStatus: args.outcome.status,
       });
+      return [];
     }
   };
 
@@ -327,11 +448,12 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     const endedAt = args.entry.endedAt ?? Date.now();
     const terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(args.reason);
+    const target = resolveSubagentTaskTarget(args.entry);
     try {
       completeTaskRunByRunId({
-        runId: args.entry.runId,
+        runId: target.runId,
         runtime: "subagent",
-        sessionKey: args.entry.childSessionKey,
+        sessionKey: target.sessionKey,
         endedAt,
         lastEventAt: Date.now(),
         progressSummary: ensureCompletionState(args.entry).resultText ?? undefined,
@@ -351,25 +473,39 @@ export function createSubagentRegistryLifecycleController(params: {
     entry: SubagentRunRecord,
     outcome: SubagentRunOutcome,
   ): Promise<boolean> => {
-    const completion = ensureCompletionState(entry);
-    if (completion.resultText !== undefined) {
+    if (ensureCompletionState(entry).resultText !== undefined) {
       return false;
     }
     if (outcome.status === "error") {
+      const completion = ensureCompletionState(entry);
       completion.resultText = null;
       completion.capturedAt = Date.now();
       return true;
     }
+    let resultText: string | null;
     try {
       const captured = await params.captureSubagentCompletionReply(entry.childSessionKey, {
         waitForReply: entry.expectsCompletionMessage === true,
         outcome,
         sessionFile: entry.execution?.transcriptFile,
       });
-      completion.resultText = captured?.trim() ? capFrozenResultText(captured) : null;
+      resultText = captured?.trim() ? capFrozenResultText(captured) : null;
     } catch {
-      completion.resultText = null;
+      resultText = null;
     }
+    const liveEntry = params.runs.get(entry.runId);
+    if (
+      entry.pauseReason === "sessions_yield" ||
+      liveEntry?.pauseReason === "sessions_yield" ||
+      newerGenerationOwnsSession(entry)
+    ) {
+      return false;
+    }
+    const completion = ensureCompletionState(entry);
+    if (completion.resultText !== undefined) {
+      return false;
+    }
+    completion.resultText = resultText;
     completion.capturedAt = Date.now();
     return true;
   };
@@ -445,18 +581,14 @@ export function createSubagentRegistryLifecycleController(params: {
   const emitCompletionEndedHookIfNeeded = async (
     entry: SubagentRunRecord,
     reason: SubagentLifecycleEndedReason,
+    isCurrent?: () => boolean,
   ) => {
-    if (
-      entry.expectsCompletionMessage === true &&
-      params.shouldEmitEndedHookForRun({
-        entry,
-        reason,
-      })
-    ) {
+    if (params.shouldEmitEndedHookForRun({ entry, reason })) {
       await params.emitSubagentEndedHookForRun({
         entry,
         reason,
         sendFarewell: true,
+        isCurrent,
       });
     }
   };
@@ -515,6 +647,26 @@ export function createSubagentRegistryLifecycleController(params: {
     delivery.payload = payload;
   };
 
+  const refreshPendingFinalDeliveryPayload = (entry: SubagentRunRecord): boolean => {
+    const delivery = entry.delivery;
+    if (
+      !delivery?.payload ||
+      delivery.status === "delivered" ||
+      typeof delivery.announcedAt === "number"
+    ) {
+      return false;
+    }
+    delivery.payload = {
+      ...delivery.payload,
+      startedAt: entry.startedAt,
+      endedAt: entry.endedAt,
+      outcome: entry.outcome,
+      frozenResultText: entry.completion?.resultText,
+      fallbackFrozenResultText: entry.completion?.fallbackResultText,
+    };
+    return true;
+  };
+
   const suspendPendingFinalDelivery = (args: {
     runId: string;
     entry: SubagentRunRecord;
@@ -537,8 +689,7 @@ export function createSubagentRegistryLifecycleController(params: {
     completion.fallbackCapturedAt = undefined;
     params.resumedRuns.delete(args.runId);
     safeSetSubagentTaskDeliveryStatus({
-      runId: args.runId,
-      childSessionKey: args.entry.childSessionKey,
+      entry: args.entry,
       deliveryStatus: "failed",
       deliveryError: getDeliveryLastError(args.entry) ?? args.reason,
     });
@@ -576,8 +727,7 @@ export function createSubagentRegistryLifecycleController(params: {
     failedDelivery.status = "failed";
     failedDelivery.lastError = deliveryError;
     safeSetSubagentTaskDeliveryStatus({
-      runId: giveUpParams.runId,
-      childSessionKey: giveUpParams.entry.childSessionKey,
+      entry: giveUpParams.entry,
       deliveryStatus: "failed",
       deliveryError,
     });
@@ -604,7 +754,9 @@ export function createSubagentRegistryLifecycleController(params: {
       cleanup: giveUpParams.entry.cleanup,
       completedAt: Date.now(),
     });
-    await emitCompletionEndedHookIfNeeded(giveUpParams.entry, completionReason);
+    await emitCompletionEndedHookIfNeeded(giveUpParams.entry, completionReason, () =>
+      isEndedHookOwnerCurrent(giveUpParams.runId, giveUpParams.entry),
+    );
   };
 
   const beginSubagentCleanup = (runId: string) => {
@@ -616,8 +768,53 @@ export function createSubagentRegistryLifecycleController(params: {
       return false;
     }
     entry.cleanupHandled = true;
+    cleanupGenerations.set(entry, (cleanupGenerations.get(entry) ?? 0) + 1);
     params.persist();
     return true;
+  };
+
+  const isCleanupAttemptCurrent = (
+    runId: string,
+    entry: SubagentRunRecord,
+    generation: number,
+  ): boolean =>
+    params.runs.get(runId) === entry &&
+    entry.cleanupHandled === true &&
+    entry.pauseReason !== "sessions_yield" &&
+    cleanupGenerations.get(entry) === generation &&
+    !newerGenerationOwnsSession(entry);
+
+  const retireSupersededCleanupIfNeeded = async (
+    runId: string,
+    entry: SubagentRunRecord,
+    generation: number,
+  ): Promise<boolean> => {
+    if (
+      params.runs.get(runId) !== entry ||
+      cleanupGenerations.get(entry) !== generation ||
+      !newerGenerationOwnsSession(entry)
+    ) {
+      return false;
+    }
+    // Cleanup can yield to attachment, mirror, or announce work. A successor
+    // registered while it was suspended owns every session-scoped side effect.
+    await params.retireSupersededRun(runId, entry);
+    params.persist();
+    return true;
+  };
+
+  const isTerminalCallbackCurrent = (
+    runId: string,
+    entry: SubagentRunRecord,
+    generation: number,
+  ): boolean =>
+    params.runs.get(runId) === entry &&
+    entry.pauseReason !== "sessions_yield" &&
+    terminalGenerations.get(entry) === generation;
+
+  const isEndedHookOwnerCurrent = (runId: string, entry: SubagentRunRecord): boolean => {
+    const current = params.runs.get(runId);
+    return (current === undefined || current === entry) && !newerGenerationOwnsSession(entry);
   };
 
   const retryDeferredCompletedAnnounces = (excludeRunId?: string) => {
@@ -647,7 +844,7 @@ export function createSubagentRegistryLifecycleController(params: {
           runId,
           entry,
           reason: "expiry",
-        }).catch((error) => {
+        }).catch((error: unknown) => {
           defaultRuntime.log(
             `[warn] Subagent expiry finalize failed during deferred retry for run ${runId}: ${String(error)}`,
           );
@@ -670,8 +867,12 @@ export function createSubagentRegistryLifecycleController(params: {
     entry: SubagentRunRecord;
     cleanup: "delete" | "keep";
     completedAt: number;
+    preserveTranscript?: boolean;
+    provisionalKill?: boolean;
   }) => {
-    void removeInternalSessionEffectsTranscript(cleanupParams.entry.execution?.transcriptFile);
+    if (!cleanupParams.preserveTranscript) {
+      void removeInternalSessionEffectsTranscript(cleanupParams.entry.execution?.transcriptFile);
+    }
     if (cleanupParams.entry.spawnMode !== "session") {
       void retireSessionMcpRuntimeForSessionKey({
         sessionKey: cleanupParams.entry.childSessionKey,
@@ -688,24 +889,42 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     if (cleanupParams.cleanup === "delete") {
       params.clearPendingLifecycleError(cleanupParams.runId);
-      void params.notifyContextEngineSubagentEnded({
-        childSessionKey: cleanupParams.entry.childSessionKey,
-        reason: "deleted",
-        agentDir: cleanupParams.entry.agentDir,
-        workspaceDir: cleanupParams.entry.workspaceDir,
-      });
+      if (!cleanupParams.provisionalKill) {
+        void params.notifyContextEngineSubagentEnded({
+          childSessionKey: cleanupParams.entry.childSessionKey,
+          reason: "deleted",
+          agentDir: cleanupParams.entry.agentDir,
+          workspaceDir: cleanupParams.entry.workspaceDir,
+        });
+      }
       params.runs.delete(cleanupParams.runId);
       params.persist();
       retryDeferredCompletedAnnounces(cleanupParams.runId);
       return;
     }
-    void params.notifyContextEngineSubagentEnded({
-      childSessionKey: cleanupParams.entry.childSessionKey,
-      reason: "completed",
-      agentDir: cleanupParams.entry.agentDir,
-      workspaceDir: cleanupParams.entry.workspaceDir,
-    });
-    cleanupParams.entry.cleanupCompletedAt = cleanupParams.completedAt;
+    if (!cleanupParams.provisionalKill) {
+      void params.notifyContextEngineSubagentEnded({
+        childSessionKey: cleanupParams.entry.childSessionKey,
+        reason: "completed",
+        agentDir: cleanupParams.entry.agentDir,
+        workspaceDir: cleanupParams.entry.workspaceDir,
+      });
+    }
+    if (
+      cleanupParams.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+      cleanupParams.entry.suppressAnnounceReason !== "killed"
+    ) {
+      // A reconciled killed row has served its tombstone purpose. Retire only
+      // the registry record; keep-mode still preserves the child session.
+      params.clearPendingLifecycleError(cleanupParams.runId);
+      params.runs.delete(cleanupParams.runId);
+      params.persist();
+      retryDeferredCompletedAnnounces(cleanupParams.runId);
+      return;
+    }
+    if (!cleanupParams.provisionalKill) {
+      cleanupParams.entry.cleanupCompletedAt = cleanupParams.completedAt;
+    }
     params.persist();
     retryDeferredCompletedAnnounces(cleanupParams.runId);
   };
@@ -736,47 +955,90 @@ export function createSubagentRegistryLifecycleController(params: {
     runId: string,
     cleanup: "delete" | "keep",
     didAnnounce: boolean,
+    cleanupGeneration: number,
     options?: {
       skipAnnounce?: boolean;
       skipDeliveryStatus?: boolean;
+      skipRequesterDelivery?: boolean;
     },
   ) => {
     const entry = params.runs.get(runId);
     if (!entry) {
       return;
     }
+    if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+      await retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);
+      return;
+    }
+    if (entry.expectsCompletionMessage === false || options?.skipRequesterDelivery) {
+      clearPendingFinalDelivery(entry);
+      if (options?.skipRequesterDelivery) {
+        ensureDeliveryState(entry).status = "not_required";
+        entry.suppressCompletionDelivery = undefined;
+      }
+      entry.wakeOnDescendantSettle = undefined;
+      const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+      if (shouldDeleteAttachments) {
+        await safeRemoveAttachmentsDir(entry);
+      }
+      if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+        await retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);
+        return;
+      }
+      completeCleanupBookkeeping({
+        runId,
+        entry,
+        cleanup,
+        completedAt: Date.now(),
+      });
+      await emitCompletionEndedHookIfNeeded(entry, resolveCleanupCompletionReason(entry), () =>
+        isEndedHookOwnerCurrent(runId, entry),
+      );
+      return;
+    }
     if (didAnnounce) {
-      if (!options?.skipAnnounce) {
-        const delivery = ensureDeliveryState(entry);
-        const deliveredAt = delivery.deliveredAt ?? Date.now();
+      const delivery = ensureDeliveryState(entry);
+      const shouldCreditDelivery =
+        !options?.skipAnnounce ||
+        delivery.status === "delivered" ||
+        typeof delivery.announcedAt === "number";
+      if (shouldCreditDelivery) {
+        const deliveredAt = delivery.deliveredAt ?? delivery.announcedAt ?? Date.now();
         delivery.status = "delivered";
         delivery.deliveredAt = deliveredAt;
-        delivery.announcedAt = deliveredAt;
-        params.persist();
+        delivery.announcedAt = delivery.announcedAt ?? deliveredAt;
+        if (!options?.skipAnnounce) {
+          delivery.announcedAt = deliveredAt;
+          params.persist();
+        }
       }
       clearPendingFinalDelivery(entry);
-      const delivery = ensureDeliveryState(entry);
-      delivery.status = "delivered";
-      delivery.suspendedAt = undefined;
-      delivery.suspendedReason = undefined;
-      if (!options?.skipDeliveryStatus) {
+      const finalDelivery = ensureDeliveryState(entry);
+      if (shouldCreditDelivery) {
+        finalDelivery.status = "delivered";
+        finalDelivery.suspendedAt = undefined;
+        finalDelivery.suspendedReason = undefined;
+      }
+      if (shouldCreditDelivery && !options?.skipDeliveryStatus) {
         safeSetSubagentTaskDeliveryStatus({
-          runId,
-          childSessionKey: entry.childSessionKey,
+          entry,
           deliveryStatus: "delivered",
         });
       }
-      delivery.lastError = undefined;
-      delivery.lastDropReason = undefined;
+      finalDelivery.lastError = undefined;
+      finalDelivery.lastDropReason = undefined;
       entry.wakeOnDescendantSettle = undefined;
       const completion = ensureCompletionState(entry);
       completion.fallbackResultText = undefined;
       completion.fallbackCapturedAt = undefined;
       const completionReason = resolveCleanupCompletionReason(entry);
-      await emitCompletionEndedHookIfNeeded(entry, completionReason);
       const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
       if (shouldDeleteAttachments) {
         await safeRemoveAttachmentsDir(entry);
+      }
+      if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+        await retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);
+        return;
       }
       if (cleanup === "delete") {
         completion.resultText = undefined;
@@ -788,6 +1050,11 @@ export function createSubagentRegistryLifecycleController(params: {
         cleanup,
         completedAt: Date.now(),
       });
+      // Hook loading is best-effort; durable delivery and cleanup must already
+      // be terminal before plugin code can fail or stall.
+      await emitCompletionEndedHookIfNeeded(entry, completionReason, () =>
+        isEndedHookOwnerCurrent(runId, entry),
+      );
       return;
     }
 
@@ -833,8 +1100,7 @@ export function createSubagentRegistryLifecycleController(params: {
         failedDelivery.lastAttemptAt = now;
       }
       safeSetSubagentTaskDeliveryStatus({
-        runId,
-        childSessionKey: entry.childSessionKey,
+        entry,
         deliveryStatus: "failed",
         deliveryError,
       });
@@ -850,6 +1116,10 @@ export function createSubagentRegistryLifecycleController(params: {
       if (shouldDeleteAttachments) {
         await safeRemoveAttachmentsDir(entry);
       }
+      if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+        await retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);
+        return;
+      }
       const completionReason = resolveCleanupCompletionReason(entry);
       logAnnounceGiveUp(entry, deferredDecision.reason);
       // Giving up on announce delivery is terminal for cleanup even if the
@@ -860,7 +1130,9 @@ export function createSubagentRegistryLifecycleController(params: {
         cleanup,
         completedAt: now,
       });
-      await emitCompletionEndedHookIfNeeded(entry, completionReason);
+      await emitCompletionEndedHookIfNeeded(entry, completionReason, () =>
+        isEndedHookOwnerCurrent(runId, entry),
+      );
       return;
     }
 
@@ -878,16 +1150,27 @@ export function createSubagentRegistryLifecycleController(params: {
   };
 
   const startSubagentAnnounceCleanupFlow = (runId: string, entry: SubagentRunRecord): boolean => {
+    if (entry.killReconciliation) {
+      // Restores and unrelated cleanup retries must not publish a provisional
+      // kill. The sweeper re-enters here after durable reconciliation.
+      return false;
+    }
+    const cleanup = entry.cleanup;
     if (typeof entry.delivery?.announcedAt === "number" || entry.delivery?.status === "delivered") {
       if (!beginSubagentCleanup(runId)) {
         return false;
       }
-      void finalizeSubagentCleanup(runId, entry.cleanup, true, {
+      const cleanupGeneration = cleanupGenerations.get(entry)!;
+      void finalizeSubagentCleanup(runId, cleanup, true, cleanupGeneration, {
         skipAnnounce: true,
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
         const current = params.runs.get(runId);
-        if (!current || current.cleanupCompletedAt) {
+        if (
+          !current ||
+          current.cleanupCompletedAt ||
+          !isCleanupAttemptCurrent(runId, entry, cleanupGeneration)
+        ) {
           return;
         }
         current.cleanupHandled = false;
@@ -898,9 +1181,22 @@ export function createSubagentRegistryLifecycleController(params: {
     if (!beginSubagentCleanup(runId)) {
       return false;
     }
-    if (entry.expectsCompletionMessage === false) {
+    const cleanupGeneration = cleanupGenerations.get(entry)!;
+    const skipRequesterDelivery = entry.suppressCompletionDelivery === true;
+    if (entry.expectsCompletionMessage === false || skipRequesterDelivery) {
       void (async () => {
-        if (entry.cleanup === "delete") {
+        // This driver is detached. Yield once so synchronous successor
+        // registration can invalidate it before sessions.delete is submitted.
+        await Promise.resolve();
+        if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+          await retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);
+          return;
+        }
+        if (cleanup === "delete") {
+          // This durable boundary prevents a late yield from reviving a run
+          // after deletion may already have reached the gateway.
+          entry.deleteCleanupDispatchedAt ??= Date.now();
+          params.persist();
           await deleteSubagentSessionForCleanup({
             callGateway: params.callGateway,
             childSessionKey: entry.childSessionKey,
@@ -913,14 +1209,23 @@ export function createSubagentRegistryLifecycleController(params: {
               }),
           });
         }
-        await finalizeSubagentCleanup(runId, entry.cleanup, true, {
+        if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+          await retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);
+          return;
+        }
+        await finalizeSubagentCleanup(runId, cleanup, true, cleanupGeneration, {
           skipAnnounce: true,
           skipDeliveryStatus: true,
+          skipRequesterDelivery,
         });
-      })().catch((err) => {
+      })().catch((err: unknown) => {
         defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
         const current = params.runs.get(runId);
-        if (!current || current.cleanupCompletedAt) {
+        if (
+          !current ||
+          current.cleanupCompletedAt ||
+          !isCleanupAttemptCurrent(runId, entry, cleanupGeneration)
+        ) {
           return;
         }
         current.cleanupHandled = false;
@@ -932,8 +1237,16 @@ export function createSubagentRegistryLifecycleController(params: {
     const requesterOrigin = normalizeDeliveryContext(pendingPayload.requesterOrigin);
     let latestDeliveryError = getDeliveryLastError(entry);
     const finalizeAnnounceCleanup = async (didAnnounce: boolean) => {
+      if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+        await retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);
+        return;
+      }
       const shouldCreditPriorDelivery =
         !didAnnounce && (await hasPriorRequesterDeliveryMirror(entry));
+      if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+        await retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);
+        return;
+      }
       if (shouldCreditPriorDelivery) {
         latestDeliveryError = undefined;
       }
@@ -942,12 +1255,17 @@ export function createSubagentRegistryLifecycleController(params: {
       }
       void finalizeSubagentCleanup(
         runId,
-        entry.cleanup,
+        cleanup,
         didAnnounce || shouldCreditPriorDelivery,
-      ).catch((err) => {
+        cleanupGeneration,
+      ).catch((err: unknown) => {
         defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
         const current = params.runs.get(runId);
-        if (!current || current.cleanupCompletedAt) {
+        if (
+          !current ||
+          current.cleanupCompletedAt ||
+          !isCleanupAttemptCurrent(runId, entry, cleanupGeneration)
+        ) {
           return;
         }
         current.cleanupHandled = false;
@@ -964,7 +1282,7 @@ export function createSubagentRegistryLifecycleController(params: {
         requesterDisplayKey: pendingPayload.requesterDisplayKey,
         task: pendingPayload.task,
         timeoutMs: params.subagentAnnounceTimeoutMs,
-        cleanup: entry.cleanup,
+        cleanup,
         roundOneReply: pendingPayload.frozenResultText ?? undefined,
         fallbackReply: pendingPayload.fallbackFrozenResultText ?? undefined,
         waitForCompletion: false,
@@ -975,7 +1293,24 @@ export function createSubagentRegistryLifecycleController(params: {
         spawnMode: pendingPayload.spawnMode,
         expectsCompletionMessage: pendingPayload.expectsCompletionMessage,
         wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
+        onBeforeDeleteChildSession:
+          cleanup === "delete"
+            ? () => {
+                if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+                  return false;
+                }
+                // Announce owns delete submission; fence late yields at the
+                // exact handoff instead of when cleanup merely starts.
+                entry.deleteCleanupDispatchedAt ??= Date.now();
+                params.persist();
+                return true;
+              }
+            : undefined,
         onDeliveryResult: (delivery) => {
+          if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
+            void retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);
+            return;
+          }
           recordAnnounceDeliveryResult(entry, delivery);
           if (delivery.delivered) {
             const deliveryState = ensureDeliveryState(entry);
@@ -999,7 +1334,7 @@ export function createSubagentRegistryLifecycleController(params: {
       .then((didAnnounce) => {
         void finalizeAnnounceCleanup(didAnnounce);
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         defaultRuntime.log(
           `[warn] Subagent announce flow failed during cleanup for run ${runId}: ${String(error)}`,
         );
@@ -1008,7 +1343,7 @@ export function createSubagentRegistryLifecycleController(params: {
     return true;
   };
 
-  const completeSubagentRun = async (completeParams: {
+  type CompleteSubagentRunParams = {
     runId: string;
     endedAt?: number;
     outcome: SubagentRunOutcome;
@@ -1016,93 +1351,393 @@ export function createSubagentRegistryLifecycleController(params: {
     sendFarewell?: boolean;
     accountId?: string;
     triggerCleanup: boolean;
-  }) => {
-    params.clearPendingLifecycleError(completeParams.runId);
-    const entry = params.runs.get(completeParams.runId);
+    startedAt?: number;
+    suppressSessionEffects?: boolean;
+    completionSnapshot?: { resultText: string | null; capturedAt: number };
+  };
+
+  const completeSubagentRun = async (completeParams: CompleteSubagentRunParams) => {
+    const releaseCompletionLock = await acquireTerminalCompletionLock(completeParams.runId);
+    let entry: SubagentRunRecord | undefined;
+    let terminalGeneration = 0;
+    let mutated = false;
+    let completionReason = completeParams.reason;
+    let sessionSuperseded = false;
+    let suppressTaskFinalization: boolean;
+    let provisionalKillSnapshot: SubagentRunRecord | undefined;
+    let postCaptureTaskResolution: DetachedTaskFindResult | undefined;
+    let entrySnapshot: SubagentRunRecord | undefined;
+    try {
+      params.clearPendingLifecycleError(completeParams.runId);
+      entry = params.runs.get(completeParams.runId);
+      if (!entry) {
+        return;
+      }
+      const currentEntry = entry;
+      entrySnapshot = structuredClone(entry);
+      const restoreEntrySnapshot = (snapshot?: SubagentRunRecord) => {
+        if (!snapshot) {
+          return;
+        }
+        const target = currentEntry as unknown as Record<string, unknown>;
+        for (const key of Object.keys(target)) {
+          delete target[key];
+        }
+        Object.assign(target, snapshot);
+      };
+      sessionSuperseded = newerGenerationOwnsSession(currentEntry);
+      if (
+        completeParams.reason === SUBAGENT_ENDED_REASON_KILLED &&
+        entry.endedReason !== undefined &&
+        entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED &&
+        entry.outcome !== undefined
+      ) {
+        // Any finalized provider outcome is canonical. A delayed abort listener
+        // must not replace success, failure, or timeout with a killed marker.
+        return;
+      }
+      let requestedEndedAt =
+        typeof completeParams.endedAt === "number" ? completeParams.endedAt : Date.now();
+      if (
+        shouldPreservePublishedExplicitRunTimeout({
+          entry,
+        })
+      ) {
+        return;
+      }
+      const shouldDrainExistingTerminal = isOlderEquivalentTerminalCallback({
+        entry,
+        endedAt: requestedEndedAt,
+        outcome: completeParams.outcome,
+        reason: completeParams.reason,
+      });
+      if (shouldDrainExistingTerminal) {
+        // Preserve the newer canonical timing while allowing this duplicate
+        // caller to rescue a stalled cleanup and delivery tail.
+        requestedEndedAt = entry.endedAt!;
+        completionReason = entry.endedReason ?? completeParams.reason;
+      }
+      let endedAt = requestedEndedAt;
+      let completionOutcome =
+        shouldDrainExistingTerminal && entry.outcome ? entry.outcome : completeParams.outcome;
+      const observedStartedAt =
+        !shouldDrainExistingTerminal &&
+        typeof completeParams.startedAt === "number" &&
+        Number.isFinite(completeParams.startedAt)
+          ? completeParams.startedAt
+          : undefined;
+      const expiredDeadlineMs = resolveExpiredExplicitRunDeadlineMs({
+        entry,
+        nextEndedAt: endedAt,
+        observedStartedAt,
+      });
+      if (expiredDeadlineMs !== undefined) {
+        endedAt = expiredDeadlineMs;
+        completionOutcome = { status: "timeout" };
+        completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
+      }
+      if (
+        completionReason !== SUBAGENT_ENDED_REASON_KILLED &&
+        entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+        entry.killReconciliation === undefined
+      ) {
+        // Only current-version provisional kills carry reconciliation state.
+        // Legacy or already-stabilized killed rows are terminal cancellation.
+        return;
+      }
+      const isSteerRestartKill =
+        completeParams.reason === SUBAGENT_ENDED_REASON_KILLED &&
+        entry.suppressAnnounceReason === "steer-restart";
+      suppressTaskFinalization = isSteerRestartKill;
+      if (completionReason === SUBAGENT_ENDED_REASON_KILLED && !isSteerRestartKill) {
+        entry.suppressAnnounceReason = "killed";
+        entry.killReconciliation ??= {
+          killedAt: requestedEndedAt,
+        };
+        mutated = true;
+      }
+
+      if (
+        completionReason !== SUBAGENT_ENDED_REASON_KILLED &&
+        entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+        entry.killReconciliation !== undefined
+      ) {
+        const killReconciliation = entry.killReconciliation;
+        const taskResolution = params.resolveSubagentTask(entry);
+        const stableTaskCancellation =
+          taskResolution.lookup === "available" &&
+          taskResolution.task?.status === "cancelled" &&
+          !isProvisionalSubagentKillTask(taskResolution.task);
+        const cancellationEndedAt = resolveKilledSubagentTaskEndedAt(entry);
+        const completionPredatesCancellation =
+          typeof cancellationEndedAt === "number" && endedAt < cancellationEndedAt;
+        if (stableTaskCancellation && !completionPredatesCancellation) {
+          // tasks.cancel promotes the provisional marker to durable operator
+          // intent. Only an already-durable earlier completion may reopen it.
+          return;
+        }
+        provisionalKillSnapshot = structuredClone(currentEntry);
+        // The sweeper uses marker identity to reject a concurrently replaced
+        // kill generation. A completion rollback must retain the same marker.
+        provisionalKillSnapshot.killReconciliation = killReconciliation;
+        // Completion capture yields. Stage the provider result off-registry so
+        // an unrelated persistence write cannot publish a tentative winner.
+        entry = structuredClone(currentEntry);
+        entry.suppressCompletionDelivery =
+          killReconciliation.suppressTaskDelivery === true ? true : undefined;
+        entry.suppressAnnounceReason = undefined;
+        entry.killReconciliation = undefined;
+        entry.cleanupHandled = false;
+        entry.cleanupCompletedAt = undefined;
+        clearDeliveryState(entry);
+        mutated = true;
+      }
+
+      if (observedStartedAt !== undefined && entry.startedAt !== observedStartedAt) {
+        entry.startedAt = observedStartedAt;
+        if (typeof entry.sessionStartedAt !== "number") {
+          entry.sessionStartedAt = observedStartedAt;
+        }
+        mutated = true;
+      }
+
+      if (
+        completionReason === SUBAGENT_ENDED_REASON_COMPLETE &&
+        completionOutcome.status !== "error" &&
+        provisionalKillSnapshot !== undefined
+      ) {
+        // A killed lifecycle may freeze an empty result before the canonical end
+        // wins. Preserve any reply already captured by an earlier successful callback.
+        const completion = ensureCompletionState(entry);
+        const hasCapturedReply =
+          typeof completion.resultText === "string" && completion.resultText.trim().length > 0;
+        if (
+          !hasCapturedReply &&
+          (completion.resultText !== undefined || completion.capturedAt !== undefined)
+        ) {
+          completion.resultText = undefined;
+          completion.capturedAt = undefined;
+          mutated = true;
+        }
+      }
+      if (entry.endedAt !== endedAt) {
+        entry.endedAt = endedAt;
+        entry.execution = {
+          ...entry.execution,
+          status: "terminal",
+          startedAt: entry.startedAt,
+          endedAt,
+        };
+        mutated = true;
+      }
+      const outcome = withSubagentOutcomeTiming(completionOutcome, {
+        startedAt: entry.startedAt,
+        endedAt,
+      });
+      if (shouldUpdateRunOutcome(entry.outcome, outcome)) {
+        entry.outcome = outcome;
+        mutated = true;
+      }
+      if (
+        entry.execution?.status !== "terminal" ||
+        entry.execution.endedAt !== endedAt ||
+        entry.execution.outcome !== outcome
+      ) {
+        entry.execution = {
+          ...entry.execution,
+          status: "terminal",
+          startedAt: entry.startedAt,
+          endedAt,
+          outcome,
+        };
+        mutated = true;
+      }
+      if (entry.endedReason !== completionReason) {
+        entry.endedReason = completionReason;
+        mutated = true;
+      }
+      if (entry.pauseReason !== undefined) {
+        entry.pauseReason = undefined;
+        mutated = true;
+      }
+
+      if (completeParams.completionSnapshot) {
+        const completion = ensureCompletionState(entry);
+        if (
+          completion.resultText !== completeParams.completionSnapshot.resultText ||
+          completion.capturedAt !== completeParams.completionSnapshot.capturedAt
+        ) {
+          completion.resultText = completeParams.completionSnapshot.resultText;
+          completion.capturedAt = completeParams.completionSnapshot.capturedAt;
+          mutated = true;
+        }
+      }
+
+      // A newer generation may share the session key. Its transcript/reply is
+      // not evidence for this older run, so reconcile only the terminal task state.
+      if (sessionSuperseded) {
+        const completion = ensureCompletionState(entry);
+        if (completion.resultText === undefined) {
+          completion.resultText = null;
+          completion.capturedAt = Date.now();
+          mutated = true;
+        }
+      } else {
+        const didFreezeResult = await freezeRunResultAtCompletion(entry, outcome);
+        sessionSuperseded = newerGenerationOwnsSession(entry);
+        if (sessionSuperseded) {
+          const completion = ensureCompletionState(entry);
+          completion.resultText = null;
+          completion.capturedAt = Date.now();
+          mutated = true;
+        } else if (didFreezeResult) {
+          mutated = true;
+        }
+      }
+      if (provisionalKillSnapshot) {
+        // Keep the tombstone's superseded generation boundary through task
+        // commit. Clearing it on the canonical registry row must not let a
+        // late old-run result select a newer task sharing the session key.
+        const taskResolution = params.resolveSubagentTask(provisionalKillSnapshot);
+        postCaptureTaskResolution = taskResolution;
+        const stableTaskCancellation =
+          taskResolution.lookup === "available" &&
+          taskResolution.task?.status === "cancelled" &&
+          !isProvisionalSubagentKillTask(taskResolution.task);
+        const cancellationEndedAt = resolveKilledSubagentTaskEndedAt(provisionalKillSnapshot);
+        const completionPredatesCancellation =
+          typeof cancellationEndedAt === "number" && endedAt < cancellationEndedAt;
+        if (stableTaskCancellation && !completionPredatesCancellation) {
+          // Cancellation can become durable while completion capture yields.
+          // The provider transition is staged, so the live tombstone is intact.
+          return;
+        }
+      }
+      if (refreshPendingFinalDeliveryPayload(entry)) {
+        mutated = true;
+      }
+
+      const opaqueTaskArbitration =
+        provisionalKillSnapshot !== undefined &&
+        postCaptureTaskResolution?.lookup === "unavailable";
+      // A steer abort ends one agent run but continues the same detached task.
+      // The successor must remain able to publish its eventual terminal state.
+      if (provisionalKillSnapshot) {
+        const finalizedTasks = safeFinalizeSubagentTaskRun({
+          entry,
+          outcome,
+          taskResolution: postCaptureTaskResolution,
+        });
+        const taskWasAbsent =
+          postCaptureTaskResolution?.lookup === "available" &&
+          postCaptureTaskResolution.task === undefined;
+        if ((!finalizedTasks || finalizedTasks.length === 0) && !taskWasAbsent) {
+          if (opaqueTaskArbitration) {
+            // The optional lookup cannot prove cancellation. Let the legacy
+            // runtime's own finalizer decide whether provider completion won.
+            return;
+          }
+          const latestTaskResolution = params.resolveSubagentTask(provisionalKillSnapshot);
+          const latestTask = latestTaskResolution.task;
+          const stableTaskCancellation =
+            latestTask?.status === "cancelled" && !isProvisionalSubagentKillTask(latestTask);
+          const cancellationEndedAt = resolveKilledSubagentTaskEndedAt(provisionalKillSnapshot);
+          const completionPredatesCancellation =
+            typeof cancellationEndedAt === "number" && endedAt < cancellationEndedAt;
+          if (stableTaskCancellation && !completionPredatesCancellation) {
+            return;
+          }
+          throw new Error("subagent task projection did not finalize");
+        }
+
+        // Task results do not auto-publish for subagents. Commit that durable,
+        // idempotent projection first: after a crash the persisted kill marker
+        // can replay it, while the inverse ordering could strand a provisional task.
+        entry.browserCleanupDispatchedAt ??= currentEntry.browserCleanupDispatchedAt;
+        if (currentEntry.killReconciliation?.suppressTaskDelivery === true) {
+          entry.suppressCompletionDelivery = true;
+        }
+        const liveBeforeCommit = structuredClone(currentEntry);
+        restoreEntrySnapshot(entry);
+        entry = currentEntry;
+        try {
+          params.persistOrThrow();
+        } catch (error) {
+          restoreEntrySnapshot(liveBeforeCommit);
+          throw error;
+        }
+        // A provider result supersedes provisional cleanup only after both
+        // durable owners accept it. Rejected callbacks leave the kill tail live.
+        cleanupGenerations.set(entry, (cleanupGenerations.get(entry) ?? 0) + 1);
+      } else {
+        try {
+          if (mutated) {
+            params.persistOrThrow();
+          }
+        } catch (error) {
+          restoreEntrySnapshot(entrySnapshot);
+          throw error;
+        }
+        if (!suppressTaskFinalization) {
+          safeFinalizeSubagentTaskRun({ entry, outcome });
+        }
+      }
+      terminalGeneration = (terminalGenerations.get(entry) ?? 0) + 1;
+      terminalGenerations.set(entry, terminalGeneration);
+    } finally {
+      // Only the canonical state/capture transition is serialized. Cleanup
+      // remains re-entrant so a stalled browser close cannot strand a duplicate callback.
+      releaseCompletionLock();
+    }
+
     if (!entry) {
       return;
     }
+    if (!isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
+      return;
+    }
+    const retireSupersededSession = async (currentEntry: SubagentRunRecord) => {
+      if (completionReason !== SUBAGENT_ENDED_REASON_KILLED) {
+        await params.retireSupersededRun(completeParams.runId, currentEntry);
+        params.persist();
+      }
+    };
+    sessionSuperseded = sessionSuperseded || newerGenerationOwnsSession(entry);
+    if (sessionSuperseded) {
+      // This callback belongs to an older run that shared the session key.
+      // Update only its task projection; the newer generation owns all session effects.
+      await retireSupersededSession(entry);
+      return;
+    }
+    const isProvisionalKill = entry.killReconciliation !== undefined;
 
-    let mutated = false;
-    if (
-      completeParams.reason === SUBAGENT_ENDED_REASON_COMPLETE &&
-      entry.suppressAnnounceReason === "killed" &&
-      (entry.cleanupHandled || typeof entry.cleanupCompletedAt === "number")
-    ) {
-      entry.suppressAnnounceReason = undefined;
-      entry.cleanupHandled = false;
-      entry.cleanupCompletedAt = undefined;
-      ensureDeliveryState(entry).announcedAt = undefined;
-      mutated = true;
+    if (!completeParams.suppressSessionEffects) {
+      try {
+        await persistSubagentSessionTiming(entry, {
+          // Recheck while patchSessionEntry owns its write lock so this old
+          // completion cannot commit after a synchronous ownership transfer.
+          isCurrentGeneration: () =>
+            isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration) &&
+            !newerGenerationOwnsSession(entry),
+        });
+      } catch (err) {
+        params.warn("failed to persist subagent session timing", {
+          err,
+          runId: entry.runId,
+          childSessionKey: entry.childSessionKey,
+        });
+      }
     }
-
-    const endedAt =
-      typeof completeParams.endedAt === "number" ? completeParams.endedAt : Date.now();
-    if (entry.endedAt !== endedAt) {
-      entry.endedAt = endedAt;
-      entry.execution = {
-        ...entry.execution,
-        status: "terminal",
-        startedAt: entry.startedAt,
-        endedAt,
-      };
-      mutated = true;
+    if (!isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
+      return;
     }
-    const outcome = withSubagentOutcomeTiming(completeParams.outcome, {
-      startedAt: entry.startedAt,
-      endedAt,
-    });
-    if (shouldUpdateRunOutcome(entry.outcome, outcome)) {
-      entry.outcome = outcome;
-      mutated = true;
-    }
-    if (
-      entry.execution?.status !== "terminal" ||
-      entry.execution.endedAt !== endedAt ||
-      entry.execution.outcome !== outcome
-    ) {
-      entry.execution = {
-        ...entry.execution,
-        status: "terminal",
-        startedAt: entry.startedAt,
-        endedAt,
-        outcome,
-      };
-      mutated = true;
-    }
-    if (entry.endedReason !== completeParams.reason) {
-      entry.endedReason = completeParams.reason;
-      mutated = true;
-    }
-    if (entry.pauseReason !== undefined) {
-      entry.pauseReason = undefined;
-      mutated = true;
-    }
-
-    if (await freezeRunResultAtCompletion(entry, outcome)) {
-      mutated = true;
-    }
-
-    if (mutated) {
-      params.persist();
-    }
-    safeFinalizeSubagentTaskRun({
-      entry,
-      outcome,
-    });
-
-    try {
-      await persistSubagentSessionTiming(entry);
-    } catch (err) {
-      params.warn("failed to persist subagent session timing", {
-        err,
-        runId: entry.runId,
-        childSessionKey: entry.childSessionKey,
-      });
+    if (newerGenerationOwnsSession(entry)) {
+      await retireSupersededSession(entry);
+      return;
     }
 
     const suppressedForSteerRestart = params.suppressAnnounceForSteerRestart(entry);
-    if (mutated && !suppressedForSteerRestart) {
+    if (mutated && !suppressedForSteerRestart && !completeParams.suppressSessionEffects) {
       emitSessionLifecycleEvent({
         sessionKey: entry.childSessionKey,
         reason: "subagent-status",
@@ -1112,9 +1747,11 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     const shouldEmitEndedHook =
       !suppressedForSteerRestart &&
+      !isProvisionalKill &&
+      !completeParams.suppressSessionEffects &&
       params.shouldEmitEndedHookForRun({
         entry,
-        reason: completeParams.reason,
+        reason: completionReason,
       });
     const shouldDeferEndedHook =
       shouldEmitEndedHook &&
@@ -1124,30 +1761,56 @@ export function createSubagentRegistryLifecycleController(params: {
     if (!shouldDeferEndedHook && shouldEmitEndedHook) {
       await params.emitSubagentEndedHookForRun({
         entry,
-        reason: completeParams.reason,
+        reason: completionReason,
         sendFarewell: completeParams.sendFarewell,
         accountId: completeParams.accountId,
+        isCurrent: () =>
+          isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration) &&
+          !newerGenerationOwnsSession(entry),
       });
+      if (!isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
+        return;
+      }
+      if (newerGenerationOwnsSession(entry)) {
+        await retireSupersededSession(entry);
+        return;
+      }
     }
 
     if (!completeParams.triggerCleanup || suppressedForSteerRestart) {
       return;
     }
 
-    try {
-      const cleanupBrowserSessions =
-        params.cleanupBrowserSessionsForLifecycleEnd ??
-        (await loadCleanupBrowserSessionsForLifecycleEnd());
-      await cleanupBrowserSessions({
-        sessionKeys: [entry.childSessionKey],
-        onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
-      });
-    } catch (error) {
-      params.warn("failed to cleanup browser sessions for completed subagent", {
-        error: buildSafeLifecycleErrorMeta(error),
-        runId: maskRunId(completeParams.runId),
-        childSessionKey: maskSessionKey(entry.childSessionKey),
-      });
+    // registerSubagentRun fires both an in-process listener and a gateway
+    // waitForSubagentCompletion RPC; both can reach this point for the same
+    // runId in embedded mode. Dedupe only the browser driver tab-close IPC
+    // with a sync check-then-set. The retire + announce tail below must still
+    // run for every caller, so a slow or held first browser cleanup cannot
+    // strand a duplicate caller's completion behind it.
+    if (entry.browserCleanupDispatchedAt === undefined) {
+      entry.browserCleanupDispatchedAt = Date.now();
+      try {
+        const cleanupBrowserSessions =
+          params.cleanupBrowserSessionsForLifecycleEnd ??
+          (await loadCleanupBrowserSessionsForLifecycleEnd());
+        await cleanupBrowserSessions({
+          sessionKeys: [entry.childSessionKey],
+          onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
+        });
+      } catch (error) {
+        params.warn("failed to cleanup browser sessions for completed subagent", {
+          error: buildSafeLifecycleErrorMeta(error),
+          runId: maskRunId(completeParams.runId),
+          childSessionKey: maskSessionKey(entry.childSessionKey),
+        });
+      }
+      if (!isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
+        return;
+      }
+      if (newerGenerationOwnsSession(entry)) {
+        await retireSupersededSession(entry);
+        return;
+      }
     }
 
     try {
@@ -1162,6 +1825,19 @@ export function createSubagentRegistryLifecycleController(params: {
         runId: maskRunId(completeParams.runId),
         childSessionKey: maskSessionKey(entry.childSessionKey),
       });
+    }
+    if (!isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
+      return;
+    }
+    if (newerGenerationOwnsSession(entry)) {
+      await retireSupersededSession(entry);
+      return;
+    }
+
+    if (isProvisionalKill) {
+      // Browser and MCP resources can close immediately, but completion delivery
+      // waits for the provider result or the killed tombstone reconciliation.
+      return;
     }
 
     startSubagentAnnounceCleanupFlow(completeParams.runId, entry);

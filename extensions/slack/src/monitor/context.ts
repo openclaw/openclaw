@@ -1,6 +1,8 @@
+// Slack plugin module implements context behavior.
 import type { App } from "@slack/bolt";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type {
   OpenClawConfig,
   SlackReactionNotificationMode,
@@ -26,6 +28,8 @@ import type { SlackChannelConfigEntries } from "./channel-config.js";
 import { resolveSlackChannelConfig } from "./channel-config.js";
 import { normalizeSlackChannelType } from "./channel-type.js";
 import { resolveSessionKey } from "./config.runtime.js";
+import type { SlackInstallationIdentity } from "./enterprise-install.js";
+import type { SlackEventScope } from "./event-scope.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
 
 export { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
@@ -45,7 +49,7 @@ export type SlackAssistantThreadContext = {
   updatedAt: number;
 };
 
-export const SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT = "assistant_thread_context";
+const SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT = "assistant_thread_context";
 
 export function buildSlackAssistantThreadMetadata(
   context: Omit<SlackAssistantThreadContext, "updatedAt">,
@@ -96,11 +100,13 @@ export type SlackMonitorContext = {
   botToken: string;
   app: App;
   runtime: RuntimeEnv;
+  channelRuntime?: ChannelRuntimeSurface;
 
   botUserId: string;
   botId?: string;
   teamId: string;
   apiAppId: string;
+  installationIdentity: SlackInstallationIdentity;
 
   historyLimit: number;
   dmHistoryLimit: number;
@@ -133,8 +139,16 @@ export type SlackMonitorContext = {
   removeAckAfterReply: boolean;
 
   logger: ReturnType<typeof getChildLogger>;
-  markMessageSeen: (channelId: string | undefined, ts?: string) => boolean;
-  releaseSeenMessage: (channelId: string | undefined, ts?: string) => void;
+  markMessageSeen: (
+    channelId: string | undefined,
+    ts?: string,
+    eventScope?: SlackEventScope,
+  ) => boolean;
+  releaseSeenMessage: (
+    channelId: string | undefined,
+    ts?: string,
+    eventScope?: SlackEventScope,
+  ) => void;
   shouldDropMismatchedSlackEvent: (body: unknown) => boolean;
   resolveSlackSystemEventSessionKey: (params: {
     channelId?: string | null;
@@ -147,24 +161,31 @@ export type SlackMonitorContext = {
     channelName?: string;
     channelType?: SlackMessageEvent["channel_type"];
   }) => boolean;
-  resolveChannelName: (channelId: string) => Promise<{
+  resolveChannelName: (
+    channelId: string,
+    eventScope?: SlackEventScope,
+  ) => Promise<{
     name?: string;
     type?: SlackMessageEvent["channel_type"];
     topic?: string;
     purpose?: string;
   }>;
-  resolveUserName: (userId: string) => Promise<{ name?: string }>;
+  resolveUserName: (userId: string, eventScope?: SlackEventScope) => Promise<{ name?: string }>;
   setSlackThreadStatus: (params: {
     channelId: string;
     threadTs?: string;
     status: string;
+    loadingMessages?: string[];
+    eventScope?: SlackEventScope;
   }) => Promise<void>;
   getSlackAssistantThreadContext: (
     channelId: string | undefined,
     threadTs: string | undefined,
+    eventScope?: SlackEventScope,
   ) => SlackAssistantThreadContext | undefined;
   saveSlackAssistantThreadContext: (
     context: Omit<SlackAssistantThreadContext, "updatedAt">,
+    eventScope?: SlackEventScope,
   ) => void;
   setSlackAssistantSuggestedPrompts: (params: {
     channelId: string;
@@ -183,11 +204,13 @@ export function createSlackMonitorContext(params: {
   botToken: string;
   app: App;
   runtime: RuntimeEnv;
+  channelRuntime?: ChannelRuntimeSurface;
 
   botUserId: string;
   botId?: string;
   teamId: string;
   apiAppId: string;
+  installationIdentity?: SlackInstallationIdentity;
 
   historyLimit: number;
   dmHistoryLimit?: number;
@@ -236,26 +259,40 @@ export function createSlackMonitorContext(params: {
 
   const allowFrom = normalizeAllowList(params.allowFrom);
   const groupDmChannels = normalizeAllowList(params.groupDmChannels);
-  const groupDmChannelsLower = normalizeAllowListLower(groupDmChannels);
+  const groupDmChannelsLower = new Set(
+    normalizeAllowListLower(groupDmChannels).map((entry) => entry.replace(/^channel:/, "")),
+  );
   const defaultRequireMention = params.defaultRequireMention ?? true;
   const hasChannelAllowlistConfig = Object.keys(params.channelsConfig ?? {}).length > 0;
   const channelsConfigKeys = Object.keys(params.channelsConfig ?? {});
 
-  const markMessageSeen = (channelId: string | undefined, ts?: string) => {
+  const scopedKey = (key: string, eventScope?: SlackEventScope) =>
+    eventScope ? `${params.accountId}:${eventScope.teamId}:${key}` : key;
+
+  const markMessageSeen = (
+    channelId: string | undefined,
+    ts?: string,
+    eventScope?: SlackEventScope,
+  ) => {
     if (!channelId || !ts) {
       return false;
     }
-    return seenMessages.check(`${channelId}:${ts}`);
+    return seenMessages.check(scopedKey(`${channelId}:${ts}`, eventScope));
   };
 
-  const releaseSeenMessage = (channelId: string | undefined, ts?: string) => {
+  const releaseSeenMessage = (
+    channelId: string | undefined,
+    ts?: string,
+    eventScope?: SlackEventScope,
+  ) => {
     if (!channelId || !ts) {
       return;
     }
-    seenMessages.delete(`${channelId}:${ts}`);
+    seenMessages.delete(scopedKey(`${channelId}:${ts}`, eventScope));
   };
 
-  const assistantContextKey = (channelId: string, threadTs: string) => `${channelId}:${threadTs}`;
+  const assistantContextKey = (channelId: string, threadTs: string, eventScope?: SlackEventScope) =>
+    scopedKey(`${channelId}:${threadTs}`, eventScope);
 
   const cleanupAssistantThreadContexts = () => {
     const now = Date.now();
@@ -274,11 +311,12 @@ export function createSlackMonitorContext(params: {
   const getSlackAssistantThreadContext = (
     channelId: string | undefined,
     threadTs: string | undefined,
+    eventScope?: SlackEventScope,
   ) => {
     if (!channelId || !threadTs) {
       return undefined;
     }
-    const key = assistantContextKey(channelId, threadTs);
+    const key = assistantContextKey(channelId, threadTs, eventScope);
     const entry = assistantThreadContexts.get(key);
     if (!entry) {
       return undefined;
@@ -292,12 +330,16 @@ export function createSlackMonitorContext(params: {
 
   const saveSlackAssistantThreadContext = (
     context: Omit<SlackAssistantThreadContext, "updatedAt">,
+    eventScope?: SlackEventScope,
   ) => {
     cleanupAssistantThreadContexts();
-    assistantThreadContexts.set(assistantContextKey(context.assistantChannelId, context.threadTs), {
-      ...context,
-      updatedAt: Date.now(),
-    });
+    assistantThreadContexts.set(
+      assistantContextKey(context.assistantChannelId, context.threadTs, eventScope),
+      {
+        ...context,
+        updatedAt: Date.now(),
+      },
+    );
   };
 
   const resolveSlackSystemEventSessionKey = (p: {
@@ -307,20 +349,19 @@ export function createSlackMonitorContext(params: {
     threadTs?: string | null;
   }) => {
     const channelId = normalizeOptionalString(p.channelId) ?? "";
-    if (!channelId) {
-      return params.mainKey;
-    }
+    const senderId = normalizeOptionalString(p.senderId) ?? "";
     const channelType = normalizeSlackChannelType(p.channelType, channelId);
     const isDirectMessage = channelType === "im";
+    if (!channelId && (!isDirectMessage || !senderId)) {
+      return params.mainKey;
+    }
     const isGroup = channelType === "mpim";
     const from = isDirectMessage
-      ? `slack:${channelId}`
+      ? `slack:${channelId || senderId}`
       : isGroup
         ? `slack:group:${channelId}`
         : `slack:channel:${channelId}`;
     const chatType = isDirectMessage ? "direct" : isGroup ? "group" : "channel";
-    const senderId = normalizeOptionalString(p.senderId) ?? "";
-
     // Resolve through shared channel/account bindings so system events route to
     // the same agent session as regular inbound messages.
     try {
@@ -388,13 +429,14 @@ export function createSlackMonitorContext(params: {
     }).sessionKey;
   };
 
-  const resolveChannelName = async (channelId: string) => {
-    const cached = channelCache.get(channelId);
+  const resolveChannelName = async (channelId: string, eventScope?: SlackEventScope) => {
+    const cacheKey = scopedKey(channelId, eventScope);
+    const cached = channelCache.get(cacheKey);
     if (cached) {
       return cached;
     }
     try {
-      const info = await params.app.client.conversations.info({
+      const info = await (eventScope?.client ?? params.app.client).conversations.info({
         token: params.botToken,
         channel: channelId,
       });
@@ -413,27 +455,28 @@ export function createSlackMonitorContext(params: {
       const purpose =
         channel && "purpose" in channel ? (channel.purpose?.value ?? undefined) : undefined;
       const entry = { name, type, topic, purpose };
-      channelCache.set(channelId, entry);
+      channelCache.set(cacheKey, entry);
       return entry;
     } catch {
       return {};
     }
   };
 
-  const resolveUserName = async (userId: string) => {
-    const cached = userCache.get(userId);
+  const resolveUserName = async (userId: string, eventScope?: SlackEventScope) => {
+    const cacheKey = scopedKey(userId, eventScope);
+    const cached = userCache.get(cacheKey);
     if (cached) {
       return cached;
     }
     try {
-      const info = await params.app.client.users.info({
+      const info = await (eventScope?.client ?? params.app.client).users.info({
         token: params.botToken,
         user: userId,
       });
       const profile = info.user?.profile;
       const name = profile?.display_name || profile?.real_name || info.user?.name || undefined;
       const entry = { name };
-      userCache.set(userId, entry);
+      userCache.set(cacheKey, entry);
       return entry;
     } catch {
       return {};
@@ -444,16 +487,19 @@ export function createSlackMonitorContext(params: {
     channelId: string;
     threadTs?: string;
     status: string;
+    loadingMessages?: string[];
+    eventScope?: SlackEventScope;
   }) => {
     if (!p.threadTs) {
       return;
     }
     try {
-      await params.app.client.assistant.threads.setStatus({
+      await (p.eventScope?.client ?? params.app.client).assistant.threads.setStatus({
         token: params.botToken,
         channel_id: p.channelId,
         thread_ts: p.threadTs,
         status: p.status,
+        ...(p.loadingMessages?.length ? { loading_messages: p.loadingMessages.slice(0, 10) } : {}),
       });
     } catch (err) {
       logVerbose(`slack status update failed for channel ${p.channelId}: ${formatSlackError(err)}`);
@@ -520,8 +566,8 @@ export function createSlackMonitorContext(params: {
         .filter((value): value is string => Boolean(value))
         .map((value) => normalizeLowercaseStringOrEmpty(value));
       const permitted =
-        groupDmChannelsLower.includes("*") ||
-        candidates.some((candidate) => groupDmChannelsLower.includes(candidate));
+        groupDmChannelsLower.has("*") ||
+        candidates.some((candidate) => groupDmChannelsLower.has(candidate));
       if (!permitted) {
         return false;
       }
@@ -601,10 +647,15 @@ export function createSlackMonitorContext(params: {
     botToken: params.botToken,
     app: params.app,
     runtime: params.runtime,
+    channelRuntime: params.channelRuntime,
     botUserId: params.botUserId,
     botId: params.botId,
     teamId: params.teamId,
     apiAppId: params.apiAppId,
+    installationIdentity: params.installationIdentity ?? {
+      kind: "degraded",
+      reason: "auth_test_failed",
+    },
     historyLimit: params.historyLimit,
     dmHistoryLimit: Math.max(0, params.dmHistoryLimit ?? 0),
     channelHistories,

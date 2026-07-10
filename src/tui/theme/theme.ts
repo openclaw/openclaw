@@ -1,11 +1,12 @@
+// TUI theme defines shared colors and text styles for Pi TUI components.
 import type {
   EditorTheme,
   MarkdownTheme,
   SelectListTheme,
   SettingsListTheme,
 } from "@earendil-works/pi-tui";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import chalk from "chalk";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import type { SearchableSelectListTheme } from "../components/searchable-select-list.js";
 
 const DARK_TEXT = "#E8E3D5";
@@ -77,7 +78,7 @@ function isLightBackground(): boolean {
 /** Whether the terminal has a light background. Exported for testing only. */
 export const lightMode = isLightBackground();
 
-export const darkPalette = {
+const darkPalette = {
   text: "#E8E3D5",
   dim: "#7B7F87",
   accent: "#F6C453",

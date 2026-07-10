@@ -1,5 +1,7 @@
+// Control Ui Mock Dev script supports OpenClaw repository automation.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import {
@@ -7,8 +9,14 @@ import {
   createControlUiMockGatewayInitScript,
   type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import {
+  resolveExternalPackageAliasesForVite,
+  resolveSourcePackageAliasesForVite,
+  resolveTsconfigPathAliasesForVite,
+} from "../ui/vite.config.ts";
 
 type CliOptions = {
+  allowedHosts: string[];
   host: string;
   port: number;
 };
@@ -28,10 +36,20 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const uiRoot = path.join(repoRoot, "ui");
 
 function parseArgs(args: string[]): CliOptions {
-  const options: CliOptions = { host: "127.0.0.1", port: 5187 };
+  const options: CliOptions = { allowedHosts: [], host: "127.0.0.1", port: 5187 };
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
-    if (arg === "--host") {
+    if (arg === "--allowed-host") {
+      const allowedHost = args[++i]?.trim();
+      if (allowedHost) {
+        options.allowedHosts.push(allowedHost);
+      }
+    } else if (arg.startsWith("--allowed-host=")) {
+      const allowedHost = arg.slice("--allowed-host=".length).trim();
+      if (allowedHost) {
+        options.allowedHosts.push(allowedHost);
+      }
+    } else if (arg === "--host") {
       options.host = args[++i] ?? options.host;
     } else if (arg.startsWith("--host=")) {
       options.host = arg.slice("--host=".length) || options.host;
@@ -56,7 +74,7 @@ function sessionRow(
   options: { model?: string; modelProvider?: string } = {},
 ) {
   return {
-    contextTokens: null,
+    contextTokens: 200_000,
     displayName: label,
     hasActiveRun: false,
     key,
@@ -74,7 +92,7 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
   return {
     count: sessions.length,
     defaults: {
-      contextTokens: null,
+      contextTokens: 200_000,
       model: "gpt-5.5",
       modelProvider: "openai",
     },
@@ -146,6 +164,114 @@ function buildSearchSessionListCases(
   return searchTerms.flatMap((search) => buildSessionListCases(sessions, { search }));
 }
 
+function usageCostTotals(totalTokens: number, totalCost = 0) {
+  return {
+    input: Math.round(totalTokens * 0.2),
+    output: Math.round(totalTokens * 0.1),
+    cacheRead: Math.round(totalTokens * 0.6),
+    cacheWrite: Math.round(totalTokens * 0.1),
+    totalTokens,
+    totalCost,
+    inputCost: totalCost,
+    outputCost: 0,
+    cacheReadCost: 0,
+    cacheWriteCost: 0,
+    missingCostEntries: 0,
+  };
+}
+
+// Deterministic year of daily activity so the settings profile heatmap,
+// streaks, and stat strip render with a lively fixture in the mock harness.
+function buildProfileUsageMocks(baseTime: number) {
+  const daily: Array<Record<string, unknown>> = [];
+  let lifetimeTokens = 0;
+  for (let daysAgo = 364; daysAgo >= 0; daysAgo -= 1) {
+    const date = new Date(baseTime - daysAgo * 24 * 60 * 60 * 1000);
+    const iso = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    const weekendDamper = date.getDay() === 0 || date.getDay() === 6 ? 0.3 : 1;
+    const quietDay = daysAgo % 19 === 4 ? 0 : 1;
+    const wave = (Math.sin(daysAgo / 6) + 1.4) * 1_400_000_000;
+    const spike = daysAgo % 47 === 0 ? 6_000_000_000 : 0;
+    const tokens = Math.round((wave + spike) * weekendDamper * quietDay);
+    lifetimeTokens += tokens;
+    daily.push({ date: iso, ...usageCostTotals(tokens, tokens / 1e9) });
+  }
+  return {
+    cost: {
+      updatedAt: baseTime,
+      days: daily.length,
+      daily,
+      totals: usageCostTotals(lifetimeTokens, lifetimeTokens / 1e9),
+    },
+    sessions: {
+      updatedAt: baseTime,
+      startDate: daily[0]?.date,
+      endDate: daily[daily.length - 1]?.date,
+      sessions: [
+        {
+          key: "agent:openclaw-mock:marathon",
+          label: "Release night marathon",
+          usage: { ...usageCostTotals(4_000_000_000), durationMs: (59 * 60 + 4) * 60 * 1000 },
+        },
+        {
+          key: "agent:openclaw-mock:daily",
+          label: "Daily driver",
+          usage: { ...usageCostTotals(900_000_000), durationMs: 3 * 60 * 60 * 1000 },
+        },
+      ],
+      totals: usageCostTotals(lifetimeTokens, lifetimeTokens / 1e9),
+      aggregates: {
+        sessionCount: 48_212,
+        longestSessionDurationMs: (59 * 60 + 4) * 60 * 1000,
+        messages: {
+          total: 2_787_815,
+          user: 1_400_000,
+          assistant: 1_387_815,
+          toolCalls: 42_380,
+          toolResults: 42_380,
+          errors: 128,
+        },
+        tools: {
+          totalCalls: 42_380,
+          uniqueTools: 205,
+          tools: [
+            { name: "exec", count: 6_418 },
+            { name: "browser", count: 5_256 },
+            { name: "message", count: 4_708 },
+            { name: "read", count: 4_489 },
+            { name: "sessions_list", count: 3_066 },
+          ],
+        },
+        byModel: [
+          {
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            count: 9_000,
+            totals: usageCostTotals(Math.round(lifetimeTokens * 0.7)),
+          },
+          {
+            provider: "openai",
+            model: "gpt-5.5",
+            count: 4_000,
+            totals: usageCostTotals(Math.round(lifetimeTokens * 0.3)),
+          },
+        ],
+        byProvider: [],
+        byAgent: [
+          { agentId: "openclaw-mock", totals: usageCostTotals(Math.round(lifetimeTokens * 0.8)) },
+          { agentId: "alpha", totals: usageCostTotals(Math.round(lifetimeTokens * 0.2)) },
+        ],
+        byChannel: [
+          { channel: "whatsapp", totals: usageCostTotals(Math.round(lifetimeTokens * 0.5)) },
+          { channel: "telegram", totals: usageCostTotals(Math.round(lifetimeTokens * 0.3)) },
+          { channel: "discord", totals: usageCostTotals(Math.round(lifetimeTokens * 0.2)) },
+        ],
+        daily: [],
+      },
+    },
+  };
+}
+
 function chatHistoryMessage(role: "assistant" | "user", text: string, timestamp: number) {
   return {
     content: [{ text, type: "text" }],
@@ -188,8 +314,218 @@ function searchPrefixes(term: string): string[] {
   return Array.from({ length: term.length }, (_value, index) => term.slice(0, index + 1));
 }
 
-function createChatPickerScenario(): ControlUiMockGatewayScenario {
+async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario> {
   const baseTime = Date.parse("2026-05-22T09:00:00.000Z");
+  const devicePairSetupCode = Buffer.from(
+    JSON.stringify({
+      url: "wss://gateway.example.test",
+      bootstrapToken: "mock-bootstrap-token",
+    }),
+    "utf8",
+  ).toString("base64url");
+  const devicePairQrDataUrl = await qrcode.toDataURL(devicePairSetupCode, {
+    errorCorrectionLevel: "M",
+    margin: 2,
+    width: 360,
+  });
+  const workspaceFiles = [
+    {
+      missing: false,
+      name: "AGENTS.md",
+      path: "/mock/workspace/AGENTS.md",
+      size: 2148,
+      updatedAtMs: baseTime - 120_000,
+    },
+    {
+      missing: false,
+      name: "plan.md",
+      path: "/mock/workspace/plan.md",
+      size: 912,
+      updatedAtMs: baseTime - 90_000,
+    },
+    {
+      missing: false,
+      name: "notes/context.md",
+      path: "/mock/workspace/notes/context.md",
+      size: 1620,
+      updatedAtMs: baseTime - 30_000,
+    },
+  ];
+  const workspaceListCases = ["main", "alpha", "openclaw-mock"].map((agentId) => ({
+    match: { agentId },
+    response: {
+      agentId,
+      files: workspaceFiles,
+      workspace: "/mock/workspace",
+    },
+  }));
+  const workspaceFileContentByName = new Map([
+    [
+      "AGENTS.md",
+      "# AGENTS.md\n\nMock workspace instructions for the composer rail.\n\n- Keep tool output compact.\n- Prefer right-rail context over modal previews.\n",
+    ],
+    [
+      "plan.md",
+      "# Composer polish plan\n\n1. Keep the composer controls calm.\n2. Move session selection into the sidebar.\n3. Keep model, reasoning, and speed choices discoverable without taking over the page.\n",
+    ],
+    [
+      "notes/context.md",
+      "# Context notes\n\nThe right rail should feel like workspace context, not a modal pasted beside the chat.\n\n## Current focus\n\n- Markdown previews need readable dark-mode chrome.\n- Empty or unavailable content should show a quiet state instead of an empty card.\n- File previews should load from the same mock scenario as the file list.\n",
+    ],
+  ]);
+  const workspaceFileCases = ["main", "alpha", "openclaw-mock"].flatMap((agentId) =>
+    workspaceFiles.map((file) => ({
+      match: { agentId, name: file.name },
+      response: {
+        agentId,
+        file: {
+          ...file,
+          content: workspaceFileContentByName.get(file.name) ?? "",
+        },
+        workspace: "/mock/workspace",
+      },
+    })),
+  );
+  const sessionFiles = [
+    {
+      kind: "modified",
+      missing: false,
+      name: "chat.ts",
+      path: "ui/src/ui/views/chat.ts",
+      size: 48320,
+      updatedAtMs: baseTime - 20_000,
+    },
+    {
+      kind: "modified",
+      missing: false,
+      name: "sidebar.css",
+      path: "ui/src/styles/chat/sidebar.css",
+      size: 18840,
+      updatedAtMs: baseTime - 18_000,
+    },
+    {
+      kind: "read",
+      missing: false,
+      name: "artifacts.ts",
+      path: "src/gateway/server-methods/artifacts.ts",
+      size: 21876,
+      updatedAtMs: baseTime - 300_000,
+    },
+    {
+      kind: "read",
+      missing: false,
+      name: "sessions.ts",
+      path: "packages/gateway-protocol/src/schema/sessions.ts",
+      size: 16542,
+      updatedAtMs: baseTime - 420_000,
+    },
+  ];
+  const sessionWorkspaceRoot = repoRoot;
+  const sessionFileContentByPath = new Map([
+    [
+      "ui/src/ui/views/chat.ts",
+      'function renderSessionWorkspaceRail() {\n  return html`<aside class="chat-workspace-rail">...</aside>`;\n}\n',
+    ],
+    [
+      "ui/src/styles/chat/sidebar.css",
+      ".chat-workspace-rail__section-title {\n  color: var(--muted);\n  text-transform: uppercase;\n}\n",
+    ],
+    [
+      "src/gateway/server-methods/artifacts.ts",
+      "// Artifact gateway methods collect generated artifacts from session transcripts.\n",
+    ],
+    [
+      "packages/gateway-protocol/src/schema/sessions.ts",
+      "export const SessionsFilesListParamsSchema = Type.Object({ sessionKey: NonEmptyString });\n",
+    ],
+    [
+      "package.json",
+      '{\n  "name": "openclaw",\n  "scripts": { "dev:ui:mock": "tsx scripts/control-ui-mock-dev.ts" }\n}\n',
+    ],
+    [
+      "ui/vite.config.ts",
+      "export default function controlUiViteConfig() {\n  return { server: { strictPort: true } };\n}\n",
+    ],
+    [
+      "ui/src/e2e/chat-flow.e2e.test.ts",
+      "it('keeps the session workspace useful while browsing files', async () => {\n  await page.getByText('Project files').waitFor();\n});\n",
+    ],
+  ]);
+  const sessionFileCases = [
+    {
+      match: { sessionKey: "agent:alpha" },
+      response: {
+        browser: {
+          entries: [
+            {
+              kind: "directory",
+              name: "packages",
+              path: "packages",
+              sessionKind: "read",
+              updatedAtMs: baseTime - 420_000,
+            },
+            {
+              kind: "directory",
+              name: "src",
+              path: "src",
+              sessionKind: "read",
+              updatedAtMs: baseTime - 300_000,
+            },
+            {
+              kind: "directory",
+              name: "ui",
+              path: "ui",
+              sessionKind: "modified",
+              updatedAtMs: baseTime - 20_000,
+            },
+            {
+              kind: "file",
+              name: "package.json",
+              path: "package.json",
+              size: 92750,
+              updatedAtMs: baseTime - 800_000,
+            },
+          ],
+          path: "",
+        },
+        files: sessionFiles,
+        root: sessionWorkspaceRoot,
+        sessionKey: "agent:alpha",
+      },
+    },
+  ];
+  const sessionFileGetCases = sessionFiles.map((file) => ({
+    match: { sessionKey: "agent:alpha", path: file.path },
+    response: {
+      file: {
+        ...file,
+        content: sessionFileContentByPath.get(file.path) ?? "",
+      },
+      root: sessionWorkspaceRoot,
+      sessionKey: "agent:alpha",
+    },
+  }));
+  const lobsterSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <rect width="640" height="360" fill="#10151d"/>
+  <circle cx="320" cy="185" r="76" fill="#e23f3f"/>
+  <ellipse cx="250" cy="178" rx="54" ry="38" fill="#f05a52"/>
+  <ellipse cx="390" cy="178" rx="54" ry="38" fill="#f05a52"/>
+  <circle cx="292" cy="145" r="10" fill="#0b0f14"/>
+  <circle cx="348" cy="145" r="10" fill="#0b0f14"/>
+  <path d="M232 114c-72-44-135-22-146 35 52 9 91-4 125-39" fill="none" stroke="#f06b5f" stroke-width="28" stroke-linecap="round"/>
+  <path d="M408 114c72-44 135-22 146 35-52 9-91-4-125-39" fill="none" stroke="#f06b5f" stroke-width="28" stroke-linecap="round"/>
+  <path d="M232 246c-45 28-91 35-142 23M408 246c45 28 91 35 142 23" fill="none" stroke="#e14b47" stroke-width="16" stroke-linecap="round"/>
+  <text x="320" y="326" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="24" fill="#f6f7f9">openclaw session artifact</text>
+</svg>`;
+  const lobsterArtifact = {
+    id: "artifact-openclaw-lobster",
+    type: "image",
+    title: "openclaw-lobster-preview.svg",
+    mimeType: "image/svg+xml",
+    sizeBytes: Buffer.byteLength(lobsterSvg, "utf8"),
+    source: "session-transcript",
+    download: { mode: "bytes" },
+  };
   const sessions = [
     sessionRow("agent:alpha", "Alpha planning", baseTime - 1_000),
     ...buildSessionRows({
@@ -213,12 +549,249 @@ function createChatPickerScenario(): ControlUiMockGatewayScenario {
     model: "claude-sonnet-4-6",
     modelProvider: "anthropic",
   });
+  // Profile fixtures track the real clock so streaks and the trailing-year
+  // heatmap stay filled no matter when the mock harness runs.
+  const profileUsage = buildProfileUsageMocks(Date.now());
   return {
     assistantAgentId: "openclaw-mock",
     assistantName: "OpenClaw mock",
     defaultAgentId: "openclaw-mock",
     historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
+      "usage.cost": profileUsage.cost,
+      "sessions.usage": profileUsage.sessions,
+      "device.pair.list": {
+        paired: [
+          {
+            deviceId: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+            displayName: "Mac Studio",
+            platform: "darwin",
+            clientId: "node-host",
+            clientMode: "node",
+            roles: ["operator", "node"],
+            scopes: ["operator.admin", "operator.read", "operator.write"],
+            approvedVia: "trusted-cidr",
+            approvedAtMs: baseTime - 3_600_000,
+            lastSeenAtMs: baseTime - 60_000,
+            tokens: [
+              { role: "node", scopes: [], createdAtMs: baseTime - 3_600_000 },
+              {
+                role: "operator",
+                scopes: ["operator.admin", "operator.read", "operator.write"],
+                createdAtMs: baseTime - 3_600_000,
+              },
+            ],
+          },
+          {
+            deviceId: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+            displayName: "Mac Studio",
+            platform: "darwin",
+            clientId: "node-host",
+            clientMode: "node",
+            roles: ["node"],
+            approvedVia: "trusted-cidr",
+            approvedAtMs: baseTime - 86_400_000,
+            lastSeenAtMs: baseTime - 82_800_000,
+            tokens: [{ role: "node", scopes: [], createdAtMs: baseTime - 86_400_000 }],
+          },
+          {
+            deviceId: "9988776655443322119988776655443322119988776655443322119988776655",
+            clientId: "cli",
+            clientMode: "cli",
+            platform: "darwin",
+            roles: ["operator"],
+            scopes: ["operator.admin", "operator.read", "operator.write"],
+            approvedVia: "silent",
+            approvedAtMs: baseTime - 7_200_000,
+            lastSeenAtMs: baseTime - 7_100_000,
+            tokens: [
+              {
+                role: "operator",
+                scopes: ["operator.admin", "operator.read", "operator.write"],
+                createdAtMs: baseTime - 7_200_000,
+              },
+            ],
+          },
+          {
+            deviceId: "11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff",
+            displayName: "iPhone",
+            platform: "iOS 26.4",
+            clientId: "openclaw-ios",
+            clientMode: "ui",
+            roles: ["operator", "node"],
+            scopes: ["operator.approvals", "operator.read", "operator.write"],
+            approvedVia: "bootstrap",
+            approvedAtMs: baseTime - 172_800_000,
+            lastSeenAtMs: baseTime - 3_600_000,
+            tokens: [
+              { role: "node", scopes: [], createdAtMs: baseTime - 172_800_000 },
+              {
+                role: "operator",
+                scopes: ["operator.approvals", "operator.read", "operator.write"],
+                createdAtMs: baseTime - 172_800_000,
+              },
+            ],
+          },
+        ],
+        pending: [
+          {
+            requestId: "mock-pending-request",
+            deviceId: "feedfacecafebeef0123456789abcdeffeedfacecafebeef0123456789abcdef",
+            displayName: "MacBook Pro",
+            role: "operator",
+            roles: ["operator"],
+            scopes: ["operator.read", "operator.write"],
+            remoteIp: "192.168.1.20",
+            ts: baseTime - 30_000,
+          },
+        ],
+      },
+      "device.pair.setupCode": {
+        auth: "token",
+        gatewayUrl: "wss://gateway.example.test",
+        qrDataUrl: devicePairQrDataUrl,
+        setupCode: devicePairSetupCode,
+        urlSource: "mock",
+      },
+      "node.list": {
+        nodes: [
+          {
+            nodeId: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+            displayName: "Mac Studio",
+            platform: "darwin",
+            version: "2026.6.11",
+            connected: true,
+            paired: true,
+            approvalState: "approved",
+            connectedAtMs: baseTime - 60_000,
+            caps: ["canvas", "screen"],
+            commands: [
+              "screen.snapshot",
+              "system.execApprovals.get",
+              "system.execApprovals.set",
+              "system.notify",
+              "system.run",
+              "system.which",
+            ],
+          },
+          {
+            nodeId: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+            displayName: "Mac Studio",
+            platform: "darwin",
+            version: "2026.6.10",
+            connected: false,
+            paired: true,
+            approvalState: "approved",
+            lastSeenAtMs: baseTime - 82_800_000,
+            caps: ["canvas", "screen"],
+            commands: ["screen.snapshot", "system.run"],
+          },
+          {
+            nodeId: "11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff",
+            displayName: "iPhone",
+            platform: "iOS 26.4",
+            version: "2026.6.11",
+            connected: false,
+            paired: true,
+            approvalState: "pending-reapproval",
+            pendingRequestId: "mock-node-reapproval",
+            lastSeenAtMs: baseTime - 3_600_000,
+            caps: ["camera", "canvas", "contacts", "device", "location"],
+            commands: ["camera.list", "contacts.search", "device.info", "location.get"],
+          },
+        ],
+      },
+      "agents.files.get": {
+        cases: workspaceFileCases,
+      },
+      "agents.files.list": {
+        cases: workspaceListCases,
+      },
+      "sessions.files.get": {
+        cases: sessionFileGetCases,
+      },
+      "sessions.files.list": {
+        cases: [
+          {
+            match: { sessionKey: "agent:alpha", path: "ui" },
+            response: {
+              browser: {
+                entries: [
+                  {
+                    kind: "directory",
+                    name: "src",
+                    path: "ui/src",
+                    sessionKind: "modified",
+                    updatedAtMs: baseTime - 20_000,
+                  },
+                  {
+                    kind: "file",
+                    name: "vite.config.ts",
+                    path: "ui/vite.config.ts",
+                    size: 9860,
+                    updatedAtMs: baseTime - 900_000,
+                  },
+                ],
+                parentPath: "",
+                path: "ui",
+              },
+              files: sessionFiles,
+              root: sessionWorkspaceRoot,
+              sessionKey: "agent:alpha",
+            },
+          },
+          {
+            match: { sessionKey: "agent:alpha", search: "chat" },
+            response: {
+              browser: {
+                entries: [
+                  {
+                    kind: "file",
+                    name: "chat.ts",
+                    path: "ui/src/ui/views/chat.ts",
+                    sessionKind: "modified",
+                    size: 48320,
+                    updatedAtMs: baseTime - 20_000,
+                  },
+                  {
+                    kind: "file",
+                    name: "chat-flow.e2e.test.ts",
+                    path: "ui/src/e2e/chat-flow.e2e.test.ts",
+                    size: 24950,
+                    updatedAtMs: baseTime - 25_000,
+                  },
+                ],
+                path: "",
+                search: "chat",
+              },
+              files: sessionFiles,
+              root: sessionWorkspaceRoot,
+              sessionKey: "agent:alpha",
+            },
+          },
+          ...sessionFileCases,
+        ],
+      },
+      "artifacts.list": {
+        cases: [
+          {
+            match: { sessionKey: "agent:alpha" },
+            response: { artifacts: [lobsterArtifact] },
+          },
+        ],
+      },
+      "artifacts.download": {
+        cases: [
+          {
+            match: { sessionKey: "agent:alpha", artifactId: lobsterArtifact.id },
+            response: {
+              artifact: lobsterArtifact,
+              data: Buffer.from(lobsterSvg, "utf8").toString("base64"),
+              encoding: "base64",
+            },
+          },
+        ],
+      },
       "sessions.list": {
         cases: [
           ...buildSearchSessionListCases(telegramSessions, searchPrefixes("telegram")),
@@ -286,12 +859,12 @@ async function waitForShutdown(): Promise<void> {
 }
 
 const options = parseArgs(process.argv.slice(2));
-const scenario = createChatPickerScenario();
+const scenario = await createChatPickerScenario();
 const server = await createServer({
   base: "/",
   cacheDir: path.join(repoRoot, ".artifacts", "control-ui-mock-vite"),
   clearScreen: false,
-  configFile: false,
+  configFile: path.join(uiRoot, "vite.config.ts"),
   define: {
     OPENCLAW_CONTROL_UI_BUILD_ID: JSON.stringify("mock"),
   },
@@ -301,11 +874,19 @@ const server = await createServer({
   },
   plugins: [createMockGatewayPlugin(scenario)],
   publicDir: path.join(uiRoot, "public"),
+  resolve: {
+    alias: [
+      ...resolveExternalPackageAliasesForVite(),
+      ...resolveSourcePackageAliasesForVite(),
+      ...resolveTsconfigPathAliasesForVite(),
+    ],
+  },
   root: uiRoot,
   server: {
+    allowedHosts: options.allowedHosts,
     host: options.host,
     port: options.port,
-    strictPort: false,
+    strictPort: true,
   },
 });
 

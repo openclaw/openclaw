@@ -1,3 +1,4 @@
+// Telegram tests cover bot.command menu plugin behavior.
 import {
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
@@ -131,7 +132,10 @@ describe("createTelegramBot command menu", () => {
 
     const registered = registeredCommands();
     const skillCommands = resolveSkillCommands(config);
-    const native = listNativeCommandSpecsForConfig(config, { skillCommands }).map((command) => ({
+    const native = listNativeCommandSpecsForConfig(config, {
+      skillCommands,
+      provider: "telegram",
+    }).map((command) => ({
       command: normalizeTelegramCommandName(command.name),
       description: command.description,
     }));
@@ -182,7 +186,10 @@ describe("createTelegramBot command menu", () => {
 
     const registered = registeredCommands();
     const skillCommands = resolveSkillCommands(config);
-    const native = listNativeCommandSpecsForConfig(config, { skillCommands }).map((command) => ({
+    const native = listNativeCommandSpecsForConfig(config, {
+      skillCommands,
+      provider: "telegram",
+    }).map((command) => ({
       command: normalizeTelegramCommandName(command.name),
       description: command.description,
     }));

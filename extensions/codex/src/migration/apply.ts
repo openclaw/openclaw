@@ -1,3 +1,4 @@
+// Codex plugin module implements apply behavior.
 import path from "node:path";
 import {
   applyMigrationManualItem,
@@ -14,12 +15,14 @@ import {
   withCachedMigrationConfigRuntime,
   writeMigrationReport,
 } from "openclaw/plugin-sdk/migration-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import type {
   MigrationApplyResult,
   MigrationItem,
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache.js";
 import {
@@ -362,9 +365,13 @@ function hasOpenAiCuratedMarketplace(response: unknown): boolean {
   );
 }
 
-function targetCodexMarketplaceDiscoveryTimeoutMs(): number {
-  const configured = Number(process.env[TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV]);
-  if (Number.isFinite(configured) && configured >= 0) {
+export function targetCodexMarketplaceDiscoveryTimeoutMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const configured = parseStrictNonNegativeInteger(
+    env[TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV],
+  );
+  if (configured !== undefined) {
     return configured;
   }
   return TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_MS;
@@ -377,10 +384,6 @@ function isCodexPluginLoadWarningItem(item: MigrationItem): boolean {
     item.status === "warning" &&
     item.details?.warningReason === CODEX_PLUGIN_LOAD_WARNING
   );
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function buildTargetCodexPluginAppCacheKey(ctx: MigrationProviderContext): Promise<string> {
@@ -500,6 +503,7 @@ function readCodexPluginPolicy(item: MigrationItem): ResolvedCodexPluginPolicy |
     pluginName,
     enabled: true,
     allowDestructiveActions: true,
+    destructiveApprovalMode: "allow",
   };
 }
 

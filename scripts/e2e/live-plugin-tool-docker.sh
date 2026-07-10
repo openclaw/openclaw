@@ -4,6 +4,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
@@ -11,8 +12,11 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-live-plugin-tool-e2e" OPENCLAW_
 DOCKER_TARGET="${OPENCLAW_LIVE_PLUGIN_TOOL_DOCKER_TARGET:-bare}"
 HOST_BUILD="${OPENCLAW_LIVE_PLUGIN_TOOL_HOST_BUILD:-1}"
 PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
-AGENT_TURN_TIMEOUT_SECONDS="${OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS:-300}"
 PROFILE_FILE="${OPENCLAW_LIVE_PLUGIN_TOOL_PROFILE_FILE:-${OPENCLAW_TESTBOX_PROFILE_FILE:-$HOME/.openclaw-testbox-live.profile}}"
+AGENT_TURN_TIMEOUT_SECONDS="$(openclaw_e2e_read_positive_int_env OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS 300)"
+AGENT_OUTPUT_MAX_BYTES="$(openclaw_e2e_read_positive_int_env OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_MAX_BYTES 1048576)"
+AGENT_OUTPUT_DUMP_BYTES="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_DUMP_BYTES 16384)"
+SESSION_SCAN_MAX_ENTRIES="$(openclaw_e2e_read_positive_int_env OPENCLAW_LIVE_PLUGIN_TOOL_SESSION_SCAN_MAX_ENTRIES 50000)"
 run_log=""
 
 cleanup() {
@@ -55,6 +59,8 @@ if [ -f "$PROFILE_FILE" ] && [ -r "$PROFILE_FILE" ]; then
   PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/appuser/.profile:ro)
   PROFILE_STATUS="$PROFILE_FILE"
 fi
+AGENT_TURN_TIMEOUT_SECONDS="$(openclaw_e2e_read_positive_int_env OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS "$AGENT_TURN_TIMEOUT_SECONDS")"
+COMMAND_TIMEOUT="${OPENCLAW_E2E_COMMAND_TIMEOUT:-$((10#$AGENT_TURN_TIMEOUT_SECONDS + 60))s}"
 
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 run_log="$(docker_e2e_run_log live-plugin-tool)"
@@ -67,7 +73,11 @@ if ! docker_e2e_run_with_harness \
   -e OPENAI_API_KEY \
   -e OPENAI_BASE_URL \
   -e OPENCLAW_LIVE_PLUGIN_TOOL_MODEL="${OPENCLAW_LIVE_PLUGIN_TOOL_MODEL:-openai/gpt-5.5}" \
+  -e "OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_DUMP_BYTES=$AGENT_OUTPUT_DUMP_BYTES" \
+  -e "OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_MAX_BYTES=$AGENT_OUTPUT_MAX_BYTES" \
+  -e "OPENCLAW_LIVE_PLUGIN_TOOL_SESSION_SCAN_MAX_ENTRIES=$SESSION_SCAN_MAX_ENTRIES" \
   -e "OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS=$AGENT_TURN_TIMEOUT_SECONDS" \
+  -e "OPENCLAW_E2E_COMMAND_TIMEOUT=$COMMAND_TIMEOUT" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "${PROFILE_MOUNT[@]}" \
@@ -112,14 +122,20 @@ export MODEL_REF PLUGIN_ID PLUGIN_NAME PLUGIN_VERSION TOOL_NAME SEED EXPECTED_SL
 
 dump_debug_logs() {
   local status="$1"
+  local agent_output_dump_bytes="${OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_DUMP_BYTES:-16384}"
   echo "Live plugin tool scenario failed with exit code $status" >&2
+  if [ -f /tmp/openclaw-agent.json ]; then
+    echo "--- /tmp/openclaw-agent.json (last ${agent_output_dump_bytes} bytes) ---" >&2
+    tail -c "$agent_output_dump_bytes" /tmp/openclaw-agent.json >&2 || true
+    echo >&2
+  fi
   openclaw_e2e_dump_logs \
     /tmp/openclaw-install.log \
     /tmp/openclaw-plugin-install.log \
     /tmp/openclaw-plugin-enable.log \
     /tmp/openclaw-plugins-list.json \
     /tmp/openclaw-plugin-inspect.json \
-    /tmp/openclaw-agent.json \
+    /tmp/openclaw-live-plugin-tool-pack.log \
     /tmp/openclaw-agent.err
 }
 trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
@@ -135,8 +151,18 @@ fixture_dir="$(mktemp -d /tmp/openclaw-live-plugin-tool.XXXXXX)"
 plugin_dir="$fixture_dir/package"
 mkdir -p "$plugin_dir"
 node scripts/e2e/lib/live-plugin-tool/assertions.mjs write-fixture "$plugin_dir"
-plugin_pack="$(cd "$plugin_dir" && npm pack --pack-destination "$fixture_dir" --silent)"
-plugin_tgz="$fixture_dir/$plugin_pack"
+(cd "$plugin_dir" && npm pack --pack-destination "$fixture_dir" --silent) \
+  >/tmp/openclaw-live-plugin-tool-pack.log 2>&1
+plugin_tgzs=()
+while IFS= read -r packed_file; do
+  plugin_tgzs+=("$packed_file")
+done < <(find "$fixture_dir" -maxdepth 1 -type f -name '*.tgz' | sort)
+if [ "${#plugin_tgzs[@]}" -ne 1 ]; then
+  echo "Expected one packed fixture plugin tarball; found ${#plugin_tgzs[@]}." >&2
+  openclaw_e2e_dump_logs /tmp/openclaw-live-plugin-tool-pack.log
+  exit 1
+fi
+plugin_tgz="${plugin_tgzs[0]}"
 
 echo "Installing fixture plugin from npm-pack: $plugin_tgz"
 openclaw plugins install "npm-pack:$plugin_tgz" --force >/tmp/openclaw-plugin-install.log 2>&1

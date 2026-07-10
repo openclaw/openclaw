@@ -1,3 +1,4 @@
+// Browser tests cover profiles service plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -222,6 +223,26 @@ describe("BrowserProfilesService", () => {
     expect(profiles.remote?.cdpUrl).toBe("http://10.0.0.42:9222");
   });
 
+  it("redacts CDP credentials from create responses while preserving profile auth", async () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+    });
+    const { ctx } = createCtx(resolved);
+    const cdpUrl = "http://browser-user:browser-password@127.0.0.1:9222/?token=browser-token";
+
+    vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
+
+    const service = createBrowserProfilesService(ctx);
+    const result = await service.createProfile({ name: "remote", cdpUrl });
+
+    expect(result.cdpUrl).toBe("http://127.0.0.1:9222/?token=***");
+    expect(result.cdpUrl).not.toContain("browser-user");
+    expect(result.cdpUrl).not.toContain("browser-password");
+    expect(result.cdpUrl).not.toContain("browser-token");
+    const profiles = writtenBrowserConfig().profiles as Record<string, { cdpUrl?: string }>;
+    expect(profiles.remote?.cdpUrl).toBe(cdpUrl);
+  });
+
   it("rejects private-network cdpUrl when strict SSRF mode is enabled", async () => {
     const resolved = resolveBrowserConfig({
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
@@ -274,10 +295,46 @@ describe("BrowserProfilesService", () => {
     expect(profiles["chrome-live"]?.attachOnly).toBe(true);
   });
 
-  it("rejects driver=existing-session when cdpUrl is provided", async () => {
+  it("accepts driver=existing-session with cdpUrl", async () => {
     const resolved = resolveBrowserConfig({});
-    const { ctx } = createCtx(resolved);
+    const { ctx, state } = createCtx(resolved);
     vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
+
+    const service = createBrowserProfilesService(ctx);
+    const result = await service.createProfile({
+      name: "chrome-live",
+      driver: "existing-session",
+      cdpUrl: "http://127.0.0.1:9222/",
+    });
+
+    expect(result.transport).toBe("chrome-mcp");
+    expect(result.cdpPort).toBeNull();
+    expect(result.cdpUrl).toBe("http://127.0.0.1:9222");
+    expect(result.userDataDir).toBeNull();
+    const resolvedProfile = state.resolved.profiles["chrome-live"];
+    expect(resolvedProfile?.driver).toBe("existing-session");
+    expect(resolvedProfile?.attachOnly).toBe(true);
+    expect(resolvedProfile?.cdpUrl).toBe("http://127.0.0.1:9222");
+    const profiles = writtenBrowserConfig().profiles as Record<
+      string,
+      { cdpUrl?: string; driver?: string }
+    >;
+    expect(profiles["chrome-live"]?.driver).toBe("existing-session");
+    expect(profiles["chrome-live"]?.cdpUrl).toBe("http://127.0.0.1:9222");
+  });
+
+  it("rejects private-network cdpUrl for existing-session when strict SSRF mode is enabled", async () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+    });
+    const { ctx } = createCtx(resolved);
+
+    vi.mocked(getRuntimeConfig).mockReturnValue({
+      browser: {
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+        profiles: {},
+      },
+    });
 
     const service = createBrowserProfilesService(ctx);
 
@@ -285,9 +342,10 @@ describe("BrowserProfilesService", () => {
       service.createProfile({
         name: "chrome-live",
         driver: "existing-session",
-        cdpUrl: "http://127.0.0.1:9222",
+        cdpUrl: "http://10.0.0.42:9222",
       }),
-    ).rejects.toThrow(/does not accept cdpUrl/i);
+    ).rejects.toThrow(/private\/internal\/special-use ip address/i);
+    expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("creates existing-session profiles with an explicit userDataDir", async () => {

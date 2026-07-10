@@ -1,3 +1,4 @@
+// Discord plugin module implements interactions behavior.
 import {
   ComponentType,
   InteractionResponseType,
@@ -15,7 +16,6 @@ import {
 import {
   createInteractionCallback,
   createWebhookMessage,
-  deleteWebhookMessage,
   editWebhookMessage,
   getWebhookMessage,
 } from "./api.js";
@@ -208,15 +208,6 @@ export class BaseInteraction {
     return result;
   }
 
-  async deleteReply(): Promise<unknown> {
-    return await deleteWebhookMessage(
-      this.client.rest,
-      this.client.options.clientId,
-      this.token,
-      "@original",
-    );
-  }
-
   async fetchReply(): Promise<unknown> {
     return await getWebhookMessage(
       this.client.rest,
@@ -291,18 +282,6 @@ export class BaseComponentInteraction extends BaseInteraction {
   }
   async showModal(modal: Modal): Promise<unknown> {
     return await this.callback(InteractionResponseType.Modal, modal.serialize());
-  }
-
-  async editAndWaitForComponent(
-    payload: MessagePayload,
-    message: Message | null = this.message,
-    timeoutMs = 300_000,
-  ) {
-    if (!message) {
-      return null;
-    }
-    const editedMessage = await message.edit(payload);
-    return await this.client.componentHandler.waitForMessageComponent(editedMessage, timeoutMs);
   }
 }
 

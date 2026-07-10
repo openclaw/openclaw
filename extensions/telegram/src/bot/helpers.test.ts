@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Telegram tests cover helpers plugin behavior.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTelegramInboundOriginTarget,
   buildTelegramRoutingTarget,
@@ -40,6 +41,10 @@ describe("resolveTelegramForumThreadId", () => {
 describe("resolveTelegramForumFlag", () => {
   beforeEach(() => {
     resetTelegramForumFlagCacheForTest();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("keeps explicit forum metadata when Telegram already provides it", async () => {
@@ -126,6 +131,35 @@ describe("resolveTelegramForumFlag", () => {
     expect(getChat).toHaveBeenCalledTimes(1);
   });
 
+  it("drops cached forum metadata when the current clock is not a valid date timestamp", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const getChat = vi.fn(async () => ({ is_forum: true }));
+    const params = {
+      chatId: -100655,
+      chatType: "supergroup" as const,
+      isGroup: true,
+      getChat,
+    };
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    nowSpy.mockReturnValue(Number.NaN);
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    expect(getChat).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache forum metadata when the expiry timestamp would exceed the valid date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    const getChat = vi.fn(async () => ({ is_forum: true }));
+    const params = {
+      chatId: -100656,
+      chatType: "supergroup" as const,
+      isGroup: true,
+      getChat,
+    };
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    expect(getChat).toHaveBeenCalledTimes(2);
+  });
+
   it("returns false when forum lookup is unavailable", async () => {
     const getChat = vi.fn(async () => {
       throw new Error("lookup failed");
@@ -150,9 +184,9 @@ describe("buildTelegramThreadParams", () => {
     { input: { id: 0, scope: "dm" as const }, expected: undefined },
     { input: { id: -1, scope: "dm" as const }, expected: undefined },
     { input: { id: 1.9, scope: "dm" as const }, expected: { message_thread_id: 1 } },
-    // id=0 should be included for forum and none scopes (not falsy)
+    // id=0 should be included for forum scope (not falsy).
     { input: { id: 0, scope: "forum" as const }, expected: { message_thread_id: 0 } },
-    { input: { id: 0, scope: "none" as const }, expected: { message_thread_id: 0 } },
+    { input: { id: 42, scope: "none" as const }, expected: undefined },
   ])("builds thread params", ({ input, expected }) => {
     expect(buildTelegramThreadParams(input)).toEqual(expected);
   });
@@ -473,6 +507,93 @@ describe("describeReplyTarget", () => {
     expect(result?.kind).toBe("reply");
   });
 
+  it("describes rich-message-only reply targets with a sanitized placeholder", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        rich_message: { blocks: [{ type: "paragraph" }] },
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+    } as any);
+
+    expect(result?.body).toBe("[unsupported Telegram rich_message received]");
+    expect(result?.quoteSourceText).toBeUndefined();
+  });
+
+  it("describes rich-message-only reply targets with rich text", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        rich_message: {
+          blocks: [
+            {
+              type: "paragraph",
+              text: "Forwarded reply text",
+            },
+          ],
+        },
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+    } as never);
+
+    expect(result?.body).toBe("Forwarded reply text");
+    expect(result?.quoteSourceText).toBeUndefined();
+  });
+
+  it("describes rich-message-only reply targets with canonical block text", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        rich_message: {
+          blocks: [
+            {
+              type: "details",
+              summary: "Run summary",
+              blocks: [
+                {
+                  type: "list",
+                  items: [
+                    {
+                      label: "1.",
+                      blocks: [{ type: "paragraph", text: "CI clean" }],
+                    },
+                  ],
+                },
+              ],
+            },
+            {
+              type: "mathematical_expression",
+              expression: "a^2+b^2=c^2",
+            },
+            {
+              type: "photo",
+              caption: { text: "Chart", credit: "OpenClaw" },
+            },
+          ],
+        },
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+    } as never);
+
+    expect(result?.body).toBe("Run summary\n1.\nCI clean\na^2+b^2=c^2\nChart\nOpenClaw");
+    expect(result?.quoteSourceText).toBeUndefined();
+  });
+
   it("drops binary reply captions with no safe fallback", () => {
     const result = describeReplyTarget({
       message_id: 2,
@@ -676,6 +797,23 @@ describe("isBinaryContent", () => {
 });
 
 describe("getTelegramTextParts — binary caption filtering (#66647)", () => {
+  it("keeps rich-message-only updates out of canonical text", () => {
+    const result = getTelegramTextParts({
+      rich_message: { blocks: [{ type: "paragraph" }] },
+    });
+
+    expect(result).toEqual({ text: "", entities: [] });
+  });
+
+  it("keeps normal text when Telegram also supplies a rich message", () => {
+    const result = getTelegramTextParts({
+      text: "normal text",
+      rich_message: { blocks: [{ type: "paragraph" }] },
+    });
+
+    expect(result).toEqual({ text: "normal text", entities: [] });
+  });
+
   it("strips binary caption content to prevent token explosion", () => {
     const binaryCaption = "PK\x03\x04\x14\x00\x08binary-ebook-data";
     const result = getTelegramTextParts({

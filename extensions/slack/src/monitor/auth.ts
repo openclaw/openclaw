@@ -1,3 +1,4 @@
+// Slack plugin module implements auth behavior.
 import {
   type ChannelIngressEventInput,
   type ChannelIngressIdentifierKind,
@@ -9,6 +10,10 @@ import {
   readChannelIngressStoreAllowFromForDmPolicy,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   allowListMatches,
@@ -20,6 +25,7 @@ import {
 import { resolveSlackChannelConfig } from "./channel-config.js";
 import { inferSlackChannelType } from "./channel-type.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "./context.js";
+import type { SlackEventScope } from "./event-scope.js";
 
 type SlackChannelMembersCacheEntry = {
   expiresAtMs: number;
@@ -145,8 +151,8 @@ function readSlackCacheTtlMs(envName: string, fallback: number): number {
   if (!raw) {
     return fallback;
   }
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : fallback;
+  const parsed = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  return Number.isSafeInteger(parsed) ? parsed : fallback;
 }
 
 function getChannelMembersCache(
@@ -183,7 +189,7 @@ export async function resolveSlackEffectiveAllowFrom(
   if (options?.includePairingStore !== true) {
     return base;
   }
-  let storeAllowFrom: string[] = [];
+  let storeAllowFrom: string[];
   try {
     const resolved = await readChannelIngressStoreAllowFromForDmPolicy({
       provider: "slack",
@@ -207,11 +213,12 @@ export function clearSlackAllowFromCacheForTest(): void {
 async function fetchSlackChannelMemberIds(
   ctx: SlackMonitorContext,
   channelId: string,
+  eventScope?: SlackEventScope,
 ): Promise<Set<string>> {
   const members = new Set<string>();
   let cursor: string | undefined;
   do {
-    const response = await ctx.app.client.conversations.members({
+    const response = await (eventScope?.client ?? ctx.app.client).conversations.members({
       token: ctx.botToken,
       channel: channelId,
       limit: 999,
@@ -229,33 +236,41 @@ async function fetchSlackChannelMemberIds(
 async function resolveSlackChannelMemberIds(
   ctx: SlackMonitorContext,
   channelId: string,
+  eventScope?: SlackEventScope,
 ): Promise<Set<string>> {
   const cache = getChannelMembersCache(ctx);
-  const key = `${ctx.accountId}:${channelId}`;
+  const key = `${ctx.accountId}:${eventScope ? `${eventScope.teamId}:` : ""}${channelId}`;
   const ttlMs = readSlackCacheTtlMs(
     "OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS",
     DEFAULT_CHANNEL_MEMBERS_CACHE_TTL_MS,
   );
-  const nowMs = Date.now();
+  const rawNowMs = Date.now();
+  const nowMs = asDateTimestampMs(rawNowMs);
   const cached = cache.get(key);
-  if (ttlMs > 0 && cached?.members && cached.expiresAtMs >= nowMs) {
-    return cached.members;
+  if (cached?.members) {
+    if (ttlMs > 0 && nowMs !== undefined && cached.expiresAtMs >= nowMs) {
+      return cached.members;
+    }
+    cache.delete(key);
   }
   if (cached?.pending) {
     return await cached.pending;
   }
 
-  const pending = fetchSlackChannelMemberIds(ctx, channelId);
+  const pending = fetchSlackChannelMemberIds(ctx, channelId, eventScope);
+  const pendingExpiresAtMs =
+    ttlMs > 0 ? resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNowMs }) : undefined;
   cache.set(key, {
-    expiresAtMs: ttlMs > 0 ? nowMs + ttlMs : 0,
+    expiresAtMs: pendingExpiresAtMs ?? 0,
     pending,
   });
   pruneChannelMembersCache(cache);
   try {
     const members = await pending;
-    if (ttlMs > 0) {
+    const membersExpiresAtMs = ttlMs > 0 ? resolveExpiresAtMsFromDurationMs(ttlMs) : undefined;
+    if (membersExpiresAtMs !== undefined) {
       cache.set(key, {
-        expiresAtMs: Date.now() + ttlMs,
+        expiresAtMs: membersExpiresAtMs,
         members,
       });
       pruneChannelMembersCache(cache);
@@ -289,6 +304,7 @@ export async function authorizeSlackBotRoomMessage(params: {
   senderName?: string;
   channelUsers?: Array<string | number>;
   allowFromLower: string[];
+  eventScope?: SlackEventScope;
 }): Promise<boolean> {
   const channelUserAllowList = normalizeAllowListLower(params.channelUsers).filter(
     (entry) => entry !== "*",
@@ -314,7 +330,11 @@ export async function authorizeSlackBotRoomMessage(params: {
   }
 
   try {
-    const channelMemberIds = await resolveSlackChannelMemberIds(params.ctx, params.channelId);
+    const channelMemberIds = await resolveSlackChannelMemberIds(
+      params.ctx,
+      params.channelId,
+      params.eventScope,
+    );
     if (explicitOwnerIds.some((ownerId) => channelMemberIds.has(ownerId))) {
       return true;
     }

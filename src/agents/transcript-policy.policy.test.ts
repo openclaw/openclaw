@@ -1,3 +1,7 @@
+/**
+ * Focused replay-policy tests for provider plugin-owned transcript behavior.
+ * Verifies plugin policy hooks override generic transport fallback choices.
+ */
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveTranscriptPolicy } from "./transcript-policy.js";
@@ -11,7 +15,15 @@ vi.mock("../plugins/provider-hook-runtime.js", () => ({
             toolCallIdMode: "strict9",
           }),
         }
-      : undefined,
+      : provider === "moonshot"
+        ? {
+            buildReplayPolicy: () => ({
+              sanitizeToolCallIds: true,
+              toolCallIdMode: "strict",
+              duplicateToolCallIdStyle: "openai",
+            }),
+          }
+        : undefined,
   ),
 }));
 
@@ -19,6 +31,14 @@ const MISTRAL_PLUGIN_CONFIG = {
   plugins: {
     entries: {
       mistral: { enabled: true },
+    },
+  },
+} as OpenClawConfig;
+
+const MOONSHOT_PLUGIN_CONFIG = {
+  plugins: {
+    entries: {
+      moonshot: { enabled: true },
     },
   },
 } as OpenClawConfig;
@@ -63,5 +83,18 @@ describe("resolveTranscriptPolicy provider replay policy", () => {
     });
     expect(policy.sanitizeToolCallIds).toBe(true);
     expect(policy.toolCallIdMode).toBe("strict9");
+  });
+
+  it("uses OpenAI-style duplicate ids for Moonshot replay", () => {
+    const policy = resolveTranscriptPolicy({
+      ...createProviderRuntimeSmokeContext(),
+      provider: "moonshot",
+      modelId: "kimi-k2.6",
+      modelApi: "openai-completions",
+      config: MOONSHOT_PLUGIN_CONFIG,
+    });
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+    expect(policy.duplicateToolCallIdStyle).toBe("openai");
   });
 });

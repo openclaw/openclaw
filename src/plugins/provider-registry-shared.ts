@@ -1,9 +1,14 @@
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+// Shares provider registry normalization helpers across plugin paths.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
+/** Normalizes provider ids used by capability-provider registries. */
 export function normalizeCapabilityProviderId(providerId: string | undefined): string | undefined {
-  return normalizeOptionalLowercaseString(providerId);
+  const normalized = normalizeOptionalLowercaseString(providerId);
+  return normalized && !isBlockedObjectKey(normalized) ? normalized : undefined;
 }
 
+/** Builds canonical and alias lookup maps for capability providers. */
 export function buildCapabilityProviderMaps<T extends { id: string; aliases?: readonly string[] }>(
   providers: readonly T[],
   normalizeId: (

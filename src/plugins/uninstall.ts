@@ -1,3 +1,4 @@
+// Removes installed plugins and updates plugin index records.
 import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -14,6 +15,7 @@ import {
   resolveDefaultPluginGitDir,
   resolveDefaultPluginNpmDir,
   resolvePluginInstallDir,
+  resolvePluginNpmProjectsDir,
 } from "./install-paths.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-link.js";
 import { defaultSlotIdForKey } from "./slots.js";
@@ -211,8 +213,42 @@ function resolveNpmManagedInstall(params: {
       const packageName = resolveNpmPackageNameFromInstallPath({ installPath, nodeModulesRoot });
       return packageName ? { installPath, npmRoot, packageName } : null;
     }
+    const projectMatch = resolveNpmManagedProjectInstall({
+      installPath,
+      projectsDir: resolvePluginNpmProjectsDir(npmRoot),
+    });
+    if (projectMatch) {
+      return projectMatch;
+    }
   }
   return null;
+}
+
+function resolveNpmManagedProjectInstall(params: {
+  installPath: string;
+  projectsDir: string;
+}): { installPath: string; npmRoot: string; packageName: string } | null {
+  if (
+    !isPathInsideOrEqual(params.projectsDir, params.installPath) ||
+    resolveComparablePath(params.projectsDir) === resolveComparablePath(params.installPath)
+  ) {
+    return null;
+  }
+  const relativePath = path.relative(
+    path.resolve(params.projectsDir),
+    path.resolve(params.installPath),
+  );
+  const segments = relativePath.split(path.sep).filter(Boolean);
+  if (segments.length < 3 || segments[1] !== "node_modules") {
+    return null;
+  }
+  const npmRoot = path.join(params.projectsDir, segments[0] ?? "");
+  const nodeModulesRoot = path.join(npmRoot, "node_modules");
+  const packageName = resolveNpmPackageNameFromInstallPath({
+    installPath: params.installPath,
+    nodeModulesRoot,
+  });
+  return packageName ? { installPath: params.installPath, npmRoot, packageName } : null;
 }
 
 function resolveNpmPackageNameFromInstallPath(params: {
@@ -356,7 +392,7 @@ export function removePluginFromConfig(
 
   // Remove from entries
   let entries = pluginsConfig.entries;
-  if (entries && pluginId in entries) {
+  if (entries && Object.hasOwn(entries, pluginId)) {
     const { [pluginId]: _, ...rest } = entries;
     entries = Object.keys(rest).length > 0 ? rest : undefined;
     actions.entry = true;
@@ -364,8 +400,9 @@ export function removePluginFromConfig(
 
   // Remove from installs
   let installs = pluginsConfig.installs;
-  const installRecord = installs?.[pluginId];
-  if (installs && pluginId in installs) {
+  const hasInstallRecord = Object.hasOwn(installs ?? {}, pluginId);
+  const installRecord = hasInstallRecord ? installs?.[pluginId] : undefined;
+  if (installs && hasInstallRecord) {
     const { [pluginId]: _, ...rest } = installs;
     installs = Object.keys(rest).length > 0 ? rest : undefined;
     actions.install = true;
@@ -462,7 +499,6 @@ export function removePluginFromConfig(
 
   // Remove channel config owned by this installed plugin.
   // Built-in channels have no install record, so keep their config untouched.
-  const hasInstallRecord = Object.hasOwn(cfg.plugins?.installs ?? {}, pluginId);
   let channels = cfg.channels as Record<string, unknown> | undefined;
   if (hasInstallRecord && channels) {
     for (const key of resolveUninstallChannelConfigKeys(pluginId, opts)) {
@@ -503,9 +539,11 @@ export type UninstallPluginParams = {
 export function planPluginUninstall(params: UninstallPluginParams): PluginUninstallPlanResult {
   const { config, pluginId, channelIds, deleteFiles = true, extensionsDir } = params;
 
-  const hasEntry = pluginId in (config.plugins?.entries ?? {});
-  const hasInstall = pluginId in (config.plugins?.installs ?? {});
-  const installRecord = config.plugins?.installs?.[pluginId];
+  const entries = config.plugins?.entries ?? {};
+  const installs = config.plugins?.installs ?? {};
+  const hasEntry = Object.hasOwn(entries, pluginId);
+  const hasInstall = Object.hasOwn(installs, pluginId);
+  const installRecord = hasInstall ? installs[pluginId] : undefined;
   const isLinked = isLinkedPathInstallRecord(installRecord);
 
   // Remove from config

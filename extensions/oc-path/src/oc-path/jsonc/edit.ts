@@ -1,8 +1,10 @@
+// OC Path module implements edit behavior.
 import { applyEdits, modify } from "jsonc-parser/lib/esm/main.js";
 import type { OcPath } from "../oc-path.js";
 import {
   isPositionalSeg,
   isQuotedSeg,
+  parseArrayIndexSegment,
   resolvePositionalSeg,
   splitRespectingBrackets,
   unquoteSeg,
@@ -13,7 +15,7 @@ import { parseJsonc } from "./parse.js";
 
 type JsoncEditPath = Array<string | number>;
 
-export type JsoncEditResult =
+type JsoncEditResult =
   | { readonly ok: true; readonly ast: JsoncAst }
   | { readonly ok: false; readonly reason: "unresolved" | "no-root" };
 
@@ -99,8 +101,8 @@ function resolveEditSegments(root: JsoncValue, segments: readonly string[]): Jso
       continue;
     }
     if (current.kind === "array") {
-      const index = Number(segment);
-      if (!Number.isInteger(index) || index < 0 || index >= current.items.length) {
+      const index = parseArrayIndexSegment(segment, current.items.length);
+      if (index === null) {
         return null;
       }
       out.push(index);

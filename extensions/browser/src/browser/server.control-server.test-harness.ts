@@ -1,3 +1,8 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+/**
+ * Shared Browser control-server test harness with mocked Chrome, CDP,
+ * Playwright, Chrome MCP, config, and media dependencies.
+ */
 import { afterEach, beforeEach, vi } from "vitest";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
@@ -44,10 +49,12 @@ const state: HarnessState = {
   prevGatewayPassword: undefined,
 };
 
+/** Returns mutable Browser control-server harness state. */
 export function getBrowserControlServerTestState(): HarnessState {
   return state;
 }
 
+/** Returns the loopback base URL for the current test server. */
 export function getBrowserControlServerBaseUrl(): string {
   return `http://127.0.0.1:${state.testPort}`;
 }
@@ -60,22 +67,27 @@ function restoreGatewayPortEnv(prevGatewayPort: string | undefined): void {
   process.env.OPENCLAW_GATEWAY_PORT = prevGatewayPort;
 }
 
+/** Sets the mocked browser.evaluateEnabled config flag. */
 export function setBrowserControlServerEvaluateEnabled(enabled: boolean): void {
   state.cfgEvaluateEnabled = enabled;
 }
 
+/** Sets the mocked Browser SSRF policy. */
 export function setBrowserControlServerSsrFPolicy(policy: SsrFPolicy | undefined): void {
   state.cfgSsrfPolicy = policy;
 }
 
+/** Sets whether mocked Chrome/CDP probes should report reachable. */
 export function setBrowserControlServerReachable(reachable: boolean): void {
   state.reachable = reachable;
 }
 
+/** Sets the URL returned by mocked /json/list tab responses. */
 export function setBrowserControlServerTabUrl(url: string): void {
   state.tabUrl = url;
 }
 
+/** Sets mocked Browser profiles and default profile for config reload tests. */
 export function setBrowserControlServerProfiles(
   profiles: HarnessState["cfgProfiles"],
   defaultProfile = Object.keys(profiles)[0] ?? "openclaw",
@@ -98,6 +110,7 @@ const cdpMocks = vi.hoisted(() => ({
   })),
 }));
 
+/** Returns mocked CDP functions used by Browser control-server tests. */
 export function getCdpMocks(): {
   createTargetViaCdp: MockFn;
   snapshotAria: MockFn;
@@ -333,6 +346,7 @@ pwMocks.executeActViaPlaywright.mockImplementation(
   },
 );
 
+/** Returns mocked Playwright-backed Browser tool functions. */
 export function getPwMocks(): Record<string, MockFn> {
   return pwMocks as unknown as Record<string, MockFn>;
 }
@@ -521,13 +535,9 @@ vi.mock("./screenshot.js", () => ({
   })),
 }));
 
-let browserServerModulePromise: Promise<typeof import("../server.js")> | undefined;
+const loadBrowserServerModule = createLazyRuntimeModule(() => import("../server.js"));
 
-async function loadBrowserServerModule() {
-  browserServerModulePromise ??= import("../server.js");
-  return await browserServerModulePromise;
-}
-
+/** Starts the Browser control server from the mocked config module. */
 export async function startBrowserControlServerFromConfig() {
   return await (await loadBrowserServerModule()).startBrowserControlServerFromConfig();
 }
@@ -536,19 +546,17 @@ async function stopBrowserControlServer(): Promise<void> {
   await (await loadBrowserServerModule()).stopBrowserControlServer();
 }
 
+/** Creates a minimal Response-like object for mocked fetch handlers. */
 export function makeResponse(
   body: unknown,
   init?: { ok?: boolean; status?: number; text?: string },
 ): Response {
-  const ok = init?.ok ?? true;
-  const status = init?.status ?? 200;
-  const text = init?.text ?? "";
-  return {
-    ok,
+  const status = init?.status ?? (init?.ok === false ? 500 : 200);
+  const responseBody = init?.text ?? JSON.stringify(body);
+  return new Response(responseBody, {
     status,
-    json: async () => body,
-    text: async () => text,
-  } as unknown as Response;
+    headers: { "content-type": "application/json" },
+  });
 }
 
 function mockClearAll(obj: Record<string, { mockClear: () => unknown }>) {
@@ -557,6 +565,7 @@ function mockClearAll(obj: Record<string, { mockClear: () => unknown }>) {
   }
 }
 
+/** Resets harness state, env, and mocks before one Browser control-server test. */
 export async function resetBrowserControlServerTestContext(): Promise<void> {
   state.reachable = false;
   state.cfgAttachOnly = false;
@@ -599,6 +608,7 @@ function restoreGatewayAuthEnv(
   }
 }
 
+/** Restores globals/env and stops the Browser control server after one test. */
 export async function cleanupBrowserControlServerTestContext(): Promise<void> {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -607,6 +617,7 @@ export async function cleanupBrowserControlServerTestContext(): Promise<void> {
   await stopBrowserControlServer();
 }
 
+/** Installs beforeEach/afterEach hooks for Browser control-server tests. */
 export function installBrowserControlServerHooks() {
   const hookTimeoutMs = process.platform === "win32" ? 300_000 : 240_000;
   beforeEach(async () => {

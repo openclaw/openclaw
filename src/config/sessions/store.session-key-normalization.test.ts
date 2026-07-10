@@ -1,14 +1,11 @@
+// Store session key tests cover session key normalization during disk writes.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
-import {
-  clearSessionStoreCacheForTest,
-  loadSessionStore,
-  recordSessionMetaFromInbound,
-  updateLastRoute,
-} from "../sessions.js";
+import { clearSessionStoreCacheForTest, loadSessionStore } from "../sessions.js";
+import { recordInboundSessionMeta, updateSessionLastRoute } from "./session-accessor.js";
 
 const CANONICAL_KEY = "agent:main:webchat:dm:mixed-user";
 const MIXED_CASE_KEY = "Agent:Main:WebChat:DM:MiXeD-User";
@@ -66,7 +63,7 @@ describe("session store key normalization", () => {
   });
 
   it("records inbound metadata under a canonical lowercase key", async () => {
-    await recordSessionMetaFromInbound({
+    await recordInboundSessionMeta({
       storePath,
       sessionKey: MIXED_CASE_KEY,
       ctx: createInboundContext(),
@@ -78,13 +75,13 @@ describe("session store key normalization", () => {
   });
 
   it("does not create a duplicate mixed-case key when last route is updated", async () => {
-    await recordSessionMetaFromInbound({
+    await recordInboundSessionMeta({
       storePath,
       sessionKey: CANONICAL_KEY,
       ctx: createInboundContext(),
     });
 
-    await updateLastRoute({
+    await updateSessionLastRoute({
       storePath,
       sessionKey: MIXED_CASE_KEY,
       channel: "webchat",
@@ -120,7 +117,7 @@ describe("session store key normalization", () => {
     );
     clearSessionStoreCacheForTest();
 
-    await updateLastRoute({
+    await updateSessionLastRoute({
       storePath,
       sessionKey: CANONICAL_KEY,
       channel: "webchat",
@@ -161,7 +158,7 @@ describe("session store key normalization", () => {
     );
     clearSessionStoreCacheForTest();
 
-    await recordSessionMetaFromInbound({
+    await recordInboundSessionMeta({
       storePath,
       sessionKey: CANONICAL_KEY,
       ctx: {},
@@ -170,7 +167,7 @@ describe("session store key normalization", () => {
     const store = loadSessionStore(storePath, { skipCache: true });
     expect(Object.keys(store)).toEqual([CANONICAL_KEY]);
     expect(store[CANONICAL_KEY]?.sessionId).toBe("canonical-session");
-    expect(store[CANONICAL_KEY]?.acp?.runtimeSessionName).toBe("runtime-1");
+    expect(store[CANONICAL_KEY]?.acp).toBeUndefined();
   });
 
   it("preserves updatedAt when recording inbound metadata for an existing session", async () => {
@@ -199,7 +196,7 @@ describe("session store key normalization", () => {
     );
     clearSessionStoreCacheForTest();
 
-    await recordSessionMetaFromInbound({
+    await recordInboundSessionMeta({
       storePath,
       sessionKey: CANONICAL_KEY,
       ctx: createInboundContext(),
@@ -212,7 +209,7 @@ describe("session store key normalization", () => {
   });
 
   it("records Signal group metadata under the mixed-case opaque group id", async () => {
-    await recordSessionMetaFromInbound({
+    await recordInboundSessionMeta({
       storePath,
       sessionKey: `Agent:Main:Signal:Group:${SIGNAL_GROUP_ID}`,
       ctx: createSignalGroupContext(),
@@ -248,7 +245,7 @@ describe("session store key normalization", () => {
     );
     clearSessionStoreCacheForTest();
 
-    await recordSessionMetaFromInbound({
+    await recordInboundSessionMeta({
       storePath,
       sessionKey: SIGNAL_GROUP_KEY,
       ctx: createSignalGroupContext(),
@@ -262,7 +259,7 @@ describe("session store key normalization", () => {
   });
 
   it("stores canonical route metadata and derives legacy delivery fields", async () => {
-    await updateLastRoute({
+    await updateSessionLastRoute({
       storePath,
       sessionKey: CANONICAL_KEY,
       route: {

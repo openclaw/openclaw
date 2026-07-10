@@ -1,3 +1,4 @@
+// Diffs tests cover render target plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { preloadFileDiffMock, preloadMultiFileDiffMock } = vi.hoisted(() => ({
@@ -71,7 +72,7 @@ describe("renderDiffDocument render targets", () => {
 
     expect(rendered.html).toContain("mock diff");
     expect(rendered.imageHtml).toContain("mock diff");
-    expect(preloadMultiFileDiffMock).toHaveBeenCalledTimes(2);
+    expect(preloadMultiFileDiffMock).toHaveBeenCalledTimes(1);
   });
 
   it("renders only the image variant for patch image mode", async () => {

@@ -1,3 +1,4 @@
+// System CLI tests cover system command registration and status output.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
@@ -101,7 +102,7 @@ describe("system-cli", () => {
     await runCli(["system", "event", "--text", "ping"]);
 
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
-    const [, , params] = gatewayCall();
+    const params = gatewayCall()[2];
     expect(params).not.toHaveProperty("sessionKey");
   });
 
@@ -109,7 +110,7 @@ describe("system-cli", () => {
     await runCli(["system", "event", "--text", "ping", "--session-key", "  "]);
 
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
-    const [, , params] = gatewayCall();
+    const params = gatewayCall()[2];
     expect(params).not.toHaveProperty("sessionKey");
   });
 

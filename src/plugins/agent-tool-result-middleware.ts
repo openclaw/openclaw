@@ -1,3 +1,4 @@
+// Applies plugin middleware to agent tool results at runtime boundaries.
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
@@ -5,7 +6,7 @@ import type {
 } from "./agent-tool-result-middleware-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 
-export const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES = [
+const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES = [
   "openclaw",
   "codex",
 ] as const satisfies AgentToolResultMiddlewareRuntime[];

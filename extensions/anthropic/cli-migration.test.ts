@@ -1,3 +1,4 @@
+// Anthropic tests cover cli migration plugin behavior.
 import type {
   ProviderAuthContext,
   ProviderAuthMethodNonInteractiveContext,
@@ -19,7 +20,7 @@ vi.mock("./cli-auth-seam.js", async (importActual) => {
   };
 });
 
-const { buildAnthropicCliMigrationResult, hasClaudeCliAuth } = await import("./cli-migration.js");
+const { buildAnthropicCliMigrationResult } = await import("./cli-migration.js");
 const { resolveKnownAnthropicModelRef } = await import("./claude-model-refs.js");
 const { createTestWizardPrompter, registerSingleProviderPlugin } =
   await import("openclaw/plugin-sdk/plugin-test-runtime");
@@ -38,10 +39,10 @@ afterAll(() => {
 describe("anthropic Claude model refs", () => {
   it("upgrades retired refs without rewriting future canonical refs", () => {
     expect(resolveKnownAnthropicModelRef("anthropic/claude-opus-4-5")).toBe(
-      "anthropic/claude-opus-4-7",
+      "anthropic/claude-opus-4-8",
     );
     expect(resolveKnownAnthropicModelRef("anthropic/claude-opus-4-5@anthropic:work")).toBe(
-      "anthropic/claude-opus-4-7@anthropic:work",
+      "anthropic/claude-opus-4-8@anthropic:work",
     );
     expect(resolveKnownAnthropicModelRef("anthropic/claude-sonnet-4-20250514")).toBe(
       "anthropic/claude-sonnet-4-6",
@@ -54,6 +55,28 @@ describe("anthropic Claude model refs", () => {
     );
     expect(resolveKnownAnthropicModelRef("anthropic/claude-sonnet-4-7")).toBe(
       "anthropic/claude-sonnet-4-7",
+    );
+    expect(resolveKnownAnthropicModelRef("anthropic/claude-haiku-4-5")).toBe(
+      "anthropic/claude-haiku-4-5",
+    );
+  });
+
+  it("preserves the current claude-haiku-4-5 model and its bare alias", () => {
+    // claude-haiku-4-5 is a current production model (not retired), so neither
+    // its full ref, its dotted variant, nor the bare "haiku" family alias must
+    // be rewritten to sonnet.
+    expect(resolveKnownAnthropicModelRef("anthropic/claude-haiku-4-5")).toBe(
+      "anthropic/claude-haiku-4-5",
+    );
+    expect(resolveKnownAnthropicModelRef("anthropic/claude-haiku-4.5")).toBe(
+      "anthropic/claude-haiku-4.5",
+    );
+    expect(resolveKnownAnthropicModelRef("anthropic/claude-haiku-4-5@anthropic:work")).toBe(
+      "anthropic/claude-haiku-4-5@anthropic:work",
+    );
+    // Genuinely retired Claude 3 Haiku still upgrades to the current sonnet.
+    expect(resolveKnownAnthropicModelRef("anthropic/claude-3-5-haiku-20241022")).toBe(
+      "anthropic/claude-sonnet-4-6",
     );
   });
 });
@@ -112,23 +135,6 @@ function createProviderAuthMethodNonInteractiveContext(
 }
 
 describe("anthropic cli migration", () => {
-  it("detects local Claude CLI auth", () => {
-    readClaudeCliCredentialsForSetup.mockReturnValue({ type: "oauth" });
-
-    expect(hasClaudeCliAuth()).toBe(true);
-  });
-
-  it("uses the non-interactive Claude auth probe without keychain prompts", () => {
-    readClaudeCliCredentialsForSetup.mockReset();
-    readClaudeCliCredentialsForSetupNonInteractive.mockReset();
-    readClaudeCliCredentialsForSetup.mockReturnValue(null);
-    readClaudeCliCredentialsForSetupNonInteractive.mockReturnValue({ type: "oauth" });
-
-    expect(hasClaudeCliAuth({ allowKeychainPrompt: false })).toBe(true);
-    expect(readClaudeCliCredentialsForSetup).not.toHaveBeenCalled();
-    expect(readClaudeCliCredentialsForSetupNonInteractive).toHaveBeenCalledTimes(1);
-  });
-
   it("keeps anthropic defaults and selects the claude-cli runtime", () => {
     const result = buildAnthropicCliMigrationResult({
       agents: {
@@ -160,6 +166,8 @@ describe("anthropic cli migration", () => {
               alias: "Opus",
               agentRuntime: { id: "claude-cli" },
             },
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-6": {
               alias: "Opus",
@@ -245,12 +253,14 @@ describe("anthropic cli migration", () => {
       },
     });
 
-    expect(result.defaultModel).toBe("anthropic/claude-opus-4-7");
+    expect(result.defaultModel).toBe("anthropic/claude-opus-4-8");
     expect(result.configPatch).toEqual({
       agents: {
         defaults: {
           models: {
             "openai/gpt-5.2": {},
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
@@ -272,7 +282,7 @@ describe("anthropic cli migration", () => {
       },
     });
 
-    expect(result.defaultModel).toBe("anthropic/claude-opus-4-7");
+    expect(result.defaultModel).toBe("anthropic/claude-opus-4-8");
     expect(result.configPatch?.agents?.defaults?.model).toBeUndefined();
     expect(result.configPatch?.agents?.defaults?.models?.["anthropic/gpt-5.2"]).toBeUndefined();
   });
@@ -294,6 +304,8 @@ describe("anthropic cli migration", () => {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-7" },
           models: {
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
@@ -475,6 +487,9 @@ describe("anthropic cli migration", () => {
     });
     expect(defaults?.models?.["anthropic/claude-opus-4-6"]).toEqual({
       alias: "Opus",
+      agentRuntime: { id: "claude-cli" },
+    });
+    expect(defaults?.models?.["anthropic/claude-opus-4-8"]).toEqual({
       agentRuntime: { id: "claude-cli" },
     });
     expect(defaults?.models?.["openai/gpt-5.2"]).toEqual({});

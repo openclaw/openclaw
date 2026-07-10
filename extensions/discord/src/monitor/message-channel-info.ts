@@ -1,3 +1,9 @@
+// Discord plugin module implements message channel info behavior.
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ChannelType, Message } from "../internal/discord.js";
@@ -21,6 +27,7 @@ type DiscordMessageWithChannelId = Message & {
 
 const DISCORD_CHANNEL_INFO_CACHE_TTL_MS = 5 * 60 * 1000;
 const DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS = 30 * 1000;
+const DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES = 1000;
 const DISCORD_CHANNEL_INFO_CACHE = new Map<
   string,
   { value: DiscordChannelInfo | null; expiresAt: number }
@@ -28,6 +35,23 @@ const DISCORD_CHANNEL_INFO_CACHE = new Map<
 
 export function resetDiscordChannelInfoCacheForTest() {
   DISCORD_CHANNEL_INFO_CACHE.clear();
+}
+
+function resolveDiscordChannelInfoCacheExpiresAt(ttlMs: number, nowMs: number): number | undefined {
+  return resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs });
+}
+
+function cacheDiscordChannelInfo(
+  channelId: string,
+  value: DiscordChannelInfo | null,
+  ttlMs: number,
+  nowMs: number,
+): void {
+  const expiresAt = resolveDiscordChannelInfoCacheExpiresAt(ttlMs, nowMs);
+  if (expiresAt !== undefined) {
+    DISCORD_CHANNEL_INFO_CACHE.set(channelId, { value, expiresAt });
+    pruneMapToMaxSize(DISCORD_CHANNEL_INFO_CACHE, DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES);
+  }
 }
 
 function normalizeDiscordChannelId(value: unknown): string {
@@ -51,9 +75,11 @@ export async function resolveDiscordChannelInfo(
   client: DiscordChannelInfoClient,
   channelId: string,
 ): Promise<DiscordChannelInfo | null> {
+  const rawNow = Date.now();
+  const now = asDateTimestampMs(rawNow);
   const cached = DISCORD_CHANNEL_INFO_CACHE.get(channelId);
   if (cached) {
-    if (cached.expiresAt > Date.now()) {
+    if (now !== undefined && cached.expiresAt > now) {
       return cached.value;
     }
     DISCORD_CHANNEL_INFO_CACHE.delete(channelId);
@@ -61,10 +87,7 @@ export async function resolveDiscordChannelInfo(
   try {
     const channel = await client.fetchChannel(channelId);
     if (!channel) {
-      DISCORD_CHANNEL_INFO_CACHE.set(channelId, {
-        value: null,
-        expiresAt: Date.now() + DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS,
-      });
+      cacheDiscordChannelInfo(channelId, null, DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS, rawNow);
       return null;
     }
     const channelInfo = resolveDiscordChannelInfoSafe(channel);
@@ -80,17 +103,11 @@ export async function resolveDiscordChannelInfo(
       parentId: channelInfo.parentId,
       ownerId: channelInfo.ownerId,
     };
-    DISCORD_CHANNEL_INFO_CACHE.set(channelId, {
-      value: payload,
-      expiresAt: Date.now() + DISCORD_CHANNEL_INFO_CACHE_TTL_MS,
-    });
+    cacheDiscordChannelInfo(channelId, payload, DISCORD_CHANNEL_INFO_CACHE_TTL_MS, rawNow);
     return payload;
   } catch (err) {
     logVerbose(`discord: failed to fetch channel ${channelId}: ${String(err)}`);
-    DISCORD_CHANNEL_INFO_CACHE.set(channelId, {
-      value: null,
-      expiresAt: Date.now() + DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS,
-    });
+    cacheDiscordChannelInfo(channelId, null, DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS, rawNow);
     return null;
   }
 }

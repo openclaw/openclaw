@@ -1,3 +1,4 @@
+/** Verifies public-surface runtime artifact loading for bundled plugins. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +12,11 @@ import {
 } from "./public-surface-runtime.js";
 
 const tempDirs: string[] = [];
+const noBundledPluginOverrideEnv = {
+  ...process.env,
+  OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+} satisfies NodeJS.ProcessEnv;
 
 afterEach(() => {
   for (const tempDir of tempDirs.splice(0)) {
@@ -70,6 +76,31 @@ describe("bundled plugin public surface runtime", () => {
     ).toBe(sourceModulePath);
   });
 
+  it("prefers package-local dist artifacts before source artifacts in source plugin trees", () => {
+    const packageRoot = createTempDir();
+    const sourceModulePath = path.join(packageRoot, "extensions", "demo", "api.ts");
+    const packageLocalDistModulePath = path.join(
+      packageRoot,
+      "extensions",
+      "demo",
+      "dist",
+      "api.js",
+    );
+    fs.mkdirSync(path.dirname(sourceModulePath), { recursive: true });
+    fs.mkdirSync(path.dirname(packageLocalDistModulePath), { recursive: true });
+    fs.writeFileSync(sourceModulePath, "export const marker = 'source';\n", "utf8");
+    fs.writeFileSync(packageLocalDistModulePath, "export const marker = 'local-dist';\n", "utf8");
+
+    expect(
+      resolveBundledPluginPublicSurfacePath({
+        rootDir: packageRoot,
+        bundledPluginsDir: path.join(packageRoot, "extensions"),
+        dirName: "demo",
+        artifactBasename: "api.js",
+      }),
+    ).toBe(packageLocalDistModulePath);
+  });
+
   it("prefers source public surfaces over stale auto-resolved dist artifacts in source checkouts", () => {
     const packageRoot = createTempDir();
     const sourceModulePath = path.join(packageRoot, "extensions", "demo", "api.ts");
@@ -86,6 +117,7 @@ describe("bundled plugin public surface runtime", () => {
         bundledPluginsDirMode: "auto",
         dirName: "demo",
         artifactBasename: "api.js",
+        env: noBundledPluginOverrideEnv,
       }),
     ).toBe(sourceModulePath);
   });

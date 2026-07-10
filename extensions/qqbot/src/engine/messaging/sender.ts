@@ -25,6 +25,7 @@
  */
 
 import os from "node:os";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { ApiClient } from "../api/api-client.js";
 import { ChunkedMediaApi as ChunkedMediaApiClass } from "../api/media-chunked.js";
 import { downloadDirectUploadUrl, MediaApi as MediaApiClass } from "../api/media.js";
@@ -349,7 +350,7 @@ export async function withTokenRetry<T>(
     if (looksLike401) {
       log?.warn?.(
         `Token retry triggered by string heuristic (err is not ApiError). ` +
-          `Consider propagating ApiError end-to-end. msg=${errMsg.slice(0, 120)}`,
+          `Consider propagating ApiError end-to-end. msg=${truncateUtf16Safe(errMsg, 120)}`,
       );
       clearTokenCache(creds.appId);
       const newToken = await getAccessToken(creds.appId, creds.clientSecret);
@@ -383,7 +384,7 @@ export async function sendText(
   target: DeliveryTarget,
   content: string,
   creds: AccountCreds,
-  opts?: { msgId?: string; messageReference?: string },
+  opts?: { msgId?: string; messageReference?: string; forcePlainText?: boolean },
 ): Promise<MessageResponse> {
   const api = resolveAccount(creds.appId).messageApi;
   const c: Credentials = { appId: creds.appId, clientSecret: creds.clientSecret };
@@ -394,9 +395,12 @@ export async function sendText(
       return api.sendMessage(scope, target.id, content, c, {
         msgId: opts.msgId,
         messageReference: opts.messageReference,
+        forcePlainText: opts.forcePlainText,
       });
     }
-    return api.sendProactiveMessage(scope, target.id, content, c);
+    return api.sendProactiveMessage(scope, target.id, content, c, {
+      forcePlainText: opts?.forcePlainText,
+    });
   }
 
   if (target.type === "dm") {

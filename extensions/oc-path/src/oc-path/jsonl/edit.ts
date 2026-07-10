@@ -10,6 +10,7 @@ import type { OcPath } from "../oc-path.js";
 import {
   isPositionalSeg,
   isQuotedSeg,
+  parseArrayIndexSegment,
   resolvePositionalSeg,
   splitRespectingBrackets,
   unquoteSeg,
@@ -17,7 +18,7 @@ import {
 import type { JsonlAst, JsonlLine } from "./ast.js";
 import { emitJsonl } from "./emit.js";
 
-export type JsonlEditResult =
+type JsonlEditResult =
   | { readonly ok: true; readonly ast: JsonlAst }
   | { readonly ok: false; readonly reason: "unresolved" | "not-a-value-line" };
 
@@ -140,8 +141,8 @@ function replaceAt(
       }
       segNorm = resolved;
     }
-    const idx = Number(segNorm);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {
+    const idx = parseArrayIndexSegment(segNorm, current.items.length);
+    if (idx === null) {
       return null;
     }
     const child = current.items[idx];

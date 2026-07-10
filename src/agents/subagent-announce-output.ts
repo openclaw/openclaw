@@ -1,7 +1,11 @@
+/**
+ * Subagent completion output capture.
+ *
+ * Reads child session output, detects waiting states, and formats completion findings for announcements.
+ */
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { formatBlockedLivenessError, isBlockedLivenessState } from "../shared/agent-liveness.js";
-import { asFiniteNumber } from "../shared/number-coercion.js";
-import { isAbortedAgentStopReason } from "./run-termination.js";
+import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import {
   captureSubagentCompletionReplyUsing,
@@ -15,8 +19,9 @@ import {
   resolveAgentIdFromSessionKey,
   resolveStorePath,
 } from "./subagent-announce.runtime.js";
+import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
-import { extractAssistantText, sanitizeTextContent } from "./tools/session-message-text.js";
+import { extractAssistantText, sanitizeTextContent } from "./tools/chat-history-text.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
@@ -60,6 +65,9 @@ type AgentWaitResult = {
   stopReason?: string;
   livenessState?: string;
   yielded?: boolean;
+  pendingError?: boolean;
+  timeoutPhase?: string;
+  providerStarted?: boolean;
 };
 
 export type SubagentRunOutcome = {
@@ -200,9 +208,10 @@ export async function readSubagentOutput(
   let messages: unknown[] | undefined;
   if (options?.sessionFile) {
     const transcriptMessages = await subagentAnnounceOutputDeps.readSessionMessagesAsync(
-      sessionKey,
-      undefined,
-      options.sessionFile,
+      {
+        sessionFile: options.sessionFile,
+        sessionId: sessionKey,
+      },
       {
         mode: "recent",
         maxMessages: 100,
@@ -274,17 +283,21 @@ export function applySubagentWaitOutcome(params: {
     next.endedAt = params.wait.endedAt;
   }
   const waitError = typeof params.wait?.error === "string" ? params.wait.error : undefined;
+  const terminalOutcome = buildAgentRunTerminalOutcomeFromWaitResult(params.wait);
   let outcome = next.outcome;
-  // Capture/announcement callers can pass raw wait snapshots that bypass the primary normalizers.
-  if (isBlockedLivenessState(params.wait?.livenessState)) {
-    outcome = { status: "error", error: formatBlockedLivenessError(waitError) };
-  } else if (isAbortedAgentStopReason(params.wait?.stopReason)) {
-    outcome = { status: "error", error: "subagent run terminated" };
-  } else if (params.wait?.status === "timeout") {
+  // Capture/announcement callers can pass raw wait snapshots that bypass the
+  // primary normalizers, so preserve the shared timeout/cancel precedence here.
+  if (terminalOutcome?.status === "timeout") {
     outcome = { status: "timeout" };
-  } else if (params.wait?.status === "error") {
-    outcome = { status: "error", error: waitError };
-  } else if (params.wait?.status === "ok") {
+  } else if (terminalOutcome?.reason === "aborted" || terminalOutcome?.reason === "cancelled") {
+    outcome = { status: "error", error: "subagent run terminated" };
+  } else if (
+    terminalOutcome?.reason === "blocked" ||
+    terminalOutcome?.reason === "abandoned" ||
+    terminalOutcome?.reason === "failed"
+  ) {
+    outcome = { status: "error", error: terminalOutcome.error ?? waitError };
+  } else if (terminalOutcome?.reason === "completed") {
     outcome = { status: "ok" };
   }
   next.outcome = outcome ? withSubagentOutcomeTiming(outcome, next) : undefined;
@@ -408,9 +421,11 @@ export function buildChildCompletionFindings(
 
 export function dedupeLatestChildCompletionRows(
   children: Array<{
+    runId: string;
     childSessionKey: string;
     task: string;
     label?: string;
+    generation?: number;
     createdAt: number;
     endedAt?: number;
     frozenResultText?: string | null;
@@ -430,7 +445,7 @@ export function dedupeLatestChildCompletionRows(
   const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
   for (const child of children) {
     const existing = latestByChildSessionKey.get(child.childSessionKey);
-    if (!existing || child.createdAt > existing.createdAt) {
+    if (!existing || compareSubagentRunGeneration(child, existing) > 0) {
       latestByChildSessionKey.set(child.childSessionKey, child);
     }
   }
@@ -509,7 +524,13 @@ function formatTokenCount(value?: number) {
     return `${(value / 1_000_000).toFixed(1)}m`;
   }
   if (value >= 1_000) {
-    return `${(value / 1_000).toFixed(1)}k`;
+    const formattedThousands = (value / 1_000).toFixed(1);
+    // Keep the compact stats unit scheme stable when one-decimal rounding
+    // reaches the next unit, e.g. 999_999 -> 1000.0k.
+    if (Number(formattedThousands) >= 1_000) {
+      return `${(value / 1_000_000).toFixed(1)}m`;
+    }
+    return `${formattedThousands}k`;
   }
   return String(Math.round(value));
 }
@@ -533,7 +554,9 @@ export async function buildCompactAnnounceStatsLine(params: {
       break;
     }
     if (!isFastTestMode()) {
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 150);
+      });
     }
     entry = subagentAnnounceOutputDeps.readSessionEntry(storePath, params.sessionKey);
   }

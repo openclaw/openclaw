@@ -1,3 +1,6 @@
+/**
+ * Gateway request context construction tests.
+ */
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import {
@@ -8,17 +11,23 @@ import {
 function makeContextParams(
   overrides: Partial<GatewayRequestContextParams> = {},
 ): GatewayRequestContextParams {
-  const runtimeState: Pick<GatewayServerLiveState, "cronState"> = {
+  const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
     cronState: {
       cron: { start: vi.fn(), stop: vi.fn() } as never,
       storePath: "/tmp/cron",
       cronEnabled: true,
     },
+    configReloader: { stop: vi.fn(async () => {}) },
   };
   return {
     deps: {} as never,
     runtimeState,
     getRuntimeConfig: vi.fn(() => ({}) as never),
+    resolveTerminalLaunchPolicy: vi.fn(() => ({
+      ok: false as const,
+      block: { kind: "disabled" as const },
+    })),
+    isTerminalEnabled: vi.fn(() => false),
     execApprovalManager: undefined,
     pluginApprovalManager: undefined,
     loadGatewayModelCatalog: vi.fn(async () => []),
@@ -41,6 +50,7 @@ function makeContextParams(
     nodeRegistry: {} as never,
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
     chatAbortedRuns: new Map(),
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
@@ -48,6 +58,7 @@ function makeContextParams(
     chatDeltaLastBroadcastText: new Map(),
     agentDeltaSentAt: new Map(),
     bufferedAgentEvents: new Map(),
+    clearChatRunState: vi.fn(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
     subscribeSessionEvents: vi.fn(),
@@ -59,6 +70,7 @@ function makeContextParams(
     registerToolEventRecipient: vi.fn(),
     dedupe: new Map(),
     wizardSessions: new Map(),
+    crestodianSessions: new Map(),
     findRunningWizard: vi.fn(() => null),
     purgeWizardSession: vi.fn(),
     getRuntimeSnapshot: vi.fn(() => ({}) as never),
@@ -77,69 +89,16 @@ describe("createGatewayRequestContext", () => {
   it("reads cron state live from runtime state", () => {
     const cronA = { start: vi.fn(), stop: vi.fn() } as never;
     const cronB = { start: vi.fn(), stop: vi.fn() } as never;
-    const runtimeState: Pick<GatewayServerLiveState, "cronState"> = {
+    const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
       cronState: {
         cron: cronA,
         storePath: "/tmp/cron-a",
         cronEnabled: true,
       },
+      configReloader: { stop: vi.fn(async () => {}) },
     };
 
-    const context = createGatewayRequestContext({
-      deps: {} as never,
-      runtimeState,
-      execApprovalManager: undefined,
-      pluginApprovalManager: undefined,
-      loadGatewayModelCatalog: vi.fn(async () => []),
-      getHealthCache: vi.fn(() => null),
-      refreshHealthSnapshot: vi.fn(async () => ({}) as never),
-      logHealth: { error: vi.fn() },
-      logGateway: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } as never,
-      incrementPresenceVersion: vi.fn(() => 1),
-      getHealthVersion: vi.fn(() => 1),
-      broadcast: vi.fn(),
-      broadcastToConnIds: vi.fn(),
-      nodeSendToSession: vi.fn(),
-      nodeSendToAllSubscribed: vi.fn(),
-      nodeSubscribe: vi.fn(),
-      nodeUnsubscribe: vi.fn(),
-      nodeUnsubscribeAll: vi.fn(),
-      hasConnectedTalkNode: vi.fn(() => false),
-      clients: new Set(),
-      enforceSharedGatewayAuthGenerationForConfigWrite: vi.fn(),
-      nodeRegistry: {} as never,
-      agentRunSeq: new Map(),
-      chatAbortControllers: new Map(),
-      chatAbortedRuns: new Map(),
-      chatRunBuffers: new Map(),
-      chatDeltaSentAt: new Map(),
-      chatDeltaLastBroadcastLen: new Map(),
-      chatDeltaLastBroadcastText: new Map(),
-      agentDeltaSentAt: new Map(),
-      bufferedAgentEvents: new Map(),
-      addChatRun: vi.fn(),
-      removeChatRun: vi.fn(),
-      subscribeSessionEvents: vi.fn(),
-      unsubscribeSessionEvents: vi.fn(),
-      subscribeSessionMessageEvents: vi.fn(),
-      unsubscribeSessionMessageEvents: vi.fn(),
-      unsubscribeAllSessionEvents: vi.fn(),
-      getSessionEventSubscriberConnIds: vi.fn(() => new Set<string>()),
-      registerToolEventRecipient: vi.fn(),
-      dedupe: new Map(),
-      wizardSessions: new Map(),
-      findRunningWizard: vi.fn(() => null),
-      purgeWizardSession: vi.fn(),
-      getRuntimeSnapshot: vi.fn(() => ({}) as never),
-      getRuntimeConfig: vi.fn(() => ({}) as never),
-      startChannel: vi.fn(async () => undefined),
-      stopChannel: vi.fn(async () => undefined),
-      markChannelLoggedOut: vi.fn(),
-      wizardRunner: vi.fn(async () => undefined),
-      broadcastVoiceWakeChanged: vi.fn(),
-      broadcastVoiceWakeRoutingChanged: vi.fn(),
-      unavailableGatewayMethods: new Set(),
-    });
+    const context = createGatewayRequestContext(makeContextParams({ runtimeState }));
 
     expect(context.cron).toBe(cronA);
     expect(context.cronStorePath).toBe("/tmp/cron-a");
@@ -154,6 +113,33 @@ describe("createGatewayRequestContext", () => {
     expect(context.cronStorePath).toBe("/tmp/cron-b");
   });
 
+  it("reads config hot-reload status live from runtime state", () => {
+    const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
+      cronState: {
+        cron: { start: vi.fn(), stop: vi.fn() } as never,
+        storePath: "/tmp/cron",
+        cronEnabled: true,
+      },
+      configReloader: { stop: vi.fn(async () => {}) },
+    };
+
+    const context = createGatewayRequestContext(makeContextParams({ runtimeState }));
+
+    expect(context.getConfigReloaderHotReloadStatus?.()).toBeUndefined();
+
+    runtimeState.configReloader = {
+      stop: vi.fn(async () => {}),
+      hotReloadStatus: () => "active",
+    };
+    expect(context.getConfigReloaderHotReloadStatus?.()).toBe("active");
+
+    runtimeState.configReloader = {
+      stop: vi.fn(async () => {}),
+      hotReloadStatus: () => "disabled",
+    };
+    expect(context.getConfigReloaderHotReloadStatus?.()).toBe("disabled");
+  });
+
   it("invalidateClientsForDevice sets the flag on matching clients without closing the socket", () => {
     const target = {
       connId: "conn-target",
@@ -166,8 +152,11 @@ describe("createGatewayRequestContext", () => {
       socket: { close: vi.fn() },
     };
     const clients = new Set([target, unrelated]) as never;
+    const invalidateDeviceTransports = vi.fn();
 
-    const context = createGatewayRequestContext(makeContextParams({ clients }));
+    const context = createGatewayRequestContext(
+      makeContextParams({ clients, invalidateDeviceTransports }),
+    );
     context.invalidateClientsForDevice?.("device-1", { reason: "device-token-rotated" });
 
     expect((target as { invalidated?: boolean }).invalidated).toBe(true);
@@ -178,6 +167,9 @@ describe("createGatewayRequestContext", () => {
 
     expect((unrelated as { invalidated?: boolean }).invalidated).toBeUndefined();
     expect(unrelated.socket.close).not.toHaveBeenCalled();
+    expect(invalidateDeviceTransports).toHaveBeenCalledWith("device-1", {
+      reason: "device-token-rotated",
+    });
   });
 
   it("disconnectClientsForDevice also marks the invalidated flag before closing", () => {
@@ -187,13 +179,17 @@ describe("createGatewayRequestContext", () => {
       socket: { close: vi.fn() },
     };
     const clients = new Set([target]) as never;
+    const disconnectDeviceTransports = vi.fn();
 
-    const context = createGatewayRequestContext(makeContextParams({ clients }));
+    const context = createGatewayRequestContext(
+      makeContextParams({ clients, disconnectDeviceTransports }),
+    );
     context.disconnectClientsForDevice?.("device-1");
 
     expect((target as { invalidated?: boolean }).invalidated).toBe(true);
     expect((target as { invalidatedReason?: string }).invalidatedReason).toBe("device-removed");
     expect(target.socket.close).toHaveBeenCalledWith(4001, "device removed");
+    expect(disconnectDeviceTransports).toHaveBeenCalledWith("device-1", undefined);
   });
 
   it("invalidateClientsForDevice filters by role when provided", () => {

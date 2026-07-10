@@ -1,3 +1,4 @@
+// Whatsapp tests cover login plugin behavior.
 import { EventEmitter } from "node:events";
 import { resetLogger, setLoggerOverride, success } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +17,10 @@ vi.mock("./session.js", async () => {
     ...actual,
     createWaSocket: vi.fn().mockResolvedValue(sock),
     waitForWaConnection: vi.fn().mockResolvedValue(undefined),
+    readWebAuthExistsForDecision: vi.fn(async () => ({
+      outcome: "stable" as const,
+      exists: true,
+    })),
   };
 });
 

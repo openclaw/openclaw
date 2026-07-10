@@ -1,8 +1,11 @@
+// Verifies tool-result middleware validation, sanitization, and fail-closed behavior.
 import { describe, expect, it } from "vitest";
 import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.js";
 
 describe("createAgentToolResultMiddlewareRunner", () => {
   it("fails closed when middleware throws", async () => {
+    // Middleware errors may contain sensitive tool data. The public result must
+    // collapse to a generic error instead of returning the thrown message.
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
       () => {
         throw new Error("raw secret should not be logged or returned");
@@ -65,6 +68,8 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("rejects oversized middleware details", async () => {
+    // Details are serialized into harness/tool payloads; cap them before a
+    // middleware result can create unbounded transcript growth.
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       () => ({
         result: {
@@ -167,6 +172,54 @@ describe("createAgentToolResultMiddlewareRunner", () => {
       messageId: "1501757759073419394",
       client: { type: "fake-channel-client" },
     });
+  });
+
+  it("truncates oversized incoming text before a no-op middleware", async () => {
+    let observedText = "";
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      (event) => {
+        const content = event.result.content[0];
+        observedText = content?.type === "text" ? content.text : "";
+        return undefined;
+      },
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "gateway",
+      args: { action: "config.get" },
+      result: {
+        content: [{ type: "text", text: "x".repeat(100_001) }],
+        details: { ok: true },
+      },
+    });
+
+    expect(observedText).toHaveLength(100_000);
+    expect(result.details).toEqual({ ok: true });
+    expect(result.content).toEqual([{ type: "text", text: "x".repeat(100_000) }]);
+  });
+
+  it("fails closed when middleware returns oversized top-level text", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      () => ({
+        result: {
+          content: [{ type: "text", text: "x".repeat(100_001) }],
+          details: { ok: true },
+        },
+      }),
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "gateway",
+      args: { action: "config.get" },
+      result: {
+        content: [{ type: "text", text: "raw" }],
+        details: { ok: true },
+      },
+    });
+
+    expect(result.details).toEqual({ status: "error", middlewareError: true });
   });
 
   it("sanitizes incoming details before failing closed on uncoercible content", async () => {
@@ -495,6 +548,70 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     const sanitized = result.details as { truncated?: boolean; originalSizeBytes?: number };
     expect(sanitized.truncated).toBe(true);
     expect(sanitized.originalSizeBytes ?? 0).toBeGreaterThan(100_000);
+  });
+
+  it("snapshots confirmed delivery before oversized details are collapsed", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+      () => {
+        throw new Error("post-processing failed");
+      },
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "message",
+      args: { action: "send", target: "C123" },
+      result: {
+        content: [{ type: "text", text: "raw result must stay private" }],
+        details: {
+          ok: true,
+          result: { messageId: "1700000000.000100", channelId: "C123" },
+          raw: "x".repeat(200_000),
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: "Message delivered, but result post-processing failed." }],
+      details: {
+        ok: true,
+        deliveryStatus: "sent",
+        middlewareWarning: "post-processing failed",
+      },
+    });
+  });
+
+  it("preserves confirmed delivery when middleware returns an explicit failure", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+      () => ({
+        result: {
+          content: [{ type: "text", text: "post-processing failed" }],
+          details: { status: "error", middlewareError: true },
+        },
+      }),
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "message",
+      args: { action: "send", target: "C123" },
+      result: {
+        content: [{ type: "text", text: "raw result must stay private" }],
+        details: {
+          ok: true,
+          result: { messageId: "1700000000.000100", channelId: "C123" },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: "Message delivered, but result post-processing failed." }],
+      details: {
+        ok: true,
+        deliveryStatus: "sent",
+        middlewareWarning: "post-processing failed",
+      },
+    });
   });
 
   it("accepts well-formed middleware results", async () => {

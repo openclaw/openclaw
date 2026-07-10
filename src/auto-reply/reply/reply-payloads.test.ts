@@ -1,6 +1,8 @@
+// Tests reply payload helper behavior and delivery metadata.
 import { describe, expect, it, vi } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import {
   filterMessagingToolMediaDuplicates,
   resolveMessagingToolPayloadDedupe,
@@ -107,6 +109,21 @@ describe("filterMessagingToolMediaDuplicates", () => {
       sentMediaUrls: ["file:///tmp/photo%20one.jpg"],
     });
     expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
+  });
+
+  it("preserves transcript ownership metadata when stripping media", () => {
+    const payload = setReplyPayloadMetadata(
+      { text: "hello", mediaUrl: "file:///tmp/photo.jpg" },
+      { assistantTranscriptOwned: true },
+    );
+    const [result] = filterMessagingToolMediaDuplicates({
+      payloads: [payload],
+      sentMediaUrls: ["file:///tmp/photo.jpg"],
+    });
+
+    expect(getReplyPayloadMetadata(result)).toEqual({
+      assistantTranscriptOwned: true,
+    });
   });
 });
 

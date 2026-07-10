@@ -1,3 +1,4 @@
+// ACPX tests cover claude agent acp completion plugin behavior.
 import { ClaudeAcpAgent } from "@agentclientprotocol/claude-agent-acp";
 import { describe, expect, it, vi } from "vitest";
 
@@ -99,7 +100,7 @@ function createAgentWithSession(query: ManualAsyncIterator) {
   return agent;
 }
 
-describe("patched claude-agent-acp completion", () => {
+describe("claude-agent-acp completion", () => {
   it("does not resolve a prompt on idle before the result message", async () => {
     const query = new ManualAsyncIterator();
     const agent = createAgentWithSession(query);
@@ -120,10 +121,6 @@ describe("patched claude-agent-acp completion", () => {
     expect(resolved).toBe(false);
 
     query.push(makeResultMessage());
-    await flushMicrotasks();
-    expect(resolved).toBe(false);
-
-    query.push(makeIdleMessage());
     const result = await promptPromise;
     expect(result.stopReason).toBe("end_turn");
     expect(result.usage?.inputTokens).toBe(1);
@@ -154,13 +151,10 @@ describe("patched claude-agent-acp completion", () => {
     expect(resolved).toBe(false);
 
     query.push(makeResultMessage());
-    await flushMicrotasks();
-    expect(resolved).toBe(false);
-
-    query.push(makeIdleMessage());
     const result = await promptPromise;
     expect(result.stopReason).toBe("end_turn");
-    expect(result.usage?.inputTokens).toBe(2);
-    expect(result.usage?.outputTokens).toBe(2);
+    // Background task-notification usage stays out of the foreground prompt response.
+    expect(result.usage?.inputTokens).toBe(1);
+    expect(result.usage?.outputTokens).toBe(1);
   });
 });

@@ -1,5 +1,7 @@
+// Google Meet plugin module implements chrome behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -21,6 +23,7 @@ import {
 import {
   asBrowserTabs,
   callBrowserProxyOnNode,
+  forceMeetEnglishUi,
   isSameMeetUrlForReuse,
   normalizeMeetUrlForReuse,
   readBrowserTab,
@@ -50,6 +53,7 @@ export const testing = {
   },
   meetStatusScriptForTest: meetStatusScript,
   parseMeetBrowserStatusForTest: parseMeetBrowserStatus,
+  resolveBrowserGatewayTimeoutMsForTest: resolveBrowserGatewayTimeoutMs,
 };
 
 function isGoogleMeetTalkBackMode(mode: GoogleMeetMode): boolean {
@@ -291,7 +295,7 @@ async function callLocalBrowserRequest(params: BrowserRequestParams) {
     "browser.request",
     {
       json: true,
-      timeout: String(params.timeoutMs + 5_000),
+      timeout: String(resolveBrowserGatewayTimeoutMs(params.timeoutMs)),
     },
     {
       method: params.method,
@@ -301,6 +305,10 @@ async function callLocalBrowserRequest(params: BrowserRequestParams) {
     },
     { progress: false },
   );
+}
+
+function resolveBrowserGatewayTimeoutMs(timeoutMs: number): number {
+  return addTimerTimeoutGraceMs(timeoutMs) ?? 1;
 }
 
 function mergeBrowserNotes(
@@ -426,7 +434,7 @@ function meetStatusScript(params: {
     notes.push("Muted Meet microphone for observe-only mode.");
   }
   const join = !readOnly && ${JSON.stringify(params.autoJoin)}
-    ? findButton(/join now|ask to join/i)
+    ? findButton(/join now|ask to join|join here too/i)
     : null;
   if (join) join.click();
   const microphoneChoice = findButton(/\\buse microphone\\b/i);
@@ -683,7 +691,7 @@ async function openMeetWithBrowserRequest(params: {
       await params.callBrowser({
         method: "POST",
         path: "/tabs/open",
-        body: { url: params.url },
+        body: { url: forceMeetEnglishUi(params.url) },
         timeoutMs,
       }),
     );
@@ -760,7 +768,9 @@ async function openMeetWithBrowserRequest(params: {
     }
     const remainingWaitMs = deadline - Date.now();
     if (remainingWaitMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, Math.min(750, remainingWaitMs)));
+      await new Promise((resolve) => {
+        setTimeout(resolve, Math.min(750, remainingWaitMs));
+      });
     }
   } while (Date.now() < deadline);
   return { launched: true, browser };
@@ -1015,7 +1025,7 @@ export async function launchChromeMeetOnNode(params: {
       audioBridgeCommand: params.config.chrome.audioBridgeCommand,
       audioBridgeHealthCommand: params.config.chrome.audioBridgeHealthCommand,
     },
-    timeoutMs: params.config.chrome.joinTimeoutMs + 5_000,
+    timeoutMs: addTimerTimeoutGraceMs(params.config.chrome.joinTimeoutMs) ?? 1,
   });
   const result = parseNodeStartResult(raw);
   if (result.audioBridge?.type === "node-command-pair") {

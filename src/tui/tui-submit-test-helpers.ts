@@ -1,6 +1,8 @@
+// Provides test helpers for TUI submit handler scenarios.
 import { vi } from "vitest";
 import { createEditorSubmitHandler } from "./tui-submit.js";
 
+// Test harness for submit-handler specs without constructing a full TUI.
 type MockFn = ReturnType<typeof vi.fn>;
 
 type SubmitHarness = {
@@ -13,9 +15,11 @@ type SubmitHarness = {
   handleBangLine: MockFn;
   canSubmitMessage: MockFn;
   onBlockedMessageSubmit: MockFn;
+  onSubmitError: MockFn;
   onSubmit: (text: string) => void;
 };
 
+/** Creates editor/command/message mocks wired to the real submit handler. */
 export function createSubmitHarness(params?: {
   canSubmitMessage?: (value: string) => boolean;
 }): SubmitHarness {
@@ -28,11 +32,13 @@ export function createSubmitHarness(params?: {
   const handleBangLine = vi.fn();
   const canSubmitMessage = vi.fn(params?.canSubmitMessage ?? (() => true));
   const onBlockedMessageSubmit = vi.fn();
+  const onSubmitError = vi.fn();
   const onSubmit = createEditorSubmitHandler({
     editor,
     handleCommand,
     sendMessage,
     handleBangLine,
+    onSubmitError,
     canSubmitMessage,
     onBlockedMessageSubmit,
   });
@@ -43,6 +49,7 @@ export function createSubmitHarness(params?: {
     handleBangLine,
     canSubmitMessage,
     onBlockedMessageSubmit,
+    onSubmitError,
     onSubmit,
   };
 }

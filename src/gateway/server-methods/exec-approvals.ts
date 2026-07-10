@@ -1,3 +1,14 @@
+// Exec approvals config methods read and write command approval defaults with
+// base-hash protection for admin-edited allowlists.
+import {
+  ErrorCodes,
+  errorShape,
+  validateExecApprovalsGetParams,
+  validateExecApprovalsNodeGetParams,
+  validateExecApprovalsNodeSnapshot,
+  validateExecApprovalsNodeSetParams,
+  validateExecApprovalsSetParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import {
   ensureExecApprovals,
   mergeExecApprovalsSocketDefaults,
@@ -7,28 +18,23 @@ import {
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
 } from "../../infra/exec-approvals.js";
-import {
-  ErrorCodes,
-  errorShape,
-  validateExecApprovalsGetParams,
-  validateExecApprovalsNodeGetParams,
-  validateExecApprovalsNodeSetParams,
-  validateExecApprovalsSetParams,
-} from "../protocol/index.js";
+import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
   respondUnavailableOnNodeInvokeError,
   respondUnavailableOnThrow,
   safeParseJson,
 } from "./nodes.helpers.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import { assertValidParams, type Validator } from "./validation.js";
 
 function requireApprovalsBaseHash(
   params: unknown,
   snapshot: ExecApprovalsSnapshot,
   respond: RespondFn,
 ): boolean {
+  // Approval allowlists are admin-editable state. Require the caller's last
+  // observed hash before writing so stale UI tabs cannot overwrite changes.
   if (!snapshot.exists) {
     return true;
   }
@@ -71,6 +77,8 @@ function requireApprovalsBaseHash(
 
 function redactExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
   const socketPath = file.socket?.path?.trim();
+  // The socket token/defaults are runtime-only; expose only the path needed by
+  // the editor so GET responses cannot leak connection material.
   return {
     ...file,
     socket: socketPath ? { path: socketPath } : undefined,
@@ -86,108 +94,139 @@ function toExecApprovalsPayload(snapshot: ExecApprovalsSnapshot) {
   };
 }
 
-function resolveNodeIdOrRespond(nodeId: string, respond: RespondFn): string | null {
-  const id = nodeId.trim();
-  if (!id) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
-    return null;
+async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: string }>(params: {
+  method: string;
+  rawParams: unknown;
+  validate: Validator<TParams>;
+  context: GatewayRequestContext;
+  respond: RespondFn;
+  command: "system.execApprovals.get" | "system.execApprovals.set";
+  commandParams: (parsedParams: TParams) => Record<string, unknown>;
+  readPayload: (response: { payload?: unknown; payloadJSON?: string | null }) => unknown;
+  validatePayload?: (payload: unknown) => boolean;
+}): Promise<void> {
+  const rawParams = params.rawParams;
+  if (!assertValidParams(rawParams, params.validate, params.method, params.respond)) {
+    return;
   }
-  return id;
-}
-
-export const execApprovalsHandlers: GatewayRequestHandlers = {
-  "exec.approvals.get": ({ params, respond }) => {
-    if (!assertValidParams(params, validateExecApprovalsGetParams, "exec.approvals.get", respond)) {
-      return;
-    }
-    ensureExecApprovals();
-    const snapshot = readExecApprovalsSnapshot();
-    respond(true, toExecApprovalsPayload(snapshot), undefined);
-  },
-  "exec.approvals.set": ({ params, respond }) => {
-    if (!assertValidParams(params, validateExecApprovalsSetParams, "exec.approvals.set", respond)) {
-      return;
-    }
-    ensureExecApprovals();
-    const snapshot = readExecApprovalsSnapshot();
-    if (!requireApprovalsBaseHash(params, snapshot, respond)) {
-      return;
-    }
-    const incoming = (params as { file?: unknown }).file;
-    if (!incoming || typeof incoming !== "object") {
-      respond(
+  const parsedParams = rawParams;
+  const nodeId = parsedParams.nodeId.trim();
+  if (!nodeId) {
+    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+    return;
+  }
+  const nodeSession = params.context.nodeRegistry.get(nodeId);
+  if (nodeSession) {
+    const allowed = isNodeCommandAllowed({
+      command: params.command,
+      declaredCommands: nodeSession.commands,
+      allowlist: resolveNodeCommandAllowlist(params.context.getRuntimeConfig(), {
+        ...nodeSession,
+        approvedCommands: nodeSession.commands,
+      }),
+    });
+    if (!allowed.ok) {
+      params.respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "exec approvals file is required"),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `node command not allowed: ${params.command} (${allowed.reason})`,
+          { details: { command: params.command, reason: allowed.reason } },
+        ),
       );
       return;
     }
-    const normalized = normalizeExecApprovals(incoming as ExecApprovalsFile);
-    const next = mergeExecApprovalsSocketDefaults({ normalized, current: snapshot.file });
-    saveExecApprovals(next);
-    const nextSnapshot = readExecApprovalsSnapshot();
-    respond(true, toExecApprovalsPayload(nextSnapshot), undefined);
-  },
-  "exec.approvals.node.get": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateExecApprovalsNodeGetParams,
-        "exec.approvals.node.get",
-        respond,
-      )
-    ) {
+  }
+  await respondUnavailableOnThrow(params.respond, async () => {
+    const res = await params.context.nodeRegistry.invoke({
+      nodeId,
+      command: params.command,
+      params: params.commandParams(parsedParams),
+    });
+    if (!respondUnavailableOnNodeInvokeError(params.respond, res)) {
       return;
     }
-    const { nodeId } = params as { nodeId: string };
-    const id = resolveNodeIdOrRespond(nodeId, respond);
-    if (!id) {
+    const payload = params.readPayload(res);
+    if (params.validatePayload && !params.validatePayload(payload)) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "node returned invalid exec approvals payload"),
+      );
+      return;
+    }
+    params.respond(true, payload, undefined);
+  });
+}
+
+export const execApprovalsHandlers: GatewayRequestHandlers = {
+  "exec.approvals.get": async ({ params, respond }) => {
+    if (!assertValidParams(params, validateExecApprovalsGetParams, "exec.approvals.get", respond)) {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const res = await context.nodeRegistry.invoke({
-        nodeId: id,
-        command: "system.execApprovals.get",
-        params: {},
-      });
-      if (!respondUnavailableOnNodeInvokeError(respond, res)) {
+      ensureExecApprovals();
+      const snapshot = readExecApprovalsSnapshot();
+      respond(true, toExecApprovalsPayload(snapshot), undefined);
+    });
+  },
+  "exec.approvals.set": async ({ params, respond }) => {
+    if (!assertValidParams(params, validateExecApprovalsSetParams, "exec.approvals.set", respond)) {
+      return;
+    }
+    await respondUnavailableOnThrow(respond, async () => {
+      ensureExecApprovals();
+      const snapshot = readExecApprovalsSnapshot();
+      if (!requireApprovalsBaseHash(params, snapshot, respond)) {
         return;
       }
-      const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
-      respond(true, payload, undefined);
+      const incoming = (params as { file?: unknown }).file;
+      if (!incoming || typeof incoming !== "object") {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "exec approvals file is required"),
+        );
+        return;
+      }
+      const normalized = normalizeExecApprovals(incoming as ExecApprovalsFile);
+      const next = mergeExecApprovalsSocketDefaults({ normalized, current: snapshot.file });
+      saveExecApprovals(next);
+      const nextSnapshot = readExecApprovalsSnapshot();
+      respond(true, toExecApprovalsPayload(nextSnapshot), undefined);
+    });
+  },
+  "exec.approvals.node.get": async ({ params, respond, context }) => {
+    await respondWithExecApprovalsNodePayload({
+      method: "exec.approvals.node.get",
+      rawParams: params,
+      validate: validateExecApprovalsNodeGetParams,
+      context,
+      respond,
+      command: "system.execApprovals.get",
+      commandParams: () => ({}),
+      // Node invocations can return structured payloads or JSON strings
+      // depending on the transport; normalize before echoing the RPC response.
+      readPayload: (res) => (res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload),
+      validatePayload: validateExecApprovalsNodeSnapshot,
     });
   },
   "exec.approvals.node.set": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateExecApprovalsNodeSetParams,
-        "exec.approvals.node.set",
-        respond,
-      )
-    ) {
-      return;
-    }
-    const { nodeId, file, baseHash } = params as {
-      nodeId: string;
-      file: ExecApprovalsFile;
-      baseHash?: string;
-    };
-    const id = resolveNodeIdOrRespond(nodeId, respond);
-    if (!id) {
-      return;
-    }
-    await respondUnavailableOnThrow(respond, async () => {
-      const res = await context.nodeRegistry.invoke({
-        nodeId: id,
-        command: "system.execApprovals.set",
-        params: { file, baseHash },
-      });
-      if (!respondUnavailableOnNodeInvokeError(respond, res)) {
-        return;
-      }
-      const payload = safeParseJson(res.payloadJSON ?? null);
-      respond(true, payload, undefined);
+    await respondWithExecApprovalsNodePayload({
+      method: "exec.approvals.node.set",
+      rawParams: params,
+      validate: validateExecApprovalsNodeSetParams,
+      context,
+      respond,
+      command: "system.execApprovals.set",
+      // Host-native nodes own a different policy model. Preserve that model at
+      // the node boundary instead of pretending it is an OpenClaw approvals file.
+      commandParams: (parsedParams) =>
+        "native" in parsedParams
+          ? { ...parsedParams.native, baseHash: parsedParams.baseHash }
+          : { file: parsedParams.file, baseHash: parsedParams.baseHash },
+      readPayload: (res) => (res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload),
     });
   },
 };

@@ -1,3 +1,5 @@
+// Outbound send service chooses plugin-handled message actions or the core
+// message/poll path while preserving media policy and transcript mirrors.
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
@@ -5,21 +7,28 @@ import { dispatchChannelMessageAction } from "../../channels/plugins/message-act
 import type {
   ChannelId,
   ChannelMessageActionContext,
+  ChannelOutboundAdapter,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  normalizeMessagePresentation,
+  renderMessagePresentationFallbackText,
+} from "../../interactive/payload.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
+import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import type { OutboundSendDeps } from "./deliver.js";
+import { collectActionMediaSourceHints } from "./message-action-params.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
-import { extractToolPayload } from "./tool-payload.js";
 
+/** Gateway connection settings forwarded to outbound send helpers. */
 export type OutboundGatewayContext = {
   url?: string;
   token?: string;
@@ -29,6 +38,7 @@ export type OutboundGatewayContext = {
   mode: GatewayClientMode;
 };
 
+/** Shared execution context for message-tool send and poll actions. */
 export type OutboundSendContext = {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -64,12 +74,35 @@ type PluginHandledResult = {
 
 type SendMessageParams = Parameters<typeof sendMessage>[0];
 
+export function materializeMessagePresentationFallback(params: {
+  payload: Pick<ReplyPayload, "presentation" | "text">;
+  text?: string;
+}): string {
+  const presentation = normalizeMessagePresentation(params.payload.presentation);
+  const text = (params.text ?? params.payload.text ?? "").trim();
+  if (!presentation) {
+    return text;
+  }
+  const fallback = renderMessagePresentationFallbackText({ presentation });
+  if (!fallback || text.includes(fallback)) {
+    return text;
+  }
+  return [text, fallback].filter(Boolean).join("\n\n");
+}
+
+export function hasCorePresentationDelivery(outbound?: ChannelOutboundAdapter): boolean {
+  return Boolean(outbound?.sendPayload || outbound?.sendText || outbound?.sendFormattedText);
+}
+
 async function sendCoreMessage(params: {
   ctx: OutboundSendContext;
   to: string;
   message: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  buffer?: string;
+  filename?: string;
+  contentType?: string;
   asVoice?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;
@@ -93,6 +126,9 @@ async function sendCoreMessage(params: {
     requesterSenderE164: params.ctx.requesterSenderE164,
     mediaUrl: params.mediaUrl || undefined,
     mediaUrls: params.mediaUrls,
+    buffer: params.buffer,
+    filename: params.filename,
+    contentType: params.contentType,
     asVoice: params.asVoice,
     channel: params.ctx.channel || undefined,
     accountId: params.ctx.accountId ?? undefined,
@@ -112,17 +148,6 @@ async function sendCoreMessage(params: {
   });
 }
 
-function collectActionMediaSources(params: Record<string, unknown>): string[] {
-  const sources: string[] = [];
-  for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl"] as const) {
-    const value = params[key];
-    if (typeof value === "string" && value.trim()) {
-      sources.push(value);
-    }
-  }
-  return sources;
-}
-
 async function tryHandleWithPluginAction(params: {
   ctx: OutboundSendContext;
   action: "send" | "poll";
@@ -131,10 +156,14 @@ async function tryHandleWithPluginAction(params: {
   if (params.ctx.dryRun) {
     return null;
   }
+  // Plugin actions receive media access scoped to the same requester/session
+  // policy as core delivery so custom handlers cannot widen file reads.
   const mediaAccess = resolveAgentScopedOutboundMediaAccess({
     cfg: params.ctx.cfg,
     agentId: params.ctx.agentId ?? params.ctx.mirror?.agentId,
-    mediaSources: collectActionMediaSources(params.ctx.params),
+    mediaSources: collectActionMediaSourceHints(params.ctx.params, undefined, {
+      structuredAttachments: params.action === "send" ? "all" : undefined,
+    }),
     sessionKey: params.ctx.sessionKey,
     messageProvider: params.ctx.sessionKey ? undefined : params.ctx.channel,
     accountId:
@@ -148,25 +177,13 @@ async function tryHandleWithPluginAction(params: {
     mediaAccess: params.ctx.mediaAccess,
     mediaReadFile: params.ctx.mediaReadFile,
   });
-  const handled = await dispatchChannelMessageAction({
-    channel: params.ctx.channel,
-    action: params.action,
-    cfg: params.ctx.cfg,
-    params: params.ctx.params,
-    mediaAccess,
-    mediaLocalRoots: mediaAccess.localRoots,
-    mediaReadFile: mediaAccess.readFile,
-    accountId: params.ctx.accountId ?? undefined,
-    requesterSenderId: params.ctx.requesterSenderId,
-    senderIsOwner: params.ctx.senderIsOwner,
-    sessionKey: params.ctx.sessionKey,
-    sessionId: params.ctx.sessionId,
-    inboundEventKind: params.ctx.inboundEventKind,
-    agentId: params.ctx.agentId,
-    gateway: params.ctx.gateway,
-    toolContext: params.ctx.toolContext,
-    dryRun: params.ctx.dryRun,
-  });
+  const handled = await dispatchChannelMessageAction(
+    createChannelActionContext({
+      ctx: params.ctx,
+      action: params.action,
+      mediaAccess,
+    }),
+  );
   if (!handled) {
     return null;
   }
@@ -193,6 +210,7 @@ function createChannelActionContext(params: {
     mediaLocalRoots: mediaAccess?.localRoots ?? params.ctx.mediaAccess?.localRoots,
     mediaReadFile: mediaAccess?.readFile ?? params.ctx.mediaReadFile,
     accountId: params.ctx.accountId ?? undefined,
+    requesterAccountId: params.ctx.requesterAccountId,
     requesterSenderId: params.ctx.requesterSenderId,
     senderIsOwner: params.ctx.senderIsOwner,
     sessionKey: params.ctx.sessionKey,
@@ -205,35 +223,42 @@ function createChannelActionContext(params: {
   };
 }
 
-async function tryPreparePluginSendPayload(params: {
+type PluginSendPayloadPreparation =
+  | { kind: "unavailable" }
+  | { kind: "declined" }
+  | { kind: "prepared"; payload: ReplyPayload };
+
+async function preparePluginSendPayload(params: {
   ctx: OutboundSendContext;
   to: string;
   payload: ReplyPayload;
   replyToId?: string;
   threadId?: string | number;
-}): Promise<ReplyPayload | null> {
+}): Promise<PluginSendPayloadPreparation> {
   const plugin = resolveOutboundChannelPlugin({
     channel: params.ctx.channel,
     cfg: params.ctx.cfg,
   });
   if (!plugin?.outbound) {
-    return null;
+    return { kind: "unavailable" };
   }
   const prepareSendPayload = plugin?.actions?.prepareSendPayload;
   if (!prepareSendPayload) {
-    return null;
+    return { kind: "unavailable" };
   }
-  return (
-    (await prepareSendPayload({
-      ctx: createChannelActionContext({ ctx: params.ctx, action: "send" }),
-      to: params.to,
-      payload: params.payload,
-      replyToId: params.replyToId,
-      threadId: params.threadId,
-    })) ?? null
-  );
+  const payload = await prepareSendPayload({
+    ctx: createChannelActionContext({ ctx: params.ctx, action: "send" }),
+    to: params.to,
+    payload: params.payload,
+    replyToId: params.replyToId,
+    threadId: params.threadId,
+  });
+  // A null result is an ownership decision: the provider-native payload cannot
+  // use durable core delivery, so even a presentation must stay on the action path.
+  return payload ? { kind: "prepared", payload } : { kind: "declined" };
 }
 
+/** Executes a message-tool send through plugin handlers or the core outbound path. */
 export async function executeSendAction(params: {
   ctx: OutboundSendContext;
   to: string;
@@ -241,6 +266,9 @@ export async function executeSendAction(params: {
   payload?: ReplyPayload;
   mediaUrl?: string;
   mediaUrls?: string[];
+  buffer?: string;
+  filename?: string;
+  contentType?: string;
   asVoice?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;
@@ -261,19 +289,44 @@ export async function executeSendAction(params: {
     audioAsVoice: params.asVoice === true,
   };
   const queuePolicy = params.bestEffort === false ? "required" : "best_effort";
-  const preparedPayload = await tryPreparePluginSendPayload({
+  const pluginPreparation = await preparePluginSendPayload({
     ctx: params.ctx,
     to: params.to,
     payload: defaultPayload,
     replyToId: params.replyToId,
     threadId: params.threadId,
   });
-  if (preparedPayload) {
+  const channelPlugin = resolveOutboundChannelPlugin({
+    channel: params.ctx.channel,
+    cfg: params.ctx.cfg,
+  });
+  const presentation = normalizeMessagePresentation(defaultPayload.presentation);
+  const corePayload =
+    pluginPreparation.kind === "prepared"
+      ? pluginPreparation.payload
+      : pluginPreparation.kind === "unavailable" &&
+          presentation &&
+          hasCorePresentationDelivery(channelPlugin?.outbound)
+        ? defaultPayload
+        : null;
+  if (corePayload) {
     throwIfAborted(params.ctx.abortSignal);
+    const corePresentation = normalizeMessagePresentation(corePayload.presentation);
+    const message =
+      corePresentation && channelPlugin?.outbound?.deliveryMode === "gateway"
+        ? materializeMessagePresentationFallback({
+            payload: corePayload,
+            text: params.message,
+          })
+        : params.message;
+    // Prepared payloads and portable presentations need core delivery so queueing,
+    // presentation rendering/adaptation, hooks, and mirrors stay uniform. The legacy
+    // gateway `send` method accepts text/media only, so materialize its fallback here.
     const result = await sendCoreMessage({
       ...params,
+      message,
       queuePolicy,
-      payloads: [preparedPayload],
+      payloads: [corePayload],
     });
 
     return {
@@ -283,14 +336,27 @@ export async function executeSendAction(params: {
     };
   }
 
+  const pluginMessage = presentation
+    ? materializeMessagePresentationFallback({ payload: defaultPayload, text: params.message })
+    : params.message;
+  const pluginCtx =
+    pluginMessage === params.message
+      ? params.ctx
+      : {
+          ...params.ctx,
+          params: { ...params.ctx.params, message: pluginMessage },
+        };
   const pluginHandled = await tryHandleWithPluginAction({
-    ctx: params.ctx,
+    ctx: pluginCtx,
     action: "send",
     onHandled: async () => {
       if (!params.ctx.mirror) {
         return;
       }
-      const mirrorText = params.ctx.mirror.text ?? params.message;
+      const materializedPresentationFallback = pluginMessage !== params.message;
+      const mirrorText = materializedPresentationFallback
+        ? pluginMessage
+        : params.ctx.mirror.text?.trim() || pluginMessage;
       const mirrorMediaUrls =
         params.ctx.mirror.mediaUrls ??
         params.mediaUrls ??
@@ -322,6 +388,7 @@ export async function executeSendAction(params: {
   };
 }
 
+/** Executes a message-tool poll through plugin handlers or the core poll path. */
 export async function executePollAction(params: {
   ctx: OutboundSendContext;
   resolveCorePoll: () => {

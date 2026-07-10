@@ -1,3 +1,4 @@
+// Openai provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   isProviderAuthProfileConfigured,
@@ -47,27 +48,7 @@ type RealtimeEvent = {
   error?: unknown;
 };
 
-type OpenAIRealtimeTranscriptionSessionCreate = {
-  type: "transcription";
-  audio: {
-    input: {
-      format: { type: "audio/pcmu" };
-      transcription: {
-        model: string;
-        language?: string;
-        prompt?: string;
-      };
-      turn_detection: {
-        type: "server_vad";
-        threshold: number;
-        prefix_padding_ms: number;
-        silence_duration_ms: number;
-      };
-    };
-  };
-};
-
-type OpenAIRealtimeTranscriptionSessionUpdate = {
+type OpenAIRealtimeTranscriptionSessionPayload = {
   type: "transcription";
   audio: {
     input: {
@@ -92,6 +73,10 @@ const OPENAI_REALTIME_TRANSCRIPTION_CONNECT_TIMEOUT_MS = 10_000;
 const OPENAI_REALTIME_TRANSCRIPTION_MAX_RECONNECT_ATTEMPTS = 5;
 const OPENAI_REALTIME_TRANSCRIPTION_RECONNECT_DELAY_MS = 1000;
 const OPENAI_REALTIME_TRANSCRIPTION_DEFAULT_MODEL = "gpt-4o-transcribe";
+const OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REQUIRED =
+  "OpenAI Realtime transcription requires an OpenAI Platform API key";
+const OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REJECTED =
+  "OpenAI Realtime transcription rejected the selected API key. Update or remove the active OpenAI API-key source";
 
 function normalizeProviderConfig(
   config: RealtimeTranscriptionProviderConfig,
@@ -110,38 +95,30 @@ function normalizeProviderConfig(
     language: trimToUndefined(raw?.language),
     model: trimToUndefined(raw?.model) ?? trimToUndefined(raw?.sttModel),
     prompt: trimToUndefined(raw?.prompt),
-    silenceDurationMs: asFiniteNumber(raw?.silenceDurationMs),
-    vadThreshold: asFiniteNumber(raw?.vadThreshold),
+    silenceDurationMs: normalizeNonNegativeInteger(raw?.silenceDurationMs),
+    vadThreshold: normalizeVadThreshold(raw?.vadThreshold),
   };
 }
 
-function buildOpenAIRealtimeTranscriptionSessionCreateConfig(
-  config: OpenAIRealtimeTranscriptionSessionConfig,
-): OpenAIRealtimeTranscriptionSessionCreate {
-  return {
-    type: "transcription",
-    audio: {
-      input: {
-        format: { type: "audio/pcmu" },
-        transcription: {
-          model: config.model,
-          ...(config.language ? { language: config.language } : {}),
-          ...(config.prompt ? { prompt: config.prompt } : {}),
-        },
-        turn_detection: {
-          type: "server_vad",
-          threshold: config.vadThreshold,
-          prefix_padding_ms: 300,
-          silence_duration_ms: config.silenceDurationMs,
-        },
-      },
-    },
-  };
+function normalizeNonNegativeInteger(value: unknown): number | undefined {
+  const number = asFiniteNumber(value);
+  if (number === undefined || !Number.isSafeInteger(number) || number < 0) {
+    return undefined;
+  }
+  return number;
 }
 
-function buildOpenAIRealtimeTranscriptionSessionUpdateConfig(
+function normalizeVadThreshold(value: unknown): number | undefined {
+  const number = asFiniteNumber(value);
+  if (number === undefined || number < 0 || number > 1) {
+    return undefined;
+  }
+  return number;
+}
+
+function buildOpenAIRealtimeTranscriptionSessionPayload(
   config: OpenAIRealtimeTranscriptionSessionConfig,
-): OpenAIRealtimeTranscriptionSessionUpdate {
+): OpenAIRealtimeTranscriptionSessionPayload {
   return {
     type: "transcription",
     audio: {
@@ -166,23 +143,28 @@ function buildOpenAIRealtimeTranscriptionSessionUpdateConfig(
 async function resolveOpenAIRealtimeTranscriptionAuthorization(
   config: OpenAIRealtimeTranscriptionSessionConfig,
 ): Promise<string> {
-  const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
-  if (apiKey) {
-    return apiKey;
+  if (config.apiKey) {
+    return config.apiKey;
   }
   const authToken = await resolveProviderAuthProfileApiKey({
-    provider: "openai-codex",
+    provider: "openai",
     cfg: config.cfg,
+    profileTypes: ["api_key"],
   });
-  if (!authToken) {
-    throw new Error("OpenAI API key or Codex OAuth missing");
+  if (authToken) {
+    const clientSecret = await createOpenAIRealtimeTranscriptionClientSecret({
+      authToken,
+      auditContext: "openai-realtime-transcription-session",
+      session: buildOpenAIRealtimeTranscriptionSessionPayload(config),
+      authRejectedMessage: OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REJECTED,
+    });
+    return clientSecret.value;
   }
-  const clientSecret = await createOpenAIRealtimeTranscriptionClientSecret({
-    authToken,
-    auditContext: "openai-realtime-transcription-session",
-    session: buildOpenAIRealtimeTranscriptionSessionCreateConfig(config),
-  });
-  return clientSecret.value;
+  const envApiKey = process.env.OPENAI_API_KEY?.trim();
+  if (envApiKey) {
+    return envApiKey;
+  }
+  throw new Error(OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REQUIRED);
 }
 
 function createOpenAIRealtimeTranscriptionSession(
@@ -227,11 +209,9 @@ function createOpenAIRealtimeTranscriptionSession(
         } else {
           config.onError?.(error);
         }
-        return;
       }
 
       default:
-        return;
     }
   };
 
@@ -270,7 +250,7 @@ function createOpenAIRealtimeTranscriptionSession(
     onOpen: (transport: RealtimeTranscriptionWebSocketTransport) => {
       transport.sendJson({
         type: "session.update",
-        session: buildOpenAIRealtimeTranscriptionSessionUpdateConfig(config),
+        session: buildOpenAIRealtimeTranscriptionSessionPayload(config),
       });
     },
     onMessage: handleEvent,
@@ -289,7 +269,7 @@ export function buildOpenAIRealtimeTranscriptionProvider(): RealtimeTranscriptio
       Boolean(
         normalizeProviderConfig(providerConfig).apiKey ||
         process.env.OPENAI_API_KEY ||
-        isProviderAuthProfileConfigured({ provider: "openai-codex", cfg }),
+        isProviderAuthProfileConfigured({ provider: "openai", cfg, profileTypes: ["api_key"] }),
       ),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);

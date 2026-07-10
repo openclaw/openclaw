@@ -1,8 +1,8 @@
+// Covers system-run command formatting and consistency checks.
 import { describe, expect, test } from "vitest";
 import {
   extractShellCommandFromArgv,
   formatExecCommand,
-  resolveSystemRunCommand,
   resolveSystemRunCommandRequest,
   validateSystemRunCommandConsistency,
 } from "./system-run-command.js";
@@ -281,8 +281,8 @@ describe("system run command helpers", () => {
     });
   });
 
-  test("resolveSystemRunCommand requires command when rawCommand is present", () => {
-    const res = resolveSystemRunCommand({ rawCommand: "echo hi" });
+  test("resolveSystemRunCommandRequest requires command when rawCommand is present", () => {
+    const res = resolveSystemRunCommandRequest({ rawCommand: "echo hi" });
     expect(res.ok).toBe(false);
     if (res.ok) {
       throw new Error("unreachable");
@@ -291,8 +291,8 @@ describe("system run command helpers", () => {
     expect(res.details?.code).toBe("MISSING_COMMAND");
   });
 
-  test("resolveSystemRunCommand treats non-array command values as missing", () => {
-    const res = resolveSystemRunCommand({
+  test("resolveSystemRunCommandRequest treats non-array command values as missing", () => {
+    const res = resolveSystemRunCommandRequest({
       command: "echo hi",
       rawCommand: "echo hi",
     });
@@ -303,17 +303,17 @@ describe("system run command helpers", () => {
     expect(res.details?.code).toBe("MISSING_COMMAND");
   });
 
-  test("resolveSystemRunCommand returns an empty success payload when no command is provided", () => {
-    const res = expectValidResult(resolveSystemRunCommand({}));
+  test("resolveSystemRunCommandRequest returns an empty success payload when no command is provided", () => {
+    const res = expectValidResult(resolveSystemRunCommandRequest({}));
     expect(res.argv).toStrictEqual([]);
     expect(res.commandText).toBe("");
     expect(res.shellPayload).toBeNull();
     expect(res.previewText).toBeNull();
   });
 
-  test("resolveSystemRunCommand stringifies non-string argv tokens", () => {
+  test("resolveSystemRunCommandRequest stringifies non-string argv tokens", () => {
     const res = expectValidResult(
-      resolveSystemRunCommand({
+      resolveSystemRunCommandRequest({
         command: ["echo", 123, false, null],
       }),
     );
@@ -334,9 +334,9 @@ describe("system run command helpers", () => {
 
   test.each([
     {
-      name: "resolveSystemRunCommand unwraps macOS dispatch wrappers before deriving shell previews",
+      name: "resolveSystemRunCommandRequest unwraps macOS dispatch wrappers before deriving shell previews",
       run: () =>
-        resolveSystemRunCommand({
+        resolveSystemRunCommandRequest({
           command: ["/usr/bin/arch", "-arm64", "/bin/sh", "-lc", "echo hi"],
         }),
       expectedShellPayload: null,
@@ -344,9 +344,9 @@ describe("system run command helpers", () => {
       expectedPreviewText: null,
     },
     {
-      name: "resolveSystemRunCommand unwraps xcrun before deriving shell previews",
+      name: "resolveSystemRunCommandRequest unwraps xcrun before deriving shell previews",
       run: () =>
-        resolveSystemRunCommand({
+        resolveSystemRunCommandRequest({
           command: ["/usr/bin/xcrun", "/bin/sh", "-lc", "echo hi"],
         }),
       expectedShellPayload: null,
@@ -366,9 +366,9 @@ describe("system run command helpers", () => {
       expectedPreviewText: "echo SAFE&&whoami",
     },
     {
-      name: "resolveSystemRunCommand binds commandText to full argv for shell-wrapper positional-argv carriers",
+      name: "resolveSystemRunCommandRequest binds commandText to full argv for shell-wrapper positional-argv carriers",
       run: () =>
-        resolveSystemRunCommand({
+        resolveSystemRunCommandRequest({
           command: ["/bin/sh", "-lc", '$0 "$1"', "/usr/bin/touch", "/tmp/marker"],
         }),
       expectedShellPayload: null,
@@ -376,9 +376,9 @@ describe("system run command helpers", () => {
       expectedPreviewText: null,
     },
     {
-      name: "resolveSystemRunCommand binds commandText to full argv when env prelude modifies shell wrapper",
+      name: "resolveSystemRunCommandRequest binds commandText to full argv when env prelude modifies shell wrapper",
       run: () =>
-        resolveSystemRunCommand({
+        resolveSystemRunCommandRequest({
           command: ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo hi"],
         }),
       expectedShellPayload: null,
@@ -386,9 +386,9 @@ describe("system run command helpers", () => {
       expectedPreviewText: null,
     },
     {
-      name: "resolveSystemRunCommand keeps wrapper preview separate from canonical command text",
+      name: "resolveSystemRunCommandRequest keeps wrapper preview separate from canonical command text",
       run: () =>
-        resolveSystemRunCommand({
+        resolveSystemRunCommandRequest({
           command: ["./env", "sh", "-c", "jq --version"],
         }),
       expectedShellPayload: "jq --version",
@@ -396,9 +396,9 @@ describe("system run command helpers", () => {
       expectedPreviewText: "jq --version",
     },
     {
-      name: "resolveSystemRunCommand accepts canonical full argv text for wrapper approvals",
+      name: "resolveSystemRunCommandRequest accepts canonical full argv text for wrapper approvals",
       run: () =>
-        resolveSystemRunCommand({
+        resolveSystemRunCommandRequest({
           command: ["./env", "sh", "-c", "jq --version"],
           rawCommand: './env sh -c "jq --version"',
         }),
@@ -419,9 +419,9 @@ describe("system run command helpers", () => {
     },
   );
 
-  test("resolveSystemRunCommand rejects legacy shell payload text in strict mode", () => {
-    const res = resolveSystemRunCommand({
-      command: ["/bin/sh", "-lc", "echo hi"],
+  test("validateSystemRunCommandConsistency rejects legacy shell payload text in strict mode", () => {
+    const res = validateSystemRunCommandConsistency({
+      argv: ["/bin/sh", "-lc", "echo hi"],
       rawCommand: "echo hi",
     });
     expect(res.ok).toBe(false);

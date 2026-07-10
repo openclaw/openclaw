@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="trust_this_gateway">Considerare attendibile questo gateway?</string>
+    <string name="trust_and_continue">Considera attendibile e continua</string>
+    <string name="cancel">Annulla</string>
+    <string name="new_chat_in_worktree">Nuova chat nel worktree</string>
+    <string name="gateway_trust_first_seen">Verifica l’impronta digitale del certificato prima di considerare attendibile questo gateway.\n\n%1$s</string>
+    <string name="gateway_trust_changed">Il certificato del gateway è cambiato. Continua solo se ti aspettavi questa modifica.\n\nSHA-256 precedente:\n%1$s\n\nNuovo SHA-256:\n%2$s</string>
+</resources>

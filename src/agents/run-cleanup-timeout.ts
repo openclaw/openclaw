@@ -1,9 +1,19 @@
+/**
+ * Agent cleanup timeout guard.
+ *
+ * Bounds cleanup steps so run completion cannot hang forever while preserving late-failure diagnostics.
+ */
+import { resolveOptionalIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../infra/errors.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 
-export const AGENT_CLEANUP_STEP_TIMEOUT_MS = 10_000;
-export const AGENT_CLEANUP_STEP_TIMEOUT_ENV = "OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS";
-export const TRAJECTORY_FLUSH_TIMEOUT_ENV = "OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS";
-export const CLEANUP_TIMEOUT_DETAILS_MAX_CHARS = 512;
+// Cleanup steps must not block run completion forever. This module bounds each
+// cleanup step and logs enough context to debug late failures.
+const AGENT_CLEANUP_STEP_TIMEOUT_MS = 10_000;
+const AGENT_CLEANUP_STEP_TIMEOUT_ENV = "OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS";
+const TRAJECTORY_FLUSH_TIMEOUT_ENV = "OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS";
+const CLEANUP_TIMEOUT_DETAILS_MAX_CHARS = 512;
 
 const CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX = "...[truncated]";
 
@@ -11,24 +21,12 @@ type AgentCleanupLogger = {
   warn: (message: string) => void;
 };
 
-function normalizeExplicitTimeoutMs(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  return Math.max(1, Math.floor(value));
-}
-
 function parseTimeoutEnvValue(value: string | undefined): number | undefined {
   const trimmed = value?.trim();
   if (!trimmed) {
     return undefined;
   }
-  const timeoutMs = Number(trimmed);
-  if (!Number.isFinite(timeoutMs)) {
-    return undefined;
-  }
-  const normalized = Math.floor(timeoutMs);
-  return normalized > 0 ? normalized : undefined;
+  return parseStrictPositiveInteger(trimmed);
 }
 
 function resolveCleanupTimeoutDetails(
@@ -50,15 +48,15 @@ function truncateCleanupTimeoutDetails(value: string): string {
     0,
     CLEANUP_TIMEOUT_DETAILS_MAX_CHARS - CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX.length,
   );
-  return `${value.slice(0, prefixLength)}${CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX}`;
+  return `${truncateUtf16Safe(value, prefixLength)}${CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX}`;
 }
 
-export function resolveAgentCleanupStepTimeoutMs(params: {
+function resolveAgentCleanupStepTimeoutMs(params: {
   step: string;
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
 }): number {
-  const explicitTimeoutMs = normalizeExplicitTimeoutMs(params.timeoutMs);
+  const explicitTimeoutMs = resolveOptionalIntegerOption(params.timeoutMs, { min: 1 });
   if (explicitTimeoutMs !== undefined) {
     return explicitTimeoutMs;
   }
@@ -74,6 +72,7 @@ export function resolveAgentCleanupStepTimeoutMs(params: {
   return parseTimeoutEnvValue(env[AGENT_CLEANUP_STEP_TIMEOUT_ENV]) ?? AGENT_CLEANUP_STEP_TIMEOUT_MS;
 }
 
+/** Run one cleanup step with timeout logging and late-rejection handling. */
 export async function runAgentCleanupStep(params: {
   runId: string;
   sessionId: string;
@@ -92,7 +91,7 @@ export async function runAgentCleanupStep(params: {
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
   const cleanupPromise = Promise.resolve().then(params.cleanup);
-  const observedCleanupPromise = cleanupPromise.catch((error) => {
+  const observedCleanupPromise = cleanupPromise.catch((error: unknown) => {
     if (!timedOut) {
       params.log.warn(
         `agent cleanup failed: runId=${params.runId} sessionId=${params.sessionId} step=${params.step} error=${formatErrorMessage(error)}`,
@@ -118,7 +117,9 @@ export async function runAgentCleanupStep(params: {
     params.log.warn(
       `agent cleanup timed out: runId=${params.runId} sessionId=${params.sessionId} step=${params.step} timeoutMs=${timeoutMs}${details}`,
     );
-    void cleanupPromise.catch((error) => {
+    // Keep observing the original cleanup promise so late failures do not turn
+    // into unhandled rejections after the timeout path returned.
+    void cleanupPromise.catch((error: unknown) => {
       params.log.warn(
         `agent cleanup rejected after timeout: runId=${params.runId} sessionId=${params.sessionId} step=${params.step} error=${formatErrorMessage(error)}`,
       );

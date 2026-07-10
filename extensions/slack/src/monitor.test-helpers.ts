@@ -1,4 +1,6 @@
+// Slack helper module supports monitor helpers behavior.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { vi } from "vitest";
 import type { Mock } from "vitest";
 import { clearSlackInboundDeliveryStateForTest } from "./monitor/inbound-delivery-state.js";
@@ -11,10 +13,13 @@ type SlackProviderMonitor = (params: {
   abortSignal: AbortSignal;
   config?: Record<string, unknown>;
   channelRuntime?: ChannelRuntimeSurface;
+  runtime?: RuntimeEnv;
 }) => Promise<unknown>;
 
 type SlackTestState = {
   config: Record<string, unknown>;
+  appStartMock: Mock<(...args: unknown[]) => Promise<unknown>>;
+  appStopMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   sendMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   replyMock: Mock<(...args: unknown[]) => unknown>;
   updateLastRouteMock: Mock<(...args: unknown[]) => unknown>;
@@ -30,6 +35,8 @@ type SlackTestState = {
 
 const slackTestState: SlackTestState = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
+  appStartMock: vi.fn(),
+  appStopMock: vi.fn(),
   sendMock: vi.fn(),
   replyMock: vi.fn(),
   updateLastRouteMock: vi.fn(),
@@ -81,7 +88,7 @@ function ensureSlackTestRuntime(): {
   }
   if (!globalState["__slackClient"]) {
     globalState["__slackClient"] = {
-      auth: { test: vi.fn().mockResolvedValue({ user_id: "bot-user" }) },
+      auth: { test: vi.fn().mockResolvedValue({ user_id: "bot-user", bot_id: "bot-id" }) },
       conversations: {
         info: vi.fn().mockResolvedValue({
           channel: { name: "dm", is_im: true },
@@ -117,7 +124,10 @@ function ensureSlackTestRuntime(): {
   };
 }
 
-export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+export const flush = () =>
+  new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 
 async function waitForSlackEvent(name: string) {
   for (let i = 0; i < 10; i += 1) {
@@ -130,7 +140,12 @@ async function waitForSlackEvent(name: string) {
 
 export function startSlackMonitor(
   monitorSlackProvider: SlackProviderMonitor,
-  opts?: { botToken?: string; appToken?: string; channelRuntime?: ChannelRuntimeSurface },
+  opts?: {
+    botToken?: string;
+    appToken?: string;
+    channelRuntime?: ChannelRuntimeSurface;
+    runtime?: RuntimeEnv;
+  },
 ) {
   const controller = new AbortController();
   const run = monitorSlackProvider({
@@ -139,6 +154,7 @@ export function startSlackMonitor(
     abortSignal: controller.signal,
     config: slackTestState.config,
     channelRuntime: opts?.channelRuntime,
+    runtime: opts?.runtime,
   });
   return { controller, run };
 }
@@ -198,6 +214,8 @@ export const defaultSlackTestConfig = () => ({
 export function resetSlackTestState(config: Record<string, unknown> = defaultSlackTestConfig()) {
   clearSlackInboundDeliveryStateForTest();
   slackTestState.config = config;
+  slackTestState.appStartMock.mockReset().mockResolvedValue(undefined);
+  slackTestState.appStopMock.mockReset().mockResolvedValue(undefined);
   slackTestState.sendMock.mockReset().mockResolvedValue(undefined);
   slackTestState.replyMock.mockReset();
   slackTestState.updateLastRouteMock.mockReset();
@@ -215,7 +233,13 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
       entries.map((input) => ({ input, resolved: false })),
     );
   const client = getSlackClient();
-  client.auth.test.mockReset().mockResolvedValue({ user_id: "bot-user" });
+  client.auth.test.mockReset().mockResolvedValue({
+    user_id: "bot-user",
+    bot_id: "bot-id",
+    app_id: "A_TEST",
+    team_id: "T_TEST",
+    is_enterprise_install: false,
+  });
   client.conversations.info.mockReset().mockResolvedValue({
     channel: { name: "dm", is_im: true },
   });
@@ -334,8 +358,8 @@ vi.mock("@slack/bolt", () => {
     command() {
       /* no-op */
     }
-    start = vi.fn().mockResolvedValue(undefined);
-    stop = vi.fn().mockResolvedValue(undefined);
+    start = (...args: unknown[]) => slackTestState.appStartMock(...args);
+    stop = (...args: unknown[]) => slackTestState.appStopMock(...args);
   }
   class HTTPReceiver {
     requestListener = vi.fn();

@@ -1,3 +1,6 @@
+// Huggingface plugin module implements models behavior.
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import {
   fetchWithSsrFGuard,
@@ -46,7 +49,7 @@ export const HUGGINGFACE_MODEL_CATALOG: ModelDefinitionConfig[] = [
     input: ["text"],
     contextWindow: 131072,
     maxTokens: 8192,
-    cost: { input: 3.0, output: 7.0, cacheRead: 3.0, cacheWrite: 3.0 },
+    cost: { input: 3, output: 7, cacheRead: 3, cacheWrite: 3 },
   },
   {
     id: "deepseek-ai/DeepSeek-V3.1",
@@ -144,15 +147,17 @@ export async function discoverHuggingfaceModels(
   }
 
   try {
+    const requestTimeoutMs = resolveTimerTimeoutMs(timeoutMs, HUGGINGFACE_DISCOVERY_TIMEOUT_MS);
     const { response, release } = await fetchWithSsrFGuard({
       url: `${HUGGINGFACE_BASE_URL}/models`,
       init: {
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(requestTimeoutMs),
         headers: {
           Authorization: `Bearer ${trimmedKey}`,
           "Content-Type": "application/json",
         },
       },
+      timeoutMs: requestTimeoutMs,
       policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(HUGGINGFACE_BASE_URL),
       auditContext: "huggingface-model-discovery",
     });
@@ -161,7 +166,10 @@ export async function discoverHuggingfaceModels(
         return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
       }
 
-      const body = (await response.json()) as OpenAIListModelsResponse;
+      const body = await readProviderJsonResponse<OpenAIListModelsResponse>(
+        response,
+        "huggingface.model-discovery",
+      );
       const data = body?.data;
       if (!Array.isArray(data) || data.length === 0) {
         return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);

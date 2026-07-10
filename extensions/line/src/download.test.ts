@@ -1,3 +1,4 @@
+// Line tests cover download plugin behavior.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const getMessageContentMock = vi.hoisted(() => vi.fn());
@@ -75,11 +76,11 @@ describe("downloadLineMedia", () => {
     saveMediaStreamMock.mockReset();
     saveMediaStreamMock.mockImplementation(
       async (stream: AsyncIterable<Buffer>, contentType?: string, subdir?: string) => {
-        const chunks: Buffer[] = [];
+        const chunksLocal: Buffer[] = [];
         for await (const chunk of stream) {
-          chunks.push(Buffer.from(chunk));
+          chunksLocal.push(Buffer.from(chunk));
         }
-        const buffer = Buffer.concat(chunks);
+        const buffer = Buffer.concat(chunksLocal);
         return {
           path: `/home/user/.openclaw/media/${subdir ?? "unknown"}/saved-media`,
           contentType: detectMockContentType(buffer, contentType),
@@ -141,6 +142,18 @@ describe("downloadLineMedia", () => {
 
     expect(result.contentType).toBe("audio/x-m4a");
     expect(saveMediaStreamCall()[2]).toBe("inbound");
+  });
+
+  it("passes original filenames to the media store for extension fallback", async () => {
+    getMessageContentMock.mockResolvedValueOnce(chunks([Buffer.from("unknown-audio-bytes")]));
+
+    await downloadLineMedia("mid-file-audio", "token", 10 * 1024 * 1024, {
+      originalFilename: "voice-note.m4a",
+    });
+
+    const call = saveMediaStreamCall();
+    expect(call[3]).toBe(10 * 1024 * 1024);
+    expect(call[4]).toBe("voice-note.m4a");
   });
 
   it("uses media store content type for MP4 video", async () => {

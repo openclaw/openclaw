@@ -1,3 +1,5 @@
+// Covers outbound payload normalization across text, media, presentation,
+// interactive blocks, mirror text, and suppressed relay status payloads.
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -266,6 +268,33 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     expect(twice).toEqual(once);
   });
 
+  it("parses Telegram reaction directives into channel data without visible text", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        {
+          text: "[[react_to_current:🔥]] Thanks",
+          channelData: { telegram: { quoteText: "quoted" } },
+        },
+      ]),
+    ).toEqual([
+      {
+        text: "Thanks",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: true,
+        replyToTag: false,
+        audioAsVoice: false,
+        channelData: {
+          telegram: {
+            quoteText: "quoted",
+            reaction: { emoji: "🔥", replyToCurrent: true },
+          },
+        },
+      },
+    ]);
+  });
+
   it("captures a tricky payload matrix snapshot", () => {
     const input: ReplyPayload[] = [
       { text: "NO_REPLY" },
@@ -437,6 +466,9 @@ describe("normalizeOutboundPayloadsForJson", () => {
             mediaUrl: null,
             mediaUrls: ["https://x.test/a.png", "https://x.test/b.png"],
             audioAsVoice: undefined,
+            presentation: undefined,
+            delivery: undefined,
+            interactive: undefined,
             channelData: undefined,
           },
         ],
@@ -544,6 +576,60 @@ describe("OutboundPayloadPlan projections", () => {
     expect(projectOutboundPayloadPlanForMirror(plan)).toEqual(resolveMirrorProjection(matrix));
   });
 
+  it("mirrors chart titles and values when no plain reply text exists", () => {
+    const plan = createOutboundPayloadPlan([
+      {
+        presentation: {
+          blocks: [
+            {
+              type: "chart",
+              chartType: "pie",
+              title: "Revenue mix",
+              segments: [
+                { label: "Product", value: 60 },
+                { label: "Services", value: 40 },
+              ],
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(projectOutboundPayloadPlanForMirror(plan)).toEqual({
+      text: "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
+      mediaUrls: [],
+    });
+  });
+
+  it("mirrors chart titles and values alongside plain reply text", () => {
+    const plan = createOutboundPayloadPlan([
+      {
+        text: "Quarterly breakdown",
+        presentation: {
+          blocks: [
+            { type: "context", text: "Internal presentation context" },
+            {
+              type: "chart",
+              chartType: "bar",
+              title: "Revenue",
+              categories: ["Q1", "Q2"],
+              series: [{ name: "USD", values: [10, 12] }],
+            },
+            {
+              type: "buttons",
+              buttons: [{ label: "Details", url: "https://example.com" }],
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(projectOutboundPayloadPlanForMirror(plan)).toEqual({
+      text: "Quarterly breakdown\nRevenue (bar chart)\n- USD: Q1: 10; Q2: 12",
+      mediaUrls: [],
+    });
+  });
+
   it("keeps markdown images as text unless extraction is enabled", () => {
     const input = "Tech: ![Node.js](https://img.shields.io/badge/Node.js-339933)";
 
@@ -591,12 +677,12 @@ describe("formatOutboundPayloadLog", () => {
       expected: string;
     }>([
       {
-        name: "text with media lines",
+        name: "text with attachment lines",
         input: {
           text: "hello  ",
           mediaUrls: ["https://x.test/a.png", "https://x.test/b.png"],
         },
-        expected: "hello\nMEDIA:https://x.test/a.png\nMEDIA:https://x.test/b.png",
+        expected: "hello\nAttachment: https://x.test/a.png\nAttachment: https://x.test/b.png",
       },
       {
         name: "media only",
@@ -604,7 +690,7 @@ describe("formatOutboundPayloadLog", () => {
           text: "",
           mediaUrls: ["https://x.test/a.png"],
         },
-        expected: "MEDIA:https://x.test/a.png",
+        expected: "Attachment: https://x.test/a.png",
       },
     ]),
   )("$name", ({ input, expected }) => {

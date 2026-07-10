@@ -1,3 +1,4 @@
+// Nextcloud Talk tests cover core plugin behavior.
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -42,7 +43,7 @@ function requireFirstTimingSafeEqualCall(mock: ReturnType<typeof vi.fn>): [unkno
 }
 
 describe("nextcloud talk core", () => {
-  it("builds an outbound session route for normalized room targets", () => {
+  it("marks ambiguous room-token session routes as best-effort", () => {
     const route = resolveNextcloudTalkOutboundSessionRoute({
       cfg: {},
       agentId: "main",
@@ -53,6 +54,7 @@ describe("nextcloud talk core", () => {
     expect(route).toEqual({
       sessionKey: "agent:main:nextcloud-talk:group:room-123",
       baseSessionKey: "agent:main:nextcloud-talk:group:room-123",
+      recipientSessionExact: false,
       peer: {
         kind: "group",
         id: "room-123",
@@ -205,17 +207,19 @@ describe("nextcloud talk core", () => {
     });
 
     try {
-      const { generateNextcloudTalkSignature, verifyNextcloudTalkSignature } =
-        await import("./signature.js");
+      const {
+        generateNextcloudTalkSignature: generateNextcloudTalkSignatureLocal,
+        verifyNextcloudTalkSignature: verifyNextcloudTalkSignatureLocal,
+      } = await import("./signature.js");
       const body = JSON.stringify({ hello: "world" });
-      const generated = generateNextcloudTalkSignature({
+      const generated = generateNextcloudTalkSignatureLocal({
         body,
         secret: "secret-123",
       });
       const shortSignature = generated.signature.slice(0, 12);
 
       expect(
-        verifyNextcloudTalkSignature({
+        verifyNextcloudTalkSignatureLocal({
           signature: shortSignature,
           random: generated.random,
           body,

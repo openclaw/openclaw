@@ -1,3 +1,4 @@
+// Start-time service repair: rebuilds stale service definitions before starting Gateway.
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
@@ -14,17 +15,20 @@ import { formatGatewayServiceStartRepairIssues } from "../../daemon/service.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mergeInstallInvocationEnv } from "./install.js";
 
+/** Repair a loaded but stale Gateway service definition and report the start result. */
 export async function repairLoadedGatewayServiceForStart(params: {
   service: GatewayService;
   state: GatewayServiceState;
   issues: GatewayServiceStartRepairIssue[];
   json: boolean;
   stdout: NodeJS.WritableStream;
+  warn?: (message: string) => void;
 }): Promise<{ result: "started"; message: string; warnings?: string[]; loaded: boolean }> {
   const { snapshot: configSnapshot, writeOptions: configWriteOptions } =
     await readConfigFileSnapshotForWrite();
   const cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
   const existingEnvironment = params.state.command?.environment;
+  const existingEnvironmentValueSources = params.state.command?.environmentValueSources;
   const installEnv = mergeInstallInvocationEnv({
     env: process.env,
     existingServiceEnv: existingEnvironment,
@@ -55,30 +59,34 @@ export async function repairLoadedGatewayServiceForStart(params: {
     }
   }
 
-  const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-    env: installEnv,
-    port,
-    runtime: DEFAULT_GATEWAY_DAEMON_RUNTIME,
-    wrapperPath,
-    existingEnvironment,
-    config: cfg,
-    warn: (message) => {
-      warnings.push(message);
-      if (!params.json) {
-        defaultRuntime.log(`- ${message}`);
-      }
-    },
-  });
+  const { programArguments, workingDirectory, environment, environmentValueSources } =
+    await buildGatewayInstallPlan({
+      env: installEnv,
+      port,
+      runtime: DEFAULT_GATEWAY_DAEMON_RUNTIME,
+      wrapperPath,
+      existingEnvironment,
+      existingEnvironmentValueSources,
+      config: cfg,
+      warn: (message) => {
+        warnings.push(message);
+        if (!params.json) {
+          defaultRuntime.log(`- ${message}`);
+        }
+      },
+    });
 
   await params.service.install({
     env: installEnv as GatewayServiceEnv,
     stdout: params.stdout,
+    warn: params.warn,
     programArguments,
     workingDirectory,
     environment,
+    environmentValueSources,
   });
 
-  let loaded = true;
+  let loaded;
   try {
     loaded = await params.service.isLoaded({ env: installEnv });
   } catch {
@@ -87,7 +95,8 @@ export async function repairLoadedGatewayServiceForStart(params: {
 
   return {
     result: "started",
-    message: "Gateway service definition repaired and started.",
+    message:
+      "Gateway service definition repaired and started. Reopen the Control UI with `openclaw dashboard` or copy a fresh auth URL with `openclaw dashboard --no-open`.",
     warnings: warnings.length ? warnings : undefined,
     loaded,
   };

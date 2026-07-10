@@ -1,7 +1,20 @@
+// Shared runtime probes used by status text and JSON commands.
+// Heavy modules stay lazily loaded so fast status output avoids security/provider/gateway costs.
+
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
+import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import {
+  buildCodexSyntheticUsageAuth,
+  mergeUsageSummaries,
+  shouldUseCodexSyntheticUsageForRuntime,
+  resolveUsageCredentialType,
+} from "../status/codex-synthetic-usage.js";
 import type { HealthSummary } from "./health.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
 
@@ -30,6 +43,42 @@ function loadGatewayCallModule() {
   return gatewayCallModuleLoader.load();
 }
 
+function shouldUseConfiguredCodexSyntheticUsage(params: {
+  config: OpenClawConfig;
+  agentDir: string;
+}): boolean {
+  const configuredDefault = resolveDefaultModelForAgent({
+    cfg: params.config,
+    allowPluginNormalization: false,
+  });
+  const policy = resolveAgentHarnessPolicy({
+    config: params.config,
+    provider: configuredDefault.provider,
+    modelId: configuredDefault.model,
+  });
+  if (
+    !shouldUseCodexSyntheticUsageForRuntime({
+      provider: configuredDefault.provider,
+      effectiveHarness: policy.runtime,
+    })
+  ) {
+    return false;
+  }
+  const authLabel = resolveModelAuthLabel({
+    provider: configuredDefault.provider,
+    acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
+      provider: configuredDefault.provider,
+      harnessRuntime: policy.runtime,
+      config: params.config,
+    }),
+    cfg: params.config,
+    agentDir: params.agentDir,
+    includeExternalProfiles: false,
+  });
+  return resolveUsageCredentialType(authLabel) !== "api_key";
+}
+
+/** Runs the lightweight security audit used by status JSON/all output. */
 export async function resolveStatusSecurityAudit(params: {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
@@ -49,6 +98,7 @@ export async function resolveStatusSecurityAudit(params: {
     includeFilesystem: true,
     includeChannelSecurity: true,
     loadPluginSecurityCollectors: false,
+    // Missing configured channel plugins make plugin-specific collectors unreliable; omit plugin list then.
     ...(readOnlyPlugins.missingConfiguredChannelIds.length === 0
       ? { plugins: readOnlyPlugins.plugins }
       : {}),
@@ -61,19 +111,34 @@ type StatusUsageSummaryOptions = {
   agentDir?: string;
 };
 
+/** Loads provider usage for status output, defaulting to the config's default agent directory. */
 export async function resolveStatusUsageSummary(params: StatusUsageSummaryOptions) {
   const { loadProviderUsageSummary } = await loadProviderUsage();
-  return await loadProviderUsageSummary({
+  const agentDir = params.agentDir ?? resolveDefaultAgentDir(params.config);
+  const usage = await loadProviderUsageSummary({
     timeoutMs: params.timeoutMs,
     config: params.config,
-    agentDir: params.agentDir ?? resolveDefaultAgentDir(params.config),
+    agentDir,
   });
+  if (!shouldUseConfiguredCodexSyntheticUsage({ config: params.config, agentDir })) {
+    return usage;
+  }
+  const codexUsage = await loadProviderUsageSummary({
+    timeoutMs: params.timeoutMs,
+    providers: ["openai"],
+    auth: [buildCodexSyntheticUsageAuth()],
+    config: params.config,
+    agentDir,
+  });
+  return mergeUsageSummaries(usage, codexUsage);
 }
 
+/** Exposes the lazily loaded provider-usage module for callers that need its helpers. */
 export async function loadStatusProviderUsageModule() {
   return await loadProviderUsage();
 }
 
+/** Calls gateway health and lets errors propagate to deep status callers. */
 export async function resolveStatusGatewayHealth(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
@@ -87,6 +152,7 @@ export async function resolveStatusGatewayHealth(params: {
   });
 }
 
+/** Calls gateway health but converts unreachable/failing probes into an error object. */
 export async function resolveStatusGatewayHealthSafe(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
@@ -99,6 +165,7 @@ export async function resolveStatusGatewayHealthSafe(params: {
   };
 }) {
   if (!params.gatewayReachable) {
+    // Preserve the probe error so status-all can explain why health was not called.
     return { error: params.gatewayProbeError ?? "gateway unreachable" };
   }
   const { callGateway } = await loadGatewayCallModule();
@@ -108,9 +175,10 @@ export async function resolveStatusGatewayHealthSafe(params: {
     timeoutMs: params.timeoutMs,
     config: params.config,
     ...params.callOverrides,
-  }).catch((err) => ({ error: String(err) }));
+  }).catch((err: unknown) => ({ error: String(err) }));
 }
 
+/** Reads gateway delivery diagnostics when reachable, returning null on failures. */
 export async function resolveStatusGatewayDiagnosticsSafe(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
@@ -134,6 +202,7 @@ export async function resolveStatusGatewayDiagnosticsSafe(params: {
   }).catch(() => null);
 }
 
+/** Reads the most recent gateway heartbeat only when the gateway probe succeeded. */
 export async function resolveStatusLastHeartbeat(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
@@ -151,8 +220,17 @@ export async function resolveStatusLastHeartbeat(params: {
   }).catch(() => null);
 }
 
-export async function resolveStatusServiceSummaries() {
-  return await Promise.all([getDaemonStatusSummary(), getNodeDaemonStatusSummary()]);
+// Default bound for service-manager probes when status runs without an explicit
+// --timeout, so a wedged systemd/launchd socket cannot hang `openclaw status`.
+const DEFAULT_SERVICE_PROBE_TIMEOUT_MS = 5000;
+
+/** Resolves launchd/systemd summaries for the gateway and node services together. */
+export async function resolveStatusServiceSummaries(timeoutMs?: number) {
+  const probeTimeoutMs = timeoutMs ?? DEFAULT_SERVICE_PROBE_TIMEOUT_MS;
+  return await Promise.all([
+    getDaemonStatusSummary(probeTimeoutMs),
+    getNodeDaemonStatusSummary(probeTimeoutMs),
+  ]);
 }
 
 type StatusUsageSummary = Awaited<ReturnType<typeof resolveStatusUsageSummary>>;
@@ -162,6 +240,7 @@ type StatusGatewayServiceSummary = Awaited<ReturnType<typeof getDaemonStatusSumm
 type StatusNodeServiceSummary = Awaited<ReturnType<typeof getNodeDaemonStatusSummary>>;
 type StatusSecurityAudit = Awaited<ReturnType<typeof resolveStatusSecurityAudit>>;
 
+/** Resolves optional usage/deep runtime details plus service summaries for status output. */
 export async function resolveStatusRuntimeDetails(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
@@ -194,6 +273,7 @@ export async function resolveStatusRuntimeDetails(params: {
           timeoutMs: params.timeoutMs,
         })
     : undefined;
+  // Last heartbeat is a deep-only gateway call; fast status should not spend network time here.
   const lastHeartbeat = params.deep
     ? await resolveStatusLastHeartbeat({
         config: params.config,
@@ -201,7 +281,7 @@ export async function resolveStatusRuntimeDetails(params: {
         gatewayReachable: params.gatewayReachable,
       })
     : null;
-  const [gatewayService, nodeService] = await resolveStatusServiceSummaries();
+  const [gatewayService, nodeService] = await resolveStatusServiceSummaries(params.timeoutMs);
   const result = {
     usage,
     health,
@@ -218,6 +298,7 @@ export async function resolveStatusRuntimeDetails(params: {
   };
 }
 
+/** Resolves the full runtime snapshot, including optional security audit, for status JSON/text. */
 export async function resolveStatusRuntimeSnapshot(params: {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;

@@ -1,8 +1,9 @@
-import { asOptionalRecord as toRecord } from "../shared/record-coerce.js";
+// Interactive payload helpers normalize structured interactive UI payloads.
+import { asOptionalRecord as toRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 
 export type InteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
 
@@ -12,11 +13,29 @@ export type MessagePresentationTone = "info" | "success" | "warning" | "danger" 
 /** Button style hint for renderers that support styled actions. */
 export type MessagePresentationButtonStyle = InteractiveButtonStyle;
 
+/** Portable typed action behind a button or select option. */
+export type MessagePresentationAction =
+  | {
+      /** Run a core/plugin slash command through the target channel's native command path. */
+      type: "command";
+      command: string;
+    }
+  | {
+      /** Opaque callback value interpreted by the target channel/plugin. */
+      type: "callback";
+      value: string;
+    };
+
 /** Portable action control rendered as a button or link by channel adapters. */
 export type MessagePresentationButton = {
   /** User-visible button label. */
   label: string;
-  /** Callback command or opaque value sent when the button is pressed. */
+  /** Typed action sent when the button is pressed. */
+  action?: MessagePresentationAction;
+  /**
+   * Legacy opaque callback value sent when the button is pressed.
+   * Prefer action for new presentation controls.
+   */
   value?: string;
   /** External URL opened by the button instead of sending a callback value. */
   url?: string;
@@ -44,9 +63,30 @@ export type MessagePresentationButton = {
 export type MessagePresentationOption = {
   /** User-visible option label. */
   label: string;
-  /** Callback command or opaque value sent when the option is selected. */
-  value: string;
+  /** Typed action sent when the option is selected. */
+  action?: MessagePresentationAction;
+  /** Legacy opaque callback value sent when the option is selected. */
+  value?: string;
 };
+
+export function resolveMessagePresentationActionValue(
+  action: MessagePresentationAction | undefined,
+): string | undefined {
+  if (action?.type === "command") {
+    return action.command;
+  }
+  if (action?.type === "callback") {
+    return action.value;
+  }
+  return undefined;
+}
+
+export function resolveMessagePresentationControlValue(control: {
+  action?: MessagePresentationAction;
+  value?: string;
+}): string | undefined {
+  return resolveMessagePresentationActionValue(control.action) ?? control.value;
+}
 
 /**
  * @deprecated Use MessagePresentationButton.
@@ -128,6 +168,40 @@ export type MessagePresentationSelectBlock = {
   options: MessagePresentationOption[];
 };
 
+export type MessagePresentationChartSegment = {
+  /** Category label shown in the chart legend. */
+  label: string;
+  /** Positive segment magnitude. */
+  value: number;
+};
+
+export type MessagePresentationChartSeries = {
+  /** Unique series name shown in the chart legend. */
+  name: string;
+  /** One finite value for each chart category, in category order. */
+  values: number[];
+};
+
+export type MessagePresentationChartBlock =
+  | {
+      type: "chart";
+      chartType: "pie";
+      /** Short chart heading. */
+      title: string;
+      segments: MessagePresentationChartSegment[];
+    }
+  | {
+      type: "chart";
+      chartType: "bar" | "area" | "line";
+      /** Short chart heading. */
+      title: string;
+      /** Ordered categories shared by every series. */
+      categories: string[];
+      series: MessagePresentationChartSeries[];
+      xLabel?: string;
+      yLabel?: string;
+    };
+
 export type MessagePresentationInteractiveBlock =
   | MessagePresentationButtonsBlock
   | MessagePresentationSelectBlock;
@@ -137,7 +211,8 @@ export type MessagePresentationBlock =
   | MessagePresentationContextBlock
   | MessagePresentationDividerBlock
   | MessagePresentationButtonsBlock
-  | MessagePresentationSelectBlock;
+  | MessagePresentationSelectBlock
+  | MessagePresentationChartBlock;
 
 export type MessagePresentation = {
   /** Optional short heading rendered before blocks when the channel supports it. */
@@ -176,6 +251,23 @@ function normalizePresentationTone(value: unknown): MessagePresentationTone | un
     : undefined;
 }
 
+function normalizePresentationAction(raw: unknown): MessagePresentationAction | undefined {
+  const record = toRecord(raw);
+  if (!record) {
+    return undefined;
+  }
+  const type = normalizeOptionalLowercaseString(record.type);
+  if (type === "command") {
+    const command = normalizeOptionalString(record.command);
+    return command ? { type: "command", command } : undefined;
+  }
+  if (type === "callback") {
+    const value = normalizeOptionalString(record.value);
+    return value ? { type: "callback", value } : undefined;
+  }
+  return undefined;
+}
+
 function normalizeButton(raw: unknown): InteractiveReplyButton | undefined {
   const record = toRecord(raw);
   if (!record) {
@@ -186,10 +278,11 @@ function normalizeButton(raw: unknown): InteractiveReplyButton | undefined {
     normalizeOptionalString(record.value) ??
     normalizeOptionalString(record.callbackData) ??
     normalizeOptionalString(record.callback_data);
+  const action = normalizePresentationAction(record.action);
   const url = normalizeOptionalString(record.url);
   const webAppRecord = toRecord(record.webApp) ?? toRecord(record.web_app);
   const webAppUrl = normalizeOptionalString(webAppRecord?.url);
-  if (!label || (!value && !url && !webAppUrl)) {
+  if (!label || (!action && !value && !url && !webAppUrl)) {
     return undefined;
   }
   const priority =
@@ -198,6 +291,7 @@ function normalizeButton(raw: unknown): InteractiveReplyButton | undefined {
       : undefined;
   return {
     label,
+    ...(action ? { action } : {}),
     ...(value ? { value } : {}),
     ...(url ? { url } : {}),
     ...(webAppUrl ? { webApp: { url: webAppUrl } } : {}),
@@ -214,11 +308,13 @@ function normalizeOption(raw: unknown): InteractiveReplyOption | undefined {
     return undefined;
   }
   const label = normalizeOptionalString(record.label) ?? normalizeOptionalString(record.text);
-  const value = normalizeOptionalString(record.value);
+  const action = normalizePresentationAction(record.action);
+  const value =
+    normalizeOptionalString(record.value) ?? resolveMessagePresentationActionValue(action);
   if (!label || !value) {
     return undefined;
   }
-  return { label, value };
+  return { label, ...(action ? { action } : {}), value };
 }
 
 function normalizeList<T>(value: unknown, normalizeEntry: (entry: unknown) => T | undefined): T[] {
@@ -252,6 +348,103 @@ function normalizeInteractiveBlock(raw: unknown): InteractiveReplyBlock | undefi
       : undefined;
   }
   return undefined;
+}
+
+function normalizeChartSegments(value: unknown): MessagePresentationChartSegment[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  const segments = value.map((entry) => {
+    const record = toRecord(entry);
+    const label = normalizeOptionalString(record?.label);
+    const segmentValue = record?.value;
+    return label && typeof segmentValue === "number" && Number.isFinite(segmentValue)
+      ? { label, value: segmentValue }
+      : undefined;
+  });
+  return segments.every((segment): segment is MessagePresentationChartSegment =>
+    Boolean(segment && segment.value > 0),
+  )
+    ? segments
+    : undefined;
+}
+
+function normalizeChartCategories(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  const categories = value.map((entry) => normalizeOptionalString(entry));
+  if (categories.some((entry) => !entry)) {
+    return undefined;
+  }
+  const normalized = categories as string[];
+  return new Set(normalized).size === normalized.length ? normalized : undefined;
+}
+
+function normalizeChartSeries(params: {
+  value: unknown;
+  categoryCount: number;
+}): MessagePresentationChartSeries[] | undefined {
+  if (!Array.isArray(params.value) || params.value.length === 0) {
+    return undefined;
+  }
+  const series = params.value.map((entry) => {
+    const record = toRecord(entry);
+    const name = normalizeOptionalString(record?.name);
+    const values = record?.values;
+    if (
+      !name ||
+      !Array.isArray(values) ||
+      values.length !== params.categoryCount ||
+      !values.every((value) => typeof value === "number" && Number.isFinite(value))
+    ) {
+      return undefined;
+    }
+    return { name, values: values as number[] };
+  });
+  if (
+    !series.every((entry): entry is MessagePresentationChartSeries => Boolean(entry)) ||
+    new Set(series.map((entry) => entry.name)).size !== series.length
+  ) {
+    return undefined;
+  }
+  return series;
+}
+
+function normalizeChartBlock(
+  record: Record<string, unknown>,
+): MessagePresentationChartBlock | undefined {
+  const title = normalizeOptionalString(record.title);
+  const chartType = normalizeOptionalLowercaseString(record.chartType);
+  if (!title) {
+    return undefined;
+  }
+  if (chartType === "pie") {
+    const segments = normalizeChartSegments(record.segments);
+    return segments ? { type: "chart", chartType, title, segments } : undefined;
+  }
+  if (chartType !== "bar" && chartType !== "area" && chartType !== "line") {
+    return undefined;
+  }
+  const categories = normalizeChartCategories(record.categories);
+  if (!categories) {
+    return undefined;
+  }
+  const series = normalizeChartSeries({ value: record.series, categoryCount: categories.length });
+  if (!series) {
+    return undefined;
+  }
+  const xLabel = normalizeOptionalString(record.xLabel);
+  const yLabel = normalizeOptionalString(record.yLabel);
+  return {
+    type: "chart",
+    chartType,
+    title,
+    categories,
+    series,
+    ...(xLabel ? { xLabel } : {}),
+    ...(yLabel ? { yLabel } : {}),
+  };
 }
 
 /**
@@ -292,6 +485,9 @@ function normalizePresentationBlock(raw: unknown): MessagePresentationBlock | un
           options,
         }
       : undefined;
+  }
+  if (type === "chart") {
+    return normalizeChartBlock(record);
   }
   return undefined;
 }
@@ -341,14 +537,24 @@ export function presentationToInteractiveReply(
     }
     if (block.type === "buttons") {
       const buttons = block.buttons
-        .filter((button) => button.value || button.url || button.webApp || button.web_app)
+        .filter(
+          (button) =>
+            button.action || button.value || button.url || button.webApp || button.web_app,
+        )
         .map((button) => {
           const interactiveButton: InteractiveReplyButton = {
             label: button.label,
             style: button.style,
           };
+          if (button.action) {
+            interactiveButton.action = button.action;
+          }
           if (button.value) {
             interactiveButton.value = button.value;
+          } else if (button.action?.type === "command") {
+            interactiveButton.value = button.action.command;
+          } else if (button.action?.type === "callback") {
+            interactiveButton.value = button.action.value;
           }
           if (button.url) {
             interactiveButton.url = button.url;
@@ -373,11 +579,24 @@ export function presentationToInteractiveReply(
       }
       continue;
     }
+    if (block.type === "chart") {
+      blocks.push({ type: "text", text: renderMessagePresentationChartFallbackText(block) });
+      continue;
+    }
     if (block.type === "select") {
       blocks.push({
         type: "select",
         placeholder: block.placeholder,
-        options: block.options,
+        options: block.options.map((option) => {
+          const interactiveOption: InteractiveReplyOption = {
+            label: option.label,
+            value: resolveMessagePresentationControlValue(option) ?? option.value,
+          };
+          if (option.action) {
+            interactiveOption.action = option.action;
+          }
+          return interactiveOption;
+        }),
       });
     }
   }
@@ -423,6 +642,46 @@ export function interactiveReplyToPresentation(
   return blocks.length > 0 ? { blocks } : undefined;
 }
 
+/**
+ * Render presentation blocks as plain-text fallback for channels that do not
+ * support native interactive controls.
+ *
+ * Text and context blocks are rendered as-is. Buttons with a `command`-typed
+ * action render as `label: \`command\`` so the value is copyable. Buttons with
+ * a `callback` action, legacy `value`, or `select` options render as label-only
+ * to keep opaque callback values private. Disabled buttons render as label-only
+ * regardless of action type, since they are not actionable.
+ *
+ * Downstream consumers should not claim a manual command is available unless
+ * they verify one was actually rendered.
+ *
+ * Exported through the plugin SDK for channel adapters.
+ */
+export function renderMessagePresentationChartFallbackText(
+  block: MessagePresentationChartBlock,
+): string {
+  const lines = [`${block.title} (${block.chartType} chart)`];
+  if (block.chartType === "pie") {
+    lines.push(...block.segments.map((segment) => `- ${segment.label}: ${String(segment.value)}`));
+    return lines.join("\n");
+  }
+  if (block.xLabel) {
+    lines.push(`X axis: ${block.xLabel}`);
+  }
+  if (block.yLabel) {
+    lines.push(`Y axis: ${block.yLabel}`);
+  }
+  lines.push(
+    ...block.series.map(
+      (series) =>
+        `- ${series.name}: ${block.categories
+          .map((category, index) => `${category}: ${String(series.values[index])}`)
+          .join("; ")}`,
+    ),
+  );
+  return lines.join("\n");
+}
+
 export function renderMessagePresentationFallbackText(params: {
   presentation?: MessagePresentation;
   emptyFallback?: string | null;
@@ -449,12 +708,26 @@ export function renderMessagePresentationFallbackText(params: {
       const labels = block.buttons
         .map((button) => {
           const targetUrl = button.url ?? button.webApp?.url ?? button.web_app?.url;
-          return targetUrl ? `${button.label}: ${targetUrl}` : button.label;
+          if (targetUrl) {
+            return `${button.label}: ${targetUrl}`;
+          }
+          const controlValue =
+            button.action?.type === "command"
+              ? resolveMessagePresentationControlValue(button)
+              : undefined;
+          if (controlValue && !button.disabled) {
+            return `${button.label}: \`${controlValue}\``;
+          }
+          return button.label;
         })
         .filter(Boolean);
       if (labels.length > 0) {
         lines.push(labels.map((label) => `- ${label}`).join("\n"));
       }
+      continue;
+    }
+    if (block.type === "chart") {
+      lines.push(renderMessagePresentationChartFallbackText(block));
       continue;
     }
     if (block.type === "select") {
