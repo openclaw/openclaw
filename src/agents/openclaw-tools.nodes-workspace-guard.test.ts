@@ -39,7 +39,7 @@ const WORKSPACE_ROOT = "/tmp/openclaw-workspace-nodes-guard";
 
 function createNodesToolHarness() {
   // Guard wraps a minimal nodes tool so tests assert only argument rewriting.
-  const nodesExecute = vi.fn(async () => ({
+  const nodesExecute = vi.fn(async (_toolCallId: string, _params: unknown) => ({
     content: [{ type: "text", text: "ok" }],
     details: {},
   }));
@@ -113,6 +113,64 @@ describe("applyNodesToolWorkspaceGuard", () => {
       undefined,
       undefined,
     );
+  });
+
+  it("canonicalizes hook-rewritten outPath during finalization", async () => {
+    const { guardedTool, nodesExecute } = getNodesTool(true);
+
+    const finalized = await guardedTool.finalizeBeforeToolCallParams?.(
+      {
+        action: "screen_record",
+        outPath: "videos/final.mp4",
+      },
+      {
+        action: "screen_record",
+        outPath: "videos/draft.mp4",
+      },
+    );
+
+    expect(finalized).toEqual({
+      action: "screen_record",
+      outPath: `${WORKSPACE_ROOT}/videos/final.mp4`,
+    });
+    expect(nodesExecute).not.toHaveBeenCalled();
+  });
+
+  it("preserves the sealed finalized root during execution", async () => {
+    const { guardedTool, nodesExecute } = getNodesTool(true);
+    const finalized = await guardedTool.finalizeBeforeToolCallParams?.(
+      { action: "screen_record", outPath: "videos/final.mp4" },
+      { action: "screen_record", outPath: "videos/draft.mp4" },
+    );
+    if (!finalized || typeof finalized !== "object") {
+      throw new Error("missing finalized nodes input");
+    }
+    Object.freeze(finalized);
+
+    await guardedTool.execute("call-sealed", finalized);
+
+    expect(nodesExecute.mock.calls[0]?.[1]).toBe(finalized);
+  });
+
+  it("fails closed when a sealed guarded path resolves differently", async () => {
+    const { guardedTool, nodesExecute } = getNodesTool(true);
+    const finalized = await guardedTool.finalizeBeforeToolCallParams?.(
+      { action: "screen_record", outPath: "videos/final.mp4" },
+      { action: "screen_record", outPath: "videos/draft.mp4" },
+    );
+    if (!finalized || typeof finalized !== "object") {
+      throw new Error("missing finalized nodes input");
+    }
+    Object.freeze(finalized);
+    mocks.assertSandboxPath.mockResolvedValueOnce({
+      relative: "videos/changed.mp4",
+      resolved: `${WORKSPACE_ROOT}/videos/changed.mp4`,
+    });
+
+    await expect(guardedTool.execute("call-changed", finalized)).rejects.toThrow(
+      /Guarded path changed after final input authorization/,
+    );
+    expect(nodesExecute).not.toHaveBeenCalled();
   });
 
   it("maps sandbox container outPath to host root when containerWorkdir is provided", async () => {

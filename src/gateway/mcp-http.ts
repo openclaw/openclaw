@@ -276,6 +276,10 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
                 agentId: scopedTools.agentId,
                 config: cfg,
                 sessionKey: requestContext.sessionKey,
+                ...(requestContext.sessionId ? { sessionId: requestContext.sessionId } : {}),
+                ...(requestContext.currentChannelId
+                  ? { channelId: requestContext.currentChannelId }
+                  : {}),
               },
               signal: requestAbort.signal,
               onToolCallPrepared: cliCaptureHandle

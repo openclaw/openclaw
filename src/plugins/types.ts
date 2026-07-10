@@ -116,6 +116,7 @@ import type {
   PluginSessionTurnScheduleParams,
   PluginSessionTurnUnscheduleByTagParams,
   PluginSessionTurnUnscheduleByTagResult,
+  PluginFinalToolInputPolicyRegistration,
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
@@ -234,6 +235,8 @@ export type {
   PluginSessionTurnScheduleParams,
   PluginSessionTurnUnscheduleByTagParams,
   PluginSessionTurnUnscheduleByTagResult,
+  PluginFinalToolInputPolicyDecision,
+  PluginFinalToolInputPolicyRegistration,
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
@@ -2813,6 +2816,11 @@ export type OpenClawPluginApi = {
    * policy id in `contracts.trustedToolPolicies`.
    */
   registerTrustedToolPolicy: (policy: PluginTrustedToolPolicyRegistration) => void;
+  /**
+   * Register a final tool-input policy. The plugin must declare the policy id
+   * in `contracts.finalToolInputPolicies`.
+   */
+  registerFinalToolInputPolicy: (policy: PluginFinalToolInputPolicyRegistration) => void;
   /**
    * Register display/policy metadata for a plugin-owned tool. Metadata is
    * scoped to the (pluginId, toolName) pair at projection time, so plugins

@@ -319,11 +319,13 @@ export {
   isToolWrappedWithBeforeToolCallHook,
   requestDeferredPluginToolApproval,
   runBeforeToolCallHook,
+  runFinalToolInputPolicies,
   setBeforeToolCallDiagnosticsEnabled,
   wrapToolWithBeforeToolCallHook,
   type BeforeToolCallPolicyDiagnosticState,
   type BeforeToolCallFailureDisposition,
   type DeferredPluginToolApproval,
+  type FinalToolInputPolicyOutcome,
 } from "../agents/agent-tools.before-tool-call.js";
 export { isReplaySafeToolCall } from "../agents/tool-mutation.js";
 export {

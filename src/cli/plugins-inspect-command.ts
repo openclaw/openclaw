@@ -403,6 +403,11 @@ export async function runPluginsInspectCommand(
       }`,
     );
   }
+  if (inspect.policy.requiredFinalToolInputPolicies.length > 0) {
+    policyLines.push(
+      `requiredFinalToolInputPolicies: ${inspect.policy.requiredFinalToolInputPolicies.join(", ")}`,
+    );
+  }
   lines.push(...formatInspectSection("Policy", policyLines));
   lines.push(
     ...formatInspectSection(

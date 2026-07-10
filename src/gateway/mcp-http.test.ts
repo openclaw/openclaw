@@ -2,6 +2,7 @@
 // JSON-RPC surface, including hook filtering and context propagation.
 import { request } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { runFinalToolInputPolicies as runFinalToolInputPoliciesType } from "../agents/agent-tools.before-tool-call.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { buildMcpToolSchema, clearMcpToolSchemaWarningsForTest } from "./mcp-http.schema.js";
@@ -11,6 +12,11 @@ type MockGatewayTool = {
   label: string;
   description: string;
   parameters: Record<string, unknown>;
+  prepareBeforeToolCallParams?: (params: unknown, ctx: unknown) => unknown;
+  finalizeBeforeToolCallParams?: (
+    params: unknown,
+    preparedParams: unknown,
+  ) => unknown;
   execute: (...args: unknown[]) => Promise<{
     content: unknown[];
     details?: Record<string, unknown>;
@@ -37,6 +43,10 @@ type MockBeforeToolCallHookResult =
       reason: string;
     }
   | { blocked: false; params: unknown };
+
+type RunFinalToolInputPolicies = typeof runFinalToolInputPoliciesType;
+type RunFinalToolInputPoliciesArgs = Parameters<RunFinalToolInputPolicies>[0];
+type RunFinalToolInputPoliciesResult = Awaited<ReturnType<RunFinalToolInputPolicies>>;
 
 type ScopedToolsCall = {
   sessionKey?: string;
@@ -87,6 +97,14 @@ const runBeforeToolCallHookMock = vi.hoisted(() =>
   ),
 );
 
+const runFinalToolInputPoliciesMock = vi.hoisted(() =>
+  vi.fn(
+    async (_args: RunFinalToolInputPoliciesArgs): Promise<RunFinalToolInputPoliciesResult> => ({
+      blocked: false,
+    }),
+  ),
+);
+
 const resolveGatewayScopedToolsMock = vi.hoisted(() =>
   vi.fn<(...args: unknown[]) => MockGatewayScopedTools>(() => ({
     agentId: "main",
@@ -125,6 +143,8 @@ vi.mock("../config/sessions.js", () => ({
 vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: (...args: Parameters<typeof runBeforeToolCallHookMock>) =>
     runBeforeToolCallHookMock(...args),
+  runFinalToolInputPolicies: (...args: Parameters<typeof runFinalToolInputPoliciesMock>) =>
+    runFinalToolInputPoliciesMock(...args),
 }));
 
 vi.mock("./tool-resolution.js", () => ({
@@ -506,6 +526,14 @@ function expectMcpToolNames(payload: McpToolResultPayload, expected: string[]) {
   }
 }
 
+function expectMcpToolResultPayload(
+  payload: object | null,
+): asserts payload is McpToolResultPayload {
+  if (payload === null || !("result" in payload)) {
+    throw new Error("expected MCP tool result payload");
+  }
+}
+
 function expectMcpResultText(payload: McpToolResultPayload, text: string, isError?: boolean) {
   if (isError === undefined) {
     expect(payload.result?.isError).not.toBe(true);
@@ -568,6 +596,42 @@ function makeCronTool(overrides: Partial<MockGatewayTool> = {}): MockGatewayTool
   });
 }
 
+function makeAsyncFinalizingTool(overrides: Partial<MockGatewayTool> = {}): MockGatewayTool {
+  return makeMockTool({
+    name: "nodes_like_finalize",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        outPath: { type: "string" },
+      },
+      additionalProperties: true,
+    },
+    prepareBeforeToolCallParams: async (args) => {
+      await Promise.resolve();
+      return { ...(args as Record<string, unknown>), prepared: true };
+    },
+    finalizeBeforeToolCallParams: async (args, preparedArgs) => {
+      await Promise.resolve();
+      const input = args as Record<string, unknown>;
+      if ((preparedArgs as { prepared?: unknown }).prepared !== true) {
+        throw new Error("missing prepared input");
+      }
+      if (input.path === "</arg_value>>") {
+        throw new Error("malformed final path");
+      }
+      const outPath = input.outPath;
+      return {
+        ...input,
+        ...(typeof outPath === "string"
+          ? { outPath: outPath.startsWith("/") ? outPath : `/workspace/${outPath}` }
+          : {}),
+      };
+    },
+    ...overrides,
+  });
+}
+
 function mockScopedTools(tools: MockGatewayTool[]) {
   resolveGatewayScopedToolsMock.mockReturnValue({
     agentId: "main",
@@ -609,6 +673,12 @@ beforeEach(() => {
     async (args: { params: unknown }): Promise<MockBeforeToolCallHookResult> => ({
       blocked: false,
       params: args.params,
+    }),
+  );
+  runFinalToolInputPoliciesMock.mockClear();
+  runFinalToolInputPoliciesMock.mockImplementation(
+    async (_args: RunFinalToolInputPoliciesArgs): Promise<RunFinalToolInputPoliciesResult> => ({
+      blocked: false,
     }),
   );
   mockScopedTools([makeMessageTool()]);
@@ -819,7 +889,7 @@ describe("mcp loopback server", () => {
         "x-openclaw-task-suggestion-delivery-mode": "gateway",
         "x-openclaw-require-explicit-message-target": "true",
       }),
-      body: mcpToolsListBody(),
+      body: mcpToolCallBody("message", { body: "hello" }),
     });
 
     expect(response.status).toBe(200);
@@ -838,6 +908,14 @@ describe("mcp loopback server", () => {
     expect(call.taskSuggestionDeliveryMode).toBe("gateway");
     expect(call.requireExplicitMessageTarget).toBe(true);
     expect(call.surface).toBe("loopback");
+    expect(runFinalToolInputPoliciesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          sessionId: "session-123",
+          channelId: "telegram:chat123",
+        }),
+      }),
+    );
     expect(Array.from(call.excludeToolNames ?? [])).toEqual([
       "read",
       "write",
@@ -1949,6 +2027,132 @@ describe("mcp loopback server", () => {
     expectMcpResultText(payload, "blocked by hook", true);
   });
 
+  it("applies final input policy to hook-adjusted params before loopback execution", async () => {
+    const execute = vi.fn<MockGatewayTool["execute"]>(async () => ({
+      content: [{ type: "text", text: "EXECUTED" }],
+    }));
+    const onToolCallResult = vi.fn();
+    const tool = makeMessageTool({ execute });
+    runBeforeToolCallHookMock.mockResolvedValueOnce({
+      blocked: false,
+      params: { body: "rewritten" },
+    });
+    runFinalToolInputPoliciesMock.mockResolvedValueOnce({
+      blocked: true,
+      reason: "Tool call blocked by final input policy",
+    });
+
+    const response = await handleMcpJsonRpc({
+      message: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "message", arguments: { body: "original" } },
+      },
+      tools: [tool as unknown as AnyAgentTool],
+      toolSchema: buildMockMcpToolSchema([tool]),
+      signal: new AbortController().signal,
+      hookContext: {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "session-final-policy",
+        channelId: "telegram:chat123",
+      },
+      onToolCallResult,
+    });
+
+    expect(runFinalToolInputPoliciesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "message",
+        params: { body: "rewritten" },
+        ctx: expect.objectContaining({
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          sessionId: "session-final-policy",
+          channelId: "telegram:chat123",
+        }),
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(execute).not.toHaveBeenCalled();
+    expect(response).toMatchObject({
+      result: {
+        content: [{ type: "text", text: "Tool call blocked by final input policy" }],
+        isError: true,
+      },
+    });
+    expect(onToolCallResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "blocked",
+        deniedReason: "final-tool-input-policy",
+      }),
+    );
+  });
+
+  it("rejects hook-rewritten malformed input during async MCP finalization", async () => {
+    const execute = vi.fn<MockGatewayTool["execute"]>(async () => ({
+      content: [{ type: "text", text: "EXECUTED" }],
+    }));
+    const tool = makeAsyncFinalizingTool({ execute });
+    runBeforeToolCallHookMock.mockResolvedValueOnce({
+      blocked: false,
+      params: { path: "</arg_value>>" },
+    });
+
+    const response = await handleMcpJsonRpc({
+      message: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: tool.name, arguments: { path: "safe.txt" } },
+      },
+      tools: [tool as unknown as AnyAgentTool],
+      toolSchema: buildMockMcpToolSchema([tool]),
+      signal: new AbortController().signal,
+    });
+
+    expectMcpToolResultPayload(response);
+    expectMcpResultText(response, "malformed final path", true);
+    expect(runFinalToolInputPoliciesMock).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("applies final input policy and executes the same canonical MCP output path", async () => {
+    const execute = vi.fn<MockGatewayTool["execute"]>(async () => ({
+      content: [{ type: "text", text: "EXECUTED" }],
+    }));
+    const tool = makeAsyncFinalizingTool({ execute });
+    runBeforeToolCallHookMock.mockResolvedValueOnce({
+      blocked: false,
+      params: { outPath: "results/output.png" },
+    });
+
+    const response = await handleMcpJsonRpc({
+      message: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: tool.name, arguments: { outPath: "draft.png" } },
+      },
+      tools: [tool as unknown as AnyAgentTool],
+      toolSchema: buildMockMcpToolSchema([tool]),
+      signal: new AbortController().signal,
+    });
+
+    expectMcpToolResultPayload(response);
+    expectMcpResultText(response, "EXECUTED");
+    expect(runFinalToolInputPoliciesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: { outPath: "/workspace/results/output.png" },
+      }),
+    );
+    expect(execute).toHaveBeenCalledWith(
+      expect.any(String),
+      { outPath: "/workspace/results/output.png" },
+      expect.any(AbortSignal),
+    );
+  });
+
   it("forwards the request abort signal to loopback tool execution", async () => {
     const execute = vi.fn<MockGatewayTool["execute"]>(async () => ({
       content: [{ type: "text", text: "EXECUTED" }],
@@ -1965,7 +2169,6 @@ describe("mcp loopback server", () => {
 
   it("preserves request-disconnect evidence without classifying a tool failure", async () => {
     const controller = new AbortController();
-    controller.abort();
     const onToolCallResult = vi.fn();
     const partialDelivery = Object.assign(new Error("request disconnected"), {
       name: "AbortError",
@@ -1973,6 +2176,7 @@ describe("mcp loopback server", () => {
     });
     const tool = makeMessageTool({
       execute: async () => {
+        controller.abort();
         throw partialDelivery;
       },
     });

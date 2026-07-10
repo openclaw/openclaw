@@ -15,6 +15,7 @@ import {
   recordAdjustedParamsForToolCall,
   recordStructuredReplayTrustForToolCall,
   runBeforeToolCallHook,
+  runFinalToolInputPolicies,
 } from "./agent-tools.before-tool-call.js";
 import {
   getCodeModeExecBeforeHookMetadata,
@@ -26,16 +27,14 @@ import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { normalizeToolName } from "./tool-policy.js";
-import { jsonResult, payloadTextResult } from "./tools/common.js";
+import {
+  finalizeToolCallParams,
+  jsonResult,
+  payloadTextResult,
+  prepareToolCallParams,
+} from "./tools/common.js";
 
 type AnyAgentTool = AgentTool;
-type BeforeToolCallPreparingTool = AnyAgentTool & {
-  prepareBeforeToolCallParams?: (
-    params: unknown,
-    ctx: { toolCallId?: string; hookContext?: HookContext; signal?: AbortSignal },
-  ) => unknown;
-  finalizeBeforeToolCallParams?: (params: unknown, preparedParams: unknown) => unknown;
-};
 
 type ToolExecuteArgsCurrent = [
   string,
@@ -282,32 +281,6 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   };
 }
 
-async function prepareToolParamsBeforeHook(params: {
-  tool: AnyAgentTool;
-  rawParams: unknown;
-  toolCallId?: string;
-  hookContext?: HookContext;
-  signal?: AbortSignal;
-}): Promise<unknown> {
-  const prepare = (params.tool as BeforeToolCallPreparingTool).prepareBeforeToolCallParams;
-  return prepare
-    ? await prepare(params.rawParams, {
-        ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
-        ...(params.hookContext ? { hookContext: params.hookContext } : {}),
-        ...(params.signal ? { signal: params.signal } : {}),
-      })
-    : params.rawParams;
-}
-
-function finalizeToolParamsBeforeExecute(params: {
-  tool: AnyAgentTool;
-  executeParams: unknown;
-  preparedParams: unknown;
-}): unknown {
-  const finalize = (params.tool as BeforeToolCallPreparingTool).finalizeBeforeToolCallParams;
-  return finalize ? finalize(params.executeParams, params.preparedParams) : params.executeParams;
-}
-
 const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
 
 /** Find client-hosted tool names that collide with runtime or sibling tools. */
@@ -378,9 +351,7 @@ export function toToolDefinitions(
         let executeParams = params;
         try {
           if (!beforeHookWrapped) {
-            const preparedParams = await prepareToolParamsBeforeHook({
-              tool,
-              rawParams: params,
+            const preparedParams = await prepareToolCallParams(tool, params, {
               ...(toolCallId ? { toolCallId } : {}),
               ...(hookContext ? { hookContext } : {}),
               ...(signal ? { signal } : {}),
@@ -417,13 +388,26 @@ export function toToolDefinitions(
               hookParams,
               adjustedParams: hookOutcome.params,
             });
-            executeParams = finalizeToolParamsBeforeExecute({
-              tool,
-              executeParams,
-              preparedParams,
+            executeParams = await finalizeToolCallParams(tool, executeParams, preparedParams);
+            const authorizationOutcome = await runFinalToolInputPolicies({
+              toolName: name,
+              params: executeParams,
+              ...getCodeModeExecBeforeHookMetadata({ tool, params: executeParams }),
+              toolCallId,
+              ctx: hookContext,
+              signal,
             });
+            if (authorizationOutcome.blocked) {
+              return buildBlockedToolResult({
+                reason: authorizationOutcome.reason,
+                deniedReason: "final-tool-input-policy",
+                toolCallId,
+                runId: hookContext?.runId,
+              });
+            }
             recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
           }
+          signal?.throwIfAborted();
           const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
           const result = normalizeToolExecutionResult({
             toolName: normalizedName,
@@ -509,7 +493,7 @@ export function toClientToolDefinitions(
       description: func.description ?? "",
       parameters: func.parameters as ToolDefinition["parameters"],
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
-        const { toolCallId, params } = splitToolExecuteArgs(args);
+        const { toolCallId, params, signal } = splitToolExecuteArgs(args);
         if (onClientToolCall && typeof onClientToolCall !== "function") {
           onClientToolCall.reserve?.(toolCallId, func.name);
         }
@@ -535,14 +519,32 @@ export function toClientToolDefinitions(
             }
             throw new Error(outcome.reason);
           }
-          const adjustedParams = outcome.params;
-          const paramsRecord = coerceParamsRecord(adjustedParams);
+          const delegatedParams = coerceParamsRecord(outcome.params);
+          const authorizationOutcome = await runFinalToolInputPolicies({
+            toolName: func.name,
+            params: delegatedParams,
+            toolCallId,
+            ctx: hookContext,
+            signal,
+          });
+          if (authorizationOutcome.blocked) {
+            if (onClientToolCall && typeof onClientToolCall !== "function") {
+              onClientToolCall.discard?.(toolCallId, func.name);
+            }
+            return buildBlockedToolResult({
+              reason: authorizationOutcome.reason,
+              deniedReason: "final-tool-input-policy",
+              toolCallId,
+              runId: hookContext?.runId,
+            });
+          }
           // Notify handler that a client tool was called.
+          signal?.throwIfAborted();
           if (onClientToolCall) {
             if (typeof onClientToolCall === "function") {
-              onClientToolCall(func.name, paramsRecord);
+              onClientToolCall(func.name, delegatedParams);
             } else {
-              onClientToolCall.complete(toolCallId, func.name, paramsRecord);
+              onClientToolCall.complete(toolCallId, func.name, delegatedParams);
             }
           }
         } catch (err) {

@@ -3,7 +3,7 @@
  * Converts malformed file-tool arguments into retryable errors and fixes the
  * specific XML suffix and Office-extension corruption seen in path arguments.
  */
-import type { AnyAgentTool } from "./agent-tools.types.js";
+import { finalizeToolCallParams, type AnyAgentTool } from "./tools/common.js";
 
 export type RequiredParamGroup = {
   keys: readonly string[];
@@ -180,6 +180,22 @@ function resolveFileToolPathParamKeys(groups: readonly RequiredParamGroup[] | un
   return [...keys];
 }
 
+/** Normalize and validate the exact file-tool input delegated to execution. */
+export function normalizeAndValidateToolParams(
+  params: unknown,
+  requiredParamGroups: readonly RequiredParamGroup[] | undefined,
+  toolName: string,
+): unknown {
+  const record = getToolParamsRecord(params);
+  const pathKeys = resolveFileToolPathParamKeys(requiredParamGroups);
+  const normalizedParams =
+    record && pathKeys.length > 0 ? normalizeFileToolPathParamsFromKeys(record, pathKeys) : params;
+  if (requiredParamGroups?.length) {
+    assertRequiredParams(getToolParamsRecord(normalizedParams), requiredParamGroups, toolName);
+  }
+  return normalizedParams;
+}
+
 /** Throw actionable retry guidance when required tool params are missing. */
 export function assertRequiredParams(
   record: Record<string, unknown> | undefined,
@@ -229,16 +245,16 @@ export function wrapToolParamValidation(
 ): AnyAgentTool {
   return {
     ...tool,
+    finalizeBeforeToolCallParams: async (params, preparedParams) => {
+      const innerParams = await finalizeToolCallParams(tool, params, preparedParams);
+      return normalizeAndValidateToolParams(innerParams, requiredParamGroups, tool.name);
+    },
     execute: async (toolCallId, params, signal, onUpdate) => {
-      const record = getToolParamsRecord(params);
-      const pathKeys = resolveFileToolPathParamKeys(requiredParamGroups);
-      const normalizedParams =
-        record && pathKeys.length > 0
-          ? normalizeFileToolPathParamsFromKeys(record, pathKeys)
-          : params;
-      if (requiredParamGroups?.length) {
-        assertRequiredParams(getToolParamsRecord(normalizedParams), requiredParamGroups, tool.name);
-      }
+      const normalizedParams = normalizeAndValidateToolParams(
+        params,
+        requiredParamGroups,
+        tool.name,
+      );
       return tool.execute(toolCallId, normalizedParams, signal, onUpdate);
     },
   };

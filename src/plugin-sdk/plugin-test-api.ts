@@ -67,6 +67,7 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
       sessionKey: injection.sessionKey,
     }),
     registerTrustedToolPolicy() {},
+    registerFinalToolInputPolicy() {},
     registerToolMetadata() {},
     registerControlUiDescriptor() {},
     registerRuntimeLifecycle() {},

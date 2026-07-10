@@ -41,9 +41,26 @@ export function resolveInstalledPluginIndexPolicyHash(config: OpenClawConfig | u
       slots: normalized.slots,
       entries: Object.fromEntries(
         Object.entries(normalized.entries)
-          .flatMap(([pluginId, entry]) =>
-            typeof entry.enabled === "boolean" ? [[pluginId, entry.enabled] as const] : [],
-          )
+          .flatMap(([pluginId, entry]) => {
+            const requiredFinalToolInputPolicies = [
+              ...(entry.requiredFinalToolInputPolicies ?? []),
+            ].toSorted((left, right) => left.localeCompare(right));
+            if (
+              typeof entry.enabled !== "boolean" &&
+              requiredFinalToolInputPolicies.length === 0
+            ) {
+              return [];
+            }
+            return [
+              [
+                pluginId,
+                {
+                  enabled: entry.enabled ?? null,
+                  requiredFinalToolInputPolicies,
+                },
+              ] as const,
+            ];
+          })
           .toSorted(([left], [right]) => left.localeCompare(right)),
       ),
     },

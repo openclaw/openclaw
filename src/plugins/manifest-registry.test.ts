@@ -2096,6 +2096,7 @@ describe("loadPluginManifestRegistry", () => {
       contracts: {
         agentToolResultMiddleware: ["openclaw", "codex"],
         trustedToolPolicies: ["workflow-budget"],
+        finalToolInputPolicies: ["external-pdp"],
       },
       configSchema: { type: "object" },
     });
@@ -2109,6 +2110,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.contracts).toEqual({
       agentToolResultMiddleware: ["openclaw", "codex"],
       trustedToolPolicies: ["workflow-budget"],
+      finalToolInputPolicies: ["external-pdp"],
     });
   });
 
@@ -2116,11 +2118,13 @@ describe("loadPluginManifestRegistry", () => {
     const contracts = manifestRegistryTesting.mergeManifestContracts(
       {
         agentToolResultMiddleware: ["openclaw"],
+        finalToolInputPolicies: ["local-pdp"],
         usageProviders: ["openai"],
       },
       {
         agentToolResultMiddleware: ["codex"],
         trustedToolPolicies: ["workflow-budget"],
+        finalToolInputPolicies: ["external-pdp"],
         usageProviders: ["openrouter"],
       },
     );
@@ -2128,6 +2132,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(contracts).toEqual({
       agentToolResultMiddleware: ["openclaw", "codex"],
       trustedToolPolicies: ["workflow-budget"],
+      finalToolInputPolicies: ["local-pdp", "external-pdp"],
       usageProviders: ["openai", "openrouter"],
     });
   });

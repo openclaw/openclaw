@@ -117,6 +117,7 @@ import {
 } from "../run-session-target.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
+import { applyRuntimeToolSchemaNormalization } from "../runtime-plan/tools.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -1008,10 +1009,11 @@ async function compactEmbeddedAgentSessionDirectOnce(
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
     });
-    const tools = runtimePlan.tools.normalize(
-      [...normalizableToolProjection.tools],
-      runtimePlanModelContext,
-    );
+    const tools = applyRuntimeToolSchemaNormalization({
+      tools: [...normalizableToolProjection.tools],
+      normalize: (normalizationInputs) =>
+        runtimePlan.tools.normalize(normalizationInputs, runtimePlanModelContext),
+    });
     const bundleMcpRuntime = toolsEnabled
       ? await createBundleMcpToolRuntime({
           workspaceDir: effectiveWorkspace,
@@ -1051,10 +1053,11 @@ async function compactEmbeddedAgentSessionDirectOnce(
     }
     const normalizedBundledTools =
       filteredBundledTools.length > 0
-        ? runtimePlan.tools.normalize(
-            [...normalizableBundledToolProjection.tools],
-            runtimePlanModelContext,
-          )
+        ? applyRuntimeToolSchemaNormalization({
+            tools: [...normalizableBundledToolProjection.tools],
+            normalize: (normalizationInputs) =>
+              runtimePlan.tools.normalize(normalizationInputs, runtimePlanModelContext),
+          })
         : filteredBundledTools;
     const projectedEffectiveTools = [...tools, ...normalizedBundledTools];
     const toolSchemaProjection = filterRuntimeCompatibleTools(projectedEffectiveTools);

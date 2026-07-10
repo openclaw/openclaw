@@ -100,6 +100,7 @@ import {
   type PluginSessionActionRegistration,
   type PluginSessionSchedulerJobRegistration,
   type PluginSessionExtensionRegistration,
+  type PluginFinalToolInputPolicyRegistration,
   type PluginToolMetadataRegistration,
   type PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
@@ -132,8 +133,13 @@ import type {
   PluginRegistryParams,
   PluginSessionActionRegistryRegistration,
   PluginTextTransformsRegistration,
+  PluginFinalToolInputPolicyRegistryRegistration,
   PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
+import {
+  MAX_FINAL_TOOL_INPUT_POLICY_TIMEOUT_MS,
+  MIN_FINAL_TOOL_INPUT_POLICY_TIMEOUT_MS,
+} from "./final-tool-input-policy-constants.js";
 export type {
   PluginReloadRegistration,
   PluginRuntimeLifecycleRegistryRegistration,
@@ -418,9 +424,34 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const pluginHookRollback = new Map<string, HookRollbackEntry[]>();
   const pluginsWithChannelRegistrationConflict = new Set<string>();
   const pluginSideEffectGuards = new Map<string, Set<PluginSideEffectGuard>>();
+  const finalToolInputPolicyRegistrationFailures = new Map<string, string[]>();
 
   const pushDiagnostic = (diag: PluginDiagnostic) => {
     registry.diagnostics.push(diag);
+  };
+  const rejectFinalToolInputPolicyRegistration = (
+    record: PluginRecord,
+    message: string,
+  ): never => {
+    pushDiagnostic({
+      level: "error",
+      pluginId: record.id,
+      source: record.source,
+      message,
+    });
+    const failures = finalToolInputPolicyRegistrationFailures.get(record.id) ?? [];
+    failures.push(message);
+    finalToolInputPolicyRegistrationFailures.set(record.id, failures);
+    throw new Error(message);
+  };
+  const assertNoFinalToolInputPolicyRegistrationFailures = (record: PluginRecord): void => {
+    const failures = finalToolInputPolicyRegistrationFailures.get(record.id);
+    if (!failures || failures.length === 0) {
+      return;
+    }
+    throw new Error(
+      `plugin "${record.id}" attempted rejected final tool input policy registrations: ${failures.join("; ")}`,
+    );
   };
   const {
     registerModelCatalogProvider,
@@ -2116,6 +2147,78 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     policies.push(registration);
   };
 
+  const registerFinalToolInputPolicy = (
+    record: PluginRecord,
+    policy: PluginFinalToolInputPolicyRegistration,
+  ) => {
+    const invalidRegistrationMessage =
+      "final tool input policy registration requires id, description, and evaluate()";
+    if (!policy || typeof policy !== "object") {
+      rejectFinalToolInputPolicyRegistration(record, invalidRegistrationMessage);
+    }
+    const id = normalizeHostHookString(policy.id);
+    const description = normalizeHostHookString(policy.description);
+    if (!id || !description || typeof policy.evaluate !== "function") {
+      rejectFinalToolInputPolicyRegistration(record, invalidRegistrationMessage);
+    }
+    if (
+      policy.timeoutMs !== undefined &&
+      (!Number.isInteger(policy.timeoutMs) ||
+        policy.timeoutMs < MIN_FINAL_TOOL_INPUT_POLICY_TIMEOUT_MS ||
+        policy.timeoutMs > MAX_FINAL_TOOL_INPUT_POLICY_TIMEOUT_MS)
+    ) {
+      rejectFinalToolInputPolicyRegistration(
+        record,
+        `final tool input policy timeoutMs must be an integer between ` +
+          `${MIN_FINAL_TOOL_INPUT_POLICY_TIMEOUT_MS} and ${MAX_FINAL_TOOL_INPUT_POLICY_TIMEOUT_MS}: ${id}`,
+      );
+    }
+    if (!(record.contracts?.finalToolInputPolicies ?? []).includes(id)) {
+      rejectFinalToolInputPolicyRegistration(
+        record,
+        `plugin must declare contracts.finalToolInputPolicies for: ${id}`,
+      );
+    }
+    if (!canRegisterInstalledTrustedHook(record)) {
+      rejectFinalToolInputPolicyRegistration(
+        record,
+        `plugin must be explicitly enabled to register final tool input policy: ${id}`,
+      );
+    }
+    const policies = registry.finalToolInputPolicies;
+    const existing = policies.find(
+      (entry) => entry.pluginId === record.id && entry.policy.id === id,
+    );
+    if (existing) {
+      rejectFinalToolInputPolicyRegistration(
+        record,
+        `final tool input policy already registered: ${id} (${existing.pluginId})`,
+      );
+    }
+    const registration: PluginFinalToolInputPolicyRegistryRegistration = {
+      pluginId: record.id,
+      pluginName: record.name,
+      policy: {
+        ...policy,
+        id,
+        description,
+      },
+      origin: record.origin,
+      source: record.source,
+      rootDir: record.rootDir,
+    };
+    if (record.origin === "bundled") {
+      const firstInstalledPolicyIndex = policies.findIndex((entry) => entry.origin !== "bundled");
+      if (firstInstalledPolicyIndex === -1) {
+        policies.push(registration);
+      } else {
+        policies.splice(firstInstalledPolicyIndex, 0, registration);
+      }
+      return;
+    }
+    policies.push(registration);
+  };
+
   const registerToolMetadata = (record: PluginRecord, metadata: PluginToolMetadataRegistration) => {
     const toolName = normalizeHostHookString(metadata.toolName);
     if (!toolName) {
@@ -3039,6 +3142,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 });
               },
               registerTrustedToolPolicy: (policy) => registerTrustedToolPolicy(record, policy),
+              registerFinalToolInputPolicy: (policy) =>
+                registerFinalToolInputPolicy(record, policy),
               registerToolMetadata: (metadata) => registerToolMetadata(record, metadata),
               registerControlUiDescriptor: (descriptor) =>
                 registerControlUiDescriptor(record, descriptor),
@@ -3364,6 +3469,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerCommand,
     registerSessionExtension,
     registerTrustedToolPolicy,
+    registerFinalToolInputPolicy,
+    assertNoFinalToolInputPolicyRegistrationFailures,
     registerToolMetadata,
     registerControlUiDescriptor,
     registerRuntimeLifecycle,

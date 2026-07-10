@@ -5,6 +5,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolveRequiredFinalToolInputPolicyOwnerIds } from "../plugins/final-tool-input-policy-requirements.js";
 import { getActivePluginRuntimeSubagentMode } from "../plugins/runtime.js";
 import { ensureStandaloneRuntimePluginRegistryLoaded } from "../plugins/runtime/standalone-runtime-registry-loader.js";
 import { resolveUserPath } from "../utils.js";
@@ -38,7 +39,12 @@ export function ensureRuntimePluginsLoaded(params: {
   workspaceDir?: string | null;
   allowGatewaySubagentBinding?: boolean;
 }): void {
-  if (params.config && !normalizePluginsConfig(params.config.plugins).enabled) {
+  const requiredPolicyOwnerIds = resolveRequiredFinalToolInputPolicyOwnerIds(params.config);
+  if (
+    params.config &&
+    !normalizePluginsConfig(params.config.plugins).enabled &&
+    requiredPolicyOwnerIds.length === 0
+  ) {
     return;
   }
   const workspaceDir =

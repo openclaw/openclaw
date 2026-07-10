@@ -5,6 +5,7 @@ sidebarTitle: "Agent Harness"
 read_when:
   - You are changing the embedded agent runtime or harness registry
   - You are registering an agent harness from a bundled or trusted plugin
+  - You are enforcing final tool input policy in a native harness
   - You need to understand how the Codex plugin relates to model providers
 ---
 
@@ -230,6 +231,64 @@ tool-search/code-mode control selection, local-model lean defaults,
 runtime-compatible schema filtering, hidden catalog execution, directory
 hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
 conversion and native execution callback.
+
+### Final tool input policies in native harnesses
+
+**Import:** `openclaw/plugin-sdk/agent-harness-runtime`
+
+A harness that directly executes or delegates a native tool owns that tool's
+final input-policy enforcement point. After tool visibility, trusted and
+ordinary pre-tool policy, OpenClaw-managed approvals and rewrites, and native
+surface-specific finalization of the host-visible payload, call
+`runFinalToolInputPolicies(...)` immediately before allowing execution
+or delegation:
+
+```typescript
+import { runFinalToolInputPolicies } from "openclaw/plugin-sdk/agent-harness-runtime";
+
+const finalInput = await runFinalToolInputPolicies({
+  toolName,
+  params: hostFinalizedParams,
+  toolCallId,
+  ctx: { agentId, sessionId, sessionKey, runId, channelId },
+  signal,
+});
+
+if (finalInput.blocked) {
+  return renderNativeToolDenied(finalInput.reason);
+}
+signal?.throwIfAborted();
+return executeNativeTool(hostFinalizedParams);
+```
+
+Pass the host-finalized plain-object input envelope and every context field the
+harness received from OpenClaw. The envelope is not necessarily the complete
+provider-internal action. Context fields are optional, but omission does not
+bypass policies; a policy may deny when a required fact or identity is
+unavailable. A blocked outcome is terminal: do not execute or delegate the
+tool, and expose only its generic `reason` through the native protocol.
+`blocked: false` means only that no final policy vetoed the call; it never
+grants a tool rejected by visibility, trusted policy, ordinary hooks, or
+approval. The helper returns no parameters. When final input policies are
+active, it seals `hostFinalizedParams` in place before awaiting them: the
+top-level object identity and hidden or symbol-keyed state remain, but
+enumerable string-keyed JSON values are canonicalized, rebound, and recursively
+frozen, so nested references can be replaced. Policies see separate detached
+clones. After an unblocked outcome, pass the same sealed top-level object to the
+execution or delegation sink and treat it as read-only. Recheck the caller's
+abort signal immediately before the sink to close a cancellation race after
+the helper returns.
+
+The helper runs only the restrict-only final input-policy tier. It does not
+replace `before_tool_call`, approvals, or native parameter finalization. An
+earlier check at a permission-request boundary may reject work sooner, but the
+actual execution boundary must still call the helper. Built-in
+OpenClaw-managed tool surfaces perform this check. Provider- or harness-native
+Codex and ACPX tools do not inherit it; integrating the public helper is the
+harness author's responsibility. A provider-native approval may still occur
+inside the handler after this check; it must not change the already evaluated
+host-visible payload. If any later native step rewrites that payload, run final
+input policies again before execution.
 
 ### Native Codex harness mode
 

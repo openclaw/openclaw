@@ -19,6 +19,7 @@ import type {
   PluginSessionActionRegistration,
   PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
+  PluginFinalToolInputPolicyRegistration,
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
@@ -320,6 +321,15 @@ export type PluginTrustedToolPolicyRegistryRegistration = {
   rootDir?: string;
 };
 
+export type PluginFinalToolInputPolicyRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  policy: PluginFinalToolInputPolicyRegistration;
+  origin?: PluginRecord["origin"];
+  source: string;
+  rootDir?: string;
+};
+
 export type PluginToolMetadataRegistryRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -482,6 +492,7 @@ export type PluginRegistry = {
   interactiveHandlers: PluginInteractiveHandlerRegistryRegistration[];
   sessionExtensions: PluginSessionExtensionRegistryRegistration[];
   trustedToolPolicies: PluginTrustedToolPolicyRegistryRegistration[];
+  finalToolInputPolicies: PluginFinalToolInputPolicyRegistryRegistration[];
   toolMetadata: PluginToolMetadataRegistryRegistration[];
   controlUiDescriptors: PluginControlUiDescriptorRegistryRegistration[];
   runtimeLifecycles: PluginRuntimeLifecycleRegistryRegistration[];

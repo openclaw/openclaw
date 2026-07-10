@@ -253,6 +253,18 @@ describe("FS tools with workspaceOnly=false", () => {
     const writeTool = requireTool(tools, "write");
     expect(tools.map((tool) => tool.name)).toEqual(["write"]);
 
+    const finalized = await writeTool.finalizeBeforeToolCallParams?.(
+      { path: allowedRelativePath, content: "new note" },
+      { path: allowedRelativePath, content: "new note" },
+    );
+    if (!finalized || typeof finalized !== "object") {
+      throw new Error("missing finalized memory input");
+    }
+    Object.freeze(finalized);
+    await expect(writeTool.finalizeBeforeToolCallParams?.(finalized, finalized)).resolves.toBe(
+      finalized,
+    );
+
     await expect(
       writeTool.execute("test-call-memory-deny", {
         path: outsideFile,
@@ -260,10 +272,7 @@ describe("FS tools with workspaceOnly=false", () => {
       }),
     ).rejects.toThrow(/Memory flush writes are restricted to memory\/2026-03-07\.md/);
 
-    const result = await writeTool.execute("test-call-memory-append", {
-      path: allowedRelativePath,
-      content: "new note",
-    });
+    const result = await writeTool.execute("test-call-memory-append", finalized);
     expect(hasToolError(result)).toBe(false);
     expect(result).toStrictEqual({
       content: [{ type: "text", text: "Appended content to memory/2026-03-07.md." }],

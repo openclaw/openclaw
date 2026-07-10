@@ -426,6 +426,17 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         },
       },
       {
+        id: "external-authorization-policy",
+        channels: [],
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+        contracts: {
+          finalToolInputPolicies: ["external-pdp"],
+        },
+      },
+      {
         id: "lossless-claw",
         kind: "context-engine",
         channels: [],
@@ -1526,6 +1537,17 @@ describe("resolveGatewayStartupPluginIds", () => {
         memorySlot: "none",
       }),
       expected: ["external-trusted-policy"],
+    });
+  });
+
+  it("loads explicit final tool input policy plugins at startup", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        allowPluginIds: ["external-authorization-policy"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["external-authorization-policy"],
     });
   });
 

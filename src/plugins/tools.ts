@@ -40,6 +40,18 @@ import type { OpenClawPluginToolContext } from "./types.js";
 
 let cachedDescriptorRuntimeRegistries = new WeakMap<CachedPluginToolDescriptor, PluginRegistry>();
 
+type CachedDescriptorPreparedState = {
+  tool: AnyAgentTool;
+  concretePreparedParams: unknown;
+};
+
+function requireCachedDescriptorLifecycleRoot(params: unknown, toolName: string): object {
+  if (!params || typeof params !== "object") {
+    throw new Error(`plugin tool lifecycle requires object parameters: ${toolName}`);
+  }
+  return params;
+}
+
 export function resetPluginToolDescriptorCache(): void {
   resetCachedPluginToolDescriptors();
   cachedDescriptorRuntimeRegistries = new WeakMap();
@@ -140,6 +152,20 @@ function wrapPluginToolCallbacks(entry: PluginToolRegistration, tool: AnyAgentTo
     ? (args: unknown) =>
         runWithPluginToolScope(entry, () => Reflect.apply(prepareArguments, tool, [args]))
     : undefined;
+  const prepareBeforeToolCallParams = tool.prepareBeforeToolCallParams;
+  const scopedPrepareBeforeToolCallParams = prepareBeforeToolCallParams
+    ? (params: unknown, ctx: Parameters<NonNullable<typeof prepareBeforeToolCallParams>>[1]) =>
+        runWithPluginToolScope(entry, () =>
+          Reflect.apply(prepareBeforeToolCallParams, tool, [params, ctx]),
+        )
+    : undefined;
+  const finalizeBeforeToolCallParams = tool.finalizeBeforeToolCallParams;
+  const scopedFinalizeBeforeToolCallParams = finalizeBeforeToolCallParams
+    ? (params: unknown, preparedParams: unknown) =>
+        runWithPluginToolScope(entry, () =>
+          Reflect.apply(finalizeBeforeToolCallParams, tool, [params, preparedParams]),
+        )
+    : undefined;
   const scopedExecute = (
     toolCallId: string,
     params: unknown,
@@ -158,6 +184,12 @@ function wrapPluginToolCallbacks(entry: PluginToolRegistration, tool: AnyAgentTo
       if (prop === "prepareArguments" && scopedPrepareArguments) {
         return scopedPrepareArguments;
       }
+      if (prop === "prepareBeforeToolCallParams" && scopedPrepareBeforeToolCallParams) {
+        return scopedPrepareBeforeToolCallParams;
+      }
+      if (prop === "finalizeBeforeToolCallParams" && scopedFinalizeBeforeToolCallParams) {
+        return scopedFinalizeBeforeToolCallParams;
+      }
       if (prop === "execute") {
         return scopedExecute;
       }
@@ -169,6 +201,22 @@ function wrapPluginToolCallbacks(entry: PluginToolRegistration, tool: AnyAgentTo
           configurable: true,
           enumerable: Object.prototype.propertyIsEnumerable.call(target, prop),
           value: scopedPrepareArguments,
+          writable: true,
+        };
+      }
+      if (prop === "prepareBeforeToolCallParams" && scopedPrepareBeforeToolCallParams) {
+        return {
+          configurable: true,
+          enumerable: Object.prototype.propertyIsEnumerable.call(target, prop),
+          value: scopedPrepareBeforeToolCallParams,
+          writable: true,
+        };
+      }
+      if (prop === "finalizeBeforeToolCallParams" && scopedFinalizeBeforeToolCallParams) {
+        return {
+          configurable: true,
+          enumerable: Object.prototype.propertyIsEnumerable.call(target, prop),
+          value: scopedFinalizeBeforeToolCallParams,
           writable: true,
         };
       }
@@ -682,6 +730,66 @@ function createCachedDescriptorPluginTool(params: {
   const { descriptor } = params.descriptor;
   const pluginId = descriptor.owner.kind === "plugin" ? descriptor.owner.pluginId : "";
   const toolName = descriptor.name;
+  const preparedStateByRoot = new WeakMap<object, CachedDescriptorPreparedState>();
+  const resolvedToolByFinalRoot = new WeakMap<object, AnyAgentTool>();
+  const resolveConcreteTool = (): AnyAgentTool => {
+    const loadOptions = buildPluginRuntimeLoadOptions(params.loadContext, {
+      activate: false,
+      toolDiscovery: true,
+      onlyPluginIds: [pluginId],
+      ...(params.runtimeOptions ? { runtimeOptions: params.runtimeOptions } : {}),
+    });
+    const registry = resolvePluginToolRegistry({
+      loadOptions,
+      onlyPluginIds: [pluginId],
+      retainedRegistry: cachedDescriptorRuntimeRegistries.get(params.descriptor),
+      onRetainRegistry: (retainedRegistry) => {
+        cachedDescriptorRuntimeRegistries.set(params.descriptor, retainedRegistry);
+      },
+    });
+    const candidates = registry?.tools.filter((candidate) => candidate.pluginId === pluginId);
+    if (!candidates || candidates.length === 0) {
+      throw new Error(`plugin tool runtime unavailable (${pluginId}): ${toolName}`);
+    }
+    const requestedToolName = normalizeToolName(toolName);
+    const matchingNamedCandidates: PluginToolRegistration[] = [];
+    const unnamedCandidates: PluginToolRegistration[] = [];
+    for (const candidate of candidates) {
+      if (candidate.names.length === 0) {
+        unnamedCandidates.push(candidate);
+        continue;
+      }
+      if (candidate.names.some((name) => normalizeToolName(name) === requestedToolName)) {
+        matchingNamedCandidates.push(candidate);
+      }
+    }
+    const resolveCandidateTool = (candidate: PluginToolRegistration): AnyAgentTool | undefined => {
+      const resolved = resolvePluginToolFactory(candidate, params.ctx);
+      const listRaw: unknown[] = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
+      for (const toolRaw of listRaw) {
+        const malformedReason = describeMalformedPluginTool(toolRaw);
+        if (malformedReason) {
+          continue;
+        }
+        const runtimeTool = toolRaw as AnyAgentTool;
+        if (normalizeToolName(readPluginToolName(runtimeTool)) === requestedToolName) {
+          return runtimeTool;
+        }
+      }
+      return undefined;
+    };
+    for (const candidate of [...matchingNamedCandidates, ...unnamedCandidates]) {
+      try {
+        const matchedTool = resolveCandidateTool(candidate);
+        if (matchedTool) {
+          return matchedTool;
+        }
+      } catch {
+        continue;
+      }
+    }
+    throw new Error(`plugin tool runtime missing (${pluginId}): ${toolName}`);
+  };
   const tool: AnyAgentTool = {
     name: descriptor.name,
     label: descriptor.title ?? descriptor.name,
@@ -690,66 +798,49 @@ function createCachedDescriptorPluginTool(params: {
     ...(params.descriptor.requiredClientCaps
       ? { requiredClientCaps: [...params.descriptor.requiredClientCaps] }
       : {}),
+    async prepareBeforeToolCallParams(rawParams, context) {
+      const concreteTool = resolveConcreteTool();
+      const concretePreparedParams = concreteTool.prepareBeforeToolCallParams
+        ? await concreteTool.prepareBeforeToolCallParams(rawParams, context)
+        : rawParams;
+      const preparedRoot = requireCachedDescriptorLifecycleRoot(
+        concretePreparedParams,
+        toolName,
+      );
+      if (preparedStateByRoot.has(preparedRoot)) {
+        throw new Error(`plugin tool lifecycle prepared root already in use: ${toolName}`);
+      }
+      preparedStateByRoot.set(preparedRoot, { tool: concreteTool, concretePreparedParams });
+      return concretePreparedParams;
+    },
+    async finalizeBeforeToolCallParams(adjustedParams, preparedParams) {
+      const preparedRoot = requireCachedDescriptorLifecycleRoot(preparedParams, toolName);
+      const preparedState = preparedStateByRoot.get(preparedRoot);
+      if (!preparedState) {
+        throw new Error(`plugin tool lifecycle preparation missing: ${toolName}`);
+      }
+      preparedStateByRoot.delete(preparedRoot);
+      const finalizedParams = preparedState.tool.finalizeBeforeToolCallParams
+        ? await preparedState.tool.finalizeBeforeToolCallParams(
+            adjustedParams,
+            preparedState.concretePreparedParams,
+          )
+        : adjustedParams;
+      const finalizedRoot = requireCachedDescriptorLifecycleRoot(finalizedParams, toolName);
+      if (resolvedToolByFinalRoot.has(finalizedRoot)) {
+        throw new Error(`plugin tool lifecycle finalized root already in use: ${toolName}`);
+      }
+      resolvedToolByFinalRoot.set(finalizedRoot, preparedState.tool);
+      return finalizedParams;
+    },
     async execute(toolCallId, executeParams, signal, onUpdate) {
-      const loadOptions = buildPluginRuntimeLoadOptions(params.loadContext, {
-        activate: false,
-        toolDiscovery: true,
-        onlyPluginIds: [pluginId],
-        ...(params.runtimeOptions ? { runtimeOptions: params.runtimeOptions } : {}),
-      });
-      const registry = resolvePluginToolRegistry({
-        loadOptions,
-        onlyPluginIds: [pluginId],
-        retainedRegistry: cachedDescriptorRuntimeRegistries.get(params.descriptor),
-        onRetainRegistry: (retainedRegistry) => {
-          cachedDescriptorRuntimeRegistries.set(params.descriptor, retainedRegistry);
-        },
-      });
-      const candidates = registry?.tools.filter((candidate) => candidate.pluginId === pluginId);
-      if (!candidates || candidates.length === 0) {
-        throw new Error(`plugin tool runtime unavailable (${pluginId}): ${toolName}`);
+      const executeRoot = requireCachedDescriptorLifecycleRoot(executeParams, toolName);
+      const concreteTool = resolvedToolByFinalRoot.get(executeRoot);
+      if (!concreteTool) {
+        throw new Error(`plugin tool lifecycle finalization missing: ${toolName}`);
       }
-      const requestedToolName = normalizeToolName(toolName);
-      const matchingNamedCandidates: PluginToolRegistration[] = [];
-      const unnamedCandidates: PluginToolRegistration[] = [];
-      for (const candidate of candidates) {
-        if (candidate.names.length === 0) {
-          unnamedCandidates.push(candidate);
-          continue;
-        }
-        if (candidate.names.some((name) => normalizeToolName(name) === requestedToolName)) {
-          matchingNamedCandidates.push(candidate);
-        }
-      }
-      const resolveCandidateTool = (
-        candidate: PluginToolRegistration,
-      ): AnyAgentTool | undefined => {
-        const resolved = resolvePluginToolFactory(candidate, params.ctx);
-        const listRaw: unknown[] = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
-        for (const toolRaw of listRaw) {
-          const malformedReason = describeMalformedPluginTool(toolRaw);
-          if (malformedReason) {
-            continue;
-          }
-          const runtimeTool = toolRaw as AnyAgentTool;
-          if (normalizeToolName(readPluginToolName(runtimeTool)) === requestedToolName) {
-            return runtimeTool;
-          }
-        }
-        return undefined;
-      };
-      for (const candidate of [...matchingNamedCandidates, ...unnamedCandidates]) {
-        let matchedTool: AnyAgentTool | undefined;
-        try {
-          matchedTool = resolveCandidateTool(candidate);
-        } catch {
-          continue;
-        }
-        if (matchedTool) {
-          return matchedTool.execute(toolCallId, executeParams, signal, onUpdate);
-        }
-      }
-      throw new Error(`plugin tool runtime missing (${pluginId}): ${toolName}`);
+      resolvedToolByFinalRoot.delete(executeRoot);
+      return concreteTool.execute(toolCallId, executeParams, signal, onUpdate);
     },
   };
   if (params.descriptor.displaySummary) {
@@ -936,9 +1027,7 @@ function resolvePluginToolRegistry(params: {
   }
 
   const activeRegistry = getLoadedRuntimePluginRegistry({
-    env: lookup.env,
-    workspaceDir: lookup.workspaceDir,
-    requiredPluginIds: lookup.requiredPluginIds,
+    ...lookup,
     surface: "active",
   });
   if (registryHasScopedPluginTools(activeRegistry, params.onlyPluginIds)) {
@@ -958,7 +1047,6 @@ function resolvePluginToolRegistry(params: {
   const standaloneRegistry = ensureStandaloneRuntimePluginRegistryLoaded({
     surface: "active",
     forceLoad: forceStandaloneLoad,
-    installRegistry: !forceStandaloneLoad,
     requiredPluginIds: params.onlyPluginIds,
     loadOptions: params.loadOptions,
   });
@@ -1152,8 +1240,9 @@ export function resolvePluginTools(params: {
     // Cold registry: path-based plugins (origin "config") registered via plugins.load.paths
     // are not pinned to any active channel/surface registry until explicitly loaded.
     // Trigger a standalone load so their tool factories become available, then retry.
+    let standaloneRegistry: PluginRegistry | undefined;
     try {
-      ensureStandaloneRuntimePluginRegistryLoaded({
+      standaloneRegistry = ensureStandaloneRuntimePluginRegistryLoaded({
         surface: "channel",
         requiredPluginIds: runtimePluginIds,
         loadOptions,
@@ -1166,10 +1255,12 @@ export function resolvePluginTools(params: {
       );
       throw error;
     }
-    registry = resolvePluginToolRegistry({
-      loadOptions,
-      onlyPluginIds: runtimePluginIds,
-    });
+    registry = registryHasScopedPluginTools(standaloneRegistry, runtimePluginIds)
+      ? standaloneRegistry
+      : resolvePluginToolRegistry({
+          loadOptions,
+          onlyPluginIds: runtimePluginIds,
+        });
     if (!registry) {
       context.logger.warn(
         `plugin tool registry still unavailable after cold load for plugin ids [${runtimePluginIds.join(

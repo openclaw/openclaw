@@ -4,6 +4,7 @@ import {
   getLoadedRuntimePluginRegistry,
   listLoadedRuntimePluginIdsAcrossSurfaces,
 } from "./active-runtime-registry.js";
+import { resolveRequiredFinalToolInputPolicyOwnerIds } from "./final-tool-input-policy-requirements.js";
 import { testing, clearPluginLoaderCache } from "./loader.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -24,6 +25,20 @@ function createRegistryWithPlugin(pluginId: string): PluginRegistry {
 }
 
 describe("getLoadedRuntimePluginRegistry", () => {
+  it("normalizes required policy owner aliases", () => {
+    expect(
+      resolveRequiredFinalToolInputPolicyOwnerIds({
+        plugins: {
+          entries: {
+            "google-gemini-cli": {
+              requiredFinalToolInputPolicies: ["pdp"],
+            },
+          },
+        },
+      }),
+    ).toEqual(["google"]);
+  });
+
   it("treats an explicit empty plugin scope as empty", () => {
     setActivePluginRegistry(createRegistryWithPlugin("stale"), "stale", "default", "/tmp/ws");
 
@@ -182,5 +197,26 @@ describe("getLoadedRuntimePluginRegistry", () => {
         },
       }),
     ).toBeUndefined();
+  });
+
+  it("does not accept an empty scope when activation config requires a policy owner", () => {
+    const loadOptions = {
+      config: { plugins: { entries: {} } },
+      activationSourceConfig: {
+        plugins: {
+          entries: {
+            "enterprise-policy": {
+              requiredFinalToolInputPolicies: ["pdp"],
+            },
+          },
+        },
+      },
+      onlyPluginIds: [],
+      workspaceDir: "/tmp/ws",
+    };
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
+    setActivePluginRegistry(createEmptyPluginRegistry(), cacheKey, "default", "/tmp/ws");
+
+    expect(getLoadedRuntimePluginRegistry({ loadOptions })).toBeUndefined();
   });
 });

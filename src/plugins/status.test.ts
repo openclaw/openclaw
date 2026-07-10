@@ -584,6 +584,7 @@ describe("plugin status reports", () => {
       allowModelOverride: true,
       allowedModels: ["openai/gpt-5.5"],
       hasAllowedModelsConfig: true,
+      requiredFinalToolInputPolicies: [],
     });
     expectPluginLoaderCall({ loadModules: true });
   });
@@ -689,6 +690,7 @@ describe("plugin status reports", () => {
         entries: {
           google: {
             hooks: { allowPromptInjection: false, allowConversationAccess: true },
+            requiredFinalToolInputPolicies: [" pii-guard ", "external-pdp", "pii-guard"],
             subagent: {
               allowModelOverride: true,
               allowedModels: ["openai/gpt-5.5"],
@@ -733,6 +735,7 @@ describe("plugin status reports", () => {
       allowModelOverride: true,
       allowedModels: ["openai/gpt-5.5"],
       hasAllowedModelsConfig: true,
+      requiredFinalToolInputPolicies: ["external-pdp", "pii-guard"],
     });
     expect(inspect.diagnostics).toEqual([
       { level: "warn", pluginId: "google", message: "watch this surface" },

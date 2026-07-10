@@ -17,6 +17,7 @@ import {
   listInstalledPluginRecords,
   loadInstalledPluginIndex,
   refreshInstalledPluginIndex,
+  resolveInstalledPluginIndexPolicyHash,
 } from "./installed-plugin-index.js";
 import { recordPluginInstall } from "./installs.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -201,6 +202,31 @@ function createRichPluginFixture(params: { id?: string; packageVersion?: string 
 }
 
 describe("installed plugin index", () => {
+  it("hashes required final input policy intent canonically", () => {
+    const withRequirements = resolveInstalledPluginIndexPolicyHash({
+      plugins: {
+        entries: {
+          "enterprise-policy": {
+            requiredFinalToolInputPolicies: ["pii-guard", "external-pdp"],
+          },
+        },
+      },
+    });
+    const reordered = resolveInstalledPluginIndexPolicyHash({
+      plugins: {
+        entries: {
+          "enterprise-policy": {
+            requiredFinalToolInputPolicies: ["external-pdp", "pii-guard"],
+          },
+        },
+      },
+    });
+    const withoutRequirements = resolveInstalledPluginIndexPolicyHash({ plugins: {} });
+
+    expect(reordered).toBe(withRequirements);
+    expect(withoutRequirements).not.toBe(withRequirements);
+  });
+
   it("drops blocked install record keys while reading persisted index records", () => {
     const root = makeTempDir();
     const filePath = path.join(root, "installed-plugin-index.json");

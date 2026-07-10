@@ -721,6 +721,34 @@ describe("plugins.entries.*.hooks", () => {
   });
 });
 
+describe("plugins.entries.*.requiredFinalToolInputPolicies", () => {
+  it("accepts non-empty policy ids", () => {
+    expect(
+      OpenClawSchema.safeParse({
+        plugins: {
+          entries: {
+            "enterprise-policy": {
+              requiredFinalToolInputPolicies: ["external-pdp", "pii-guard"],
+            },
+          },
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([[true], ["external-pdp"], [" "]])("rejects invalid value %o", (value) => {
+    expect(
+      OpenClawSchema.safeParse({
+        plugins: {
+          entries: {
+            "enterprise-policy": { requiredFinalToolInputPolicies: value },
+          },
+        },
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe("plugins.entries.*.subagent", () => {
   it("accepts trusted subagent override settings", () => {
     const result = OpenClawSchema.safeParse({

@@ -17,6 +17,7 @@ import {
 import type { AgentTool } from "../runtime/index.js";
 import {
   filterProviderNormalizableTools,
+  projectRuntimeToolInputSchema,
   type RuntimeToolSchemaDiagnostic,
 } from "../tool-schema-projection.js";
 import { copyToolTerminalPresentation } from "../tool-terminal-presentation.js";
@@ -65,7 +66,7 @@ function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
     return;
   }
   const catalogMode = (source as AnyAgentTool).catalogMode;
-  if (catalogMode) {
+  if (catalogMode && (target as AnyAgentTool).catalogMode !== catalogMode) {
     (target as AnyAgentTool).catalogMode = catalogMode;
   }
   copyPluginToolMeta(source as never, target as never);
@@ -74,34 +75,163 @@ function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
   copyToolTerminalPresentation(source as never, target as never);
 }
 
-// Duplicate names cannot be matched by map lookup alone, so same-index matches
-// take precedence and unique-name fallback covers cloned arrays.
-function preserveRuntimeToolMetadata<TSchemaType extends TSchema = TSchema, TResult = unknown>(
-  sourceTools: AgentTool<TSchemaType, TResult>[],
-  normalizedTools: AgentTool<TSchemaType, TResult>[],
-): AgentTool<TSchemaType, TResult>[] {
-  const sourcesByUniqueName = new Map<string, AgentTool<TSchemaType, TResult>>();
-  const duplicateNames = new Set<string>();
-  for (const source of sourceTools) {
+const inertSchemaNormalizationExecute: AnyAgentTool["execute"] = async () => ({
+  content: [],
+  details: undefined,
+});
+
+type RuntimeToolSchemaNormalizationEntry<
+  TSchemaType extends TSchema = TSchema,
+  TResult = unknown,
+> = {
+  name: string;
+  normalizationInput: AgentTool<TSchemaType, TResult>;
+  sourceSnapshot: AgentTool<TSchemaType, TResult>;
+};
+
+function createRuntimeToolSchemaNormalizationEntry<
+  TSchemaType extends TSchema = TSchema,
+  TResult = unknown,
+>(
+  source: AgentTool<TSchemaType, TResult>,
+): RuntimeToolSchemaNormalizationEntry<TSchemaType, TResult> | undefined {
+  try {
     const name = source.name;
+    const sourceWithLifecycle = source as AnyAgentTool;
+    const label = source.label;
+    const description = source.description;
+    const sourceParameters = source.parameters;
+    const execute = source.execute;
+    const hideFromChannelProgress = source.hideFromChannelProgress;
+    const prepareArguments = source.prepareArguments;
+    const executionMode = source.executionMode;
+    const displaySummary = sourceWithLifecycle.displaySummary;
+    const catalogMode = sourceWithLifecycle.catalogMode;
+    const requiredClientCaps = sourceWithLifecycle.requiredClientCaps;
+    const prepareBeforeToolCallParams = sourceWithLifecycle.prepareBeforeToolCallParams;
+    const finalizeBeforeToolCallParams = sourceWithLifecycle.finalizeBeforeToolCallParams;
+    const sourceSnapshot = {
+      name,
+      ...(label === undefined ? {} : { label }),
+      ...(description === undefined ? {} : { description }),
+      parameters: sourceParameters,
+      ...(hideFromChannelProgress === undefined
+        ? {}
+        : { hideFromChannelProgress }),
+      ...(prepareArguments ? { prepareArguments: prepareArguments.bind(source) } : {}),
+      ...(executionMode === undefined ? {} : { executionMode }),
+      ...(displaySummary === undefined ? {} : { displaySummary }),
+      ...(catalogMode === undefined ? {} : { catalogMode }),
+      ...(requiredClientCaps === undefined ? {} : { requiredClientCaps: [...requiredClientCaps] }),
+      ...(prepareBeforeToolCallParams
+        ? {
+            prepareBeforeToolCallParams: prepareBeforeToolCallParams.bind(source),
+          }
+        : {}),
+      ...(finalizeBeforeToolCallParams
+        ? {
+            finalizeBeforeToolCallParams: finalizeBeforeToolCallParams.bind(source),
+          }
+        : {}),
+    } as AgentTool<TSchemaType, TResult>;
+    Object.defineProperty(sourceSnapshot, "execute", {
+      configurable: true,
+      enumerable: typeof execute === "function",
+      value:
+        typeof execute === "function"
+          ? execute.bind(source)
+          : (inertSchemaNormalizationExecute as AgentTool<TSchemaType, TResult>["execute"]),
+      writable: true,
+    });
+    copyRuntimeToolMetadata(source, sourceSnapshot);
+    const parameters =
+      sourceParameters === undefined
+        ? undefined
+        : projectRuntimeToolInputSchema(sourceParameters, `${name}.parameters`).schema;
+    const normalizationInput = {
+      name,
+      ...(label === undefined ? {} : { label }),
+      ...(description === undefined ? {} : { description }),
+      parameters: parameters as TSchemaType,
+    } as AgentTool<TSchemaType, TResult>;
+    Object.defineProperty(normalizationInput, "execute", {
+      configurable: true,
+      enumerable: false,
+      value: inertSchemaNormalizationExecute as AgentTool<TSchemaType, TResult>["execute"],
+      writable: false,
+    });
+    return { name, sourceSnapshot, normalizationInput };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Runs a schema hook against detached tool projections, then applies only its
+ * schema output to captured source behavior. Added/unmatched tools are dropped.
+ */
+export function applyRuntimeToolSchemaNormalization<
+  TSchemaType extends TSchema = TSchema,
+  TResult = unknown,
+>(params: {
+  tools: AgentTool<TSchemaType, TResult>[];
+  normalize: (
+    tools: AgentTool<TSchemaType, TResult>[],
+  ) => AgentTool<TSchemaType, TResult>[] | null | undefined;
+}): AgentTool<TSchemaType, TResult>[] {
+  const entries = params.tools.flatMap((source) => {
+    const entry = createRuntimeToolSchemaNormalizationEntry(source);
+    return entry ? [entry] : [];
+  });
+  const normalizationInputs = entries.map((entry) => entry.normalizationInput);
+  const normalized = params.normalize(normalizationInputs);
+  const normalizedTools = Array.isArray(normalized) ? normalized : normalizationInputs;
+  const sourcesByUniqueName = new Map<
+    string,
+    RuntimeToolSchemaNormalizationEntry<TSchemaType, TResult>
+  >();
+  const duplicateNames = new Set<string>();
+  for (const entry of entries) {
+    const { name } = entry;
     if (sourcesByUniqueName.has(name)) {
       duplicateNames.add(name);
       sourcesByUniqueName.delete(name);
       continue;
     }
     if (!duplicateNames.has(name)) {
-      sourcesByUniqueName.set(name, source);
+      sourcesByUniqueName.set(name, entry);
     }
   }
+  const usedSources = new Set<RuntimeToolSchemaNormalizationEntry<TSchemaType, TResult>>();
+  const projectedTools: AgentTool<TSchemaType, TResult>[] = [];
   for (const [index, target] of normalizedTools.entries()) {
-    const indexedSource = sourceTools[index];
-    const source =
-      indexedSource?.name === target.name ? indexedSource : sourcesByUniqueName.get(target.name);
-    if (source) {
-      copyRuntimeToolMetadata(source, target);
+    let targetName: string;
+    let targetParameters: TSchemaType;
+    try {
+      targetName = target.name;
+      targetParameters = target.parameters;
+    } catch {
+      continue;
     }
+    const indexedSource = entries[index];
+    const source =
+      indexedSource?.name === targetName ? indexedSource : sourcesByUniqueName.get(targetName);
+    if (!source || usedSources.has(source)) {
+      continue;
+    }
+    const projectedParameters =
+      targetParameters === undefined
+        ? targetParameters
+        : projectRuntimeToolInputSchema(targetParameters, `${targetName}.parameters`).schema;
+    usedSources.add(source);
+    const projected = {
+      ...source.sourceSnapshot,
+      parameters: projectedParameters as TSchemaType,
+    } as AgentTool<TSchemaType, TResult>;
+    copyRuntimeToolMetadata(source.sourceSnapshot, projected);
+    projectedTools.push(projected);
   }
-  return normalizedTools;
+  return projectedTools;
 }
 
 /** Normalizes tool schemas through a runtime plan or provider fallback policy. */
@@ -119,22 +249,23 @@ export function normalizeAgentRuntimeTools<
     TSchemaType,
     TResult
   >[];
-  const normalized =
-    params.runtimePlan?.tools.normalize(normalizableTools, planContext) ??
-    normalizeProviderToolSchemas({
-      tools: normalizableTools,
-      provider: params.provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env ?? process.env,
-      modelId: params.modelId,
-      modelApi: params.modelApi,
-      model: params.model,
-      runtimeHandle: params.runtimeHandle,
-      allowRuntimePluginLoad: params.allowProviderRuntimePluginLoad,
-    });
-  const normalizedTools = Array.isArray(normalized) ? normalized : normalizableTools;
-  return preserveRuntimeToolMetadata(normalizableTools, normalizedTools);
+  return applyRuntimeToolSchemaNormalization({
+    tools: normalizableTools,
+    normalize: (tools) =>
+      params.runtimePlan?.tools.normalize(tools, planContext) ??
+      normalizeProviderToolSchemas({
+        tools,
+        provider: params.provider,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env ?? process.env,
+        modelId: params.modelId,
+        modelApi: params.modelApi,
+        model: params.model,
+        runtimeHandle: params.runtimeHandle,
+        allowRuntimePluginLoad: params.allowProviderRuntimePluginLoad,
+      }),
+  });
 }
 
 /** Emits runtime-plan or provider fallback diagnostics for normalized tools. */

@@ -189,6 +189,10 @@ export type PluginToolMetadataRegistration =
   import("../plugins/types.js").PluginToolMetadataRegistration;
 export type PluginTrustedToolPolicyRegistration =
   import("../plugins/types.js").PluginTrustedToolPolicyRegistration;
+export type PluginFinalToolInputPolicyDecision =
+  import("../plugins/types.js").PluginFinalToolInputPolicyDecision;
+export type PluginFinalToolInputPolicyRegistration =
+  import("../plugins/types.js").PluginFinalToolInputPolicyRegistration;
 
 export type {
   PluginConversationBinding,

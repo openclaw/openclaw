@@ -791,17 +791,25 @@ export function loadGatewayPlugins(params: {
           });
   const resolvedConfigMs = performance.now() - started;
   const resolvedConfig = autoEnabled.config;
-  const pluginIds = params.pluginIds ?? [
-    ...(
-      params.pluginLookUpTable ??
-      loadPluginLookUpTable({
-        config: resolvedConfig,
-        activationSourceConfig: params.activationSourceConfig,
-        workspaceDir: params.workspaceDir,
-        env: process.env,
-      })
-    ).startup.pluginIds,
-  ];
+  const requiredFinalPolicyPluginIds = uniqueStrings(
+    [resolvedConfig, params.activationSourceConfig].flatMap((config) =>
+      Object.entries(normalizePluginsConfig(config?.plugins).entries).flatMap(
+        ([pluginId, entry]) =>
+          (entry.requiredFinalToolInputPolicies?.length ?? 0) > 0 ? [pluginId] : [],
+      ),
+    ),
+  );
+  const pluginIds = uniqueStrings([
+    ...(params.pluginIds ??
+      (params.pluginLookUpTable ??
+        loadPluginLookUpTable({
+          config: resolvedConfig,
+          activationSourceConfig: params.activationSourceConfig,
+          workspaceDir: params.workspaceDir,
+          env: process.env,
+        })).startup.pluginIds),
+    ...requiredFinalPolicyPluginIds,
+  ]);
   const pluginIdsMs = performance.now() - started;
   if (pluginIds.length === 0) {
     clearActivatedPluginRuntimeState();

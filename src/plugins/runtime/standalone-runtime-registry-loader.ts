@@ -4,65 +4,56 @@ import {
   getLoadedRuntimePluginRegistry,
 } from "../active-runtime-registry.js";
 import {
-  loadOpenClawPlugins,
-  resolvePluginRegistryLoadCacheKey,
-  type PluginLoadOptions,
-} from "../loader.js";
+  resolveRequiredFinalToolInputPolicyOwnerIds,
+} from "../final-tool-input-policy-requirements.js";
+import { loadOpenClawPlugins, type PluginLoadOptions } from "../loader.js";
+import { normalizePluginIdScope } from "../plugin-scope.js";
 import type { PluginRegistry } from "../registry-types.js";
-import {
-  pinActivePluginChannelRegistry,
-  pinActivePluginHttpRouteRegistry,
-  setActivePluginRegistry,
-} from "../runtime.js";
+import { pinActivePluginChannelRegistry, pinActivePluginHttpRouteRegistry } from "../runtime.js";
 
-function resolveRuntimeSubagentMode(
+function includeRequiredFinalToolInputPolicyOwners(
   loadOptions: PluginLoadOptions,
-): "default" | "explicit" | "gateway-bindable" {
-  if (loadOptions.runtimeOptions?.allowGatewaySubagentBinding === true) {
-    return "gateway-bindable";
+): PluginLoadOptions {
+  const requestedPluginIds = normalizePluginIdScope(loadOptions.onlyPluginIds);
+  if (requestedPluginIds === undefined) {
+    return loadOptions;
   }
-  if (loadOptions.runtimeOptions?.subagent) {
-    return "explicit";
+  const requiredPolicyOwnerIds =
+    normalizePluginIdScope([
+      ...resolveRequiredFinalToolInputPolicyOwnerIds(loadOptions.config),
+      ...resolveRequiredFinalToolInputPolicyOwnerIds(loadOptions.activationSourceConfig),
+    ]) ?? [];
+  if (requiredPolicyOwnerIds.length === 0) {
+    return loadOptions;
   }
-  return "default";
-}
-
-function installStandaloneRuntimePluginRegistry(
-  registry: PluginRegistry,
-  params: {
-    loadOptions: PluginLoadOptions;
-    surface: ActiveRuntimePluginRegistrySurface;
-  },
-): void {
-  const cacheKey = resolvePluginRegistryLoadCacheKey(params.loadOptions);
-  const mode = resolveRuntimeSubagentMode(params.loadOptions);
-  setActivePluginRegistry(registry, cacheKey, mode, params.loadOptions.workspaceDir);
-  switch (params.surface) {
-    case "active":
-      break;
-    case "channel":
-      pinActivePluginChannelRegistry(registry);
-      break;
-    case "http-route":
-      pinActivePluginHttpRouteRegistry(registry);
-      break;
+  const onlyPluginIds =
+    normalizePluginIdScope([...requestedPluginIds, ...requiredPolicyOwnerIds]) ?? [];
+  if (
+    onlyPluginIds.length === requestedPluginIds.length &&
+    onlyPluginIds.every((pluginId, index) => pluginId === requestedPluginIds[index])
+  ) {
+    return loadOptions;
   }
+  // Scoped standalone loads must carry operator-required policy owners through
+  // compatibility lookup and cold load; otherwise a fresh registry omits a
+  // security dependency that active-registry checks treat as mandatory.
+  return { ...loadOptions, onlyPluginIds };
 }
 
 export function ensureStandaloneRuntimePluginRegistryLoaded(params: {
   loadOptions: PluginLoadOptions;
   forceLoad?: boolean;
-  installRegistry?: boolean;
   requiredPluginIds?: readonly string[];
   surface?: ActiveRuntimePluginRegistrySurface;
 }): PluginRegistry | undefined {
-  const requiredPluginIds = params.requiredPluginIds ?? params.loadOptions.onlyPluginIds;
+  const loadOptions = includeRequiredFinalToolInputPolicyOwners(params.loadOptions);
+  const requiredPluginIds = params.requiredPluginIds ?? loadOptions.onlyPluginIds;
   const surface = params.surface ?? "active";
   if (!params.forceLoad) {
     const existing = getLoadedRuntimePluginRegistry({
-      env: params.loadOptions.env,
-      loadOptions: params.loadOptions,
-      workspaceDir: params.loadOptions.workspaceDir,
+      env: loadOptions.env,
+      loadOptions,
+      workspaceDir: loadOptions.workspaceDir,
       requiredPluginIds,
       surface,
     });
@@ -72,10 +63,10 @@ export function ensureStandaloneRuntimePluginRegistryLoaded(params: {
   }
 
   const effectiveLoadOptions = params.forceLoad
-    ? { ...params.loadOptions, cache: false }
-    : params.loadOptions;
+    ? { ...loadOptions, cache: false }
+    : loadOptions;
   const registry = loadOpenClawPlugins(effectiveLoadOptions);
-  if (params.loadOptions.activate !== false) {
+  if (loadOptions.activate !== false) {
     switch (surface) {
       case "active":
         break;
@@ -88,20 +79,7 @@ export function ensureStandaloneRuntimePluginRegistryLoaded(params: {
     }
     return registry;
   }
-
-  if (params.installRegistry === false) {
-    return registry;
-  }
-
-  // Tool discovery returns a request-local snapshot. Installing it would replace live provider,
-  // channel, or HTTP-route registries with a registry that intentionally omits those surfaces.
-  if (params.loadOptions.toolDiscovery === true) {
-    return registry;
-  }
-
-  installStandaloneRuntimePluginRegistry(registry, {
-    loadOptions: params.loadOptions,
-    surface,
-  });
+  // activate:false is always a request-local snapshot. Promoting it here would bypass the
+  // loader's validated, sealed activation path and could replace live security policies.
   return registry;
 }

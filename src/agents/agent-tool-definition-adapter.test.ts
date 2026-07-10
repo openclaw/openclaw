@@ -3,11 +3,19 @@
  * Exercises result coercion, error wrapping, client delegation, and conflict
  * detection at the ToolDefinition boundary.
  */
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { addTestHook } from "../plugins/hooks.test-helpers.js";
+import type { PluginFinalToolInputPolicyRegistration } from "../plugins/host-hooks.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   createClientToolNameConflictError,
   findClientToolNameConflicts,
@@ -18,10 +26,39 @@ import {
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createExecTool } from "./bash-tools.exec.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
+import { applyNodesToolWorkspaceGuard } from "./openclaw-tools.nodes-workspace-guard.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
 const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
+
+function installFinalToolInputPolicy(
+  policy: PluginFinalToolInputPolicyRegistration,
+  beforeToolCall?: Parameters<typeof addTestHook>[0]["handler"],
+): void {
+  const registry = createEmptyPluginRegistry();
+  registry.finalToolInputPolicies = [
+    {
+      pluginId: "test-final-input-policy",
+      pluginName: "Test Final Input Policy",
+      policy,
+      source: "test",
+    },
+  ];
+  if (beforeToolCall) {
+    addTestHook({
+      registry,
+      pluginId: "test-before-tool-call",
+      hookName: "before_tool_call",
+      handler: beforeToolCall,
+    });
+  }
+  initializeGlobalHookRunner(registry);
+}
+
+afterEach(() => {
+  resetGlobalHookRunner();
+});
 
 async function executeThrowingTool(name: string, callId: string) {
   const tool = {
@@ -346,6 +383,258 @@ describe("agent tool definition adapter", () => {
     expect(prepareBeforeToolCallParams).toHaveBeenCalledOnce();
     expect(execute).toHaveBeenCalledOnce();
   });
+
+  it("evaluates finalized params without replacing trusted execution state", async () => {
+    const trustedState = Symbol("trusted-state");
+    const seenByPolicy: unknown[] = [];
+    const execute = vi.fn(async (_toolCallId: string, params: unknown) => ({
+      content: [{ type: "text" as const, text: "done" }],
+      details: {
+        stage: (params as { stage?: unknown }).stage,
+        trusted: (params as Record<symbol, unknown>)[trustedState],
+      },
+    }));
+    installFinalToolInputPolicy({
+      id: "final-params",
+      description: "inspect finalized params",
+      evaluate(event) {
+        seenByPolicy.push(event.params);
+        expect((event.params as Record<symbol, unknown>)[trustedState]).toBeUndefined();
+        (event.params as { stage?: string }).stage = "mutated-policy-snapshot";
+        return { outcome: "pass" };
+      },
+    });
+    const tool = {
+      name: "prepared_tool",
+      label: "Prepared Tool",
+      description: "carries trusted finalizer state",
+      parameters: Type.Object({ stage: Type.String() }),
+      prepareBeforeToolCallParams: (params: unknown) => ({
+        ...(params as Record<string, unknown>),
+        stage: "prepared",
+      }),
+      finalizeBeforeToolCallParams: (params: unknown) => {
+        const finalParams = params as Record<string | symbol, unknown>;
+        finalParams.stage = "finalized";
+        Object.defineProperty(finalParams, trustedState, {
+          configurable: false,
+          enumerable: false,
+          value: "trusted",
+        });
+        return finalParams;
+      },
+      execute,
+    } as unknown as AgentTool;
+    const [definition] = toToolDefinitions([tool]);
+    if (!definition) {
+      throw new Error("missing prepared tool definition");
+    }
+
+    const result = await definition.execute(
+      "call-finalized",
+      { stage: "raw" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(seenByPolicy).toEqual([{ stage: "mutated-policy-snapshot" }]);
+    expect(execute).toHaveBeenCalledTimes(1);
+    const executedParams = execute.mock.calls[0]?.[1];
+    if (!executedParams || typeof executedParams !== "object") {
+      throw new Error("missing finalized execution params");
+    }
+    expect(executedParams).toMatchObject({ stage: "finalized" });
+    expect((executedParams as Record<symbol, unknown>)[trustedState]).toBe("trusted");
+    expect(result.details).toEqual({ stage: "finalized", trusted: "trusted" });
+  });
+
+  it("applies an outer workspace guard after an inner finalizer rewrite", async () => {
+    const tempRoot = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "openclaw-final-input-guard-"),
+    );
+    try {
+      const seenByPolicy: unknown[] = [];
+      const execute = vi.fn(async (_toolCallId: string, _params: unknown) => ({
+        content: [{ type: "text" as const, text: "done" }],
+        details: {},
+      }));
+      installFinalToolInputPolicy({
+        id: "outer-workspace-guard",
+        description: "inspect outer-guarded input",
+        evaluate(event) {
+          seenByPolicy.push(event.params);
+          return { outcome: "pass" };
+        },
+      });
+      const innerTool = {
+        name: "nodes",
+        label: "Nodes",
+        description: "rewrites an output path",
+        parameters: Type.Object({}),
+        finalizeBeforeToolCallParams: async (params: unknown) => ({
+          ...(params as Record<string, unknown>),
+          outPath:
+            (params as { escape?: unknown }).escape === true ? "/etc/passwd" : "videos/final.mp4",
+        }),
+        execute,
+      } as unknown as Parameters<typeof applyNodesToolWorkspaceGuard>[0];
+      const guardedTool = applyNodesToolWorkspaceGuard(innerTool, {
+        workspaceDir: tempRoot,
+        fsPolicy: { workspaceOnly: true },
+      });
+      const [definition] = toToolDefinitions([guardedTool]);
+      if (!definition) {
+        throw new Error("missing guarded nodes tool definition");
+      }
+
+      await definition.execute(
+        "call-guarded-safe",
+        { action: "screen_record" },
+        undefined,
+        undefined,
+        extensionContext,
+      );
+      const blocked = await definition.execute(
+        "call-guarded-escape",
+        { action: "screen_record", escape: true },
+        undefined,
+        undefined,
+        extensionContext,
+      );
+
+      const expectedParams = {
+        action: "screen_record",
+        outPath: path.join(tempRoot, "videos/final.mp4"),
+      };
+      expect(seenByPolicy).toEqual([expectedParams]);
+      expect(execute).toHaveBeenCalledOnce();
+      expect(Object.isFrozen(execute.mock.calls[0]?.[1])).toBe(true);
+      expect(execute).toHaveBeenCalledWith(
+        "call-guarded-safe",
+        expectedParams,
+        undefined,
+        undefined,
+      );
+      expect(blocked.details).toMatchObject({
+        status: "error",
+        tool: "nodes",
+        error: expect.stringMatching(/Path escapes sandbox root/),
+      });
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("seals retained hook aliases before awaiting final policy evaluation", async () => {
+    const trustedState = Symbol("trusted-state");
+    const retainedNested = { value: "canonical" };
+    const hookParams = { nested: retainedNested };
+    let finalizedParams: Record<string | symbol, unknown> | undefined;
+    let mutationAttempted = false;
+    const execute = vi.fn(async (_toolCallId: string, params: unknown) => ({
+      content: [{ type: "text" as const, text: "done" }],
+      details: {
+        nested: (params as { nested: { value: string } }).nested.value,
+        trusted: (params as Record<symbol, unknown>)[trustedState],
+      },
+    }));
+    installFinalToolInputPolicy(
+      {
+        id: "retained-alias",
+        description: "await after snapshotting retained input",
+        async evaluate(event) {
+          expect(event.params).toEqual({ nested: { value: "canonical" } });
+          queueMicrotask(() => {
+            mutationAttempted = true;
+            retainedNested.value = "mutated-after-snapshot";
+          });
+          await Promise.resolve();
+          return { outcome: "pass" };
+        },
+      },
+      () => ({ params: hookParams }),
+    );
+    const tool = {
+      name: "retained_alias_tool",
+      label: "Retained Alias Tool",
+      description: "preserves final host input identity",
+      parameters: Type.Object({}),
+      finalizeBeforeToolCallParams: (params: unknown) => {
+        finalizedParams = params as Record<string | symbol, unknown>;
+        Object.defineProperty(finalizedParams, trustedState, {
+          configurable: false,
+          enumerable: false,
+          value: "trusted",
+        });
+        return finalizedParams;
+      },
+      execute,
+    } as unknown as AgentTool;
+    const [definition] = toToolDefinitions([tool]);
+    if (!definition) {
+      throw new Error("missing retained alias tool definition");
+    }
+
+    const result = await definition.execute(
+      "call-retained-alias",
+      { nested: { value: "raw" } },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    const executedParams = execute.mock.calls[0]?.[1] as
+      | Record<string | symbol, unknown>
+      | undefined;
+    expect(mutationAttempted).toBe(true);
+    expect(retainedNested.value).toBe("mutated-after-snapshot");
+    expect(executedParams).toBe(finalizedParams);
+    expect(executedParams?.[trustedState]).toBe("trusted");
+    expect(executedParams?.nested as object | undefined).not.toBe(retainedNested);
+    expect(Object.isFrozen(executedParams)).toBe(true);
+    expect(Object.isFrozen(executedParams?.nested)).toBe(true);
+    expect(Object.isFrozen(retainedNested)).toBe(false);
+    expect(result.details).toEqual({ nested: "canonical", trusted: "trusted" });
+  });
+
+  it("does not execute an unwrapped runtime tool denied by final input policy", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "executed" }],
+      details: {},
+    }));
+    installFinalToolInputPolicy({
+      id: "deny-runtime-tool",
+      description: "deny runtime tool",
+      evaluate: () => ({ outcome: "deny", reasonCode: "runtime_tool.denied" }),
+    });
+    const tool = {
+      name: "runtime_tool",
+      label: "Runtime Tool",
+      description: "must not execute",
+      parameters: Type.Object({}),
+      execute,
+    } satisfies AgentTool;
+    const [definition] = toToolDefinitions([tool]);
+    if (!definition) {
+      throw new Error("missing runtime tool definition");
+    }
+
+    const result = await definition.execute(
+      "call-denied",
+      {},
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "blocked",
+      deniedReason: "final-tool-input-policy",
+      reason: "Tool call blocked by final input policy",
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -450,6 +739,127 @@ describe("toClientToolDefinitions – param coercion", () => {
       '{"action":"search","params":{"q":"test","page":1}}',
     );
     expect(calledWith).toEqual({ action: "search", params: { q: "test", page: 1 } });
+  });
+
+  it("isolates and deeply freezes final-policy client delegation input", async () => {
+    installFinalToolInputPolicy({
+      id: "pass-client-tool",
+      description: "pass client delegation",
+      evaluate: () => ({ outcome: "pass" }),
+    });
+    const original = {
+      query: "private",
+      options: { limit: 10 },
+    };
+    const retainedOptions = original.options;
+    let delegated: Record<string, unknown> | undefined;
+    const [definition] = toClientToolDefinitions([makeClientTool("search")], (_name, params) => {
+      delegated = params;
+    });
+    if (!definition) {
+      throw new Error("missing client tool definition");
+    }
+
+    const result = await definition.execute(
+      "call-client-allowed",
+      original,
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.terminate).toBe(true);
+    expect(delegated).toBe(original);
+    if (!delegated) {
+      throw new Error("missing delegated params");
+    }
+    const delegatedOptions = delegated.options;
+    if (!delegatedOptions || typeof delegatedOptions !== "object") {
+      throw new Error("missing delegated options");
+    }
+    expect(delegatedOptions).not.toBe(retainedOptions);
+    expect(Object.isFrozen(delegated)).toBe(true);
+    expect(Object.isFrozen(delegatedOptions)).toBe(true);
+    expect(() => {
+      (delegatedOptions as { limit: number }).limit = 99;
+    }).toThrow(TypeError);
+    retainedOptions.limit = 99;
+    expect(delegated).toEqual({ query: "private", options: { limit: 10 } });
+    expect(original).toEqual({ query: "private", options: { limit: 10 } });
+    expect(retainedOptions).toEqual({ limit: 99 });
+    expect(Object.isFrozen(original)).toBe(true);
+    expect(Object.isFrozen(original.options)).toBe(true);
+  });
+
+  it("does not delegate when cancellation races with a passing final policy", async () => {
+    const controller = new AbortController();
+    const delegate = vi.fn();
+    installFinalToolInputPolicy({
+      id: "race-client-cancel",
+      description: "abort while passing client delegation",
+      evaluate: () =>
+        new Promise<{ outcome: "pass" }>((resolve) => {
+          controller.abort(new Error("cancelled during policy resolution"));
+          resolve({ outcome: "pass" });
+        }),
+    });
+    const [definition] = toClientToolDefinitions([makeClientTool("search")], delegate);
+    if (!definition) {
+      throw new Error("missing client tool definition");
+    }
+
+    await expect(
+      definition.execute(
+        "call-client-racing-cancel",
+        { query: "private" },
+        controller.signal,
+        undefined,
+        extensionContext,
+      ),
+    ).rejects.toThrow("cancelled during policy resolution");
+    expect(delegate).not.toHaveBeenCalled();
+  });
+
+  it("discards a reserved client delegation denied by final input policy", async () => {
+    const reserve = vi.fn();
+    const complete = vi.fn();
+    const discard = vi.fn();
+    const seenByPolicy: unknown[] = [];
+    installFinalToolInputPolicy({
+      id: "deny-client-tool",
+      description: "deny client delegation",
+      evaluate(event) {
+        seenByPolicy.push(event.params);
+        return { outcome: "deny", reasonCode: "client_tool.denied" };
+      },
+    });
+    const [definition] = toClientToolDefinitions([makeClientTool("search")], {
+      reserve,
+      complete,
+      discard,
+    });
+    if (!definition) {
+      throw new Error("missing client tool definition");
+    }
+
+    const result = await definition.execute(
+      "call-client-denied",
+      '{"query":"private"}',
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(seenByPolicy).toEqual([{ query: "private" }]);
+    expect(reserve).toHaveBeenCalledWith("call-client-denied", "search");
+    expect(discard).toHaveBeenCalledWith("call-client-denied", "search");
+    expect(complete).not.toHaveBeenCalled();
+    expect(result.terminate).not.toBe(true);
+    expect(result.details).toMatchObject({
+      status: "blocked",
+      deniedReason: "final-tool-input-policy",
+      reason: "Tool call blocked by final input policy",
+    });
   });
 });
 

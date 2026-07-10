@@ -1,7 +1,12 @@
 /**
  * Tests agent harness runtime helpers and task dispatch behavior.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   attachModelProviderRequestTransport,
   buildAgentHarnessUserInputAnswers,
@@ -9,6 +14,7 @@ import {
   deliverAgentHarnessUserInputPrompt,
   formatAgentHarnessUserInputPrompt,
   getModelProviderRequestTransport,
+  runFinalToolInputPolicies,
   type AgentHarnessTerminalOutcomeClassification,
 } from "./agent-harness-runtime.js";
 
@@ -21,6 +27,10 @@ vi.mock("../skills/research/autocapture.js", () => {
   return {
     runSkillResearchAutoCapture: vi.fn(),
   };
+});
+
+afterEach(() => {
+  resetGlobalHookRunner();
 });
 
 describe("classifyAgentHarnessTerminalOutcome", () => {
@@ -166,6 +176,60 @@ describe("agent harness runtime SDK facade", () => {
     expect(getModelProviderRequestTransport(model)).toEqual({
       auth: { mode: "header", headerName: "x-api-key", value: "secret" },
     });
+  });
+
+  it("exports final input policy execution and seals caller input in place", async () => {
+    let policySnapshot: Record<string, unknown> | undefined;
+    const registry = createEmptyPluginRegistry();
+    registry.finalToolInputPolicies = [
+      {
+        pluginId: "sdk-policy",
+        pluginName: "SDK Policy",
+        source: "test",
+        policy: {
+          id: "sdk-pass",
+          description: "allow SDK policy input",
+          evaluate: (event) => {
+            policySnapshot = event.params;
+            (event.params.nested as { stable: boolean }).stable = false;
+            return { outcome: "pass" };
+          },
+        },
+      },
+    ];
+    initializeGlobalHookRunner(registry);
+    const params = { action: "inspect", nested: { stable: true } };
+    const callerRoot = params;
+    const callerNested = params.nested;
+
+    const outcome = await runFinalToolInputPolicies({
+      toolName: "sdk_tool",
+      params,
+    });
+
+    expect(outcome).toEqual({ blocked: false });
+    expect(params).toBe(callerRoot);
+    expect(params).toEqual({ action: "inspect", nested: { stable: true } });
+    expect(params.nested).not.toBe(callerNested);
+    expect(Object.isFrozen(params)).toBe(true);
+    expect(Object.isFrozen(params.nested)).toBe(true);
+    expect(policySnapshot).not.toBe(params);
+    expect(policySnapshot?.nested).not.toBe(params.nested);
+    expect(policySnapshot).toEqual({ action: "inspect", nested: { stable: false } });
+  });
+
+  it("observes an already-aborted signal when no final input policies are active", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled before final policy lookup");
+    controller.abort(reason);
+
+    await expect(
+      runFinalToolInputPolicies({
+        toolName: "sdk_tool",
+        params: {},
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
   });
 });
 

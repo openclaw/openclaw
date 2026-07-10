@@ -95,7 +95,7 @@ describe("global hook runner composition (#91918)", () => {
     expect(runner().hasHooks("message_sent")).toBe(true);
   });
 
-  it("keeps bundled trusted policies before installed policies across live registries", () => {
+  it("keeps bundled tool policies before installed policies across live registries", () => {
     const pinnedBundled = createMockPluginRegistry([
       { hookName: "before_tool_call", handler: vi.fn(), pluginId: "bundled-policy" },
     ]);
@@ -110,6 +110,19 @@ describe("global hook runner composition (#91918)", () => {
           id: "bundled-first",
           description: "bundled policy",
           evaluate: () => undefined,
+        },
+      },
+    ];
+    pinnedBundled.finalToolInputPolicies = [
+      {
+        pluginId: "bundled-policy",
+        pluginName: "Bundled Policy",
+        origin: "bundled",
+        source: "test",
+        policy: {
+          id: "bundled-final-input-first",
+          description: "bundled final input policy",
+          evaluate: () => ({ outcome: "pass" }),
         },
       },
     ];
@@ -128,6 +141,19 @@ describe("global hook runner composition (#91918)", () => {
         },
       },
     ];
+    activeInstalled.finalToolInputPolicies = [
+      {
+        pluginId: "installed-policy",
+        pluginName: "Installed Policy",
+        origin: "workspace",
+        source: "test",
+        policy: {
+          id: "installed-final-input-second",
+          description: "installed final input policy",
+          evaluate: () => ({ outcome: "pass" }),
+        },
+      },
+    ];
 
     pinActivePluginChannelRegistry(pinnedBundled);
     setActivePluginRegistry(activeInstalled);
@@ -142,6 +168,61 @@ describe("global hook runner composition (#91918)", () => {
       ["bundled", "bundled-first"],
       ["workspace", "installed-second"],
     ]);
+    expect(
+      getGlobalHookRunnerRegistry()?.finalToolInputPolicies?.map((registration) => [
+        registration.origin,
+        registration.policy.id,
+      ]),
+    ).toEqual([
+      ["bundled", "bundled-final-input-first"],
+      ["workspace", "installed-final-input-second"],
+    ]);
+  });
+
+  it("resolves pre-tool and final-input policy ownership independently", () => {
+    const pluginId = "split-policy-plugin";
+    const pinnedPreTool = createMockPluginRegistry([]);
+    pinnedPreTool.plugins = [createPluginRecord({ id: pluginId, origin: "workspace" })];
+    pinnedPreTool.trustedToolPolicies = [
+      {
+        pluginId,
+        pluginName: "Split Policy Plugin",
+        origin: "workspace",
+        source: "pinned-test",
+        policy: {
+          id: "pre-tool-policy",
+          description: "pre-tool tier from pinned registry",
+          evaluate: () => undefined,
+        },
+      },
+    ];
+
+    const activeFinalInput = createMockPluginRegistry([]);
+    activeFinalInput.plugins = [createPluginRecord({ id: pluginId, origin: "workspace" })];
+    activeFinalInput.finalToolInputPolicies = [
+      {
+        pluginId,
+        pluginName: "Split Policy Plugin",
+        origin: "workspace",
+        source: "active-test",
+        policy: {
+          id: "final-input-policy",
+          description: "final-input tier from active registry",
+          evaluate: () => ({ outcome: "pass" }),
+        },
+      },
+    ];
+
+    pinActivePluginChannelRegistry(pinnedPreTool);
+    setActivePluginRegistry(activeFinalInput);
+    initializeGlobalHookRunner(activeFinalInput);
+
+    expect(
+      getGlobalHookRunnerRegistry()?.trustedToolPolicies?.map((entry) => entry.policy.id),
+    ).toEqual(["pre-tool-policy"]);
+    expect(
+      getGlobalHookRunnerRegistry()?.finalToolInputPolicies?.map((entry) => entry.policy.id),
+    ).toEqual(["final-input-policy"]);
   });
 
   it("lets an explicitly initialized registry win ownership over the active registry", () => {

@@ -86,6 +86,34 @@ describe("ensureRuntimePluginsLoaded", () => {
     expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).not.toHaveBeenCalled();
   });
 
+  it("still validates required policies when plugins are globally disabled", () => {
+    const config = {
+      plugins: {
+        enabled: false,
+        entries: {
+          "enterprise-policy": {
+            enabled: false,
+            requiredFinalToolInputPolicies: ["pdp"],
+          },
+        },
+      },
+    } as never;
+
+    ensureRuntimePluginsLoaded({
+      config,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(hoisted.ensureStandaloneRuntimePluginRegistryLoaded).toHaveBeenCalledWith({
+      requiredPluginIds: undefined,
+      loadOptions: {
+        config,
+        workspaceDir: "/tmp/workspace",
+        runtimeOptions: undefined,
+      },
+    });
+  });
+
   it("scopes runtime plugin loading to the current gateway startup plan", () => {
     // Startup metadata narrows runtime loading to plugins already planned for gateway startup.
     const config = {} as never;

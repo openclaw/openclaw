@@ -565,6 +565,7 @@ Use `contracts` only for static capability ownership metadata that OpenClaw can 
   "contracts": {
     "agentToolResultMiddleware": ["openclaw", "codex"],
     "trustedToolPolicies": ["workflow-budget"],
+    "finalToolInputPolicies": ["production-write-boundary"],
     "externalAuthProviders": ["acme-ai"],
     "embeddingProviders": ["openai-compatible"],
     "speechProviders": ["openai"],
@@ -594,6 +595,7 @@ Each list is optional:
 | `embeddedExtensionFactories`     | `string[]` | Codex app-server extension factory ids, currently `codex-app-server`.                                                                |
 | `agentToolResultMiddleware`      | `string[]` | Runtime ids this plugin may register tool-result middleware for.                                                                     |
 | `trustedToolPolicies`            | `string[]` | Plugin-local trusted pre-tool policy ids an installed plugin may register. Bundled plugins may register policies without this field. |
+| `finalToolInputPolicies`         | `string[]` | Plugin-local final tool input policy ids this plugin may register.                                                                   |
 | `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.                                                                      |
 | `embeddingProviders`             | `string[]` | General embedding provider ids this plugin owns for reusable vector embedding use, including memory.                                 |
 | `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                                                                                                |
@@ -617,6 +619,10 @@ Each list is optional:
 `contracts.embeddedExtensionFactories` is retained for bundled Codex app-server-only extension factories. Bundled tool-result transforms should declare `contracts.agentToolResultMiddleware` and register with `api.registerAgentToolResultMiddleware(...)` instead. Installed plugins may use the same middleware seam only when explicitly enabled and only for runtimes they declare in `contracts.agentToolResultMiddleware`.
 
 Installed plugins that need the host-trusted pre-tool policy tier must declare each registered local id in `contracts.trustedToolPolicies` and be explicitly enabled. Bundled plugins keep the existing trusted-policy path, but installed plugins with undeclared policy ids are rejected before registration. Policy ids are scoped to the registering plugin, so two plugins may both declare and register `workflow-budget`; a single plugin may not register the same local id twice.
+
+Every plugin that registers a final tool input policy must declare each local id in `contracts.finalToolInputPolicies`; installed plugins must also be explicitly enabled. These declarations are required runtime contracts: an active plugin must register every declared id on every activating runtime load. Conditional policies must still register and return `pass` while inactive. Undeclared ids, missing registrations, duplicate ids within one plugin, and malformed registrations are rejected. See [Plugin hooks](/plugins/hooks#final-tool-input-policies) for the restrict-only decision contract and execution boundary.
+
+Operators can independently pin required policy ids with `plugins.entries.<id>.requiredFinalToolInputPolicies`. That requirement remains effective even if an upgrade removes the manifest declaration; activation fails until the plugin again declares and registers the id or the operator intentionally removes the requirement. See [Final tool input policies](/plugins/hooks#final-tool-input-policies) for an example.
 
 Runtime `api.registerTool(...)` registrations must match `contracts.tools`. Tool discovery uses this list to load only the plugin runtimes that can own the requested tools.
 

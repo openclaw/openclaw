@@ -112,6 +112,10 @@ describe("migration provider runtime", () => {
         diagnostics: [],
       }),
     );
+    mocks.ensureStandaloneRuntimePluginRegistryLoaded.mockImplementation(
+      (params: { requiredPluginIds?: string[] }) =>
+        mocks.resolveRuntimePluginRegistry({ onlyPluginIds: params.requiredPluginIds }),
+    );
     const runtime = await import("./migration-provider-runtime.js");
     ensureStandaloneMigrationProviderRegistryLoaded =
       runtime.ensureStandaloneMigrationProviderRegistryLoaded;
@@ -157,6 +161,7 @@ describe("migration provider runtime", () => {
       };
     };
     expect(standaloneParams.surface).toBe("active");
+    expect(standaloneParams).not.toHaveProperty("installRegistry");
     expect(standaloneParams.requiredPluginIds).toEqual(["migrate-hermes"]);
     expect(standaloneParams.loadOptions?.activate).toBe(false);
     expect(standaloneParams.loadOptions?.onlyPluginIds).toEqual(["migrate-hermes"]);

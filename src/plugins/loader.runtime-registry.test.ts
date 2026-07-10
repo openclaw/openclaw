@@ -367,6 +367,47 @@ describe("getCompatibleActivePluginRegistry", () => {
     expect(resolving).not.toBe(plain);
   });
 
+  it("includes canonical required final input policies in the loader cache key", () => {
+    const loadOptions = {
+      config: {
+        plugins: {
+          allow: ["enterprise-policy"],
+          entries: {
+            "enterprise-policy": {
+              enabled: true,
+              requiredFinalToolInputPolicies: ["pii-guard", "external-pdp"],
+            },
+          },
+        },
+      },
+    };
+    const withRequirements = testing.resolvePluginLoadCacheContext(loadOptions).cacheKey;
+    const reordered = testing.resolvePluginLoadCacheContext({
+      config: {
+        plugins: {
+          allow: ["enterprise-policy"],
+          entries: {
+            "enterprise-policy": {
+              enabled: true,
+              requiredFinalToolInputPolicies: ["external-pdp", "pii-guard"],
+            },
+          },
+        },
+      },
+    }).cacheKey;
+    const withoutRequirements = testing.resolvePluginLoadCacheContext({
+      config: {
+        plugins: {
+          allow: ["enterprise-policy"],
+          entries: { "enterprise-policy": { enabled: true } },
+        },
+      },
+    }).cacheKey;
+
+    expect(reordered).toBe(withRequirements);
+    expect(withoutRequirements).not.toBe(withRequirements);
+  });
+
   it("does not embed raw resolved plugin config env values in the loader cache key", () => {
     const { cacheKey } = testing.resolvePluginLoadCacheContext({
       config: {

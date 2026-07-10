@@ -3,11 +3,17 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { runBeforeToolCallHook as runBeforeToolCallHookType } from "../agents/agent-tools.before-tool-call.js";
+import type {
+  runBeforeToolCallHook as runBeforeToolCallHookType,
+  runFinalToolInputPolicies as runFinalToolInputPoliciesType,
+} from "../agents/agent-tools.before-tool-call.js";
 
 type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
 type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
 type RunBeforeToolCallHookResult = Awaited<ReturnType<RunBeforeToolCallHook>>;
+type RunFinalToolInputPolicies = typeof runFinalToolInputPoliciesType;
+type RunFinalToolInputPoliciesArgs = Parameters<RunFinalToolInputPolicies>[0];
+type RunFinalToolInputPoliciesResult = Awaited<ReturnType<RunFinalToolInputPolicies>>;
 
 const pluginToolMetaState = vi.hoisted(
   () => new Map<string, { pluginId: string; optional: boolean }>(),
@@ -21,7 +27,40 @@ const hookMocks = vi.hoisted(() => ({
       params: args.params,
     }),
   ),
+  runFinalToolInputPolicies: vi.fn(
+    async (_args: RunFinalToolInputPoliciesArgs): Promise<RunFinalToolInputPoliciesResult> => ({
+      blocked: false,
+    }),
+  ),
 }));
+
+const toolsInvokeTestExecuteMock = vi.hoisted(() =>
+  vi.fn(async (_toolCallId: string, args: unknown) => {
+    const mode = (args as { mode?: unknown })?.mode;
+    if (mode === "input") {
+      const err = new Error("mode invalid");
+      err.name = "ToolInputError";
+      throw err;
+    }
+    if (mode === "auth") {
+      const err = new Error("mode forbidden") as Error & { status?: number };
+      err.name = "ToolAuthorizationError";
+      err.status = 403;
+      throw err;
+    }
+    if (mode === "crash") {
+      throw new Error("boom");
+    }
+    return { ok: true };
+  }),
+);
+
+const finalizingToolExecuteMock = vi.hoisted(() =>
+  vi.fn(async (_toolCallId: string, args: unknown) => ({
+    ok: true,
+    observed: args,
+  })),
+);
 
 let cfg: Record<string, unknown> = {};
 let lastCreateOpenClawToolsContext: Record<string, unknown> | undefined;
@@ -81,13 +120,6 @@ vi.mock("../agents/openclaw-tools.js", () => {
     err.name = "ToolInputError";
     return err;
   };
-  const toolAuthorizationError = (message: string) => {
-    const err = new Error(message) as Error & { status?: number };
-    err.name = "ToolAuthorizationError";
-    err.status = 403;
-    return err;
-  };
-
   const tools = [
     {
       name: "session_status",
@@ -168,19 +200,40 @@ vi.mock("../agents/openclaw-tools.js", () => {
         required: ["mode"],
         additionalProperties: false,
       },
-      execute: async (_toolCallId: string, args: unknown) => {
-        const mode = (args as { mode?: unknown })?.mode;
-        if (mode === "input") {
-          throw toolInputError("mode invalid");
-        }
-        if (mode === "auth") {
-          throw toolAuthorizationError("mode forbidden");
-        }
-        if (mode === "crash") {
-          throw new Error("boom");
-        }
-        return { ok: true };
+      execute: toolsInvokeTestExecuteMock,
+    },
+    {
+      name: "finalizing_tool_test",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          outPath: { type: "string" },
+        },
+        additionalProperties: true,
       },
+      prepareBeforeToolCallParams: async (args: unknown) => {
+        await Promise.resolve();
+        return { ...(args as Record<string, unknown>), prepared: true };
+      },
+      finalizeBeforeToolCallParams: async (args: unknown, preparedArgs: unknown) => {
+        await Promise.resolve();
+        const input = args as Record<string, unknown>;
+        if ((preparedArgs as { prepared?: unknown }).prepared !== true) {
+          throw new Error("missing prepared input");
+        }
+        if (input.path === "</arg_value>>") {
+          throw toolInputError("malformed final path");
+        }
+        const outPath = input.outPath;
+        return {
+          ...input,
+          ...(typeof outPath === "string"
+            ? { outPath: outPath.startsWith("/") ? outPath : `/workspace/${outPath}` }
+            : {}),
+        };
+      },
+      execute: finalizingToolExecuteMock,
     },
     {
       name: "diffs_compat_test",
@@ -217,6 +270,7 @@ vi.mock("../agents/agent-tools.js", () => ({
 
 vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: hookMocks.runBeforeToolCallHook,
+  runFinalToolInputPolicies: hookMocks.runFinalToolInputPolicies,
 }));
 
 const { authorizeHttpGatewayConnect } = await import("./auth.js");
@@ -288,6 +342,14 @@ beforeEach(() => {
       params: args.params,
     }),
   );
+  hookMocks.runFinalToolInputPolicies.mockClear();
+  hookMocks.runFinalToolInputPolicies.mockImplementation(
+    async (_args: RunFinalToolInputPoliciesArgs): Promise<RunFinalToolInputPoliciesResult> => ({
+      blocked: false,
+    }),
+  );
+  toolsInvokeTestExecuteMock.mockClear();
+  finalizingToolExecuteMock.mockClear();
   vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true });
 });
 
@@ -386,12 +448,13 @@ const invokeToolAuthed = async (params: {
   tool: string;
   args?: Record<string, unknown>;
   action?: string;
+  headers?: Record<string, string>;
   sessionKey?: string;
 }) =>
   invokeTool({
     port: sharedPort,
-    headers: gatewayAuthHeaders(),
     ...params,
+    headers: { ...gatewayAuthHeaders(), ...params.headers },
   });
 
 const expectOkInvokeResponse = async (res: Response) => {
@@ -577,6 +640,92 @@ describe("POST /tools/invoke", () => {
 
     const body = await expectOkInvokeResponse(res);
     expect(body.result?.ok).toBe(true);
+  });
+
+  it("applies final input policy to hook-adjusted params before HTTP execution", async () => {
+    setMainAllowedTools({ allow: ["tools_invoke_test"] });
+    hookMocks.runBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: false,
+      params: { mode: "rewritten" },
+    });
+    hookMocks.runFinalToolInputPolicies.mockResolvedValueOnce({
+      blocked: true,
+      reason: "Tool call blocked by final input policy",
+    });
+
+    const res = await invokeToolAuthed({
+      tool: "tools_invoke_test",
+      args: { mode: "input" },
+      headers: { "x-openclaw-message-channel": "telegram" },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      error: {
+        type: "tool_call_blocked",
+        message: "Tool call blocked by final input policy",
+      },
+    });
+    expect(hookMocks.runFinalToolInputPolicies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "tools_invoke_test",
+        params: { mode: "rewritten" },
+        ctx: expect.objectContaining({
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          channelId: "telegram",
+        }),
+      }),
+    );
+    expect(toolsInvokeTestExecuteMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects hook-rewritten malformed input during async finalization", async () => {
+    setMainAllowedTools({ allow: ["finalizing_tool_test"] });
+    hookMocks.runBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: false,
+      params: { path: "</arg_value>>" },
+    });
+
+    const res = await invokeToolAuthed({
+      tool: "finalizing_tool_test",
+      args: { path: "safe.txt" },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      error: { type: "tool_error", message: "malformed final path" },
+    });
+    expect(hookMocks.runFinalToolInputPolicies).not.toHaveBeenCalled();
+    expect(finalizingToolExecuteMock).not.toHaveBeenCalled();
+  });
+
+  it("applies final input policy and executes the same canonical output path", async () => {
+    setMainAllowedTools({ allow: ["finalizing_tool_test"] });
+    hookMocks.runBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: false,
+      params: { outPath: "results/output.png" },
+    });
+
+    const res = await invokeToolAuthed({
+      tool: "finalizing_tool_test",
+      args: { outPath: "draft.png" },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(200);
+    expect(hookMocks.runFinalToolInputPolicies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: { outPath: "/workspace/results/output.png" },
+      }),
+    );
+    expect(finalizingToolExecuteMock).toHaveBeenCalledWith(expect.any(String), {
+      outPath: "/workspace/results/output.png",
+    });
   });
 
   it("supports tools.alsoAllow in profile and implicit modes", async () => {

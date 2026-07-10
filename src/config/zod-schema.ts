@@ -274,6 +274,7 @@ const SkillEntrySchema = z
 const PluginEntrySchema = z
   .object({
     enabled: z.boolean().optional(),
+    requiredFinalToolInputPolicies: z.array(z.string().trim().min(1)).optional(),
     hooks: z
       .object({
         allowPromptInjection: z.boolean().optional(),

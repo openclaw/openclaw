@@ -98,6 +98,7 @@ export type PluginInspectReport = {
     allowModelOverride?: boolean;
     allowedModels: string[];
     hasAllowedModelsConfig: boolean;
+    requiredFinalToolInputPolicies: string[];
   };
   usesLegacyBeforeAgentStart: boolean;
   compatibility: PluginCompatibilityNotice[];
@@ -438,6 +439,9 @@ export function buildPluginInspectReport(params: {
       allowModelOverride: policyEntry?.subagent?.allowModelOverride,
       allowedModels: [...(policyEntry?.subagent?.allowedModels ?? [])],
       hasAllowedModelsConfig: policyEntry?.subagent?.hasAllowedModelsConfig === true,
+      requiredFinalToolInputPolicies: [
+        ...(policyEntry?.requiredFinalToolInputPolicies ?? []),
+      ],
     },
     usesLegacyBeforeAgentStart,
     compatibility,

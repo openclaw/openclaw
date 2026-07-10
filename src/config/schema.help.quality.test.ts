@@ -372,6 +372,7 @@ const TARGET_KEYS = [
   "plugins.slots",
   "plugins.entries",
   "plugins.entries.*.enabled",
+  "plugins.entries.*.requiredFinalToolInputPolicies",
   "plugins.entries.*.hooks",
   "plugins.entries.*.hooks.allowPromptInjection",
   "plugins.entries.*.hooks.allowConversationAccess",
@@ -875,6 +876,10 @@ describe("config help copy quality", () => {
 
     const pluginEnv = FIELD_HELP["plugins.entries.*.env"];
     expect(/scope|plugin|environment/i.test(pluginEnv)).toBe(true);
+
+    const requiredFinalPolicies =
+      FIELD_HELP["plugins.entries.*.requiredFinalToolInputPolicies"];
+    expect(/operator|active runtime|fail/i.test(requiredFinalPolicies)).toBe(true);
 
     const pluginPromptPolicy = FIELD_HELP["plugins.entries.*.hooks.allowPromptInjection"];
     expect(pluginPromptPolicy.includes("before_prompt_build")).toBe(true);

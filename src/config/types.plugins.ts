@@ -1,6 +1,11 @@
 // Defines plugin entry and install configuration types.
 export type PluginEntryConfig = {
   enabled?: boolean;
+  /**
+   * Operator-owned final input policy ids that must load for this plugin.
+   * Active runtime loads fail closed until every id is declared and registered.
+   */
+  requiredFinalToolInputPolicies?: string[];
   hooks?: {
     /** Controls prompt mutation via before_prompt_build and prompt fields from legacy before_agent_start. */
     allowPromptInjection?: boolean;

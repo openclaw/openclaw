@@ -47,8 +47,14 @@ import {
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  hasFinalToolInputPolicies,
+  runFinalToolInputPolicies as evaluateFinalToolInputPolicies,
+  type FinalToolInputPolicyBlock,
+} from "../plugins/final-tool-input-policy.js";
 import { getGlobalHookRunnerRegistry } from "../plugins/hook-runner-global-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { hasPluginJsonContainerShape } from "../plugins/host-hook-json.js";
 import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
 import {
@@ -114,7 +120,11 @@ import {
 } from "./tool-result-error.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import { getToolTerminalPresentation } from "./tool-terminal-presentation.js";
-import type { AnyAgentTool } from "./tools/common.js";
+import {
+  finalizeToolCallParams,
+  prepareToolCallParams,
+  type AnyAgentTool,
+} from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { canonicalizePath } from "./utils/paths.js";
 
@@ -168,7 +178,11 @@ export type HookContext = {
   };
 };
 
-type HookBlockedReason = "plugin-before-tool-call" | "plugin-approval" | "tool-loop";
+type HookBlockedReason =
+  | "plugin-before-tool-call"
+  | "plugin-approval"
+  | "final-tool-input-policy"
+  | "tool-loop";
 export type BeforeToolCallFailureDisposition = "blocked" | DiagnosticToolTerminalReason;
 type HookBlockedOutcome = {
   blocked: true;
@@ -218,14 +232,6 @@ type BeforeToolCallWrapperOptions = {
   approvalMode?: "request" | "report" | "defer";
   emitDiagnostics: boolean;
 };
-type BeforeToolCallPreparingTool = AnyAgentTool & {
-  prepareBeforeToolCallParams?: (
-    params: unknown,
-    ctx: { toolCallId?: string; hookContext?: HookContext; signal?: AbortSignal },
-  ) => unknown;
-  finalizeBeforeToolCallParams?: (params: unknown, preparedParams: unknown) => unknown;
-};
-
 export type BeforeToolCallPolicyDiagnosticState = {
   hasBeforeToolCallHook: boolean;
   trustedToolPolicies: Array<{
@@ -766,7 +772,7 @@ function emitSkillUsedDiagnostic(params: {
 
 function emitToolBlockedSecurityEvent(params: {
   ctx?: HookContext;
-  deniedReason: HookBlockedReason;
+  deniedReason: Exclude<HookBlockedReason, "final-tool-input-policy">;
   toolIdentity: ToolDiagnosticIdentity;
   toolName: string;
   trace?: DiagnosticTraceContext;
@@ -817,6 +823,33 @@ function emitToolBlockedSecurityEvent(params: {
     attributes: {
       tool_source: params.toolIdentity.toolSource,
       ...(params.paramsSummary ? { params_kind: params.paramsSummary.kind } : {}),
+    },
+  });
+}
+
+function emitFinalToolInputPolicySecurityEvent(params: {
+  toolName: string;
+  ctx?: HookContext;
+  policy: Pick<FinalToolInputPolicyBlock, "kind" | "pluginId" | "policyId" | "reasonCode">;
+}): void {
+  emitTrustedSecurityEvent({
+    category: "tool",
+    action: "tool.execution.blocked",
+    outcome: "denied",
+    severity: "medium",
+    reason: "final-tool-input-policy",
+    ...(params.ctx?.trace ? { trace: freezeDiagnosticTraceContext(params.ctx.trace) } : {}),
+    actor: { kind: "agent" },
+    target: { kind: "tool", name: normalizeToolName(params.toolName || "tool") },
+    policy: {
+      id: params.policy.policyId,
+      decision: "deny",
+      reason: params.policy.reasonCode,
+    },
+    control: { id: "final-tool-input-policy", family: "authorization" },
+    attributes: {
+      final_input_policy_plugin_id: params.policy.pluginId,
+      final_input_policy_outcome_kind: params.policy.kind,
     },
   });
 }
@@ -1383,6 +1416,131 @@ async function recordLoopOutcome(args: {
   }
 }
 
+export type FinalToolInputPolicyOutcome =
+  | {
+      blocked: true;
+      reason: string;
+    }
+  | {
+      blocked: false;
+    };
+
+function buildFinalToolInputPolicyBlockedOutcome(params: {
+  toolName: string;
+  ctx?: HookContext;
+  policy: Pick<FinalToolInputPolicyBlock, "kind" | "pluginId" | "policyId" | "reasonCode">;
+  reason?: string;
+}): FinalToolInputPolicyOutcome {
+  emitFinalToolInputPolicySecurityEvent({
+    toolName: params.toolName,
+    ...(params.ctx ? { ctx: params.ctx } : {}),
+    policy: params.policy,
+  });
+  return {
+    blocked: true,
+    reason: params.reason ?? "Tool call blocked by final input policy",
+  };
+}
+
+/**
+ * Run restrict-only final policies after visibility, pre-tool policies,
+ * OpenClaw-managed approvals, and finalization.
+ * An unblocked result means no final veto; it is never an independent authorization grant.
+ * Policies see bounded plain JSON input only. Tool-owned defaults and hidden
+ * runtime facts may be absent, so a policy must deny when a required fact is unknown.
+ */
+export async function runFinalToolInputPolicies(args: {
+  toolName: string;
+  params: unknown;
+  toolKind?: PluginHookToolKind;
+  toolInputKind?: PluginHookToolInputKind;
+  toolCallId?: string;
+  ctx?: HookContext;
+  signal?: AbortSignal;
+}): Promise<FinalToolInputPolicyOutcome> {
+  const policyRegistry = getGlobalHookRunnerRegistry() ?? undefined;
+  if (!hasFinalToolInputPolicies(policyRegistry)) {
+    args.signal?.throwIfAborted();
+    return { blocked: false };
+  }
+
+  if (args.params === null || typeof args.params !== "object" || Array.isArray(args.params)) {
+    const policy = {
+      kind: "error" as const,
+      pluginId: "unknown-plugin",
+      policyId: "unknown-policy",
+      reasonCode: "policy-input-invalid",
+    };
+    return buildFinalToolInputPolicyBlockedOutcome({
+      toolName: args.toolName,
+      ...(args.ctx ? { ctx: args.ctx } : {}),
+      policy,
+    });
+  }
+  const finalParams = args.params as Record<string, unknown>;
+  if (!hasPluginJsonContainerShape(finalParams)) {
+    return buildFinalToolInputPolicyBlockedOutcome({
+      toolName: args.toolName,
+      ...(args.ctx ? { ctx: args.ctx } : {}),
+      policy: {
+        kind: "error",
+        pluginId: "unknown-plugin",
+        policyId: "unknown-policy",
+        reasonCode: "policy-input-invalid",
+      },
+    });
+  }
+  const result = await evaluateFinalToolInputPolicies(
+    {
+      toolName: normalizeToolName(args.toolName || "tool"),
+      params: finalParams,
+      ...(args.toolKind ? { toolKind: args.toolKind } : {}),
+      ...(args.toolInputKind ? { toolInputKind: args.toolInputKind } : {}),
+      ...(args.ctx?.runId ? { runId: args.ctx.runId } : {}),
+      ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
+    },
+    {
+      toolName: normalizeToolName(args.toolName || "tool"),
+      ...(args.toolKind ? { toolKind: args.toolKind } : {}),
+      ...(args.toolInputKind ? { toolInputKind: args.toolInputKind } : {}),
+      ...(args.ctx?.agentId ? { agentId: args.ctx.agentId } : {}),
+      ...(args.ctx?.sessionKey ? { sessionKey: args.ctx.sessionKey } : {}),
+      ...(args.ctx?.sessionId ? { sessionId: args.ctx.sessionId } : {}),
+      ...(args.ctx?.runId ? { runId: args.ctx.runId } : {}),
+      ...(args.ctx?.trace ? { trace: freezeDiagnosticTraceContext(args.ctx.trace) } : {}),
+      ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
+      ...(args.ctx?.channelId ? { channelId: args.ctx.channelId } : {}),
+    },
+    {
+      registry: policyRegistry,
+      ...(args.signal ? { signal: args.signal } : {}),
+      ...(args.ctx?.config ? { config: args.ctx.config } : {}),
+    },
+  );
+  if (result?.block) {
+    if (result.kind === "abort") {
+      args.signal?.throwIfAborted();
+      throw new Error("Final tool input policy cancelled");
+    }
+    const policy = {
+      kind: result.kind,
+      pluginId: result.pluginId,
+      policyId: result.policyId,
+      reasonCode: result.reasonCode,
+    };
+    return buildFinalToolInputPolicyBlockedOutcome({
+      toolName: args.toolName,
+      ...(args.ctx ? { ctx: args.ctx } : {}),
+      policy,
+      reason: result.blockReason,
+    });
+  }
+  // The runner preserves top-level identity and hidden host state while
+  // sealing the canonical enumerable input inspected by policies.
+  args.signal?.throwIfAborted();
+  return { blocked: false };
+}
+
 /** Run the full before_tool_call policy chain for a pending tool call. */
 export async function runBeforeToolCallHook(args: {
   toolName: string;
@@ -1789,16 +1947,63 @@ export function wrapToolWithBeforeToolCallHook(
           terminalReason: disposition,
         });
       };
-      const prepare = (tool as BeforeToolCallPreparingTool).prepareBeforeToolCallParams;
+      const handleBlockedOutcome = async (
+        blockedOutcome: Extract<HookOutcome, { blocked: true }>,
+        fallbackParams: unknown,
+      ) => {
+        if (blockedOutcome.kind !== "veto") {
+          recordPreExecutionDisposition(
+            blockedOutcome.params ?? fallbackParams,
+            blockedOutcome.disposition,
+            blockedOutcome.deniedReason === "plugin-approval"
+              ? "plugin_approval"
+              : "before_tool_call",
+            blockedOutcome.deniedReason,
+          );
+          throw new BeforeToolCallFailureError(blockedOutcome.reason, blockedOutcome.disposition);
+        }
+        const eventBase = buildEventBase(blockedOutcome.params ?? fallbackParams);
+        if (hookOptions.emitDiagnostics) {
+          emitTrustedDiagnosticEvent({
+            type: "tool.execution.blocked",
+            ...eventBase,
+            reason: blockedOutcome.reason,
+            deniedReason: blockedOutcome.deniedReason ?? "plugin-before-tool-call",
+          });
+          if (blockedOutcome.deniedReason !== "final-tool-input-policy") {
+            emitToolBlockedSecurityEvent({
+              ctx,
+              deniedReason: blockedOutcome.deniedReason ?? "plugin-before-tool-call",
+              toolIdentity: diagnosticIdentity,
+              toolName: normalizedToolName,
+              trace,
+              paramsSummary: eventBase.paramsSummary,
+            });
+          }
+        }
+        const blockedResult = buildBlockedToolResult({
+          reason: blockedOutcome.reason,
+          deniedReason: blockedOutcome.deniedReason ?? "plugin-before-tool-call",
+          toolCallId,
+          runId: ctx?.runId,
+        });
+        await recordLoopOutcome({
+          ctx,
+          toolName: normalizedToolName,
+          toolParams: blockedOutcome.params ?? fallbackParams,
+          toolCallId,
+          result: blockedResult,
+          toolCallOrdinal,
+        });
+        return blockedResult;
+      };
       let preparedParams: unknown;
       try {
-        preparedParams = prepare
-          ? await prepare(params, {
-              ...(toolCallId ? { toolCallId } : {}),
-              ...(ctx ? { hookContext: ctx } : {}),
-              ...(signal ? { signal } : {}),
-            })
-          : params;
+        preparedParams = await prepareToolCallParams(tool, params, {
+          ...(toolCallId ? { toolCallId } : {}),
+          ...(ctx ? { hookContext: ctx } : {}),
+          ...(signal ? { signal } : {}),
+        });
       } catch (error) {
         recordPreExecutionError(error, params, "tool_preparation");
         throw tagBeforeToolCallFailure(error, signal);
@@ -1821,47 +2026,7 @@ export function wrapToolWithBeforeToolCallHook(
         throw tagBeforeToolCallFailure(error, signal);
       }
       if (outcome.blocked) {
-        if (outcome.kind !== "veto") {
-          recordPreExecutionDisposition(
-            outcome.params ?? hookParams,
-            outcome.disposition,
-            outcome.deniedReason === "plugin-approval" ? "plugin_approval" : "before_tool_call",
-            outcome.deniedReason,
-          );
-          throw new BeforeToolCallFailureError(outcome.reason, outcome.disposition);
-        }
-        const eventBase = buildEventBase(outcome.params ?? hookParams);
-        if (hookOptions.emitDiagnostics) {
-          emitTrustedDiagnosticEvent({
-            type: "tool.execution.blocked",
-            ...eventBase,
-            reason: outcome.reason,
-            deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
-          });
-          emitToolBlockedSecurityEvent({
-            ctx,
-            deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
-            toolIdentity: diagnosticIdentity,
-            toolName: normalizedToolName,
-            trace,
-            paramsSummary: eventBase.paramsSummary,
-          });
-        }
-        const blockedResult = buildBlockedToolResult({
-          reason: outcome.reason,
-          deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
-          toolCallId,
-          runId: ctx?.runId,
-        });
-        await recordLoopOutcome({
-          ctx,
-          toolName: normalizedToolName,
-          toolParams: outcome.params ?? hookParams,
-          toolCallId,
-          result: blockedResult,
-          toolCallOrdinal,
-        });
-        return blockedResult;
+        return await handleBlockedOutcome(outcome, hookParams);
       }
       let executeParams: unknown;
       try {
@@ -1871,11 +2036,26 @@ export function wrapToolWithBeforeToolCallHook(
           hookParams,
           adjustedParams: outcome.params,
         });
-        executeParams =
-          (tool as BeforeToolCallPreparingTool).finalizeBeforeToolCallParams?.(
+        executeParams = await finalizeToolCallParams(tool, executeParams, preparedParams);
+        const authorizationOutcome = await runFinalToolInputPolicies({
+          toolName,
+          params: executeParams,
+          ...getCodeModeExecBeforeHookMetadata({ tool, params: executeParams }),
+          toolCallId,
+          ctx,
+          signal,
+        });
+        if (authorizationOutcome.blocked) {
+          return await handleBlockedOutcome(
+            {
+              ...authorizationOutcome,
+              kind: "veto",
+              deniedReason: "final-tool-input-policy",
+              params: executeParams,
+            },
             executeParams,
-            preparedParams,
-          ) ?? executeParams;
+          );
+        }
       } catch (error) {
         recordPreExecutionError(error, outcome.params ?? hookParams, "tool_preparation");
         throw tagBeforeToolCallFailure(error, signal);
@@ -1890,6 +2070,7 @@ export function wrapToolWithBeforeToolCallHook(
       }
       const startedAt = Date.now();
       try {
+        signal?.throwIfAborted();
         const result = await execute(toolCallId, executeParams, signal, onUpdate);
         const durationMs = Date.now() - startedAt;
         const terminalPresentation = resolveToolTerminalPresentation({

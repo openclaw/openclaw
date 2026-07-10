@@ -443,6 +443,45 @@ describe("loadGatewayPlugins", () => {
     expect(getLastPluginLoadOption("preferBuiltPluginArtifacts")).toBe(true);
   });
 
+  test("keeps required final input policy owners in an explicit startup scope", () => {
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+    loadGatewayPluginsForTest({
+      cfg: {
+        plugins: {
+          entries: {
+            "enterprise-policy": {
+              enabled: true,
+              requiredFinalToolInputPolicies: ["external-pdp"],
+            },
+          },
+        },
+      },
+      pluginIds: [],
+    });
+
+    expect(getLastPluginLoadOption("onlyPluginIds")).toEqual(["enterprise-policy"]);
+  });
+
+  test("keeps activation-source-only final policy owners in the startup scope", () => {
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+    loadGatewayPluginsForTest({
+      cfg: {},
+      activationSourceConfig: {
+        plugins: {
+          entries: {
+            "source-policy": {
+              enabled: true,
+              requiredFinalToolInputPolicies: ["external-pdp"],
+            },
+          },
+        },
+      },
+      pluginIds: [],
+    });
+
+    expect(getLastPluginLoadOption("onlyPluginIds")).toEqual(["source-policy"]);
+  });
+
   test("routes plugin registration logs through the plugin logger", () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     const log = loadGatewayPluginsForTest();

@@ -69,4 +69,21 @@ describe("createOpenClawReadTool malformed XML arg-value suffix handling", () =>
     );
     expect(execute).not.toHaveBeenCalled();
   });
+
+  it("rejects a hook-rewritten malformed path during finalization", async () => {
+    const execute = vi.fn();
+    const base = {
+      name: "read",
+      label: "read",
+      description: "read a file",
+      parameters: {},
+      execute,
+    } as unknown as AnyAgentTool;
+    const tool = createOpenClawReadTool(base);
+
+    await expect(
+      tool.finalizeBeforeToolCallParams?.({ path: "</arg_value>>" }, { path: "notes.txt" }),
+    ).rejects.toThrow(/Missing required parameter: path/);
+    expect(execute).not.toHaveBeenCalled();
+  });
 });

@@ -367,6 +367,7 @@ function mergeManifestContracts(
     "embeddedExtensionFactories",
     "agentToolResultMiddleware",
     "trustedToolPolicies",
+    "finalToolInputPolicies",
     "externalAuthProviders",
     "embeddingProviders",
     "memoryEmbeddingProviders",

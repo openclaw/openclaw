@@ -467,20 +467,44 @@ function getContextEngineQuarantine(engineId: string): ContextEngineRuntimeQuara
   return getContextEngineRegistryState().quarantinedEngines.get(engineId);
 }
 
-export function listContextEngineQuarantines(): ContextEngineRuntimeQuarantine[] {
-  const quarantines: ContextEngineRuntimeQuarantine[] = [];
-  for (const entry of getContextEngineRegistryState().quarantinedEngines.values()) {
-    const quarantine: ContextEngineRuntimeQuarantine = {
-      engineId: entry.engineId,
-      operation: entry.operation,
-      reason: entry.reason,
-      failedAt: new Date(entry.failedAt),
-    };
-    if (entry.owner) {
-      quarantine.owner = entry.owner;
+function cloneContextEngineRuntimeQuarantine(
+  entry: ContextEngineRuntimeQuarantine,
+): ContextEngineRuntimeQuarantine {
+  return {
+    engineId: entry.engineId,
+    operation: entry.operation,
+    reason: entry.reason,
+    failedAt: new Date(entry.failedAt),
+    ...(entry.owner ? { owner: entry.owner } : {}),
+  };
+}
+
+/** Captures this process's quarantine state for transactional runtime reloads. */
+export function snapshotContextEngineRuntimeQuarantines(): ContextEngineRuntimeQuarantine[] {
+  return [...getContextEngineRegistryState().quarantinedEngines.values()].map(
+    cloneContextEngineRuntimeQuarantine,
+  );
+}
+
+/** Restores this process's quarantine state after a rejected runtime reload. */
+export function restoreContextEngineRuntimeQuarantines(
+  quarantines: readonly ContextEngineRuntimeQuarantine[],
+): void {
+  clearContextEngineRuntimeQuarantine();
+  const state = getContextEngineRegistryState().quarantinedEngines;
+  for (const entry of quarantines) {
+    const quarantine = cloneContextEngineRuntimeQuarantine(entry);
+    state.set(quarantine.engineId, quarantine);
+    try {
+      recordPersistedContextEngineQuarantine(quarantine);
+    } catch {
+      // The in-memory enforcement state is authoritative; health mirroring is best effort.
     }
-    quarantines.push(quarantine);
   }
+}
+
+export function listContextEngineQuarantines(): ContextEngineRuntimeQuarantine[] {
+  const quarantines = snapshotContextEngineRuntimeQuarantines();
   const seenEngineIds = new Set(quarantines.map((entry) => entry.engineId));
   for (const entry of listPersistedContextEngineQuarantines()) {
     if (seenEngineIds.has(entry.engineId)) {

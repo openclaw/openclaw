@@ -1,5 +1,12 @@
 // Standalone runtime registry loader tests cover registry loading outside gateway startup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runFinalToolInputPolicies } from "../final-tool-input-policy.js";
+import { getGlobalHookRunnerRegistry } from "../hook-runner-global-state.js";
+import {
+  getGlobalPluginRegistry,
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../hook-runner-global.js";
 import { clearPluginLoaderCache, testing } from "../loader.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import type { PluginRegistry } from "../registry-types.js";
@@ -42,6 +49,7 @@ beforeEach(() => {
 
 afterEach(() => {
   clearPluginLoaderCache();
+  resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
 });
 
@@ -120,6 +128,93 @@ describe("ensureStandaloneRuntimePluginRegistryLoaded", () => {
     expect(result).toBe(loadedRegistry);
     expect(loaderMocks.loadOpenClawPlugins).toHaveBeenCalledOnce();
   });
+
+  it("cold-loads required policy owners with an explicitly scoped plugin", () => {
+    const loadedRegistry = createRegistryWithPlugin("target-plugin");
+    loaderMocks.loadOpenClawPlugins.mockReturnValue(loadedRegistry);
+    const config = {
+      plugins: {
+        entries: {
+          "runtime-policy": { requiredFinalToolInputPolicies: ["pdp"] },
+          unrelated: { enabled: true },
+        },
+      },
+    };
+    const activationSourceConfig = {
+      plugins: {
+        entries: {
+          "activation-policy": { requiredFinalToolInputPolicies: ["guard"] },
+        },
+      },
+    };
+
+    const result = ensureStandaloneRuntimePluginRegistryLoaded({
+      loadOptions: {
+        config,
+        activationSourceConfig,
+        onlyPluginIds: ["target-plugin"],
+        workspaceDir: "/tmp/ws",
+      },
+    });
+
+    expect(result).toBe(loadedRegistry);
+    expect(loaderMocks.loadOpenClawPlugins).toHaveBeenCalledWith({
+      config,
+      activationSourceConfig,
+      onlyPluginIds: ["activation-policy", "runtime-policy", "target-plugin"],
+      workspaceDir: "/tmp/ws",
+    });
+  });
+
+  it("reuses a registry cached under the widened policy-owner scope", () => {
+    const registry = createRegistryWithPlugin("target-plugin");
+    registry.plugins.push({ id: "enterprise-policy", status: "loaded" } as never);
+    const config = {
+      plugins: {
+        entries: {
+          "enterprise-policy": { requiredFinalToolInputPolicies: ["pdp"] },
+        },
+      },
+    };
+    const widenedLoadOptions = {
+      config,
+      onlyPluginIds: ["enterprise-policy", "target-plugin"],
+      workspaceDir: "/tmp/ws",
+    };
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(widenedLoadOptions);
+    setActivePluginRegistry(registry, cacheKey, "default", "/tmp/ws");
+
+    const result = ensureStandaloneRuntimePluginRegistryLoaded({
+      loadOptions: {
+        config,
+        onlyPluginIds: ["target-plugin"],
+        workspaceDir: "/tmp/ws",
+      },
+    });
+
+    expect(result).toBe(registry);
+    expect(loaderMocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unscoped cold load unscoped when policy owners are required", () => {
+    loaderMocks.loadOpenClawPlugins.mockReturnValue(createRegistryWithPlugin("enterprise-policy"));
+    const config = {
+      plugins: {
+        entries: {
+          "enterprise-policy": { requiredFinalToolInputPolicies: ["pdp"] },
+        },
+      },
+    };
+
+    ensureStandaloneRuntimePluginRegistryLoaded({
+      loadOptions: { config, workspaceDir: "/tmp/ws" },
+    });
+
+    expect(loaderMocks.loadOpenClawPlugins).toHaveBeenCalledWith({
+      config,
+      workspaceDir: "/tmp/ws",
+    });
+  });
 });
 
 describe("ensureStandaloneRuntimePluginRegistryLoaded tool-discovery installs", () => {
@@ -155,7 +250,6 @@ describe("ensureStandaloneRuntimePluginRegistryLoaded tool-discovery installs", 
     const result = ensureStandaloneRuntimePluginRegistryLoaded({
       surface: "active",
       forceLoad: true,
-      installRegistry: true,
       loadOptions: {
         onlyPluginIds: ["tool-plugin"],
         activate: false,
@@ -168,7 +262,7 @@ describe("ensureStandaloneRuntimePluginRegistryLoaded tool-discovery installs", 
     expect(getActivePluginRegistry()).toBe(activeRegistry);
   });
 
-  it("still installs a non-tool-discovery active load (migration provider path)", () => {
+  it("does not promote a migration-provider snapshot into the active registry", () => {
     const activeRegistry = createRegistryWithPlugin("provider-only");
     setActivePluginRegistry(activeRegistry, "active-key", "default", "/tmp/ws");
     const migrationRegistry = createRegistryWithPlugin("migration-plugin");
@@ -177,7 +271,6 @@ describe("ensureStandaloneRuntimePluginRegistryLoaded tool-discovery installs", 
     ensureStandaloneRuntimePluginRegistryLoaded({
       surface: "active",
       forceLoad: true,
-      installRegistry: true,
       loadOptions: {
         onlyPluginIds: ["migration-plugin"],
         activate: false,
@@ -185,9 +278,84 @@ describe("ensureStandaloneRuntimePluginRegistryLoaded tool-discovery installs", 
       },
     });
 
-    // Without toolDiscovery the load must still become the active registry, since the migration
-    // provider resolver reads migrationProviders off the active registry.
-    expect(getActivePluginRegistry()).toBe(migrationRegistry);
+    expect(getActivePluginRegistry()).toBe(activeRegistry);
+  });
+
+  it("widens a forced request-local snapshot without promoting it", () => {
+    const activeRegistry = createRegistryWithPlugin("provider-only");
+    setActivePluginRegistry(activeRegistry, "active-key", "default", "/tmp/ws");
+    const snapshotRegistry = createRegistryWithPlugin("migration-plugin");
+    loaderMocks.loadOpenClawPlugins.mockReturnValue(snapshotRegistry);
+    const config = {
+      plugins: {
+        entries: {
+          "enterprise-policy": { requiredFinalToolInputPolicies: ["pdp"] },
+        },
+      },
+    };
+
+    const result = ensureStandaloneRuntimePluginRegistryLoaded({
+      surface: "active",
+      forceLoad: true,
+      loadOptions: {
+        config,
+        onlyPluginIds: [],
+        activate: false,
+        workspaceDir: "/tmp/ws",
+      },
+    });
+
+    expect(result).toBe(snapshotRegistry);
+    expect(loaderMocks.loadOpenClawPlugins).toHaveBeenCalledWith({
+      config,
+      onlyPluginIds: ["enterprise-policy"],
+      activate: false,
+      workspaceDir: "/tmp/ws",
+      cache: false,
+    });
+    expect(getActivePluginRegistry()).toBe(activeRegistry);
+  });
+
+  it("preserves the active sealed policy boundary across migration snapshots", async () => {
+    const activeRegistry = createRegistryWithPlugin("enterprise-policy");
+    activeRegistry.finalToolInputPolicies.push({
+      pluginId: "enterprise-policy",
+      pluginName: "Enterprise Policy",
+      source: "test",
+      policy: {
+        id: "pdp",
+        description: "deny test calls",
+        evaluate: () => ({ outcome: "deny", reasonCode: "test.denied" }),
+      },
+    });
+    setActivePluginRegistry(activeRegistry, "active-policy", "default", "/tmp/ws");
+    initializeGlobalHookRunner(activeRegistry);
+    loaderMocks.loadOpenClawPlugins.mockReturnValue(createRegistryWithPlugin("migration-plugin"));
+
+    ensureStandaloneRuntimePluginRegistryLoaded({
+      surface: "active",
+      forceLoad: true,
+      loadOptions: {
+        onlyPluginIds: ["migration-plugin"],
+        activate: false,
+        workspaceDir: "/tmp/ws",
+      },
+    });
+
+    expect(getActivePluginRegistry()).toBe(activeRegistry);
+    expect(getGlobalPluginRegistry()).toBe(activeRegistry);
+    expect(Object.isFrozen(activeRegistry.finalToolInputPolicies)).toBe(true);
+    const decision = await runFinalToolInputPolicies(
+      { toolName: "exec", params: { command: "echo test" } },
+      { toolName: "exec" },
+      { registry: getGlobalHookRunnerRegistry() },
+    );
+    expect(decision).toMatchObject({
+      block: true,
+      pluginId: "enterprise-policy",
+      policyId: "pdp",
+      reasonCode: "test.denied",
+    });
   });
 
   it("keeps runtime surfaces empty for a cold tool-discovery load", () => {

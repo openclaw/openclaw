@@ -377,6 +377,7 @@ describe("runtime api guardrails", () => {
     expect(pluginRuntime).toContain('export * from "../plugins/hook-runner-global.js";');
     expect(hookRunnerGlobal).not.toContain("getGlobalHookRunnerRegistry");
     expect(hookRegistryTypes).not.toContain("trustedToolPolicies");
+    expect(hookRegistryTypes).not.toContain("finalToolInputPolicies");
   });
 
   it("keeps Slack's narrow runtime-setter entrypoint pinned to a single export", () => {

@@ -556,6 +556,7 @@ describe("plugins cli list", () => {
         allowConversationAccess: true,
         allowedModels: [],
         hasAllowedModelsConfig: false,
+        requiredFinalToolInputPolicies: ["external-pdp", "pii-guard"],
       },
       usesLegacyBeforeAgentStart: false,
       compatibility: [],
@@ -566,6 +567,9 @@ describe("plugins cli list", () => {
     expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
     expect(runtimeLogs.join("\n")).toContain("Policy");
     expect(runtimeLogs.join("\n")).toContain("allowConversationAccess: true");
+    expect(runtimeLogs.join("\n")).toContain(
+      "requiredFinalToolInputPolicies: external-pdp, pii-guard",
+    );
     expect(runtimeLogs.join("\n")).toContain("ClawHub package: openclaw-mem0");
     expect(runtimeLogs.join("\n")).toContain("Artifact kind: npm-pack");
     expect(runtimeLogs.join("\n")).toContain("Npm integrity: sha512-clawpack");
@@ -574,6 +578,52 @@ describe("plugins cli list", () => {
     );
     expect(runtimeLogs.join("\n")).toContain("ClawPack spec: 1");
     expect(runtimeLogs.join("\n")).toContain("ClawPack size: 4096 bytes");
+  });
+
+  it("includes operator-required final input policies in inspect JSON", async () => {
+    const plugin = createPluginRecord({ id: "policy-plugin", name: "Policy Plugin" });
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [plugin],
+      diagnostics: [],
+    });
+    buildPluginInspectReport.mockReturnValue({
+      workspaceDir: "/workspace",
+      plugin,
+      shape: "non-capability",
+      capabilityMode: "none",
+      capabilityCount: 0,
+      capabilities: [],
+      typedHooks: [],
+      customHooks: [],
+      tools: [],
+      commands: [],
+      cliCommands: [],
+      services: [],
+      gatewayDiscoveryServices: [],
+      gatewayMethods: [],
+      mcpServers: [],
+      lspServers: [],
+      httpRouteCount: 0,
+      bundleCapabilities: [],
+      diagnostics: [],
+      policy: {
+        allowedModels: [],
+        hasAllowedModelsConfig: false,
+        requiredFinalToolInputPolicies: ["external-pdp", "pii-guard"],
+      },
+      usesLegacyBeforeAgentStart: false,
+      compatibility: [],
+    });
+
+    await runPluginsCommand(["plugins", "inspect", "policy-plugin", "--json"]);
+
+    const output = JSON.parse(runtimeLogs[0] ?? "null") as {
+      policy?: { requiredFinalToolInputPolicies?: string[] };
+    };
+    expect(output.policy?.requiredFinalToolInputPolicies).toEqual([
+      "external-pdp",
+      "pii-guard",
+    ]);
   });
 
   it("runtime-inspects without repairing deps", async () => {
@@ -603,6 +653,7 @@ describe("plugins cli list", () => {
       policy: {
         allowedModels: [],
         hasAllowedModelsConfig: false,
+        requiredFinalToolInputPolicies: [],
       },
       usesLegacyBeforeAgentStart: false,
       compatibility: [],

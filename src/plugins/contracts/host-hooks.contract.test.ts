@@ -316,6 +316,107 @@ describe("host-hook fixture plugin contract", () => {
     ]);
   });
 
+  it("validates final tool input policy registrations", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "authorization-policy",
+        name: "Authorization Policy",
+        origin: "workspace",
+        contracts: { finalToolInputPolicies: ["external-pdp"] },
+      }),
+      register(api) {
+        api.registerFinalToolInputPolicy({
+          id: "external-pdp",
+          description: "Final external authorization",
+          timeoutMs: 1_000,
+          evaluate: () => ({ outcome: "pass" }),
+        });
+      },
+    });
+
+    expect(registry.registry.finalToolInputPolicies).toHaveLength(1);
+    expect(registry.registry.finalToolInputPolicies[0]?.policy).toMatchObject({
+      id: "external-pdp",
+      description: "Final external authorization",
+      timeoutMs: 1_000,
+    });
+    expect(registry.registry.diagnostics).toEqual([]);
+  });
+
+  it.each([
+    {
+      label: "malformed",
+      policy: null,
+      message: "final tool input policy registration requires id, description, and evaluate()",
+    },
+    {
+      label: "out-of-range timeout",
+      policy: {
+        id: "too-slow",
+        description: "Invalid evaluation budget",
+        timeoutMs: 30_001,
+        evaluate: () => ({ outcome: "pass" as const }),
+      },
+      message: "final tool input policy timeoutMs must be an integer between 1 and 30000: too-slow",
+    },
+  ])("rejects $label final tool input policy registrations", ({ policy, message }) => {
+    const { config, registry } = createPluginRegistryFixture();
+    expect(() =>
+      registerTestPlugin({
+        registry,
+        config,
+        record: createPluginRecord({
+          id: "invalid-final-input-policy",
+          origin: "workspace",
+          contracts: { finalToolInputPolicies: ["too-slow"] },
+        }),
+        register(api) {
+          Reflect.apply(api.registerFinalToolInputPolicy, api, [policy]);
+        },
+      }),
+    ).toThrow(message);
+    expect(registry.registry.finalToolInputPolicies).toHaveLength(0);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      { pluginId: "invalid-final-input-policy", message },
+    ]);
+  });
+
+  it.each(["bundled", "workspace"] as const)(
+    "rejects undeclared %s final tool input policies",
+    (origin) => {
+      const { config, registry } = createPluginRegistryFixture();
+      const pluginId = `undeclared-${origin}-final-input-policy`;
+      expect(() =>
+        registerTestPlugin({
+          registry,
+          config,
+          record: createPluginRecord({
+            id: pluginId,
+            origin,
+          }),
+          register(api) {
+            api.registerFinalToolInputPolicy({
+              id: "external-pdp",
+              description: "Missing manifest declaration",
+              evaluate: () => ({ outcome: "pass" }),
+            });
+          },
+        }),
+      ).toThrow("plugin must declare contracts.finalToolInputPolicies for: external-pdp");
+
+      expect(registry.registry.finalToolInputPolicies).toHaveLength(0);
+      expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+        {
+          pluginId,
+          message: "plugin must declare contracts.finalToolInputPolicies for: external-pdp",
+        },
+      ]);
+    },
+  );
+
   it("scopes installed trusted policy ids to the registering plugin", () => {
     const { config, registry } = createPluginRegistryFixture();
     for (const pluginId of ["budget-policy-a", "budget-policy-b"]) {
@@ -1087,6 +1188,11 @@ describe("host-hook fixture plugin contract", () => {
     expect(isPluginJsonValue(new Date(0))).toBe(false);
     expect(isPluginJsonValue(new Map([["state", "waiting"]]))).toBe(false);
     expect(isPluginJsonValue({ value: "x".repeat(70 * 1024) })).toBe(false);
+    expect(isPluginJsonValue(Object.assign([] as unknown[], { length: 2 }))).toBe(false);
+    expect(isPluginJsonValue(Object.assign(["ok"], { extra: true }))).toBe(false);
+    const symbolArray = ["ok"];
+    Object.defineProperty(symbolArray, Symbol("extra"), { enumerable: true, value: true });
+    expect(isPluginJsonValue(symbolArray)).toBe(false);
   });
 
   it("rejects non-JSON descriptor schemas before projecting Control UI descriptors", () => {

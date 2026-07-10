@@ -6,12 +6,19 @@ import {
   createParameterFreeTool,
   normalizedParameterFreeSchema,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tools.js";
+import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
+import type { ExtensionContext } from "../sessions/index.js";
 import type { RuntimeToolSchemaDiagnostic } from "../tool-schema-projection.js";
 import {
   getToolTerminalPresentation,
@@ -37,9 +44,15 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     mocks.normalizeProviderToolSchemas.mockReset();
   });
 
+  afterEach(() => {
+    resetGlobalHookRunner();
+  });
+
   it("uses RuntimePlan-owned tool normalization when a plan is available", () => {
     const tools = [createParameterFreeTool()] as AgentTool[];
-    const normalized = [{ ...tools[0], name: "normalized" }] as AgentTool[];
+    const normalized = [
+      { ...tools[0], parameters: normalizedParameterFreeSchema() },
+    ] as AgentTool[];
     const model = createNativeOpenAIResponsesModel() as never;
     const normalize = vi.fn(() => normalized);
     const runtimePlan = {
@@ -59,7 +72,7 @@ describe("AgentRuntimePlan tool policy helpers", () => {
         workspaceDir: "/tmp/openclaw-runtime-plan-tools",
         model,
       }),
-    ).toBe(normalized);
+    ).toEqual(normalized);
     expect(normalize).toHaveBeenCalledWith(tools, {
       workspaceDir: "/tmp/openclaw-runtime-plan-tools",
       modelApi: "openai-responses",
@@ -162,7 +175,7 @@ describe("AgentRuntimePlan tool policy helpers", () => {
         provider: "openai",
         modelApi: null,
       }),
-    ).toBe(tools);
+    ).toEqual(tools);
     expect(normalize).toHaveBeenCalledWith(tools, {
       workspaceDir: undefined,
       modelApi: undefined,
@@ -227,7 +240,7 @@ describe("AgentRuntimePlan tool policy helpers", () => {
       provider: "openai",
     });
 
-    expect(result[0]).toBe(normalized);
+    expect(result[0]).not.toBe(normalized);
     expect(getPluginToolMeta(result[0])).toMatchObject({
       pluginId: "bundle-mcp",
       mcp: {
@@ -265,10 +278,201 @@ describe("AgentRuntimePlan tool policy helpers", () => {
       provider: "openai",
     });
 
-    expect(result[0]).toBe(normalized);
+    expect(result[0]).not.toBe(normalized);
     expect((result[0] as AnyAgentTool).catalogMode).toBe("direct-only");
     expect(isToolWrappedWithBeforeToolCallHook(result[0])).toBe(true);
     expect(getToolTerminalPresentation(result[0])).toBe(formatter);
+  });
+
+  it("keeps wrapped execution authoritative when normalization replaces callbacks", async () => {
+    const sourcePrepareArguments = vi.fn((args: unknown) => args as Record<string, never>);
+    const sourcePrepare = vi.fn((params: unknown) => params);
+    const sourceFinalize = vi.fn((params: unknown) => params);
+    const sourceExecute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "source executed" }],
+      details: {},
+    }));
+    const replacementPrepareArguments = vi.fn((args: unknown) => args as Record<string, never>);
+    const replacementPrepare = vi.fn((params: unknown) => params);
+    const replacementFinalize = vi.fn((params: unknown) => params);
+    const replacementExecute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "replacement executed" }],
+      details: {},
+    }));
+    const source: AnyAgentTool = {
+      ...createParameterFreeTool("dangerous_write"),
+      label: "Dangerous write",
+      prepareArguments: sourcePrepareArguments,
+      prepareBeforeToolCallParams: sourcePrepare,
+      finalizeBeforeToolCallParams: sourceFinalize,
+      executionMode: "sequential" as const,
+      execute: sourceExecute,
+    };
+    const wrapped = wrapToolWithBeforeToolCallHook(source, {
+      agentId: "main",
+      sessionId: "session-runtime-normalization-policy",
+    });
+    const registry = createEmptyPluginRegistry();
+    registry.finalToolInputPolicies = [
+      {
+        pluginId: "deny-all-policy",
+        source: "test",
+        policy: {
+          id: "deny-all",
+          description: "deny every finalized tool input",
+          evaluate: () => ({ outcome: "deny", reasonCode: "test.denied" }),
+        },
+      },
+    ];
+    initializeGlobalHookRunner(registry);
+    let normalizationExecutionProbe: ReturnType<AnyAgentTool["execute"]> | undefined;
+    mocks.normalizeProviderToolSchemas.mockImplementationOnce(({ tools }) => {
+      const [normalizationInput] = tools;
+      if (!normalizationInput) {
+        throw new Error("expected normalization input");
+      }
+      normalizationExecutionProbe = normalizationInput.execute("normalization-probe", {});
+      return [
+        {
+          ...normalizationInput,
+          parameters: normalizedParameterFreeSchema(),
+          prepareArguments: replacementPrepareArguments,
+          prepareBeforeToolCallParams: replacementPrepare,
+          finalizeBeforeToolCallParams: replacementFinalize,
+          executionMode: "parallel" as const,
+          execute: replacementExecute,
+        },
+      ];
+    });
+
+    const [normalized] = normalizeAgentRuntimeTools({
+      tools: [wrapped],
+      provider: "openai",
+    });
+    if (!normalized) {
+      throw new Error("expected normalized tool");
+    }
+    expect(normalized.prepareArguments?.({})).toEqual({});
+    expect(sourcePrepareArguments).toHaveBeenCalledOnce();
+    expect(normalized.prepareArguments).not.toBe(replacementPrepareArguments);
+    expect((normalized as AnyAgentTool).prepareBeforeToolCallParams).not.toBe(replacementPrepare);
+    expect((normalized as AnyAgentTool).finalizeBeforeToolCallParams).not.toBe(replacementFinalize);
+    expect(normalized.executionMode).toBe("sequential");
+    const [definition] = toToolDefinitions([normalized]);
+    if (!definition) {
+      throw new Error("expected tool definition");
+    }
+    await expect(normalizationExecutionProbe).resolves.toEqual({
+      content: [],
+      details: undefined,
+    });
+    const result = await definition.execute(
+      "call-1",
+      {},
+      undefined,
+      undefined,
+      {} as ExtensionContext,
+    );
+
+    expect(result.content).toEqual([
+      { type: "text", text: "Tool call blocked by final input policy" },
+    ]);
+    expect(sourceExecute).not.toHaveBeenCalled();
+    expect(sourcePrepare).toHaveBeenCalledOnce();
+    expect(sourceFinalize).toHaveBeenCalledOnce();
+    expect(replacementPrepareArguments).not.toHaveBeenCalled();
+    expect(replacementPrepare).not.toHaveBeenCalled();
+    expect(replacementFinalize).not.toHaveBeenCalled();
+    expect(replacementExecute).not.toHaveBeenCalled();
+  });
+
+  it("binds projected lifecycle callbacks to the original tool identity", async () => {
+    const identityState = new WeakMap<object, string>();
+    class IdentityBoundTool {
+      readonly #privateIdentity = "private";
+      readonly #parameters = createParameterFreeTool().parameters;
+
+      get name() {
+        return this.#privateIdentity === "private" ? "identity_bound" : "invalid";
+      }
+
+      get label() {
+        return this.#privateIdentity === "private" ? "Identity bound" : "invalid";
+      }
+
+      get description() {
+        return this.#privateIdentity === "private"
+          ? "requires its original class identity"
+          : "invalid";
+      }
+
+      get parameters() {
+        return this.#parameters;
+      }
+
+      constructor() {
+        identityState.set(this, "weakmap");
+      }
+
+      private readIdentity(): string {
+        return `${this.#privateIdentity}:${identityState.get(this)}`;
+      }
+
+      prepareArguments(args: unknown) {
+        return { ...(args as Record<string, unknown>), preparedBy: this.readIdentity() };
+      }
+
+      prepareBeforeToolCallParams(params: unknown) {
+        return { ...(params as Record<string, unknown>), preparedBy: this.readIdentity() };
+      }
+
+      finalizeBeforeToolCallParams(params: unknown) {
+        return { ...(params as Record<string, unknown>), finalizedBy: this.readIdentity() };
+      }
+
+      async execute() {
+        return {
+          content: [{ type: "text" as const, text: this.readIdentity() }],
+          details: {},
+        };
+      }
+    }
+
+    const source = new IdentityBoundTool() as unknown as AnyAgentTool;
+    mocks.normalizeProviderToolSchemas.mockImplementationOnce(({ tools }) => {
+      const [normalizationInput] = tools;
+      if (!normalizationInput) {
+        throw new Error("expected normalization input");
+      }
+      return [
+        {
+          ...normalizationInput,
+          parameters: normalizedParameterFreeSchema(),
+          execute: vi.fn(),
+        },
+      ];
+    });
+
+    const [normalized] = normalizeAgentRuntimeTools({
+      tools: [source],
+      provider: "openai",
+    }) as AnyAgentTool[];
+    if (!normalized?.prepareBeforeToolCallParams || !normalized.finalizeBeforeToolCallParams) {
+      throw new Error("expected projected lifecycle callbacks");
+    }
+    expect(normalized.prepareArguments?.({})).toEqual({
+      preparedBy: "private:weakmap",
+    });
+    const prepared = await normalized.prepareBeforeToolCallParams({}, {});
+    expect(prepared).toEqual({ preparedBy: "private:weakmap" });
+    const finalized = await normalized.finalizeBeforeToolCallParams(prepared, prepared);
+    expect(finalized).toEqual({
+      preparedBy: "private:weakmap",
+      finalizedBy: "private:weakmap",
+    });
+    await expect(normalized.execute("call-identity", finalized)).resolves.toMatchObject({
+      content: [{ type: "text", text: "private:weakmap" }],
+    });
   });
 
   it("does not reread quarantined tools while preserving normalized metadata", () => {

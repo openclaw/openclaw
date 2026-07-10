@@ -201,9 +201,9 @@ export function setActivePluginRegistry(
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable" = "default",
   workspaceDir?: string,
 ) {
+  markPluginRegistryActive(registry);
   const previousRegistry = asPluginRegistry(state.activeRegistry);
   state.activeRegistry = registry;
-  markPluginRegistryActive(registry);
   state.activeVersion += 1;
   syncTrackedSurface(state.httpRoute, registry, true);
   syncTrackedSurface(state.channel, registry, true);
@@ -231,8 +231,9 @@ export function getActivePluginRegistryWorkspaceDir(): string | undefined {
 
 export function requireActivePluginRegistry(): PluginRegistry {
   if (!state.activeRegistry) {
-    state.activeRegistry = createEmptyPluginRegistry();
-    markPluginRegistryActive(state.activeRegistry);
+    const registry = createEmptyPluginRegistry();
+    markPluginRegistryActive(registry);
+    state.activeRegistry = registry;
     state.activeVersion += 1;
     syncTrackedSurface(state.httpRoute, state.activeRegistry);
     syncTrackedSurface(state.channel, state.activeRegistry);
@@ -242,9 +243,9 @@ export function requireActivePluginRegistry(): PluginRegistry {
 }
 
 export function pinActivePluginHttpRouteRegistry(registry: PluginRegistry) {
+  markPluginRegistryActive(registry);
   const previousRegistry = asPluginRegistry(state.httpRoute.registry);
   installSurfaceRegistry(state.httpRoute, registry, true);
-  markPluginRegistryActive(registry);
   syncPluginAgentEventBridge();
   if (retirePluginRegistryIfUnused(previousRegistry)) {
     cleanupRetiredPluginHostRegistry(previousRegistry!);
@@ -298,9 +299,9 @@ export function resolveActivePluginHttpRouteRegistry(fallback: PluginRegistry): 
 }
 
 export function pinActivePluginChannelRegistry(registry: PluginRegistry) {
+  markPluginRegistryActive(registry);
   const previousRegistry = asPluginRegistry(state.channel.registry);
   installSurfaceRegistry(state.channel, registry, true);
-  markPluginRegistryActive(registry);
   syncPluginAgentEventBridge();
   if (retirePluginRegistryIfUnused(previousRegistry)) {
     cleanupRetiredPluginHostRegistry(previousRegistry!);
@@ -373,9 +374,9 @@ export function requireActivePluginChannelRegistry(): PluginRegistry {
 }
 
 export function pinActivePluginSessionExtensionRegistry(registry: PluginRegistry) {
+  markPluginRegistryActive(registry);
   const previousRegistry = asPluginRegistry(state.sessionExtension.registry);
   installSurfaceRegistry(state.sessionExtension, registry, true);
-  markPluginRegistryActive(registry);
   syncPluginAgentEventBridge();
   if (retirePluginRegistryIfUnused(previousRegistry)) {
     cleanupRetiredPluginHostRegistry(previousRegistry!);

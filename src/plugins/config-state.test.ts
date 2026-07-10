@@ -165,6 +165,14 @@ describe("normalizePluginsConfig", () => {
     });
   });
 
+  it("normalizes required final tool input policy ids", () => {
+    expect(
+      normalizeVoiceCallEntry({
+        requiredFinalToolInputPolicies: [" external-pdp ", "", "external-pdp", "pii-guard"],
+      })?.requiredFinalToolInputPolicies,
+    ).toEqual(["external-pdp", "pii-guard"]);
+  });
+
   it("normalizes legacy plugin ids to their merged bundled plugin id", () => {
     const result = normalizePluginsConfig({
       allow: ["openai", "google-gemini-cli", "minimax-portal-auth"],

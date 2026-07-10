@@ -16,6 +16,7 @@ import type {
   PluginSessionActionRegistration,
   PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
+  PluginFinalToolInputPolicyRegistration,
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
@@ -76,6 +77,7 @@ export type CapturedPluginRegistration = {
   memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[];
   sessionExtensions: PluginSessionExtensionRegistration[];
   trustedToolPolicies: PluginTrustedToolPolicyRegistration[];
+  finalToolInputPolicies: PluginFinalToolInputPolicyRegistration[];
   toolMetadata: PluginToolMetadataRegistration[];
   controlUiDescriptors: PluginControlUiDescriptor[];
   runtimeLifecycles: PluginRuntimeLifecycleRegistration[];
@@ -115,6 +117,7 @@ export function createCapturedPluginRegistration(params?: {
   const memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[] = [];
   const sessionExtensions: PluginSessionExtensionRegistration[] = [];
   const trustedToolPolicies: PluginTrustedToolPolicyRegistration[] = [];
+  const finalToolInputPolicies: PluginFinalToolInputPolicyRegistration[] = [];
   const toolMetadata: PluginToolMetadataRegistration[] = [];
   const controlUiDescriptors: PluginControlUiDescriptor[] = [];
   const runtimeLifecycles: PluginRuntimeLifecycleRegistration[] = [];
@@ -157,6 +160,7 @@ export function createCapturedPluginRegistration(params?: {
     memoryEmbeddingProviders,
     sessionExtensions,
     trustedToolPolicies,
+    finalToolInputPolicies,
     toolMetadata,
     controlUiDescriptors,
     runtimeLifecycles,
@@ -274,6 +278,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerTrustedToolPolicy(policy: PluginTrustedToolPolicyRegistration) {
           trustedToolPolicies.push(policy);
+        },
+        registerFinalToolInputPolicy(policy: PluginFinalToolInputPolicyRegistration) {
+          finalToolInputPolicies.push(policy);
         },
         registerToolMetadata(metadata: PluginToolMetadataRegistration) {
           toolMetadata.push(metadata);

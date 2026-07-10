@@ -11,7 +11,13 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { getContextEngineFactory, listContextEngineIds } from "../context-engine/registry.js";
+import {
+  getContextEngineFactory,
+  listContextEngineIds,
+  listContextEngineQuarantines,
+  resolveContextEngine,
+} from "../context-engine/registry.js";
+import { registerLegacyContextEngine } from "../context-engine/legacy.registration.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -39,9 +45,11 @@ import {
   listEmbeddingProviders,
   registerEmbeddingProvider,
 } from "./embedding-providers.js";
+import { hasFinalToolInputPolicies } from "./final-tool-input-policy.js";
 import {
   getGlobalHookRunner,
   getGlobalPluginRegistry,
+  initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "./hook-runner-global.js";
 import { createHookRunner } from "./hooks.js";
@@ -105,10 +113,7 @@ import {
   releasePinnedPluginChannelRegistry,
   setActivePluginRegistry,
 } from "./runtime.js";
-import {
-  testing as runtimeRegistryLoaderTesting,
-  ensurePluginRegistryLoaded,
-} from "./runtime/runtime-registry-loader.js";
+import { ensurePluginRegistryLoaded } from "./runtime/runtime-registry-loader.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 let cachedBundledTelegramDir = "";
 let cachedBundledMemoryDir = "";
@@ -746,6 +751,7 @@ function createSetupEntryChannelPluginFixture(params: {
   bundledSetupRuntimeError?: string;
   bundledFullRuntimeMarker?: string;
   requireBundledFullRuntimeBeforeLoad?: boolean;
+  finalToolInputPolicyId?: string;
 }) {
   useNoBundledPlugins();
   const pluginDir = makeTempDir();
@@ -785,6 +791,9 @@ function createSetupEntryChannelPluginFixture(params: {
         id: params.id,
         configSchema: EMPTY_PLUGIN_SCHEMA,
         channels: [params.id],
+        ...(params.finalToolInputPolicyId
+          ? { contracts: { finalToolInputPolicies: [params.finalToolInputPolicyId] } }
+          : {}),
       },
       null,
       2,
@@ -832,12 +841,31 @@ module.exports = {
   },`
       : ""
   }
-  register() {},
+  register(api) {
+    ${
+      params.finalToolInputPolicyId
+        ? `api.registerFinalToolInputPolicy({
+      id: ${JSON.stringify(params.finalToolInputPolicyId)},
+      description: "fixture final input policy",
+      evaluate: () => ({ outcome: "pass" }),
+    });`
+        : ""
+    }
+  },
 };`
       : `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
 module.exports = {
   id: ${JSON.stringify(params.id)},
   register(api) {
+    ${
+      params.finalToolInputPolicyId
+        ? `api.registerFinalToolInputPolicy({
+      id: ${JSON.stringify(params.finalToolInputPolicyId)},
+      description: "fixture final input policy",
+      evaluate: () => ({ outcome: "pass" }),
+    });`
+        : ""
+    }
     api.registerChannel({
       plugin: {
         id: ${JSON.stringify(params.id)},
@@ -1063,7 +1091,6 @@ function collectStartupTraceMetrics(
 afterEach(() => {
   resetDiagnosticEventsForTest();
   clearRuntimeConfigSnapshot();
-  runtimeRegistryLoaderTesting.resetPluginRegistryLoadedForTests();
   resetPluginLoaderTestStateForTest();
 });
 
@@ -1278,6 +1305,802 @@ describe("loadOpenClawPlugins", () => {
     });
   });
 
+  it("rolls back final tool input policies when plugin register fails", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "authorization-policy-register-fail",
+      filename: "authorization-policy-register-fail.cjs",
+      body: `module.exports = { id: "authorization-policy-register-fail", register(api) {
+  api.registerFinalToolInputPolicy({
+    id: "failed-policy",
+    description: "Must be removed after register failure",
+    evaluate: () => ({ outcome: "deny", reasonCode: "stale.failed.policy" })
+  });
+  throw new Error("register boom");
+} };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { finalToolInputPolicies: ["failed-policy"] },
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["authorization-policy-register-fail"],
+      },
+      options: { activate: false },
+    });
+
+    expect(registry.finalToolInputPolicies).toHaveLength(0);
+    const loaded = registry.plugins.find(
+      (entry) => entry.id === "authorization-policy-register-fail",
+    );
+    expect(loaded?.status).toBe("error");
+    expect(loaded?.error).toContain("register boom");
+
+    expect(() =>
+      loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: {
+          allow: ["authorization-policy-register-fail"],
+        },
+      }),
+    ).toThrow("required final tool input policies unavailable");
+  });
+
+  it.each([
+    {
+      label: "omitted",
+      registerBody: "",
+      expectedError: "did not register declared final tool input policies: required-policy",
+    },
+    {
+      label: "malformed",
+      registerBody: "Reflect.apply(api.registerFinalToolInputPolicy, api, [null]);",
+      expectedError: "final tool input policy registration requires id, description, and evaluate()",
+    },
+  ])(
+    "records a $label declared final input policy without activating the registry",
+    ({ label, registerBody, expectedError }) => {
+      useNoBundledPlugins();
+      const pluginId = `final-input-policy-${label}`;
+      const plugin = writePlugin({
+        id: pluginId,
+        filename: `${pluginId}.cjs`,
+        body: `module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
+  ${registerBody}
+} };`,
+      });
+      updatePluginManifest(plugin, {
+        contracts: { finalToolInputPolicies: ["required-policy"] },
+      });
+
+      const registry = loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: { allow: [pluginId] },
+        options: { activate: false },
+      });
+
+      expect(registry.finalToolInputPolicies).toHaveLength(0);
+      const record = registry.plugins.find((entry) => entry.id === pluginId);
+      expect(record?.status).toBe("error");
+      expect(record?.error).toContain(expectedError);
+      expectDiagnosticContaining({
+        registry,
+        level: "error",
+        pluginId,
+        message: expectedError,
+      });
+    },
+  );
+
+  it.each([
+    {
+      label: "malformed",
+      rejectedCall: "Reflect.apply(api.registerFinalToolInputPolicy, api, [null]);",
+      validBefore: false,
+    },
+    {
+      label: "undeclared",
+      rejectedCall: `api.registerFinalToolInputPolicy({
+    id: "undeclared-policy",
+    description: "Undeclared policy",
+    evaluate: () => ({ outcome: "pass" })
+  });`,
+      validBefore: false,
+    },
+    {
+      label: "invalid-timeout",
+      rejectedCall: `api.registerFinalToolInputPolicy({
+    id: "required-policy",
+    description: "Invalid timeout",
+    timeoutMs: 30001,
+    evaluate: () => ({ outcome: "pass" })
+  });`,
+      validBefore: false,
+    },
+    {
+      label: "duplicate",
+      rejectedCall: `api.registerFinalToolInputPolicy({
+    id: "required-policy",
+    description: "Duplicate policy",
+    evaluate: () => ({ outcome: "pass" })
+  });`,
+      validBefore: true,
+    },
+  ])(
+    "rolls back a caught $label final input policy rejection",
+    ({ label, rejectedCall, validBefore }) => {
+      useNoBundledPlugins();
+      const pluginId = `caught-final-input-policy-${label}`;
+      const validRegistration = `api.registerFinalToolInputPolicy({
+    id: "required-policy",
+    description: "Required policy",
+    evaluate: () => ({ outcome: "pass" })
+  });`;
+      const plugin = writePlugin({
+        id: pluginId,
+        filename: `${pluginId}.cjs`,
+        body: `module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
+  ${validBefore ? validRegistration : ""}
+  try {
+    ${rejectedCall}
+  } catch {}
+  ${validBefore ? "" : validRegistration}
+} };`,
+      });
+      updatePluginManifest(plugin, {
+        contracts: { finalToolInputPolicies: ["required-policy"] },
+      });
+
+      const registry = loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: { allow: [pluginId] },
+        options: { activate: false },
+      });
+      expect(registry.finalToolInputPolicies).toHaveLength(0);
+      expect(registry.plugins.find((entry) => entry.id === pluginId)?.error).toContain(
+        "attempted rejected final tool input policy registrations",
+      );
+      expect(() =>
+        loadRegistryFromSinglePlugin({
+          plugin,
+          pluginConfig: { allow: [pluginId] },
+        }),
+      ).toThrow("required final tool input policies unavailable");
+    },
+  );
+
+  it("refuses to activate a plugin that omits a declared final input policy", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "missing-final-input-policy",
+      filename: "missing-final-input-policy.cjs",
+      body: `module.exports = { id: "missing-final-input-policy", register() {} };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { finalToolInputPolicies: ["required-policy"] },
+    });
+
+    expect(() =>
+      loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: { allow: ["missing-final-input-policy"] },
+      }),
+    ).toThrow(
+      "required final tool input policies unavailable: missing-final-input-policy (status=error; unregistered=required-policy)",
+    );
+  });
+
+  it("rejects an operator-required final input policy when the plugin is missing", () => {
+    useNoBundledPlugins();
+    expect(() =>
+      loadOpenClawPlugins({
+        cache: false,
+        onlyPluginIds: [],
+        config: {
+          plugins: {
+            entries: {
+              "missing-policy-plugin": {
+                enabled: true,
+                requiredFinalToolInputPolicies: ["external-pdp"],
+              },
+            },
+          },
+        },
+      }),
+    ).toThrow(
+      "required final tool input policies unavailable: missing-policy-plugin (status=missing; undeclared=external-pdp; unregistered=external-pdp)",
+    );
+  });
+
+  it("does not treat a policy requirement as plugin enablement", () => {
+    useNoBundledPlugins();
+    const { workspaceDir, plugin } = writeWorkspacePlugin({
+      id: "requirement-only-policy-plugin",
+      body: `module.exports = { id: "requirement-only-policy-plugin", register() {} };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { finalToolInputPolicies: ["external-pdp"] },
+    });
+
+    expect(() =>
+      loadOpenClawPlugins({
+        cache: false,
+        workspaceDir,
+        onlyPluginIds: ["requirement-only-policy-plugin"],
+        config: {
+          plugins: {
+            entries: {
+              "requirement-only-policy-plugin": {
+                requiredFinalToolInputPolicies: ["external-pdp"],
+              },
+            },
+          },
+        },
+      }),
+    ).toThrow(
+      "required final tool input policies unavailable: requirement-only-policy-plugin (status=disabled; unregistered=external-pdp)",
+    );
+  });
+
+  it.each([
+    {
+      label: "disabled",
+      pluginConfig: {
+        allow: ["inactive-required-policy"],
+        entries: {
+          "inactive-required-policy": {
+            enabled: false,
+            requiredFinalToolInputPolicies: ["external-pdp"],
+          },
+        },
+      },
+    },
+    {
+      label: "denied",
+      pluginConfig: {
+        allow: ["inactive-required-policy"],
+        deny: ["inactive-required-policy"],
+        entries: {
+          "inactive-required-policy": {
+            enabled: true,
+            requiredFinalToolInputPolicies: ["external-pdp"],
+          },
+        },
+      },
+    },
+    {
+      label: "globally disabled",
+      pluginConfig: {
+        enabled: false,
+        allow: ["inactive-required-policy"],
+        entries: {
+          "inactive-required-policy": {
+            enabled: true,
+            requiredFinalToolInputPolicies: ["external-pdp"],
+          },
+        },
+      },
+    },
+  ])("rejects a $label operator-required policy plugin", ({ pluginConfig }) => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "inactive-required-policy",
+      filename: "inactive-required-policy.cjs",
+      body: `module.exports = { id: "inactive-required-policy", register() {} };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { finalToolInputPolicies: ["external-pdp"] },
+    });
+
+    expect(() => loadRegistryFromSinglePlugin({ plugin, pluginConfig })).toThrow(
+      "required final tool input policies unavailable: inactive-required-policy (status=disabled; unregistered=external-pdp)",
+    );
+  });
+
+  it("rejects an operator requirement removed from the plugin manifest", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "manifest-dropped-policy",
+      filename: "manifest-dropped-policy.cjs",
+      body: `module.exports = { id: "manifest-dropped-policy", register() {} };`,
+    });
+
+    expect(() =>
+      loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: {
+          allow: ["manifest-dropped-policy"],
+          entries: {
+            "manifest-dropped-policy": {
+              enabled: true,
+              requiredFinalToolInputPolicies: ["external-pdp"],
+            },
+          },
+        },
+      }),
+    ).toThrow(
+      "required final tool input policies unavailable: manifest-dropped-policy (status=loaded; undeclared=external-pdp; unregistered=external-pdp)",
+    );
+  });
+
+  it("preserves stronger activation-source final input policy requirements", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "activation-source-policy",
+      filename: "activation-source-policy.cjs",
+      body: `module.exports = { id: "activation-source-policy", register(api) {
+  api.registerFinalToolInputPolicy({
+    id: "runtime-policy",
+    description: "Runtime policy",
+    evaluate: () => ({ outcome: "pass" })
+  });
+} };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { finalToolInputPolicies: ["runtime-policy"] },
+    });
+
+    expect(() =>
+      loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: {
+          allow: ["activation-source-policy"],
+          entries: {
+            "activation-source-policy": {
+              enabled: true,
+              requiredFinalToolInputPolicies: ["runtime-policy"],
+            },
+          },
+        },
+        options: {
+          activationSourceConfig: {
+            plugins: {
+              allow: ["activation-source-policy"],
+              entries: {
+                "activation-source-policy": {
+                  enabled: true,
+                  requiredFinalToolInputPolicies: ["pinned-policy"],
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).toThrow(
+      "required final tool input policies unavailable: activation-source-policy (status=loaded; undeclared=pinned-policy; unregistered=pinned-policy)",
+    );
+  });
+
+  it("fails a required policy disabled by the activation source", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "source-disabled-policy",
+      filename: "source-disabled-policy.cjs",
+      body: `module.exports = { id: "source-disabled-policy", register(api) {
+  api.registerFinalToolInputPolicy({
+    id: "external-pdp",
+    description: "External PDP",
+    evaluate: () => ({ outcome: "pass" })
+  });
+} };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { finalToolInputPolicies: ["external-pdp"] },
+    });
+
+    expect(() =>
+      loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: {
+          allow: ["source-disabled-policy"],
+          entries: {
+            "source-disabled-policy": {
+              enabled: true,
+              requiredFinalToolInputPolicies: ["external-pdp"],
+            },
+          },
+        },
+        options: {
+          activationSourceConfig: {
+            plugins: {
+              allow: ["source-disabled-policy"],
+              deny: ["source-disabled-policy"],
+              entries: {
+                "source-disabled-policy": {
+                  requiredFinalToolInputPolicies: ["external-pdp"],
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).toThrow(
+      "required final tool input policies unavailable: source-disabled-policy (status=disabled; unregistered=external-pdp)",
+    );
+  });
+
+  it("keeps the last initialized final input policy registry when a replacement drops it", () => {
+    useNoBundledPlugins();
+    const pluginId = "last-known-final-input-policy";
+    const goodPlugin = writePlugin({
+      id: pluginId,
+      filename: "good-final-input-policy.cjs",
+      body: `module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
+  api.registerFinalToolInputPolicy({
+    id: "external-pdp",
+    description: "Last known good policy",
+    evaluate: () => ({ outcome: "pass" })
+  });
+} };`,
+    });
+    updatePluginManifest(goodPlugin, {
+      contracts: { finalToolInputPolicies: ["external-pdp"] },
+    });
+    const badPlugin = writePlugin({
+      id: pluginId,
+      filename: "bad-final-input-policy.cjs",
+      body: `module.exports = { id: ${JSON.stringify(pluginId)}, register() {} };`,
+    });
+    const pluginConfig = {
+      allow: [pluginId],
+      entries: {
+        [pluginId]: {
+          enabled: true,
+          requiredFinalToolInputPolicies: ["external-pdp"],
+        },
+      },
+    };
+
+    const goodRegistry = loadRegistryFromSinglePlugin({
+      plugin: goodPlugin,
+      pluginConfig,
+    });
+    pinActivePluginChannelRegistry(goodRegistry);
+    try {
+      expect(() =>
+        loadRegistryFromSinglePlugin({
+          plugin: badPlugin,
+          pluginConfig,
+        }),
+      ).toThrow("required final tool input policies unavailable");
+      expect(
+        (getGlobalPluginRegistry() as PluginRegistry | null)?.finalToolInputPolicies.map(
+          (entry) => entry.policy.id,
+        ),
+      ).toEqual(["external-pdp"]);
+    } finally {
+      releasePinnedPluginChannelRegistry(goodRegistry);
+    }
+  });
+
+  it("restores prior process-global plugin state when final policy activation fails", () => {
+    useNoBundledPlugins();
+    const oldPlugin = writePlugin({
+      id: "old-active-plugin",
+      filename: "old-active-plugin.cjs",
+      body: `module.exports = { id: "old-active-plugin", register(api) {
+  api.registerCommand({
+    name: "old-command",
+    description: "Old active command",
+    handler: async () => ({ text: "old" })
+  });
+  api.registerAgentHarness({
+    id: "old-harness",
+    label: "Old harness",
+    supports: () => ({ supported: true }),
+    runAttempt: async () => ({ ok: false, error: "unused" })
+  });
+} };`,
+    });
+    const oldRegistry = loadRegistryFromSinglePlugin({
+      plugin: oldPlugin,
+      pluginConfig: { allow: ["old-active-plugin"] },
+    });
+    expect(getPluginCommandSpecs().map((command) => command.name)).toEqual(["old-command"]);
+    expect(listRegisteredAgentHarnessIdsForTest()).toEqual(["old-harness"]);
+
+    const candidatePlugin = writePlugin({
+      id: "candidate-active-plugin",
+      filename: "candidate-active-plugin.cjs",
+      body: `module.exports = { id: "candidate-active-plugin", register(api) {
+  api.registerCommand({
+    name: "candidate-command",
+    description: "Candidate command",
+    handler: async () => ({ text: "candidate" })
+  });
+  api.registerAgentHarness({
+    id: "candidate-harness",
+    label: "Candidate harness",
+    supports: () => ({ supported: true }),
+    runAttempt: async () => ({ ok: false, error: "unused" })
+  });
+} };`,
+    });
+
+    expect(() =>
+      loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: candidatePlugin.dir,
+        onlyPluginIds: ["candidate-active-plugin"],
+        config: {
+          plugins: {
+            load: { paths: [candidatePlugin.file] },
+            allow: ["candidate-active-plugin"],
+            entries: {
+              "missing-required-policy": {
+                enabled: true,
+                requiredFinalToolInputPolicies: ["external-pdp"],
+              },
+            },
+          },
+        },
+      }),
+    ).toThrow("required final tool input policies unavailable");
+
+    expect(getActivePluginRegistry()).toBe(oldRegistry);
+    expect(getPluginCommandSpecs().map((command) => command.name)).toEqual(["old-command"]);
+    expect(listRegisteredAgentHarnessIdsForTest()).toEqual(["old-harness"]);
+  });
+
+  it("restores context engine registrations and quarantine when policy activation fails", async () => {
+    useNoBundledPlugins();
+    const pluginId = "context-engine-activation-transaction";
+    const engineId = "activation-transaction-context-engine";
+    const candidateOnlyEngineId = "activation-transaction-candidate-only-context-engine";
+    const oldPlugin = writePlugin({
+      id: pluginId,
+      filename: "old-context-engine-activation-transaction.cjs",
+      body: `module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
+  api.registerContextEngine(${JSON.stringify(engineId)}, () => { throw new Error("old engine quarantined"); });
+} };`,
+    });
+    const oldRegistry = loadRegistryFromSinglePlugin({
+      plugin: oldPlugin,
+      pluginConfig: { allow: [pluginId] },
+    });
+    const oldFactory = getContextEngineFactory(engineId);
+    expect(oldFactory).toBeTypeOf("function");
+    registerLegacyContextEngine();
+    await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
+    const oldQuarantine = listContextEngineQuarantines().find(
+      (entry) => entry.engineId === engineId,
+    );
+    expect(oldQuarantine).toMatchObject({
+      engineId,
+      owner: `plugin:${pluginId}`,
+      operation: "factory",
+      reason: "old engine quarantined",
+    });
+
+    const candidatePlugin = writePlugin({
+      id: pluginId,
+      filename: "candidate-context-engine-activation-transaction.cjs",
+      body: `module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
+  api.registerContextEngine(${JSON.stringify(engineId)}, () => ({ marker: "candidate" }));
+  api.registerContextEngine(${JSON.stringify(candidateOnlyEngineId)}, () => ({ marker: "candidate-only" }));
+} };`,
+    });
+    expect(() =>
+      loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: candidatePlugin.dir,
+        onlyPluginIds: [pluginId],
+        config: {
+          plugins: {
+            load: { paths: [candidatePlugin.file] },
+            allow: [pluginId],
+            entries: {
+              "missing-required-context-policy": {
+                enabled: true,
+                requiredFinalToolInputPolicies: ["external-pdp"],
+              },
+            },
+          },
+        },
+      }),
+    ).toThrow("required final tool input policies unavailable");
+
+    expect(getActivePluginRegistry()).toBe(oldRegistry);
+    expect(getContextEngineFactory(engineId)).toBe(oldFactory);
+    expect(getContextEngineFactory(candidateOnlyEngineId)).toBeUndefined();
+    expect(listContextEngineQuarantines().find((entry) => entry.engineId === engineId)).toEqual(
+      oldQuarantine,
+    );
+  });
+
+  it("removes plugin-owned context engines after a successful disable reload", () => {
+    useNoBundledPlugins();
+    const pluginId = "disabled-context-engine-owner";
+    const engineId = "disabled-context-engine";
+    const plugin = writePlugin({
+      id: pluginId,
+      filename: "disabled-context-engine-owner.cjs",
+      body: `module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
+  api.registerContextEngine(${JSON.stringify(engineId)}, () => ({}));
+} };`,
+    });
+    loadRegistryFromSinglePlugin({ plugin, pluginConfig: { allow: [pluginId] } });
+    expect(getContextEngineFactory(engineId)).toBeTypeOf("function");
+
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: makeTempDir(),
+      config: { plugins: { allow: [] } },
+    });
+
+    expect(getContextEngineFactory(engineId)).toBeUndefined();
+  });
+
+  it("restores cached context engines and quarantine across A to B to A activation", async () => {
+    useNoBundledPlugins();
+    const sharedEngineId = "cached-context-shared";
+    const onlyAEngineId = "cached-context-only-a";
+    const onlyBEngineId = "cached-context-only-b";
+    const unrelatedQuarantineId = "cached-context-unrelated-quarantine";
+    const pluginA = writePlugin({
+      id: "cached-context-a",
+      filename: "cached-context-a.cjs",
+      body: `module.exports = { id: "cached-context-a", register(api) {
+  api.registerContextEngine(${JSON.stringify(sharedEngineId)}, () => ({ marker: "a-shared" }));
+  api.registerContextEngine(${JSON.stringify(onlyAEngineId)}, () => { throw new Error("a quarantined"); });
+} };`,
+    });
+    const pluginB = writePlugin({
+      id: "cached-context-b",
+      filename: "cached-context-b.cjs",
+      body: `module.exports = { id: "cached-context-b", register(api) {
+  api.registerContextEngine(${JSON.stringify(sharedEngineId)}, () => ({ marker: "b-shared" }));
+  api.registerContextEngine(${JSON.stringify(onlyBEngineId)}, () => ({ marker: "b-only" }));
+} };`,
+    });
+    const optionsA = {
+      workspaceDir: pluginA.dir,
+      config: {
+        plugins: {
+          load: { paths: [pluginA.file] },
+          allow: [pluginA.id],
+        },
+      },
+    } satisfies PluginLoadOptions;
+    const optionsB = {
+      workspaceDir: pluginB.dir,
+      config: {
+        plugins: {
+          load: { paths: [pluginB.file] },
+          allow: [pluginB.id],
+        },
+      },
+    } satisfies PluginLoadOptions;
+
+    const registryA = loadOpenClawPlugins(optionsA);
+    const sharedFactoryA = getContextEngineFactory(sharedEngineId);
+    const onlyAFactory = getContextEngineFactory(onlyAEngineId);
+    registerLegacyContextEngine();
+    await resolveContextEngine({ plugins: { slots: { contextEngine: onlyAEngineId } } });
+    const quarantineA = listContextEngineQuarantines().find(
+      (entry) => entry.engineId === onlyAEngineId,
+    );
+    expect(quarantineA).toMatchObject({ reason: "a quarantined" });
+
+    loadOpenClawPlugins(optionsB);
+    expect(getContextEngineFactory(sharedEngineId)).not.toBe(sharedFactoryA);
+    expect(getContextEngineFactory(onlyAEngineId)).toBeUndefined();
+    expect(getContextEngineFactory(onlyBEngineId)).toBeTypeOf("function");
+    expect(
+      listContextEngineQuarantines().some((entry) => entry.engineId === onlyAEngineId),
+    ).toBe(false);
+    await resolveContextEngine({
+      plugins: { slots: { contextEngine: unrelatedQuarantineId } },
+    });
+    const unrelatedQuarantine = listContextEngineQuarantines().find(
+      (entry) => entry.engineId === unrelatedQuarantineId,
+    );
+    expect(unrelatedQuarantine).toMatchObject({
+      operation: "resolve",
+      reason: "not registered",
+    });
+
+    expect(loadOpenClawPlugins(optionsA)).toBe(registryA);
+    expect(getContextEngineFactory(sharedEngineId)).toBe(sharedFactoryA);
+    expect(getContextEngineFactory(onlyAEngineId)).toBe(onlyAFactory);
+    expect(getContextEngineFactory(onlyBEngineId)).toBeUndefined();
+    expect(listContextEngineQuarantines().find((entry) => entry.engineId === onlyAEngineId)).toEqual(
+      quarantineA,
+    );
+    expect(
+      listContextEngineQuarantines().find((entry) => entry.engineId === unrelatedQuarantineId),
+    ).toEqual(unrelatedQuarantine);
+  });
+
+  it("seals required final input policies in an active cached registry", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "cached-final-input-policy",
+      filename: "cached-final-input-policy.cjs",
+      body: `module.exports = { id: "cached-final-input-policy", register(api) {
+  api.registerFinalToolInputPolicy({
+    id: "required-policy",
+    description: "Required cached policy",
+    evaluate: () => ({ outcome: "pass" })
+  });
+} };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { finalToolInputPolicies: ["required-policy"] },
+    });
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["cached-final-input-policy"],
+          entries: {
+            "cached-final-input-policy": {
+              enabled: true,
+              requiredFinalToolInputPolicies: ["required-policy"],
+            },
+          },
+        },
+      },
+    } satisfies PluginLoadOptions;
+
+    const registry = loadOpenClawPlugins(options);
+    expect(registry.finalToolInputPolicies).toHaveLength(1);
+    const [registration] = registry.finalToolInputPolicies;
+    expect(Object.isFrozen(registry.finalToolInputPolicies)).toBe(true);
+    expect(Object.isFrozen(registration)).toBe(true);
+    expect(Object.isFrozen(registration?.policy)).toBe(true);
+    expect(Reflect.set(registry, "finalToolInputPolicies", [])).toBe(false);
+    expect(() => registry.finalToolInputPolicies.splice(0)).toThrow(TypeError);
+    expect(Reflect.set(registration?.policy ?? {}, "evaluate", vi.fn())).toBe(false);
+    Object.defineProperty(registry, "finalToolInputPolicies", {
+      configurable: true,
+      value: [],
+      writable: true,
+    });
+    expect(registry.finalToolInputPolicies).toEqual([]);
+    expect(hasFinalToolInputPolicies()).toBe(true);
+  });
+
+  it("never activates a validation-mode registry over live final input policies", () => {
+    useNoBundledPlugins();
+    const activeRegistry = createEmptyPluginRegistry();
+    activeRegistry.finalToolInputPolicies.push({
+      pluginId: "active-policy",
+      source: "test",
+      policy: {
+        id: "active-policy",
+        description: "active policy",
+        evaluate: () => ({ outcome: "pass" }),
+      },
+    });
+    setActivePluginRegistry(activeRegistry);
+    initializeGlobalHookRunner(activeRegistry);
+
+    const validationRegistry = loadOpenClawPlugins({
+      activate: true,
+      cache: false,
+      mode: "validate",
+      onlyPluginIds: [],
+      config: {
+        plugins: {
+          entries: {
+            "missing-validation-policy": {
+              enabled: true,
+              requiredFinalToolInputPolicies: ["external-pdp"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(validationRegistry.plugins).toEqual([]);
+    expect(getActivePluginRegistry()).toBe(activeRegistry);
+    expect(hasFinalToolInputPolicies()).toBe(true);
+  });
+
   it("loads declared installed trusted policies through plugin manifests", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -1309,6 +2132,52 @@ describe("loadOpenClawPlugins", () => {
       expect.objectContaining({
         pluginId: "trusted-policy-success",
         message: "plugin must declare contracts.trustedToolPolicies for: declared-policy",
+      }),
+    );
+  });
+
+  it("loads declared installed final tool input policies through plugin manifests", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "authorization-policy-success",
+      filename: "authorization-policy-success.cjs",
+      body: `module.exports = { id: "authorization-policy-success", register(api) {
+  api.registerFinalToolInputPolicy({
+    id: "declared-policy",
+    description: "Declared installed final policy",
+    timeoutMs: 1000,
+    evaluate: () => ({ outcome: "pass" })
+  });
+} };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { finalToolInputPolicies: ["declared-policy"] },
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["authorization-policy-success"],
+        entries: {
+          "authorization-policy-success": {
+            enabled: true,
+            requiredFinalToolInputPolicies: ["declared-policy"],
+          },
+        },
+      },
+    });
+
+    expect(
+      registry.finalToolInputPolicies.map((entry) => [
+        entry.pluginId,
+        entry.policy.id,
+        entry.policy.timeoutMs,
+      ]),
+    ).toEqual([["authorization-policy-success", "declared-policy", 1_000]]);
+    expect(registry.diagnostics).not.toContainEqual(
+      expect.objectContaining({
+        pluginId: "authorization-policy-success",
+        message: "plugin must declare contracts.finalToolInputPolicies for: declared-policy",
       }),
     );
   });
@@ -6666,6 +7535,40 @@ module.exports = {
       expectSetupLoaded: false,
       expectedChannels: 1,
     },
+    {
+      name: "forces full runtime for declared final tool input policies",
+      fixture: {
+        id: "setup-runtime-final-input-policy-test",
+        label: "Setup Runtime Final Input Policy Test",
+        packageName: "@openclaw/setup-runtime-final-input-policy-test",
+        fullBlurb: "full entry owns the final input policy",
+        setupBlurb: "setup entry must not shadow the final input policy",
+        configured: true,
+        startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
+        finalToolInputPolicyId: "required-final-input",
+      },
+      load: ({ pluginDir }: { pluginDir: string }) =>
+        loadOpenClawPlugins({
+          cache: false,
+          preferSetupRuntimeForChannelPlugins: true,
+          config: {
+            channels: {
+              "setup-runtime-final-input-policy-test": {
+                enabled: true,
+                token: "configured",
+              },
+            },
+            plugins: {
+              load: { paths: [pluginDir] },
+              allow: ["setup-runtime-final-input-policy-test"],
+            },
+          },
+        }),
+      expectFullLoaded: true,
+      expectSetupLoaded: false,
+      expectedChannels: 1,
+      expectedFinalToolInputPolicyId: "required-final-input",
+    },
   ])(
     "$name",
     ({
@@ -6679,6 +7582,7 @@ module.exports = {
       expectSetupRuntimeLoaded,
       expectBundledFullRuntimeLoaded,
       expectedSetupRuntimeRoutePath,
+      expectedFinalToolInputPolicyId,
     }) => {
       const built = createSetupEntryChannelPluginFixture(fixture);
       const registry = load({ pluginDir: built.pluginDir });
@@ -6716,6 +7620,11 @@ module.exports = {
               route.pluginId === fixture.id && route.path === expectedSetupRuntimeRoutePath,
           ),
         ).toBe(true);
+      }
+      if (expectedFinalToolInputPolicyId) {
+        expect(registry.finalToolInputPolicies.map((entry) => entry.policy.id)).toEqual([
+          expectedFinalToolInputPolicyId,
+        ]);
       }
     },
   );

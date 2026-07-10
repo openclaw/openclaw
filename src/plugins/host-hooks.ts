@@ -82,6 +82,32 @@ export type PluginTrustedToolPolicyRegistration = {
   ) => PluginToolPolicyDecision | void | Promise<PluginToolPolicyDecision | void>;
 };
 
+/** Restrict-only decision over one host-finalized tool input. */
+export type PluginFinalToolInputPolicyDecision =
+  | { outcome: "pass" }
+  | {
+      outcome: "deny";
+      /** Machine-safe audit code (`[a-z0-9][a-z0-9._-]{0,63}`). */
+      reasonCode: string;
+    };
+
+/**
+ * Host-trusted policy evaluated after OpenClaw-managed input rewrites and approvals.
+ * Tool-owned defaults and hidden runtime facts may be absent; deny when a required
+ * fact is unknown. A pass decision never grants a tool removed by an earlier policy.
+ */
+export type PluginFinalToolInputPolicyRegistration = {
+  id: string;
+  description: string;
+  /** Evaluation budget. Must fit the host's bounded policy timeout range. */
+  timeoutMs?: number;
+  evaluate: (
+    event: PluginHookBeforeToolCallEvent,
+    ctx: PluginHookToolContext,
+    signal: AbortSignal,
+  ) => PluginFinalToolInputPolicyDecision | Promise<PluginFinalToolInputPolicyDecision>;
+};
+
 export type PluginToolMetadataRegistration = {
   toolName: string;
   displayName?: string;

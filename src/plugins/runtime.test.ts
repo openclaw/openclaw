@@ -1,10 +1,16 @@
 /** Covers plugin runtime registration API behavior and registry mutation guards. */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { isPluginRegistryRetired } from "./registry-lifecycle.js";
+import { hasFinalToolInputPolicies } from "./final-tool-input-policy.js";
+import {
+  getActivatedFinalToolInputPolicies,
+  isPluginRegistryRetired,
+} from "./registry-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
-import type { PluginHttpRouteRegistration } from "./registry.js";
+import type { PluginHttpRouteRegistration, PluginRegistry } from "./registry.js";
 import {
   getActivePluginGatewayCommandRegistry,
+  getActivePluginChannelRegistry,
+  getActivePluginHttpRouteRegistry,
   getActivePluginHttpRouteRegistryVersion,
   getActivePluginRegistryVersion,
   getActivePluginRegistry,
@@ -54,6 +60,23 @@ function createRuntimeRegistryPair() {
     startupRegistry: createEmptyPluginRegistry(),
     laterRegistry: createEmptyPluginRegistry(),
   };
+}
+
+function createThrowOnceFinalPolicyRegistry(): PluginRegistry {
+  const registry = createEmptyPluginRegistry();
+  let reads = 0;
+  Object.defineProperty(registry, "finalToolInputPolicies", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      reads += 1;
+      if (reads === 1) {
+        throw new Error("final policy getter failed");
+      }
+      return [];
+    },
+  });
+  return registry;
 }
 
 function expectRegistryVersions(params: { active: number; routes: number }) {
@@ -117,6 +140,145 @@ describe("plugin runtime route registry", () => {
     resetPluginRuntimeStateForTest();
 
     expect(getActivePluginRegistry()).toBeNull();
+  });
+
+  it("captures final input policies through a forwarding registry proxy", () => {
+    const concrete = createEmptyPluginRegistry();
+    concrete.finalToolInputPolicies.push({
+      pluginId: "proxy-policy",
+      source: "test",
+      policy: {
+        id: "proxy-policy",
+        description: "proxy policy",
+        evaluate: () => ({ outcome: "pass" }),
+      },
+    });
+    const proxy = new Proxy({} as PluginRegistry, {
+      defineProperty(_target, property, attributes) {
+        return Reflect.defineProperty(concrete, property, attributes);
+      },
+      get(_target, property, receiver) {
+        return Reflect.get(concrete, property, receiver);
+      },
+      getOwnPropertyDescriptor(_target, property) {
+        return Reflect.getOwnPropertyDescriptor(concrete, property);
+      },
+      set(_target, property, value, receiver) {
+        return Reflect.set(concrete, property, value, receiver);
+      },
+    });
+
+    expect(() => setActivePluginRegistry(proxy)).not.toThrow();
+    expect(getActivatedFinalToolInputPolicies(proxy)?.map((entry) => entry.policy.id)).toEqual([
+      "proxy-policy",
+    ]);
+    Object.defineProperty(proxy, "finalToolInputPolicies", {
+      configurable: true,
+      value: [],
+      writable: true,
+    });
+    expect(proxy.finalToolInputPolicies).toEqual([]);
+    expect(hasFinalToolInputPolicies()).toBe(true);
+  });
+
+  it("clones final policies from a presealed mutable registry property", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.finalToolInputPolicies.push({
+      pluginId: "presealed-policy",
+      source: "test",
+      policy: {
+        id: "presealed-policy",
+        description: "presealed policy",
+        evaluate: () => ({ outcome: "pass" }),
+      },
+    });
+    const mutablePolicies = registry.finalToolInputPolicies;
+    Object.defineProperty(registry, "finalToolInputPolicies", {
+      configurable: false,
+      enumerable: true,
+      value: mutablePolicies,
+      writable: false,
+    });
+
+    setActivePluginRegistry(registry);
+    const activePolicies = getActivatedFinalToolInputPolicies(registry);
+    expect(activePolicies).not.toBe(mutablePolicies);
+    expect(Object.isFrozen(activePolicies)).toBe(true);
+    expect(Object.isFrozen(activePolicies?.[0])).toBe(true);
+    expect(Object.isFrozen(activePolicies?.[0]?.policy)).toBe(true);
+
+    mutablePolicies.splice(0);
+    expect(registry.finalToolInputPolicies).toEqual([]);
+    expect(hasFinalToolInputPolicies()).toBe(true);
+  });
+
+  it("does not recapture a redefined visible policy property when repinned", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.finalToolInputPolicies.push({
+      pluginId: "repinned-policy",
+      source: "test",
+      policy: {
+        id: "repinned-policy",
+        description: "repinned policy",
+        evaluate: () => ({ outcome: "pass" }),
+      },
+    });
+    setActivePluginRegistry(registry);
+    Object.defineProperty(registry, "finalToolInputPolicies", {
+      configurable: true,
+      value: [],
+      writable: true,
+    });
+
+    pinActivePluginChannelRegistry(registry);
+
+    expect(registry.finalToolInputPolicies).toEqual([]);
+    expect(getActivatedFinalToolInputPolicies(registry)?.map((entry) => entry.policy.id)).toEqual([
+      "repinned-policy",
+    ]);
+    expect(hasFinalToolInputPolicies()).toBe(true);
+  });
+
+  it("keeps the old active registry when policy snapshot capture fails", () => {
+    const oldRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(oldRegistry, "old-active");
+    const activeVersion = getActivePluginRegistryVersion();
+
+    expect(() => setActivePluginRegistry(createThrowOnceFinalPolicyRegistry(), "candidate")).toThrow(
+      "final policy getter failed",
+    );
+
+    expect(getActivePluginRegistry()).toBe(oldRegistry);
+    expect(getActivePluginRegistryVersion()).toBe(activeVersion);
+  });
+
+  it.each([
+    {
+      name: "HTTP route",
+      pin: pinActivePluginHttpRouteRegistry,
+      get: getActivePluginHttpRouteRegistry,
+    },
+    {
+      name: "channel",
+      pin: pinActivePluginChannelRegistry,
+      get: getActivePluginChannelRegistry,
+    },
+    {
+      name: "session extension",
+      pin: pinActivePluginSessionExtensionRegistry,
+      get: getActivePluginSessionExtensionRegistry,
+    },
+  ])("keeps the old pinned $name registry when policy snapshot capture fails", ({ pin, get }) => {
+    const activeRegistry = createEmptyPluginRegistry();
+    const oldPinnedRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(activeRegistry);
+    pin(oldPinnedRegistry);
+
+    expect(() => pin(createThrowOnceFinalPolicyRegistry())).toThrow(
+      "final policy getter failed",
+    );
+
+    expect(get()).toBe(oldPinnedRegistry);
   });
 
   it.each([

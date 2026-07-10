@@ -80,6 +80,8 @@ export type {
   PluginSessionExtensionRegistration,
   PluginSessionExtensionProjection,
   PluginToolMetadataRegistration,
+  PluginFinalToolInputPolicyDecision,
+  PluginFinalToolInputPolicyRegistration,
   PluginTrustedToolPolicyRegistration,
   PluginLogger,
   ProviderAuthContext,

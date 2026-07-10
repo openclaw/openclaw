@@ -2,20 +2,25 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { GlobalHookRunnerRegistry } from "./hook-registry.types.js";
 import type { HookRunner } from "./hooks.js";
-import { isPluginRegistryRetired } from "./registry-lifecycle.js";
+import {
+  getActivatedFinalToolInputPolicies,
+  isPluginRegistryRetired,
+} from "./registry-lifecycle.js";
 import type {
   PluginRegistry,
+  PluginFinalToolInputPolicyRegistryRegistration,
   PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
 import { collectLivePluginRegistries } from "./runtime.js";
 
-type TrustedPolicyHookRunnerRegistry = GlobalHookRunnerRegistry & {
+type ToolPolicyHookRunnerRegistry = GlobalHookRunnerRegistry & {
   trustedToolPolicies?: PluginTrustedToolPolicyRegistryRegistration[];
+  finalToolInputPolicies?: PluginFinalToolInputPolicyRegistryRegistration[];
 };
 
 export type HookRunnerGlobalState = {
   hookRunner: HookRunner | null;
-  registry: TrustedPolicyHookRunnerRegistry | null;
+  registry: ToolPolicyHookRunnerRegistry | null;
 };
 
 const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
@@ -28,11 +33,11 @@ export function getHookRunnerGlobalState(): HookRunnerGlobalState {
 }
 
 function collectHookRegistrySources(
-  lastInitialized: TrustedPolicyHookRunnerRegistry | null,
-): TrustedPolicyHookRunnerRegistry[] {
-  const ordered: TrustedPolicyHookRunnerRegistry[] = [];
-  const seen = new Set<TrustedPolicyHookRunnerRegistry>();
-  const add = (registry: TrustedPolicyHookRunnerRegistry | null) => {
+  lastInitialized: ToolPolicyHookRunnerRegistry | null,
+): ToolPolicyHookRunnerRegistry[] {
+  const ordered: ToolPolicyHookRunnerRegistry[] = [];
+  const seen = new Set<ToolPolicyHookRunnerRegistry>();
+  const add = (registry: ToolPolicyHookRunnerRegistry | null) => {
     if (!registry || seen.has(registry)) {
       return;
     }
@@ -56,9 +61,57 @@ function collectHookRegistrySources(
   return ordered;
 }
 
+function resolvePolicyOwnerSources(
+  sources: readonly ToolPolicyHookRunnerRegistry[],
+  select: (
+    registry: ToolPolicyHookRunnerRegistry,
+  ) => readonly { pluginId: string }[] | undefined,
+): Map<string, number> {
+  const ownerByPluginId = new Map<string, number>();
+  const claimOwner = (pluginId: string, index: number) => {
+    if (!ownerByPluginId.has(pluginId)) {
+      ownerByPluginId.set(pluginId, index);
+    }
+  };
+  const contributionIds = sources.map(
+    (registry) => new Set((select(registry) ?? []).map((registration) => registration.pluginId)),
+  );
+  sources.forEach((registry, index) => {
+    for (const plugin of registry.plugins) {
+      if (plugin.status === "loaded" && contributionIds[index].has(plugin.id)) {
+        claimOwner(plugin.id, index);
+      }
+    }
+  });
+  sources.forEach((registry, index) => {
+    for (const plugin of registry.plugins) {
+      if (plugin.status === "loaded") {
+        claimOwner(plugin.id, index);
+      }
+    }
+  });
+  sources.forEach((registry, index) => {
+    for (const plugin of registry.plugins) {
+      claimOwner(plugin.id, index);
+    }
+    for (const registration of select(registry) ?? []) {
+      claimOwner(registration.pluginId, index);
+    }
+  });
+  return ownerByPluginId;
+}
+
+function selectFinalToolInputPolicies(
+  registry: ToolPolicyHookRunnerRegistry,
+): readonly PluginFinalToolInputPolicyRegistryRegistration[] | undefined {
+  return (
+    getActivatedFinalToolInputPolicies(registry) ?? registry.finalToolInputPolicies
+  );
+}
+
 function composeLiveHookRegistry(
-  lastInitialized: TrustedPolicyHookRunnerRegistry | null,
-): TrustedPolicyHookRunnerRegistry {
+  lastInitialized: ToolPolicyHookRunnerRegistry | null,
+): ToolPolicyHookRunnerRegistry {
   const sources = collectHookRegistrySources(lastInitialized);
   // One source registry owns a plugin's entire contribution (status + hooks),
   // so handlers never double-fire across registries and a plugin's hooks stay
@@ -118,52 +171,37 @@ function composeLiveHookRegistry(
       claimOwner(hook.pluginId, index);
     }
   });
-  const policyOwnerSourceIndexByPluginId = new Map<string, number>();
-  const claimPolicyOwner = (pluginId: string, index: number) => {
-    if (!policyOwnerSourceIndexByPluginId.has(pluginId)) {
-      policyOwnerSourceIndexByPluginId.set(pluginId, index);
-    }
-  };
-  const trustedPolicyPluginIdsBySource = sources.map((registry) => {
-    const ids = new Set<string>();
-    for (const registration of registry.trustedToolPolicies ?? []) {
-      ids.add(registration.pluginId);
-    }
-    return ids;
-  });
-  sources.forEach((registry, index) => {
-    for (const plugin of registry.plugins) {
-      if (plugin.status === "loaded" && trustedPolicyPluginIdsBySource[index].has(plugin.id)) {
-        claimPolicyOwner(plugin.id, index);
-      }
-    }
-  });
-  sources.forEach((registry, index) => {
-    for (const plugin of registry.plugins) {
-      if (plugin.status === "loaded") {
-        claimPolicyOwner(plugin.id, index);
-      }
-    }
-  });
-  sources.forEach((registry, index) => {
-    for (const plugin of registry.plugins) {
-      claimPolicyOwner(plugin.id, index);
-    }
-  });
-  sources.forEach((registry, index) => {
-    for (const registration of registry.trustedToolPolicies ?? []) {
-      claimPolicyOwner(registration.pluginId, index);
-    }
-  });
+  // Each policy tier resolves ownership independently. A scoped registry can
+  // carry one tier but not the other, so a shared map would drop the lower
+  // source's still-live contribution for the missing tier.
+  const trustedPolicyOwnerByPluginId = resolvePolicyOwnerSources(
+    sources,
+    (registry) => registry.trustedToolPolicies,
+  );
+  const finalInputPolicyOwnerByPluginId = resolvePolicyOwnerSources(
+    sources,
+    selectFinalToolInputPolicies,
+  );
   const trustedToolPolicies = sources
     .flatMap((registry, index) =>
       (registry.trustedToolPolicies ?? []).filter(
-        (registration) => policyOwnerSourceIndexByPluginId.get(registration.pluginId) === index,
+        (registration) => trustedPolicyOwnerByPluginId.get(registration.pluginId) === index,
       ),
     )
     // Preserve the trusted-policy tier contract across composed registries:
     // bundled policies run before installed policies, and same-tier entries
     // keep the source/plugin-load order selected above.
+    .toSorted((left, right) => {
+      const leftRank = left.origin === "bundled" ? 0 : 1;
+      const rightRank = right.origin === "bundled" ? 0 : 1;
+      return leftRank - rightRank;
+    });
+  const finalToolInputPolicies = sources
+    .flatMap((registry, index) =>
+      (selectFinalToolInputPolicies(registry) ?? []).filter(
+        (registration) => finalInputPolicyOwnerByPluginId.get(registration.pluginId) === index,
+      ),
+    )
     .toSorted((left, right) => {
       const leftRank = left.origin === "bundled" ? 0 : 1;
       const rightRank = right.origin === "bundled" ? 0 : 1;
@@ -180,12 +218,13 @@ function composeLiveHookRegistry(
       registry.plugins.filter((plugin) => ownerSourceIndexByPluginId.get(plugin.id) === index),
     ),
     trustedToolPolicies,
+    finalToolInputPolicies,
   };
 }
 
 export function createComposedHookRegistryFacade(
   state: HookRunnerGlobalState,
-): TrustedPolicyHookRunnerRegistry {
+): ToolPolicyHookRunnerRegistry {
   // Live getters: createHookRunner reads these on every hasHooks/getHooksForName
   // call, so the runner always dispatches the current live registry set rather
   // than a snapshot captured at initialization. Composition is bounded by the
@@ -203,11 +242,14 @@ export function createComposedHookRegistryFacade(
     get trustedToolPolicies() {
       return composeLiveHookRegistry(state.registry).trustedToolPolicies;
     },
+    get finalToolInputPolicies() {
+      return composeLiveHookRegistry(state.registry).finalToolInputPolicies;
+    },
   };
 }
 
 /** Get the composed registry that backs global hook dispatch. */
-export function getGlobalHookRunnerRegistry(): TrustedPolicyHookRunnerRegistry | null {
+export function getGlobalHookRunnerRegistry(): ToolPolicyHookRunnerRegistry | null {
   const state = getHookRunnerGlobalState();
   return state.registry ? createComposedHookRegistryFacade(state) : null;
 }

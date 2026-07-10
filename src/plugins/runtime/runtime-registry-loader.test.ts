@@ -31,7 +31,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 let ensurePluginRegistryLoaded: typeof import("./runtime-registry-loader.js").ensurePluginRegistryLoaded;
-let resetPluginRegistryLoadedForTests: typeof import("./runtime-registry-loader.js").testing.resetPluginRegistryLoadedForTests;
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object") {
@@ -124,7 +123,6 @@ describe("ensurePluginRegistryLoaded", () => {
   beforeAll(async () => {
     const mod = await import("./runtime-registry-loader.js");
     ensurePluginRegistryLoaded = mod.ensurePluginRegistryLoaded;
-    resetPluginRegistryLoadedForTests = () => mod.testing.resetPluginRegistryLoadedForTests();
   });
 
   beforeEach(() => {
@@ -141,8 +139,6 @@ describe("ensurePluginRegistryLoaded", () => {
     mocks.resolvePluginMetadataSnapshot.mockReset();
     mocks.resolveAgentWorkspaceDir.mockClear();
     mocks.resolveDefaultAgentId.mockClear();
-    resetPluginRegistryLoadedForTests();
-
     mocks.getActivePluginRegistry.mockReturnValue(null);
     mocks.getActivePluginRegistryWorkspaceDir.mockReturnValue(undefined);
     mocks.resolveCompatibleRuntimePluginRegistry.mockReturnValue(undefined);
@@ -290,6 +286,101 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(load.onlyPluginIds).toEqual(["external-chat-plugin"]);
   });
 
+  it.each([
+    {
+      name: "configured-channel",
+      configuredOwners: ["demo-channel"],
+      scopedOwners: [],
+      onlyChannelIds: undefined,
+      expectedPluginIds: ["demo-channel", "enterprise-policy"],
+    },
+    {
+      name: "explicit channel-owner",
+      configuredOwners: [],
+      scopedOwners: ["external-chat-plugin"],
+      onlyChannelIds: ["external-chat"],
+      expectedPluginIds: ["enterprise-policy", "external-chat-plugin"],
+    },
+  ])(
+    "keeps explicitly enabled required policy owners active in $name loads",
+    ({ configuredOwners, scopedOwners, onlyChannelIds, expectedPluginIds }) => {
+      const config = {
+        plugins: {
+          entries: {
+            "enterprise-policy": {
+              enabled: true,
+              requiredFinalToolInputPolicies: ["pdp"],
+            },
+            unrelated: { enabled: true },
+          },
+        },
+      };
+      mocks.applyPluginAutoEnable.mockImplementationOnce((params) => ({
+        config: params.config ?? {},
+        changes: [],
+        autoEnabledReasons: {},
+      }));
+      mocks.resolveConfiguredChannelPluginIds.mockReturnValue(configuredOwners);
+      mocks.resolveDiscoverableScopedChannelPluginIds.mockReturnValue(scopedOwners);
+
+      ensurePluginRegistryLoaded({
+        scope: "configured-channels",
+        config: config as never,
+        ...(onlyChannelIds ? { onlyChannelIds } : {}),
+      });
+
+      const load = loadOptions();
+      for (const [label, value] of [
+        ["load config", load.config],
+        ["activation config", load.activationSourceConfig],
+      ] as const) {
+        const scoped = requireRecord(value, label);
+        expect(pluginsConfig(scoped).allow).toEqual(expectedPluginIds);
+        expect(pluginEntries(scoped)["enterprise-policy"]).toEqual({
+          enabled: true,
+          requiredFinalToolInputPolicies: ["pdp"],
+        });
+      }
+      expect(load.onlyPluginIds).toEqual(expectedPluginIds);
+    },
+  );
+
+  it("does not activate a requirement-only policy owner during channel scoping", () => {
+    const config = {
+      plugins: {
+        entries: {
+          "enterprise-policy": {
+            requiredFinalToolInputPolicies: ["pdp"],
+          },
+        },
+      },
+    };
+    mocks.applyPluginAutoEnable.mockImplementationOnce((params) => ({
+      config: params.config ?? {},
+      changes: [],
+      autoEnabledReasons: {},
+    }));
+    mocks.resolveConfiguredChannelPluginIds.mockReturnValue(["demo-channel"]);
+
+    ensurePluginRegistryLoaded({
+      scope: "configured-channels",
+      config: config as never,
+    });
+
+    const load = loadOptions();
+    for (const [label, value] of [
+      ["load config", load.config],
+      ["activation config", load.activationSourceConfig],
+    ] as const) {
+      const scoped = requireRecord(value, label);
+      expect(pluginsConfig(scoped).allow).toEqual(["demo-channel"]);
+      expect(pluginEntries(scoped)["enterprise-policy"]).toEqual({
+        requiredFinalToolInputPolicies: ["pdp"],
+      });
+    }
+    expect(load.onlyPluginIds).toEqual(["demo-channel", "enterprise-policy"]);
+  });
+
   it("forwards explicit empty scopes without widening to channel resolution", () => {
     ensurePluginRegistryLoaded({
       scope: "configured-channels",
@@ -397,6 +488,7 @@ describe("ensurePluginRegistryLoaded", () => {
     const emptyRegistry = createEmptyPluginRegistry();
     mocks.getActivePluginRegistry.mockReturnValue(emptyRegistry);
     mocks.getActivePluginRegistryWorkspaceDir.mockReturnValue("/resolved-workspace");
+    mocks.resolveCompatibleRuntimePluginRegistry.mockReturnValue(emptyRegistry);
     mocks.loadOpenClawPlugins.mockClear();
 
     ensurePluginRegistryLoaded({
@@ -549,5 +641,134 @@ describe("ensurePluginRegistryLoaded", () => {
 
     expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
     expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "disabled",
+      plugins: {
+        entries: {
+          "enterprise-policy": {
+            enabled: false,
+            requiredFinalToolInputPolicies: ["pdp"],
+          },
+        },
+      },
+    },
+    {
+      name: "denied",
+      plugins: {
+        deny: ["enterprise-policy"],
+        entries: {
+          "enterprise-policy": {
+            requiredFinalToolInputPolicies: ["pdp"],
+          },
+        },
+      },
+    },
+  ])("loads and fails closed for a $name required-policy owner", ({ plugins }) => {
+    mocks.applyPluginAutoEnable.mockImplementationOnce((params) => ({
+      config: params.config ?? {},
+      changes: [],
+      autoEnabledReasons: {},
+    }));
+    mocks.resolveEffectivePluginIds.mockReturnValue([]);
+    mocks.getActivePluginRegistry.mockReturnValue(createEmptyPluginRegistry());
+    mocks.loadOpenClawPlugins.mockImplementationOnce(() => {
+      throw new Error(
+        "required final tool input policies unavailable: enterprise-policy (status=disabled)",
+      );
+    });
+
+    expect(() =>
+      ensurePluginRegistryLoaded({
+        scope: "all",
+        config: { plugins } as never,
+      }),
+    ).toThrow(/required final tool input policies unavailable/);
+
+    const load = loadOptions();
+    expect(load.onlyPluginIds).toEqual(["enterprise-policy"]);
+    expect(requireRecord(load.config, "load config").plugins).toEqual(plugins);
+  });
+
+  it("includes policy owners required only by activation-source config", () => {
+    mocks.applyPluginAutoEnable.mockImplementationOnce((params) => ({
+      config: params.config ?? {},
+      changes: [],
+      autoEnabledReasons: {},
+    }));
+    mocks.resolveEffectivePluginIds.mockReturnValue([]);
+    mocks.loadOpenClawPlugins.mockImplementationOnce(() => {
+      throw new Error(
+        "required final tool input policies unavailable: enterprise-policy (status=disabled)",
+      );
+    });
+    const activationSourceConfig = {
+      plugins: {
+        entries: {
+          "enterprise-policy": {
+            enabled: false,
+            requiredFinalToolInputPolicies: ["pdp"],
+          },
+        },
+      },
+    };
+
+    expect(() =>
+      ensurePluginRegistryLoaded({
+        scope: "all",
+        config: {} as never,
+        activationSourceConfig: activationSourceConfig as never,
+      }),
+    ).toThrow(/required final tool input policies unavailable/);
+
+    const load = loadOptions();
+    expect(load.onlyPluginIds).toEqual(["enterprise-policy"]);
+    expect(load.config).toEqual({});
+    expect(load.activationSourceConfig).toEqual(activationSourceConfig);
+  });
+
+  it("revalidates an active plugin when config newly requires its final policy", () => {
+    const activeRegistry = createEmptyPluginRegistry();
+    activeRegistry.plugins.push({
+      id: "enterprise-policy",
+      source: "/tmp/enterprise-policy.js",
+      origin: "workspace",
+      enabled: true,
+      status: "loaded",
+    } as never);
+    mocks.applyPluginAutoEnable.mockImplementation((params) => ({
+      config: params.config ?? {},
+      changes: [],
+      autoEnabledReasons: {},
+    }));
+    mocks.resolveEffectivePluginIds.mockReturnValue(["enterprise-policy"]);
+    mocks.getActivePluginRegistry.mockReturnValue(activeRegistry);
+    mocks.resolveCompatibleRuntimePluginRegistry.mockReturnValue(undefined);
+    mocks.loadOpenClawPlugins.mockImplementationOnce(() => {
+      throw new Error(
+        "required final tool input policies unavailable: enterprise-policy (unregistered=pdp)",
+      );
+    });
+
+    expect(() =>
+      ensurePluginRegistryLoaded({
+        scope: "all",
+        config: {
+          plugins: {
+            allow: ["enterprise-policy"],
+            entries: {
+              "enterprise-policy": {
+                requiredFinalToolInputPolicies: ["pdp"],
+              },
+            },
+          },
+        } as never,
+      }),
+    ).toThrow(/required final tool input policies unavailable/);
+
+    expect(mocks.resolveCompatibleRuntimePluginRegistry).toHaveBeenCalledOnce();
+    expect(loadOptions().onlyPluginIds).toEqual(["enterprise-policy"]);
   });
 });

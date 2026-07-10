@@ -214,6 +214,7 @@ plugins.
 | `api.session.state.registerSessionExtension(...)`                                    | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                                             |
 | `api.session.workflow.enqueueNextTurnInjection(...)`                                 | Durable exactly-once context injected into the next agent turn for one session                                                                             |
 | `api.registerTrustedToolPolicy(...)`                                                 | Manifest-gated trusted pre-plugin tool policy that can block or rewrite tool params                                                                        |
+| `api.registerFinalToolInputPolicy(...)`                                              | Manifest-gated, restrict-only final input veto over host-finalized parameters for an OpenClaw-managed tool call                                            |
 | `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                                                     |
 | `api.registerCommand(...)`                                                           | Scoped plugin commands; command results can set `continueAgent: true` or `suppressReply: true`; Discord native commands support `descriptionLocalizations` |
 | `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors for session, tool, run, settings, or tab surfaces                                                                      |
@@ -287,6 +288,12 @@ The contracts intentionally split authority:
   explicit enablement plus their local ids in
   `contracts.trustedToolPolicies`, and run next in plugin-load order. Policy ids
   are scoped to the registering plugin.
+- Final tool input policies run after tool parameter rewrites,
+  OpenClaw-managed approvals, and surface-specific finalization. They receive a
+  detached snapshot and can only return non-granting `pass` or terminal `deny`.
+  Every local id must be declared in `contracts.finalToolInputPolicies`;
+  installed plugins also require explicit enablement. See [Plugin hooks](/plugins/hooks#final-tool-input-policies)
+  for ordering, failure behavior, and scope limits.
 - Reserved command ownership is bundled-only. External plugins should use their
   own command names or aliases.
 - `allowPromptInjection=false` disables prompt-mutating hooks including

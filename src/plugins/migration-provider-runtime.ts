@@ -31,9 +31,23 @@ function resolveMigrationProviderConfig(params: {
   });
 }
 
-function resolveMigrationProviderRegistry(params: { pluginIds: string[] }) {
-  return getLoadedRuntimePluginRegistry({
+function loadMigrationProviderRegistry(params: {
+  cfg?: OpenClawConfig;
+  pluginIds: string[];
+  bundledCompatPluginIds: string[];
+}) {
+  const compatConfig = resolveMigrationProviderConfig({
+    cfg: params.cfg,
+    bundledCompatPluginIds: params.bundledCompatPluginIds,
+  });
+  return ensureStandaloneRuntimePluginRegistryLoaded({
+    surface: "active",
     requiredPluginIds: params.pluginIds,
+    loadOptions: {
+      ...(compatConfig === undefined ? {} : { config: compatConfig }),
+      onlyPluginIds: params.pluginIds,
+      activate: false,
+    },
   });
 }
 
@@ -55,27 +69,19 @@ export function ensureStandaloneMigrationProviderRegistryLoaded(
     cfg?: OpenClawConfig;
     providerId?: string;
   } = {},
-): void {
+) {
   const resolution = resolveManifestContractRuntimePluginResolution({
     cfg: params.cfg,
     contract: "migrationProviders",
     ...(params.providerId ? { value: params.providerId } : {}),
   });
   if (resolution.pluginIds.length === 0) {
-    return;
+    return undefined;
   }
-  const compatConfig = resolveMigrationProviderConfig({
+  return loadMigrationProviderRegistry({
     cfg: params.cfg,
+    pluginIds: resolution.pluginIds,
     bundledCompatPluginIds: resolution.bundledCompatPluginIds,
-  });
-  ensureStandaloneRuntimePluginRegistryLoaded({
-    surface: "active",
-    requiredPluginIds: resolution.pluginIds,
-    loadOptions: {
-      ...(compatConfig === undefined ? {} : { config: compatConfig }),
-      onlyPluginIds: resolution.pluginIds,
-      activate: false,
-    },
   });
 }
 
@@ -101,8 +107,10 @@ export function resolvePluginMigrationProvider(params: {
   if (pluginIds.length === 0) {
     return undefined;
   }
-  const registry = resolveMigrationProviderRegistry({
+  const registry = loadMigrationProviderRegistry({
+    cfg: params.cfg,
     pluginIds,
+    bundledCompatPluginIds: resolution.bundledCompatPluginIds,
   });
   return findMigrationProviderById(registry?.migrationProviders ?? [], params.providerId);
 }
@@ -122,8 +130,10 @@ export function resolvePluginMigrationProviders(
   if (pluginIds.length === 0) {
     return mergeMigrationProviders(activeProviders, []);
   }
-  const registry = resolveMigrationProviderRegistry({
+  const registry = loadMigrationProviderRegistry({
+    cfg: params.cfg,
     pluginIds,
+    bundledCompatPluginIds: resolution.bundledCompatPluginIds,
   });
   return mergeMigrationProviders(activeProviders, registry?.migrationProviders ?? []);
 }

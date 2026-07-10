@@ -977,6 +977,28 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("discord plugin config present, added to plugin allowlist.");
   });
 
+  it("does not auto-enable or allowlist requirement-only policy plugins", () => {
+    const result = materializePluginAutoEnableCandidates({
+      config: {
+        plugins: {
+          allow: ["glueclaw"],
+          entries: {
+            "enterprise-policy": {
+              requiredFinalToolInputPolicies: ["external-pdp"],
+            },
+          },
+        },
+      },
+      candidates: [],
+      env,
+      manifestRegistry: makeRegistry([{ id: "enterprise-policy", channels: [] }]),
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["glueclaw"]);
+    expect(result.config.plugins?.entries?.["enterprise-policy"]?.enabled).toBeUndefined();
+    expect(result.changes).toStrictEqual([]);
+  });
+
   it("does not preserve stale configured plugin entries in restrictive plugins.allow", () => {
     const result = materializePluginAutoEnableCandidates({
       config: {

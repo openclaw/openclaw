@@ -1,5 +1,6 @@
 // Stores active runtime plugin registry state and activation metadata.
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { resolveRequiredFinalToolInputPolicyOwnerIds } from "./final-tool-input-policy-requirements.js";
 import { resolveCompatibleRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import {
@@ -117,10 +118,17 @@ export function getLoadedRuntimePluginRegistry(
   } = {},
 ): PluginRegistry | undefined {
   const surface = params.surface ?? "active";
+  const requestedPluginIds = params.requiredPluginIds ?? params.loadOptions?.onlyPluginIds;
+  const requiredPolicyOwnerIds = normalizeSortedUniqueStringEntries([
+    ...resolveRequiredFinalToolInputPolicyOwnerIds(params.loadOptions?.config),
+    ...resolveRequiredFinalToolInputPolicyOwnerIds(params.loadOptions?.activationSourceConfig),
+  ]);
   const requiredPluginIds = normalizeRequiredPluginIds(
-    params.requiredPluginIds ?? params.loadOptions?.onlyPluginIds,
+    requiredPolicyOwnerIds.length > 0
+      ? [...(requestedPluginIds ?? []), ...requiredPolicyOwnerIds]
+      : requestedPluginIds,
   );
-  if (surface === "active" && params.loadOptions && requiredPluginIds?.length !== 0) {
+  if (surface === "active" && params.loadOptions) {
     const compatible = resolveCompatibleRuntimePluginRegistry(params.loadOptions);
     if (!compatible || !registryContainsRuntimePluginIds(compatible, requiredPluginIds)) {
       return undefined;

@@ -4,11 +4,19 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
+import {
+  runBeforeToolCallHook,
+  runFinalToolInputPolicies,
+} from "../agents/agent-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tools.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
-import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
+import {
+  finalizeToolCallParams,
+  prepareToolCallParams,
+  ToolInputError,
+  type AnyAgentTool,
+} from "../agents/tools/common.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
@@ -251,17 +259,23 @@ export async function invokeGatewayTool(params: {
       action,
       args,
     });
+    const hookContext = {
+      agentId,
+      config: params.cfg,
+      sessionKey,
+      workspaceDir,
+      ...(params.messageChannel ? { channelId: params.messageChannel } : {}),
+      loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId }),
+    };
+    const preparedArgs = await prepareToolCallParams(gatewayTool, toolArgs, {
+      toolCallId,
+      hookContext,
+    });
     const hookResult = await runBeforeToolCallHook({
       toolName,
-      params: toolArgs,
+      params: preparedArgs,
       toolCallId,
-      ctx: {
-        agentId,
-        config: params.cfg,
-        sessionKey,
-        workspaceDir,
-        loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId }),
-      },
+      ctx: hookContext,
       approvalMode: params.approvalMode,
     });
     if (hookResult.blocked) {
@@ -276,12 +290,34 @@ export async function invokeGatewayTool(params: {
         },
       };
     }
+    const finalizedArgs = await finalizeToolCallParams(
+      gatewayTool,
+      hookResult.params,
+      preparedArgs,
+    );
+    const authorizationOutcome = await runFinalToolInputPolicies({
+      toolName,
+      params: finalizedArgs,
+      toolCallId,
+      ctx: hookContext,
+    });
+    if (authorizationOutcome.blocked) {
+      return {
+        ok: false,
+        status: 403,
+        toolName,
+        error: {
+          type: "tool_call_blocked",
+          message: authorizationOutcome.reason,
+        },
+      };
+    }
     return {
       ok: true,
       status: 200,
       toolName,
       source: resolveToolSource(gatewayTool),
-      result: await gatewayTool.execute?.(toolCallId, hookResult.params),
+      result: await gatewayTool.execute?.(toolCallId, finalizedArgs),
     };
   } catch (err) {
     const inputStatus = resolveToolInputErrorStatus(err);

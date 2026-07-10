@@ -1428,6 +1428,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
   "plugins.entries.*.enabled":
     "Per-plugin enablement override for a specific entry, applied on top of global plugin policy (restart required). Use this to stage plugin rollout gradually across environments.",
+  "plugins.entries.*.requiredFinalToolInputPolicies":
+    "Operator-owned final tool input policy ids that must be declared and registered by this plugin. Every active runtime load fails closed while the plugin is missing, disabled, denied, fails to load, drops a declaration, or omits a required registration.",
   "plugins.entries.*.hooks":
     "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
   "plugins.entries.*.hooks.allowPromptInjection":

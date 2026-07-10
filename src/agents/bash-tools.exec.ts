@@ -1525,13 +1525,18 @@ export function createExecTool(
         preparedParams as ExecToolArgs,
       );
       const workdirState = getResolvedExecWorkdirPreparedState(preparedParams as ExecToolArgs);
-      if (!envState && !deferredEnvState && !workdirState) {
-        return params;
-      }
       if (!isExecToolArgsObject(params)) {
         return params;
       }
-      const execParams = params;
+      // Normalize the exact input that final tool-input policies inspect.
+      // execute() repeats this for direct callers, so both paths stay idempotent.
+      const execParams = stripMalformedXmlArgValueSuffixFromKeys(
+        params,
+        XML_ARG_VALUE_EXEC_PARAM_KEYS,
+      );
+      if (!envState && !deferredEnvState && !workdirState) {
+        return execParams;
+      }
       let host: ExecHost | undefined;
       const resolveFinalHost = () => {
         host ??= resolveHostForParams(execParams);

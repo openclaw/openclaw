@@ -110,6 +110,43 @@ describe("assertRequiredParams", () => {
     );
   });
 
+  it("preserves preparation and normalizes after awaiting the wrapped finalizer", async () => {
+    const prepareBeforeToolCallParams = vi.fn(async (params: unknown) => params);
+    const finalizeBeforeToolCallParams = vi.fn(async (params: unknown) => ({
+      ...(params as Record<string, unknown>),
+      path: "inner.docodex</arg_value>>",
+      innerFinalized: true,
+    }));
+    const tool = wrapToolParamValidation(
+      {
+        name: "write",
+        label: "write",
+        description: "write a file",
+        parameters: {},
+        prepareBeforeToolCallParams,
+        finalizeBeforeToolCallParams,
+        execute: vi.fn(),
+      },
+      REQUIRED_PARAM_GROUPS.write,
+    );
+
+    const finalized = await tool.finalizeBeforeToolCallParams?.(
+      { path: "notes.docodex</arg_value>>", content: "hello" },
+      { path: "draft.txt", content: "hello" },
+    );
+
+    expect(tool.prepareBeforeToolCallParams).toBe(prepareBeforeToolCallParams);
+    expect(finalizeBeforeToolCallParams).toHaveBeenCalledWith(
+      { path: "notes.docodex</arg_value>>", content: "hello" },
+      { path: "draft.txt", content: "hello" },
+    );
+    expect(finalized).toEqual({
+      path: "inner.docx",
+      content: "hello",
+      innerFinalized: true,
+    });
+  });
+
   it("rejects paths that become empty after malformed XML arg-value suffix stripping", async () => {
     const execute = vi.fn();
     const tool = wrapToolParamValidation(

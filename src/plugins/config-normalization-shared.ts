@@ -3,7 +3,10 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeArrayBackedTrimmedStringList,
+  normalizeSortedUniqueTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultSlotIdForKey } from "./slots.js";
@@ -22,6 +25,7 @@ export type NormalizedPluginsConfig = {
     string,
     {
       enabled?: boolean;
+      requiredFinalToolInputPolicies?: string[];
       hooks?: {
         allowPromptInjection?: boolean;
         allowConversationAccess?: boolean;
@@ -115,6 +119,9 @@ function normalizePluginEntries(
       continue;
     }
     const entry = value as Record<string, unknown>;
+    const requiredFinalToolInputPolicies = normalizeSortedUniqueTrimmedStringList(
+      entry.requiredFinalToolInputPolicies,
+    );
     const hooksRaw = entry.hooks;
     const hooks =
       hooksRaw && typeof hooksRaw === "object" && !Array.isArray(hooksRaw)
@@ -215,6 +222,10 @@ function normalizePluginEntries(
       ...normalized[normalizedKey],
       enabled:
         typeof entry.enabled === "boolean" ? entry.enabled : normalized[normalizedKey]?.enabled,
+      requiredFinalToolInputPolicies:
+        "requiredFinalToolInputPolicies" in entry
+          ? requiredFinalToolInputPolicies
+          : normalized[normalizedKey]?.requiredFinalToolInputPolicies,
       hooks: normalizedHooks ?? normalized[normalizedKey]?.hooks,
       subagent: normalizedSubagent ?? normalized[normalizedKey]?.subagent,
       llm: normalizedLlm ?? normalized[normalizedKey]?.llm,

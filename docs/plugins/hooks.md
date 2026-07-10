@@ -3,7 +3,7 @@ summary: "Plugin hooks: intercept agent, tool, message, session, and Gateway lif
 title: "Plugin hooks"
 read_when:
   - You are building a plugin that needs before_tool_call, before_agent_reply, message hooks, or lifecycle hooks
-  - You need to block, rewrite, or require approval for tool calls from a plugin
+  - You need to block, rewrite, require approval for, or apply a final input veto to plugin tool calls
   - You are deciding between internal hooks and plugin hooks
 ---
 
@@ -269,6 +269,167 @@ are rejected before registration. Policy ids are scoped to the registering
 plugin, so different plugins may reuse the same local id. Use this tier only
 for host-trusted gates such as workspace policy, budget enforcement, or
 reserved workflow safety.
+
+### Final tool input policies
+
+Use `api.registerFinalToolInputPolicy(...)` when a host-trusted policy must
+inspect host-finalized parameters after all host-managed rewrites and
+surface-specific finalization, and can only veto the call. Every plugin must
+declare each local policy id in `contracts.finalToolInputPolicies`;
+installed plugins must also be explicitly enabled:
+
+```json
+{
+  "contracts": {
+    "finalToolInputPolicies": ["production-write-boundary"]
+  }
+}
+```
+
+Register the matching policy from the plugin entry:
+
+```typescript
+api.registerFinalToolInputPolicy({
+  id: "production-write-boundary",
+  description: "Blocks direct writes to the production database",
+  timeoutMs: 5000,
+  evaluate(event, _ctx, signal) {
+    signal.throwIfAborted();
+
+    if (event.toolName !== "database_execute") {
+      return { outcome: "pass" };
+    }
+    if (event.params.environment === "production" && event.params.mode === "write") {
+      return {
+        outcome: "deny",
+        reasonCode: "production.write_requires_workflow",
+      };
+    }
+    return { outcome: "pass" };
+  },
+});
+```
+
+Declarations are runtime requirements, not discovery hints. An active plugin
+must register every declared id on every activating runtime load. A conditional
+policy should always register and return `pass` while inactive. A missing or
+invalid registration is rejected by every activating loader, including a
+cache-hit load. Gateway startup and reload therefore reject the candidate
+registry before activation rather than running without the declared policy.
+
+Pin policies that an operator requires across plugin upgrades in config:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "production-policy": {
+        enabled: true,
+        requiredFinalToolInputPolicies: ["production-write-boundary"],
+      },
+    },
+  },
+}
+```
+
+`requiredFinalToolInputPolicies` is an operator assertion, not a declaration,
+auto-enable switch, or allowlist entry. An activating load fails while the
+plugin is missing, disabled, denied by plugin policy, no longer declares a
+required id, or does not register it. Remove the requirement only when
+intentionally retiring that control.
+
+This requirement attests only that the configured plugin declares and
+registers the id, not the policy semantics or artifact identity; an upgraded
+or malicious plugin can reuse the id with a pass-through policy, so pair it
+with version pinning and supply-chain controls.
+
+`event` and `ctx` use the `PluginHookBeforeToolCallEvent` and
+`PluginHookToolContext` shapes described above. Context fields are optional and
+supply available agent, session, run, tool, channel, and trace correlation;
+they are not a formal authenticated RBAC principal. A policy that requires an
+identity field should deny when that field is absent.
+
+`ctx.getSessionExtension?.(namespace)` reads JSON-compatible state only from
+the registering plugin's own session extension for the current session. It
+returns `undefined` when the session, namespace, or plugin-owned state is
+unavailable; it cannot read another plugin's extension state.
+
+The decision is deliberately restrict-only:
+
+```typescript
+type PluginFinalToolInputPolicyDecision =
+  | { outcome: "pass" }
+  | { outcome: "deny"; reasonCode: string };
+```
+
+`pass` continues to the next policy; it never grants a tool removed or blocked
+by an earlier layer. The first `deny` is terminal. Every evaluation path must
+explicitly return one of the two shapes above. `undefined`, a missing return,
+or extra decision fields are invalid and fail closed. A final policy cannot
+rewrite parameters or request approval.
+
+For OpenClaw-managed tool execution and delegation, the order is:
+
+1. The tool surface performs its initial parameter preparation.
+2. Trusted pre-tool policies run and may rewrite or block.
+3. Ordinary `before_tool_call` hooks run and may rewrite, block, or request
+   approval.
+4. The host reconciles hook-rewritten parameters and applies the tool surface's
+   finalizer.
+5. Final tool input policies inspect a detached snapshot of that host-finalized
+   input.
+6. OpenClaw executes or delegates the call only if every policy passes.
+
+Bundled policies run first. Installed-plugin policies run next in plugin-load
+order. When final input policies are active, OpenClaw seals the host-finalized
+input in place before the first policy await. The top-level object identity and
+hidden or symbol-keyed state are preserved, while its enumerable string-keyed
+JSON graph is replaced with canonical values and recursively frozen. Nested
+references can therefore change. Each policy then receives a separate detached
+`event.params` clone, so mutating a policy snapshot cannot change the sealed
+sink input. The execution sink receives the same top-level object and must
+treat it as read-only. The OpenClaw-managed final-policy boundary does not
+derive path hints; final policies must inspect canonical `event.params` for
+resource decisions.
+
+The snapshot is host-finalized tool input, not a complete description of the
+effective action. Tool-owned defaults and hidden runtime facts can still be
+resolved inside execution; for example, an exec surface may resolve an omitted
+host or working directory, or merge hidden environment state. Treat a missing
+fact required by policy as unknown and deny. This API does not yet provide a
+canonical action/resource or input-provenance model.
+
+The detached snapshot must be bounded, finite plain JSON. Non-JSON values such
+as `undefined`, `NaN`, or infinity; cyclic structures; shared buffers;
+non-plain objects; and inputs over the host limits fail closed before a policy
+runs.
+
+`timeoutMs` must be an integer from 1 through 30,000 milliseconds and defaults
+to 15,000. The third `evaluate` argument is an `AbortSignal` that fires on host
+timeout or run cancellation. The timeout bounds host wait for cooperative
+async policies; it cannot preempt in-process JavaScript. A synchronous loop can
+delay the timer, and async work that ignores the signal can continue after the
+host stops waiting. Evaluators should stay side-effect-free and propagate or
+honor the signal. A timeout, thrown error, unreadable policy, or invalid
+decision fails closed. The model and user receive only `Tool call blocked by
+final input policy`. A deny `reasonCode` must match
+`[a-z0-9][a-z0-9._-]{0,63}`. Trusted security events record the plugin id,
+policy id, outcome kind, and reason code; none of those internal fields become
+model- or user-facing text.
+
+<Warning>
+  This contract covers OpenClaw agent tools and adapters, client-hosted tool
+  delegation, Gateway `tools.invoke`, and in-process Gateway MCP loopback calls.
+  It is not a plugin sandbox, network egress control, or complete RBAC layer.
+  Native plugins still run in-process and can use registration code, services,
+  HTTP or Gateway routes, provider code, direct Node APIs, or network clients
+  outside this policy path. Provider- or harness-native Codex and ACPX tools,
+  standalone ACPX MCP bridges, and external MCP server processes do not inherit
+  this policy. Harness owners can integrate the public helper described in
+  [Agent harness plugins](/plugins/sdk-agent-harness#final-tool-input-policies-in-native-harnesses).
+  See [Plugin architecture](/plugins/architecture#execution-model) for the
+  process trust boundary.
+</Warning>
 
 ### Exec environment hook
 

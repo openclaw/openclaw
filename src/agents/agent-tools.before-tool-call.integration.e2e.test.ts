@@ -8,6 +8,11 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { updateSessionStore, type SessionEntry } from "../config/sessions.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import {
   initializeGlobalHookRunner,
@@ -15,6 +20,7 @@ import {
 } from "../plugins/hook-runner-global.js";
 import { addTestHook, createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 import { patchPluginSessionExtension } from "../plugins/host-hook-state.js";
+import type { PluginFinalToolInputPolicyRegistration } from "../plugins/host-hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
@@ -26,14 +32,17 @@ import {
   consumeAdjustedParamsForToolCall,
   finalizeToolTerminalPresentation,
   isToolWrappedWithBeforeToolCallHook,
+  runFinalToolInputPolicies,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { normalizeToolParameters } from "./agent-tools.schema.js";
+import { createExecTool } from "./bash-tools.exec.js";
 import { markCodeModeControlTool } from "./code-mode-control-tools.js";
 import { CODE_MODE_EXEC_TOOL_NAME, createCodeModeTools } from "./code-mode.js";
 import { splitSdkTools } from "./embedded-agent-runner.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { setToolTerminalPresentation } from "./tool-terminal-presentation.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
 type BeforeToolCallHandlerMock = ReturnType<typeof vi.fn>;
 
@@ -60,6 +69,7 @@ function collectMatching<T, U>(
 function installBeforeToolCallHook(params?: {
   enabled?: boolean;
   runBeforeToolCallImpl?: (...args: unknown[]) => unknown;
+  finalToolInputPolicy?: PluginFinalToolInputPolicyRegistration;
 }): BeforeToolCallHandlerMock {
   resetGlobalHookRunner();
   const handler = params?.runBeforeToolCallImpl
@@ -68,7 +78,18 @@ function installBeforeToolCallHook(params?: {
   if (params?.enabled === false) {
     return handler;
   }
-  initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_tool_call", handler }]));
+  const registry = createMockPluginRegistry([{ hookName: "before_tool_call", handler }]);
+  if (params?.finalToolInputPolicy) {
+    registry.finalToolInputPolicies = [
+      {
+        pluginId: "test-final-input-policy",
+        pluginName: "Test Final Input Policy",
+        policy: params.finalToolInputPolicy,
+        source: "test",
+      },
+    ];
+  }
+  initializeGlobalHookRunner(registry);
   return handler;
 }
 
@@ -93,6 +114,7 @@ describe("before_tool_call hook integration", () => {
   beforeEach(() => {
     resetGlobalHookRunner();
     resetDiagnosticSessionStateForTest();
+    resetDiagnosticEventsForTest();
     beforeToolCallTesting.adjustedParamsByToolCallId.clear();
     beforeToolCallTesting.structuredReplaySafeToolCallIds.clear();
     beforeToolCallHook = installBeforeToolCallHook();
@@ -181,6 +203,230 @@ describe("before_tool_call hook integration", () => {
       { cmd: "ls", mode: "safe" },
       undefined,
       extensionContext,
+    );
+  });
+
+  it("authorizes normalized exec input after ordinary hook rewrites", async () => {
+    const evaluate = vi.fn<PluginFinalToolInputPolicyRegistration["evaluate"]>((event) => {
+      expect(event.params.command).toBe("rm -rf /");
+      return { outcome: "deny" as const, reasonCode: "command.destructive" };
+    });
+    beforeToolCallHook = installBeforeToolCallHook({
+      runBeforeToolCallImpl: async () => ({
+        params: { command: "rm -rf /</arg_value>>" },
+      }),
+      finalToolInputPolicy: {
+        id: "dangerous-command",
+        description: "deny destructive normalized commands",
+        evaluate,
+      },
+    });
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const execTool = createExecTool({ cwd: process.cwd(), allowBackground: false });
+    const tool = wrapToolWithBeforeToolCallHook(
+      { ...execTool, execute } as unknown as AnyAgentTool,
+      {
+        agentId: "main",
+        sessionKey: "main",
+      },
+    );
+    const trustedEvents: DiagnosticEventPayload[] = [];
+    const stop = onTrustedInternalDiagnosticEvent((event) => {
+      trustedEvents.push(event);
+    });
+
+    let result!: Awaited<ReturnType<typeof tool.execute>>;
+    try {
+      result = await tool.execute("call-final-exec-deny", { command: "echo safe" });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    } finally {
+      stop();
+    }
+
+    expect(beforeToolCallHook).toHaveBeenCalledTimes(1);
+    expect(evaluate).toHaveBeenCalledTimes(1);
+    expect(execute).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      content: [{ type: "text", text: "Tool call blocked by final input policy" }],
+      details: {
+        status: "blocked",
+        deniedReason: "final-tool-input-policy",
+        reason: "Tool call blocked by final input policy",
+      },
+    });
+    expect(result).not.toHaveProperty("authorizationPolicy");
+    expect(JSON.stringify(result)).not.toContain("command.destructive");
+    expect(JSON.stringify(result)).not.toContain("test-final-input-policy");
+
+    const securityEvents = trustedEvents.filter(
+      (event): event is Extract<DiagnosticEventPayload, { type: "security.event" }> =>
+        event.type === "security.event",
+    );
+    expect(securityEvents).toHaveLength(1);
+    expect(securityEvents[0]).toMatchObject({
+      category: "tool",
+      action: "tool.execution.blocked",
+      outcome: "denied",
+      reason: "final-tool-input-policy",
+      policy: {
+        id: "dangerous-command",
+        decision: "deny",
+        reason: "command.destructive",
+      },
+      control: { id: "final-tool-input-policy", family: "authorization" },
+      attributes: {
+        final_input_policy_plugin_id: "test-final-input-policy",
+        final_input_policy_outcome_kind: "deny",
+      },
+    });
+    expect(JSON.stringify(securityEvents[0])).not.toContain("rm -rf /");
+  });
+
+  it("reports final policy evaluator failures as host-owned error outcomes", async () => {
+    const evaluate = vi.fn<PluginFinalToolInputPolicyRegistration["evaluate"]>(() => {
+      throw new Error("plugin-controlled secret detail");
+    });
+    beforeToolCallHook = installBeforeToolCallHook({
+      finalToolInputPolicy: {
+        id: "failing-evaluator",
+        description: "fail closed on evaluator errors",
+        evaluate,
+      },
+    });
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const tool = wrapToolWithBeforeToolCallHook({
+      name: "read",
+      execute,
+    } as unknown as AnyAgentTool);
+    const trustedEvents: DiagnosticEventPayload[] = [];
+    const stop = onTrustedInternalDiagnosticEvent((event) => {
+      trustedEvents.push(event);
+    });
+
+    let result!: Awaited<ReturnType<typeof tool.execute>>;
+    try {
+      result = await tool.execute("call-final-policy-error", { path: "/tmp/private" });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    } finally {
+      stop();
+    }
+
+    expect(evaluate).toHaveBeenCalledTimes(1);
+    expect(execute).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      content: [{ type: "text", text: "Tool call blocked by final input policy" }],
+      details: {
+        status: "blocked",
+        deniedReason: "final-tool-input-policy",
+        reason: "Tool call blocked by final input policy",
+      },
+    });
+    const securityEvents = trustedEvents.filter(
+      (event): event is Extract<DiagnosticEventPayload, { type: "security.event" }> =>
+        event.type === "security.event",
+    );
+    expect(securityEvents).toHaveLength(1);
+    expect(securityEvents[0]).toMatchObject({
+      reason: "final-tool-input-policy",
+      policy: {
+        id: "failing-evaluator",
+        decision: "deny",
+        reason: "policy-evaluation-failed",
+      },
+      control: { id: "final-tool-input-policy", family: "authorization" },
+      attributes: {
+        final_input_policy_plugin_id: "test-final-input-policy",
+        final_input_policy_outcome_kind: "error",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("policy-evaluation-failed");
+    expect(JSON.stringify(securityEvents[0])).not.toContain("plugin-controlled secret detail");
+    expect(JSON.stringify(securityEvents[0])).not.toContain("/tmp/private");
+  });
+
+  it("rejects accessor input before final policy evaluation", async () => {
+    let getterReads = 0;
+    const evaluate = vi.fn<PluginFinalToolInputPolicyRegistration["evaluate"]>(() => ({
+      outcome: "pass",
+    }));
+    installBeforeToolCallHook({
+      finalToolInputPolicy: {
+        id: "accessor-input",
+        description: "must not evaluate accessor input",
+        evaluate,
+      },
+    });
+    const params = {};
+    Object.defineProperty(params, "path", {
+      enumerable: true,
+      get() {
+        getterReads += 1;
+        return "/tmp/private";
+      },
+    });
+
+    await expect(
+      runFinalToolInputPolicies({ toolName: "read", params }),
+    ).resolves.toMatchObject({ blocked: true });
+    expect(getterReads).toBe(0);
+    expect(evaluate).not.toHaveBeenCalled();
+  });
+
+  it("preserves hidden finalized execution state after final policy inspection", async () => {
+    const trustedState = Symbol("trusted-state");
+    const evaluate = vi.fn<PluginFinalToolInputPolicyRegistration["evaluate"]>((event) => {
+      const policyParams = event.params as Record<string | symbol, unknown>;
+      expect(policyParams.stage).toBe("finalized");
+      expect(policyParams[trustedState]).toBeUndefined();
+      expect(Object.hasOwn(policyParams, "preparedState")).toBe(false);
+      return { outcome: "pass" as const };
+    });
+    beforeToolCallHook = installBeforeToolCallHook({
+      finalToolInputPolicy: {
+        id: "inspect-finalized-input",
+        description: "inspect finalized public input",
+        evaluate,
+      },
+    });
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const sourceTool = {
+      name: "prepared_tool",
+      prepareBeforeToolCallParams: (params: unknown) => ({
+        ...(params as Record<string, unknown>),
+        stage: "prepared",
+      }),
+      finalizeBeforeToolCallParams: (params: unknown) => {
+        const finalized = params as Record<string | symbol, unknown>;
+        finalized.stage = "finalized";
+        Object.defineProperty(finalized, trustedState, {
+          enumerable: false,
+          value: "symbol-secret",
+        });
+        Object.defineProperty(finalized, "preparedState", {
+          enumerable: false,
+          value: "host-secret",
+        });
+        return finalized;
+      },
+      execute,
+    } as unknown as AnyAgentTool;
+    const tool = wrapToolWithBeforeToolCallHook(sourceTool);
+
+    await tool.execute("call-final-input-pass", { stage: "raw" });
+
+    expect(beforeToolCallHook).toHaveBeenCalledTimes(1);
+    expect(evaluate).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledTimes(1);
+    const executedParams = execute.mock.calls[0]?.[1] as Record<string | symbol, unknown>;
+    expect(executedParams.stage).toBe("finalized");
+    expect(executedParams[trustedState]).toBe("symbol-secret");
+    expect(executedParams.preparedState).toBe("host-secret");
+    expect(Object.getOwnPropertyDescriptor(executedParams, "preparedState")?.enumerable).toBe(
+      false,
     );
   });
 

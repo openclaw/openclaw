@@ -12,6 +12,15 @@ import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import {
+  clearContextEnginesForOwner,
+  getContextEngineRegistration,
+  listContextEngineIds,
+  registerContextEngineForOwner,
+  restoreContextEngineRuntimeQuarantines,
+  snapshotContextEngineRuntimeQuarantines,
+  type ContextEngineRegistration,
+} from "../context-engine/registry.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
@@ -364,8 +373,20 @@ class PluginLoadFailureError extends Error {
   }
 }
 
+type ContextEngineRegistrationSnapshot = {
+  id: string;
+  registration: ContextEngineRegistration;
+};
+
+type ContextEngineRuntimeStateSnapshot = {
+  contextEngines: ContextEngineRegistrationSnapshot[];
+  contextEngineQuarantines: ReturnType<typeof snapshotContextEngineRuntimeQuarantines>;
+};
+
 type CachedPluginState = {
   registry: PluginRegistry;
+  contextEngines: ContextEngineRegistrationSnapshot[];
+  contextEngineQuarantines: ReturnType<typeof snapshotContextEngineRuntimeQuarantines>;
   detachedTaskRuntimeRegistration: ReturnType<typeof getDetachedTaskLifecycleRuntimeRegistration>;
   commands?: ReturnType<typeof listRegisteredPluginCommands>;
   interactiveHandlers?: ReturnType<typeof listPluginInteractiveHandlers>;
@@ -429,6 +450,7 @@ export function clearPluginLoaderCache(): void {
 }
 
 export function clearActivatedPluginRuntimeState(): void {
+  clearPluginOwnedContextEngines();
   clearAgentHarnesses();
   clearPluginCommands();
   clearCompactionProviders();
@@ -437,6 +459,126 @@ export function clearActivatedPluginRuntimeState(): void {
   clearEmbeddingProviders();
   clearMemoryEmbeddingProviders();
   clearMemoryPluginState();
+}
+
+function clearPluginOwnedContextEngines(): void {
+  const owners = new Set(
+    listContextEngineIds()
+      .map((id) => getContextEngineRegistration(id)?.owner)
+      .filter((owner): owner is string => owner?.startsWith("plugin:") === true),
+  );
+  for (const owner of owners) {
+    clearContextEnginesForOwner(owner);
+  }
+}
+
+function snapshotPluginOwnedContextEngineRegistrations(): ContextEngineRegistrationSnapshot[] {
+  return listContextEngineIds().flatMap((id) => {
+    const registration = getContextEngineRegistration(id);
+    return registration?.owner.startsWith("plugin:") ? [{ id, registration }] : [];
+  });
+}
+
+function snapshotContextEngineRuntimeState(): ContextEngineRuntimeStateSnapshot {
+  const contextEngines = snapshotPluginOwnedContextEngineRegistrations();
+  const pluginEngineIds = new Set(contextEngines.map((entry) => entry.id));
+  return {
+    contextEngines,
+    contextEngineQuarantines: snapshotContextEngineRuntimeQuarantines().filter((entry) =>
+      pluginEngineIds.has(entry.engineId),
+    ),
+  };
+}
+
+function restoreContextEngineRuntimeState(snapshot: ContextEngineRuntimeStateSnapshot): void {
+  const currentPluginEngineIds = new Set(
+    snapshotPluginOwnedContextEngineRegistrations().map((entry) => entry.id),
+  );
+  const preservedQuarantines = snapshotContextEngineRuntimeQuarantines().filter(
+    (entry) => !currentPluginEngineIds.has(entry.engineId),
+  );
+  clearPluginOwnedContextEngines();
+  for (const { id, registration } of snapshot.contextEngines) {
+    const result = registerContextEngineForOwner(id, registration.factory, registration.owner, {
+      allowSameOwnerRefresh: true,
+      lifecycle: registration.lifecycle,
+    });
+    if (!result.ok) {
+      throw new Error(
+        `failed to restore context engine "${id}" owned by ${registration.owner}: ` +
+          `already owned by ${result.existingOwner}`,
+      );
+    }
+  }
+  restoreContextEngineRuntimeQuarantines([
+    ...preservedQuarantines,
+    ...snapshot.contextEngineQuarantines,
+  ]);
+}
+
+type ActivatedPluginRuntimeStateSnapshot = ContextEngineRuntimeStateSnapshot & {
+  agentHarnesses: ReturnType<typeof listRegisteredAgentHarnesses>;
+  commands: ReturnType<typeof listRegisteredPluginCommands>;
+  compactionProviders: ReturnType<typeof listRegisteredCompactionProviders>;
+  detachedTaskRuntimeRegistration: ReturnType<
+    typeof getDetachedTaskLifecycleRuntimeRegistration
+  >;
+  embeddingProviders: ReturnType<typeof listRegisteredEmbeddingProviders>;
+  interactiveHandlers: ReturnType<typeof listPluginInteractiveHandlers>;
+  memoryCapability: ReturnType<typeof getMemoryCapabilityRegistration>;
+  memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
+  memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
+  memoryPromptSupplements: ReturnType<typeof listMemoryPromptSupplements>;
+};
+
+function snapshotActivatedPluginRuntimeState(): ActivatedPluginRuntimeStateSnapshot {
+  return {
+    agentHarnesses: listRegisteredAgentHarnesses(),
+    commands: listRegisteredPluginCommands(),
+    compactionProviders: listRegisteredCompactionProviders(),
+    ...snapshotContextEngineRuntimeState(),
+    detachedTaskRuntimeRegistration: getDetachedTaskLifecycleRuntimeRegistration(),
+    embeddingProviders: listRegisteredEmbeddingProviders(),
+    interactiveHandlers: listPluginInteractiveHandlers(),
+    memoryCapability: getMemoryCapabilityRegistration(),
+    memoryCorpusSupplements: listMemoryCorpusSupplements(),
+    memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
+    memoryPromptSupplements: listMemoryPromptSupplements(),
+  };
+}
+
+function restoreActivatedPluginRuntimeState(
+  snapshot: ActivatedPluginRuntimeStateSnapshot,
+): void {
+  restoreRegisteredAgentHarnesses(snapshot.agentHarnesses);
+  restorePluginCommands(snapshot.commands);
+  restoreRegisteredCompactionProviders(snapshot.compactionProviders);
+  restoreContextEngineRuntimeState(snapshot);
+  restoreDetachedTaskLifecycleRuntimeRegistration(snapshot.detachedTaskRuntimeRegistration);
+  restorePluginInteractiveHandlers(snapshot.interactiveHandlers);
+  restoreRegisteredEmbeddingProviders(snapshot.embeddingProviders);
+  restoreRegisteredMemoryEmbeddingProviders(snapshot.memoryEmbeddingProviders);
+  restoreMemoryPluginState({
+    capability: snapshot.memoryCapability,
+    corpusSupplements: snapshot.memoryCorpusSupplements,
+    promptSupplements: snapshot.memoryPromptSupplements,
+  });
+}
+
+function refreshCachedActiveContextEngineRuntimeState(): void {
+  const activeRegistry = getActivePluginRegistry();
+  const activeCacheKey = getActivePluginRegistryKey();
+  if (!activeRegistry || !activeCacheKey) {
+    return;
+  }
+  const snapshot = snapshotContextEngineRuntimeState();
+  for (const cacheState of [pluginLoaderCacheState, fullWorkspacePluginLoaderCacheState]) {
+    const cached = cacheState.get(activeCacheKey);
+    if (cached?.registry === activeRegistry) {
+      cached.contextEngines = snapshot.contextEngines;
+      cached.contextEngineQuarantines = snapshot.contextEngineQuarantines;
+    }
+  }
 }
 
 export function clearPluginRegistryLoadCache(): void {
@@ -480,6 +622,7 @@ type PluginRegistrySnapshot = {
     codexAppServerExtensionFactories: PluginRegistry["codexAppServerExtensionFactories"];
     agentToolResultMiddlewares: PluginRegistry["agentToolResultMiddlewares"];
     trustedToolPolicies: PluginRegistry["trustedToolPolicies"];
+    finalToolInputPolicies: PluginRegistry["finalToolInputPolicies"];
     memoryEmbeddingProviders: PluginRegistry["memoryEmbeddingProviders"];
     agentHarnesses: PluginRegistry["agentHarnesses"];
     httpRoutes: PluginRegistry["httpRoutes"];
@@ -527,6 +670,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       codexAppServerExtensionFactories: [...registry.codexAppServerExtensionFactories],
       agentToolResultMiddlewares: [...registry.agentToolResultMiddlewares],
       trustedToolPolicies: [...registry.trustedToolPolicies],
+      finalToolInputPolicies: [...registry.finalToolInputPolicies],
       memoryEmbeddingProviders: [...registry.memoryEmbeddingProviders],
       agentHarnesses: [...registry.agentHarnesses],
       httpRoutes: [...registry.httpRoutes],
@@ -573,6 +717,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.codexAppServerExtensionFactories = snapshot.arrays.codexAppServerExtensionFactories;
   registry.agentToolResultMiddlewares = snapshot.arrays.agentToolResultMiddlewares;
   registry.trustedToolPolicies = snapshot.arrays.trustedToolPolicies;
+  registry.finalToolInputPolicies = snapshot.arrays.finalToolInputPolicies;
   registry.memoryEmbeddingProviders = snapshot.arrays.memoryEmbeddingProviders;
   registry.agentHarnesses = snapshot.arrays.agentHarnesses;
   registry.httpRoutes = snapshot.arrays.httpRoutes;
@@ -1123,7 +1268,18 @@ function buildActivationMetadataHash(params: {
     .map(([channelId]) => channelId)
     .toSorted((left, right) => left.localeCompare(right));
   const pluginEntryStates = Object.entries(params.activationSource.plugins.entries)
-    .map(([pluginId, entry]) => [pluginId, entry?.enabled ?? null] as const)
+    .map(
+      ([pluginId, entry]) =>
+        [
+          pluginId,
+          {
+            enabled: entry?.enabled ?? null,
+            requiredFinalToolInputPolicies: [
+              ...(entry?.requiredFinalToolInputPolicies ?? []),
+            ].toSorted((left, right) => left.localeCompare(right)),
+          },
+        ] as const,
+    )
     .toSorted(([left], [right]) => left.localeCompare(right));
   const autoEnableReasonEntries = Object.entries(params.autoEnabledReasons)
     .map(([pluginId, reasons]) => [pluginId, [...reasons]] as const)
@@ -1389,6 +1545,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const preferSetupRuntimeForChannelPlugins = options.preferSetupRuntimeForChannelPlugins === true;
   const forceFullRuntimeForChannelPlugins = options.forceFullRuntimeForChannelPlugins === true;
   const preferBuiltPluginArtifacts = options.preferBuiltPluginArtifacts === true;
+  const shouldActivate = options.activate !== false && options.mode !== "validate";
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = resolveCoreGatewayMethodNames(options);
   const installRecords = {
@@ -1421,7 +1578,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     runtimeSubagentMode,
     pluginSdkResolution: options.pluginSdkResolution,
     ...(coreGatewayMethodNames !== undefined && { coreGatewayMethodNames }),
-    activate: options.activate,
+    activate: shouldActivate,
   });
   return {
     env,
@@ -1437,7 +1594,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     preferSetupRuntimeForChannelPlugins,
     forceFullRuntimeForChannelPlugins,
     preferBuiltPluginArtifacts,
-    shouldActivate: options.activate !== false,
+    shouldActivate,
     shouldLoadModules: options.loadModules !== false,
     runtimeSubagentMode,
     installRecords,
@@ -1454,10 +1611,37 @@ function mergeTrustPluginConfigFromActivationSource(params: {
   const allow = mergePluginTrustList(params.normalized.allow, source.allow);
   const deny = mergePluginTrustList(params.normalized.deny, source.deny);
   const loadPaths = mergePluginTrustList(params.normalized.loadPaths, source.loadPaths);
+  const entryUpdates: NormalizedPluginsConfig["entries"] = {};
+  for (const [pluginId, sourceEntry] of Object.entries(source.entries)) {
+    const sourceRequirements = sourceEntry.requiredFinalToolInputPolicies ?? [];
+    if (sourceRequirements.length === 0) {
+      continue;
+    }
+    const runtimeEntry = params.normalized.entries[pluginId];
+    const runtimeRequirements = runtimeEntry?.requiredFinalToolInputPolicies ?? [];
+    const requiredFinalToolInputPolicies = [
+      ...new Set([...runtimeRequirements, ...sourceRequirements]),
+    ].toSorted((left, right) => left.localeCompare(right));
+    if (
+      requiredFinalToolInputPolicies.length === runtimeRequirements.length &&
+      requiredFinalToolInputPolicies.every((value, index) => value === runtimeRequirements[index])
+    ) {
+      continue;
+    }
+    entryUpdates[pluginId] = {
+      ...runtimeEntry,
+      requiredFinalToolInputPolicies,
+    };
+  }
+  const entries =
+    Object.keys(entryUpdates).length === 0
+      ? params.normalized.entries
+      : { ...params.normalized.entries, ...entryUpdates };
   if (
     allow === params.normalized.allow &&
     deny === params.normalized.deny &&
-    loadPaths === params.normalized.loadPaths
+    loadPaths === params.normalized.loadPaths &&
+    entries === params.normalized.entries
   ) {
     return params.normalized;
   }
@@ -1466,6 +1650,7 @@ function mergeTrustPluginConfigFromActivationSource(params: {
     allow,
     deny,
     loadPaths,
+    entries,
   };
 }
 
@@ -1809,6 +1994,131 @@ function maybeThrowOnPluginLoadError(
   throw new PluginLoadFailureError(registry);
 }
 
+function getRequiredFinalToolInputPolicyIds(record: PluginRecord): string[] {
+  if (
+    !record.enabled ||
+    (record.origin !== "bundled" && record.explicitlyEnabled !== true)
+  ) {
+    return [];
+  }
+  return [...new Set(record.contracts?.finalToolInputPolicies ?? [])];
+}
+
+function getMissingFinalToolInputPolicyIds(
+  registry: PluginRegistry,
+  record: PluginRecord,
+): string[] {
+  const requiredIds = getRequiredFinalToolInputPolicyIds(record);
+  if (requiredIds.length === 0) {
+    return [];
+  }
+  const registeredIds = new Set(
+    registry.finalToolInputPolicies
+      .filter((registration) => registration.pluginId === record.id)
+      .map((registration) => registration.policy.id),
+  );
+  return requiredIds.filter((id) => !registeredIds.has(id));
+}
+
+function assertDeclaredFinalToolInputPoliciesRegistered(
+  registry: PluginRegistry,
+  record: PluginRecord,
+): void {
+  const missingIds = getMissingFinalToolInputPolicyIds(registry, record);
+  if (missingIds.length === 0) {
+    return;
+  }
+  throw new Error(
+    `plugin "${record.id}" did not register declared final tool input policies: ${missingIds.join(", ")}`,
+  );
+}
+
+// Manifest declarations are runtime requirements, not optional capabilities.
+// Validate again at activation so stale/corrupt cache entries cannot drop the
+// final veto layer after registration-time checks passed.
+function assertStrictFinalToolInputPolicies(
+  registry: PluginRegistry,
+  config: NormalizedPluginsConfig,
+): void {
+  type Failure = {
+    status?: PluginRecord["status"] | "missing";
+    undeclared: Set<string>;
+    unregistered: Set<string>;
+  };
+  const failures = new Map<string, Failure>();
+  const getFailure = (pluginId: string): Failure => {
+    const existing = failures.get(pluginId);
+    if (existing) {
+      return existing;
+    }
+    const created = { undeclared: new Set<string>(), unregistered: new Set<string>() };
+    failures.set(pluginId, created);
+    return created;
+  };
+  for (const record of registry.plugins) {
+    const requiredIds = getRequiredFinalToolInputPolicyIds(record);
+    if (requiredIds.length === 0) {
+      continue;
+    }
+    const missingIds = getMissingFinalToolInputPolicyIds(registry, record);
+    if (record.status === "loaded" && missingIds.length === 0) {
+      continue;
+    }
+    const failure = getFailure(record.id);
+    failure.status = record.status;
+    for (const id of missingIds) {
+      failure.unregistered.add(id);
+    }
+  }
+  const registeredByPlugin = new Map<string, Set<string>>();
+  for (const registration of registry.finalToolInputPolicies) {
+    const ids = registeredByPlugin.get(registration.pluginId) ?? new Set<string>();
+    ids.add(registration.policy.id);
+    registeredByPlugin.set(registration.pluginId, ids);
+  }
+  for (const [pluginId, entry] of Object.entries(config.entries)) {
+    const requiredIds = entry.requiredFinalToolInputPolicies ?? [];
+    if (requiredIds.length === 0) {
+      continue;
+    }
+    const records = registry.plugins.filter((record) => record.id === pluginId);
+    const record = records.find((candidate) => candidate.status === "loaded") ?? records[0];
+    const declaredIds = new Set(record?.contracts?.finalToolInputPolicies ?? []);
+    const registeredIds = registeredByPlugin.get(pluginId) ?? new Set<string>();
+    const undeclaredIds = requiredIds.filter((id) => !declaredIds.has(id));
+    const unregisteredIds = requiredIds.filter((id) => !registeredIds.has(id));
+    if (record?.status === "loaded" && undeclaredIds.length === 0 && unregisteredIds.length === 0) {
+      continue;
+    }
+    const failure = getFailure(pluginId);
+    failure.status = record?.status ?? "missing";
+    for (const id of undeclaredIds) {
+      failure.undeclared.add(id);
+    }
+    for (const id of unregisteredIds) {
+      failure.unregistered.add(id);
+    }
+  }
+  if (failures.size === 0) {
+    return;
+  }
+  const descriptions = [...failures.entries()].map(([pluginId, failure]) => {
+    const details = [
+      `status=${failure.status ?? "missing"}`,
+      ...(failure.undeclared.size > 0
+        ? [`undeclared=${[...failure.undeclared].join(",")}`]
+        : []),
+      ...(failure.unregistered.size > 0
+        ? [`unregistered=${[...failure.unregistered].join(",")}`]
+        : []),
+    ];
+    return `${pluginId} (${details.join("; ")})`;
+  });
+  throw new Error(
+    `required final tool input policies unavailable: ${descriptions.join("; ")}`,
+  );
+}
+
 function activatePluginRegistry(
   registry: PluginRegistry,
   cacheKey: string,
@@ -1827,7 +2137,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const requestedOnlyPluginIdSet = createPluginIdScopeSet(requestedOnlyPluginIds);
   if (requestedOnlyPluginIdSet && requestedOnlyPluginIdSet.size === 0) {
     const emptyRegistry = createEmptyPluginRegistry();
-    if (options.activate !== false) {
+    const emptyLoadContext = resolvePluginLoadCacheContext(options);
+    if (emptyLoadContext.shouldActivate && options.mode !== "validate") {
+      assertStrictFinalToolInputPolicies(emptyRegistry, emptyLoadContext.normalized);
+    }
+    if (emptyLoadContext.shouldActivate) {
+      refreshCachedActiveContextEngineRuntimeState();
       clearActivatedPluginRuntimeState();
       activatePluginRegistry(
         emptyRegistry,
@@ -1862,6 +2177,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const logger = options.logger ?? defaultLogger();
   const validateOnly = options.mode === "validate";
   const onlyPluginIdSet = createPluginIdScopeSet(onlyPluginIds);
+  const previousActivatedRuntimeState = shouldActivate
+    ? snapshotActivatedPluginRuntimeState()
+    : undefined;
+  let rollbackActiveLoadGlobalSideEffects: (() => void) | undefined;
 
   const cacheEnabled = options.cache !== false && options.resolveRawConfigEnvVars !== true;
   if (cacheEnabled) {
@@ -1872,29 +2191,41 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       options,
     });
     if (cached) {
-      if (shouldActivate) {
-        restoreRegisteredAgentHarnesses(cached.state.agentHarnesses);
-        restorePluginCommands(cached.state.commands ?? []);
-        restoreRegisteredCompactionProviders(cached.state.compactionProviders);
-        restoreDetachedTaskLifecycleRuntimeRegistration(
-          cached.state.detachedTaskRuntimeRegistration,
-        );
-        restorePluginInteractiveHandlers(cached.state.interactiveHandlers ?? []);
-        restoreRegisteredEmbeddingProviders(cached.state.embeddingProviders);
-        restoreRegisteredMemoryEmbeddingProviders(cached.state.memoryEmbeddingProviders);
-        restoreMemoryPluginState({
-          capability: cached.state.memoryCapability,
-          corpusSupplements: cached.state.memoryCorpusSupplements,
-          promptSupplements: cached.state.memoryPromptSupplements,
-        });
-        activatePluginRegistry(
-          cached.state.registry,
-          cached.cacheKey,
-          cached.runtimeSubagentMode,
-          options.workspaceDir,
-        );
+      try {
+        if (shouldActivate && !validateOnly) {
+          assertStrictFinalToolInputPolicies(cached.state.registry, normalized);
+        }
+        if (shouldActivate) {
+          refreshCachedActiveContextEngineRuntimeState();
+          restoreContextEngineRuntimeState(cached.state);
+          restoreRegisteredAgentHarnesses(cached.state.agentHarnesses);
+          restorePluginCommands(cached.state.commands ?? []);
+          restoreRegisteredCompactionProviders(cached.state.compactionProviders);
+          restoreDetachedTaskLifecycleRuntimeRegistration(
+            cached.state.detachedTaskRuntimeRegistration,
+          );
+          restorePluginInteractiveHandlers(cached.state.interactiveHandlers ?? []);
+          restoreRegisteredEmbeddingProviders(cached.state.embeddingProviders);
+          restoreRegisteredMemoryEmbeddingProviders(cached.state.memoryEmbeddingProviders);
+          restoreMemoryPluginState({
+            capability: cached.state.memoryCapability,
+            corpusSupplements: cached.state.memoryCorpusSupplements,
+            promptSupplements: cached.state.memoryPromptSupplements,
+          });
+          activatePluginRegistry(
+            cached.state.registry,
+            cached.cacheKey,
+            cached.runtimeSubagentMode,
+            options.workspaceDir,
+          );
+        }
+        return cached.state.registry;
+      } catch (error) {
+        if (previousActivatedRuntimeState) {
+          restoreActivatedPluginRuntimeState(previousActivatedRuntimeState);
+        }
+        throw error;
       }
-      return cached.state.registry;
     }
   }
   pluginLoaderCacheState.beginLoad(cacheKey);
@@ -1902,6 +2233,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     // Clear previously registered plugin state before reloading.
     // Skip for non-activating (snapshot) loads to avoid wiping commands from other plugins.
     if (shouldActivate) {
+      refreshCachedActiveContextEngineRuntimeState();
       clearActivatedPluginRuntimeState();
     }
 
@@ -2002,6 +2334,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       registry,
       createApi,
       rollbackPluginGlobalSideEffects,
+      assertNoFinalToolInputPolicyRegistrationFailures,
       registerReload,
       registerNodeHostCommand,
       registerSecurityAuditCollector,
@@ -2017,6 +2350,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }),
       activateGlobalSideEffects: shouldActivate,
     });
+    rollbackActiveLoadGlobalSideEffects = () => {
+      const pluginIds = [...new Set(registry.plugins.map((record) => record.id))];
+      for (const pluginId of pluginIds.toReversed()) {
+        rollbackPluginGlobalSideEffects(pluginId);
+      }
+    };
 
     const suppliedManifestRegistry = options.manifestRegistry;
     const discovery = suppliedManifestRegistry
@@ -2267,6 +2606,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         scopedSetupOnlyChannelPluginRequested &&
         (candidate.origin !== "workspace" || enableState.enabled) &&
         (!requireSetupEntryForSetupOnlyChannelPlugins || Boolean(manifestRecord.setupSource));
+      const requiresFinalToolInputPolicies =
+        getRequiredFinalToolInputPolicyIds(record).length > 0;
+      // Setup entries intentionally omit full runtime hooks. A declared final
+      // input policy therefore owns a full-runtime startup requirement.
       const registrationPlan = resolvePluginRegistrationPlan({
         canLoadScopedSetupOnlyChannelPlugin,
         scopedSetupOnlyChannelPluginRequested,
@@ -2278,10 +2621,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         manifestRecord,
         cfg,
         env,
-        preferSetupRuntimeForChannelPlugins: forceFullRuntimeForChannelPlugins
+        preferSetupRuntimeForChannelPlugins:
+          forceFullRuntimeForChannelPlugins || requiresFinalToolInputPolicies
           ? false
           : preferSetupRuntimeForChannelPlugins,
-        forceFullRuntimeForChannelPlugins,
+        forceFullRuntimeForChannelPlugins:
+          forceFullRuntimeForChannelPlugins || requiresFinalToolInputPolicies,
         toolDiscovery: options.toolDiscovery === true,
       });
 
@@ -2863,7 +3208,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         withProfile(
           { pluginId: record.id, source: record.source },
           `${registrationMode}:register`,
-          () => runPluginRegisterSync(register, api),
+          () => {
+            runPluginRegisterSync(register, api);
+            assertNoFinalToolInputPolicyRegistrationFailures(record);
+            assertDeclaredFinalToolInputPoliciesRegistered(registry, record);
+          },
         );
         // Snapshot loads should not replace process-global runtime prompt state.
         if (!shouldActivate) {
@@ -2941,6 +3290,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       env,
     });
 
+    if (shouldActivate && !validateOnly) {
+      assertStrictFinalToolInputPolicies(registry, normalized);
+    }
     maybeThrowOnPluginLoadError(registry, options.throwOnLoadError);
 
     if (shouldActivate && options.mode !== "validate") {
@@ -2959,6 +3311,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         cacheKey,
         {
           commands: listRegisteredPluginCommands(),
+          ...snapshotContextEngineRuntimeState(),
           detachedTaskRuntimeRegistration: getDetachedTaskLifecycleRuntimeRegistration(),
           interactiveHandlers: listPluginInteractiveHandlers(),
           memoryCapability: getMemoryCapabilityRegistration(),
@@ -2977,6 +3330,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       activatePluginRegistry(registry, cacheKey, runtimeSubagentMode, options.workspaceDir);
     }
     return registry;
+  } catch (error) {
+    rollbackActiveLoadGlobalSideEffects?.();
+    if (previousActivatedRuntimeState) {
+      restoreActivatedPluginRuntimeState(previousActivatedRuntimeState);
+    }
+    throw error;
   } finally {
     pluginLoaderCacheState.finishLoad(cacheKey);
   }
