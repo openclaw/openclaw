@@ -36,10 +36,9 @@ export function resolveSessionModelRef(
   }
   const runtimeProvider = normalizeOptionalString(entry?.modelProvider);
   const runtimeModel = normalizeOptionalString(entry?.model);
-  if (runtimeProvider && runtimeModel) {
-    return { provider: runtimeProvider, model: runtimeModel };
-  }
 
+  // Resolve from agent config or built-in defaults so we can detect stale
+  // runtime metadata after a config hot-reload.
   const resolved = agentId
     ? resolveDefaultModelForAgent({
         cfg,
@@ -53,10 +52,33 @@ export function resolveSessionModelRef(
         allowPluginNormalization: options?.allowPluginNormalization,
       });
 
+  if (runtimeProvider && runtimeModel) {
+    if (!agentId) {
+      return { provider: runtimeProvider, model: runtimeModel };
+    }
+    // agentId available, no overrides — runtime metadata is default-derived
+    // and may be stale after a config hot-reload. Return the cached values
+    // only when they still match the current agent default (not stale).
+    if (runtimeProvider === resolved.provider && runtimeModel === resolved.model) {
+      return { provider: runtimeProvider, model: runtimeModel };
+    }
+    // Runtime metadata differs from current default — stale after a config
+    // hot-reload. Fall through to use the freshly resolved default.
+  }
+
+  // runtimeProvider/runtimeModel that is present but stale must not reach
+  // resolvePersistedModelRef — it returns runtime before defaults.
+  const skipStaleRuntime =
+    agentId != null &&
+    runtimeProvider != null &&
+    runtimeModel != null &&
+    !normalizedOverride.providerOverride &&
+    !normalizedOverride.modelOverride;
+
   const persisted = resolvePersistedSelectedModelRef({
     defaultProvider: resolved.provider || DEFAULT_PROVIDER,
-    runtimeProvider,
-    runtimeModel,
+    runtimeProvider: skipStaleRuntime ? undefined : runtimeProvider,
+    runtimeModel: skipStaleRuntime ? undefined : runtimeModel,
     overrideProvider: normalizedOverride.providerOverride,
     overrideModel: normalizedOverride.modelOverride,
     allowPluginNormalization: options?.allowPluginNormalization,
