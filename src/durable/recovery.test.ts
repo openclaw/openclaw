@@ -476,6 +476,36 @@ describe("durable runtime recovery", () => {
         "subagent.child.result_mailbox_queued",
         "fan_in.ready",
       ]);
+      const wakes = store.listDurableWakes({ status: "pending" });
+      expect(wakes.every((wake) => wake.parentRunId === undefined)).toBe(true);
+      expect(wakes.every((wake) => wake.parentSessionKey === undefined)).toBe(true);
+      expect(wakes).toEqual([
+        expect.objectContaining({
+          reason: "child_terminal",
+          sourceRunId: child.runtimeRunId,
+          targetKind: "agent_session",
+          targetRef: "agent:bo:parent",
+          targetResolutionStatus: "resolved",
+          targetResolutionReason: "delegation_subagent_child",
+          dedupeKey: `wake:v1:child-terminal:${parent.runtimeRunId}:subagents:${child.runtimeRunId}`,
+          metadata: expect.objectContaining({
+            evidence: expect.objectContaining({
+              kind: "subagent_child_terminal",
+              terminalOutcome: "lost",
+              recoveryReason: "gateway_startup_reconciliation",
+            }),
+          }),
+        }),
+      ]);
+
+      expect(
+        reconcileDurableSubagentRunsOnGatewayStartup({
+          store,
+          processInstanceId: "process-subagent-startup",
+          now: 300,
+        }),
+      ).toEqual({ scanned: 0, markedLost: 0 });
+      expect(store.listDurableWakes({ status: "pending" })).toHaveLength(1);
     } finally {
       store.close();
       fs.rmSync(dir, { recursive: true, force: true });

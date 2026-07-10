@@ -227,6 +227,24 @@ describe("durable subagent bridge", () => {
           }),
         }),
       );
+      expect(assertStore.listDurableWakes({ status: "pending" })).toEqual([
+        expect.objectContaining({
+          reason: "no_handler",
+          sourceRunId: child?.runtimeRunId,
+          targetKind: "operator",
+          targetRef: "operator",
+          targetResolutionStatus: "missing",
+          targetResolutionReason: "explicit_work_owner_missing",
+          dedupeKey: `wake:v1:subagent-parent-binding-missing:${child?.runtimeRunId}`,
+          metadata: expect.objectContaining({
+            evidence: expect.objectContaining({
+              kind: "subagent_parent_binding_missing",
+              requesterRunId: "run_parent_current_not_recorded",
+              reason: "requester_run_id_not_found",
+            }),
+          }),
+        }),
+      ]);
     } finally {
       assertStore.close();
       fs.rmSync(dir, { recursive: true, force: true });
@@ -933,6 +951,13 @@ describe("durable subagent bridge", () => {
       summary: "done",
       env,
     });
+    recordDurableSubagentTerminal({
+      runId: "run_child_failed_delivery",
+      childSessionKey: "agent:bo:subagent:failed-delivery-child",
+      status: "ok",
+      summary: "done",
+      env,
+    });
     recordDurableSubagentAnnounceDelivery({
       runId: "run_child_failed_delivery",
       childSessionKey: "agent:bo:subagent:failed-delivery-child",
@@ -993,6 +1018,43 @@ describe("durable subagent bridge", () => {
           eventType: "result_mailbox.delivery_failed",
         }),
       );
+      const wakes = assertStore.listDurableWakes({ status: "pending" });
+      expect(wakes.every((wake) => wake.parentRunId === undefined)).toBe(true);
+      expect(wakes.every((wake) => wake.parentSessionKey === undefined)).toBe(true);
+      expect(wakes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            reason: "child_terminal",
+            targetKind: "agent_session",
+            targetRef: parentSessionKey,
+            ownerKind: "agent_session",
+            ownerRef: parentSessionKey,
+            targetResolutionStatus: "resolved",
+            targetResolutionReason: "delegation_subagent_child",
+            metadata: expect.objectContaining({
+              evidence: expect.objectContaining({
+                kind: "subagent_child_terminal",
+                terminalOutcome: "succeeded",
+              }),
+            }),
+          }),
+          expect.objectContaining({
+            reason: "delivery_unknown",
+            targetKind: "agent_session",
+            targetRef: parentSessionKey,
+            targetResolutionStatus: "resolved",
+            targetResolutionReason: "delegation_subagent_child",
+            metadata: expect.objectContaining({
+              evidence: expect.objectContaining({
+                kind: "subagent_announce_delivery_unknown",
+                path: "direct",
+                error: "gateway unavailable",
+              }),
+            }),
+          }),
+        ]),
+      );
+      expect(wakes.filter((wake) => wake.reason === "child_terminal")).toHaveLength(1);
     } finally {
       assertStore.close();
       fs.rmSync(dir, { recursive: true, force: true });
