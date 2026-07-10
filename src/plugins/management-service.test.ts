@@ -510,6 +510,67 @@ describe("plugin management service", () => {
     expect(mocks.persistInstall).not.toHaveBeenCalled();
   });
 
+  it("does not pin a runtime id when the hosted entry only exposes its package name", async () => {
+    const installRecord = {
+      source: "clawhub",
+      spec: "clawhub:@openclaw/bluebubbles",
+      installPath: "/tmp/extensions/bluebubbles",
+    };
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.officialCatalog.mockResolvedValue({
+      source: "hosted",
+      // Hosted feed row without a declared runtime id: the id falls back to
+      // the package name, which must not become an expectedPluginId pin.
+      entries: [
+        {
+          id: "@openclaw/bluebubbles",
+          title: "BlueBubbles",
+          state: "available",
+          publisher: { id: "openclaw", trust: "official" },
+          install: {
+            candidates: [{ sourceRef: "public-clawhub", package: "@openclaw/bluebubbles" }],
+          },
+        },
+      ],
+      feed: { schemaVersion: 1, id: "test", generatedAt: "now", sequence: 1, entries: [] },
+      metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
+    });
+    mocks.clawhubInstall.mockResolvedValue({
+      ok: true,
+      pluginId: "bluebubbles",
+      targetDir: "/tmp/extensions/bluebubbles",
+      extensions: ["index.js"],
+      packageName: "@openclaw/bluebubbles",
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "@openclaw/bluebubbles",
+        clawhubFamily: "code-plugin",
+      },
+    });
+    mocks.persistInstall.mockResolvedValue({});
+    mocks.refreshRegistry.mockResolvedValue(undefined);
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({
+        enabled: false,
+        id: "bluebubbles",
+        name: "BlueBubbles",
+        origin: "global",
+        installRecord,
+      }),
+    );
+
+    const result = await installManagedPlugin({
+      request: { source: "clawhub", packageName: "@openclaw/bluebubbles" },
+      env: {},
+    });
+
+    expect(mocks.clawhubInstall).toHaveBeenCalledWith(
+      expect.not.objectContaining({ expectedPluginId: expect.anything() }),
+    );
+    expect(result.plugin.id).toBe("bluebubbles");
+  });
+
   it("threads hosted ClawHub candidate integrity into official installs", async () => {
     mocks.readConfig.mockResolvedValue(configSnapshot());
     mocks.officialCatalog.mockResolvedValue({

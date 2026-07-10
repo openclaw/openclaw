@@ -336,11 +336,19 @@ export async function listManagedPlugins(params: {
     // Only externally installed plugins (tracked install record, non-bundled) can be removed.
     const removable =
       record.origin !== "bundled" && Boolean(metadata.index.installRecords[record.pluginId]);
+    // Prefer human labels over package specifiers: the registry backfills a
+    // missing manifest name with the npm package name, which is an install
+    // spec rather than a display name.
+    const manifestName =
+      manifest?.name && manifest.name !== record.packageName ? manifest.name : undefined;
+    const name = manifestName ?? manifest?.channelCatalogMeta?.label ?? record.pluginId;
+    const description =
+      manifest?.description ?? manifest?.channelCatalogMeta?.blurb ?? manifest?.packageDescription;
     return {
       id: record.pluginId,
-      name: manifest?.name ?? record.packageName ?? record.pluginId,
+      name,
       ...(record.packageName ? { packageName: record.packageName } : {}),
-      ...(manifest?.description ? { description: manifest.description } : {}),
+      ...(description ? { description } : {}),
       ...(record.packageVersion || manifest?.version
         ? { version: record.packageVersion ?? manifest?.version }
         : {}),
@@ -636,7 +644,10 @@ async function installFromClawHub(params: {
     params.snapshot.config,
     packageName,
   );
-  const expectedPluginId = official ? resolveOfficialExternalPluginId(official) : undefined;
+  const resolvedOfficialId = official ? resolveOfficialExternalPluginId(official) : undefined;
+  // Hosted feed entries without a declared runtime id fall back to their
+  // package name; pinning that would reject every legitimate install.
+  const expectedPluginId = resolvedOfficialId !== packageName ? resolvedOfficialId : undefined;
   const hostedOfficial = resolveHostedOfficialEntryByClawHubPackage(
     params.officialEntries,
     params.snapshot.config,
