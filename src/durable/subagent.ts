@@ -164,6 +164,20 @@ function isTerminalRunStatus(status: DurableRuntimeRunStatus): boolean {
   );
 }
 
+function isTerminalLinkStatus(status: DurableRuntimeLinkStatus): boolean {
+  return (
+    status === "succeeded" || status === "failed" || status === "cancelled" || status === "lost"
+  );
+}
+
+function isParentFanInComplete(params: {
+  store: DurableRuntimeStore;
+  parentRuntimeRunId: string;
+}): boolean {
+  const childLinks = params.store.listChildLinks(params.parentRuntimeRunId);
+  return childLinks.length > 0 && childLinks.every((link) => isTerminalLinkStatus(link.status));
+}
+
 function findRunByIdempotencyKey(params: {
   store: DurableRuntimeStore;
   operationKind: string;
