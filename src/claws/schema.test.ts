@@ -418,7 +418,7 @@ describe("buildClawAddPlan", () => {
     );
   });
 
-  it("blocks agent, configured workspace, MCP, and cron collisions", async () => {
+  it("blocks agent, configured workspace, and MCP collisions", async () => {
     const { source, workspace } = await createPlanSource();
     const plan = await buildClawAddPlan({
       manifest: requireManifest(),
@@ -428,7 +428,6 @@ describe("buildClawAddPlan", () => {
         existingAgentIds: ["github-triage"],
         existingWorkspacePaths: [workspace],
         existingMcpServerNames: ["github"],
-        existingCronJobIds: ["weekday-triage"],
       },
     });
 
@@ -438,9 +437,8 @@ describe("buildClawAddPlan", () => {
       "package_install_unavailable",
       "package_install_unavailable",
       "mcp_server_collision",
-      "cron_job_collision",
     ]);
-    expect(plan.summary.blockedActions).toBe(8);
+    expect(plan.summary.blockedActions).toBe(7);
   });
 
   it("uses an explicit unused agent id for every derived action", async () => {

@@ -19,7 +19,9 @@ afterEach(() => closeOpenClawStateDatabaseForTest());
 
 const packageIntegrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-async function fixture(params: { id?: string; name?: string; withFile?: boolean } = {}) {
+async function fixture(
+  params: { id?: string; name?: string; withFile?: boolean; withCron?: boolean } = {},
+) {
   const root = await mkdtemp(join(tmpdir(), "openclaw-claw-remove-"));
   if (params.withFile) {
     await writeFile(join(root, "SOUL.md"), "managed\n", "utf8");
@@ -28,6 +30,16 @@ async function fixture(params: { id?: string; name?: string; withFile?: boolean 
     schemaVersion: 1,
     agent: { id: params.id ?? "worker", name: "Worker" },
     workspace: params.withFile ? { bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } } } : {},
+    cronJobs: params.withCron
+      ? [
+          {
+            id: "daily-report",
+            schedule: { cron: "0 9 * * *" },
+            session: "isolated",
+            message: "Prepare report",
+          },
+        ]
+      : [],
   });
   if (!parsed.ok) {
     throw new Error(JSON.stringify(parsed.diagnostics));
@@ -50,7 +62,7 @@ async function fixture(params: { id?: string; name?: string; withFile?: boolean 
   return { root, plan, env: { OPENCLAW_STATE_DIR: join(root, "state") } };
 }
 
-async function addFixture(params: { withFile?: boolean } = {}) {
+async function addFixture(params: { withFile?: boolean; withCron?: boolean } = {}) {
   const current = await fixture(params);
   let config: OpenClawConfig = {};
   await applyClawAddPlan(current.plan, {
@@ -59,6 +71,7 @@ async function addFixture(params: { withFile?: boolean } = {}) {
     commitConfig: async (transform) => {
       config = transform(config);
     },
+    cronGateway: { add: async () => ({ id: "scheduler-daily" }) },
   });
   return { ...current, getConfig: () => config };
 }
@@ -187,6 +200,45 @@ describe("Claw status and remove", () => {
     await expect(readFile(join(current.plan.agent.workspace, "SOUL.md"), "utf8")).rejects.toThrow();
     await expect(readClawStatus("worker", { env: current.env, config })).resolves.toMatchObject({
       summary: { claws: 0 },
+    });
+  });
+
+  it("removes scheduler-owned cron jobs before agent config", async () => {
+    const current = await addFixture({ withCron: true });
+    const plan = await buildClawRemovePlan("worker", {
+      env: current.env,
+      config: current.getConfig(),
+    });
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "cronJob",
+        id: "daily-report",
+        action: "remove",
+        target: "scheduler-daily",
+      }),
+    );
+    let config = current.getConfig();
+    const order: string[] = [];
+    const result = await applyClawRemovePlan(plan, {
+      env: current.env,
+      config,
+      cronGateway: {
+        remove: async (id) => {
+          order.push(`cron:${id}`);
+          return { ok: true };
+        },
+      },
+      commitConfig: async (transform) => {
+        order.push("config");
+        config = transform(config);
+      },
+    });
+    expect(order).toEqual(["cron:scheduler-daily", "config"]);
+    expect(result).toMatchObject({
+      status: "complete",
+      cronJobs: [
+        { manifestId: "daily-report", schedulerJobId: "scheduler-daily", action: "removed" },
+      ],
     });
   });
 
