@@ -236,9 +236,9 @@ function buildCliMcpGrantContext(params: {
   const execSession = buildCliMcpExecSession(params.run.sessionEntry);
   const execOverrides = buildCliMcpExecOverrides(params.run.execOverrides);
   const channelContext = buildCliMcpChannelContext(params.run.channelContext, params.run.senderId);
-  const senderName = normalizeOptionalMcpContextValue(params.run.senderName);
-  const senderUsername = normalizeOptionalMcpContextValue(params.run.senderUsername);
-  const senderE164 = normalizeOptionalMcpContextValue(params.run.senderE164);
+  const senderName = normalizeOptionalMcpContextValue(params.run.senderName ?? undefined);
+  const senderUsername = normalizeOptionalMcpContextValue(params.run.senderUsername ?? undefined);
+  const senderE164 = normalizeOptionalMcpContextValue(params.run.senderE164 ?? undefined);
   const groupId = normalizeOptionalMcpContextValue(params.run.groupId ?? undefined);
   const groupChannel = normalizeOptionalMcpContextValue(params.run.groupChannel ?? undefined);
   const groupSpace = normalizeOptionalMcpContextValue(params.run.groupSpace ?? undefined);
@@ -926,9 +926,9 @@ export async function prepareCliRunContext(
               params.approvalReviewerDeviceId,
             ),
             channelContext: buildCliMcpChannelContext(params.channelContext, params.senderId),
-            senderName: normalizeOptionalMcpContextValue(params.senderName),
-            senderUsername: normalizeOptionalMcpContextValue(params.senderUsername),
-            senderE164: normalizeOptionalMcpContextValue(params.senderE164),
+            senderName: normalizeOptionalMcpContextValue(params.senderName ?? undefined),
+            senderUsername: normalizeOptionalMcpContextValue(params.senderUsername ?? undefined),
+            senderE164: normalizeOptionalMcpContextValue(params.senderE164 ?? undefined),
             groupId: normalizeOptionalMcpContextValue(params.groupId ?? undefined),
             groupChannel: normalizeOptionalMcpContextValue(params.groupChannel ?? undefined),
             groupSpace: normalizeOptionalMcpContextValue(params.groupSpace ?? undefined),
