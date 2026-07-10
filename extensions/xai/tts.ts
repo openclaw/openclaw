@@ -111,8 +111,9 @@ export function toXaiTtsWsUrl(params: {
   responseFormat: XaiTtsResponseFormat;
   speed?: number;
 }): string {
+  assertXaiNativeTtsStreamEndpoint(params.baseUrl);
   const url = new URL(normalizeXaiTtsBaseUrl(params.baseUrl));
-  url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
+  url.protocol = "wss:";
   const basePath = url.pathname.replace(/\/+$/, "");
   url.pathname = `${basePath}/tts`;
   url.searchParams.set("language", params.language);
@@ -129,16 +130,22 @@ function readXaiTtsStreamErrorMessage(event: XaiTtsStreamServerEvent): string {
   return message ?? "xAI TTS stream error";
 }
 
-function resolveXaiTtsStreamHostname(baseUrl: string): string {
+function parseXaiTtsStreamBaseUrl(baseUrl: string): URL {
   try {
-    return new URL(normalizeXaiTtsBaseUrl(baseUrl)).hostname.toLowerCase();
+    return new URL(normalizeXaiTtsBaseUrl(baseUrl));
   } catch {
     throw new Error(`Invalid xAI TTS stream baseUrl: ${baseUrl}`);
   }
 }
 
 export function assertXaiNativeTtsStreamEndpoint(baseUrl: string): void {
-  const hostname = resolveXaiTtsStreamHostname(baseUrl);
+  const url = parseXaiTtsStreamBaseUrl(baseUrl);
+  if (url.protocol !== "https:") {
+    throw new Error(
+      `xAI streaming TTS only supports HTTPS for the native ${XAI_NATIVE_TTS_STREAM_HOST} endpoint; got protocol "${url.protocol}"`,
+    );
+  }
+  const hostname = url.hostname.toLowerCase();
   if (hostname !== XAI_NATIVE_TTS_STREAM_HOST) {
     throw new Error(
       `xAI streaming TTS only supports the native ${XAI_NATIVE_TTS_STREAM_HOST} endpoint; got host "${hostname}"`,

@@ -155,6 +155,12 @@ describe("xai tts", () => {
       expect(() => assertXaiNativeTtsStreamEndpoint(XAI_BASE_URL)).not.toThrow();
     });
 
+    it("rejects the native host over HTTP", () => {
+      expect(() => assertXaiNativeTtsStreamEndpoint("http://api.x.ai/v1")).toThrow(
+        "only supports HTTPS for the native api.x.ai endpoint; got protocol \"http:\"",
+      );
+    });
+
     it("rejects non-native streaming hosts", () => {
       expect(() => assertXaiNativeTtsStreamEndpoint("https://proxy.example/v1")).toThrow(
         'only supports the native api.x.ai endpoint; got host "proxy.example"',
@@ -395,6 +401,21 @@ describe("xai tts", () => {
           timeoutMs: 5_000,
         }),
       ).rejects.toThrow('only supports the native api.x.ai endpoint; got host "proxy.example"');
+      expect(FakeWebSocket.instances).toHaveLength(0);
+    });
+
+    it("rejects HTTP native baseUrl before opening a WebSocket", async () => {
+      await expect(
+        xaiTTSStream({
+          text: "hello",
+          apiKey: "ok-key",
+          baseUrl: "http://api.x.ai/v1",
+          voiceId: "eve",
+          language: "en",
+          responseFormat: "mp3",
+          timeoutMs: 5_000,
+        }),
+      ).rejects.toThrow("only supports HTTPS for the native api.x.ai endpoint");
       expect(FakeWebSocket.instances).toHaveLength(0);
     });
 
