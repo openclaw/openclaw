@@ -92,9 +92,7 @@ describe("opencode-go provider plugin", () => {
       "kimi-k2.5",
       "kimi-k2.6",
       "kimi-k2.7-code",
-      "mimo-v2-omni",
       "mimo-v2.5",
-      "mimo-v2-pro",
       "mimo-v2.5-pro",
       "minimax-m2.5",
       "minimax-m2.7",
@@ -251,7 +249,7 @@ describe("opencode-go provider plugin", () => {
     const deepSeekPro = result.provider.models.find((model) => model.id === "deepseek-v4-pro");
     const glm52 = result.provider.models.find((model) => model.id === "glm-5.2");
 
-    expect(result.provider.models).toHaveLength(20);
+    expect(result.provider.models).toHaveLength(18);
     expect(deepSeekPro).toMatchObject({
       provider: "opencode-go",
       contextWindow: 1_000_000,
