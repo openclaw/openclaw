@@ -33,6 +33,7 @@ export type ExecuteNodeHostCommandParams = {
   ask: ExecAsk;
   autoReview?: boolean;
   autoReviewer?: ExecAutoReviewer;
+  signal?: AbortSignal;
   strictInlineEval?: boolean;
   commandHighlighting?: boolean;
   timeoutSec?: number;

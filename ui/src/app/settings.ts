@@ -66,6 +66,15 @@ export function normalizeChatSendShortcut(value: unknown): ChatSendShortcut {
     : "enter";
 }
 
+const CHAT_WORKSPACE_DOCKS = ["right", "bottom"] as const;
+export type ChatWorkspaceDock = (typeof CHAT_WORKSPACE_DOCKS)[number];
+
+export function normalizeChatWorkspaceDock(value: unknown): ChatWorkspaceDock {
+  return CHAT_WORKSPACE_DOCKS.includes(value as ChatWorkspaceDock)
+    ? (value as ChatWorkspaceDock)
+    : "right";
+}
+
 export function normalizeTextScale(value: unknown, fallback: TextScaleStop = 100): TextScaleStop {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return fallback;
@@ -97,6 +106,7 @@ export type UiSettings = {
   realtimeTalkInputDeviceId?: string;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   chatSplitLayout?: ChatSplitLayout;
+  chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
   sidebarPinnedRoutes: SidebarNavRoute[]; // Nav routes shown above the "More" section
@@ -104,6 +114,7 @@ export type UiSettings = {
   textScale?: TextScaleStop; // Browser-local text scale percentage
   customTheme?: ImportedCustomTheme;
   locale?: string;
+  lobsterPetVisits?: boolean; // Whether the sidebar lobster pet drops by (default true)
 };
 
 type LastActiveSessionHost = {
@@ -136,6 +147,7 @@ type ApplicationStartupSettings = {
   password: string | null;
   pendingGatewayUrl: string | null;
   pendingGatewayToken: string | null;
+  pendingBootstrapToken: string | null;
   queryTokenUsed: boolean;
   location: ApplicationStartupLocation;
   changed: boolean;
@@ -156,6 +168,7 @@ export function resolveApplicationStartupSettings(
   let password: string | null = null;
   let pendingGatewayUrl: string | null = null;
   let pendingGatewayToken: string | null = null;
+  let pendingBootstrapToken: string | null = null;
   let queryTokenUsed = false;
 
   const updateSettings = (patch: Partial<UiSettings>) => {
@@ -196,6 +209,7 @@ export function resolveApplicationStartupSettings(
       password,
       pendingGatewayUrl,
       pendingGatewayToken,
+      pendingBootstrapToken,
       queryTokenUsed,
       location,
       changed,
@@ -215,6 +229,8 @@ export function resolveApplicationStartupSettings(
   const hashToken = hashParams.get("token");
   const hasTokenParam = hashToken != null || queryToken != null;
   const token = normalizeOptionalString(hashToken ?? queryToken);
+  const hasBootstrapTokenParam = hashParams.has("bootstrapToken");
+  const bootstrapToken = normalizeOptionalString(hashParams.get("bootstrapToken"));
   const session = normalizeOptionalString(params.get("session") ?? hashParams.get("session"));
   const shouldResetSessionForToken = Boolean(token && !session && !gatewayUrlChanged);
   let shouldCleanUrl = false;
@@ -237,6 +253,12 @@ export function resolveApplicationStartupSettings(
       updateSettings({ token });
     }
     hashParams.delete("token");
+    shouldCleanUrl = true;
+  }
+
+  if (hasBootstrapTokenParam) {
+    pendingBootstrapToken = bootstrapToken ?? null;
+    hashParams.delete("bootstrapToken");
     shouldCleanUrl = true;
   }
 
@@ -264,6 +286,8 @@ export function resolveApplicationStartupSettings(
     pendingGatewayUrl = gatewayUrlChanged ? nextGatewayUrl : null;
     if (!gatewayUrlChanged) {
       pendingGatewayToken = null;
+    } else if (pendingBootstrapToken) {
+      pendingGatewayToken = null;
     }
     params.delete("gatewayUrl");
     hashParams.delete("gatewayUrl");
@@ -281,6 +305,7 @@ export function resolveApplicationStartupSettings(
     password,
     pendingGatewayUrl,
     pendingGatewayToken,
+    pendingBootstrapToken,
     queryTokenUsed,
     location: shouldCleanUrl
       ? {
@@ -581,6 +606,7 @@ export function loadSettings(): UiSettings {
           ? parsed.splitRatio
           : defaults.splitRatio,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
+      chatWorkspaceDock: normalizeChatWorkspaceDock(parsed.chatWorkspaceDock),
       navCollapsed:
         typeof parsed.navCollapsed === "boolean" ? parsed.navCollapsed : defaults.navCollapsed,
       navWidth:
@@ -598,6 +624,7 @@ export function loadSettings(): UiSettings {
       textScale: normalizeTextScale(parsed.textScale, defaults.textScale),
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
+      ...(parsed.lobsterPetVisits === false ? { lobsterPetVisits: false } : {}),
     };
     if (source.legacy || "token" in parsed) {
       persistSettings(settings, { selectGateway: true });
@@ -676,6 +703,8 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
       : {}),
     splitRatio: next.splitRatio,
     ...(next.chatSplitLayout ? { chatSplitLayout: next.chatSplitLayout } : {}),
+    // Right dock is the default; only the opt-in bottom dock persists.
+    ...(next.chatWorkspaceDock === "bottom" ? { chatWorkspaceDock: "bottom" as const } : {}),
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
     sidebarPinnedRoutes: next.sidebarPinnedRoutes,
@@ -684,6 +713,8 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     ...(next.customTheme ? { customTheme: next.customTheme } : {}),
     sessionsByGateway,
     ...(next.locale ? { locale: next.locale } : {}),
+    // Visits default on; only an explicit opt-out persists.
+    ...(next.lobsterPetVisits === false ? { lobsterPetVisits: false } : {}),
   };
   const serialized = JSON.stringify(persisted);
   try {
