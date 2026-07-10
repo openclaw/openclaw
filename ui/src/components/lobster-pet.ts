@@ -6,6 +6,7 @@
 // every new session hatches a slightly different lobster.
 import { html, LitElement, nothing, svg, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
+import { getSafeLocalStorage } from "../local-storage.ts";
 import {
   LOBSTER_FAMILIARITY_TUNING,
   getLobsterFamiliarity,
@@ -403,6 +404,28 @@ export function strangerLookFor(seed: number, own: LobsterPetPaletteId): Lobster
   return createLobsterPetLook((seed + 1) >>> 0);
 }
 
+// The pet notices gateway upgrades: the first page load on a new version, it
+// shows up carrying a bindle (moving day). The very first version sighting
+// only records a baseline - no bindle without a previous home.
+const MOVING_DAY_KEY = "openclaw.control.lobsterpet.gatewayVersion.v1";
+
+function detectLobsterMovingDay(version: string): boolean {
+  try {
+    const storage = getSafeLocalStorage();
+    if (!storage) {
+      return false;
+    }
+    const previous = storage.getItem(MOVING_DAY_KEY);
+    if (previous === version) {
+      return false;
+    }
+    storage.setItem(MOVING_DAY_KEY, version);
+    return previous !== null;
+  } catch {
+    return false;
+  }
+}
+
 // Late-night visitors are always sleepy, whatever their daytime personality.
 export function isLobsterNightTime(now: Date = new Date()): boolean {
   const hour = now.getHours();
@@ -663,6 +686,18 @@ const TAIL_FAN = svg`
   </g>
 `;
 
+// Moving-day bindle: a stick over the shoulder with a polka-dot bundle,
+// carried for the whole first load after a gateway upgrade.
+const BINDLE = svg`
+  <g class="lob-bindle">
+    <path d="M70 62 L99 30" stroke="#8a5a2b" stroke-width="3.5" stroke-linecap="round" />
+    <circle cx="101" cy="27" r="9.5" fill="#e8b04b" />
+    <circle cx="98" cy="24" r="1.6" fill="#b6791f" />
+    <circle cx="104" cy="29" r="1.6" fill="#b6791f" />
+    <circle cx="100" cy="32" r="1.3" fill="#b6791f" />
+  </g>
+`;
+
 // Shown while grumpy (poked too much): angry brows and a frown.
 const GRUMPY_FACE = svg`
   <g stroke="#0a1014" stroke-linecap="round" fill="none">
@@ -730,7 +765,13 @@ export function renderCrabSvg() {
 // with stubby legs, side claws, antennae, and teal-glint eyes.
 export function renderLobsterSvg(
   look: LobsterPetLook,
-  options: { grumpy?: boolean; shell?: boolean; sleeping?: boolean; standalone?: boolean } = {},
+  options: {
+    grumpy?: boolean;
+    shell?: boolean;
+    sleeping?: boolean;
+    standalone?: boolean;
+    bindle?: boolean;
+  } = {},
 ) {
   return svg`
     <svg
@@ -795,6 +836,10 @@ export function renderLobsterSvg(
       }
       ${options.grumpy && look.palette.id !== "retro" ? GRUMPY_FACE : nothing}
       ${look.accessory === "none" || options.shell ? nothing : ACCESSORY_SPRITES[look.accessory]}
+      ${
+        // The retro grail's mega claw owns the same shoulder; it moves light.
+        options.bindle && look.palette.id !== "retro" ? BINDLE : nothing
+      }
     </svg>
   `;
 }
@@ -809,6 +854,8 @@ export class LobsterPet extends LitElement {
 
   @property({ attribute: false }) visitsEnabled = true;
   @property({ attribute: false }) runOutcome: LobsterRunOutcome = "ok";
+  @property({ attribute: false }) soundsEnabled = false;
+  @property({ attribute: false }) gatewayVersion: string | null = null;
 
   @state() private act: LobsterPetAct | null = null;
   @state() private spotPct = 80;
@@ -821,6 +868,8 @@ export class LobsterPet extends LitElement {
   @state() private grumpy = false;
   @state() private vigil = false;
   @state() private passer: LobsterPasserPlan | null = null;
+  @state() private movingDay = false;
+  private movingDayChecked = false;
   @state() private shellVisible = false;
   private shellSpotPct = 50;
   private shellScale = 2;
@@ -845,6 +894,7 @@ export class LobsterPet extends LitElement {
   private vigilTimer: number | null = null;
   private holdTimer: number | null = null;
   private holdPetted = false;
+  private audioCtx: AudioContext | null = null;
   private pokeTimes: number[] = [];
   private lastGazeAt = 0;
   private restartPending = false;
@@ -876,6 +926,10 @@ export class LobsterPet extends LitElement {
     this.holdTimer = null;
     this.passerTimer = null;
     this.passerEndTimer = null;
+    if (this.audioCtx) {
+      this.audioCtx.close().catch(() => {});
+      this.audioCtx = null;
+    }
     document.removeEventListener("pointermove", this.handleGaze);
     super.disconnectedCallback();
   }
@@ -938,6 +992,12 @@ export class LobsterPet extends LitElement {
               : "cheer";
         this.performAct(finished ? finishAct : "startle");
       }
+    }
+    // Moving day latches once per load, as soon as the gateway version is
+    // known (the hello can land after the first render).
+    if (!this.movingDayChecked && this.gatewayVersion) {
+      this.movingDayChecked = true;
+      this.movingDay = detectLobsterMovingDay(this.gatewayVersion);
     }
     this.reconcilePresence();
   }
@@ -1027,6 +1087,7 @@ export class LobsterPet extends LitElement {
       this.holdTimer = null;
       this.holdPetted = true;
       this.grumpy = false;
+      this.playChirp("pet");
       this.performAct("pet");
     }, 600);
   };
@@ -1050,7 +1111,48 @@ export class LobsterPet extends LitElement {
     this.holdPetted = false;
   };
 
+  // Opt-in (default off) tiny synth chirps: a descending blub for pokes, a
+  // rising coo for pets. Only ever called from pointer gestures, so the
+  // AudioContext is created inside a user activation and never blocked by
+  // autoplay policy. Sound is decoration - any audio failure is swallowed.
+  private playChirp(kind: "poke" | "pet") {
+    if (!this.soundsEnabled) {
+      return;
+    }
+    try {
+      const Ctor = window.AudioContext;
+      if (!Ctor) {
+        return;
+      }
+      this.audioCtx ??= new Ctor();
+      const ctx = this.audioCtx;
+      if (ctx.state === "suspended") {
+        void ctx.resume();
+      }
+      const at = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      if (kind === "poke") {
+        osc.frequency.setValueAtTime(330, at);
+        osc.frequency.exponentialRampToValueAtTime(165, at + 0.09);
+      } else {
+        osc.frequency.setValueAtTime(392, at);
+        osc.frequency.exponentialRampToValueAtTime(523, at + 0.18);
+      }
+      gain.gain.setValueAtTime(0.0001, at);
+      gain.gain.exponentialRampToValueAtTime(0.05, at + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + (kind === "poke" ? 0.12 : 0.24));
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(at);
+      osc.stop(at + 0.26);
+    } catch {
+      // never let audio break the pet
+    }
+  }
+
   private pokeNow() {
+    this.playChirp("poke");
     const now = Date.now();
     this.pokeTimes = [...this.pokeTimes.filter((at) => now - at < 6000), now];
     if (this.pokeTimes.length >= 10 && this.mode !== "offline") {
@@ -1389,19 +1491,22 @@ export class LobsterPet extends LitElement {
       ? `${this.spriteStyle(look, scale, spotPct, this.facing === 1 ? -1 : 1)};--lob-act-delay:0.18s`
       : this.spriteStyle(look, scale, spotPct, this.facing);
     const name = lobsterPetName(look, this.seed);
+    // The twin travels light; only the resident pet hauls the moving bindle.
+    const bindle = this.movingDay && !twin;
+    const title = twin ? `${name} Jr.` : bindle ? `${name} · just moved in` : name;
     return html`
       <div
         class=${classes}
         style=${style}
         aria-hidden="true"
-        title=${twin ? `${name} Jr.` : name}
+        title=${title}
         @pointerdown=${this.handleHoldStart}
         @pointerup=${this.handleHoldEnd}
         @pointerleave=${this.handleHoldCancel}
         @contextmenu=${this.handleShoo}
       >
         <div class="lobster-pet__body">
-          ${renderLobsterSvg(look, { grumpy: this.grumpy })}
+          ${renderLobsterSvg(look, { grumpy: this.grumpy, bindle })}
           <span class="lobster-pet__z" style="--i:0">z</span>
           <span class="lobster-pet__z" style="--i:1">z</span>
           <span class="lobster-pet__z" style="--i:2">Z</span>
