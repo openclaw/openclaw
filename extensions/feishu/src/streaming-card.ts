@@ -529,9 +529,6 @@ export class FeishuStreamingSession {
       );
       if (sent && this.state) {
         this.state.sentText = nextText;
-      } else if (this.state && this.pendingText === null) {
-        // Retain a failed full snapshot for the next update or close retry.
-        this.pendingText = nextText;
       }
     });
     await this.queue;
