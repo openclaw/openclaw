@@ -92,6 +92,142 @@ describe("resolveMemoryWikiStatus", () => {
     expect(status.warnings.map((warning) => warning.code)).toContain("bridge-artifacts-missing");
   });
 
+  it("filters bridgePublicArtifactCount by calling agentId", async () => {
+    const config = resolveMemoryWikiConfig(
+      {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+        },
+      },
+      { homedir: "/Users/tester" },
+    );
+
+    const appConfig = {
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: "/tmp/main" },
+          { id: "secondary", workspace: "/tmp/secondary" },
+        ],
+      },
+    } as OpenClawConfig;
+
+    // main caller sees only its own artifact, not the whole-system count
+    const mainStatus = await resolveMemoryWikiStatus(config, {
+      appConfig,
+      listPublicArtifacts: async () => [
+        {
+          kind: "memory-root",
+          workspaceDir: "/tmp/main",
+          relativePath: "MEMORY.md",
+          absolutePath: "/tmp/main/MEMORY.md",
+          agentIds: ["main"],
+          contentType: "markdown",
+        },
+        {
+          kind: "memory-root",
+          workspaceDir: "/tmp/secondary",
+          relativePath: "MEMORY.md",
+          absolutePath: "/tmp/secondary/MEMORY.md",
+          agentIds: ["secondary"],
+          contentType: "markdown",
+        },
+      ],
+      pathExists: async () => true,
+      resolveCommand: async () => null,
+      agentId: "main",
+    });
+
+    expect(mainStatus.bridgePublicArtifactCount).toBe(1);
+    expect(mainStatus.warnings.map((w) => w.code)).not.toContain("bridge-artifacts-missing");
+
+    // secondary caller sees only its own artifact
+    const secondaryStatus = await resolveMemoryWikiStatus(config, {
+      appConfig,
+      listPublicArtifacts: async () => [
+        {
+          kind: "memory-root",
+          workspaceDir: "/tmp/main",
+          relativePath: "MEMORY.md",
+          absolutePath: "/tmp/main/MEMORY.md",
+          agentIds: ["main"],
+          contentType: "markdown",
+        },
+        {
+          kind: "memory-root",
+          workspaceDir: "/tmp/secondary",
+          relativePath: "MEMORY.md",
+          absolutePath: "/tmp/secondary/MEMORY.md",
+          agentIds: ["secondary"],
+          contentType: "markdown",
+        },
+      ],
+      pathExists: async () => true,
+      resolveCommand: async () => null,
+      agentId: "secondary",
+    });
+
+    expect(secondaryStatus.bridgePublicArtifactCount).toBe(1);
+
+    // non-owning caller sees 0 and gets the missing-artifacts warning
+    const noMatchStatus = await resolveMemoryWikiStatus(config, {
+      appConfig,
+      listPublicArtifacts: async () => [
+        {
+          kind: "memory-root",
+          workspaceDir: "/tmp/main",
+          relativePath: "MEMORY.md",
+          absolutePath: "/tmp/main/MEMORY.md",
+          agentIds: ["main"],
+          contentType: "markdown",
+        },
+        {
+          kind: "memory-root",
+          workspaceDir: "/tmp/secondary",
+          relativePath: "MEMORY.md",
+          absolutePath: "/tmp/secondary/MEMORY.md",
+          agentIds: ["secondary"],
+          contentType: "markdown",
+        },
+      ],
+      pathExists: async () => true,
+      resolveCommand: async () => null,
+      agentId: "third-agent",
+    });
+
+    expect(noMatchStatus.bridgePublicArtifactCount).toBe(0);
+    expect(noMatchStatus.warnings.map((w) => w.code)).toContain("bridge-artifacts-missing");
+
+    // no agentId (CLI path) keeps the global count
+    const globalStatus = await resolveMemoryWikiStatus(config, {
+      appConfig,
+      listPublicArtifacts: async () => [
+        {
+          kind: "memory-root",
+          workspaceDir: "/tmp/main",
+          relativePath: "MEMORY.md",
+          absolutePath: "/tmp/main/MEMORY.md",
+          agentIds: ["main"],
+          contentType: "markdown",
+        },
+        {
+          kind: "memory-root",
+          workspaceDir: "/tmp/secondary",
+          relativePath: "MEMORY.md",
+          absolutePath: "/tmp/secondary/MEMORY.md",
+          agentIds: ["secondary"],
+          contentType: "markdown",
+        },
+      ],
+      pathExists: async () => true,
+      resolveCommand: async () => null,
+    });
+
+    expect(globalStatus.bridgePublicArtifactCount).toBe(2);
+    expect(globalStatus.warnings.map((w) => w.code)).not.toContain("bridge-artifacts-missing");
+  });
+
   it("skips artifact enumeration when readMemoryArtifacts is disabled", async () => {
     const config = resolveMemoryWikiConfig(
       {

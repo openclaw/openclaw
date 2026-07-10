@@ -65,6 +65,9 @@ type ResolveMemoryWikiStatusDeps = {
   pathExists?: (inputPath: string) => Promise<boolean>;
   listPublicArtifacts?: typeof listActiveMemoryPublicArtifacts;
   resolveCommand?: (command: string) => Promise<string | null>;
+  /** When provided, scope bridgePublicArtifactCount to artifacts whose agentIds
+   *  include this caller. Operator/CLI callers omit agentId for a global count. */
+  agentId?: string;
 };
 
 async function collectVaultCounts(vaultPath: string): Promise<{
@@ -219,7 +222,7 @@ export async function resolveMemoryWikiStatus(
           await (deps.listPublicArtifacts ?? listActiveMemoryPublicArtifacts)({
             cfg: deps.appConfig,
           })
-        ).length
+        ).filter((artifact) => !deps?.agentId || artifact.agentIds.includes(deps.agentId)).length
       : null;
   const obsidianProbe = await probeObsidianCli({ resolveCommand: deps?.resolveCommand });
   const counts = vaultExists
