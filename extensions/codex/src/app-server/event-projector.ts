@@ -76,6 +76,7 @@ export type CodexAppServerEventProjectorOptions = {
   readRecentRateLimits?: () => JsonValue | undefined;
   runAbortSignal?: AbortSignal;
   trajectoryRecorder?: CodexTrajectoryRecorder | null;
+  onContextCompacted?: () => void;
 };
 
 type CodexNativeToolLifecycleContext = Pick<
@@ -521,10 +522,7 @@ export class CodexAppServerEventProjector {
   // Once an output delta crosses the transcript cap, later deltas must not fill
   // UTF-16 capacity recovered by backing up over a split surrogate pair.
   private readonly toolResultOutputTruncatedItemIds = new Set<string>();
-  private readonly toolMetas = new Map<
-    string,
-    { toolName: string; meta?: string; asyncStarted?: boolean }
-  >();
+  private readonly toolMetas = new Map<string, EmbeddedRunAttemptResult["toolMetas"][number]>();
   private readonly terminalPresentationClearedItemIds = new Set<string>();
   private readonly nativeToolOutcomeOrdinals = new Map<string, number>();
   private readonly sideEffectingToolItemIds = new Set<string>();
@@ -882,14 +880,13 @@ export class CodexAppServerEventProjector {
     contentItems: CodexDynamicToolCallOutputContentItem[];
   }): void {
     const resultText = collectDynamicToolContentText(params.contentItems);
-    if (params.asyncStarted === true) {
-      const existing = this.toolMetas.get(params.callId);
-      this.toolMetas.set(params.callId, {
-        toolName: existing?.toolName ?? params.tool,
-        ...(existing?.meta ? { meta: existing.meta } : {}),
-        asyncStarted: true,
-      });
-    }
+    const existing = this.toolMetas.get(params.callId);
+    this.toolMetas.set(params.callId, {
+      toolName: existing?.toolName ?? params.tool,
+      ...(existing?.meta ? { meta: existing.meta } : {}),
+      ...(params.asyncStarted === true ? { asyncStarted: true } : {}),
+      ...(!params.success ? { isError: true } : {}),
+    });
     this.recordToolTranscriptResult({
       id: params.callId,
       name: params.tool,
@@ -1166,6 +1163,7 @@ export class CodexAppServerEventProjector {
     if (item?.type === "contextCompaction" && itemId) {
       this.activeCompactionItemIds.delete(itemId);
       this.completedCompactionCount += 1;
+      this.options.onContextCompacted?.();
       await runAgentHarnessAfterCompactionHook({
         sessionFile: this.params.sessionFile,
         messages: await this.readMirroredSessionMessages(),
@@ -2010,11 +2008,13 @@ export class CodexAppServerEventProjector {
       return;
     }
     const meta = itemMeta(item, this.toolProgressDetailMode());
+    const status = itemStatus(item);
     const existing = this.toolMetas.get(item.id);
     this.toolMetas.set(item.id, {
       toolName,
       ...(meta ? { meta } : {}),
       ...(existing?.asyncStarted ? { asyncStarted: true } : {}),
+      ...(status !== "running" && isNonSuccessItemStatus(status) ? { isError: true } : {}),
     });
   }
 
