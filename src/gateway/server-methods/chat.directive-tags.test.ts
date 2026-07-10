@@ -444,7 +444,8 @@ vi.mock("../../media/store.js", async () => {
 
 const { chatHandlers } = await import("./chat.js");
 
-async function waitForAssertion(assertion: () => void, timeoutMs = 1000, stepMs = 2) {
+// Multi-media transcript mirroring can exceed 1s on loaded CI before the async broadcast lands.
+async function waitForAssertion(assertion: () => void, timeoutMs = 5_000, stepMs = 2) {
   await vi.waitFor(assertion, { interval: stepMs, timeout: timeoutMs });
 }
 

@@ -73,22 +73,39 @@ struct MacNodeRuntimeTests {
         }
     }
 
+    actor ShellRunProbe {
+        private var commands: [[String]] = []
+
+        func run(_ command: [String]) -> ShellExecutor.ShellResult {
+            self.commands.append(command)
+            return ShellExecutor.ShellResult(
+                stdout: "",
+                stderr: "",
+                exitCode: 0,
+                timedOut: false,
+                success: true,
+                errorMessage: nil)
+        }
+
+        func capturedCommands() -> [[String]] {
+            self.commands
+        }
+    }
+
     @MainActor
     final class ScreenSnapshotProbeServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
-        typealias SnapshotResult = (
-            data: Data,
-            format: OpenClawScreenSnapshotFormat,
-            width: Int,
-            height: Int,
-            displayFrameId: String)
-
         var snapshotCallCount = 0
         var receivedSnapshotParams: MacNodeScreenSnapshotParams?
-        var snapshotResult: SnapshotResult
+        var snapshotResult: ScreenSnapshotResult
         var snapshotError: Error?
 
         init(
-            snapshotResult: SnapshotResult = (Data("ok".utf8), .jpeg, 10, 10, "display-frame-test"),
+            snapshotResult: ScreenSnapshotResult = ScreenSnapshotResult(
+                data: Data("ok".utf8),
+                format: .jpeg,
+                width: 10,
+                height: 10,
+                displayFrameId: "display-frame-test"),
             snapshotError: Error? = nil)
         {
             self.snapshotResult = snapshotResult
@@ -99,7 +116,7 @@ struct MacNodeRuntimeTests {
             screenIndex: Int?,
             maxWidth: Int?,
             quality: Double?,
-            format: OpenClawScreenSnapshotFormat?) async throws -> SnapshotResult
+            format: OpenClawScreenSnapshotFormat?) async throws -> ScreenSnapshotResult
         {
             self.snapshotCallCount += 1
             self.receivedSnapshotParams = MacNodeScreenSnapshotParams(
@@ -223,6 +240,64 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == false)
     }
 
+    @Test func `system run rejects raw command prompt spoof before execution`() async throws {
+        let probe = ShellRunProbe()
+        let runtime = MacNodeRuntime(
+            shellRunner: { command, _, _, _ in await probe.run(command) })
+        let params = OpenClawSystemRunParams(
+            command: ["/usr/bin/printf", "unsafe"],
+            rawCommand: "echo safe")
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-raw-command-spoof",
+            command: OpenClawSystemCommand.run.rawValue,
+            paramsJSON: json))
+
+        #expect(!response.ok)
+        #expect(response.error?.code == .invalidRequest)
+        #expect(response.error?.message.contains("rawCommand does not match command") == true)
+        #expect(await probe.capturedCommands().isEmpty)
+    }
+
+    @Test func `system run rejects mismatched shell payload preview before execution`() async throws {
+        let probe = ShellRunProbe()
+        let runtime = MacNodeRuntime(
+            shellRunner: { command, _, _, _ in await probe.run(command) })
+        let params = OpenClawSystemRunParams(
+            command: ["/bin/sh", "-lc", "/usr/bin/printf unsafe"],
+            rawCommand: "echo safe")
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-shell-preview-spoof",
+            command: OpenClawSystemCommand.run.rawValue,
+            paramsJSON: json))
+
+        #expect(!response.ok)
+        #expect(response.error?.code == .invalidRequest)
+        #expect(response.error?.message.contains("rawCommand does not match command") == true)
+        #expect(await probe.capturedCommands().isEmpty)
+    }
+
+    @Test func `system run shares padded executable rejection with socket host`() async throws {
+        let probe = ShellRunProbe()
+        let runtime = MacNodeRuntime(
+            shellRunner: { command, _, _, _ in await probe.run(command) })
+        let params = OpenClawSystemRunParams(command: [" /usr/bin/printf ", "unsafe"])
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-padded-executable",
+            command: OpenClawSystemCommand.run.rawValue,
+            paramsJSON: json))
+
+        #expect(!response.ok)
+        #expect(response.error?.code == .invalidRequest)
+        #expect(response.error?.message.contains("executable has surrounding whitespace") == true)
+        #expect(await probe.capturedCommands().isEmpty)
+    }
+
     @Test func `system run denied event preserves gateway run id`() async throws {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
@@ -236,8 +311,10 @@ struct MacNodeRuntimeTests {
             }
             let params = OpenClawSystemRunParams(
                 command: ["/bin/sh", "-lc", "printf ok"],
+                rawCommand: "printf ok",
                 sessionKey: "agent:main:main",
-                runId: "gateway-run-1")
+                runId: "gateway-run-1",
+                approvalDecision: ExecApprovalDecision.deny.rawValue)
             let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
             let response = await runtime.handleInvoke(
                 BridgeInvokeRequest(
@@ -250,10 +327,13 @@ struct MacNodeRuntimeTests {
             struct Payload: Decodable {
                 var sessionKey: String
                 var runId: String
+                var command: String
             }
             let payload = try JSONDecoder().decode(Payload.self, from: Data(denied.json.utf8))
             #expect(payload.sessionKey == "agent:main:main")
             #expect(payload.runId == "gateway-run-1")
+            #expect(payload.command == ExecCommandFormatter.displayString(for: params.command))
+            #expect(payload.command != params.rawCommand)
         }
     }
 
@@ -319,17 +399,17 @@ struct MacNodeRuntimeTests {
                 maxWidth: Int?,
                 quality: Double?,
                 format: OpenClawScreenSnapshotFormat?) async throws
-                -> (
-                    data: Data,
-                    format: OpenClawScreenSnapshotFormat,
-                    width: Int,
-                    height: Int,
-                    displayFrameId: String)
+                -> ScreenSnapshotResult
             {
                 _ = screenIndex
                 _ = maxWidth
                 _ = quality
-                return (Data("snapshot".utf8), format ?? .jpeg, 640, 360, "display-frame-test")
+                return ScreenSnapshotResult(
+                    data: Data("snapshot".utf8),
+                    format: format ?? .jpeg,
+                    width: 640,
+                    height: 360,
+                    displayFrameId: "display-frame-test")
             }
 
             func recordScreen(
@@ -404,18 +484,18 @@ struct MacNodeRuntimeTests {
                 maxWidth: Int?,
                 quality: Double?,
                 format: OpenClawScreenSnapshotFormat?) async throws
-                -> (
-                    data: Data,
-                    format: OpenClawScreenSnapshotFormat,
-                    width: Int,
-                    height: Int,
-                    displayFrameId: String)
+                -> ScreenSnapshotResult
             {
                 self.snapshotCalledAtMs = Int64(Date().timeIntervalSince1970 * 1000)
                 #expect(screenIndex == 0)
                 #expect(maxWidth == 800)
                 #expect(quality == 0.5)
-                return (Data("ok".utf8), format ?? .jpeg, 800, 450, "display-frame-test")
+                return ScreenSnapshotResult(
+                    data: Data("ok".utf8),
+                    format: format ?? .jpeg,
+                    width: 800,
+                    height: 450,
+                    displayFrameId: "display-frame-test")
             }
 
             func recordScreen(
@@ -560,14 +640,14 @@ struct MacNodeRuntimeTests {
             maxWidth _: Int?,
             quality _: Double?,
             format: OpenClawScreenSnapshotFormat?) async throws
-            -> (
-                data: Data,
-                format: OpenClawScreenSnapshotFormat,
-                width: Int,
-                height: Int,
-                displayFrameId: String)
+            -> ScreenSnapshotResult
         {
-            (Data("ok".utf8), format ?? .jpeg, 10, 10, "display-frame-test")
+            ScreenSnapshotResult(
+                data: Data("ok".utf8),
+                format: format ?? .jpeg,
+                width: 10,
+                height: 10,
+                displayFrameId: "display-frame-test")
         }
 
         func recordScreen(
@@ -880,12 +960,12 @@ struct MacNodeRuntimeTests {
     @Test func `handle invoke screen snapshot rejects raw payloads above base64 ceiling`() async {
         let payloadSize = 19_660_801
         let services = await MainActor.run {
-            ScreenSnapshotProbeServices(snapshotResult: (
-                Data(repeating: 0x41, count: payloadSize),
-                .jpeg,
-                4000,
-                3000,
-                "display-frame-test"))
+            ScreenSnapshotProbeServices(snapshotResult: ScreenSnapshotResult(
+                data: Data(repeating: 0x41, count: payloadSize),
+                format: .jpeg,
+                width: 4000,
+                height: 3000,
+                displayFrameId: "display-frame-test"))
         }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
@@ -905,12 +985,12 @@ struct MacNodeRuntimeTests {
     @Test func `handle invoke screen snapshot rejects escaped oversized outer frames`() async {
         let payloadSize = 12 * 1024 * 1024
         let services = await MainActor.run {
-            ScreenSnapshotProbeServices(snapshotResult: (
-                Data(repeating: 0xFF, count: payloadSize),
-                .png,
-                4000,
-                3000,
-                "display-frame-test"))
+            ScreenSnapshotProbeServices(snapshotResult: ScreenSnapshotResult(
+                data: Data(repeating: 0xFF, count: payloadSize),
+                format: .png,
+                width: 4000,
+                height: 3000,
+                displayFrameId: "display-frame-test"))
         }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
@@ -930,12 +1010,12 @@ struct MacNodeRuntimeTests {
     @Test func `handle invoke screen snapshot accepts near-limit frames that fit`() async throws {
         let payloadSize = 19_660_100
         let services = await MainActor.run {
-            ScreenSnapshotProbeServices(snapshotResult: (
-                Data(repeating: 0x00, count: payloadSize),
-                .jpeg,
-                4000,
-                3000,
-                "display-frame-test"))
+            ScreenSnapshotProbeServices(snapshotResult: ScreenSnapshotResult(
+                data: Data(repeating: 0x00, count: payloadSize),
+                format: .jpeg,
+                width: 4000,
+                height: 3000,
+                displayFrameId: "display-frame-test"))
         }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 

@@ -364,7 +364,9 @@ extension OnboardingView {
                 return "Select a nearby gateway or open Advanced to enter a gateway URL."
             }
             if GatewayRemoteConfig.normalizeGatewayUrl(trimmedUrl) == nil {
-                return "Gateway URL must use wss:// for public hosts; ws:// is allowed for localhost, LAN, or Tailnet hosts."
+                return """
+                Gateway URL must use wss:// for public hosts; ws:// is allowed for localhost, LAN, or Tailnet hosts.
+                """
             }
             return nil
         case .ssh:

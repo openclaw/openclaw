@@ -235,6 +235,14 @@ describe("normalizeOpenAICompatibleReasoningPayload", () => {
 
     expect(payload).toEqual({});
   });
+
+  it("defensively normalizes logical Ultra for generic compatible payloads", () => {
+    const payload: Record<string, unknown> = {};
+
+    normalizeOpenAICompatibleReasoningPayload(payload, "ultra");
+
+    expect(payload).toEqual({ reasoning: { effort: "xhigh" } });
+  });
 });
 
 describe("createDeepSeekV4OpenAICompatibleThinkingWrapper", () => {
@@ -999,6 +1007,61 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           { type: "text", text: visibleText },
         ],
       },
+    });
+    expect(JSON.stringify(events)).not.toContain(marker);
+  });
+
+  it("keeps a byte-over-cap visible suffix at its streamed content index in done messages", async () => {
+    const marker = "<function=read>";
+    const visibleText = "Visible answer";
+    const firstChunk = `${marker}${"\u00a0".repeat(100_000)}`;
+    const secondChunk = `${"\u00a0".repeat(28_001)}</function>\n${visibleText}`;
+    const content = [
+      { type: "text", text: firstChunk },
+      { type: "thinking", thinking: "checking" },
+      { type: "text", text: secondChunk },
+    ];
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", contentIndex: 0, delta: firstChunk },
+        {
+          type: "text_delta",
+          contentIndex: 2,
+          delta: secondChunk,
+          partial: { role: "assistant", content },
+        },
+        {
+          type: "done",
+          reason: "stop",
+          message: { role: "assistant", content, stopReason: "stop" },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => requireRecord(event, "event").type)).toEqual([
+      "text_delta",
+      "done",
+    ]);
+    const expectedContent = [
+      { type: "text", text: "" },
+      { type: "thinking", thinking: "checking" },
+      { type: "text", text: visibleText },
+    ];
+    expect(requireRecord(events[0], "text event")).toMatchObject({
+      delta: visibleText,
+      partial: { content: expectedContent },
+    });
+    expect(requireRecord(events[1], "done event").message).toMatchObject({
+      content: expectedContent,
     });
     expect(JSON.stringify(events)).not.toContain(marker);
   });
