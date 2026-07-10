@@ -3,6 +3,10 @@ import type { Block, KnownBlock } from "@slack/web-api";
 
 export const SLACK_MAX_BLOCKS = 50;
 
+type ValidateSlackBlocksArrayOptions = {
+  maxBlocks?: number;
+};
+
 function parseBlocksJson(raw: string) {
   try {
     return JSON.parse(raw);
@@ -11,15 +15,16 @@ function parseBlocksJson(raw: string) {
   }
 }
 
-function assertBlocksArray(raw: unknown) {
+function assertBlocksArray(raw: unknown, options?: ValidateSlackBlocksArrayOptions) {
+  const maxBlocks = options?.maxBlocks ?? SLACK_MAX_BLOCKS;
   if (!Array.isArray(raw)) {
     throw new Error("blocks must be an array");
   }
   if (raw.length === 0) {
     throw new Error("blocks must contain at least one block");
   }
-  if (raw.length > SLACK_MAX_BLOCKS) {
-    throw new Error(`blocks cannot exceed ${SLACK_MAX_BLOCKS} items`);
+  if (raw.length > maxBlocks) {
+    throw new Error(`blocks cannot exceed ${maxBlocks} items`);
   }
   for (const block of raw) {
     if (!block || typeof block !== "object" || Array.isArray(block)) {
@@ -32,8 +37,11 @@ function assertBlocksArray(raw: unknown) {
   }
 }
 
-export function validateSlackBlocksArray(raw: unknown): (Block | KnownBlock)[] {
-  assertBlocksArray(raw);
+export function validateSlackBlocksArray(
+  raw: unknown,
+  options?: ValidateSlackBlocksArrayOptions,
+): (Block | KnownBlock)[] {
+  assertBlocksArray(raw, options);
   return raw as (Block | KnownBlock)[];
 }
 
