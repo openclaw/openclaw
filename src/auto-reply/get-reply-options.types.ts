@@ -53,7 +53,7 @@ export type QueuedReplyLifecycle = {
   /** Retires this source's cancellation ownership while retaining its live identity. */
   onCancellationRetired?: () => void;
   /** Called after the queued turn owns the reply lane, before model/tool execution. */
-  onAdmitted?: () => void;
+  onAdmitted?: () => void | Promise<void>;
   onComplete?: () => void;
 };
 

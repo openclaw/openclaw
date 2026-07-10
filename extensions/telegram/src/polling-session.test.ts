@@ -1963,6 +1963,124 @@ describe("TelegramPollingSession", () => {
     });
   });
 
+  it("keeps a deferred claim owned while adopted completion retries", async () => {
+    const refreshHarness = installSpooledClaimRefreshHarness();
+    await withTempSpool(async (tempDir) => {
+      let completeAttempts = 0;
+      let refreshAttempts = 0;
+      let failRefreshAfterAdoption = false;
+      let releaseCompletion: (() => void) | undefined;
+      let markCompletionRetryStarted: (() => void) | undefined;
+      const completionGate = new Promise<void>((resolve) => {
+        releaseCompletion = resolve;
+      });
+      const completionRetryStarted = new Promise<void>((resolve) => {
+        markCompletionRetryStarted = resolve;
+      });
+      setTelegramRuntime({
+        state: {
+          resolveStateDir: () => tempDir,
+          openChannelIngressQueue: (
+            options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
+          ) => {
+            const queue = createChannelIngressQueue({ ...options, channelId: "telegram" });
+            return {
+              ...queue,
+              refreshClaim: async (...args: Parameters<NonNullable<typeof queue.refreshClaim>>) => {
+                refreshAttempts += 1;
+                if (failRefreshAfterAdoption) {
+                  return false;
+                }
+                return (await queue.refreshClaim?.(...args)) ?? false;
+              },
+              complete: async (...args: Parameters<typeof queue.complete>) => {
+                completeAttempts += 1;
+                if (completeAttempts === 1) {
+                  throw new Error("transient completion write failure");
+                }
+                if (completeAttempts === 2) {
+                  markCompletionRetryStarted?.();
+                  await completionGate;
+                }
+                return await queue.complete(...args);
+              },
+            };
+          },
+        },
+      } as TelegramRuntime);
+      const abort = new AbortController();
+      const log = vi.fn();
+      const events: number[] = [];
+      const participants: TelegramSpooledReplayDeferredParticipant[] = [];
+      const replyFenceKey = "test-completion-retry:topic-10";
+      const replyFenceAbortController = new AbortController();
+      beginTelegramReplyFence({
+        key: replyFenceKey,
+        laneKey: buildTelegramReplyFenceLaneKey({
+          accountId: "default",
+          sequentialKey: "telegram:-100:topic:10",
+        }),
+        supersede: false,
+        abortController: replyFenceAbortController,
+      });
+      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "buffered topic 10 turn")]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        handleUpdate: async (update) => {
+          events.push(Number(update.update_id));
+          const participant = createTelegramSpooledReplayDeferredParticipant(
+            `test-completion-retry:${update.update_id}`,
+          );
+          if (!participant) {
+            throw new Error("expected spooled replay participant");
+          }
+          participants.push(participant);
+        },
+      });
+
+      try {
+        await vi.waitFor(() => expect(participants).toHaveLength(1));
+        participants[0]?.settle({ kind: "completed" });
+        await completionRetryStarted;
+
+        expect(events).toEqual([42]);
+        expect(
+          (await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).map(
+            (claim) => claim.updateId,
+          ),
+        ).toEqual([42]);
+        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+        expectLogIncludes(log, "buffered completion retry 1 scheduled");
+
+        failRefreshAfterAdoption = true;
+        refreshHarness.triggerRefresh();
+        await vi.waitFor(() => expect(refreshAttempts).toBe(1));
+        expect(replyFenceAbortController.signal.aborted).toBe(false);
+
+        releaseCompletion?.();
+        await vi.waitFor(async () =>
+          expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]),
+        );
+        await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "telegram refetch")]);
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20);
+        });
+        expect(events).toEqual([42]);
+        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      } finally {
+        releaseCompletion?.();
+        abort.abort();
+        stopWorker();
+        endTelegramReplyFence(replyFenceKey, replyFenceAbortController);
+        refreshHarness.restore();
+        await runPromise;
+      }
+    });
+  });
+
   it("releases buffered spooled claims for retry when deferred processing fails", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();

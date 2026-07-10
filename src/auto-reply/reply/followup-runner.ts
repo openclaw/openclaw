@@ -105,6 +105,7 @@ import {
   warnPrivateMessageToolFinal,
 } from "./private-message-tool-final.js";
 import {
+  admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
   enqueueFollowupRun,
   FollowupRunDeferredError,
@@ -715,7 +716,7 @@ export function createFollowupRunner(params: {
       replyOperation.retainFailureUntilComplete();
       // Multi-source collected turns become atomic at reply-lane admission.
       // Their queue owner uses this boundary to retire source cancellation ids.
-      effectiveQueued.queuedLifecycle?.onAdmitted?.();
+      await admitFollowupRunLifecycle(effectiveQueued);
       if (replyOperation.sessionId !== run.sessionId) {
         run = { ...run, sessionId: replyOperation.sessionId };
         effectiveQueued = { ...effectiveQueued, run };
