@@ -811,7 +811,9 @@ class PluginsPage extends OpenClawLightDomElement {
             name: connector.name,
             command: `openclaw mcp login ${mcp.serverName}`,
           })
-        : t("pluginsPage.connectorAddedEndpoint", { name: connector.name });
+        : mcp.followUp === "endpoint"
+          ? t("pluginsPage.connectorAddedEndpoint", { name: connector.name })
+          : t("pluginsPage.connectorAddedReady", { name: connector.name });
     const added = await this.mutateMcpServers({
       buildPatch: (servers) =>
         servers[mcp.serverName]

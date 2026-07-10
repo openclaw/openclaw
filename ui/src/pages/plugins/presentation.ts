@@ -51,6 +51,21 @@ const PLUGIN_ART_SLUGS: ReadonlySet<string> = new Set([
   "voice-call",
   "workboard",
   "youtube",
+  "todoist",
+  "airtable",
+  "jira",
+  "canva",
+  "stripe",
+  "hugging-face",
+  "context7",
+  "deepwiki",
+  "pdf-tools",
+  "reddit",
+  "kubernetes",
+  "maps",
+  "translation",
+  "transcription",
+  "notes",
 ]);
 
 export function pluginArtPath(slug: string): string | null {
@@ -127,15 +142,21 @@ export type ConnectorMcpTemplate = {
     transport?: "sse" | "streamable-http";
     auth?: "oauth";
   };
-  /** Post-add step the operator still owns (OAuth login or endpoint/token edit). */
-  followUp: "oauth" | "endpoint";
+  /** Post-add step the operator still owns, or none for keyless servers. */
+  followUp: "oauth" | "endpoint" | "none";
   docsUrl: string;
 };
+
+export type ConnectorGroup = "work" | "dev" | "home" | "life";
+
+/** Display order for the use-case shelves inside "Connect your world". */
+export const CONNECTOR_GROUP_ORDER: readonly ConnectorGroup[] = ["work", "dev", "home", "life"];
 
 export type ConnectorSuggestion = {
   id: string;
   name: string;
   description: string;
+  group: ConnectorGroup;
   action: { kind: "mcp"; mcp: ConnectorMcpTemplate } | { kind: "clawhub"; query: string };
 };
 
@@ -145,27 +166,10 @@ export type ConnectorSuggestion = {
  * catalog data (like manifest descriptions), not localized UI chrome.
  */
 export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
-  {
-    id: "github",
-    name: "GitHub",
-    description: "PR review queues, issue triage, and repo Q&A through the official GitHub MCP.",
-    action: {
-      kind: "mcp",
-      mcp: {
-        serverName: "github",
-        config: {
-          url: "https://api.githubcopilot.com/mcp/",
-          transport: "streamable-http",
-          auth: "oauth",
-        },
-        followUp: "oauth",
-        docsUrl:
-          "https://docs.github.com/en/copilot/customizing-copilot/using-model-context-protocol/using-the-github-mcp-server",
-      },
-    },
-  },
+  // --- Work & productivity ---
   {
     id: "notion",
+    group: "work",
     name: "Notion",
     description: "Search, create, and update pages and databases in your Notion workspace.",
     action: {
@@ -180,20 +184,145 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
   },
   {
     id: "linear",
+    group: "work",
     name: "Linear",
     description: "Triage issues, update cycles, and file bugs straight from chat.",
     action: {
       kind: "mcp",
       mcp: {
         serverName: "linear",
-        config: { url: "https://mcp.linear.app/sse", transport: "sse", auth: "oauth" },
+        // Linear retired mcp.linear.app/sse (404); /mcp is the documented endpoint.
+        config: { url: "https://mcp.linear.app/mcp", transport: "streamable-http", auth: "oauth" },
         followUp: "oauth",
         docsUrl: "https://linear.app/docs/mcp",
       },
     },
   },
   {
+    id: "todoist",
+    group: "work",
+    name: "Todoist",
+    description: "Read, add, and complete tasks and projects in Todoist.",
+    action: {
+      kind: "mcp",
+      mcp: {
+        serverName: "todoist",
+        config: { url: "https://ai.todoist.net/mcp", transport: "streamable-http", auth: "oauth" },
+        followUp: "oauth",
+        docsUrl:
+          "https://www.todoist.com/help/articles/use-claude-code-with-todoist-cli-and-mcp-b1USJ4HB3",
+      },
+    },
+  },
+  {
+    id: "airtable",
+    group: "work",
+    name: "Airtable",
+    description: "Query and update records, tables, and bases in Airtable.",
+    action: {
+      kind: "mcp",
+      mcp: {
+        serverName: "airtable",
+        config: {
+          url: "https://mcp.airtable.com/mcp",
+          transport: "streamable-http",
+          auth: "oauth",
+        },
+        followUp: "oauth",
+        docsUrl: "https://support.airtable.com/docs/using-the-airtable-mcp-server",
+      },
+    },
+  },
+  {
+    id: "jira",
+    group: "work",
+    name: "Jira",
+    description: "Create, search, and triage Jira tickets from chat.",
+    action: { kind: "clawhub", query: "jira" },
+  },
+  {
+    id: "canva",
+    group: "work",
+    name: "Canva",
+    description: "Create and edit Canva designs, manage assets, and export results.",
+    action: {
+      kind: "mcp",
+      mcp: {
+        serverName: "canva",
+        config: { url: "https://mcp.canva.com/mcp", transport: "streamable-http", auth: "oauth" },
+        followUp: "oauth",
+        docsUrl: "https://www.canva.dev/docs/mcp/",
+      },
+    },
+  },
+  {
+    id: "stripe",
+    group: "work",
+    name: "Stripe",
+    description: "Check payments, customers, invoices, and subscriptions in your Stripe account.",
+    action: {
+      kind: "mcp",
+      mcp: {
+        serverName: "stripe",
+        config: { url: "https://mcp.stripe.com", transport: "streamable-http", auth: "oauth" },
+        followUp: "oauth",
+        docsUrl: "https://docs.stripe.com/mcp",
+      },
+    },
+  },
+  {
+    id: "google-calendar",
+    group: "work",
+    name: "Calendar",
+    description: "Read, create, and get briefed on events — your agent owns your schedule.",
+    action: { kind: "clawhub", query: "google calendar" },
+  },
+  {
+    id: "email-inbox",
+    group: "work",
+    name: "Email",
+    description: "Mailbox triage, summaries, and drafts with send-on-approval.",
+    action: { kind: "clawhub", query: "email" },
+  },
+  {
+    id: "pdf-tools",
+    group: "work",
+    name: "PDF",
+    description: "Extract, merge, convert, and OCR PDF documents.",
+    action: { kind: "clawhub", query: "pdf" },
+  },
+  {
+    id: "transcription",
+    group: "work",
+    name: "Transcription",
+    description: "Turn audio and video into clean, structured transcripts.",
+    action: { kind: "clawhub", query: "transcription" },
+  },
+  // --- Coding & infrastructure ---
+  {
+    id: "github",
+    group: "dev",
+    name: "GitHub",
+    description: "PR review queues, issue triage, and repo Q&A through the official GitHub MCP.",
+    action: {
+      kind: "mcp",
+      mcp: {
+        serverName: "github",
+        // GitHub's MCP OAuth has no dynamic client registration; users add a
+        // PAT Authorization header in MCP settings after the one-click add.
+        config: {
+          url: "https://api.githubcopilot.com/mcp/",
+          transport: "streamable-http",
+        },
+        followUp: "endpoint",
+        docsUrl:
+          "https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp-in-your-ide/use-the-github-mcp-server",
+      },
+    },
+  },
+  {
     id: "sentry",
+    group: "dev",
     name: "Sentry",
     description: "Crash alerts explained and triaged the moment they fire.",
     action: {
@@ -202,12 +331,73 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
         serverName: "sentry",
         config: { url: "https://mcp.sentry.dev/mcp", transport: "streamable-http", auth: "oauth" },
         followUp: "oauth",
-        docsUrl: "https://docs.sentry.io/product/sentry-mcp/",
+        docsUrl: "https://mcp.sentry.dev/",
       },
     },
   },
   {
+    id: "context7",
+    group: "dev",
+    name: "Context7",
+    description: "Version-specific library docs and code examples while coding. No signup needed.",
+    action: {
+      kind: "mcp",
+      mcp: {
+        serverName: "context7",
+        config: { url: "https://mcp.context7.com/mcp", transport: "streamable-http" },
+        followUp: "none",
+        docsUrl: "https://github.com/upstash/context7",
+      },
+    },
+  },
+  {
+    id: "deepwiki",
+    group: "dev",
+    name: "DeepWiki",
+    description: "Ask questions about any public GitHub repo. Free, no account needed.",
+    action: {
+      kind: "mcp",
+      mcp: {
+        serverName: "deepwiki",
+        config: { url: "https://mcp.deepwiki.com/mcp", transport: "streamable-http" },
+        followUp: "none",
+        docsUrl: "https://docs.devin.ai/work-with-devin/deepwiki-mcp",
+      },
+    },
+  },
+  {
+    id: "hugging-face",
+    group: "dev",
+    name: "Hugging Face",
+    description: "Search models, datasets, and papers; run Spaces as tools.",
+    action: {
+      kind: "mcp",
+      mcp: {
+        serverName: "hugging-face",
+        config: { url: "https://huggingface.co/mcp", transport: "streamable-http" },
+        followUp: "none",
+        docsUrl: "https://huggingface.co/docs/hub/hf-mcp-server",
+      },
+    },
+  },
+  {
+    id: "grafana",
+    group: "dev",
+    name: "Grafana",
+    description: "Grafana know-how and community connectors for dashboards and alerts.",
+    action: { kind: "clawhub", query: "grafana" },
+  },
+  {
+    id: "kubernetes",
+    group: "dev",
+    name: "Kubernetes",
+    description: "Cluster operations and troubleshooting from chat.",
+    action: { kind: "clawhub", query: "kubernetes" },
+  },
+  // --- Home & media ---
+  {
     id: "home-assistant",
+    group: "home",
     name: "Home Assistant",
     description: "Control lights, climate, and automations across your whole home.",
     action: {
@@ -215,8 +405,8 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
       mcp: {
         serverName: "home-assistant",
         config: {
-          url: "http://homeassistant.local:8123/mcp_server/sse",
-          transport: "sse",
+          url: "http://homeassistant.local:8123/api/mcp",
+          transport: "streamable-http",
         },
         followUp: "endpoint",
         docsUrl: "https://www.home-assistant.io/integrations/mcp_server/",
@@ -224,63 +414,67 @@ export const CONNECTOR_SUGGESTIONS: readonly ConnectorSuggestion[] = [
     },
   },
   {
-    id: "google-calendar",
-    name: "Calendar",
-    description: "Read, create, and get briefed on events — your agent owns your schedule.",
-    action: { kind: "clawhub", query: "calendar" },
-  },
-  {
-    id: "email-inbox",
-    name: "Email",
-    description: "Mailbox triage, summaries, and drafts with send-on-approval.",
-    action: { kind: "clawhub", query: "email" },
-  },
-  {
     id: "spotify",
+    group: "home",
     name: "Spotify",
     description: "Search, queue, and soundtrack your day with mood-based playlists.",
     action: { kind: "clawhub", query: "spotify" },
   },
   {
     id: "sonos",
+    group: "home",
     name: "Sonos",
     description: "Whole-home audio: play, group rooms, and queue by chat.",
     action: { kind: "clawhub", query: "sonos" },
   },
   {
-    id: "philips-hue",
-    name: "Philips Hue",
-    description: "Mood lighting on command — scenes, schedules, and color moods.",
-    action: { kind: "clawhub", query: "hue" },
+    id: "reddit",
+    group: "life",
+    name: "Reddit",
+    description: "Browse, search, and summarize subreddits and threads.",
+    action: { kind: "clawhub", query: "reddit" },
   },
-  {
-    id: "youtube",
-    name: "YouTube",
-    description: "Search, summarize, and pull transcripts from any video.",
-    action: { kind: "clawhub", query: "youtube" },
-  },
-  {
-    id: "grafana",
-    name: "Grafana",
-    description: "Query dashboards and alerts; get anomaly summaries in chat.",
-    action: { kind: "clawhub", query: "grafana" },
-  },
+  // --- Everyday life ---
   {
     id: "portfolio-pulse",
+    group: "life",
     name: "Markets",
     description: "Live stocks and crypto with price alerts and daily digests.",
-    action: { kind: "clawhub", query: "finance" },
+    action: { kind: "clawhub", query: "stocks" },
   },
   {
     id: "trip-scout",
+    group: "life",
     name: "Travel",
     description: "Flight and hotel search with fare watching and trip memory.",
     action: { kind: "clawhub", query: "flights" },
   },
   {
     id: "morning-brief",
+    group: "life",
     name: "News",
     description: "A personalized daily briefing: news, weather, and tasks in one message.",
     action: { kind: "clawhub", query: "news" },
+  },
+  {
+    id: "maps",
+    group: "life",
+    name: "Maps",
+    description: "Places, routing, and travel-time answers.",
+    action: { kind: "clawhub", query: "maps" },
+  },
+  {
+    id: "translation",
+    group: "life",
+    name: "Translation",
+    description: "Translate and localize text and documents.",
+    action: { kind: "clawhub", query: "translation" },
+  },
+  {
+    id: "notes",
+    group: "life",
+    name: "Notes",
+    description: "Capture notes to Markdown, Obsidian, Notion, or Bear.",
+    action: { kind: "clawhub", query: "notes" },
   },
 ];

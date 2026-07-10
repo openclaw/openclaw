@@ -14,12 +14,14 @@ import {
   type PluginSearchResult,
 } from "../../lib/plugins/index.ts";
 import {
+  CONNECTOR_GROUP_ORDER,
   CONNECTOR_SUGGESTIONS,
   PLUGIN_CATEGORY_ORDER,
   pluginArtPath,
   pluginCategoryLabel,
   pluginFallbackGradient,
   pluginMonogram,
+  type ConnectorGroup,
   type ConnectorSuggestion,
 } from "./presentation.ts";
 
@@ -116,6 +118,21 @@ function filterLabel(filter: InstalledFilter): string {
       return t("pluginsPage.filterIssues");
     default:
       return filter satisfies never;
+  }
+}
+
+function connectorGroupLabel(group: ConnectorGroup): string {
+  switch (group) {
+    case "work":
+      return t("pluginsPage.connectorGroupWork");
+    case "dev":
+      return t("pluginsPage.connectorGroupDev");
+    case "home":
+      return t("pluginsPage.connectorGroupHome");
+    case "life":
+      return t("pluginsPage.connectorGroupLife");
+    default:
+      return group satisfies never;
   }
 }
 
@@ -1122,11 +1139,8 @@ function renderDiscover(props: PluginsViewProps) {
   const shelves = discoverShelves(props.result?.plugins ?? [], props.query);
   const featuredCards = shelves.featured.map((plugin) => renderCatalogCard(plugin, props));
   const officialCards = shelves.official.map((plugin) => renderCatalogCard(plugin, props));
-  const connectorCards = shelves.connectors.map((connector) =>
-    renderConnectorCard(connector, props),
-  );
   const clawHub = renderClawHubGroup(props);
-  if (!featuredCards.length && !officialCards.length && !connectorCards.length) {
+  if (!featuredCards.length && !officialCards.length && !shelves.connectors.length) {
     return html`
       ${clawHub === nothing
         ? renderEmpty(t("pluginsPage.noDiscoverMatchTitle"), t("pluginsPage.noMatchBody"))
@@ -1138,14 +1152,41 @@ function renderDiscover(props: PluginsViewProps) {
     <div class="plugins-groups">
       ${renderShelf("featured", t("pluginsPage.featuredGroup"), null, featuredCards)}
       ${renderShelf("official", t("pluginsPage.officialGroup"), null, officialCards)}
-      ${renderShelf(
-        "connectors",
-        t("pluginsPage.connectorsGroup"),
-        t("pluginsPage.connectorsHint"),
-        connectorCards,
-      )}
-      ${clawHub}
+      ${renderConnectorShelves(shelves.connectors, props)} ${clawHub}
     </div>
+  `;
+}
+
+/** Connectors shelve by use case, mirroring how people group their tools. */
+function renderConnectorShelves(
+  connectors: readonly ConnectorSuggestion[],
+  props: PluginsViewProps,
+) {
+  if (connectors.length === 0) {
+    return nothing;
+  }
+  const groups = CONNECTOR_GROUP_ORDER.map((group) => ({
+    group,
+    entries: connectors.filter((connector) => connector.group === group),
+  })).filter((entry) => entry.entries.length > 0);
+  return html`
+    <section class="plugins-group" aria-labelledby="plugins-shelf-connectors">
+      <div class="plugins-group__heading">
+        <h2 id="plugins-shelf-connectors">${t("pluginsPage.connectorsGroup")}</h2>
+        <span>${connectors.length}</span>
+      </div>
+      <p class="plugins-group__hint">${t("pluginsPage.connectorsHint")}</p>
+      ${groups.map(
+        (entry) => html`
+          <div class="plugins-subgroup" data-connector-group=${entry.group}>
+            <h3 class="plugins-subgroup__heading">${connectorGroupLabel(entry.group)}</h3>
+            <div class="plugins-grid">
+              ${entry.entries.map((connector) => renderConnectorCard(connector, props))}
+            </div>
+          </div>
+        `,
+      )}
+    </section>
   `;
 }
 

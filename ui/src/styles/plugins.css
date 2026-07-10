@@ -1135,3 +1135,21 @@
     min-height: 40px;
   }
 }
+
+/* ---------- connector use-case subgroups ---------- */
+
+.plugins-subgroup {
+  margin-top: 6px;
+}
+
+.plugins-subgroup + .plugins-subgroup {
+  margin-top: 18px;
+}
+
+.plugins-subgroup__heading {
+  margin: 0 2px 9px;
+  color: var(--muted-strong);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 620;
+  letter-spacing: -0.005em;
+}
