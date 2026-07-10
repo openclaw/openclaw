@@ -125,7 +125,7 @@ function buildOutboundCacheMessage(params: {
   const stableSender = params.message.sender_chat ? undefined : rawSender;
   const selfSenderName = buildTelegramSelfSenderName(
     params.account.name,
-    params.account.bot ?? rawSender,
+    params.account.bot ?? stableSender,
   );
   return {
     ...params.message,

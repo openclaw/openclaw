@@ -190,9 +190,9 @@ describe("recordOutboundMessageForPromptContext", () => {
     });
   });
 
-  it("retains synthetic self identity across channel post echoes without from", async () => {
+  it("ignores Telegram's fake sender identity across channel post echoes", async () => {
     const initial = await recordAndRead({
-      account: { accountId: "default", name: "ChannelBot" },
+      account: { accountId: "default" },
       chatId: -1001,
       message: {
         message_id: 1498,
@@ -202,7 +202,7 @@ describe("recordOutboundMessageForPromptContext", () => {
       messageId: 1498,
       text: "Channel announcement",
     });
-    expect(initial).toMatchObject({ sender: "ChannelBot (you)", senderId: "0" });
+    expect(initial).toMatchObject({ sender: "OpenClaw (you)", senderId: "0" });
 
     const cache = createPromptContextCache();
     await cache.record({
@@ -224,10 +224,10 @@ describe("recordOutboundMessageForPromptContext", () => {
       messageId: "1498",
     });
     expect(merged).toMatchObject({
-      sender: "ChannelBot (you)",
+      sender: "OpenClaw (you)",
       senderId: "0",
       sourceMessage: {
-        from: { id: 0, is_bot: true, first_name: "ChannelBot (you)" },
+        from: { id: 0, is_bot: true, first_name: "OpenClaw (you)" },
         sender_chat: { id: -1001, type: "channel", title: "Announcements" },
       },
     });
