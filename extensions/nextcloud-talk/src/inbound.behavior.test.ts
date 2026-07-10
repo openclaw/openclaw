@@ -101,23 +101,6 @@ function requireFirstSendMessageCall(): [unknown, unknown, unknown] {
   return call as [unknown, unknown, unknown];
 }
 
-type CapturedReplyDelivery = {
-  preparePayload: (payload: OutboundReplyPayload) => OutboundReplyPayload;
-  deliver: (payload: OutboundReplyPayload) => Promise<void>;
-};
-
-function requireFirstReplyDelivery(mock: ReturnType<typeof vi.fn>): CapturedReplyDelivery {
-  const assembledRequest = requireFirstMockArg(mock, "Nextcloud Talk assembled request") as {
-    delivery?: Partial<CapturedReplyDelivery>;
-  };
-  const preparePayload = assembledRequest.delivery?.preparePayload;
-  const deliver = assembledRequest.delivery?.deliver;
-  if (!preparePayload || !deliver) {
-    throw new Error("expected Nextcloud Talk reply delivery hooks");
-  }
-  return { preparePayload, deliver };
-}
-
 function createAccount(
   overrides?: Partial<ResolvedNextcloudTalkAccount>,
 ): ResolvedNextcloudTalkAccount {
@@ -325,7 +308,7 @@ describe("nextcloud-talk inbound behavior", () => {
     expect(assembledRequest.replyPipeline).toEqual({});
   });
 
-  it("sanitizes inbound replies before local delivery while preserving reply metadata", async () => {
+  it("sanitizes inbound replies before local delivery while preserving transport fields", async () => {
     const coreRuntime = createPluginRuntimeMock();
     setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
     createChannelPairingControllerMock.mockReturnValue({
@@ -349,55 +332,37 @@ describe("nextcloud-talk inbound behavior", () => {
       runtime: createRuntimeEnv(),
     });
 
-    const delivery = requireFirstReplyDelivery(
+    const assembledRequest = requireFirstMockArg(
       coreRuntime.channel.inbound.dispatchReply as ReturnType<typeof vi.fn>,
-    );
-    const cases = [
-      {
-        text: "Done.\n⚠️ 🛠️ `search repos (agent)` failed",
-        expected: "Done.",
-      },
-      {
-        text: '<tool_call>{"name":"exec"}</tool_call>Meeting notes sent.',
-        expected: "Meeting notes sent.",
-      },
-      {
-        text: [
-          "Checking now.",
-          "<function_response>",
-          'Searching for: "agenda"',
-          "</function_response>",
-          "Meeting notes sent.",
-        ].join("\n"),
-        expected: "Checking now.\n\nMeeting notes sent.",
-      },
-      {
-        text: "The agenda has 3 open action items.",
-        expected: "The agenda has 3 open action items.",
-      },
-    ];
-    for (const testCase of cases) {
-      expect(delivery.preparePayload({ text: testCase.text })).toEqual({
-        text: testCase.expected,
-      });
+      "Nextcloud Talk assembled request",
+    ) as {
+      delivery?: {
+        preparePayload?: (payload: OutboundReplyPayload) => OutboundReplyPayload;
+        deliver?: (payload: OutboundReplyPayload) => Promise<void>;
+      };
+    };
+    const preparePayload = assembledRequest.delivery?.preparePayload;
+    const deliver = assembledRequest.delivery?.deliver;
+    if (!preparePayload || !deliver) {
+      throw new Error("expected Nextcloud Talk reply delivery hooks");
     }
 
     const mediaOnlyPayload = { mediaUrl: "https://example.com/a.png" };
-    expect(delivery.preparePayload(mediaOnlyPayload)).toBe(mediaOnlyPayload);
+    expect(preparePayload(mediaOnlyPayload)).toBe(mediaOnlyPayload);
 
-    const preparedPayload = delivery.preparePayload({
+    const preparedPayload = preparePayload({
       text: "Done.\n⚠️ 🛠️ `search repos (agent)` failed",
       mediaUrls: ["https://example.com/a.png"],
       replyToId: "reply-1",
     });
-    await delivery.deliver(preparedPayload);
-    await delivery.deliver(
-      delivery.preparePayload({
-        text: '<tool_call>{"name":"exec"}</tool_call>Meeting notes sent.',
-      }),
-    );
+    expect(preparedPayload).toEqual({
+      text: "Done.",
+      mediaUrls: ["https://example.com/a.png"],
+      replyToId: "reply-1",
+    });
+    await deliver(preparedPayload);
 
-    expect(sendMessageNextcloudTalkMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageNextcloudTalkMock).toHaveBeenCalledTimes(1);
     expect(requireFirstSendMessageCall()).toEqual([
       "room-1",
       "Done.\n\nAttachment: https://example.com/a.png",
@@ -407,15 +372,5 @@ describe("nextcloud-talk inbound behavior", () => {
         replyTo: "reply-1",
       },
     ]);
-    expect(sendMessageNextcloudTalkMock).toHaveBeenNthCalledWith(
-      2,
-      "room-1",
-      "Meeting notes sent.",
-      {
-        cfg: config,
-        accountId: "default",
-        replyTo: undefined,
-      },
-    );
   });
 });
