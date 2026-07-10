@@ -290,7 +290,7 @@ describe("Codex Computer Use setup", () => {
         },
       },
       request,
-      defaultBundledMarketplacePath: bundledMarketplacePath,
+      defaultBundledMarketplacePaths: [bundledMarketplacePath],
     });
 
     expectStatusFields(status, {
@@ -305,6 +305,57 @@ describe("Codex Computer Use setup", () => {
     expect(request).toHaveBeenCalledWith("plugin/install", {
       marketplacePath: `${bundledMarketplacePath}/.agents/plugins/marketplace.json`,
       pluginName: "computer-use",
+    });
+  });
+
+  it("registers the first bundled marketplace candidate that exists", async () => {
+    const bundledMarketplacePath = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-codex-bundled-marketplace-"),
+    );
+    cleanupPaths.push(bundledMarketplacePath);
+    const missingBundledMarketplacePath = path.join(
+      os.tmpdir(),
+      "openclaw-codex-missing-bundled-marketplace",
+    );
+    const request = createBundledMarketplaceComputerUseRequest(bundledMarketplacePath);
+
+    const status = await ensureCodexComputerUse({
+      pluginConfig: {
+        computerUse: {
+          enabled: true,
+          autoInstall: true,
+        },
+      },
+      request,
+      defaultBundledMarketplacePaths: [missingBundledMarketplacePath, bundledMarketplacePath],
+    });
+
+    expectStatusFields(status, {
+      ready: true,
+      reason: "ready",
+      marketplaceName: "openai-bundled",
+    });
+    expect(request).toHaveBeenCalledWith("marketplace/add", {
+      source: bundledMarketplacePath,
+    });
+  });
+
+  it("reports the checked bundled marketplace paths when none exist", async () => {
+    const missingBundledMarketplacePaths = [
+      "/missing/codex-bundled-marketplace",
+      "/missing/chatgpt-bundled-marketplace",
+    ];
+
+    const status = await readCodexComputerUseStatus({
+      pluginConfig: { computerUse: { enabled: true } },
+      request: createEmptyMarketplaceComputerUseRequest(),
+      defaultBundledMarketplacePaths: missingBundledMarketplacePaths,
+    });
+
+    expectStatusFields(status, {
+      ready: false,
+      reason: "marketplace_missing",
+      message: `No Codex marketplace containing computer-use is registered, and no bundled Codex marketplace exists (checked ${missingBundledMarketplacePaths.join(", ")}). Configure computerUse.marketplaceSource or computerUse.marketplacePath, then run /codex computer-use install.`,
     });
   });
 

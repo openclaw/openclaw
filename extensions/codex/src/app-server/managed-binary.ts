@@ -12,7 +12,12 @@ import { MANAGED_CODEX_APP_SERVER_PACKAGE } from "./version.js";
 
 const CODEX_APP_SERVER_MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CODEX_PLUGIN_ROOT = resolveDefaultCodexPluginRoot(CODEX_APP_SERVER_MODULE_DIR);
-const MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND = "/Applications/Codex.app/Contents/Resources/codex";
+// macOS Codex.app was folded into ChatGPT.app; keep the legacy bundle path first
+// for existing standalone installs and fall back to the ChatGPT.app layout.
+const MACOS_DESKTOP_CODEX_APP_SERVER_COMMANDS = [
+  "/Applications/Codex.app/Contents/Resources/codex",
+  "/Applications/ChatGPT.app/Contents/Resources/codex",
+];
 
 type ManagedCodexAppServerPaths = {
   commandPath: string;
@@ -89,7 +94,7 @@ function resolveManagedCodexAppServerCommandCandidates(
 }
 
 function resolveDesktopCodexAppServerCommandCandidates(platform: NodeJS.Platform): string[] {
-  return platform === "darwin" ? [MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND] : [];
+  return platform === "darwin" ? MACOS_DESKTOP_CODEX_APP_SERVER_COMMANDS : [];
 }
 
 function resolveDefaultCodexPluginRoot(moduleDir: string): string {
