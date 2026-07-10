@@ -7,6 +7,35 @@ import { resolveDeepSeekV4ThinkingProfile } from "./thinking.js";
 type ModelDefinitionDraft = Partial<ModelDefinitionConfig> &
   Pick<ModelDefinitionConfig, "id" | "name">;
 
+type CatalogMetadataSnapshot = Pick<ModelDefinitionConfig, "contextWindow" | "cost" | "maxTokens">;
+
+// Onboarding wrote these catalog-owned values into user config in prior releases.
+// Refresh only exact matches; any other values remain explicit user overrides.
+const PREVIOUS_BUNDLED_METADATA: Record<string, CatalogMetadataSnapshot> = {
+  "deepseek-v4-flash": {
+    contextWindow: 1_000_000,
+    maxTokens: 384_000,
+    cost: { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
+  },
+  "deepseek-v4-pro": {
+    contextWindow: 1_000_000,
+    maxTokens: 384_000,
+    cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
+  },
+  "deepseek-chat": {
+    contextWindow: 131_072,
+    maxTokens: 8_192,
+    cost: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 },
+  },
+  "deepseek-reasoner": {
+    contextWindow: 131_072,
+    maxTokens: 65_536,
+    cost: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 },
+  },
+};
+
+const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
 /**
  * Build a lookup from the bundled DeepSeek model catalog so we can hydrate
  * missing metadata (contextWindow, cost, maxTokens) into user-configured
@@ -37,6 +66,47 @@ function hasCostValues(cost: unknown): cost is ModelDefinitionConfig["cost"] {
   );
 }
 
+function hasSameCost(left: unknown, right: ModelDefinitionConfig["cost"] | undefined): boolean {
+  if (!left || typeof left !== "object" || !right) {
+    return false;
+  }
+  const cost = left as Record<string, unknown>;
+  if (Object.hasOwn(cost, "tieredPricing")) {
+    return false;
+  }
+  return (
+    cost.input === right.input &&
+    cost.output === right.output &&
+    cost.cacheRead === right.cacheRead &&
+    cost.cacheWrite === right.cacheWrite
+  );
+}
+
+function shouldRefreshPositiveNumber(params: {
+  current: unknown;
+  previous: unknown;
+  next: unknown;
+}): boolean {
+  return (
+    isPositiveNumber(params.previous) &&
+    params.current === params.previous &&
+    isPositiveNumber(params.next) &&
+    params.next !== params.previous
+  );
+}
+
+function isShippedZeroCostAliasSnapshot(
+  raw: ModelDefinitionDraft,
+  previous: CatalogMetadataSnapshot | undefined,
+): boolean {
+  return (
+    (raw.id === "deepseek-chat" || raw.id === "deepseek-reasoner") &&
+    raw.contextWindow === previous?.contextWindow &&
+    raw.maxTokens === previous?.maxTokens &&
+    hasSameCost(raw.cost, ZERO_COST)
+  );
+}
+
 /**
  * Provider policy surface for DeepSeek.
  *
@@ -61,24 +131,47 @@ export function normalizeConfig(params: {
     if (!catalogEntry) {
       return model;
     }
+    const previousEntry = PREVIOUS_BUNDLED_METADATA[raw.id];
 
     let modelMutated = false;
     const patched: Record<string, unknown> = {};
 
     // Hydrate contextWindow from catalog when missing or not a positive number.
-    if (!isPositiveNumber(raw.contextWindow) && isPositiveNumber(catalogEntry.contextWindow)) {
+    if (
+      (!isPositiveNumber(raw.contextWindow) ||
+        shouldRefreshPositiveNumber({
+          current: raw.contextWindow,
+          previous: previousEntry?.contextWindow,
+          next: catalogEntry.contextWindow,
+        })) &&
+      isPositiveNumber(catalogEntry.contextWindow)
+    ) {
       patched.contextWindow = catalogEntry.contextWindow;
       modelMutated = true;
     }
 
     // Hydrate maxTokens from catalog when missing or not a positive number.
-    if (!isPositiveNumber(raw.maxTokens) && isPositiveNumber(catalogEntry.maxTokens)) {
+    if (
+      (!isPositiveNumber(raw.maxTokens) ||
+        shouldRefreshPositiveNumber({
+          current: raw.maxTokens,
+          previous: previousEntry?.maxTokens,
+          next: catalogEntry.maxTokens,
+        })) &&
+      isPositiveNumber(catalogEntry.maxTokens)
+    ) {
       patched.maxTokens = catalogEntry.maxTokens;
       modelMutated = true;
     }
 
-    // Hydrate cost from catalog when missing or when all fields are zero/absent.
-    if (!hasCostValues(raw.cost) && hasCostValues(catalogEntry.cost)) {
+    // Hydrate missing cost or refresh a known catalog-owned snapshot from a prior release.
+    if (
+      (!hasCostValues(raw.cost) ||
+        hasSameCost(raw.cost, previousEntry?.cost) ||
+        isShippedZeroCostAliasSnapshot(raw, previousEntry)) &&
+      hasCostValues(catalogEntry.cost) &&
+      !hasSameCost(raw.cost, catalogEntry.cost)
+    ) {
       patched.cost = catalogEntry.cost;
       modelMutated = true;
     }
