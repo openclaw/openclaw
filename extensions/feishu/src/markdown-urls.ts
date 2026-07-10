@@ -5,7 +5,6 @@ type Range = {
   end: number;
 };
 
-const URL_START_PATTERN = /https?:\/\//g;
 const TRAILING_URL_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?"]);
 
 function isEscaped(text: string, index: number): boolean {
@@ -192,17 +191,20 @@ function trimBareUrl(rawUrl: string): { url: string; suffix: string } {
 }
 
 export function preserveFeishuBareMarkdownUrls(text: string): string {
-  if (!text.includes("_") || !URL_START_PATTERN.test(text)) {
-    URL_START_PATTERN.lastIndex = 0;
+  if (!text.includes("_")) {
     return text;
   }
 
-  URL_START_PATTERN.lastIndex = 0;
+  const urlPattern = /https?:\/\//g;
+  if (!urlPattern.test(text)) {
+    return text;
+  }
+
   const protectedRanges = collectProtectedRanges(text);
   let output = "";
   let cursor = 0;
   let match: RegExpExecArray | null;
-  while ((match = URL_START_PATTERN.exec(text)) !== null) {
+  while ((match = urlPattern.exec(text)) !== null) {
     const start = match.index;
     if (start < cursor || isInsideRanges(start, protectedRanges) || !isBareUrlStart(text, start)) {
       continue;
@@ -217,7 +219,7 @@ export function preserveFeishuBareMarkdownUrls(text: string): string {
     output += text.slice(cursor, start);
     output += `[${url}](${url})${suffix}`;
     cursor = rawEnd;
-    URL_START_PATTERN.lastIndex = rawEnd;
+    urlPattern.lastIndex = rawEnd;
   }
   output += text.slice(cursor);
   return output;
