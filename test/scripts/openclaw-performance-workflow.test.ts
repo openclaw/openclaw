@@ -129,6 +129,26 @@ describe("OpenClaw performance workflow", () => {
     ).toHaveLength(1);
   });
 
+  it("pins the Kova model through exact current source owners and fails closed on drift", () => {
+    const pinModel = findStep("Pin Kova OpenAI model to GPT 5.6");
+    const run = pinModel.run ?? "";
+    const configuredFiles = [...run.matchAll(/^\s*"((?:support|states)\/[^"]+)",?$/gm)].map(
+      (match) => match[1],
+    );
+
+    expect(configuredFiles).toEqual([
+      "support/configure-openclaw-mock-auth.mjs",
+      "support/configure-openclaw-live-auth.mjs",
+      "states/mock-openai-provider.json",
+    ]);
+    expect(run).not.toContain("support/mock-openai-server.mjs");
+    expect(run).toContain("if (!before.includes(sourceModel))");
+    expect(run).toContain("after.includes(sourceModel) || !after.includes(targetModel)");
+    expect(run.indexOf("const rewrites = files.map")).toBeLessThan(
+      run.indexOf("fs.writeFileSync(file, after"),
+    );
+  });
+
   it("fetches the public clawgrit baseline without publisher credentials", () => {
     const workflowText = readFileSync(WORKFLOW, "utf8");
     const baseline = findStep("Fetch previous source performance baseline");
