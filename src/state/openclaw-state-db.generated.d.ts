@@ -205,6 +205,24 @@ export interface ChannelPairingRequests {
   request_id: string;
 }
 
+export interface ClawhubPromotionClaims {
+  claimed_at_ms: number;
+  ends_at_ms: number;
+  model_keys_json: string;
+  provider: string | null;
+  slug: string;
+}
+
+export interface ClawhubPromotionsFeedState {
+  etag: string | null;
+  feed_sequence: number | null;
+  last_checked_at_ms: number | null;
+  notified_slugs_json: Generated<string>;
+  payload_json: string | null;
+  state_key: string;
+  updated_at_ms: number;
+}
+
 export interface CommandLogEntries {
   action: string;
   entry_json: string;
@@ -328,6 +346,8 @@ export interface CronJobs {
   stagger_ms: number | null;
   state_json: Generated<string>;
   store_key: string;
+  trigger_once: number | null;
+  trigger_script: string | null;
   updated_at: number;
   wake_mode: string;
 }
@@ -430,6 +450,7 @@ export interface DeviceIdentities {
 export interface DevicePairingPaired {
   approved_at_ms: number;
   approved_scopes_json: string | null;
+  approved_via: string | null;
   client_id: string | null;
   client_mode: string | null;
   created_at_ms: number;
@@ -438,6 +459,8 @@ export interface DevicePairingPaired {
   display_name: string | null;
   last_seen_at_ms: number | null;
   last_seen_reason: string | null;
+  node_surface_json: string | null;
+  pending_node_surface_json: string | null;
   platform: string | null;
   public_key: string;
   remote_ip: string | null;
@@ -456,6 +479,7 @@ export interface DevicePairingPending {
   is_repair: number | null;
   platform: string | null;
   public_key: string;
+  refreshed_at_ms: number | null;
   remote_ip: string | null;
   request_id: string;
   role: string | null;
@@ -689,50 +713,6 @@ export interface NodeHostConfig {
   version: number;
 }
 
-export interface NodePairingPaired {
-  approved_at_ms: number;
-  bins_json: string | null;
-  caps_json: string | null;
-  client_id: string | null;
-  client_mode: string | null;
-  commands_json: string | null;
-  core_version: string | null;
-  created_at_ms: number;
-  device_family: string | null;
-  display_name: string | null;
-  last_connected_at_ms: number | null;
-  last_seen_at_ms: number | null;
-  last_seen_reason: string | null;
-  model_identifier: string | null;
-  node_id: string;
-  permissions_json: string | null;
-  platform: string | null;
-  remote_ip: string | null;
-  token: string;
-  ui_version: string | null;
-  version: string | null;
-}
-
-export interface NodePairingPending {
-  caps_json: string | null;
-  client_id: string | null;
-  client_mode: string | null;
-  commands_json: string | null;
-  core_version: string | null;
-  device_family: string | null;
-  display_name: string | null;
-  model_identifier: string | null;
-  node_id: string;
-  permissions_json: string | null;
-  platform: string | null;
-  remote_ip: string | null;
-  request_id: string;
-  silent: number | null;
-  ts: number;
-  ui_version: string | null;
-  version: string | null;
-}
-
 export interface OfficialExternalPluginCatalogSnapshots {
   body: string;
   checksum: string;
@@ -741,6 +721,11 @@ export interface OfficialExternalPluginCatalogSnapshots {
   last_modified: string | null;
   saved_at: string;
   status: number;
+  trust_key_id: string | null;
+  trust_mode: string | null;
+  trust_signature_count: number | null;
+  trust_threshold: number | null;
+  trust_verified_at: string | null;
   updated_at_ms: number;
 }
 
@@ -799,6 +784,25 @@ export interface SchemaMeta {
   updated_at: number;
 }
 
+export interface SkillCuratorState {
+  id: Generated<number>;
+  last_attempt_at_ms: number;
+  last_error: string | null;
+  last_result_json: string;
+  last_success_at_ms: number | null;
+}
+
+export interface SkillLifecycle {
+  archived_reason: string | null;
+  created_at_ms: number;
+  pinned: Generated<number>;
+  skill_file: string;
+  skill_key: string;
+  skill_name: string;
+  state: string;
+  state_changed_at_ms: number;
+}
+
 export interface SkillUploads {
   actual_sha256: string | null;
   archive_blob: Uint8Array;
@@ -814,6 +818,17 @@ export interface SkillUploads {
   size_bytes: number;
   slug: string;
   upload_id: string;
+}
+
+export interface SkillUsage {
+  first_used_at_ms: number;
+  last_agent_id: string | null;
+  last_used_at_ms: number;
+  skill_file: string;
+  skill_key: string;
+  skill_name: string;
+  skill_source: string;
+  use_count: number;
 }
 
 export interface StateLeases {
@@ -1021,6 +1036,8 @@ export interface DB {
   channel_ingress_events: ChannelIngressEvents;
   channel_pairing_allow_entries: ChannelPairingAllowEntries;
   channel_pairing_requests: ChannelPairingRequests;
+  clawhub_promotion_claims: ClawhubPromotionClaims;
+  clawhub_promotions_feed_state: ClawhubPromotionsFeedState;
   command_log_entries: CommandLogEntries;
   commitments: Commitments;
   config_health_entries: ConfigHealthEntries;
@@ -1050,15 +1067,16 @@ export interface DB {
   model_capability_cache: ModelCapabilityCache;
   native_hook_relay_bridges: NativeHookRelayBridges;
   node_host_config: NodeHostConfig;
-  node_pairing_paired: NodePairingPaired;
-  node_pairing_pending: NodePairingPending;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;
+  skill_curator_state: SkillCuratorState;
+  skill_lifecycle: SkillLifecycle;
   skill_uploads: SkillUploads;
+  skill_usage: SkillUsage;
   state_leases: StateLeases;
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;

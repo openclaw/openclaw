@@ -42,6 +42,10 @@ import {
   SkillsDetailParamsSchema,
   SkillsDetailResultSchema,
   SkillsInstallParamsSchema,
+  SkillsCuratorActionParamsSchema,
+  SkillsCuratorActionResultSchema,
+  SkillsCuratorStatusParamsSchema,
+  SkillsCuratorStatusResultSchema,
   SkillsProposalActionParamsSchema,
   SkillsProposalApplyResultSchema,
   SkillsProposalCreateParamsSchema,
@@ -197,6 +201,7 @@ import {
 import {
   ExecApprovalsGetParamsSchema,
   ExecApprovalsNodeGetParamsSchema,
+  ExecApprovalsNodeSnapshotSchema,
   ExecApprovalsNodeSetParamsSchema,
   ExecApprovalsSetParamsSchema,
   ExecApprovalsSnapshotSchema,
@@ -250,8 +255,6 @@ import {
   NodePairListParamsSchema,
   NodePairRemoveParamsSchema,
   NodePairRejectParamsSchema,
-  NodePairRequestParamsSchema,
-  NodePairVerifyParamsSchema,
   NodeRenameParamsSchema,
 } from "./nodes.js";
 import {
@@ -316,6 +319,19 @@ import {
 } from "./sessions.js";
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 import { SystemInfoParamsSchema, SystemInfoResultSchema } from "./system-info.js";
+import {
+  TaskSuggestionEventSchema,
+  TaskSuggestionResolutionSchema,
+  TaskSuggestionSchema,
+  TaskSuggestionsAcceptParamsSchema,
+  TaskSuggestionsAcceptResultSchema,
+  TaskSuggestionsCreateParamsSchema,
+  TaskSuggestionsCreateResultSchema,
+  TaskSuggestionsDismissParamsSchema,
+  TaskSuggestionsDismissResultSchema,
+  TaskSuggestionsListParamsSchema,
+  TaskSuggestionsListResultSchema,
+} from "./task-suggestions.js";
 import {
   TasksCancelParamsSchema,
   TasksCancelResultSchema,
@@ -407,12 +423,10 @@ export const ProtocolSchemas = {
   WorktreesGcResult: WorktreesGcResultSchema,
 
   // Node pairing, invocation, presence, and pending-queue payloads.
-  NodePairRequestParams: NodePairRequestParamsSchema,
   NodePairListParams: NodePairListParamsSchema,
   NodePairApproveParams: NodePairApproveParamsSchema,
   NodePairRejectParams: NodePairRejectParamsSchema,
   NodePairRemoveParams: NodePairRemoveParamsSchema,
-  NodePairVerifyParams: NodePairVerifyParamsSchema,
   NodeRenameParams: NodeRenameParamsSchema,
   NodeListParams: NodeListParamsSchema,
   NodePendingAckParams: NodePendingAckParamsSchema,
@@ -481,6 +495,17 @@ export const ProtocolSchemas = {
   AuditEvent: AuditEventSchema,
   AuditListParams: AuditListParamsSchema,
   AuditListResult: AuditListResultSchema,
+  TaskSuggestion: TaskSuggestionSchema,
+  TaskSuggestionEvent: TaskSuggestionEventSchema,
+  TaskSuggestionResolution: TaskSuggestionResolutionSchema,
+  TaskSuggestionsAcceptParams: TaskSuggestionsAcceptParamsSchema,
+  TaskSuggestionsAcceptResult: TaskSuggestionsAcceptResultSchema,
+  TaskSuggestionsCreateParams: TaskSuggestionsCreateParamsSchema,
+  TaskSuggestionsCreateResult: TaskSuggestionsCreateResultSchema,
+  TaskSuggestionsDismissParams: TaskSuggestionsDismissParamsSchema,
+  TaskSuggestionsDismissResult: TaskSuggestionsDismissResultSchema,
+  TaskSuggestionsListParams: TaskSuggestionsListParamsSchema,
+  TaskSuggestionsListResult: TaskSuggestionsListResultSchema,
   TaskSummary: TaskSummarySchema,
   TasksListParams: TasksListParamsSchema,
   TasksListResult: TasksListResultSchema,
@@ -605,6 +630,10 @@ export const ProtocolSchemas = {
   SkillsSearchResult: SkillsSearchResultSchema,
   SkillsDetailParams: SkillsDetailParamsSchema,
   SkillsDetailResult: SkillsDetailResultSchema,
+  SkillsCuratorActionParams: SkillsCuratorActionParamsSchema,
+  SkillsCuratorActionResult: SkillsCuratorActionResultSchema,
+  SkillsCuratorStatusParams: SkillsCuratorStatusParamsSchema,
+  SkillsCuratorStatusResult: SkillsCuratorStatusResultSchema,
   SkillsProposalsListParams: SkillsProposalsListParamsSchema,
   SkillsProposalsListResult: SkillsProposalsListResultSchema,
   SkillsProposalInspectParams: SkillsProposalInspectParamsSchema,
@@ -660,6 +689,7 @@ export const ProtocolSchemas = {
   ExecApprovalsGetParams: ExecApprovalsGetParamsSchema,
   ExecApprovalsSetParams: ExecApprovalsSetParamsSchema,
   ExecApprovalsNodeGetParams: ExecApprovalsNodeGetParamsSchema,
+  ExecApprovalsNodeSnapshot: ExecApprovalsNodeSnapshotSchema,
   ExecApprovalsNodeSetParams: ExecApprovalsNodeSetParamsSchema,
   ExecApprovalsSnapshot: ExecApprovalsSnapshotSchema,
   ExecApprovalGetParams: ExecApprovalGetParamsSchema,

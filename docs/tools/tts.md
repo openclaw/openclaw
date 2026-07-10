@@ -634,7 +634,7 @@ directive warnings.
 - `speakerVoice` / `speakerVoiceId` (legacy aliases: `voice`, `voiceName`, `voice_name`, `google_voice`, `voiceId`)
 - `model` / `google_model`
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
-- `vol` / `volume` (MiniMax volume, 0–10)
+- `vol` / `volume` (MiniMax volume, `(0, 10]`)
 - `pitch` (MiniMax integer pitch, −12 to 12; fractional values are truncated)
 - `emotion` (Volcengine emotion tag)
 - `applyTextNormalization` (`auto|on|off`)
@@ -868,6 +868,9 @@ Reply -> TTS enabled?
     <ParamField path="timeoutMs" type="number">Command timeout in milliseconds. Default `120000`.</ParamField>
     <ParamField path="cwd" type="string">Optional command working directory.</ParamField>
     <ParamField path="env" type="Record<string, string>">Optional environment overrides for the command.</ParamField>
+
+    Command stdout and generated or converted audio are limited to 50 MiB. Diagnostic stderr is limited to 1 MiB. OpenClaw terminates the command and fails synthesis when either limit is exceeded.
+
   </Accordion>
 
   <Accordion title="Microsoft (no API key)">

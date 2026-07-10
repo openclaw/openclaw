@@ -15,7 +15,7 @@ Crestodian is OpenClaw's local setup, repair, and configuration helper. It stays
 
 Running `openclaw` with no subcommand routes based on config state:
 
-- Config missing, or exists with no authored settings (empty, or only `$schema`/`meta` keys): starts classic onboarding.
+- Config missing, or exists with no authored settings (empty, or only `$schema`/`meta` keys): starts guided onboarding with live AI verification.
 - Config exists but fails validation: starts Crestodian.
 - Config exists and is valid: opens the normal agent TUI (against a reachable configured Gateway, or locally if none is reachable). Use `/crestodian` inside the TUI, or run `openclaw crestodian` directly, to reach Crestodian.
 
@@ -23,7 +23,9 @@ Running `openclaw crestodian` always starts Crestodian explicitly, regardless of
 
 Noninteractive bare `openclaw` (no TTY) exits with a short message instead of printing root help: it points to non-interactive onboarding on a fresh install, to `openclaw crestodian --message "status"` when config is invalid, or to `openclaw agent --local ...` when config is valid.
 
-`openclaw onboard --modern` starts Crestodian as the modern onboarding preview. Plain `openclaw onboard` keeps classic onboarding.
+`openclaw onboard --modern` starts Crestodian directly. Plain `openclaw onboard`
+starts guided onboarding; `openclaw onboard --classic` opens the full
+step-by-step wizard.
 
 ## What Crestodian shows
 
@@ -70,7 +72,14 @@ restart gateway
 agents
 create agent work workspace ~/Projects/work
 models
+configure model provider
 set default model openai/gpt-5.5
+channels
+channel info slack
+connect slack
+open setup wizard
+open classic wizard
+open channel wizard for slack
 plugins list
 plugins search slack
 plugin install clawhub:openclaw-codex-app-server
@@ -85,7 +94,9 @@ quit
 
 Crestodian uses typed operations instead of editing config ad hoc.
 
-Read-only, run immediately: show overview, list agents, list installed plugins, search ClawHub plugins, show model/backend status, run status/health checks, check Gateway reachability, run doctor without interactive fixes, validate config, show the audit-log path. Starting the guided channel setup (`connect telegram`) also runs immediately — the wizard itself collects explicit answers and commits only at the end.
+Read-only operations run immediately: show overview, list agents, list installed plugins, search ClawHub plugins, show model/backend status, run status/health checks, check Gateway reachability, run doctor without interactive fixes, validate config, show the audit-log path.
+
+Starting guided channel setup (`connect telegram`) or model-provider setup (`configure model provider`) also runs immediately. Each wizard collects explicit answers and owns the resulting writes.
 
 Persistent, require conversational approval (or `--yes` for a direct command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, install or uninstall plugins, run doctor repairs that rewrite config or state.
 
@@ -93,10 +104,32 @@ Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahe
 
 Applied writes are recorded in `~/.openclaw/audit/crestodian.jsonl`. Discovery is not audited; only applied operations and writes are.
 
-Channel setup can run as a hosted conversation when the host supports masked
-input. The local Crestodian TUI does not accept sensitive wizard answers;
-instead it directs you to `openclaw channels add --channel <channel>`, whose
-interactive prompts mask credentials.
+Channel setup can run as a hosted conversation until it reaches a secret. The
+local Crestodian TUI does not accept sensitive wizard answers because terminal
+chat input is visible. It offers `open channel wizard` immediately, carrying
+the selected channel into the masked terminal wizard; you can also run
+`openclaw channels add --channel <channel>` later.
+
+### Switching to the menu wizards
+
+The local chat can hand control back to any terminal menu flow:
+
+```text
+open setup wizard
+open classic wizard
+open channel wizard for slack
+channel info slack
+```
+
+`open setup wizard` opens guided onboarding. `open classic wizard` opens the
+full classic setup. `open channel wizard for <channel>` opens masked channel
+setup after the chat TUI closes. Use `channel info <channel>` first for the
+channel label, setup state, prerequisites summary, and docs link.
+
+Model-provider setup uses the same provider/auth and default-model steps as
+`openclaw onboard`. In the local Crestodian TUI, approval exits the chat shell,
+runs those steps with masked terminal prompts, and then resumes Crestodian. A
+gateway/app chat that supports sensitive replies hosts the same steps inline.
 
 ## Setup bootstrap
 
@@ -117,7 +150,7 @@ When no model is configured, setup picks the first usable backend in this order 
 5. Codex -> `openai/gpt-5.5` through the Codex app-server harness
 6. Gemini CLI -> `google-gemini-cli/gemini-3.1-pro-preview`
 
-If none are available, setup still writes the default workspace and leaves the model unset. Install or log into Codex/Claude Code/Gemini CLI, or expose `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`, then run setup again.
+If none are available, setup still writes the workspace and Gateway configuration, then asks whether to configure a model provider. Accepting opens the normal onboarding provider/auth and default-model steps. Declining leaves Crestodian in deterministic mode; exact setup and repair commands still work, but the normal agent cannot answer until a provider and default model are configured. Run `configure model provider` later to reopen the provider flow.
 
 The macOS app drives the same ladder through the `crestodian.setup.detect` and `crestodian.setup.activate` gateway methods: detect lists every reusable backend it finds, activate live-tests one candidate (a real "reply with OK" completion) and only persists the model, workspace, and gateway defaults after the test passes. A failing candidate never changes config; the app automatically walks down the ladder and finally offers a manual key/token step populated from the Gateway's active text-inference provider plugins. The selected provider owns its starter model and config, and the credential is verified the same way before it is saved.
 

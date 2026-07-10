@@ -14,10 +14,7 @@ import {
   normalizeExtraMemoryPaths,
   remapChunkLines,
 } from "./internal.js";
-import {
-  DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES,
-  type MemoryMultimodalSettings,
-} from "./multimodal.js";
+import { normalizeMemoryMultimodalSettings, type MemoryMultimodalSettings } from "./multimodal.js";
 
 type FileEntry = NonNullable<Awaited<ReturnType<typeof buildFileEntry>>>;
 type MultimodalIndexingChunk = NonNullable<
@@ -75,11 +72,7 @@ function expectEmbeddingInput(
   return chunk.embeddingInput;
 }
 
-const multimodal: MemoryMultimodalSettings = {
-  enabled: true,
-  modalities: ["image", "audio"],
-  maxFileBytes: DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES,
-};
+const multimodal: MemoryMultimodalSettings = normalizeMemoryMultimodalSettings({ enabled: true });
 
 describe("memory host SDK package internals", () => {
   const getTmpDir = setupTempDirLifecycle("memory-package-");
@@ -233,7 +226,19 @@ describe("memory host SDK package internals", () => {
       overlap: 0,
     });
     for (const chunk of surrogateChunks) {
-      expect(chunk.text).not.toContain("\uFFFD");
+      expect(() => encodeURIComponent(chunk.text)).not.toThrow();
+    }
+  });
+
+  it("preserves a surrogate pair at the coarse split boundary", () => {
+    const text = `${"a".repeat(39)}🌸${"b".repeat(39)}`;
+
+    const chunks = chunkMarkdown(text, { tokens: 10, overlap: 0 });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe(text);
+    for (const chunk of chunks) {
+      expect(() => encodeURIComponent(chunk.text)).not.toThrow();
     }
   });
 

@@ -4,6 +4,7 @@ import os from "node:os";
 import nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 import "./doctor-tool-result-cap-advice.js";
 import {
@@ -142,6 +143,7 @@ const mocks = vi.hoisted(() => ({
   readSystemdUserLingerStatus: vi.fn(async () => ({ user: "alice", linger: "no" as const })),
   gatewayServiceIsLoaded: vi.fn(async () => true),
   resolveGatewayService: vi.fn(),
+  getSkillCuratorDoctorWarning: vi.fn(),
 }));
 
 const DOCTOR_GATEWAY_HEALTH_ID = "doctor:gateway-health";
@@ -157,6 +159,10 @@ vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({
 
 vi.mock("./bundled-health-checks.js", () => ({
   registerBundledHealthChecks: mocks.registerBundledHealthChecks,
+}));
+
+vi.mock("../skills/workshop/curator.js", () => ({
+  getSkillCuratorDoctorWarning: mocks.getSkillCuratorDoctorWarning,
 }));
 
 vi.mock("./doctor-repair-flow.js", () => ({
@@ -964,6 +970,27 @@ describe("doctor health contributions", () => {
     expect(ids.indexOf("doctor:skills")).toBeLessThan(ids.indexOf("doctor:write-config"));
   });
 
+  it("reports a wedged skill curator as a warning finding", async () => {
+    mocks.getSkillCuratorDoctorWarning.mockReturnValueOnce(
+      "skill curator has not completed a sweep since 2026-01-01 — check gateway logs",
+    );
+    const contribution = requireDoctorContribution("doctor:skill-curator");
+    const check = contribution.healthChecks[0] as HealthCheck;
+    const findings = await check.detect({
+      cfg: {},
+      mode: "doctor",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/skill-curator",
+        severity: "warning",
+        target: "skill-curator",
+      }),
+    ]);
+  });
+
   it("keeps workspace status opt-in for structured lint selection", async () => {
     const contribution = requireDoctorContribution("doctor:workspace-status");
     const check = contribution.healthChecks[0] as HealthCheck & { defaultEnabled?: boolean };
@@ -1305,6 +1332,44 @@ describe("doctor health contributions", () => {
     });
   });
 
+  it("keeps default-account routing lint opt-in", async () => {
+    const contribution = requireDoctorContribution("doctor:default-account-routing");
+    const check = contribution.healthChecks[0] as HealthCheck | undefined;
+    expect(check).toMatchObject({ defaultEnabled: false });
+
+    const ctx = {
+      cfg: {
+        channels: {
+          telegram: {
+            accounts: {
+              alerts: {},
+              work: {},
+            },
+          },
+        },
+        bindings: [{ agentId: "ops", match: { channel: "telegram" } }],
+      } as unknown as OpenClawConfig,
+      mode: "lint" as const,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    };
+
+    await expect(runDoctorLintChecks(ctx, { checks: [check!] })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+      findings: [],
+    });
+    await expect(
+      runDoctorLintChecks(ctx, { checks: [check!], includeAllChecks: true }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({ checkId: "core/doctor/default-account-routing" }),
+        expect.objectContaining({ checkId: "core/doctor/default-account-routing" }),
+      ],
+    });
+  });
+
   it("preserves allow-exec Gateway SecretRef resolution in auth health", async () => {
     const contribution = requireDoctorContribution("doctor:gateway-auth");
     const ctx = {
@@ -1363,6 +1428,11 @@ describe("doctor health contributions", () => {
 
   it("passes the active config into legacy state migration", async () => {
     const contribution = requireDoctorContribution("doctor:legacy-state");
+    const legacyStateCheck = CORE_HEALTH_CHECKS.find(
+      (check) => check.id === "core/doctor/legacy-state",
+    );
+    expect(legacyStateCheck).toMatchObject({ defaultEnabled: false });
+
     const cfg = { session: { store: "/tmp/shared-sessions.json" } };
     const detected = { preview: ["legacy sessions"], warnings: [] };
     mocks.detectLegacyStateMigrations.mockResolvedValue(detected);
@@ -1381,6 +1451,31 @@ describe("doctor health contributions", () => {
       config: cfg,
       recoverCorruptTargetStore: false,
     });
+  });
+
+  it("prints legacy state migration notices during manual doctor runs", async () => {
+    const contribution = requireDoctorContribution("doctor:legacy-state");
+    const detected = { preview: ["legacy sessions"], warnings: [] };
+    mocks.detectLegacyStateMigrations.mockResolvedValue(detected);
+    mocks.runLegacyStateMigrations.mockResolvedValue({
+      changes: [],
+      warnings: [],
+      notices: ["Left reviewed legacy residue in place."],
+    });
+    const ctx = {
+      cfg: {},
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: true },
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.note).toHaveBeenCalledWith(
+      "Left reviewed legacy residue in place.",
+      "Doctor notices",
+    );
   });
 
   it("skips Gateway health probes for exec SecretRefs unless allow-exec is set", async () => {
@@ -1505,6 +1600,12 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/config-audit-scrub");
     expect(contributionIds).toContain("core/doctor/session-transcripts");
     expect(contributionIds).toContain("core/doctor/session-snapshots");
+    expect(
+      contributionChecks.find((check) => check.id === "core/doctor/session-transcripts"),
+    ).toMatchObject({ defaultEnabled: false });
+    expect(
+      contributionChecks.find((check) => check.id === "core/doctor/session-snapshots"),
+    ).toMatchObject({ defaultEnabled: false });
     expect(contributionIds).toContain("core/doctor/plugin-registry");
     expect(contributionIds).toContain("core/doctor/configured-plugin-installs");
     expect(contributionIds).toContain("core/doctor/legacy-plugin-dependencies");
@@ -2708,6 +2809,65 @@ describe("doctor health contributions", () => {
       "Doctor warnings",
     );
   });
+
+  it.each([false, true])(
+    "reports default-account routing warnings during doctor runs (repair=%s)",
+    async (shouldRepair) => {
+      const contribution = requireDoctorContribution("doctor:default-account-routing");
+      mocks.runDoctorHealthRepairs.mockImplementation(async (ctx, options) => {
+        const findings = await options.checks[0]!.detect(ctx);
+        return {
+          config: ctx.cfg,
+          findings,
+          remainingFindings: findings,
+          changes: [],
+          warnings: [],
+          diffs: [],
+          effects: [],
+          checksRun: 1,
+          checksRepaired: 0,
+          checksValidated: 1,
+        };
+      });
+      const ctx = {
+        cfg: {
+          channels: {
+            telegram: {
+              accounts: {
+                alerts: {},
+                work: {},
+              },
+            },
+          },
+          bindings: [{ agentId: "ops", match: { channel: "telegram" } }],
+        } as unknown as OpenClawConfig,
+        configResult: { cfg: {} },
+        sourceConfigValid: true,
+        prompter: buildDoctorPrompter(shouldRepair),
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options: {},
+        cfgForPersistence: {},
+        configPath: "/tmp/fake-openclaw.json",
+        env: {},
+      } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+      await contribution.run(ctx);
+
+      expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(
+        expect.objectContaining({ mode: "fix", dryRun: !shouldRepair }),
+        expect.objectContaining({
+          checks: contribution.healthChecks,
+          dryRun: !shouldRepair,
+        }),
+      );
+      expect(ctx.runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("accounts.default is missing and no valid account-scoped binding"),
+      );
+      expect(ctx.runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("multiple accounts are configured but no explicit default is set"),
+      );
+    },
+  );
 
   it("skips doctor config writes under legacy update parents", () => {
     expect(

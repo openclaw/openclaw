@@ -106,7 +106,6 @@
   ],
   "experimentalRawEvents": true,
   "model": "gpt-5.5",
-  "persistExtendedHistory": true,
   "personality": "none",
   "sandbox": "danger-full-access",
   "serviceName": "OpenClaw"
@@ -128,7 +127,6 @@
   },
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "model": "gpt-5.5",
-  "persistExtendedHistory": true,
   "personality": "none",
   "sandbox": "danger-full-access",
   "threadId": "thread-telegram-heartbeat-codex-tool"
@@ -228,20 +226,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 52919,
-    "roughTokens": 13230
+    "chars": 54450,
+    "roughTokens": 13613
   },
   "openClawDeveloperInstructions": {
-    "chars": 1955,
-    "roughTokens": 489
+    "chars": 2155,
+    "roughTokens": 539
   },
   "totalTextOnly": {
-    "chars": 26995,
-    "roughTokens": 6749
+    "chars": 27195,
+    "roughTokens": 6799
   },
   "totalWithDynamicToolsJson": {
-    "chars": 79916,
-    "roughTokens": 19979
+    "chars": 81647,
+    "roughTokens": 20412
   },
   "userInputText": {
     "chars": 1271,
@@ -430,7 +428,7 @@ You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for
 
 Deferred searchable OpenClaw dynamic tools available: cron, gateway, heartbeat_respond, nodes, session_status, sessions_history, sessions_list, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
 
-Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.
+Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
 
 Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. Do not repeat that visible content in your final answer.
 

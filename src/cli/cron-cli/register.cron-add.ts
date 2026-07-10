@@ -26,6 +26,7 @@ import {
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
 import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
+import { readCronTriggerScript } from "./trigger-options.js";
 
 export function registerCronStatusCommand(cron: Command) {
   addGatewayClientOptions(
@@ -113,6 +114,8 @@ export function registerCronAddCommand(cron: Command) {
       )
       .option("--stagger <duration>", "Cron stagger window (e.g. 30s, 5m)")
       .option("--exact", "Disable cron staggering (set stagger to 0)", false)
+      .option("--trigger-script <path|->", "Condition script file, or - for stdin")
+      .option("--trigger-once", "Disable after the first successful triggered run", false)
       .option("--system-event <text>", "System event payload (main session)")
       .option("--message <text>", "Agent message payload")
       .option("--command <shell>", "Command payload run as sh -lc <shell> on the Gateway")
@@ -382,6 +385,16 @@ export function registerCronAddCommand(cron: Command) {
             }
 
             const sessionKey = normalizeOptionalString(opts.sessionKey);
+            const triggerScriptPath = normalizeOptionalString(opts.triggerScript);
+            if (opts.triggerOnce && !triggerScriptPath) {
+              throw new Error("--trigger-once requires --trigger-script");
+            }
+            const trigger = triggerScriptPath
+              ? {
+                  script: await readCronTriggerScript(triggerScriptPath),
+                  ...(opts.triggerOnce ? { once: true } : {}),
+                }
+              : undefined;
 
             if ((payload.kind === "agentTurn" || payload.kind === "command") && !agentId) {
               defaultRuntime.error(
@@ -404,6 +417,7 @@ export function registerCronAddCommand(cron: Command) {
               agentId,
               sessionKey,
               schedule,
+              trigger,
               sessionTarget,
               wakeMode,
               payload,

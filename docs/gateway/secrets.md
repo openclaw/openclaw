@@ -24,9 +24,24 @@ Plaintext credentials remain agent-readable if they sit in files the agent can i
 - Startup fails fast when an effectively active SecretRef cannot be resolved.
 - Reload is an atomic swap: full success, or keep the last-known-good snapshot.
 - Policy violations (for example an OAuth-mode auth profile combined with SecretRef input) fail activation before the runtime swap.
-- Runtime requests read only the active in-memory snapshot. Outbound delivery paths (Discord reply/thread delivery, Telegram action sends) also read that snapshot and do not re-resolve refs per send.
+- Runtime requests read only the active in-memory snapshot. Model-provider SecretRef credentials pass through auth storage and stream options as process-local sentinels until egress. Outbound delivery paths (Discord reply/thread delivery, Telegram action sends) also read that snapshot and do not re-resolve refs per send.
 
 This keeps secret-provider outages off hot request paths.
+
+## Egress-time injection (sentinels)
+
+For model-provider credentials backed by SecretRefs, OpenClaw mints an opaque, process-local sentinel during model-auth resolution. Auth storage, stream options, SDK configuration, logs, error objects, and most runtime introspection therefore see a value such as `oc-sent-v1-...`, not the provider credential. The guarded model fetch and managed local-provider health probes replace known sentinels in URL and header values immediately before each request leaves the process.
+
+Unknown sentinel-shaped values fail closed before network activity. OpenClaw refuses to send the request rather than forwarding an unresolved sentinel to a provider. Resolved secret values are also registered for exact-value log redaction as a defense in depth measure.
+
+Provider adapters use the latest injection point their SDK supports:
+
+- SDKs with a custom fetch option receive OpenClaw's guarded fetch, so the SDK retains the sentinel.
+- SDKs without a custom fetch option unwrap the sentinel immediately before client construction. Plugin-owned provider streams and agent harnesses unwrap at the final core-owned handoff because those transports do not share OpenClaw's guarded fetch.
+
+Sentinels reduce plaintext exposure across the model-call chain, but they are not process isolation. The real value still exists in same-process memory and appears at the final adapter boundary. Plain environment credentials that are not configured through SecretRefs remain plaintext and are outside this mechanism.
+
+Set `OPENCLAW_SECRET_SENTINELS=off` (also accepts `0` or `false`, case-insensitive) to disable sentinel minting during incident response or compatibility troubleshooting. The kill switch does not disable exact-value redaction registration.
 
 ## Agent-access boundary
 
@@ -726,6 +741,7 @@ Some SecretInput unions are easier to configure in raw editor mode than in form 
 
 - [Authentication](/gateway/authentication) - auth setup
 - [CLI: secrets](/cli/secrets) - CLI commands
+- [Vault SecretRefs](/plugins/vault) - HashiCorp Vault provider setup
 - [Environment Variables](/help/environment) - environment precedence
 - [SecretRef Credential Surface](/reference/secretref-credential-surface) - credential surface
 - [Secrets Apply Plan Contract](/gateway/secrets-plan-contract) - plan contract details

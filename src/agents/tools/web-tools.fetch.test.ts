@@ -425,7 +425,8 @@ describe("web_fetch extraction fallbacks", () => {
   });
 
   it("honors maxChars even when wrapper overhead exceeds limit", async () => {
-    installPlainTextFetch("short text");
+    const fullText = "short text";
+    installPlainTextFetch(fullText);
 
     const tool = createFetchTool({
       firecrawl: { enabled: false },
@@ -433,10 +434,21 @@ describe("web_fetch extraction fallbacks", () => {
     });
 
     const result = await tool?.execute?.("call", { url: "https://example.com/short" });
-    const details = result?.details as { text?: string; truncated?: boolean };
+    const details = result?.details as {
+      text?: string;
+      truncated?: boolean;
+      rawLength?: number;
+      wrappedLength?: number;
+      fullOutputPath?: string;
+    };
 
     expect(withoutSpillFooter(details.text).length).toBeLessThanOrEqual(100);
     expect(details.truncated).toBe(true);
+    expect(details.rawLength).toBe(fullText.length);
+    expect(details.wrappedLength).toBe(details.text?.length);
+    if (details.fullOutputPath) {
+      await rm(details.fullOutputPath, { force: true });
+    }
   });
 
   it("spills truncated fetched text to a private temp file", async () => {
@@ -452,6 +464,8 @@ describe("web_fetch extraction fallbacks", () => {
     const details = result?.details as {
       text?: string;
       truncated?: boolean;
+      rawLength?: number;
+      wrappedLength?: number;
       fullOutputPath?: string;
       spilledChars?: number;
       spillTruncated?: boolean;
@@ -463,6 +477,8 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.truncated).toBe(true);
     expect(details.text).toContain(`Full output: ${details.fullOutputPath}`);
     expect(details.text?.length).toBeLessThanOrEqual(500);
+    expect(details.rawLength).toBe(fullText.length);
+    expect(details.wrappedLength).toBe(details.text?.length);
     expect(details.spilledChars).toBe(fullText.length);
     expect(details.spillTruncated).toBeUndefined();
     const spilledText = await readFile(details.fullOutputPath, "utf8");
@@ -500,6 +516,38 @@ describe("web_fetch extraction fallbacks", () => {
     expect(spilledText).toContain("SECURITY NOTICE");
     expect(spilledText.length).toBeGreaterThan(WEB_FETCH_SPILL_MAX_CHARS);
     expect(spilledText.length).toBeLessThan(WEB_FETCH_SPILL_MAX_CHARS + 1_000);
+    await rm(details.fullOutputPath, { force: true });
+  });
+
+  it("does not split an emoji at the web_fetch spill file cap", async () => {
+    const prefix = "x".repeat(WEB_FETCH_SPILL_MAX_CHARS - 1);
+    const fullText = `${prefix}${String.fromCodePoint(0x1f600)}tail`;
+    installPlainTextFetch(fullText);
+
+    const tool = createFetchTool({
+      firecrawl: { enabled: false },
+      maxChars: 500,
+      maxResponseBytes: WEB_FETCH_SPILL_MAX_CHARS + 1_000,
+    });
+
+    const result = await tool?.execute?.("call", { url: "https://example.com/spill-utf16" });
+    const details = result?.details as {
+      text?: string;
+      fullOutputPath?: string;
+      spilledChars?: number;
+      spillTruncated?: boolean;
+    };
+    if (!details.fullOutputPath) {
+      throw new Error("expected fullOutputPath");
+    }
+
+    expect(details.spilledChars).toBe(WEB_FETCH_SPILL_MAX_CHARS - 1);
+    expect(details.text).toContain(`Spilled first ${WEB_FETCH_SPILL_MAX_CHARS - 1} chars.`);
+    expect(details.spillTruncated).toBe(true);
+    const spilledText = await readFile(details.fullOutputPath, "utf8");
+    expect(spilledText).toContain(prefix);
+    expect(spilledText).not.toContain(String.fromCodePoint(0x1f600));
+    expect(spilledText).not.toContain(String.fromCharCode(0xd83d));
     await rm(details.fullOutputPath, { force: true });
   });
 
@@ -637,7 +685,41 @@ describe("web_fetch extraction fallbacks", () => {
     });
     const result = await tool?.execute?.("call", { url: "https://example.com/stream" });
     const details = result?.details as { warning?: string } | undefined;
-    expect(details?.warning).toContain("Response body truncated");
+    expect(details?.warning).toContain("Response body incomplete after 32000 bytes");
+  });
+
+  it("reports the retained byte count when a response stream fails", async () => {
+    const chunk = new TextEncoder().encode("partial");
+    let sentChunk = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sentChunk) {
+          sentChunk = true;
+          controller.enqueue(chunk);
+          return;
+        }
+        controller.error(new Error("stream reset"));
+      },
+    });
+    installMockFetch((input: RequestInfo | URL) =>
+      Promise.resolve(
+        responseWithUrl(
+          stream,
+          { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } },
+          resolveRequestUrl(input),
+        ),
+      ),
+    );
+
+    const tool = createFetchTool({
+      maxResponseBytes: 64,
+      firecrawl: { enabled: false },
+    });
+    const result = await tool?.execute?.("call", { url: "https://example.com/reset" });
+    const details = result?.details as { text?: string; warning?: string } | undefined;
+
+    expect(details?.text).toContain("partial");
+    expect(details?.warning).toContain("Response body incomplete after 7 bytes");
   });
 
   it("keeps DNS pinning for web_fetch by default even when HTTP_PROXY is configured", async () => {

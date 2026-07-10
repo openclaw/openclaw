@@ -1,8 +1,10 @@
 // Reads HTTP request and response bodies with timeout and byte limits.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
+import { decodeTextPrefix } from "@openclaw/normalization-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "./errors.js";
 import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
 
@@ -180,6 +182,15 @@ type ReadResponsePrefixResult = {
   truncated: boolean;
 };
 
+export type ReadResponseTextPrefixOptions = {
+  chunkTimeoutMs?: number;
+  onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
+};
+
+type ReadResponsePrefixOptions = ReadResponseTextPrefixOptions & {
+  stopAtLimit?: boolean;
+};
+
 function validateMaxBytes(maxBytes: number): void {
   if (!Number.isFinite(maxBytes) || maxBytes < 0) {
     throw new RangeError(`maxBytes must be a non-negative finite number: ${maxBytes}`);
@@ -189,10 +200,7 @@ function validateMaxBytes(maxBytes: number): void {
 async function readResponsePrefix(
   response: Response,
   maxBytes: number,
-  options?: {
-    chunkTimeoutMs?: number;
-    onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
-  },
+  options?: ReadResponsePrefixOptions,
 ): Promise<ReadResponsePrefixResult> {
   validateMaxBytes(maxBytes);
   const body = response.body;
@@ -226,7 +234,7 @@ async function readResponsePrefix(
         continue;
       }
       const nextTotal = total + value.length;
-      if (nextTotal > maxBytes) {
+      if (nextTotal > maxBytes || (options?.stopAtLimit && nextTotal === maxBytes)) {
         const remaining = maxBytes - total;
         if (remaining > 0) {
           chunks.push(value.subarray(0, remaining));
@@ -256,6 +264,29 @@ async function readResponsePrefix(
     ),
     size,
     truncated,
+  };
+}
+
+export type ReadResponseTextPrefixResult = {
+  text: string;
+  size: number;
+  truncated: boolean;
+};
+
+/** Reads and decodes a bounded text prefix while cancelling unread overflow. */
+export async function readResponseTextPrefix(
+  response: Response,
+  maxBytes: number,
+  options?: ReadResponseTextPrefixOptions,
+): Promise<ReadResponseTextPrefixResult> {
+  const prefix = await readResponsePrefix(response, maxBytes, {
+    ...options,
+    stopAtLimit: true,
+  });
+  return {
+    text: decodeTextPrefix(prefix.buffer, { truncated: prefix.truncated }),
+    size: prefix.size,
+    truncated: prefix.truncated,
   };
 }
 
@@ -295,25 +326,20 @@ export async function readResponseTextSnippet(
 ): Promise<string | undefined> {
   const maxBytes = options?.maxBytes ?? 8 * 1024;
   const maxChars = options?.maxChars ?? 200;
-  const prefix = await readResponsePrefix(response, maxBytes, {
+  const prefix = await readResponseTextPrefix(response, maxBytes, {
     chunkTimeoutMs: options?.chunkTimeoutMs,
     onIdleTimeout: options?.onIdleTimeout,
   });
-  if (prefix.buffer.length === 0) {
+  if (!prefix.text) {
     return undefined;
   }
 
-  const text = new TextDecoder().decode(prefix.buffer);
-  if (!text) {
-    return undefined;
-  }
-
-  const collapsed = text.replace(/\s+/g, " ").trim();
+  const collapsed = prefix.text.replace(/\s+/g, " ").trim();
   if (!collapsed) {
     return undefined;
   }
   if (collapsed.length > maxChars) {
-    return `${collapsed.slice(0, maxChars)}…`;
+    return `${truncateUtf16Safe(collapsed, maxChars)}…`;
   }
   return prefix.truncated ? `${collapsed}…` : collapsed;
 }

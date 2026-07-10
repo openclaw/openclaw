@@ -21,6 +21,10 @@ import type {
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
 import { isCliRuntimeAliasForProvider } from "../model-runtime-aliases.js";
+import {
+  unwrapModelHeaderSentinelsForProviderEgress,
+  unwrapSecretSentinelsForProviderEgress,
+} from "../provider-secret-egress.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { expandToolGroups, mergeAlsoAllowPolicy, normalizeToolName } from "../tool-policy.js";
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
@@ -90,6 +94,7 @@ type PluginHarnessToolPolicyContext = Pick<
   | "senderName"
   | "senderUsername"
   | "senderE164"
+  | "senderIsOwner"
 >;
 
 type PluginHarnessToolPolicy = { allow?: string[]; deny?: string[] };
@@ -371,8 +376,7 @@ export async function runAgentHarnessAttempt(
     agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
   });
   const harness = selection.harness;
-  const attemptParams =
-    harness.id === "openclaw" ? params : applyPluginHarnessDenyAllToolPolicy(params);
+  const attemptParams = harness.id === "openclaw" ? params : preparePluginHarnessParams(params);
   logAgentHarnessSelection(selection, {
     provider: params.provider,
     modelId: params.modelId,
@@ -395,6 +399,22 @@ export async function runAgentHarnessAttempt(
     });
     throw error;
   }
+}
+
+function preparePluginHarnessParams(params: EmbeddedRunAttemptParams): EmbeddedRunAttemptParams {
+  const boundary = "plugin harness handoff";
+  const resolvedApiKey = params.resolvedApiKey
+    ? unwrapSecretSentinelsForProviderEgress(params.resolvedApiKey, boundary)
+    : params.resolvedApiKey;
+  const model = unwrapModelHeaderSentinelsForProviderEgress(params.model, boundary);
+  if (model === params.model && resolvedApiKey === params.resolvedApiKey) {
+    return applyPluginHarnessDenyAllToolPolicy(params);
+  }
+  return applyPluginHarnessDenyAllToolPolicy({
+    ...params,
+    model,
+    resolvedApiKey,
+  });
 }
 
 function applyPluginHarnessDenyAllToolPolicy(
@@ -463,6 +483,7 @@ function resolvePluginHarnessToolPolicies(
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    senderIsOwner: params.senderIsOwner,
   });
   const groupPolicyParams = {
     config: params.config,

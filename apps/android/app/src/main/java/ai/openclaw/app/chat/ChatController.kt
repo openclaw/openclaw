@@ -7,6 +7,7 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.parseGatewayModels
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
+import ai.openclaw.app.ui.chat.thinkingSupportedForSelection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -279,15 +280,6 @@ class ChatController internal constructor(
     scope.launch { publishOutbox() }
   }
 
-  /** Purges cached transcripts and queued sends after old-scope writes finish. */
-  internal suspend fun clearTranscriptCache() {
-    val cache = transcriptCache ?: return
-    cacheMutationMutex.withLock {
-      cache.clearAll()
-      commandOutbox?.clearAll()
-    }
-  }
-
   /** Purges cached transcripts and queued sends for one retired authentication scope. */
   internal suspend fun clearGatewayCache(gatewayId: String) {
     cacheMutationMutex.withLock {
@@ -466,6 +458,9 @@ class ChatController internal constructor(
         buildJsonObject {
           put("key", JsonPrimitive(sessionKey))
           put("deleteTranscript", JsonPrimitive(true))
+          // archive-then-delete: the bounded operator session lacks admin, and
+          // the gateway grants write-scope deletes only for archived sessions.
+          put("archivedOnly", JsonPrimitive(true))
         }
       requestGateway("sessions.delete", params.toString())
       fallBackFromRetiredActiveSession(sessionKey)
@@ -763,6 +758,15 @@ class ChatController internal constructor(
     val pendingSelection = pendingModelSelections[sessionKey]
     if (pendingSelection != null && !pendingSelection.await()) return false
     if (_sessionKey.value != sessionKey) return false
+    // agent-command.ts throws for explicit unsupported levels, so hidden controls must send off.
+    // Applied at enqueue time too so durable rows never persist a level the selected model
+    // rejects; reconnect flushes with a cleared catalog fail open, matching pre-gating behavior.
+    val thinking =
+      if (thinkingSupportedForSelection(_selectedModelRef.value, _modelCatalog.value)) {
+        normalizeThinking(thinkingLevel)
+      } else {
+        "off"
+      }
     if (!_healthOk.value) {
       // Offline capture: text-only commands become durable outbox rows and flush on reconnect.
       // Attachments stay blocked (text-only v1) so large payloads never sit in the database.
@@ -770,12 +774,11 @@ class ChatController internal constructor(
         updateErrorText("Gateway health not OK; cannot send")
         return false
       }
-      return enqueueOfflineCommand(text = trimmed, thinkingLevel = normalizeThinking(thinkingLevel))
+      return enqueueOfflineCommand(text = trimmed, thinkingLevel = thinking)
     }
 
     val runId = UUID.randomUUID().toString()
     val text = if (trimmed.isEmpty() && attachments.isNotEmpty()) "See attached." else trimmed
-    val thinking = normalizeThinking(thinkingLevel)
 
     // Optimistic user message keeps the composer responsive while chat.send and history refresh complete.
     val userContent =
@@ -1585,14 +1588,25 @@ class ChatController internal constructor(
     gatewayId: String,
   ): OutboxSendResult =
     try {
+      val queuedSessionKey = normalizeRequestedSessionKey(item.sessionKey)
+      // Android only knows the active session's selected model. Unknown queued sessions fail
+      // open, preserving the thinking level captured when they were enqueued.
+      val thinking =
+        if (
+          queuedSessionKey == _sessionKey.value &&
+          !thinkingSupportedForSelection(_selectedModelRef.value, _modelCatalog.value)
+        ) {
+          "off"
+        } else {
+          item.thinkingLevel
+        }
       val params =
         buildJsonObject {
           // Rows enqueued under the pre-hello "main" alias must flush to the canonical main
           // session the gateway announced, matching how the UI attributes those rows.
-          put("sessionKey", JsonPrimitive(normalizeRequestedSessionKey(item.sessionKey)))
+          put("sessionKey", JsonPrimitive(queuedSessionKey))
           put("message", JsonPrimitive(item.text))
-          // Enqueue-time thinking level: a later selector change must not alter queued sends.
-          put("thinking", JsonPrimitive(item.thinkingLevel))
+          put("thinking", JsonPrimitive(thinking))
           put("timeoutMs", JsonPrimitive(30_000))
           // The row id is the idempotency key, so gateway-side dedupe makes redelivery of an
           // acked-but-crashed item harmless.

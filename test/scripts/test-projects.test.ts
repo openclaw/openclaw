@@ -255,6 +255,13 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes live command retry helper changes through its regression test", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/ci-live-command-retry.sh"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/ci-live-command-retry.test.ts"],
+    });
+  });
+
   it("routes release wrapper changes through their owner tests", () => {
     expect(resolveChangedTestTargetPlan(["scripts/android-release.sh"])).toEqual({
       mode: "targets",
@@ -1300,6 +1307,14 @@ describe("scripts/test-projects changed-target routing", () => {
         ".github/workflows/mantis-telegram-desktop-proof.yml",
         [
           "test/scripts/mantis-telegram-desktop-proof-workflow.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/ci-workflow-guards.test.ts",
+        ],
+      ],
+      [
+        ".github/workflows/mantis-web-ui-chat-proof.yml",
+        [
+          "test/scripts/mantis-web-ui-chat-proof-workflow.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/ci-workflow-guards.test.ts",
         ],
@@ -2629,13 +2644,22 @@ describe("scripts/test-projects changed-target routing", () => {
       ["ui/src", "test/vitest/vitest.ui.config.ts"],
     ] as const;
 
+    const plansByConfig = new Map(
+      buildVitestRunPlans(
+        cases.map(([target]) => target),
+        process.cwd(),
+      ).map((plan) => [plan.config, plan]),
+    );
     for (const [target, config] of cases) {
-      expect(buildVitestRunPlans([target], process.cwd()).at(-1)).toEqual({
+      const plan = plansByConfig.get(config);
+      expect(plan).toMatchObject({
         config,
         forwardedArgs: [],
-        includePatterns: [`${target}/**/*.test.ts`],
         watchMode: false,
       });
+      expect(plan?.includePatterns?.filter((pattern) => pattern.endsWith("/**/*.test.ts"))).toEqual(
+        [`${target}/**/*.test.ts`],
+      );
     }
 
     expect(buildVitestRunPlans(["src/plugin-sdk"], process.cwd())).toEqual([

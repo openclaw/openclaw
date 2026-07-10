@@ -1,15 +1,17 @@
 # OpenClaw iOS Changelog
 
-## Unreleased
+## 2026.7.1 - 2026-07-08
 
-- Added long-press Listen and Stop controls for assistant chat messages, using configured Gateway speech with an on-device fallback.
-- Added a read-only Files browser for agent workspaces with directory navigation, text and image previews, and share-sheet export.
-- Added multi-gateway support: the app remembers every paired gateway, shows them in Settings with a quick switcher, and switches between them without pairing again. Credentials, TLS trust, and cached chats stay scoped to their gateway, push registration follows the active gateway, and forgetting a gateway removes all of its stored state.
-- Fixed Apple Watch connection setup so pairing and companion-install changes refresh immediately and cold launches wait for WatchConnectivity activation before sending.
-- Redesigned the Settings About screen with the animated mascot, app tagline, and Website/Docs/GitHub/Discord links.
-- Fixed startup aborts caused by inactive Voice Wake initializing the simulator audio pipeline.
-- Debug builds now use separate app, extension, widget, and Watch identifiers plus a distinct debug icon, so they can remain installed beside release builds.
-- Animated the OpenClaw mascot (float, blink, antenna wiggle, claw snaps) across onboarding, sidebar, and command center, matching openclaw.ai.
+- Added multi-gateway pairing and switching with gateway-scoped credentials, TLS trust, cached chats, push registration, and custom proxy headers.
+- Added voice-note recording, a slash-command picker, durable offline sending, and read-only offline session and transcript access.
+- Added session search, archived browsing, groups, unread state, rename/delete actions, and new-session creation in managed worktrees.
+- Improved chat rendering with syntax-highlighted code, native tables, inline and display math, expandable link previews, streaming prose animation, and Markdown export.
+- Added model favorites and recents, working model switching, and reasoning controls that adapt to model capabilities.
+- Added Listen and Stop controls for assistant messages, using configured Gateway speech with an on-device fallback.
+- Added a read-only Files browser for agent workspaces and an authenticated Gateway terminal destination.
+- Added Apple Watch voice turns and made pairing, activation, and queued replies more reliable.
+- Refreshed the native iOS design with branded typography, denser controls, an animated mascot, and a redesigned About screen.
+- Fixed permission prompts, onboarding and QR handoff, reconnect recovery, screen-recording finalization, Voice Wake startup, and contact creation.
 
 ## 2026.6.11 - 2026-07-01
 

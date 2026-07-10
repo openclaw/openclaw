@@ -111,6 +111,7 @@
   gap: 6px;
 }
 
+.chat-workspace-rail__terminal,
 .chat-workspace-rail__refresh,
 .chat-workspace-rail__collapse-toggle {
   width: 32px;
@@ -119,11 +120,43 @@
   padding: 0;
 }
 
+.chat-workspace-rail__terminal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  /* Match the sibling refresh/collapse buttons (.btn radius) so the rail
+     header buttons share one corner treatment. */
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.chat-workspace-rail__terminal:hover,
+.chat-workspace-rail__terminal:focus-visible {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.chat-workspace-rail--collapsed .chat-workspace-rail__terminal {
+  border-color: transparent;
+  background: transparent;
+}
+
+.chat-workspace-rail--collapsed .chat-workspace-rail__terminal:hover,
+.chat-workspace-rail--collapsed .chat-workspace-rail__terminal:focus-visible {
+  border-color: transparent;
+  background: transparent;
+}
+
 .chat-workspace-rail__collapse-toggle {
   flex: 0 0 auto;
   box-shadow: none;
 }
 
+.chat-workspace-rail__terminal svg,
 .chat-workspace-rail__refresh svg,
 .chat-workspace-rail__collapse-toggle svg,
 .chat-workspace-rail__file-icon svg {
@@ -407,40 +440,6 @@
   color: var(--muted);
 }
 
-.chat-workspace-rail__breadcrumbs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  padding: 0 12px 6px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.2;
-  overflow: hidden;
-}
-
-.chat-workspace-rail__crumb {
-  min-width: 0;
-  max-width: 88px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  font: inherit;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-workspace-rail__crumb:hover,
-.chat-workspace-rail__crumb:focus-visible {
-  color: var(--text);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.chat-workspace-rail__crumb-separator,
 .chat-workspace-rail__browser-caption {
   color: var(--muted);
 }

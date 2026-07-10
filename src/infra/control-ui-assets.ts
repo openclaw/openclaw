@@ -2,6 +2,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import * as controlUiFsRuntime from "./control-ui-assets.fs.runtime.js";
@@ -285,7 +286,7 @@ function summarizeCommandOutput(text: string): string | undefined {
   if (!last) {
     return undefined;
   }
-  return last.length > 240 ? `${last.slice(0, 239)}…` : last;
+  return last.length > 240 ? `${truncateUtf16Safe(last, 239)}…` : last;
 }
 
 export async function ensureControlUiAssetsBuilt(

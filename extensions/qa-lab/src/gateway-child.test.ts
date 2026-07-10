@@ -1,5 +1,6 @@
+import { spawn } from "node:child_process";
 // Qa Lab tests cover gateway child plugin behavior.
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -141,6 +142,51 @@ describe("runQaGatewayCliCommand", () => {
         env: process.env,
       }),
     ).rejects.toThrow("OpenClaw CLI exited 7: fixture failure");
+  });
+
+  it.each(["stdout", "stderr"] as const)(
+    "rejects and stops the CLI child when its %s pipe fails",
+    async (streamName) => {
+      const child = spawn(process.execPath, ["--eval", "setInterval(() => {}, 1000)"], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const close = once(child, "close");
+      const result = testing.readQaGatewayCliCommand(child);
+      const message = `synthetic ${streamName} read failure`;
+
+      child[streamName]?.destroy(new Error(message));
+
+      await expect(result).rejects.toThrow(
+        `qa gateway cli ${streamName} stream failed: ${message}`,
+      );
+      await close;
+    },
+  );
+});
+
+describe("monitorQaGatewayChildFailure", () => {
+  it("records the first pipe failure and stops the detached Gateway child", async () => {
+    const child = spawn(process.execPath, ["--eval", "setInterval(() => {}, 1000)"], {
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const close = once(child, "close");
+    const output = testing.createQaGatewayChildLogCollector();
+    const getFailure = testing.monitorQaGatewayChildFailure(child, output);
+    const error = new Error("synthetic gateway stdout read failure");
+
+    child.stdout?.destroy(error);
+    child.stderr?.destroy(new Error("later stderr read failure"));
+
+    await vi.waitFor(() => expect(getFailure()).toEqual({ source: "stdout", error }));
+    await close;
+    expect(output.text()).toContain(
+      "gateway child stdout stream failed: synthetic gateway stdout read failure",
+    );
+    expect(output.text()).not.toContain("later stderr read failure");
+    expect(() => testing.throwQaGatewayChildFailure(getFailure, () => output.text())).toThrow(
+      "gateway child stdout stream failed: synthetic gateway stdout read failure",
+    );
   });
 });
 
@@ -1529,7 +1575,9 @@ describe("qa bundled plugin dir", () => {
     );
     await mkdir(path.join(repoRoot, "dist", "extensions", "qa-channel"), { recursive: true });
     await mkdir(path.join(repoRoot, "dist", "extensions", "memory-core"), { recursive: true });
-    await mkdir(path.join(repoRoot, "dist", "extensions", "speech-core"), { recursive: true });
+    await mkdir(path.join(repoRoot, "dist", "extensions", "image-generation-core"), {
+      recursive: true,
+    });
     await mkdir(path.join(repoRoot, "dist", "extensions", "unused-plugin"), { recursive: true });
     await mkdir(path.join(repoRoot, "dist", "plugin-sdk"), { recursive: true });
     await writeFile(
@@ -1564,9 +1612,9 @@ describe("qa bundled plugin dir", () => {
     });
 
     expect((await readdir(bundledPluginsDir)).toSorted()).toEqual([
+      "image-generation-core",
       "memory-core",
       "qa-channel",
-      "speech-core",
     ]);
     expect(bundledPluginsDir).toBe(
       path.join(
@@ -1590,7 +1638,9 @@ describe("qa bundled plugin dir", () => {
     expect(qaChannel.accountId).toBe("qa");
     expect((await lstat(path.join(bundledPluginsDir, "qa-channel"))).isDirectory()).toBe(true);
     expect((await lstat(path.join(bundledPluginsDir, "memory-core"))).isDirectory()).toBe(true);
-    expect((await lstat(path.join(bundledPluginsDir, "speech-core"))).isDirectory()).toBe(true);
+    expect((await lstat(path.join(bundledPluginsDir, "image-generation-core"))).isDirectory()).toBe(
+      true,
+    );
     const sharedChunkStat = await lstat(
       path.join(
         repoRoot,
@@ -2064,9 +2114,9 @@ describe("qa bundled plugin dir", () => {
       JSON.stringify({ openclaw: { install: { minHostVersion: ">=2026.4.8" } } }),
       "utf8",
     );
-    await mkdir(path.join(bundledRoot, "speech-core"), { recursive: true });
+    await mkdir(path.join(bundledRoot, "image-generation-core"), { recursive: true });
     await writeFile(
-      path.join(bundledRoot, "speech-core", "package.json"),
+      path.join(bundledRoot, "image-generation-core", "package.json"),
       JSON.stringify({ openclaw: { install: { minHostVersion: ">=2026.4.9" } } }),
       "utf8",
     );

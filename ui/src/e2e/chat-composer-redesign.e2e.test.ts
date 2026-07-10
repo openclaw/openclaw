@@ -61,7 +61,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
               displayName: "Codex",
               status: "ok",
               profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
-              usage: { windows: [{ label: "Week", usedPercent: 72 }] },
+              usage: { providerId: "openai", windows: [{ label: "Week", usedPercent: 72 }] },
             },
           ],
         },
@@ -120,13 +120,19 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       const camera = composerShell.locator(".agent-chat__camera-btn");
       const takePhoto = composerShell.getByRole("menuitem", { name: "Take photo" });
       const settings = composer.getByRole("button", { name: "Chat settings", exact: true });
-      const splitView = composer.getByRole("button", { name: "Open split view" });
+      const splitView = page.getByRole("button", { name: "Open split view" });
       const voice = page.getByRole("button", { name: "Start voice input" });
 
       await expect.poll(() => model.isVisible()).toBe(true);
       await expect.poll(() => contextUsage.isVisible()).toBe(true);
       await expect.poll(() => usage.isVisible()).toBe(false);
       await expect.poll(() => settings.isVisible()).toBe(true);
+      await expect.poll(() => splitView.isVisible()).toBe(true);
+      await expect
+        .poll(() =>
+          splitView.evaluate((node) => node.closest(".agent-chat__composer-shell") == null),
+        )
+        .toBe(true);
       await expect.poll(() => attach.isVisible()).toBe(true);
       await expect.poll(() => camera.isVisible()).toBe(false);
       await expect.poll(() => voice.isVisible()).toBe(true);
@@ -159,42 +165,34 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await contextUsage.click();
       await expect.poll(() => usage.isVisible()).toBe(true);
       await expect
-        .poll(async () => (await usage.textContent())?.replace(/\s+/g, " ").trim())
-        .toBe("Usage Remaining 28%");
+        .poll(async () =>
+          (await composer.locator(".context-usage__limit").first().textContent())
+            ?.replace(/\s+/g, " ")
+            .trim(),
+        )
+        .toBe("Weekly · all models 72%");
       await contextUsage.click();
 
       await model.click();
       const thinkingSlider = composer.locator('[data-chat-thinking-slider="true"]');
-      const speedButtons = composer.locator("[data-chat-speed-option]");
+      const speedToggle = composer.locator("[data-chat-speed-toggle]");
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe("off,low,medium,high");
       await expect.poll(() => thinkingSlider.inputValue()).toBe("3");
-      await expect
-        .poll(async () => (await speedButtons.allTextContents()).map((label) => label.trim()))
-        .toEqual(["Standard", "Fast"]);
+      // OpenAI sessions toggle between the standard and priority tiers.
+      await expect.poll(async () => (await speedToggle.textContent())?.trim()).toBe("Standard");
+      await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("false");
       await expect
         .poll(() => composer.locator(".chat-controls__model-option-icon").count())
         .toBe(0);
       await expect
         .poll(() => composer.locator(".chat-controls__provider-icon").count())
         .toBeGreaterThan(0);
-      const patchCountBeforeDraft = (await gateway.getRequests("sessions.patch")).length;
+      // Reasoning and speed commit immediately; the picker stays open so all
+      // three controls can be adjusted together.
       await thinkingSlider.press("Home");
       await thinkingSlider.press("ArrowRight");
-      await expect
-        .poll(() => gateway.getRequests("sessions.patch"))
-        .toHaveLength(patchCountBeforeDraft);
-      await expect.poll(() => model.getAttribute("data-chat-thinking-value")).toBe("low");
-      await expect.poll(() => thinkingSlider.inputValue()).toBe("1");
-      await composer.locator('[data-chat-speed-option="on"]').click();
-      await expect
-        .poll(() => gateway.getRequests("sessions.patch"))
-        .toHaveLength(patchCountBeforeDraft);
-      await expect
-        .poll(() => composer.locator('[data-chat-speed-option="on"]').getAttribute("aria-pressed"))
-        .toBe("true");
-      await composer.getByRole("button", { name: "Save", exact: true }).click();
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.patch")).some(
@@ -206,6 +204,9 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
           ),
         )
         .toBe(true);
+      await expect.poll(() => model.getAttribute("data-chat-thinking-value")).toBe("low");
+      await expect.poll(() => thinkingSlider.inputValue()).toBe("1");
+      await speedToggle.click();
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.patch")).some(
@@ -217,13 +218,14 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
           ),
         )
         .toBe(true);
+      await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("true");
+      await expect.poll(async () => (await speedToggle.textContent())?.trim()).toBe("Fast");
+      await page.keyboard.press("Escape");
       await expect
         .poll(() => composer.locator(".chat-controls__inline-select-menu").isVisible())
         .toBe(false);
       await model.click();
-      await expect
-        .poll(() => composer.locator('[data-chat-speed-option="on"]').getAttribute("aria-pressed"))
-        .toBe("true");
+      await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("true");
       await expect
         .poll(() => composer.locator('[data-chat-thinking-slider="true"]').count())
         .toBe(1);
@@ -381,37 +383,56 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
           progress.evaluate((node) => node.closest(".agent-chat__composer-controls") != null),
         )
         .toBe(true);
-      const [activeSettingsBox, activeSplitViewBox, activeProgressBox, activeModelBox] =
-        await Promise.all([
-          settings.boundingBox(),
-          splitView.boundingBox(),
-          progress.boundingBox(),
-          model.boundingBox(),
-        ]);
+      const [
+        activeSettingsBox,
+        activeSplitViewBox,
+        activeProgressBox,
+        activeModelBox,
+        activeChatContentBox,
+      ] = await Promise.all([
+        settings.boundingBox(),
+        splitView.boundingBox(),
+        progress.boundingBox(),
+        model.boundingBox(),
+        chatContent.boundingBox(),
+      ]);
       expect(activeSettingsBox).not.toBeNull();
       expect(activeSplitViewBox).not.toBeNull();
       expect(activeProgressBox).not.toBeNull();
       expect(activeModelBox).not.toBeNull();
-      if (!activeSettingsBox || !activeSplitViewBox || !activeProgressBox || !activeModelBox) {
-        throw new Error(
-          "expected settings, split view, progress, and model controls to have layout boxes",
-        );
+      expect(activeChatContentBox).not.toBeNull();
+      if (
+        !activeSettingsBox ||
+        !activeSplitViewBox ||
+        !activeProgressBox ||
+        !activeModelBox ||
+        !activeChatContentBox
+      ) {
+        throw new Error("expected chat content and composer controls to have layout boxes");
       }
-      expect(activeSplitViewBox.x).toBeGreaterThanOrEqual(
+      expect(activeProgressBox.x).toBeGreaterThanOrEqual(
         activeSettingsBox.x + activeSettingsBox.width - 1,
       );
       expect(
-        activeSplitViewBox.x - (activeSettingsBox.x + activeSettingsBox.width),
-      ).toBeLessThanOrEqual(8);
-      expect(activeProgressBox.x).toBeGreaterThanOrEqual(
-        activeSplitViewBox.x + activeSplitViewBox.width - 1,
-      );
-      expect(
-        activeProgressBox.x - (activeSplitViewBox.x + activeSplitViewBox.width),
+        activeProgressBox.x - (activeSettingsBox.x + activeSettingsBox.width),
       ).toBeLessThanOrEqual(8);
       expect(activeModelBox.x).toBeGreaterThanOrEqual(
         activeProgressBox.x + activeProgressBox.width - 1,
       );
+      expect(
+        Math.abs(
+          activeChatContentBox.x +
+            activeChatContentBox.width -
+            (activeSplitViewBox.x + activeSplitViewBox.width),
+        ),
+      ).toBeLessThanOrEqual(24);
+      expect(
+        Math.abs(
+          activeChatContentBox.y +
+            activeChatContentBox.height -
+            (activeSplitViewBox.y + activeSplitViewBox.height),
+        ),
+      ).toBeLessThanOrEqual(24);
       expect(
         Math.abs(
           activeProgressBox.y +
@@ -606,6 +627,8 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect
         .poll(() => composer.locator('[data-chat-model-provider-group="codex"]').count())
         .toBe(0);
+      // The default model is advertised as unavailable, so the pinned default
+      // option must not be offered.
       await expect.poll(() => composer.locator('[data-chat-model-option=""]').count()).toBe(0);
     } finally {
       await context.close();

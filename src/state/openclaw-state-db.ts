@@ -31,7 +31,7 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js"
  * tables, private file permissions, cached handles, and audit rows for
  * migrations/backups that operate on local state.
  */
-const OPENCLAW_STATE_SCHEMA_VERSION = 1;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 1;
 /** Shared timeout used by state and agent SQLite handles before surfacing busy errors. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 30_000;
 const OPENCLAW_STATE_DIR_MODE = 0o700;
@@ -86,7 +86,7 @@ function bestEffortChmodSync(target: string, mode: number): void {
   stateDbLog.warn(`skipped permission hardening for ${target}: ${String(result.error)}`);
 }
 
-function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv): void {
+export function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv): void {
   const dir = path.dirname(pathname);
   const defaultDir = resolveOpenClawStateSqliteDir(env);
   const isDefaultStateDatabase =
@@ -301,6 +301,57 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
       changes: [],
       warnings: [`Failed migrating shared state database schema at ${pathname}: ${String(err)}`],
     };
+  } finally {
+    db.close();
+    ensureOpenClawStatePermissions(pathname, env);
+  }
+}
+
+function ensureStartupMigrationCheckpointSchema(db: DatabaseSync, pathname: string): void {
+  assertSupportedSchemaVersion(db, pathname);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_meta (
+      meta_key TEXT NOT NULL PRIMARY KEY,
+      role TEXT NOT NULL,
+      schema_version INTEGER NOT NULL,
+      agent_id TEXT,
+      app_version TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS state_leases (
+      scope TEXT NOT NULL,
+      lease_key TEXT NOT NULL,
+      owner TEXT NOT NULL,
+      expires_at INTEGER,
+      heartbeat_at INTEGER,
+      payload_json TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (scope, lease_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_state_leases_expiry
+      ON state_leases(expires_at, scope, lease_key)
+      WHERE expires_at IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_state_leases_owner
+      ON state_leases(owner, updated_at DESC);
+  `);
+  ensureColumn(db, "schema_meta", "app_version TEXT");
+}
+
+export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
+  callback: (db: DatabaseSync) => T,
+  options: OpenClawStateDatabaseOptions = {},
+): T {
+  const env = options.env ?? process.env;
+  const pathname = resolveDatabasePath(options);
+  ensureOpenClawStatePermissions(pathname, env);
+  const sqlite = requireNodeSqlite();
+  const db = new sqlite.DatabaseSync(pathname);
+  db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+  try {
+    ensureStartupMigrationCheckpointSchema(db, pathname);
+    return callback(db);
   } finally {
     db.close();
     ensureOpenClawStatePermissions(pathname, env);
@@ -703,10 +754,10 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
 }
 
 function ensureAdditiveStateColumns(db: DatabaseSync): void {
-  ensureColumn(db, "node_pairing_pending", "client_id TEXT");
-  ensureColumn(db, "node_pairing_pending", "client_mode TEXT");
-  ensureColumn(db, "node_pairing_paired", "client_id TEXT");
-  ensureColumn(db, "node_pairing_paired", "client_mode TEXT");
+  ensureColumn(db, "device_pairing_pending", "refreshed_at_ms INTEGER");
+  ensureColumn(db, "device_pairing_paired", "approved_via TEXT");
+  ensureColumn(db, "device_pairing_paired", "node_surface_json TEXT");
+  ensureColumn(db, "device_pairing_paired", "pending_node_surface_json TEXT");
   ensureColumn(db, "cron_run_logs", "status TEXT");
   ensureColumn(db, "cron_run_logs", "error TEXT");
   ensureColumn(db, "cron_run_logs", "summary TEXT");
@@ -746,6 +797,8 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "cron_jobs", "stagger_ms INTEGER");
   ensureColumn(db, "cron_jobs", "session_target TEXT NOT NULL DEFAULT 'main'");
   ensureColumn(db, "cron_jobs", "wake_mode TEXT NOT NULL DEFAULT 'auto'");
+  ensureColumn(db, "cron_jobs", "trigger_script TEXT");
+  ensureColumn(db, "cron_jobs", "trigger_once INTEGER");
   ensureColumn(db, "cron_jobs", "payload_kind TEXT NOT NULL DEFAULT 'message'");
   ensureColumn(db, "cron_jobs", "payload_message TEXT");
   ensureColumn(db, "cron_jobs", "payload_model TEXT");
@@ -862,6 +915,11 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "gateway_restart_sentinel", "doctor_hint TEXT");
   ensureColumn(db, "gateway_restart_sentinel", "stats_json TEXT");
   ensureColumn(db, "gateway_boot_lifecycle", "startup_reason TEXT");
+  ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_mode TEXT");
+  ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_key_id TEXT");
+  ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_signature_count INTEGER");
+  ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_threshold INTEGER");
+  ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_verified_at TEXT");
   runSqliteImmediateTransactionSync(db, () => {
     const addedTaskRequesterAgentId = ensureColumn(db, "task_runs", "requester_agent_id TEXT");
     if (addedTaskRequesterAgentId) {
@@ -876,6 +934,10 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
   ensureAdditiveStateColumns(db);
   assertCanonicalStateSchemaShape(db, pathname);
   db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+  // Retired node_pairing_* tables were created by earlier schema revisions but
+  // never had a shipped writer (the node surface lives on device_pairing_paired
+  // records), so dropping the always-empty tables is safe, not destructive.
+  db.exec("DROP TABLE IF EXISTS node_pairing_pending; DROP TABLE IF EXISTS node_pairing_paired;");
   ensureAdditiveStateColumns(db);
   db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
   const now = Date.now();

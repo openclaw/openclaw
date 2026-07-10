@@ -77,6 +77,7 @@ import {
   type ChatInputHistoryState,
 } from "./input-history.ts";
 import { controlUiNowMs, roundedControlUiDurationMs } from "./performance.ts";
+import type { RenderLifecycle } from "./render-lifecycle.ts";
 import {
   handleAbortChat,
   isChatBusy,
@@ -102,7 +103,7 @@ export type ChatHost = ChatInputHistoryState &
     chatError?: string | null;
     hello: GatewayHelloOk | null;
     chatModelSwitchPromises?: Record<string, Promise<boolean>>;
-    updateComplete?: Promise<unknown>;
+    renderLifecycle?: RenderLifecycle;
     requestUpdate?: () => void;
     refreshSessionsAfterChat: Map<string, SessionRefreshTarget>;
     chatSubmitGuards?: Map<string, Promise<void>>;
@@ -856,7 +857,7 @@ function attachmentSubmitSignature(attachment: ChatAttachment): string {
 
 function chatSubmitKey(
   host: ChatHost,
-  kind: "btw" | "message",
+  kind: "detached" | "message",
   message: string,
   attachments: ChatAttachment[],
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision,
@@ -948,7 +949,7 @@ function snapshotChatAttachments(attachments: readonly ChatAttachment[]): ChatAt
   });
 }
 
-async function sendDetachedBtwMessage(
+async function sendDetachedCommandMessage(
   host: ChatHost,
   message: string,
   opts?: {
@@ -1153,8 +1154,13 @@ export async function handleSendChat(
       return;
     }
 
-    if (isBtwCommand(message)) {
-      const submitKey = chatSubmitKey(host, "btw", message, attachmentsToSend);
+    const parsed = parseSlashCommand(message);
+    // The backend resolves /approve before active-run admission. Send it now so
+    // the approval command cannot queue behind the run that is waiting for it.
+    const shouldSendDetachedCommand =
+      isBtwCommand(message) || (parsed?.command.key === "approve" && isChatBusy(host));
+    if (shouldSendDetachedCommand) {
+      const submitKey = chatSubmitKey(host, "detached", message, attachmentsToSend);
       await withChatSubmitGuard(host, submitKey, async () => {
         const modelSwitchReady = waitForPendingChatModelSwitch(host, submittedSessionKey);
         if (modelSwitchReady !== true && !(await modelSwitchReady)) {
@@ -1170,7 +1176,7 @@ export async function handleSendChat(
         if (messageOverride == null) {
           recordNonTranscriptInputHistory(host, message);
         }
-        await sendDetachedBtwMessage(host, message, {
+        await sendDetachedCommandMessage(host, message, {
           previousDraft: cleared.previousDraft,
           attachments: hasAttachments ? attachmentsToSend : undefined,
           previousAttachments: cleared.previousAttachments,
@@ -1180,7 +1186,6 @@ export async function handleSendChat(
     }
 
     // Intercept local slash commands (/status, /model, /compact, etc.)
-    const parsed = parseSlashCommand(message);
     if (parsed?.command.executeLocal) {
       if (isChatBusy(host) && shouldQueueLocalSlashCommand(parsed.command.key)) {
         if (messageOverride == null) {

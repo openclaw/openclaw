@@ -5,6 +5,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -106,6 +107,8 @@ data class GatewayHelloSummary(
   val serverVersion: String?,
   val mainSessionKey: String?,
   val updateAvailable: GatewayUpdateAvailableSummary?,
+  val authRole: String? = null,
+  val authScopes: List<String> = emptyList(),
 )
 
 data class GatewayUpdateAvailableSummary(
@@ -611,6 +614,7 @@ class GatewaySession(
       }
     }
 
+    @OptIn(DelicateCoroutinesApi::class)
     suspend fun sendRequestFrame(
       method: String,
       params: JsonElement?,
@@ -625,7 +629,12 @@ class GatewaySession(
         pending.remove(id)
         throw err
       }
-      connectionScope.launch(Dispatchers.IO) {
+      // ATOMIC start: joinOwnedWork() cancels connectionJob right after failPending(); a
+      // DEFAULT-start watcher still queued for dispatch would be cancelled without ever running
+      // and silently drop the terminal onError owed to fire-and-forget callers. ATOMIC
+      // guarantees this block runs; await() on the already-failed deferred then surfaces the
+      // disconnect outcome without suspending.
+      connectionScope.launch(Dispatchers.IO, start = CoroutineStart.ATOMIC) {
         try {
           val response =
             try {
@@ -712,6 +721,7 @@ class GatewaySession(
       socket?.cancel() ?: closedDeferred.complete(Unit)
     }
 
+    @OptIn(DelicateCoroutinesApi::class)
     private fun finishTransport(
       message: String,
       connectError: Throwable,
@@ -719,18 +729,19 @@ class GatewaySession(
       if (!terminalCallbackClaimed.compareAndSet(false, true)) return
       val shouldNotify = state.getAndSet(ConnectionState.CLOSED) != ConnectionState.CLOSED
       incomingMessages.close()
-      try {
-        if (shouldNotify) onDisconnected(message)
-      } finally {
-        messagePumpJob.invokeOnCompletion {
-          // OkHttp can deliver onClosed immediately after onMessage. Let an accepted connect
-          // response finish so auth retry state and issued device tokens survive the close.
-          if (connectResponseAccepted.get()) {
-            connectHandshakeJob?.invokeOnCompletion {
-              finalizeTransport(connectError)
-            } ?: finalizeTransport(connectError)
-          } else {
-            connectNonceDeferred.completeExceptionally(connectError)
+      // Completion handlers run synchronously and cannot own app-level disconnect cleanup.
+      connectionScope.launch(Dispatchers.IO, start = CoroutineStart.ATOMIC) {
+        // Preserve accepted-frame ordering even if the parent scope is cancelled during failure.
+        withContext(NonCancellable) {
+          try {
+            messagePumpJob.join()
+            if (connectResponseAccepted.get()) {
+              connectHandshakeJob?.join()
+            } else {
+              connectNonceDeferred.completeExceptionally(connectError)
+            }
+            if (shouldNotify) onDisconnected(message)
+          } finally {
             finalizeTransport(connectError)
           }
         }
@@ -880,6 +891,10 @@ class GatewaySession(
     ): List<String>? =
       when (role.trim()) {
         "node" -> emptyList()
+        // Setup-code bootstrap handoff is deliberately least-privilege. It never
+        // persists operator.admin, so Skill Workshop lifecycle actions remain
+        // disabled until shared token/password auth or an owner-approved scope
+        // upgrade issues an admin-scoped operator device token.
         "operator" -> {
           val allowedOperatorScopes =
             setOf(
@@ -986,6 +1001,8 @@ class GatewaySession(
             serverVersion = serverVersion,
             mainSessionKey = nextMainSessionKey,
             updateAvailable = parseUpdateAvailable(snapshot?.get("updateAvailable").asObjectOrNull()),
+            authRole = authRole,
+            authScopes = authScopes,
           ),
       )
     }

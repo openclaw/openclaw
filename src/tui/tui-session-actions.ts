@@ -14,7 +14,7 @@ import type { ChatLog } from "./components/chat-log.js";
 import type { TuiAgentsList, TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
-import type { SessionInfo, TuiOptions, TuiStateAccess } from "./tui-types.js";
+import type { SessionInfo, TuiHistoryLoadResult, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
 type SessionActionBtwPresenter = {
   clear: () => void;
@@ -417,7 +417,7 @@ export function createSessionActions(context: SessionActionContext) {
     return true;
   };
 
-  const loadHistory = async () => {
+  const loadHistory = async (): Promise<TuiHistoryLoadResult> => {
     try {
       const history = await client.loadHistory({
         sessionKey: state.currentSessionKey,
@@ -554,10 +554,13 @@ export function createSessionActions(context: SessionActionContext) {
         );
       }
       void rememberSessionKey?.(state.currentSessionKey);
+      tui.requestRender(true);
+      return { loaded: true, inFlightRunId: inFlightRunId || null };
     } catch (err) {
       chatLog.addSystem(`history failed: ${String(err)}`);
+      tui.requestRender(true);
+      return { loaded: false };
     }
-    tui.requestRender(true);
   };
 
   const setSession = async (rawKey: string) => {
