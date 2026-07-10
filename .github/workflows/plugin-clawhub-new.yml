@@ -415,7 +415,7 @@ jobs:
             node scripts/check-plugin-npm-runtime-builds.mjs --package "${package_dir}"
             OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR="${output_dir}" \
               PACKAGE_TAG="${package_tag}" \
-              bash scripts/plugin-clawhub-publish.sh --pack "${package_dir}"
+              bash .release-harness/scripts/plugin-clawhub-publish.sh --pack "${package_dir}"
             tgz="$(find "${output_dir}" -maxdepth 1 -type f -name '*.tgz' -print -quit)"
             artifact_sha256="$(sha256sum "${tgz}" | awk '{print $1}')"
             artifact_size="$(wc -c < "${tgz}" | tr -d '[:space:]')"

@@ -88,6 +88,8 @@ describe("Plugin ClawHub New workflow", () => {
     });
     const packRun = step(pack, "Pack immutable ClawHub bootstrap artifacts").run ?? "";
     expect(packRun).not.toContain('mode}" == "configure-only"');
+    expect(packRun).toContain("bash .release-harness/scripts/plugin-clawhub-publish.sh --pack");
+    expect(packRun).not.toContain("bash scripts/plugin-clawhub-publish.sh --pack");
     expect(packRun).toContain("--validate-packed");
     expect(packRun).toContain("--clawhub-toolchain-integrity");
     expect(packRun).toContain("--clawhub-toolchain-sha256");
