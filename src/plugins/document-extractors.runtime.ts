@@ -47,6 +47,9 @@ export function resolvePluginDocumentExtractors(params?: {
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: readonly string[];
 }): PluginDocumentExtractorEntry[] {
+  if (params?.onlyPluginIds !== undefined && params.onlyPluginIds.length === 0) {
+    return [];
+  }
   const extractors: PluginDocumentExtractorEntry[] = [];
   const loadErrors: unknown[] = [];
   const explicitAllowedPluginIds = resolveExplicitAllowedDocumentExtractorPluginIds({
