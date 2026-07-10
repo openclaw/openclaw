@@ -460,6 +460,34 @@ describe("official external plugin catalog", () => {
     });
   });
 
+  it("accepts matching repeated hosted feed content-length headers", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 2,
+      entries: [],
+    });
+    const size = new TextEncoder().encode(body).byteLength;
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: {
+              "content-length": `${size}, ${size}`,
+            },
+          }),
+      ),
+    });
+
+    expect(result.source).toBe("hosted");
+    if (result.source === "hosted") {
+      expect(result.feed.sequence).toBe(2);
+    }
+  });
+
   it("uses the default local feed profile for hosted catalog loading", async () => {
     const body = JSON.stringify({
       schemaVersion: 1,

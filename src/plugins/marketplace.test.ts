@@ -899,6 +899,46 @@ describe("marketplace plugins", () => {
     });
   });
 
+  it("accepts matching repeated archive content-length headers", async () => {
+    await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+      const body = Buffer.from("tgz-bytes");
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: new Response(new Blob([body]), {
+          status: 200,
+          headers: { "content-length": `${body.byteLength}, ${body.byteLength}` },
+        }),
+        finalUrl: "https://cdn.example.com/releases/frontend-design.tgz",
+        release: vi.fn(async () => undefined),
+      });
+      installPluginFromPathMock.mockResolvedValue({
+        ok: true,
+        pluginId: "frontend-design",
+        targetDir: "/tmp/frontend-design",
+        version: "0.1.0",
+        extensions: ["index.ts"],
+      });
+      const manifestPath = await writeMarketplaceManifest(rootDir, {
+        plugins: [
+          {
+            name: "frontend-design",
+            source: "https://example.com/frontend-design.tgz",
+          },
+        ],
+      });
+
+      const result = await installPluginFromMarketplace({
+        marketplace: manifestPath,
+        plugin: "frontend-design",
+      });
+
+      expectMarketplaceInstallSuccess(result, {
+        marketplacePlugin: "frontend-design",
+        marketplaceSource: manifestPath,
+      });
+      expect(installPluginFromPathMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("rejects non-streaming archive responses before buffering them", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
       const arrayBuffer = vi.fn(async () => new Uint8Array([1, 2, 3]).buffer);

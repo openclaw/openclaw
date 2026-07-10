@@ -574,6 +574,49 @@ describe("model-pricing-cache", () => {
     expect(health.sources[0]?.detail).toContain("invalid content-length header: 1e3");
   });
 
+  it("accepts matching repeated pricing content-length headers", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "custom/gpt-remote" },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [{ id: "gpt-remote" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const body = JSON.stringify({ data: [] });
+    const size = new TextEncoder().encode(body).byteLength;
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response(body, {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": `${size}, ${size}`,
+          },
+        });
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    const health = getGatewayModelPricingHealth();
+    expect(health.state).toBe("ok");
+    expect(health.sources).toHaveLength(0);
+  });
+
   it("records and clears scheduled refresh rejections for health surfaces", async () => {
     vi.useFakeTimers();
     try {

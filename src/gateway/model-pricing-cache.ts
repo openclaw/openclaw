@@ -1,5 +1,6 @@
 // Gateway model-pricing refresh and normalization.
 // Fetches, normalizes, and schedules cached pricing for model usage estimates.
+import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import type { ModelCatalogCost } from "@openclaw/model-catalog-core/model-catalog-types";
 import {
   normalizeOptionalString,
@@ -153,18 +154,7 @@ function parseNumberString(value: unknown): number | null {
 }
 
 function parsePricingContentLength(value: string | null): number | null {
-  if (value === null) {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    throw new Error(`invalid content-length header: ${value}`);
-  }
-  const parsed = Number(trimmed);
-  if (!Number.isSafeInteger(parsed)) {
-    throw new Error(`invalid content-length header: ${value}`);
-  }
-  return parsed;
+  return parseMediaContentLength(value);
 }
 
 function formatTimeoutSeconds(timeoutMs: number): string {

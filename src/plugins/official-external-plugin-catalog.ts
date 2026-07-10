@@ -1,5 +1,6 @@
 /** Reads official external plugin/channel/provider catalogs into manifest-like metadata. */
 import { createHash } from "node:crypto";
+import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import officialExternalChannelCatalog from "../../scripts/lib/official-external-channel-catalog.json" with { type: "json" };
@@ -546,11 +547,13 @@ function parseHostedCatalogContentLength(raw: string | null, maxBytes: number): 
   if (!normalized) {
     return;
   }
-  if (!/^\d+$/.test(normalized)) {
+  let size: number | null;
+  try {
+    size = parseMediaContentLength(normalized);
+  } catch {
     throw new Error("hosted catalog feed has invalid content-length");
   }
-  const size = Number(normalized);
-  if (!Number.isSafeInteger(size) || size > maxBytes) {
+  if (size !== null && size > maxBytes) {
     throw new Error(`hosted catalog feed exceeds ${maxBytes} bytes`);
   }
 }

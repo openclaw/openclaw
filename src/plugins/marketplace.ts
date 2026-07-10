@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -747,15 +748,7 @@ async function cancelUnreadMarketplaceResponseBody(response: Response): Promise<
 }
 
 function parseMarketplaceContentLength(raw: string): number {
-  const trimmed = raw.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    throw new Error(`invalid content-length header: ${raw}`);
-  }
-  const size = Number(trimmed);
-  if (!Number.isSafeInteger(size)) {
-    throw new Error(`invalid content-length header: ${raw}`);
-  }
-  return size;
+  return parseMediaContentLength(raw) ?? 0;
 }
 
 async function readMarketplaceChunkWithTimeout(
