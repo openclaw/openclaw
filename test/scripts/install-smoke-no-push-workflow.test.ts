@@ -107,9 +107,18 @@ describe("install smoke no-push root image transport", () => {
     );
     expect(workflowIdentity.run).toContain("job.workflow_sha must be a full lowercase commit SHA");
     const manifest = step(preflight, "Build install-smoke CI manifest");
+    expect(manifest.env).toEqual({
+      OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE:
+        "${{ inputs.run_bun_global_install_smoke || 'false' }}",
+    });
     expect(manifest.run).toContain(
       'dockerfile_image="openclaw-dockerfile-smoke-local:${target_sha}"',
     );
+    expect(manifest.run).toContain(
+      'run_bun_global_install_smoke="$workflow_bun_global_install_smoke"',
+    );
+    expect(manifest.run).not.toContain("event_name");
+    expect(manifest.run).not.toContain("workflow_call");
 
     const text = readFileSync(INSTALL_SMOKE_REUSABLE, "utf8");
     expect(text).not.toContain("packages: write");

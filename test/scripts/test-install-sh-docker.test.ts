@@ -1506,7 +1506,9 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
     expect(workflow).not.toContain("github.event_name == 'pull_request'");
     expect(workflow).not.toContain("node scripts/ci-changed-scope.mjs");
     expect(workflow).toContain("OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE");
-    expect(workflow).toContain('if [ "$event_name" = "workflow_call" ]; then');
+    expect(workflow).toContain('run_bun_global_install_smoke="$workflow_bun_global_install_smoke"');
+    expect(workflow).not.toContain("OPENCLAW_CI_EVENT_NAME");
+    expect(workflow).not.toContain('if [ "$event_name"');
     expect(workflow).toContain('echo "run_bun_global_install_smoke=$run_bun_global_install_smoke"');
     expect(workflow).toContain("run_fast_install_smoke=true");
     expect(workflow).toContain("run_full_install_smoke=true");
