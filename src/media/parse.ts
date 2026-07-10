@@ -35,7 +35,7 @@ export type SplitMediaFromOutputOptions = {
 
 /** Converts file URLs into plain local paths before downstream media validation. */
 export function normalizeMediaSource(src: string): string {
-  return src.startsWith("file://") ? src.replace("file://", "") : src;
+  return src.replace(/^file:\/\//i, "");
 }
 
 const TRAILING_SERIALIZED_JSON_AFTER_EXT_RE = /^(.*\.\w{1,10})\\?"(?=[\]},:]|$).*/s;
