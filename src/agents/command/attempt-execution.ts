@@ -48,6 +48,7 @@ import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { runCliAgent } from "../cli-runner.js";
+import { hasClaudeLiveSessionForOwner } from "../cli-runner/claude-live-session.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
 import { getCliSessionBinding } from "../cli-session.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
@@ -660,9 +661,22 @@ export function runAgentAttempt(params: {
           }
         : undefined;
     const resolveReusableCliSessionBinding = async () => {
+      const hasManagedClaudeLiveSession = Boolean(
+        isClaudeCliProvider(cliExecutionProvider) &&
+        cliSessionBinding?.sessionId &&
+        hasClaudeLiveSessionForOwner({
+          backendId: cliExecutionProvider,
+          agentAccountId: params.runContext.accountId,
+          agentId: params.sessionAgentId,
+          authProfileId: cliSessionBinding.authProfileId,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+        }),
+      );
       if (
         !isClaudeCliProvider(cliExecutionProvider) ||
         !cliSessionBinding?.sessionId ||
+        hasManagedClaudeLiveSession ||
         (await claudeCliSessionTranscriptHasContent({
           sessionId: cliSessionBinding.sessionId,
           workspaceDir: cliProcessCwd,

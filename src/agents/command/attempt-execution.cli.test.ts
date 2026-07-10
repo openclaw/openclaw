@@ -35,6 +35,7 @@ const runAgentAttempt = (
 
 const runCliAgentMock = vi.hoisted(() => vi.fn());
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
+const hasClaudeLiveSessionForOwnerMock = vi.hoisted(() => vi.fn(() => false));
 const providerAuthAliasMocks = vi.hoisted(() => ({
   resolveProviderAuthAliasMap: vi.fn(() => ({})),
   resolveProviderIdForAuth: vi.fn(
@@ -59,6 +60,11 @@ const providerAuthAliasMocks = vi.hoisted(() => ({
 }));
 vi.mock("../cli-runner.js", () => ({
   runCliAgent: runCliAgentMock,
+}));
+
+vi.mock("../cli-runner/claude-live-session.js", () => ({
+  getClaudeLiveSessionGenerationForOwner: vi.fn(() => undefined),
+  hasClaudeLiveSessionForOwner: hasClaudeLiveSessionForOwnerMock,
 }));
 
 vi.mock("../model-selection.js", () => ({
@@ -287,6 +293,8 @@ describe("CLI attempt execution", () => {
     runCliAgentMock.mockReset();
     runEmbeddedAgentMock.mockReset();
     resetGeneratedMediaTaskActivityForTests();
+    hasClaudeLiveSessionForOwnerMock.mockReset();
+    hasClaudeLiveSessionForOwnerMock.mockReturnValue(false);
     providerAuthAliasMocks.resolveProviderAuthAliasMap.mockClear();
     providerAuthAliasMocks.resolveProviderIdForAuth.mockClear();
   });
@@ -708,12 +716,9 @@ describe("CLI attempt execution", () => {
   it("keeps the bound claude-cli session id as the reuse candidate when the native transcript is missing (so reseed can recover)", async () => {
     const sessionKey = "agent:main:direct:claude-missing-transcript-reseed";
     const cliSessionId = "cli-sid-abc";
-    // Bug condition: the Claude project dir exists but holds no transcript for
-    // the bound session, so claudeCliSessionTranscriptHasContent() is false. The
-    // store is cleared (no stale --resume), but the bound id must still flow to
-    // runCliAgent as the reuse candidate so prepare can re-detect the missing
-    // transcript and arm raw-transcript reseed. Dropping it here starves reseed
-    // and loses warm-stdin continuity.
+    // Bug condition: the managed stdio child is still live but Claude wrote no
+    // native transcript. The durable binding and the current candidate must both
+    // survive until prepare/execution prove that exact child reusable.
     const homeDir = path.join(tmpDir, "home-missing-transcript");
     const projectsDir = resolveClaudeCliProjectDirForWorkspace({
       workspaceDir: tmpDir,
@@ -725,6 +730,7 @@ describe("CLI attempt execution", () => {
     const sessionEntry = makeClaudeCliSessionEntry("openclaw-sid", cliSessionId);
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    hasClaudeLiveSessionForOwnerMock.mockReturnValue(true);
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("ok"));
 
     await runClaudeCliAttempt({
@@ -743,6 +749,22 @@ describe("CLI attempt execution", () => {
       sessionId: cliSessionId,
       authProfileId: "anthropic:claude-cli",
     });
+    expect(hasClaudeLiveSessionForOwnerMock).toHaveBeenCalledWith({
+      backendId: "claude-cli",
+      agentAccountId: undefined,
+      agentId: "main",
+      authProfileId: "anthropic:claude-cli",
+      sessionId: "openclaw-sid",
+      sessionKey,
+    });
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      cliSessionId,
+    );
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(cliSessionId);
   });
 
   it("keeps Claude CLI resume when the stored transcript has assistant content", async () => {

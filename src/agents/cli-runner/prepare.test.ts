@@ -181,6 +181,7 @@ function createCliBackendConfig(
 
 function setClaudeCliBackendForPrepareTest(
   params: {
+    liveSession?: boolean;
     sessionMode?: "always" | "existing" | "none";
     reseedFromRawTranscriptWhenUncompacted?: boolean;
   } = {},
@@ -201,6 +202,7 @@ function setClaudeCliBackendForPrepareTest(
           output: "jsonl",
           input: "stdin",
           sessionMode: params.sessionMode ?? "existing",
+          ...(params.liveSession ? { liveSession: "claude-stdio" as const } : {}),
           ...(params.reseedFromRawTranscriptWhenUncompacted
             ? { reseedFromRawTranscriptWhenUncompacted: true }
             : {}),
@@ -281,6 +283,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         args: [],
         cleanup: vi.fn(async () => undefined),
       })),
+      getClaudeLiveSessionGenerationForOwner: vi.fn(() => undefined),
       resolveApiKeyForProfile: resolveApiKeyForProfileImpl,
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
@@ -3306,6 +3309,72 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
       expect(context.openClawHistoryPrompt).toContain("prior claude-cli ask");
       expect(context.openClawHistoryPrompt).toContain("latest ask");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a warm claude-cli binding when its managed stdio child is still live", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    appendTranscriptEntry(sessionFile, {
+      id: "msg-warm-1",
+      parentId: null,
+      timestamp: new Date(1).toISOString(),
+      message: {
+        role: "user",
+        content: "earlier warm context",
+        timestamp: 1,
+      },
+    });
+    try {
+      setClaudeCliBackendForPrepareTest({
+        liveSession: true,
+        reseedFromRawTranscriptWhenUncompacted: true,
+      });
+      const transcriptCheck = vi.fn(async () => false);
+      const orphanCheck = vi.fn(async () => true);
+      const getLiveSessionGeneration = vi.fn(() => "warm-live-generation");
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+        getClaudeLiveSessionGenerationForOwner: getLiveSessionGeneration,
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:direct:peer",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "warm follow-up",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-warm-live-follow-up",
+        cliSessionBinding: { sessionId: "warm-claude-sid" },
+        cliSessionId: "warm-claude-sid",
+        config: createCliBackendConfig(),
+      });
+
+      expect(getLiveSessionGeneration).toHaveBeenCalledWith({
+        backendId: "claude-cli",
+        agentAccountId: undefined,
+        agentId: undefined,
+        authProfileId: undefined,
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:direct:peer",
+      });
+      expect(transcriptCheck).toHaveBeenCalledWith({
+        sessionId: "warm-claude-sid",
+        workspaceDir: dir,
+      });
+      expect(orphanCheck).not.toHaveBeenCalled();
+      expect(context.reusableCliSession).toEqual({
+        mode: "reuse",
+        sessionId: "warm-claude-sid",
+      });
+      expect(context.requiredClaudeLiveSessionGeneration).toBe("warm-live-generation");
+      expect(context.openClawHistoryPrompt).toContain("earlier warm context");
+      expect(context.openClawHistoryPrompt).toContain("warm follow-up");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

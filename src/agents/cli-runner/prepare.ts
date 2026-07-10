@@ -89,6 +89,7 @@ import {
   isWorkspaceBootstrapPending as isWorkspaceBootstrapPendingImpl,
 } from "../workspace.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+import { getClaudeLiveSessionGenerationForOwner } from "./claude-live-session.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { buildCliAgentSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
@@ -116,6 +117,7 @@ const prepareDeps = {
   prepareClaudeCliSkillsPlugin,
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
+  getClaudeLiveSessionGenerationForOwner,
   resolveApiKeyForProfile,
 };
 
@@ -767,6 +769,22 @@ export async function prepareCliRunContext(
         sessionId: candidateClaudeCliSessionId,
         workspaceDir: cwd,
       }));
+    const managedClaudeLiveSessionGeneration =
+      claudeCliTranscriptMissing &&
+      backendResolved.id === "claude-cli" &&
+      "liveSession" in preparedBackendFinal.backend &&
+      preparedBackendFinal.backend.liveSession === "claude-stdio" &&
+      preparedBackendFinal.backend.output === "jsonl" &&
+      preparedBackendFinal.backend.input === "stdin" &&
+      prepareDeps.getClaudeLiveSessionGenerationForOwner({
+        backendId: backendResolved.id,
+        agentAccountId: params.agentAccountId,
+        agentId: params.agentId,
+        authProfileId: effectiveAuthProfileId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      });
+    const hasManagedClaudeLiveSession = Boolean(managedClaudeLiveSessionGeneration);
     const claudeCliTranscriptOrphanedToolUse =
       hasClaudeCliCandidate &&
       !claudeCliTranscriptMissing &&
@@ -775,7 +793,7 @@ export async function prepareCliRunContext(
         workspaceDir: cwd,
       }));
     const claudeCliInvalidatedReason: "missing-transcript" | "orphaned-tool-use" | undefined =
-      claudeCliTranscriptMissing
+      claudeCliTranscriptMissing && !hasManagedClaudeLiveSession
         ? "missing-transcript"
         : claudeCliTranscriptOrphanedToolUse
           ? "orphaned-tool-use"
@@ -1101,6 +1119,9 @@ export async function prepareCliRunContext(
       backendResolved,
       preparedBackend: preparedBackendFinal,
       reusableCliSession,
+      ...(managedClaudeLiveSessionGeneration
+        ? { requiredClaudeLiveSessionGeneration: managedClaudeLiveSessionGeneration }
+        : {}),
       hadSessionFile,
       contextEngineConfig,
       contextEngine,

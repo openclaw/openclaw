@@ -19,6 +19,7 @@ import {
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isHeartbeatLifecycleRunKind } from "./bootstrap-mode.js";
+import { resolveCliBackendConfig } from "./cli-backends.js";
 import type { CliOutput } from "./cli-output.js";
 import { shouldUseClaudeLiveSession } from "./cli-runner/claude-live-session.js";
 import {
@@ -467,6 +468,10 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
       );
       if (hookResult?.handled) {
         const finalText = hookResult.reply?.text ?? SILENT_REPLY_TOKEN;
+        const syntheticBackend = resolveCliBackendConfig(params.provider, params.config, {
+          agentId: params.agentId,
+        });
+        const sessionBindingDisabled = syntheticBackend?.config.sessionMode === "none";
         cliBackendLog.info(
           `cli synthetic turn: provider=${params.provider} model=<synthetic> requestedModel=${params.model ?? ""} durationMs=${Date.now() - startedAt} ${formatCliBackendOutputDigest(finalText)}`,
         );
@@ -475,9 +480,10 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
           meta: {
             durationMs: Date.now() - startedAt,
             agentMeta: {
-              sessionId: params.sessionId,
+              sessionId: "",
               provider: params.provider,
               model: params.model ?? "",
+              ...(sessionBindingDisabled ? { clearCliSessionBinding: true } : {}),
             },
             finalAssistantVisibleText: finalText,
             finalAssistantRawText: finalText,
@@ -541,6 +547,7 @@ export async function runPreparedCliAgent(
 ): Promise<EmbeddedAgentRunResult> {
   const { executePreparedCliRun } = await import("./cli-runner/execute.runtime.js");
   const { params } = context;
+  const sessionBindingDisabled = context.preparedBackend.backend.sessionMode === "none";
   const hookRunner = getGlobalHookRunner();
   const hasLlmInputHooks = hookRunner?.hasHooks("llm_input") === true;
   const hasLlmOutputHooks = hookRunner?.hasHooks("llm_output") === true;
@@ -662,6 +669,7 @@ export async function runPreparedCliAgent(
         sessionId: params.sessionId ?? "",
         provider: params.provider,
         model: context.modelId,
+        ...(sessionBindingDisabled ? { clearCliSessionBinding: true } : {}),
       },
     },
   });
@@ -754,7 +762,7 @@ export async function runPreparedCliAgent(
           sessionId: "",
           provider: params.provider,
           model: context.modelId,
-          ...(resolveReusableCliSessionId(context.reusableCliSession)
+          ...(sessionBindingDisabled || resolveReusableCliSessionId(context.reusableCliSession)
             ? { clearCliSessionBinding: true }
             : {}),
         },
@@ -940,12 +948,16 @@ export async function runPreparedCliAgent(
       deliveredMessagingSideEffect = true;
     }
     const unflushedCliSessionId =
-      resultParams.effectiveCliSessionId && resultParams.bindingFlushOk === false
+      !sessionBindingDisabled &&
+      resultParams.effectiveCliSessionId &&
+      resultParams.bindingFlushOk === false
         ? resultParams.effectiveCliSessionId
         : undefined;
-    const persistedCliSessionId = unflushedCliSessionId
+    const persistedCliSessionId = sessionBindingDisabled
       ? undefined
-      : resultParams.effectiveCliSessionId;
+      : unflushedCliSessionId
+        ? undefined
+        : resultParams.effectiveCliSessionId;
     const createdReseedReceipt =
       persistedCliSessionId &&
       resultParams.usedHistoryPrompt &&
@@ -967,9 +979,11 @@ export async function runPreparedCliAgent(
         ? params.cliSessionBinding.reseedReceipt
         : undefined;
     const reseedReceipt = createdReseedReceipt ?? preservedReseedReceipt;
-    const agentSessionId = unflushedCliSessionId
-      ? ""
-      : (resultParams.effectiveCliSessionId ?? params.sessionId ?? "");
+    const agentSessionId = sessionBindingDisabled
+      ? (params.sessionId ?? "")
+      : unflushedCliSessionId
+        ? ""
+        : (resultParams.effectiveCliSessionId ?? params.sessionId ?? "");
     const yielded = resultParams.output.yielded === true;
     const stopReason = yielded ? "end_turn" : "completed";
 
@@ -1045,7 +1059,9 @@ export async function runPreparedCliAgent(
                 },
               }
             : {}),
-          ...(unflushedCliSessionId ? { clearCliSessionBinding: true } : {}),
+          ...(sessionBindingDisabled || unflushedCliSessionId
+            ? { clearCliSessionBinding: true }
+            : {}),
         },
       },
       ...(resultParams.output.didSendViaMessagingTool ? { didSendViaMessagingTool: true } : {}),
@@ -1113,17 +1129,16 @@ export async function runPreparedCliAgent(
           modelId: context.modelId,
           usage: output.usage,
         });
-        // A stateless backend may use the live transport for the current process,
-        // but its emitted id must not become durable continuity.
-        const skipTranscriptProbe =
-          shouldUseClaudeLiveSession(context) &&
-          context.preparedBackend.backend.sessionMode !== "none";
-        const bindingFlushOk = await isCliBindingFlushed(
-          effectiveCliSessionId,
-          params.provider,
-          context.cwd ?? context.workspaceDir,
-          { skipTranscriptProbe },
-        );
+        // A stateless backend may emit an id, but it never becomes continuity.
+        // Managed stdio sessions own continuity in-process and write no native transcript.
+        const bindingFlushOk = sessionBindingDisabled
+          ? true
+          : await isCliBindingFlushed(
+              effectiveCliSessionId,
+              params.provider,
+              context.cwd ?? context.workspaceDir,
+              { skipTranscriptProbe: shouldUseClaudeLiveSession(context) },
+            );
         await runCliAgentEndHook(params, {
           event: {
             messages: buildAgentEndMessages(lastAssistant),
