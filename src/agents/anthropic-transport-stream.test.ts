@@ -1885,6 +1885,52 @@ describe("anthropic transport stream", () => {
     });
   });
 
+  it("sentinel-izes a thinking signature interrupted before content_block_stop", async () => {
+    // A truncated signature persisted verbatim permanently poisons the session:
+    // Anthropic rejects every replay with Invalid `signature` in `thinking`
+    // block (#103830). Blocks that never saw content_block_stop must fall back
+    // to the replay-safe reasoning_content sentinel lane.
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "thinking", thinking: "partial reasoning", signature: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "signature_delta", signature: "truncated-chun" },
+        },
+        // No content_block_stop for index 0: the stream was cut mid-block.
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 6, output_tokens: 5 },
+        },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "think" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(result.content[0]).toMatchObject({
+      type: "thinking",
+      thinkingSignature: "reasoning_content",
+    });
+  });
+
   it("concatenates multiple signature_delta events instead of overwriting", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([

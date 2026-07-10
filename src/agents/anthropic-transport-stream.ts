@@ -1257,6 +1257,25 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         const blocks = output.content;
         const blockIndexes = new Map<number, number>();
         const signatureDeltaIndexes = new Set<number>();
+        // A thinking block that never saw content_block_stop cannot prove its
+        // streamed signature is complete: persisting a truncated signature
+        // permanently poisons the session on replay (Anthropic rejects the
+        // whole request with Invalid `signature` in `thinking` block, #103830).
+        // Route such blocks through the reasoning_content sentinel lane the
+        // replay serializer already treats as replay-safe.
+        const sealInterruptedThinkingSignatures = () => {
+          for (const contentIndex of blockIndexes.values()) {
+            const block = blocks[contentIndex];
+            if (
+              block?.type === "thinking" &&
+              typeof block.thinkingSignature === "string" &&
+              block.thinkingSignature.length > 0 &&
+              block.thinkingSignature !== "reasoning_content"
+            ) {
+              block.thinkingSignature = "reasoning_content";
+            }
+          }
+        };
         const allowReasoningContentReplay = supportsReasoningContentReplay(model);
         const reasoningContentThinkingBlocks = new Map<number, number>();
         const reasoningContentTextBlocks = new Map<number, number>();
@@ -1823,6 +1842,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             flushPendingTextEnds();
           }
         }
+        sealInterruptedThinkingSignatures();
         if (refusalBuffer && !sawMessageStop) {
           throw new Error("Anthropic stream ended before message_stop");
         }
