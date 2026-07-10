@@ -1,5 +1,7 @@
 // Googlechat tests cover google auth plugin behavior.
 import fs from "node:fs/promises";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo, Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -119,6 +121,7 @@ describe("googlechat google auth runtime", () => {
       policy: {
         hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
       },
+      timeoutMs: 30_000,
       url: "https://oauth2.googleapis.com/token",
     });
     await expect(response.text()).resolves.toBe("ok");
@@ -195,6 +198,7 @@ describe("googlechat google auth runtime", () => {
       policy: {
         hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
       },
+      timeoutMs: 30_000,
       url: "https://oauth2.googleapis.com/token",
     });
     await expect(response.text()).resolves.toBe("ok");
@@ -232,6 +236,7 @@ describe("googlechat google auth runtime", () => {
       policy: {
         hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
       },
+      timeoutMs: 30_000,
       url: "https://oauth2.googleapis.com/token",
     });
     await expect(response.text()).resolves.toBe("ok");
@@ -570,5 +575,73 @@ describe("googlechat google auth runtime", () => {
     expect((thrown as Error).message).not.toMatch(
       /ENOENT|service-account\.json|googlechat-auth-missing/,
     );
+  });
+
+  it("passes a 30s timeout deadline to guarded Google auth fetches", async () => {
+    const release = vi.fn();
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response("ok", { status: 200 }),
+      release,
+    });
+
+    const guardedFetch = createGoogleAuthFetch();
+    await guardedFetch("https://oauth2.googleapis.com/token", { method: "POST" });
+
+    const callArg = mockCallArg(mocks.fetchWithSsrFGuard) as Record<string, unknown>;
+    expect(callArg.timeoutMs).toBe(30_000);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("aborts a hanging Google auth request when the token endpoint stalls", async () => {
+    // Override the mock to forward to real fetch, verifying the 30s production
+    // deadline is passed but using a wall-clock-short deadline so the test
+    // completes in real time.
+    mocks.fetchWithSsrFGuard.mockImplementationOnce(
+      async (params: { url: string; init?: RequestInit; timeoutMs?: number }) => {
+        expect(params.timeoutMs).toBe(30_000);
+        const response = await globalThis.fetch(params.url, {
+          ...params.init,
+          signal: params.init?.signal ?? AbortSignal.timeout(250),
+        });
+        return { response, release: vi.fn(async () => {}) };
+      },
+    );
+
+    const sockets = new Set<Socket>();
+    let requestCount = 0;
+    const server = createServer((_req, _res) => {
+      requestCount += 1;
+    });
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const addr = server.address();
+    if (!addr || typeof addr === "string") {
+      throw new Error("expected loopback server address");
+    }
+    const baseUrl = `http://127.0.0.1:${(addr as AddressInfo).port}`;
+    const startedAt = Date.now();
+    const guardedFetch = createGoogleAuthFetch();
+
+    try {
+      await expect(
+        Promise.race([
+          guardedFetch(`${baseUrl}/token`, { method: "POST" }),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Google auth fetch did not time out")), 2_000),
+          ),
+        ]),
+      ).rejects.toThrow(/aborted|timeout|timed out/i);
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+      expect(requestCount).toBe(1);
+    } finally {
+      for (const s of sockets) s.destroy();
+      await new Promise<void>((resolve, reject) =>
+        server.close((err) => (err ? reject(err) : resolve())),
+      );
+    }
   });
 });
