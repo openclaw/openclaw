@@ -388,6 +388,23 @@ describe("opencode provider plugin", () => {
     });
   });
 
+  it("exposes the offline catalog fallback through the full provider registration", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const result = await provider.staticCatalog?.run({} as never);
+    if (!result || !("provider" in result)) {
+      throw new Error("expected registered OpenCode Zen static provider");
+    }
+
+    expect(result.provider.models).toHaveLength(52);
+    expect(result.provider.models.map((model) => model.id)).toContain("claude-sonnet-5");
+    expect(result.provider.models.map((model) => model.id)).toContain("minimax-m3");
+    expect(result.provider.models.find((model) => model.id === "grok-4.5")).toMatchObject({
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/v1",
+      provider: "opencode",
+    });
+  });
+
   it("skips live OpenCode Zen catalog discovery when no shared key is configured", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
