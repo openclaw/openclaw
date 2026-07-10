@@ -1,7 +1,7 @@
 ---
 summary: "CLI reference for `openclaw onboard` (interactive onboarding)"
 read_when:
-  - You want guided setup for gateway, workspace, auth, channels, and skills
+  - You want to establish inference, then finish setup with Crestodian
 title: "Onboard"
 ---
 
@@ -44,36 +44,48 @@ openclaw onboard --skip-bootstrap
 openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 ```
 
-- `--classic`: opens the full step-by-step wizard.
+- `--classic`: opens the full step-by-step wizard. It cannot be combined with
+  `--non-interactive`; omit `--classic` for automated setup.
 - `--flow quickstart`: opens the classic wizard with minimal prompts and
   auto-generates a gateway token.
 - `--flow manual` (alias `advanced`): opens the classic wizard with full prompts
   for port, bind, and auth.
 - `--flow import`: runs a detected migration provider (for example Hermes via `--import-from hermes`), previews the plan, then applies after confirmation. Import only runs against a fresh OpenClaw setup - reset config, credentials, sessions, and workspace state first if any exist. Use [`openclaw migrate`](/cli/migrate) for dry-run plans, overwrite mode, reports, and exact mappings.
 - `--modern` is a compatibility alias for the Crestodian conversational
-  setup/repair assistant. It uses the same live-inference gate as `openclaw crestodian`.
+  setup/repair assistant. It uses the same live-inference gate as `openclaw
+  crestodian` and accepts only `--workspace`, `--accept-risk`,
+  `--non-interactive`, and `--json`. Other setup flags are rejected instead of
+  being silently ignored.
 
 ## Guided flow
 
 Plain `openclaw onboard` starts the guided flow. It shows the security notice,
-asks for a workspace, detects AI access already available through configured
-models, API-key environment variables, and supported local CLIs, then tests the
-recommended candidate with a real completion. If that candidate fails,
-onboarding shows the reason and automatically tries the next usable candidate.
+detects AI access already available through configured models, API-key
+environment variables, and supported local CLIs, then tests the recommended
+candidate with a real completion. If that candidate fails, onboarding shows
+the reason and automatically tries the next usable candidate.
 
-If automatic detection is exhausted, choose another detected candidate, enter
-a provider API key in a masked prompt, or switch to the classic wizard. A
-manual key is tested through the same live completion path. Guided onboarding
+If automatic detection is exhausted, choose another detected candidate or enter
+a provider API key in a masked prompt. A manual key is tested through the same
+live completion path. Guided onboarding
 does not offer Crestodian or a skip-AI exit before a candidate passes. OpenClaw
-persists the selected model, workspace, and QuickStart Gateway settings only
-after the test succeeds; a failed candidate does not replace the configured
-model or save the attempted credential.
+persists only the verified model route and its credential after the test
+succeeds; a failed candidate does not replace the configured model or save the
+attempted credential. Workspace and Gateway setup remain unchanged until
+Crestodian starts.
+
+In guided mode, `--workspace <dir>` supplies Crestodian's proposed workspace
+and the isolated inference context. It is not persisted until you approve the
+Crestodian setup proposal. Classic and noninteractive onboarding persist their
+workspace through their normal setup flow.
 
 After inference passes, guided onboarding immediately starts Crestodian with
-the verified model. Crestodian can then configure channels, agents, plugins,
-and other optional features. Inside Crestodian, use `open setup wizard`, `open
-classic wizard`, or `open channel wizard for <channel>` to switch flows.
-Channel credentials are always collected in a masked terminal wizard.
+the verified model. Crestodian can then configure the workspace, Gateway,
+channels, agents, plugins, and other optional features. Inside Crestodian, use
+`open channel wizard for <channel>` to hand channel credential collection to a
+masked terminal wizard. To change the model provider or its authentication,
+exit Crestodian and run `openclaw onboard`; Crestodian does not open the guided
+or classic provider flows.
 
 On a configured install, running `openclaw onboard` again verifies the current
 default model first, so the same flow acts as a verification and repair pass.
@@ -83,10 +95,10 @@ workspace, so a model provided by a workspace plugin can fail here while still
 working in the agent.
 Use `openclaw onboard --classic` for provider-specific auth, channels, skills,
 remote Gateway setup, imports, or full Gateway controls. For conversational
-setup and repair, run `openclaw crestodian`; `openclaw onboard --modern` is a
-compatibility alias through the same inference gate. The classic wizard can
-optionally verify the default model with a live completion, but Crestodian will
-not start until its own live inference check passes.
+non-inference setup and repair, run `openclaw crestodian`; `openclaw onboard
+--modern` is a compatibility alias through the same inference gate. The classic
+wizard can optionally verify the default model with a live completion, but
+Crestodian will not start until its own live inference check passes.
 
 In an interactive terminal, bare `openclaw` (no subcommand) routes by config
 state:
@@ -259,7 +271,9 @@ UI and hook setup: `--skip-ui` (skip Control UI/TUI prompts), `--skip-hooks` (sk
 Output: `--suppress-gateway-token-output` suppresses token-bearing Gateway/UI output (token hints, auto-login URL with embedded token, and automatic Control UI launch) - useful in shared terminals and CI.
 
 <Note>
-`--json` does not imply non-interactive mode. Use `--non-interactive` for scripts.
+`--json` does not imply non-interactive mode in guided or classic onboarding.
+With `--modern`, JSON is a one-shot Crestodian overview and exits after that
+single result. Use `--non-interactive` for other scripts.
 </Note>
 
 ## Provider prefiltering
@@ -282,7 +296,9 @@ Some web-search providers trigger provider-specific follow-up prompts during onb
 
 ## Common follow-up commands
 
-Use `openclaw configure` later for targeted changes and `openclaw channels add` for channel-only setup.
+Use `openclaw configure` later for targeted non-inference changes and `openclaw
+channels add` for channel-only setup. For model provider or auth route changes,
+run `openclaw onboard` instead.
 
 ```bash
 openclaw channels add

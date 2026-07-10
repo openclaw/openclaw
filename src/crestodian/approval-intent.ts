@@ -72,12 +72,11 @@ export type CrestodianApprovalIntentDeps = {
 };
 
 /**
- * Judge whether a message approves the pending proposal. Deterministic
- * closed-list answers short-circuit (a literal "yes" needs no model and must
- * keep working on configless machines); ambiguous messages go to the
- * configured completion model. CLI-harness-only hosts get no model judgment —
- * spawning a full harness per approval check is too slow — so their ambiguous
- * replies stay "other" and the conversation asks for a clear yes.
+ * Judge whether a message approves the pending proposal. Closed-list answers
+ * short-circuit so a literal "yes" cannot be reinterpreted by the conversation
+ * model; ambiguous messages go to a separate configured completion call.
+ * CLI-harness routes do not spawn a second harness for that check, so their
+ * ambiguous replies stay "other" and the conversation asks for a clear yes.
  */
 export async function classifyCrestodianApprovalIntent(
   params: {

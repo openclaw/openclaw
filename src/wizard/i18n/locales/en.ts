@@ -236,7 +236,7 @@ export const en = {
     guided: {
       aiAccessTitle: "AI access",
       apiKeyPrompt: "API key or token for {label}",
-      appliedTitle: "Setup applied",
+      appliedTitle: "Inference ready",
       detected: "AI detection complete.",
       detectedCandidate: "{label} — {detail}{recommended}",
       detectedTitle: "AI found",
@@ -255,6 +255,8 @@ export const en = {
       foundNothing: "No existing AI access was detected on this machine.",
       intro: "Connect your AI",
       manualChoice: "How would you like to connect AI?",
+      noInferenceOptions:
+        "No inference option is available yet. Sign in to Claude Code or Codex, or configure an API-key provider, then run onboarding again.",
       recommendedSuffix: " — recommended",
       repliedIn: "AI check: replied in {seconds}s",
       retryCandidate: "Retry {label} ({detail})",
@@ -266,9 +268,7 @@ export const en = {
       tryCandidate: "Try {label} ({detail})",
       ttyRequired:
         "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
-      useClassic: "Use the classic step-by-step wizard",
       welcomeTitle: "Setup choices",
-      workspace: "Workspace directory",
     },
     setup: {
       authChoiceFailedRetry: "Pick another provider or auth method, or choose Skip for now.",

@@ -1,11 +1,17 @@
 // Applies Crestodian's conversational setup: config, workspace files, gateway.
 import { resolveGatewayPort } from "../config/config.js";
+import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import {
+  projectDefaultInferenceRoute,
+  sameDefaultInferenceRoute,
+  type DefaultInferenceRouteProjection,
+} from "./inference-route.js";
 
 /**
  * The whole first-run setup as one approved operation: the user says "yes" in
@@ -17,6 +23,8 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 export type CrestodianSetupApplyParams = {
   workspace: string;
   model?: string;
+  /** Exact default-agent route whose inference passed the setup gate. */
+  expectedInferenceRoute?: DefaultInferenceRouteProjection;
   surface: "cli" | "gateway";
   runtime: RuntimeEnv;
 };
@@ -25,6 +33,32 @@ export type CrestodianSetupApplyResult = {
   configPath: string;
   lines: string[];
 };
+
+const CRESTODIAN_AGENT_ID = normalizeAgentId("crestodian");
+
+function requireValidSetupSnapshot(snapshot: ConfigFileSnapshot): {
+  sourceConfig: OpenClawConfig;
+  runtimeConfig: OpenClawConfig;
+} {
+  if (!snapshot.exists || !snapshot.valid) {
+    throw new Error(
+      "OpenClaw's config is missing or invalid, so Crestodian cannot safely preserve the verified inference route and existing settings. Repair the config, then retry setup.",
+    );
+  }
+  if (
+    snapshot.runtimeConfig.agents?.list?.some(
+      (entry) => normalizeAgentId(entry.id) === CRESTODIAN_AGENT_ID,
+    )
+  ) {
+    throw new Error(
+      'Agent id "crestodian" is reserved for the setup assistant. Rename that configured agent, then retry setup.',
+    );
+  }
+  return {
+    sourceConfig: snapshot.sourceConfig,
+    runtimeConfig: snapshot.runtimeConfig,
+  };
+}
 
 /** Prompter for quickstart-only flows: notes go to the log, prompts fail loud. */
 export function createQuickstartNotePrompter(runtime: RuntimeEnv): WizardPrompter {
@@ -78,6 +112,8 @@ type CrestodianModelSelectionParams = {
   config: OpenClawConfig;
   model: string;
   agentRuntimeId?: string;
+  /** Pin the selected model to the exact credential that passed inference. */
+  authProfileId?: string;
 };
 
 type CrestodianModelSelectionModules = {
@@ -122,7 +158,8 @@ function applyCrestodianModelSelectionWithModules(
     delete entry.agentRuntime;
     models[key] = entry;
   }
-  agentScope.setAgentEffectiveModelPrimary(nextConfig, agentId, key);
+  const selectedModel = params.authProfileId ? `${key}@${params.authProfileId}` : key;
+  agentScope.setAgentEffectiveModelPrimary(nextConfig, agentId, selectedModel);
   if (params.agentRuntimeId) {
     const effectiveRuntime = runtimePolicy.resolveModelRuntimePolicy({
       config: nextConfig,
@@ -204,41 +241,74 @@ export async function applyCrestodianSetup(
     import("../commands/onboard-config.js"),
   ]);
 
-  const snapshot = await readSetupConfigFileSnapshot();
-  const baseConfig: OpenClawConfig =
-    snapshot.valid && snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {};
-
-  let nextConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspace);
-  if (model) {
-    nextConfig = await applyCrestodianModelSelection({
-      config: nextConfig,
-      model,
-    });
-  }
-  nextConfig = applySecurityAcknowledgement(nextConfig);
+  let snapshot = await readSetupConfigFileSnapshot();
+  let snapshotConfig = requireValidSetupSnapshot(snapshot);
+  const assertVerifiedRoute = async (runtimeConfig: OpenClawConfig) => {
+    if (!params.expectedInferenceRoute) {
+      return;
+    }
+    const currentRoute = await projectDefaultInferenceRoute(runtimeConfig);
+    if (!sameDefaultInferenceRoute(currentRoute, params.expectedInferenceRoute)) {
+      throw new Error(
+        "The default-agent inference route changed before setup could start, so no workspace or Gateway settings were changed. Retry setup from the current Crestodian session.",
+      );
+    }
+  };
+  await assertVerifiedRoute(snapshotConfig.runtimeConfig);
+  let baseConfig = snapshotConfig.sourceConfig;
 
   const prompter = createQuickstartNotePrompter(runtime);
   const { configureGatewayForSetup } = await import("../wizard/setup.gateway-config.js");
-  const gateway = await configureGatewayForSetup({
-    flow: "quickstart",
-    baseConfig,
-    nextConfig,
-    localPort: resolveGatewayPort(baseConfig),
-    quickstartGateway: resolveQuickstartGatewayDefaults(baseConfig),
-    prompter,
-    runtime,
-  });
-  nextConfig = gateway.nextConfig;
-  const settings = gateway.settings;
-
-  nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, {
-    command: "onboard",
-    mode: "local",
-  });
-  nextConfig = await writeWizardConfigFile(nextConfig, {
-    allowConfigSizeDrop: false,
-    migrationBaseConfig: baseConfig,
-  });
+  const buildSetupCandidate = async (currentBaseConfig: OpenClawConfig) => {
+    let candidate = applyLocalSetupWorkspaceConfig(currentBaseConfig, workspace);
+    if (model) {
+      candidate = await applyCrestodianModelSelection({
+        config: candidate,
+        model,
+      });
+    }
+    candidate = applySecurityAcknowledgement(candidate);
+    const gateway = await configureGatewayForSetup({
+      flow: "quickstart",
+      baseConfig: currentBaseConfig,
+      nextConfig: candidate,
+      localPort: resolveGatewayPort(currentBaseConfig),
+      quickstartGateway: resolveQuickstartGatewayDefaults(currentBaseConfig),
+      prompter,
+      runtime,
+    });
+    return {
+      nextConfig: onboardHelpers.applyWizardMetadata(gateway.nextConfig, {
+        command: "onboard",
+        mode: "local",
+      }),
+      settings: gateway.settings,
+    };
+  };
+  let setupCandidate = await buildSetupCandidate(baseConfig);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      setupCandidate.nextConfig = await writeWizardConfigFile(setupCandidate.nextConfig, {
+        allowConfigSizeDrop: false,
+        ...(snapshot.hash ? { baseHash: snapshot.hash } : {}),
+        migrationBaseConfig: baseConfig,
+      });
+      break;
+    } catch (error) {
+      if (!(error instanceof ConfigMutationConflictError) || !error.retryable || attempt >= 2) {
+        throw error;
+      }
+      snapshot = await readSetupConfigFileSnapshot();
+      snapshotConfig = requireValidSetupSnapshot(snapshot);
+      await assertVerifiedRoute(snapshotConfig.runtimeConfig);
+      baseConfig = snapshotConfig.sourceConfig;
+      // Rebuild both config and runtime settings from the same fresh snapshot.
+      // Otherwise a preserved concurrent Gateway edit could be installed or
+      // probed with settings derived from the stale pre-conflict config.
+      setupCandidate = await buildSetupCandidate(baseConfig);
+    }
+  }
+  const { nextConfig, settings } = setupCandidate;
 
   await onboardHelpers.ensureWorkspaceAndSessions(workspace, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),

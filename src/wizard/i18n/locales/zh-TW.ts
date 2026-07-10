@@ -233,7 +233,7 @@ export const zh_TW = {
     guided: {
       aiAccessTitle: "AI 存取",
       apiKeyPrompt: "{label} 的 API key 或 token",
-      appliedTitle: "設定已套用",
+      appliedTitle: "推理已就緒",
       detected: "AI 偵測完成。",
       detectedCandidate: "{label} — {detail}{recommended}",
       detectedTitle: "找到的 AI",
@@ -252,6 +252,8 @@ export const zh_TW = {
       foundNothing: "未在此機器上偵測到既有 AI 存取方式。",
       intro: "連接你的 AI",
       manualChoice: "你想如何連接 AI？",
+      noInferenceOptions:
+        "尚無可用的推理選項。請先登入 Claude Code 或 Codex，或設定 API 金鑰供應商，然後重新執行引導。",
       recommendedSuffix: " — 建議",
       repliedIn: "AI 檢查：在 {seconds} 秒內回覆",
       retryCandidate: "重試 {label}（{detail}）",
@@ -263,9 +265,7 @@ export const zh_TW = {
       tryCandidate: "嘗試 {label}（{detail}）",
       ttyRequired:
         "Onboarding 需要互動式 TTY。自動化請使用 `openclaw onboard --non-interactive --accept-risk ...`。",
-      useClassic: "使用經典分步精靈",
       welcomeTitle: "設定選項",
-      workspace: "工作區目錄",
     },
     setup: {
       authChoiceFailedRetry: "請選擇其他提供商或認證方式，或選擇暫時跳過。",

@@ -1744,6 +1744,9 @@ async function runEmbeddedAgentInternal(
         agentDir?: RunEmbeddedAgentParams["agentDir"];
         modelId?: string;
       }) => {
+        if (params.authProfileStateMode === "read-only") {
+          return;
+        }
         const { profileId, reason } = failure;
         if (!profileId || !reason) {
           return;
@@ -1764,7 +1767,7 @@ async function runEmbeddedAgentInternal(
         });
       };
       const markAuthProfileSuccessAfterRun = () => {
-        if (!lastProfileId) {
+        if (params.authProfileStateMode === "read-only" || !lastProfileId) {
           return;
         }
         const successProfileId = lastProfileId;

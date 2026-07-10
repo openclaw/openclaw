@@ -32,13 +32,14 @@ export type CrestodianToolOptions = {
   proposalRef?: { current?: string };
   /**
    * Host handoff channel for actions the tool cannot perform itself
-   * (interactive channel-setup wizard, opening the agent TUI). The engine
-   * reads it after the turn; CLI MCP hosts mirror it from tool events.
+   * (interactive channel setup, external onboarding guidance, opening the
+   * agent TUI). The engine reads it after the turn; CLI MCP hosts mirror it
+   * from tool events.
    */
   directiveRef?: { current?: CrestodianToolDirective };
 };
 
-/** Interactive handoffs the hosting chat engine executes after the turn. */
+/** Host directives the hosting chat engine handles after the turn. */
 export type CrestodianToolDirective =
   | { kind: "channel-setup"; channel: string }
   | { kind: "model-setup"; workspace?: string }
@@ -139,7 +140,7 @@ const CRESTODIAN_TOOL_ACTIONS = [
   "config_schema",
   "gateway_status",
   "plugin_search",
-  // Interactive handoffs executed by the hosting chat after this turn.
+  // Host directives handled by the hosting chat after this turn.
   "connect_channel",
   "configure_model_provider",
   "open_agent",
@@ -155,7 +156,6 @@ const CRESTODIAN_TOOL_ACTIONS = [
   "gateway_restart",
   "plugin_install",
   "plugin_uninstall",
-  "doctor_fix",
 ] as const;
 
 const CrestodianToolSchema = Type.Object({
@@ -173,7 +173,8 @@ const CrestodianToolSchema = Type.Object({
   ),
   target: Type.Optional(
     stringEnum(["guided", "classic", "channels"], {
-      description: "Setup wizard target for open_setup (defaults to guided)",
+      description:
+        "Setup target for open_setup. channels runs in this chat; guided/classic require exiting Crestodian and running openclaw onboard.",
     }),
   ),
   query: Type.Optional(Type.String({ description: "Search query for plugin_search" })),
@@ -234,8 +235,6 @@ function operationForAction(params: Record<string, unknown>): CrestodianOperatio
       return { kind: "config-validate" };
     case "doctor":
       return { kind: "doctor" };
-    case "doctor_fix":
-      return { kind: "doctor-fix" };
     case "config_get":
       return { kind: "config-get", path: requireParam(params, "path") };
     case "config_schema": {
@@ -346,9 +345,11 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
     label: "Crestodian",
     description: [
       "Ring-zero OpenClaw setup and repair. Read actions (status/models/agents/channels/channel_info/config_get/config_schema/gateway_status/plugin_search/validate_config/doctor/audit) run immediately.",
-      "connect_channel(channel) starts guided channel setup in this chat; configure_model_provider starts masked provider/default-model setup; open_agent hands off to the normal agent; open_setup hands off to a menu wizard. All run immediately.",
-      "Mutating actions (setup/set_default_model/config_set/config_set_ref/create_agent/gateway_*/plugin_install/plugin_uninstall/doctor_fix) REQUIRE approved=true, which you may only set after the user clearly agreed to that exact change in this conversation.",
-      "Before writing an unfamiliar config path, call config_schema for it — the schema is the source of truth. Secrets go through config_set_ref (env var), never plaintext echoes.",
+      "connect_channel(channel) and open_setup(target=channels, channel=...) start guided channel setup in this chat; open_agent hands off to the normal agent.",
+      "configure_model_provider and open_setup(target=guided|classic) cannot change or reconfigure the active inference route inside Crestodian. Tell the user to exit Crestodian and run `openclaw onboard`; never ask for provider credentials here.",
+      "Mutating actions (setup/set_default_model/config_set/config_set_ref/create_agent/gateway_*/plugin_install) REQUIRE approved=true, which you may only set after the user clearly agreed to that exact change in this conversation.",
+      "Before writing an unfamiliar config path, call config_schema for it — the schema is the source of truth. Secrets go through config_set_ref (env var), never plaintext echoes. Raw writes under auth/models/env/secrets/plugins/tools/agent-route paths or $include are refused; use typed workflows. Plugin uninstall is refused because it could remove active inference; exit Crestodian and use the CLI.",
+      "Doctor repairs are unavailable because they can change the active inference route; exit Crestodian and run `openclaw doctor --fix`.",
       "Every applied write is validated; if the result reports CONFIG INVALID, fix it immediately. All writes are audited.",
     ].join(" "),
     parameters: CrestodianToolSchema,
@@ -366,10 +367,12 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
           directive.kind === "channel-setup"
             ? `${CRESTODIAN_DIRECTIVE_PREFIX} the host chat now starts the guided ${directive.channel} setup with the user. Tell the user the setup questions come next; do not describe steps yourself.`
             : directive.kind === "model-setup"
-              ? `${CRESTODIAN_DIRECTIVE_PREFIX} the host now starts masked model-provider setup. Tell the user the provider questions come next; do not ask for credentials yourself.`
+              ? `${CRESTODIAN_DIRECTIVE_PREFIX} the active inference route cannot be changed inside Crestodian. Tell the user to exit Crestodian and run \`openclaw onboard\`; do not ask for provider credentials here.`
               : directive.kind === "open-tui"
                 ? `${CRESTODIAN_DIRECTIVE_PREFIX} the host now hands the user over to their normal agent. Say goodbye briefly.`
-                : `${CRESTODIAN_DIRECTIVE_PREFIX} the host now opens the ${directive.target} setup wizard. Tell the user the menu wizard comes next.`,
+                : directive.target === "channels"
+                  ? `${CRESTODIAN_DIRECTIVE_PREFIX} the host now opens channel setup${directive.channel ? ` for ${directive.channel}` : ""}. Tell the user the channel setup questions come next.`
+                  : `${CRESTODIAN_DIRECTIVE_PREFIX} ${directive.target} setup cannot run inside Crestodian because it may change the active inference route. Tell the user to exit Crestodian and run \`openclaw onboard\`.`,
           {},
         );
       }

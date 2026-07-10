@@ -247,6 +247,10 @@ describe("crestodian tool", () => {
       workspace: "/tmp/work",
     });
     expect(toolText(configureModel)).toContain("directive:");
+    expect(toolText(configureModel)).toContain(
+      "active inference route cannot be changed inside Crestodian",
+    );
+    expect(toolText(configureModel)).toContain("openclaw onboard");
     expect(directiveRef.current).toEqual({ kind: "model-setup", workspace: "/tmp/work" });
 
     const open = await tool.execute("t7", { action: "open_agent", agentId: "work" });
@@ -264,6 +268,14 @@ describe("crestodian tool", () => {
       target: "channels",
       channel: "slack",
     });
+
+    const guidedSetup = await tool.execute("t8", {
+      action: "open_setup",
+      target: "guided",
+    });
+    expect(toolText(guidedSetup)).toContain("cannot run inside Crestodian");
+    expect(toolText(guidedSetup)).toContain("openclaw onboard");
+    expect(directiveRef.current).toEqual({ kind: "open-setup", target: "guided" });
 
     // Directives are host handoffs, never operation executions.
     expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
@@ -285,13 +297,14 @@ describe("crestodian tool", () => {
     expect(
       resolveCrestodianDirectiveTransition({
         args: { action: "configure_model_provider", workspace: "/tmp/work" },
-        resultText: "directive: the host now starts masked model-provider setup.",
+        resultText:
+          "directive: the active inference route cannot be changed inside Crestodian; run openclaw onboard.",
       }),
     ).toEqual({ kind: "model-setup", workspace: "/tmp/work" });
     expect(
       resolveCrestodianDirectiveTransition({
         args: { action: "open_setup", target: "classic" },
-        resultText: "directive: the host now opens the classic setup wizard.",
+        resultText: "directive: classic setup cannot run inside Crestodian; run openclaw onboard.",
       }),
     ).toEqual({ kind: "open-setup", target: "classic" });
     // Non-directive results and other actions never mirror.

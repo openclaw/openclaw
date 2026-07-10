@@ -1,6 +1,7 @@
 // Crestodian dialogue parses direct commands and optionally asks the assistant planner.
 import type { RuntimeEnv } from "../runtime.js";
 import type { CrestodianAssistantPlan, CrestodianAssistantPlanner } from "./assistant.js";
+import { CrestodianInferenceUnavailableError } from "./inference-error.js";
 import {
   describeCrestodianPersistentOperation,
   parseCrestodianOperation,
@@ -36,13 +37,25 @@ export async function resolveCrestodianOperation(
   }
   const overview = await (opts.loadOverview ?? loadCrestodianOverview)();
   const planner = opts.planWithAssistant ?? (await import("./assistant.js")).planCrestodianCommand;
-  const plan = await planner({ input, overview });
-  if (!plan?.command) {
-    return operation;
+  let plan: CrestodianAssistantPlan | null;
+  try {
+    plan = await planner({ input, overview });
+  } catch (error) {
+    throw new CrestodianInferenceUnavailableError("planner", [error]);
+  }
+  if (!plan) {
+    throw new CrestodianInferenceUnavailableError("planner");
+  }
+  if (!plan.command) {
+    if (!plan.reply?.trim()) {
+      throw new CrestodianInferenceUnavailableError("planner");
+    }
+    runtime.log(plan.reply);
+    return { kind: "none", message: "" };
   }
   const planned = parseCrestodianOperation(plan.command);
   if (planned.kind === "none") {
-    return operation;
+    throw new CrestodianInferenceUnavailableError("planner");
   }
   logAssistantPlan(runtime, plan, overview);
   return planned;

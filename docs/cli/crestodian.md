@@ -54,7 +54,7 @@ openclaw crestodian
 openclaw crestodian --json
 openclaw crestodian --message "models"
 openclaw crestodian --message "validate config"
-openclaw crestodian --message "setup workspace ~/Projects/work model openai/gpt-5.5" --yes
+openclaw crestodian --message "setup workspace ~/Projects/work" --yes
 openclaw crestodian --message "set default model openai/gpt-5.5" --yes
 openclaw onboard --modern
 ```
@@ -65,10 +65,9 @@ Inside the Crestodian TUI:
 status
 health
 doctor
-doctor fix
 validate config
 setup
-setup workspace ~/Projects/work model openai/gpt-5.5
+setup workspace ~/Projects/work
 config set gateway.port 19001
 config set-ref gateway.auth.token env OPENCLAW_GATEWAY_TOKEN
 gateway status
@@ -76,18 +75,14 @@ restart gateway
 agents
 create agent work workspace ~/Projects/work
 models
-configure model provider
 set default model openai/gpt-5.5
 channels
 channel info slack
 connect slack
-open setup wizard
-open classic wizard
 open channel wizard for slack
 plugins list
 plugins search slack
 plugin install clawhub:openclaw-codex-app-server
-plugin uninstall openclaw-codex-app-server
 talk to work agent
 talk to agent for ~/Projects/work
 audit
@@ -100,11 +95,29 @@ Crestodian uses typed operations instead of editing config ad hoc.
 
 Read-only operations run immediately: show overview, list agents, list installed plugins, search ClawHub plugins, show model/backend status, run status/health checks, check Gateway reachability, run doctor without interactive fixes, validate config, show the audit-log path.
 
-Starting guided channel setup (`connect telegram`) or model-provider setup (`configure model provider`) also runs immediately. Each wizard collects explicit answers and owns the resulting writes.
+Starting guided channel setup (`connect telegram`) also runs immediately. Its wizard collects explicit answers and owns the resulting writes.
 
-Persistent, require conversational approval (or `--yes` for a direct command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, install or uninstall plugins, run doctor repairs that rewrite config or state.
+Persistent operations require conversational approval (or `--yes` for a direct command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, and install plugins.
 
-Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahead", "not now") resolve from a closed deterministic list, and anything else is judged by a separate host-run model call that sees only your message and the pending proposal — never by the conversation model itself, which cannot self-approve. Ambiguous replies keep the proposal pending and the conversation asks again.
+Doctor repairs are unavailable inside Crestodian because they can rewrite the provider, authentication, or default-agent inference route powering the session. Exit Crestodian and run `openclaw doctor --fix` in a terminal. Read-only `doctor` remains available inside Crestodian.
+
+New agents inherit the live-verified default inference route. The agent id `crestodian` is reserved for the privileged virtual custodian and cannot be created as a normal agent.
+
+`config set` and `config set-ref` cannot change inference-route state,
+including inference-provider credentials, top-level `auth.*`, model catalogs,
+CLI backends, default/per-agent model routes, agent params/tools, or root
+`tools.*`. Raw writes under `env.*`, `secrets.*`, `plugins.*`, and `$include`
+are also refused because they can replace credential resolution or provider
+activation. Gateway and channel auth remain normal config surfaces. Use typed plugin/channel workflows and
+`set default model <provider/model>` for an already
+configured route; it live-tests the route before saving it. To configure or
+repair provider/auth access, exit Crestodian and run `openclaw onboard`.
+
+Plugin uninstall is refused inside Crestodian because removing a provider
+plugin could disable the inference route powering the session. Exit Crestodian
+and run `openclaw plugins uninstall <id>` from a terminal.
+
+Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahead", "not now") resolve from a closed deterministic list. When the configured route supports a separate completion call, other replies can be classified from only your message and the pending proposal — never by the conversation model itself, which cannot self-approve. Unclassified or ambiguous replies keep the proposal pending and the conversation asks again.
 
 Applied writes are recorded in `~/.openclaw/audit/crestodian.jsonl`. Discovery is not audited; only applied operations and writes are.
 
@@ -114,26 +127,25 @@ chat input is visible. It offers `open channel wizard` immediately, carrying
 the selected channel into the masked terminal wizard; you can also run
 `openclaw channels add --channel <channel>` later.
 
-### Switching to the menu wizards
+### Switching to masked channel setup
 
-The local chat can hand control back to any terminal menu flow:
+The local chat can hand control to the masked channel wizard:
 
 ```text
-open setup wizard
-open classic wizard
 open channel wizard for slack
 channel info slack
 ```
 
-`open setup wizard` opens guided onboarding. `open classic wizard` opens the
-full classic setup. `open channel wizard for <channel>` opens masked channel
-setup after the chat TUI closes. Use `channel info <channel>` first for the
-channel label, setup state, prerequisites summary, and docs link.
+`open channel wizard for <channel>` opens masked channel setup after the chat
+TUI closes. Use `channel info <channel>` first for the channel label, setup
+state, prerequisites summary, and docs link.
 
-Model-provider setup uses the same provider/auth and default-model steps as
-`openclaw onboard`. In the local Crestodian TUI, approval exits the chat shell,
-runs those steps with masked terminal prompts, and then resumes Crestodian. A
-gateway/app chat that supports sensitive replies hosts the same steps inline.
+Crestodian never changes provider/auth access from inside its own session: the
+session already depends on that inference route. For model-provider setup or
+repair, `configure model provider` returns exit/onboarding guidance without
+starting a wizard or writing config. Exit Crestodian and run `openclaw
+onboard`; onboarding stages the credentials and saves only a route that
+completes a real live turn. Start Crestodian again after onboarding succeeds.
 
 ## Setup bootstrap
 
@@ -142,13 +154,16 @@ gateway/app chat that supports sensitive replies hosts the same steps inline.
 ```text
 setup
 setup workspace ~/Projects/work
-setup workspace ~/Projects/work model openai/gpt-5.5
 ```
 
-If inference is missing or its live check fails, leave Crestodian and run `openclaw onboard`. Guided onboarding detects configured models, API keys, and authenticated local CLIs, asks each candidate for a real reply, and persists only a passing route. Crestodian starts immediately after that boundary and can then configure channels, agents, plugins, and other optional features.
+`setup` preserves the verified effective model. It does not configure or
+replace inference.
+
+If inference is missing or its live check fails, leave Crestodian and run `openclaw onboard`. Guided onboarding detects configured models, API keys, and authenticated local CLIs, asks each candidate for a real reply, and persists only a passing route. Crestodian starts immediately after that boundary and can then configure the workspace, Gateway, channels, agents, plugins, and other optional features.
 
 The macOS app skips this ladder entirely when it reaches a configured Gateway
-whose default agent already has a working model; it opens the normal agent UI.
+whose default agent already has a configured model; it opens the normal agent
+UI.
 For a fresh or incomplete Gateway, the app drives the inference ladder through
 the `crestodian.setup.detect` and `crestodian.setup.activate` Gateway methods:
 detect lists every candidate backend it finds, activate live-tests one
@@ -161,11 +176,21 @@ and config, and the credential is verified the same way before it is saved.
 
 ## AI conversation
 
-Interactive Crestodian is AI-only: every message — including ones that look like typed commands — runs through the same agent loop as regular OpenClaw agents, restricted to one ring-zero `crestodian` tool that wraps the typed operations. Read actions run freely, mutations require your conversational approval for that exact operation (see Operations and approval), and every applied write is audited and re-validated. The agent session persists, so Crestodian has real multi-turn memory. If the verified inference route later stops working, return to `openclaw onboard` and repair it before continuing.
+Interactive Crestodian's free-form conversation runs through the same agent loop as regular OpenClaw agents, restricted to one ring-zero `crestodian` tool that wraps the typed operations. Read actions run freely, mutations require your conversational approval for that exact operation (see Operations and approval), and every applied write is audited and re-validated. The agent session persists, so Crestodian has real multi-turn memory. If the verified inference route later stops working, return to `openclaw onboard` and repair it before continuing.
 
-The typed command grammar is anchored: a message either matches a command exactly or it is conversation. Questions and natural phrasing ("why did my gateway stop?") never trigger operations — they are answered by the AI.
+The host does not parse natural-language requests into operations. Free-form
+messages — including command-looking text and questions such as "why did my
+gateway stop?" — go to the AI, which can map the request to a typed operation
+through the `crestodian` tool.
 
-One secret-hygiene exception: an exact `config set` on a sensitive path (tokens, keys, passwords) never reaches a model. It runs on the deterministic path with a redacted proposal, and the value is masked in the AI-visible history. Prefer `config set-ref <path> env <ENV_VAR>` for secrets.
+When a mutation is pending, only unambiguous approval or decline phrases from a
+closed list are resolved without inference. Ambiguous consent goes to a
+separate configured completion call and otherwise fails closed. Structured
+wizard fields and exact host navigation are UI controls, not natural-language
+operation parsing. One secret-hygiene exception is especially important: an
+exact `config set` on a sensitive path (tokens, keys, passwords) never reaches
+a model. The host creates a redacted proposal, and the value is masked in the
+AI-visible history. Prefer `config set-ref <path> env <ENV_VAR>` for secrets.
 
 Message-channel rescue mode never uses the model-assisted planner. Remote rescue stays deterministic so a broken or compromised normal agent path cannot be used as a config editor.
 
@@ -173,7 +198,7 @@ Message-channel rescue mode never uses the model-assisted planner. Remote rescue
 
 Embedded runtimes and the Codex app-server harness enforce the ring-zero
 restriction directly: the run carries a tool allow-list with only the
-`crestodian` tool. CLI harnesses (Claude Code, Gemini CLI) cannot enforce an
+`crestodian` tool. CLI harnesses such as Claude Code cannot enforce an
 OpenClaw tool allow-list — the CLI owns its native tools and its own permission
 policy, so OpenClaw fails closed if asked to restrict one. For CLI-harness
 models Crestodian instead:
@@ -198,6 +223,9 @@ approval-gated path for config repair, but it does not prevent the harness's
 native tools from touching files directly. The Codex app-server fallback and
 API-key models enforce the strict single-tool loop; prefer those when you want
 the hard restriction.
+
+Gemini CLI remains available for normal agents, but it cannot enforce the
+tool-free probe required by the inference gate, so it cannot host Crestodian.
 
 ## Switching to an agent
 
@@ -238,9 +266,12 @@ OpenClaw: Applied. Audit entry written.
 Agent creation can also be queued locally or via rescue:
 
 ```text
-create agent work workspace ~/Projects/work model openai/gpt-5.5
+create agent work workspace ~/Projects/work
 /crestodian create agent work workspace ~/Projects/work
 ```
+
+Agent creation cannot specify a model. The new agent inherits the
+live-verified default route.
 
 Remote rescue is an admin surface and must be treated like remote config repair, not normal chat.
 
@@ -250,7 +281,7 @@ Security contract for remote rescue:
 - Default effective state is `auto`: allow remote rescue only in trusted YOLO operation, where the runtime already has unsandboxed local authority (`tools.exec.security` resolves to `full` and `tools.exec.ask` resolves to `off`, with sandbox mode `off`).
 - Requires an explicit owner identity; no wildcard sender rules, open group policy, unauthenticated webhooks, or anonymous channels.
 - Owner DMs only by default; group/channel rescue needs explicit opt-in.
-- Plugin search and list are read-only. Plugin install is always local-only (blocked in rescue, even when otherwise enabled) because it downloads executable code. Plugin uninstall can be approved as a persistent rescue operation.
+- Plugin search and list are read-only. Plugin install is always local-only (blocked in rescue, even when otherwise enabled) because it downloads executable code. Plugin uninstall is refused in both local Crestodian and rescue; run `openclaw plugins uninstall <id>` from a terminal.
 - Remote rescue cannot open the local TUI or switch into an interactive agent session; use local `openclaw` for agent handoff.
 - Persistent writes still require approval, even in rescue mode.
 - Every applied rescue operation is audited. Message-channel rescue records channel, account, sender, and source-address metadata; config-mutating operations also record config hashes before and after.
@@ -287,18 +318,21 @@ An opt-in live channel command-surface smoke checks `/crestodian status` plus a 
 pnpm test:live:crestodian-rescue-channel
 ```
 
-Inference-first setup through explicit Crestodian commands is covered by:
+Inference-gated packaged one-shot setup is covered by:
 
 ```bash
 pnpm test:docker:crestodian-first-run
 ```
 
 That packaged-CLI lane starts with an empty state dir and proves Crestodian
-fails closed without inference. It then live-activates a fake Claude inference
-backend, verifies the probe, and only afterward runs Crestodian commands to set
-the workspace and model, create an additional agent, configure Discord through
-a plugin enablement plus token SecretRef, validate config, and check the audit
-log. The QA Lab scenario below redirects to the same Docker lane:
+fails closed without inference. It then tests and activates fake Claude through
+the packaged activation module. Only afterward does a fuzzy request reach the
+planner and resolve to typed setup, followed by one-shot commands that create an
+additional agent, configure Discord through a plugin enablement plus token
+SecretRef, validate config, and check the audit log. This lane is supporting
+gate/operation evidence; it does not exercise interactive onboarding or the
+Crestodian agent/tool/approval conversation. The QA Lab scenario below redirects
+to the same Docker lane:
 
 ```bash
 pnpm openclaw qa suite --scenario crestodian-ring-zero-setup

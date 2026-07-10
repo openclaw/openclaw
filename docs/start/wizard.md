@@ -24,11 +24,13 @@ to configure the rest of OpenClaw. There is no pre-inference Crestodian or
 skip-AI path in the guided flow.
 
 The classic wizard remains available for provider sign-in, remote Gateway
-setup, channel pairing, daemon controls, skills, and imports. You can switch to
-it while choosing an inference candidate. After inference passes and
-Crestodian starts, use `open setup wizard`, `open classic wizard`, or `open
-channel wizard for <channel>` to switch flows. Channel setup that needs secrets
-always continues in a masked terminal wizard.
+setup, channel pairing, daemon controls, skills, and imports. Run it explicitly
+with `openclaw onboard --classic`; the guided inference candidate screen does
+not delegate into it. After inference passes, Crestodian can use `open channel
+wizard for <channel>` to hand channel setup that needs secrets to a masked
+terminal wizard. To change the model provider or its authentication, exit
+Crestodian and run `openclaw onboard`; Crestodian does not open guided or
+classic provider flows.
 
 <Info>
 Fastest first chat: finish guided setup, run `openclaw dashboard`, and chat in
@@ -48,7 +50,7 @@ OPENCLAW_LOCALE=zh-CN openclaw onboard
 Product names, commands, config keys, URLs, provider IDs, model IDs, and
 plugin/channel labels stay in English regardless of locale.
 
-To reconfigure later:
+To reconfigure non-inference settings later:
 
 ```bash
 openclaw configure
@@ -71,13 +73,13 @@ key-free. Configure this later with `openclaw configure --section web`. Docs:
 
 Plain `openclaw onboard` follows this path:
 
-1. Accept the security notice and choose the workspace.
+1. Accept the security notice.
 2. Detect configured models, API-key environment variables, and supported local
    AI CLIs.
 3. Test the recommended candidate with a real completion. On failure, show the
    reason and continue to the next usable candidate.
-4. If detection is exhausted, retry a detected candidate, enter a provider API
-   key in a masked prompt, or switch to the classic wizard. Guided onboarding
+4. If detection is exhausted, retry a detected candidate or enter a provider
+   API key in a masked prompt. Guided onboarding
    does not offer Crestodian or a skip-AI exit before inference works.
 5. Persist only the verified model route and any credential/plugin state it
    requires. Workspace and Gateway settings remain untouched.
@@ -88,7 +90,8 @@ Re-running the command on a configured installation tests the current default
 model first, making the guided flow a verification and repair pass. A failing
 check never replaces the configured model automatically; onboarding stops and
 asks how to continue. Run `openclaw channels add` or `openclaw configure` for
-later additions.
+later non-inference additions; use `openclaw onboard` for provider or auth route
+changes.
 
 ## Classic wizard: QuickStart vs Advanced
 

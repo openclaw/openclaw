@@ -1,5 +1,4 @@
 import AppKit
-import OpenClawChatUI
 import OpenClawDiscovery
 import OpenClawIPC
 import OpenClawKit
@@ -19,8 +18,6 @@ extension OnboardingView {
             self.aiSetupPage()
         case 5:
             self.permissionsPage()
-        case 8:
-            self.onboardingChatPage()
         case 9:
             self.readyPage()
         default:
@@ -257,7 +254,7 @@ extension OnboardingView {
                         Text("Transport")
                             .font(.callout.weight(.semibold))
                             .frame(width: labelWidth, alignment: .leading)
-                        Picker("Transport", selection: self.$state.remoteTransport) {
+                        Picker("Transport", selection: self.manualRemoteTransportBinding) {
                             Text("SSH tunnel").tag(AppState.RemoteTransport.ssh)
                             Text("Direct (ws/wss)").tag(AppState.RemoteTransport.direct)
                         }
@@ -269,7 +266,7 @@ extension OnboardingView {
                             Text("Gateway URL")
                                 .font(.callout.weight(.semibold))
                                 .frame(width: labelWidth, alignment: .leading)
-                            TextField("wss://gateway.example.ts.net", text: self.$state.remoteUrl)
+                            TextField("wss://gateway.example.ts.net", text: self.manualRemoteURLBinding)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: fieldWidth)
                         }
@@ -279,7 +276,7 @@ extension OnboardingView {
                             Text("SSH target")
                                 .font(.callout.weight(.semibold))
                                 .frame(width: labelWidth, alignment: .leading)
-                            TextField("user@host[:port]", text: self.$state.remoteTarget)
+                            TextField("user@host[:port]", text: self.manualRemoteTargetBinding)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: fieldWidth)
                         }
@@ -333,6 +330,51 @@ extension OnboardingView {
             }
             .transition(.opacity.combined(with: .move(edge: .top)))
         }
+    }
+
+    private var manualRemoteTransportBinding: Binding<AppState.RemoteTransport> {
+        Binding(
+            get: { self.state.remoteTransport },
+            set: { self.updateManualRemoteTransport($0) })
+    }
+
+    private var manualRemoteURLBinding: Binding<String> {
+        Binding(
+            get: { self.state.remoteUrl },
+            set: { self.updateManualRemoteURL($0) })
+    }
+
+    private var manualRemoteTargetBinding: Binding<String> {
+        Binding(
+            get: { self.state.remoteTarget },
+            set: { self.updateManualRemoteTarget($0) })
+    }
+
+    func updateManualRemoteTransport(_ value: AppState.RemoteTransport) {
+        guard value != self.state.remoteTransport else { return }
+        self.clearPreferredGatewayForManualEndpointEdit()
+        self.state.remoteTransport = value
+    }
+
+    func updateManualRemoteURL(_ value: String) {
+        guard value != self.state.remoteUrl else { return }
+        self.clearPreferredGatewayForManualEndpointEdit()
+        self.state.remoteUrl = value
+    }
+
+    func updateManualRemoteTarget(_ value: String) {
+        guard value != self.state.remoteTarget else { return }
+        self.clearPreferredGatewayForManualEndpointEdit()
+        self.state.remoteTarget = value
+    }
+
+    private func clearPreferredGatewayForManualEndpointEdit() {
+        let preferred = self.preferredGatewayID ?? GatewayDiscoveryPreferences.preferredStableID()
+        guard preferred != nil else { return }
+        self.preferredGatewayID = nil
+        // The coordinator clears the persisted discovery preference and revokes
+        // any suspended attempt before this manual endpoint can become active.
+        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(nil)
     }
 
     private var shouldShowRemoteConnectionSection: Bool {
@@ -513,6 +555,7 @@ extension OnboardingView {
         let shouldRestoreMode = originalMode != .remote
         if shouldRestoreMode {
             // Reuse the shared remote endpoint stack for probing without committing the user's mode choice.
+            self.configuredGatewayProbe.beginTemporaryConnectionCheck()
             self.state.connectionMode = .remote
         }
         self.remoteProbeState = .checking
@@ -522,6 +565,7 @@ extension OnboardingView {
                 self.suppressRemoteProbeReset = true
                 self.state.connectionMode = originalMode
                 self.suppressRemoteProbeReset = false
+                self.configuredGatewayProbe.endTemporaryConnectionCheck()
             }
         }
 
@@ -808,119 +852,6 @@ extension OnboardingView {
             }
             Spacer(minLength: 0)
         }
-    }
-
-    func workspacePage() -> some View {
-        self.onboardingPage {
-            Text("Agent workspace")
-                .font(.largeTitle.weight(.semibold))
-            Text(
-                "OpenClaw runs the agent from a dedicated workspace so it can load `AGENTS.md` " +
-                    "and write files there without mixing into your other projects.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 560)
-                .fixedSize(horizontal: false, vertical: true)
-
-            self.onboardingCard(spacing: 10) {
-                if self.state.connectionMode == .remote {
-                    Text("Remote gateway detected")
-                        .font(.headline)
-                    Text(
-                        "Create the workspace on the remote host (SSH in first). " +
-                            "The macOS app can’t write files on your gateway over SSH yet.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-
-                    Button(self.copied ? "Copied" : "Copy setup command") {
-                        self.copyToPasteboard(self.workspaceBootstrapCommand)
-                    }
-                    .buttonStyle(.bordered)
-                } else {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Workspace folder")
-                            .font(.headline)
-                        TextField(
-                            AgentWorkspace.displayPath(for: OpenClawConfigFile.defaultWorkspaceURL()),
-                            text: self.$workspacePath)
-                            .textFieldStyle(.roundedBorder)
-
-                        HStack(spacing: 12) {
-                            Button {
-                                Task { await self.applyWorkspace() }
-                            } label: {
-                                if self.workspaceApplying {
-                                    ProgressView()
-                                } else {
-                                    Text("Create workspace")
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(self.workspaceApplying)
-
-                            Button("Open folder") {
-                                let url = AgentWorkspace.resolveWorkspaceURL(from: self.workspacePath)
-                                NSWorkspace.shared.open(url)
-                            }
-                            .buttonStyle(.bordered)
-                            .disabled(self.workspaceApplying)
-
-                            Button("Save in config") {
-                                Task {
-                                    let url = AgentWorkspace.resolveWorkspaceURL(from: self.workspacePath)
-                                    let saved = await self.saveAgentWorkspace(AgentWorkspace.displayPath(for: url))
-                                    if saved {
-                                        self.workspaceStatus =
-                                            "Saved to ~/.openclaw/openclaw.json (agents.defaults.workspace)"
-                                    }
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            .disabled(self.workspaceApplying)
-                        }
-                    }
-
-                    if let workspaceStatus {
-                        Text(workspaceStatus)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    } else {
-                        Text(
-                            "Tip: edit AGENTS.md in this folder to shape the assistant’s behavior. " +
-                                "For backup, make the workspace a private git repo so your agent’s " +
-                                "“memory” is versioned.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-                }
-            }
-        }
-    }
-
-    func onboardingChatPage() -> some View {
-        VStack(spacing: 12) {
-            Text("Meet your agent")
-                .font(.largeTitle.weight(.semibold))
-            Text(
-                "Your agent introduces itself, picks a name with you, and helps you " +
-                    "connect WhatsApp, Telegram, or another channel — just chat.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 520)
-                .fixedSize(horizontal: false, vertical: true)
-
-            self.onboardingGlassCard(padding: 8) {
-                OpenClawChatView(viewModel: self.onboardingChatModel, style: .onboarding)
-                    .frame(maxHeight: .infinity)
-            }
-            .frame(maxHeight: .infinity)
-        }
-        .padding(.horizontal, 28)
-        .frame(width: self.pageWidth, height: self.contentHeight, alignment: .top)
     }
 
     func readyPage() -> some View {

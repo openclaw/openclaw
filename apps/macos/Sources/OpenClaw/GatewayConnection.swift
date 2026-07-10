@@ -435,11 +435,14 @@ actor GatewayConnection {
         return SessionRoutingIdentity(defaultAgentID: result.defaultid, contract: contract)
     }
 
-    func configuredInferenceModel(ifCurrentRoute route: Route) async throws -> String? {
+    func configuredInferenceModel(
+        ifCurrentRoute route: Route,
+        timeoutMs: Double = 15000) async throws -> String?
+    {
         let data = try await request(
             method: "agents.list",
             params: [:],
-            timeoutMs: 15000,
+            timeoutMs: timeoutMs,
             ifCurrentRoute: route)
         guard await self.isCurrentRoute(route) else {
             throw CancellationError()

@@ -1,8 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOnboardingWelcome } from "./onboarding-welcome.js";
 
 const mocks = vi.hoisted(() => ({
-  detectInferenceBackends: vi.fn(async () => [] as Array<Record<string, unknown>>),
   sourceConfig: {
     agents: { defaults: { workspace: "/existing/workspace" } },
     gateway: undefined as
@@ -29,13 +28,14 @@ vi.mock("../config/config.js", async (importOriginal) => ({
   })),
 }));
 
-vi.mock("../commands/onboard-inference.js", () => ({
-  detectInferenceBackends: mocks.detectInferenceBackends,
-}));
-
 vi.mock("../commands/onboard-helpers.js", () => ({ DEFAULT_WORKSPACE: "/default/workspace" }));
 
 describe("buildOnboardingWelcome", () => {
+  beforeEach(() => {
+    mocks.sourceConfig.agents.defaults.workspace = "/existing/workspace";
+    mocks.sourceConfig.gateway = undefined;
+  });
+
   it("preserves an authored workspace in a partial setup", async () => {
     mocks.sourceConfig.agents.defaults.workspace = "/existing/workspace";
     const propose = vi.fn();
@@ -49,7 +49,7 @@ describe("buildOnboardingWelcome", () => {
           issues: [],
           hash: "hash",
         },
-        defaultModel: undefined,
+        defaultModel: "openai/gpt-5.5",
       })),
       propose,
       noteAssistantMessage,
@@ -59,18 +59,10 @@ describe("buildOnboardingWelcome", () => {
 
     expect(propose).toHaveBeenCalledWith({ kind: "setup", workspace: "/existing/workspace" });
     expect(welcome).toContain("Workspace: /existing/workspace");
-    expect(welcome).toContain("configure a model provider with masked credential prompts");
+    expect(welcome).toContain("AI: openai/gpt-5.5 — already verified with a real reply");
   });
 
-  it("promises to verify an installed CLI before reusing it", async () => {
-    mocks.detectInferenceBackends.mockResolvedValueOnce([
-      {
-        kind: "claude-cli",
-        modelRef: "claude-cli/claude-opus-4-8",
-        label: "Claude Code",
-        detail: "installed",
-      },
-    ]);
+  it("advertises only the route that passed the inference gate", async () => {
     const welcome = await buildOnboardingWelcome({
       engine: {
         loadOverview: vi.fn(async () => ({
@@ -81,15 +73,16 @@ describe("buildOnboardingWelcome", () => {
             issues: [],
             hash: null,
           },
-          defaultModel: undefined,
+          defaultModel: "openai/gpt-5.5",
         })),
         propose: vi.fn(),
         noteAssistantMessage: vi.fn(),
       } as never,
     });
 
-    expect(welcome).toContain("AI: Claude Code");
-    expect(welcome).toContain("verify it with a real reply and reuse it only if it works");
+    expect(welcome).toContain("AI: openai/gpt-5.5 — already verified with a real reply");
+    expect(welcome).not.toContain("Claude Code");
+    expect(welcome).not.toContain("Codex login");
   });
 
   it("ignores a blank authored workspace", async () => {
@@ -104,7 +97,7 @@ describe("buildOnboardingWelcome", () => {
           issues: [],
           hash: "hash",
         },
-        defaultModel: undefined,
+        defaultModel: "openai/gpt-5.5",
       })),
       propose,
       noteAssistantMessage: vi.fn(),
@@ -113,6 +106,61 @@ describe("buildOnboardingWelcome", () => {
     await buildOnboardingWelcome({ engine: engine as never });
 
     expect(propose).toHaveBeenCalledWith({ kind: "setup", workspace: "/default/workspace" });
+  });
+
+  it("honors an explicit workspace override on an authored setup", async () => {
+    mocks.sourceConfig.gateway = { auth: { mode: "token", token: "existing-token" } };
+    const propose = vi.fn();
+    const welcome = await buildOnboardingWelcome({
+      workspace: "/requested/workspace",
+      engine: {
+        loadOverview: vi.fn(async () => ({
+          config: {
+            path: "/tmp/openclaw.json",
+            exists: true,
+            valid: true,
+            issues: [],
+            hash: "hash",
+          },
+          defaultModel: "openai/gpt-5.5",
+        })),
+        propose,
+        noteAssistantMessage: vi.fn(),
+      } as never,
+    });
+
+    expect(propose).toHaveBeenCalledWith({
+      kind: "setup",
+      workspace: "/requested/workspace",
+    });
+    expect(welcome).toContain("Workspace: /requested/workspace");
+  });
+
+  it("fails closed before proposing setup when inference is missing", async () => {
+    const propose = vi.fn();
+    const noteAssistantMessage = vi.fn();
+
+    await expect(
+      buildOnboardingWelcome({
+        engine: {
+          loadOverview: vi.fn(async () => ({
+            config: {
+              path: "/tmp/openclaw.json",
+              exists: true,
+              valid: true,
+              issues: [],
+              hash: "hash",
+            },
+            defaultModel: undefined,
+          })),
+          propose,
+          noteAssistantMessage,
+        } as never,
+      }),
+    ).rejects.toThrow("requires working inference first");
+
+    expect(propose).not.toHaveBeenCalled();
+    expect(noteAssistantMessage).not.toHaveBeenCalled();
   });
 
   it.each([

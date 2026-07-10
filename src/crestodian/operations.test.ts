@@ -175,32 +175,6 @@ vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: mockConfig.readConfigFileSnapshot,
 }));
 
-vi.mock("../commands/models/shared.js", () => ({
-  applyDefaultModelPrimaryUpdate: ({
-    cfg,
-    modelRaw,
-    field,
-  }: {
-    cfg: TestConfig;
-    modelRaw: string;
-    field: "model" | "imageModel";
-  }) => ({
-    ...cfg,
-    agents: {
-      ...(cfg.agents as TestConfig | undefined),
-      defaults: {
-        ...(cfg.agents as { defaults?: TestConfig } | undefined)?.defaults,
-        [field]: { primary: modelRaw },
-      },
-    },
-  }),
-}));
-
-vi.mock("../config/model-input.js", () => ({
-  resolveAgentModelPrimaryValue: (model?: string | { primary?: string }) =>
-    typeof model === "string" ? model : model?.primary,
-}));
-
 const opTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("parseCrestodianOperation", () => {
@@ -425,6 +399,16 @@ describe("parseCrestodianOperation", () => {
     expect(output).toContain("openclaw channels add --channel slack");
   });
 
+  it("routes one-shot model setup through the verified Crestodian flow", async () => {
+    const { runtime, lines } = createCrestodianTestRuntime();
+
+    const result = await executeCrestodianOperation({ kind: "model-setup" }, runtime);
+
+    expect(result.applied).toBe(false);
+    expect(lines.join("\n")).toContain("Exit Crestodian and run `openclaw onboard`");
+    expect(lines.join("\n")).not.toContain("openclaw configure --section model");
+  });
+
   it("prints discovered channel metadata and sorted unknown-channel choices", async () => {
     const { runtime, lines } = createCrestodianTestRuntime();
     const entries = [
@@ -497,6 +481,62 @@ describe("parseCrestodianOperation", () => {
       kind: "create-agent",
       agentId: "ops",
     });
+  });
+
+  it("rejects an explicit new-agent model before any config write or audit", async () => {
+    const tempDir = opTempDirs.make("crestodian-agent-model-rejected-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const runAgentsAdd = vi.fn(async () => {});
+    expect(
+      isPersistentCrestodianOperation({
+        kind: "create-agent",
+        agentId: "work",
+        model: "openai/gpt-5.5",
+      }),
+    ).toBe(false);
+    expect(isPersistentCrestodianOperation({ kind: "create-agent", agentId: "work" })).toBe(true);
+
+    await expect(
+      executeCrestodianOperation(
+        {
+          kind: "create-agent",
+          agentId: "work",
+          workspace: "/tmp/work",
+          model: "openai/gpt-5.5",
+        },
+        runtime,
+        { approved: true, deps: { runAgentsAdd } },
+      ),
+    ).rejects.toThrow("Retry without `model`; the new agent will inherit");
+
+    expect(runAgentsAdd).not.toHaveBeenCalled();
+    expect(lines.join("\n")).not.toContain("[crestodian] running: agents.create");
+    await expect(fs.access(path.join(tempDir, "audit", "crestodian.jsonl"))).rejects.toThrow();
+  });
+
+  it("reserves the normalized Crestodian agent identity before any write or audit", async () => {
+    const tempDir = opTempDirs.make("crestodian-agent-id-reserved-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const runAgentsAdd = vi.fn(async () => {});
+    const operation = {
+      kind: "create-agent" as const,
+      agentId: "Crestodian",
+      workspace: "/tmp/work",
+    };
+
+    expect(isPersistentCrestodianOperation(operation)).toBe(false);
+    await expect(
+      executeCrestodianOperation(operation, runtime, {
+        approved: true,
+        deps: { runAgentsAdd },
+      }),
+    ).rejects.toThrow('Agent id "crestodian" is reserved');
+
+    expect(runAgentsAdd).not.toHaveBeenCalled();
+    expect(lines.join("\n")).not.toContain("[crestodian] running: agents.create");
+    await expect(fs.access(path.join(tempDir, "audit", "crestodian.jsonl"))).rejects.toThrow();
   });
 
   it("requires approval before restarting gateway", async () => {
@@ -610,6 +650,108 @@ describe("parseCrestodianOperation", () => {
     );
   });
 
+  it("keeps channel SecretRef writes available after inference is verified", async () => {
+    const { runtime } = createCrestodianTestRuntime();
+    const runConfigSet = vi.fn(async () => {});
+
+    const result = await executeCrestodianOperation(
+      {
+        kind: "config-set-ref",
+        path: "channels.telegram.botToken",
+        source: "env",
+        id: "TELEGRAM_BOT_TOKEN",
+      },
+      runtime,
+      { approved: true, deps: { runConfigSet } },
+    );
+
+    expect(result.applied).toBe(true);
+    expect(runConfigSet).toHaveBeenCalledWith({
+      path: "channels.telegram.botToken",
+      cliOptions: {
+        refProvider: "default",
+        refSource: "env",
+        refId: "TELEGRAM_BOT_TOKEN",
+      },
+    });
+  });
+
+  it.each([
+    { kind: "config-set" as const, path: "agents.defaults.model.primary", value: "openai/gpt-5.5" },
+    {
+      kind: "config-set" as const,
+      path: "agents[defaults][model][primary]",
+      value: "openai/gpt-5.5",
+    },
+    {
+      kind: "config-set" as const,
+      path: 'agents["defaults"]["model"].primary',
+      value: "openai/gpt-5.5",
+    },
+    { kind: "config-set" as const, path: "agents.defaults.agentRuntime", value: "{}" },
+    { kind: "config-set" as const, path: "agents.defaults.params.temperature", value: "0.5" },
+    { kind: "config-set" as const, path: "agents.defaults.tools.profile", value: '"full"' },
+    { kind: "config-set" as const, path: "agents.list[0].models.openai", value: "{}" },
+    { kind: "config-set" as const, path: "agents.list[0].params.temperature", value: "0.5" },
+    { kind: "config-set" as const, path: "agents.list[0].tools.profile", value: '"full"' },
+    { kind: "config-set" as const, path: "agents.list[0].default", value: "true" },
+    { kind: "config-set" as const, path: "agents.list[0].agentDir", value: '"/tmp/agent"' },
+    { kind: "config-set" as const, path: "auth.order.anthropic", value: "[]" },
+    { kind: "config-set" as const, path: "env.vars.ANTHROPIC_API_KEY", value: '"changed"' },
+    { kind: "config-set" as const, path: '["env"]["vars"]["OPENAI_API_KEY"]', value: '"x"' },
+    { kind: "config-set" as const, path: "secrets.defaults.env", value: '"changed"' },
+    { kind: "config-set" as const, path: '["secrets"]["defaults"]["env"]', value: '"x"' },
+    { kind: "config-set" as const, path: "plugins.entries.codex.enabled", value: "false" },
+    {
+      kind: "config-set" as const,
+      path: '["plugins"]["entries"]["openai"]["enabled"]',
+      value: "false",
+    },
+    {
+      kind: "config-set" as const,
+      path: String.raw`mo\dels.providers.openai.apiKey`,
+      value: '"x"',
+    },
+    { kind: "config-set" as const, path: "$include", value: '"./alternate.json5"' },
+    { kind: "config-set" as const, path: '["$include"]', value: '"./alternate.json5"' },
+    { kind: "config-set" as const, path: "tools.profile", value: '"full"' },
+    { kind: "config-set" as const, path: '["tools"]["profile"]', value: '"full"' },
+    {
+      kind: "config-set-ref" as const,
+      path: "models.providers.openai.apiKey",
+      source: "env" as const,
+      id: "OPENAI_API_KEY",
+    },
+    {
+      kind: "config-set-ref" as const,
+      path: "models[providers][openai][apiKey]",
+      source: "env" as const,
+      id: "OPENAI_API_KEY",
+    },
+    {
+      kind: "config-set-ref" as const,
+      path: '["models"]["providers"]["openai"]["apiKey"]',
+      source: "env" as const,
+      id: "OPENAI_API_KEY",
+    },
+  ])("rejects unverified inference-route write $path", async (operation) => {
+    const tempDir = opTempDirs.make("crestodian-route-write-refused-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const runConfigSet = vi.fn(async () => {});
+
+    await expect(
+      executeCrestodianOperation(operation, runtime, {
+        approved: true,
+        deps: { runConfigSet },
+      }),
+    ).rejects.toThrow("openclaw onboard");
+
+    expect(runConfigSet).not.toHaveBeenCalled();
+    expect(lines.join("\n")).not.toContain("[crestodian] running:");
+    await expect(fs.access(path.join(tempDir, "audit", "crestodian.jsonl"))).rejects.toThrow();
+  });
+
   it("runs plugin list and search as read-only operations", async () => {
     const { runtime, lines } = createCrestodianTestRuntime();
     const runPluginsList = vi.fn(async (pluginRuntime: RuntimeEnv) => {
@@ -684,68 +826,64 @@ describe("parseCrestodianOperation", () => {
     );
   });
 
-  it("uninstalls plugins only after approval and audits the write", async () => {
-    const tempDir = opTempDirs.make("crestodian-plugin-uninstall-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime, lines } = createCrestodianTestRuntime();
-    const runPluginUninstall = vi.fn(async (pluginId: string, pluginRuntime: RuntimeEnv) => {
-      pluginRuntime.log(`uninstalled ${pluginId}`);
-    });
+  it("rejects an invalid approved plugin spec without exiting inside the executor", async () => {
+    const runPluginInstall = vi.fn();
+    mockConfig.readConfigFileSnapshot.mockClear();
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn() as unknown as RuntimeEnv["exit"],
+    };
 
-    const plan = await executeCrestodianOperation(
-      { kind: "plugin-uninstall", pluginId: "openclaw-demo" },
-      runtime,
-      { deps: { runPluginUninstall } },
-    );
-    expectRecordFields(plan as unknown as Record<string, unknown>, {
-      applied: false,
-      message: "Plan: uninstall plugin openclaw-demo. Say yes to apply.",
-    });
-    expect(runPluginUninstall).not.toHaveBeenCalled();
+    await expect(
+      executeCrestodianOperation(
+        { kind: "plugin-install", spec: "https://example.test/plugin.tgz" },
+        runtime,
+        { approved: true, deps: { runPluginInstall } },
+      ),
+    ).rejects.toThrow("accepts npm or ClawHub package specs only");
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(runPluginInstall).not.toHaveBeenCalled();
+    expect(mockConfig.readConfigFileSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("refuses plugin uninstall because it cannot prove inference survives", async () => {
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const runPluginUninstall = vi.fn();
 
     const result = await executeCrestodianOperation(
       { kind: "plugin-uninstall", pluginId: "openclaw-demo" },
       runtime,
-      {
-        approved: true,
-        deps: { runPluginUninstall },
-        auditDetails: { rescue: true },
-      },
+      { approved: true, deps: { runPluginUninstall } },
     );
-    expect(result.applied).toBe(true);
-
-    const uninstallCall = requireFirstMockCall(runPluginUninstall, "runPluginUninstall");
-    expect(uninstallCall[0]).toBe("openclaw-demo");
-    expectRuntimeArg(uninstallCall[1]);
-    expect(lines.join("\n")).toContain("[crestodian] done: plugin.uninstall");
-    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
-    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
-    expectAuditRecord(
-      audit,
-      {
-        operation: "plugin.uninstall",
-        summary: "Uninstalled plugin openclaw-demo",
-      },
-      { rescue: true, pluginId: "openclaw-demo" },
-    );
+    expectRecordFields(result as unknown as Record<string, unknown>, {
+      applied: false,
+    });
+    expect(runPluginUninstall).not.toHaveBeenCalled();
+    expect(lines.join("\n")).toContain("cannot prove that uninstalling a plugin");
+    expect(lines.join("\n")).toContain("openclaw plugins uninstall openclaw-demo");
   });
 
   it("runs setup bootstrap only after approval and audits it", async () => {
     const tempDir = opTempDirs.make("crestodian-setup-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    vi.stubEnv("OPENAI_API_KEY", "test-key");
     const { runtime, lines } = createCrestodianTestRuntime();
+    mockConfig.setConfig({ agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } });
     const applySetup = vi.fn(async () => ({
       configPath: path.join(tempDir, "openclaw.json"),
-      lines: ["Workspace: /tmp/work", "Default model: openai/gpt-5.5"],
+      lines: ["Workspace: /tmp/work"],
     }));
-    const activateSetupInference = vi.fn(async () => ({
-      ok: true as const,
-      modelRef: "openai/gpt-5.5",
-      latencyMs: 250,
-      lines: ["Workspace: /tmp/work", "Default model: openai/gpt-5.5"],
-    }));
-    const deps = { activateSetupInference, applySetup };
+    const deps = {
+      applySetup,
+      loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
+      verifyInferenceConfig: vi.fn(async () => ({
+        ok: true as const,
+        modelRef: "openai/gpt-5.5",
+        latencyMs: 12,
+      })),
+    };
 
     const plan = await executeCrestodianOperation(
       { kind: "setup", workspace: "/tmp/work" },
@@ -755,9 +893,7 @@ describe("parseCrestodianOperation", () => {
     expectRecordFields(plan as unknown as Record<string, unknown>, {
       applied: false,
     });
-    expect(lines.join("\n")).toContain(
-      "Model candidate: openai/gpt-5.5 (OPENAI_API_KEY); I will verify it before saving.",
-    );
+    expect(lines.join("\n")).toContain("Model choice: keep verified default openai/gpt-5.5.");
     expect(applySetup).not.toHaveBeenCalled();
 
     const result = await executeCrestodianOperation(
@@ -772,224 +908,13 @@ describe("parseCrestodianOperation", () => {
     expect(result.applied).toBe(true);
 
     expect(lines.join("\n")).toContain("[crestodian] done: crestodian.setup");
-    expect(activateSetupInference).toHaveBeenCalledWith({
-      kind: "openai-api-key",
+    expect(applySetup).toHaveBeenCalledWith({
       workspace: "/tmp/work",
+      expectedInferenceRoute: expect.any(Object),
       surface: "cli",
       runtime,
     });
-    expect(applySetup).not.toHaveBeenCalled();
-    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
-    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
-    expectAuditRecord(
-      audit,
-      {
-        operation: "crestodian.setup",
-        summary: "Bootstrapped setup with openai/gpt-5.5",
-      },
-      {
-        rescue: true,
-        workspace: "/tmp/work",
-        model: "openai/gpt-5.5",
-        modelSource: "OPENAI_API_KEY",
-      },
-    );
-  });
-
-  it("applies gateway setup once without a model after every usable candidate fails", async () => {
-    const tempDir = opTempDirs.make("crestodian-providerless-setup-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime, lines } = createCrestodianTestRuntime();
-    const applySetup = vi.fn(async () => ({
-      configPath: path.join(tempDir, "openclaw.json"),
-      lines: ["Workspace: /tmp/work"],
-    }));
-    const deps = {
-      applySetup,
-      setupSurface: "gateway" as const,
-      activateSetupInference: vi
-        .fn()
-        .mockResolvedValueOnce({
-          ok: false as const,
-          status: "auth" as const,
-          error: "not logged in",
-        })
-        .mockResolvedValueOnce({
-          ok: false as const,
-          status: "billing" as const,
-          error: "billing unavailable",
-        }),
-      detectInferenceBackends: async () => [
-        {
-          kind: "claude-cli" as const,
-          modelRef: "claude-cli/claude-opus-4-8",
-          label: "Claude Code",
-          detail: "installed, not logged in",
-          credentials: false,
-        },
-        {
-          kind: "codex-cli" as const,
-          modelRef: "openai/gpt-5.5",
-          label: "Codex",
-          detail: "installed",
-        },
-        {
-          kind: "gemini-cli" as const,
-          modelRef: "google-gemini-cli/gemini-3.1-pro-preview",
-          label: "Gemini CLI",
-          detail: "logged in",
-          credentials: true,
-        },
-      ],
-    };
-
-    const plan = await executeCrestodianOperation(
-      { kind: "setup", workspace: "/tmp/work" },
-      runtime,
-      { deps },
-    );
-
-    expect(plan.message).toContain("I will verify it before saving");
-
-    const result = await executeCrestodianOperation(
-      { kind: "setup", workspace: "/tmp/work" },
-      runtime,
-      {
-        approved: true,
-        deps,
-      },
-    );
-
-    expect(result).toMatchObject({
-      applied: true,
-      followUp: { kind: "model-setup", workspace: "/tmp/work" },
-    });
-    expect(deps.activateSetupInference.mock.calls.map(([call]) => call.kind)).toEqual([
-      "codex-cli",
-      "gemini-cli",
-    ]);
-    expect(applySetup).toHaveBeenCalledOnce();
-    expect(applySetup).toHaveBeenCalledWith({
-      workspace: "/tmp/work",
-      surface: "gateway",
-      runtime,
-    });
-    expect(lines.join("\n")).toContain("Default model: not configured yet");
-  });
-
-  it("walks the live inference ladder and persists only the first passing candidate", async () => {
-    const tempDir = opTempDirs.make("crestodian-verified-setup-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime, lines } = createCrestodianTestRuntime();
-    const applySetup = vi.fn();
-    const activateSetupInference = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: false, status: "auth", error: "not logged in" })
-      .mockResolvedValueOnce({
-        ok: true,
-        modelRef: "openai/gpt-5.5",
-        latencyMs: 400,
-        lines: ["Workspace: /tmp/work", "Default model: openai/gpt-5.5"],
-      });
-    const candidates = [
-      {
-        kind: "claude-cli" as const,
-        modelRef: "claude-cli/claude-opus-4-8",
-        label: "Claude Code",
-        detail: "installed",
-      },
-      {
-        kind: "codex-cli" as const,
-        modelRef: "openai/gpt-5.5",
-        label: "Codex",
-        detail: "logged in",
-        credentials: true,
-      },
-      {
-        kind: "gemini-cli" as const,
-        modelRef: "google-gemini-cli/gemini-3.1-pro-preview",
-        label: "Gemini CLI",
-        detail: "logged in",
-        credentials: true,
-      },
-    ];
-
-    const result = await executeCrestodianOperation(
-      { kind: "setup", workspace: "/tmp/work" },
-      runtime,
-      {
-        approved: true,
-        deps: {
-          activateSetupInference,
-          applySetup,
-          detectInferenceBackends: async () => candidates,
-          setupSurface: "gateway",
-        },
-      },
-    );
-
-    expect(result).toEqual({ applied: true });
-    expect(activateSetupInference.mock.calls.map(([call]) => call.kind)).toEqual([
-      "claude-cli",
-      "codex-cli",
-    ]);
-    expect(activateSetupInference.mock.calls.map(([call]) => call.surface)).toEqual([
-      "gateway",
-      "gateway",
-    ]);
-    expect(applySetup).not.toHaveBeenCalled();
-    expect(lines.join("\n")).toContain("Claude Code did not pass verification (auth).");
-    expect(lines.join("\n")).toContain("Default model: openai/gpt-5.5");
-    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
-    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
-    expectAuditRecord(
-      audit,
-      {
-        operation: "crestodian.setup",
-        summary: "Bootstrapped setup with openai/gpt-5.5",
-      },
-      {
-        workspace: "/tmp/work",
-        model: "openai/gpt-5.5",
-        modelSource: "Codex app-server",
-      },
-    );
-  });
-
-  it("keeps an existing default model without running the implicit ladder", async () => {
-    const tempDir = opTempDirs.make("crestodian-existing-model-setup-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime, lines } = createCrestodianTestRuntime();
-    const applySetup = vi.fn(async () => ({
-      configPath: path.join(tempDir, "openclaw.json"),
-      lines: ["Workspace: /tmp/work"],
-    }));
-    const activateSetupInference = vi.fn();
-    const detectInferenceBackends = vi.fn();
-
-    const result = await executeCrestodianOperation(
-      { kind: "setup", workspace: "/tmp/work" },
-      runtime,
-      {
-        approved: true,
-        deps: {
-          loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
-          detectInferenceBackends,
-          activateSetupInference,
-          applySetup,
-        },
-      },
-    );
-
-    expect(result).toEqual({ applied: true });
-    expect(detectInferenceBackends).not.toHaveBeenCalled();
-    expect(activateSetupInference).not.toHaveBeenCalled();
-    expect(applySetup).toHaveBeenCalledWith({
-      workspace: "/tmp/work",
-      surface: "cli",
-      runtime,
-    });
-    expect(lines.join("\n")).toContain("Default model: openai/gpt-5.5 (kept)");
+    expect(lines.join("\n")).toContain("Default model: openai/gpt-5.5 (verified and kept)");
     const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
     const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
     expectAuditRecord(
@@ -999,76 +924,578 @@ describe("parseCrestodianOperation", () => {
         summary: "Bootstrapped setup workspace",
       },
       {
+        rescue: true,
         workspace: "/tmp/work",
-        modelSource: "existing default model",
+        model: "openai/gpt-5.5",
+        modelSource: "live-verified default model",
+        inferenceLatencyMs: 12,
       },
     );
   });
 
-  it("keeps an explicitly requested setup model without running the implicit ladder", async () => {
-    const tempDir = opTempDirs.make("crestodian-explicit-model-setup-");
+  it("rejects setup without a default model before any workspace or Gateway write", async () => {
+    const tempDir = opTempDirs.make("crestodian-no-inference-setup-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const applySetup = vi.fn();
+    const deps = {
+      applySetup,
+      setupSurface: "gateway" as const,
+      loadOverview: async () => ({ defaultModel: undefined }) as never,
+    };
+
+    await expect(
+      executeCrestodianOperation({ kind: "setup", workspace: "/tmp/work" }, runtime, {
+        approved: true,
+        deps,
+      }),
+    ).rejects.toThrow("requires working inference first");
+
+    expect(applySetup).not.toHaveBeenCalled();
+    expect(lines.join("\n")).not.toContain("[crestodian] running: crestodian.setup");
+    await expect(fs.access(path.join(tempDir, "audit", "crestodian.jsonl"))).rejects.toThrow();
+  });
+
+  it("rejects setup when the current route fails its live inference check", async () => {
+    const tempDir = opTempDirs.make("crestodian-failed-inference-setup-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    mockConfig.setConfig({ agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } });
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const applySetup = vi.fn();
+
+    await expect(
+      executeCrestodianOperation({ kind: "setup", workspace: "/tmp/work" }, runtime, {
+        approved: true,
+        deps: {
+          applySetup,
+          loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
+          verifyInferenceConfig: async () => ({
+            ok: false as const,
+            status: "auth" as const,
+            error: "not authenticated",
+          }),
+        },
+      }),
+    ).rejects.toThrow("failed a live check");
+
+    expect(applySetup).not.toHaveBeenCalled();
+    expect(lines.join("\n")).not.toContain("[crestodian] running: crestodian.setup");
+    await expect(fs.access(path.join(tempDir, "audit", "crestodian.jsonl"))).rejects.toThrow();
+  });
+
+  it("rejects route drift during setup verification but preserves the concurrent edit", async () => {
+    mockConfig.setConfig({
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      auth: { order: { openai: ["openai:old"] } },
+    });
     const { runtime } = createCrestodianTestRuntime();
-    const applySetup = vi.fn(async () => ({
-      configPath: path.join(tempDir, "openclaw.json"),
-      lines: ["Default model: acme/explicit"],
-    }));
-    const activateSetupInference = vi.fn();
+    const applySetup = vi.fn();
+
+    await expect(
+      executeCrestodianOperation({ kind: "setup", workspace: "/tmp/work" }, runtime, {
+        approved: true,
+        deps: {
+          applySetup,
+          loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
+          verifyInferenceConfig: async () => {
+            mockConfig.setConfig({
+              agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+              auth: { order: { openai: ["openai:new"] } },
+            });
+            return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 8 };
+          },
+        },
+      }),
+    ).rejects.toThrow("changed during setup verification");
+
+    expect(applySetup).not.toHaveBeenCalled();
+    expect(mockConfig.currentConfig()).toMatchObject({
+      auth: { order: { openai: ["openai:new"] } },
+    });
+  });
+
+  it("preserves unrelated concurrent edits after re-verifying the same setup route", async () => {
+    mockConfig.setConfig({
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      gateway: { port: 18789 },
+    });
+    const { runtime } = createCrestodianTestRuntime();
+    const applySetup = vi.fn(async () => ({ configPath: "/tmp/openclaw.json", lines: [] }));
 
     const result = await executeCrestodianOperation(
-      { kind: "setup", workspace: "/tmp/work", model: "acme/explicit" },
+      { kind: "setup", workspace: "/tmp/work" },
       runtime,
       {
         approved: true,
-        deps: { activateSetupInference, applySetup },
+        deps: {
+          applySetup,
+          loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
+          verifyInferenceConfig: async () => {
+            mockConfig.setConfig({
+              agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+              gateway: { port: 19000 },
+            });
+            return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 7 };
+          },
+        },
+      },
+    );
+
+    expect(result.applied).toBe(true);
+    expect(mockConfig.currentConfig()).toMatchObject({ gateway: { port: 19000 } });
+    expect(applySetup).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedInferenceRoute: expect.any(Object) }),
+    );
+  });
+
+  it("rejects a setup model switch before writing", async () => {
+    const tempDir = opTempDirs.make("crestodian-model-switch-setup-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const { runtime } = createCrestodianTestRuntime();
+    const applySetup = vi.fn();
+
+    await expect(
+      executeCrestodianOperation(
+        { kind: "setup", workspace: "/tmp/work", model: "acme/different" },
+        runtime,
+        {
+          approved: true,
+          deps: {
+            applySetup,
+            loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
+          },
+        },
+      ),
+    ).rejects.toThrow("Exit Crestodian and run `openclaw onboard`");
+
+    expect(applySetup).not.toHaveBeenCalled();
+  });
+
+  it("allows the same requested model while preserving it without a model write", async () => {
+    const tempDir = opTempDirs.make("crestodian-same-model-setup-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const { runtime } = createCrestodianTestRuntime();
+    mockConfig.setConfig({ agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } });
+    const applySetup = vi.fn(async () => ({
+      configPath: path.join(tempDir, "openclaw.json"),
+      lines: ["Workspace: /tmp/work"],
+    }));
+
+    const result = await executeCrestodianOperation(
+      { kind: "setup", workspace: "/tmp/work", model: "openai/gpt-5.5" },
+      runtime,
+      {
+        approved: true,
+        deps: {
+          applySetup,
+          loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
+          verifyInferenceConfig: async () => ({
+            ok: true as const,
+            modelRef: "openai/gpt-5.5",
+            latencyMs: 5,
+          }),
+        },
       },
     );
 
     expect(result).toEqual({ applied: true });
-    expect(activateSetupInference).not.toHaveBeenCalled();
     expect(applySetup).toHaveBeenCalledWith({
       workspace: "/tmp/work",
-      model: "acme/explicit",
+      expectedInferenceRoute: expect.any(Object),
       surface: "cli",
       runtime,
     });
   });
 
-  it("runs doctor repairs only after approval and audits them", async () => {
-    const tempDir = opTempDirs.make("crestodian-doctor-fix-");
+  it("live-verifies a staged default model before writing and preserves concurrent edits", async () => {
+    const tempDir = opTempDirs.make("crestodian-verified-model-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    mockConfig.setConfig({
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: ["openai/gpt-5.2"] },
+        },
+        list: [{ id: "main", default: true, workspace: "/tmp/main" }],
+      },
+      gateway: { port: 18789 },
+      models: { providers: { openai: { baseUrl: "https://api.openai.com/v1" } } },
+    });
+    mockConfig.mutateConfigFile.mockClear();
+    const { runtime, lines } = createCrestodianTestRuntime();
+    let verificationCalls = 0;
+    const verifyInferenceConfig = vi.fn(async ({ config }: { config: TestConfig }) => {
+      verificationCalls += 1;
+      const stagedDefaults = requireRecord(
+        requireRecord(config.agents, "agents").defaults,
+        "defaults",
+      );
+      expect(stagedDefaults.model).toEqual({
+        primary: "openai/gpt-5.5",
+        fallbacks: ["openai/gpt-5.2"],
+      });
+      expect(
+        requireRecord(
+          requireRecord(
+            requireRecord(mockConfig.currentConfig().agents, "agents").defaults,
+            "defaults",
+          ).model,
+          "persisted model",
+        ).primary,
+      ).toBe("anthropic/claude-sonnet-4-6");
+      if (verificationCalls === 1) {
+        const current = mockConfig.currentConfig();
+        const currentModels = requireRecord(current.models, "models");
+        const currentProviders = requireRecord(currentModels.providers, "providers");
+        mockConfig.setConfig({
+          ...current,
+          auth: {
+            profiles: { "google:other": { provider: "google", mode: "api_key" } },
+          },
+          models: {
+            ...currentModels,
+            providers: {
+              ...currentProviders,
+              google: {
+                baseUrl: "https://example.invalid",
+                models: [{ id: "unrelated", name: "Unrelated", contextWindow: 1, maxTokens: 1 }],
+              },
+            },
+          },
+          agents: {
+            ...requireRecord(current.agents, "agents"),
+            defaults: {
+              ...requireRecord(requireRecord(current.agents, "agents").defaults, "defaults"),
+              models: { "google/unrelated": { agentRuntime: { id: "openclaw" } } },
+            },
+            list: [
+              { id: "main", default: true, workspace: "/tmp/main" },
+              { id: "work", workspace: "/tmp/work" },
+            ],
+          },
+          channels: { telegram: { enabled: true } },
+        });
+      }
+      return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 17 };
+    });
+
+    const result = await executeCrestodianOperation(
+      { kind: "set-default-model", model: "openai/gpt-5.5" },
+      runtime,
+      { approved: true, deps: { verifyInferenceConfig } },
+    );
+
+    expect(result).toEqual({ applied: true });
+    expect(verifyInferenceConfig).toHaveBeenCalledTimes(2);
+    expect(mockConfig.mutateConfigFile).toHaveBeenCalledOnce();
+    const persisted = mockConfig.currentConfig();
+    expect(
+      requireRecord(requireRecord(persisted.agents, "agents").defaults, "defaults").model,
+    ).toEqual({ primary: "openai/gpt-5.5", fallbacks: ["openai/gpt-5.2"] });
+    expect(requireRecord(persisted.agents, "agents").list).toEqual([
+      { id: "main", default: true, workspace: "/tmp/main" },
+      { id: "work", workspace: "/tmp/work" },
+    ]);
+    expect(requireRecord(persisted.auth, "auth").profiles).toEqual({
+      "google:other": { provider: "google", mode: "api_key" },
+    });
+    expect(
+      requireRecord(requireRecord(persisted.models, "models").providers, "providers"),
+    ).toMatchObject({
+      openai: { baseUrl: "https://api.openai.com/v1" },
+      google: expect.any(Object),
+    });
+    expect(
+      requireRecord(
+        requireRecord(requireRecord(persisted.agents, "agents").defaults, "defaults").models,
+        "default models",
+      ),
+    ).toHaveProperty("google/unrelated");
+    expect(persisted.channels).toEqual({ telegram: { enabled: true } });
+    expect(lines.join("\n")).toContain("Default model: openai/gpt-5.5");
+
+    const audit = parseLastJsonLine(
+      await fs.readFile(path.join(tempDir, "audit", "crestodian.jsonl"), "utf8"),
+    );
+    expectAuditRecord(
+      audit,
+      {
+        operation: "config.setDefaultModel",
+        summary: "Set default model to openai/gpt-5.5",
+      },
+      {
+        requestedModel: "openai/gpt-5.5",
+        effectiveModel: "openai/gpt-5.5",
+        inferenceVerified: true,
+        inferenceLatencyMs: 17,
+      },
+    );
+  });
+
+  it.each([
+    {
+      field: "default agent",
+      initial: {
+        agents: {
+          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+          list: [{ id: "main", default: true }, { id: "work" }],
+        },
+      },
+      change: (config: TestConfig) => {
+        const next = structuredClone(config);
+        const list = requireRecord(next.agents, "agents").list as Array<{
+          id: string;
+          default?: boolean;
+        }>;
+        delete list[0]?.default;
+        list[1]!.default = true;
+        return next;
+      },
+    },
+    {
+      field: "default marker",
+      initial: {
+        agents: {
+          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+          list: [{ id: "main", default: true }, { id: "work" }],
+        },
+      },
+      change: (config: TestConfig) => {
+        const next = structuredClone(config);
+        const list = requireRecord(next.agents, "agents").list as Array<{
+          id: string;
+          default?: boolean;
+        }>;
+        delete list[0]?.default;
+        return next;
+      },
+    },
+    {
+      field: "auth profile order",
+      initial: {
+        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+        auth: { order: { anthropic: ["anthropic:one"] } },
+      },
+      change: (config: TestConfig) => ({
+        ...structuredClone(config),
+        auth: { order: { anthropic: ["anthropic:two"] } },
+      }),
+    },
+    {
+      field: "runtime metadata",
+      initial: {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            models: {
+              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      },
+      change: (config: TestConfig) => {
+        const next = structuredClone(config);
+        const defaults = requireRecord(requireRecord(next.agents, "agents").defaults, "defaults");
+        defaults.models = {
+          "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "openclaw" } },
+        };
+        return next;
+      },
+    },
+    {
+      field: "model",
+      initial: {
+        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      },
+      change: (config: TestConfig) => {
+        const next = structuredClone(config);
+        const defaults = requireRecord(requireRecord(next.agents, "agents").defaults, "defaults");
+        defaults.model = { primary: "anthropic/claude-opus-4-6" };
+        return next;
+      },
+    },
+    {
+      field: "config-backed environment",
+      initial: {
+        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+        env: { vars: { ANTHROPIC_API_KEY: "first" } },
+      },
+      change: (config: TestConfig) => ({
+        ...structuredClone(config),
+        env: { vars: { ANTHROPIC_API_KEY: "second" } },
+      }),
+    },
+    {
+      field: "secret provider policy",
+      initial: {
+        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+        secrets: { defaults: { env: "first" } },
+      },
+      change: (config: TestConfig) => ({
+        ...structuredClone(config),
+        secrets: { defaults: { env: "second" } },
+      }),
+    },
+    {
+      field: "plugin load policy",
+      initial: {
+        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+        plugins: { enabled: true },
+      },
+      change: (config: TestConfig) => ({
+        ...structuredClone(config),
+        plugins: { enabled: false },
+      }),
+    },
+  ])(
+    "aborts when concurrent $field changes invalidate the verified route",
+    async ({ initial, change }) => {
+      const tempDir = opTempDirs.make("crestodian-route-conflict-");
+      setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+      mockConfig.setConfig(initial);
+      mockConfig.mutateConfigFile.mockClear();
+      const { runtime, lines } = createCrestodianTestRuntime();
+      const verifyInferenceConfig = vi.fn(async () => {
+        mockConfig.setConfig(change(mockConfig.currentConfig()));
+        return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 7 };
+      });
+
+      await expect(
+        executeCrestodianOperation(
+          { kind: "set-default-model", model: "openai/gpt-5.5" },
+          runtime,
+          {
+            approved: true,
+            deps: { verifyInferenceConfig },
+          },
+        ),
+      ).rejects.toThrow("inference route changed during verification");
+
+      expect(mockConfig.mutateConfigFile).toHaveBeenCalledOnce();
+      expect(lines.join("\n")).not.toContain("[crestodian] done: config.setDefaultModel");
+      await expect(fs.access(path.join(tempDir, "audit", "crestodian.jsonl"))).rejects.toThrow();
+    },
+  );
+
+  it("keeps the working model and writes no audit when live inference fails", async () => {
+    const tempDir = opTempDirs.make("crestodian-rejected-model-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const originalConfig = {
+      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      gateway: { port: 18789 },
+    };
+    mockConfig.setConfig(originalConfig);
+    mockConfig.mutateConfigFile.mockClear();
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const verifyInferenceConfig = vi.fn(async () => ({
+      ok: false as const,
+      status: "auth" as const,
+      error: "Provider authentication failed.",
+    }));
+
+    await expect(
+      executeCrestodianOperation({ kind: "set-default-model", model: "openai/gpt-5.5" }, runtime, {
+        approved: true,
+        deps: { verifyInferenceConfig },
+      }),
+    ).rejects.toThrow(
+      "The requested model failed a live inference test, so the current default model was not changed. Provider authentication failed. Fix provider authentication or model access, then retry.",
+    );
+
+    expect(mockConfig.currentConfig()).toEqual(originalConfig);
+    expect(mockConfig.mutateConfigFile).not.toHaveBeenCalled();
+    expect(lines.join("\n")).not.toContain("[crestodian] done: config.setDefaultModel");
+    await expect(fs.access(path.join(tempDir, "audit", "crestodian.jsonl"))).rejects.toThrow();
+  });
+
+  it("writes nothing when the exact latest route fails its locked recheck", async () => {
+    const tempDir = opTempDirs.make("crestodian-latest-route-rejected-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const originalConfig = {
+      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+    };
+    mockConfig.setConfig(originalConfig);
+    mockConfig.mutateConfigFile.mockClear();
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const verifyInferenceConfig = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, modelRef: "openai/gpt-5.5", latencyMs: 5 })
+      .mockResolvedValueOnce({ ok: false, status: "auth", error: "credential changed" });
+
+    await expect(
+      executeCrestodianOperation({ kind: "set-default-model", model: "openai/gpt-5.5" }, runtime, {
+        approved: true,
+        deps: { verifyInferenceConfig },
+      }),
+    ).rejects.toThrow("no longer passes live inference with the latest config");
+
+    expect(verifyInferenceConfig).toHaveBeenCalledTimes(2);
+    expect(mockConfig.currentConfig()).toEqual(originalConfig);
+    expect(lines.join("\n")).not.toContain("[crestodian] done: config.setDefaultModel");
+    await expect(fs.access(path.join(tempDir, "audit", "crestodian.jsonl"))).rejects.toThrow();
+  });
+
+  it("stages and persists model changes at the effective default-agent owner", async () => {
+    const tempDir = opTempDirs.make("crestodian-default-agent-model-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    mockConfig.setConfig({
+      agents: {
+        defaults: { model: { primary: "anthropic/global-default" } },
+        list: [
+          {
+            id: "work",
+            default: true,
+            model: { primary: "anthropic/work-default" },
+          },
+        ],
+      },
+    });
+    const { runtime } = createCrestodianTestRuntime();
+    const verifyInferenceConfig = vi.fn(async ({ config }: { config: TestConfig }) => {
+      const agents = requireRecord(config.agents, "agents");
+      expect(requireRecord(agents.defaults, "defaults").model).toEqual({
+        primary: "anthropic/global-default",
+      });
+      const list = agents.list as Array<{ id: string; model: unknown }>;
+      expect(list.find((agent) => agent.id === "work")?.model).toEqual({
+        primary: "openai/gpt-5.5",
+      });
+      return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 9 };
+    });
+
+    await executeCrestodianOperation(
+      { kind: "set-default-model", model: "openai/gpt-5.5" },
+      runtime,
+      { approved: true, deps: { verifyInferenceConfig } },
+    );
+
+    const agents = requireRecord(mockConfig.currentConfig().agents, "agents");
+    expect(requireRecord(agents.defaults, "defaults").model).toEqual({
+      primary: "anthropic/global-default",
+    });
+    const list = agents.list as Array<{ id: string; model: unknown }>;
+    expect(list.find((agent) => agent.id === "work")?.model).toEqual({
+      primary: "openai/gpt-5.5",
+    });
+  });
+
+  it("refuses doctor repairs before any write or audit", async () => {
+    const tempDir = opTempDirs.make("crestodian-doctor-fix-refused-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const { runtime, lines } = createCrestodianTestRuntime();
     const runDoctor = vi.fn(async () => {});
-
-    const plan = await executeCrestodianOperation({ kind: "doctor-fix" }, runtime, {
-      deps: { runDoctor },
-    });
-    expectRecordFields(plan as unknown as Record<string, unknown>, {
-      applied: false,
-      message: "Plan: run doctor repairs. Say yes to apply.",
-    });
-    expect(runDoctor).not.toHaveBeenCalled();
 
     const result = await executeCrestodianOperation({ kind: "doctor-fix" }, runtime, {
       approved: true,
       deps: { runDoctor },
       auditDetails: { rescue: true },
     });
-    expect(result.applied).toBe(true);
-
-    expect(runDoctor).toHaveBeenCalledWith(runtime, {
-      nonInteractive: true,
-      repair: true,
-      yes: true,
-    });
-    expect(lines.join("\n")).toContain("[crestodian] done: doctor.fix");
-    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
-    const audit = parseLastJsonLine(await fs.readFile(auditPath, "utf8"));
-    expectAuditRecord(
-      audit,
-      { operation: "doctor.fix", summary: "Ran doctor repairs" },
-      { rescue: true },
-    );
+    expect(result).toEqual({ applied: false });
+    expect(isPersistentCrestodianOperation({ kind: "doctor-fix" })).toBe(false);
+    expect(runDoctor).not.toHaveBeenCalled();
+    expect(lines.join("\n")).toContain("Exit Crestodian");
+    expect(lines.join("\n")).toContain("openclaw doctor --fix");
+    expect(lines.join("\n")).not.toContain("[crestodian] running: doctor.fix");
+    await expect(fs.access(path.join(tempDir, "audit", "crestodian.jsonl"))).rejects.toThrow();
   });
 
   it("returns from the agent TUI back to Crestodian", async () => {

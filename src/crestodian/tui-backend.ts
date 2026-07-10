@@ -5,7 +5,6 @@ import type {
   SessionsPatchResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { ChannelsAddOptions } from "../commands/channels/add.js";
-import type { OnboardOptions } from "../commands/onboard-types.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { notifyListeners } from "../shared/listeners.js";
@@ -21,7 +20,10 @@ import type {
 import { runTui as defaultRunTui } from "../tui/tui.js";
 import type { CrestodianAssistantPlanner } from "./assistant.js";
 import { CrestodianChatEngine, type CrestodianChatEngineOptions } from "./chat-engine.js";
-import type { CrestodianModelSetupResult } from "./model-setup.js";
+import {
+  type CrestodianInferenceUnavailableError,
+  isCrestodianInferenceUnavailableError,
+} from "./inference-error.js";
 import { buildOnboardingWelcome } from "./onboarding-welcome.js";
 import {
   executeCrestodianOperation,
@@ -41,18 +43,8 @@ export type CrestodianTuiOptions = {
   welcomeVariant?: "onboarding";
   /** Workspace override for the proposed first-run setup (from --workspace). */
   setupWorkspace?: string;
-  /** Risk acknowledgement already collected by the calling onboarding flow. */
-  setupAcceptRisk?: boolean;
   /** Test seam for the channel-setup wizard hosted by the chat bridge. */
   runChannelSetupWizard?: CrestodianChatEngineOptions["runChannelSetupWizard"];
-  /** Test seam for masked terminal model setup after the TUI exits. */
-  runModelSetup?: (params: {
-    workspace?: string;
-    prompter: import("../wizard/prompts.js").WizardPrompter;
-    runtime: RuntimeEnv;
-  }) => Promise<CrestodianModelSetupResult>;
-  runGuidedSetup?: (opts: OnboardOptions, runtime: RuntimeEnv) => Promise<void>;
-  runClassicSetup?: (opts: OnboardOptions, runtime: RuntimeEnv) => Promise<void>;
   runChannelsAdd?: (
     opts: ChannelsAddOptions,
     runtime: RuntimeEnv,
@@ -68,15 +60,6 @@ type CrestodianHistoryMessage = {
 
 const CRESTODIAN_AGENT_ID = "crestodian";
 const CRESTODIAN_SESSION_KEY = buildAgentMainSessionKey({ agentId: CRESTODIAN_AGENT_ID });
-
-function createEmbeddedModelSetupRuntime(runtime: RuntimeEnv): RuntimeEnv {
-  return {
-    ...runtime,
-    exit: (code): never => {
-      throw new Error(`embedded model setup exited with code ${String(code)}`);
-    },
-  };
-}
 
 function createChatEngine(opts: CrestodianTuiOptions): CrestodianChatEngine {
   return new CrestodianChatEngine({
@@ -128,8 +111,11 @@ class CrestodianTuiBackend implements TuiBackend {
 
   private seq = 0;
   private engine: CrestodianChatEngine;
+  private engineDisposal: Promise<void> | null = null;
+  private inferenceFailure: CrestodianInferenceUnavailableError | null = null;
   private handoff: CrestodianOperation | null = null;
   private requestExit: (() => void) | null = null;
+  private responseQueue: Promise<void> = Promise.resolve();
   private readonly messages: CrestodianHistoryMessage[] = [];
 
   constructor(
@@ -143,6 +129,9 @@ class CrestodianTuiBackend implements TuiBackend {
 
   setRequestExitHandler(handler: () => void): void {
     this.requestExit = handler;
+    if (this.inferenceFailure) {
+      queueMicrotask(handler);
+    }
   }
 
   consumeHandoff(): CrestodianOperation | null {
@@ -165,7 +154,10 @@ class CrestodianTuiBackend implements TuiBackend {
     const runId = opts.runId ?? randomUUID();
     const text = opts.message.trim();
     this.messages.push(message("user", opts.message));
-    void this.respond(runId, opts.sessionKey, text);
+    // Keep the backend queue ahead of the engine queue so a failed inference
+    // turn can retire the session before an already-submitted host command runs.
+    const response = this.responseQueue.then(() => this.respond(runId, opts.sessionKey, text));
+    this.responseQueue = response.catch(() => undefined);
     return { runId };
   }
 
@@ -244,9 +236,13 @@ class CrestodianTuiBackend implements TuiBackend {
   }
 
   async resetSession(): Promise<{ ok: boolean }> {
+    if (this.inferenceFailure) {
+      throw this.inferenceFailure;
+    }
     // Reset drops in-flight approvals/wizards along with the transcript.
-    await this.engine.dispose();
+    await this.disposeEngine();
     this.engine = createChatEngine(this.opts);
+    this.engineDisposal = null;
     const overview = await loadOverviewForTui(this.opts);
     this.messages.splice(
       0,
@@ -275,7 +271,19 @@ class CrestodianTuiBackend implements TuiBackend {
   }
 
   async dispose(): Promise<void> {
-    await this.engine.dispose();
+    try {
+      await this.disposeEngine();
+    } catch (error) {
+      if (!this.inferenceFailure) {
+        throw error;
+      }
+      // Inference failure remains authoritative; retirement cleanup is best-effort.
+    }
+  }
+
+  private disposeEngine(): Promise<void> {
+    this.engineDisposal ??= this.engine.dispose();
+    return this.engineDisposal;
   }
 
   private nextSeq(): number {
@@ -321,6 +329,11 @@ class CrestodianTuiBackend implements TuiBackend {
   }
 
   private async respond(runId: string, sessionKey: string, text: string): Promise<void> {
+    if (this.inferenceFailure) {
+      this.emitError(runId, sessionKey, this.inferenceFailure);
+      queueMicrotask(() => this.requestExit?.());
+      return;
+    }
     try {
       const reply = await this.engine.handle(text);
       if ((reply.action === "open-tui" || reply.action === "open-setup") && reply.handoff) {
@@ -332,6 +345,21 @@ class CrestodianTuiBackend implements TuiBackend {
       }
       this.emitFinal(runId, sessionKey, reply.text);
     } catch (error) {
+      if (isCrestodianInferenceUnavailableError(error)) {
+        // Match the Gateway session boundary: the failed conversation is dead.
+        // Clear handoffs and dispose before exit so no queued exact command can
+        // bypass the inference-first gate through this backend instance.
+        this.inferenceFailure = error;
+        this.handoff = null;
+        try {
+          await this.disposeEngine();
+        } catch {
+          // The inference error is authoritative; cleanup stays best-effort.
+        }
+        this.emitError(runId, sessionKey, error);
+        queueMicrotask(() => this.requestExit?.());
+        return;
+      }
       this.emitError(runId, sessionKey, error);
     }
   }
@@ -342,29 +370,9 @@ async function runSetupHandoff(
   opts: CrestodianTuiOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  if (handoff.target === "guided") {
-    const runGuided =
-      opts.runGuidedSetup ?? (await import("../commands/onboard-guided.js")).runGuidedOnboarding;
-    await runGuided(
-      {
-        ...(opts.setupWorkspace ? { workspace: opts.setupWorkspace } : {}),
-        ...(opts.setupAcceptRisk === true ? { acceptRisk: true } : {}),
-      },
-      runtime,
-    );
-    return;
-  }
-  if (handoff.target === "classic") {
-    const runClassic =
-      opts.runClassicSetup ??
-      (await import("../commands/onboard-interactive.js")).runInteractiveSetup;
-    await runClassic(
-      {
-        classic: true,
-        ...(opts.setupWorkspace ? { workspace: opts.setupWorkspace } : {}),
-        ...(opts.setupAcceptRisk === true ? { acceptRisk: true } : {}),
-      },
-      runtime,
+  if (handoff.target !== "channels") {
+    runtime.error(
+      "Setup cannot replace the inference route powering Crestodian. Exit and run `openclaw onboard`, then start Crestodian again.",
     );
     return;
   }
@@ -421,31 +429,10 @@ export async function runCrestodianTui(
       return;
     }
     if (handoff.kind === "model-setup") {
-      const [{ createClackPrompter }, { runCrestodianModelSetup }] = await Promise.all([
-        import("../wizard/clack-prompter.js"),
-        import("./model-setup.js"),
-      ]);
-      const runModelSetup = opts.runModelSetup ?? runCrestodianModelSetup;
-      try {
-        const result = await runModelSetup({
-          ...(handoff.workspace ? { workspace: handoff.workspace } : {}),
-          prompter: createClackPrompter(),
-          runtime: createEmbeddedModelSetupRuntime(runtime),
-        });
-        runtime.log(
-          result.model
-            ? `Default model configured: ${result.model}`
-            : "Model provider setup finished without a default model.",
-        );
-      } catch (error) {
-        const { WizardCancelledError } = await import("../wizard/prompts.js");
-        if (!(error instanceof WizardCancelledError)) {
-          runtime.error(
-            `Model provider setup failed: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }
-      continue;
+      runtime.error(
+        "Crestodian cannot replace its active inference route. Run `openclaw onboard` outside this session, then start Crestodian again.",
+      );
+      return;
     }
     if (handoff.kind === "open-setup") {
       await runSetupHandoff(handoff, opts, runtime);

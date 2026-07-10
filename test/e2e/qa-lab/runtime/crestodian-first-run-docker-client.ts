@@ -16,6 +16,7 @@ type CrestodianFirstRunCommand = {
   message: string;
   expectOutput: string;
   approve: boolean;
+  planner?: boolean;
 };
 
 type CrestodianFirstRunSpec = {
@@ -66,9 +67,23 @@ function renderCommandTemplate(template: string, vars: Record<string, string>): 
   return template.replace(/\{([A-Za-z0-9_]+)\}/g, (match, key: string) => vars[key] ?? match);
 }
 
-async function installFakeClaudeCli(fakeBinDir: string, promptLogPath: string): Promise<void> {
+const FAKE_PLANNER_REPLY = "Fake Claude planner selected an inference-backed typed setup.";
+const PACKAGED_CLI_TIMEOUT_MS = 60_000;
+
+async function installFakeClaudeCli(
+  fakeBinDir: string,
+  promptLogPath: string,
+  plannerCommand: string,
+): Promise<void> {
   await fs.mkdir(fakeBinDir, { recursive: true });
   const scriptPath = path.join(fakeBinDir, "claude");
+  const plannerResult = JSON.stringify({
+    reply: FAKE_PLANNER_REPLY,
+    command: plannerCommand,
+  });
+  const plannerEnvelope = `console.log(JSON.stringify({ type: "result", session_id: "fake-claude-session", result: ${JSON.stringify(plannerResult)}, usage: { input_tokens: 1, output_tokens: 1 } }))`;
+  const probeEnvelope =
+    'console.log(JSON.stringify({ type: "result", session_id: "fake-claude-session", result: "OK", usage: { input_tokens: 1, output_tokens: 1 } }))';
   await fs.writeFile(
     scriptPath,
     [
@@ -80,7 +95,11 @@ async function installFakeClaudeCli(fakeBinDir: string, promptLogPath: string): 
       "fi",
       "IFS= read -r prompt_line || true",
       `printf '%s\\n' "$prompt_line" >> ${JSON.stringify(promptLogPath)}`,
-      'node -e \'console.log(JSON.stringify({ type: "result", session_id: "fake-claude-session", result: "OK", usage: { input_tokens: 1, output_tokens: 1 } }))\'',
+      'if [[ "$prompt_line" == *"User request:"* ]]; then',
+      `  node -e ${JSON.stringify(plannerEnvelope)}`,
+      "else",
+      `  node -e ${JSON.stringify(probeEnvelope)}`,
+      "fi",
     ].join("\n"),
     { mode: 0o755 },
   );
@@ -106,10 +125,25 @@ async function runPackagedCli(args: string[]): Promise<{
   child.stderr.on("data", (chunk: string) => {
     stderr += chunk;
   });
-  const code = await new Promise<number | null>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", resolve);
-  });
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    child.kill("SIGKILL");
+  }, PACKAGED_CLI_TIMEOUT_MS);
+  let code: number | null;
+  try {
+    code = await new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", resolve);
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+  if (timedOut) {
+    throw new Error(
+      `Packaged CLI timed out after ${PACKAGED_CLI_TIMEOUT_MS}ms: openclaw ${args.join(" ")}\n${stdout}\n${stderr}`,
+    );
+  }
   return { code, stdout, stderr };
 }
 
@@ -145,6 +179,7 @@ async function main() {
     "onboard",
     "--modern",
     "--non-interactive",
+    "--accept-risk",
     "--json",
   ]);
   assert(
@@ -153,7 +188,8 @@ async function main() {
     "modern compatibility entrypoint did not fail closed with structured JSON",
   );
 
-  await installFakeClaudeCli(fakeBinDir, promptLogPath);
+  const plannerCommand = `setup workspace ${spec.dockerDefaultWorkspace}`;
+  await installFakeClaudeCli(fakeBinDir, promptLogPath, plannerCommand);
   const activationRuntime = createRuntime();
   const activation = await activateSetupInference({
     kind: "claude-cli",
@@ -186,10 +222,16 @@ async function main() {
     "inference activation did not send the live model probe",
   );
 
-  const modern = await runPackagedCli(["onboard", "--modern", "--non-interactive", "--json"]);
+  const modern = await runPackagedCli([
+    "onboard",
+    "--modern",
+    "--non-interactive",
+    "--accept-risk",
+    "--json",
+  ]);
   assert(
     modern.code === 0 && `${modern.stdout}\n${modern.stderr}`.includes(activation.modelRef),
-    "modern compatibility entrypoint did not open Crestodian after activation",
+    "modern compatibility entrypoint did not expose Crestodian after activation",
   );
 
   const overview = await runPackagedCli(["crestodian", "--message", "overview"]);
@@ -222,14 +264,34 @@ async function main() {
       result.code === 0 && output.includes(command.expectOutput),
       `Crestodian first-run command ${command.id} did not apply: ${output}`,
     );
+    if (command.planner) {
+      assert(
+        output.includes(`[crestodian] planner: ${spec.model}`) &&
+          output.includes(FAKE_PLANNER_REPLY) &&
+          output.includes(`[crestodian] interpreted: ${plannerCommand}`),
+        `Crestodian first-run command ${command.id} did not use the verified planner: ${output}`,
+      );
+    }
   }
 
   const probeLines = (await fs.readFile(promptLogPath, "utf8"))
     .split("\n")
     .filter((line) => line.trim().length > 0);
+  const inferencePrompts = probeLines.filter((line) =>
+    line.includes("Reply with the single word OK"),
+  );
+  const plannerPrompts = probeLines.filter((line) => line.includes("User request:"));
   assert(
-    probeLines.length === spec.commands.length + 3,
-    `expected one live probe per Crestodian CLI call; got ${probeLines.length}`,
+    inferencePrompts.length === spec.commands.length + 4,
+    `expected one activation or preflight probe per Crestodian CLI call; got ${inferencePrompts.length}`,
+  );
+  assert(
+    plannerPrompts.length === 1 && plannerPrompts[0]?.includes("finish basic setup"),
+    `expected one fuzzy setup planner prompt; got ${plannerPrompts.length}`,
+  );
+  assert(
+    probeLines.length === inferencePrompts.length + plannerPrompts.length,
+    `unexpected fake Claude prompt count: ${probeLines.length}`,
   );
 
   const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
@@ -247,7 +309,10 @@ async function main() {
   const reef = config.agents?.list?.find((agent) => agent.id === spec.agentId);
   assert(reef, "Crestodian did not create reef agent");
   assert(reef.workspace === spec.dockerAgentWorkspace, "Crestodian did not write reef workspace");
-  assert(reef.model === spec.model, "Crestodian did not write reef model");
+  assert(
+    reef.model === undefined,
+    "Crestodian wrote a per-agent model instead of inheriting the verified default",
+  );
   assert(config.plugins?.allow?.includes("discord"), "Crestodian did not allow Discord plugin");
   assert(
     config.plugins?.entries?.discord?.enabled === true,

@@ -469,7 +469,12 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadWizardHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["crestodian.chat", "crestodian.setup.detect", "crestodian.setup.activate"],
+    methods: [
+      "crestodian.chat",
+      "crestodian.setup.detect",
+      "crestodian.setup.verify",
+      "crestodian.setup.activate",
+    ],
     loadHandlers: loadCrestodianHandlers,
   }),
   ...createLazyCoreHandlers({

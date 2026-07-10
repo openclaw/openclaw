@@ -1,7 +1,8 @@
 // Crestodian TUI backend tests cover rescue status integration with the TUI backend.
 import { describe, expect, it, vi } from "vitest";
-import type { CrestodianOperation } from "./operations.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { CrestodianInferenceUnavailableError } from "./inference-error.js";
+import type { CrestodianOperation } from "./operations.js";
 import type { CrestodianOverview } from "./overview.js";
 import { runCrestodianTui } from "./tui-backend.js";
 
@@ -138,182 +139,100 @@ describe("runCrestodianTui", () => {
     expect(unhandled).toHaveLength(0);
   });
 
-  it("exits to masked model setup and then resumes Crestodian", async () => {
-    const runModelSetup = vi.fn(async () => ({
-      model: "openai/gpt-5.5",
-    }));
-    let runTuiCalls = 0;
+  it("emits an error without a fake final reply when inference fails", async () => {
+    const events: Array<{ payload?: { state?: string; errorMessage?: string } }> = [];
 
     await runCrestodianTui(
       {
-        deps: { loadOverview: async () => ({ ...overview, defaultModel: undefined }) },
-        runModelSetup,
+        deps: { loadOverview: async () => overview },
         runTui: async (opts) => {
-          runTuiCalls += 1;
-          if (runTuiCalls > 1) {
-            return { exitReason: "exit" };
-          }
           const backend = opts.backend as unknown as {
-            setRequestExitHandler: (handler: () => void) => void;
             sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
-            engine: {
-              handle: () => Promise<{
-                text: string;
-                action: "open-tui";
-                handoff: { kind: "model-setup"; workspace: string };
-              }>;
-            };
+            onEvent?: (event: { payload?: { state?: string; errorMessage?: string } }) => void;
+            engine: { handle: () => Promise<never> };
           };
-          backend.engine.handle = async () => ({
-            text: "Opening masked model-provider setup in the terminal.",
-            action: "open-tui",
-            handoff: { kind: "model-setup", workspace: "/tmp/work" },
-          });
-          await new Promise<void>((resolve) => {
-            backend.setRequestExitHandler(resolve);
-            void backend.sendChat({ message: "yes" });
-          });
+          backend.engine.handle = async () => {
+            throw new CrestodianInferenceUnavailableError("conversation");
+          };
+          backend.onEvent = (event) => events.push(event);
+
+          await backend.sendChat({ message: "status please" });
+          await new Promise((resolve) => setTimeout(resolve, 0));
           return { exitReason: "exit" };
         },
       },
       createRuntime(),
     );
 
-    expect(runModelSetup).toHaveBeenCalledWith(
+    expect(events).toEqual([
       expect.objectContaining({
-        workspace: "/tmp/work",
-        runtime: expect.anything(),
-        prompter: expect.anything(),
+        payload: expect.objectContaining({
+          state: "error",
+          errorMessage: expect.stringContaining("working inference"),
+        }),
       }),
-    );
-    expect(runTuiCalls).toBe(2);
+    ]);
   });
 
-  it("turns embedded model setup exits into errors and resumes Crestodian", async () => {
-    const exit = vi.fn();
-    const error = vi.fn();
-    const runModelSetup = vi.fn(async (params: { runtime: RuntimeEnv }) => {
-      params.runtime.exit(1);
-      return {};
-    });
-    let runTuiCalls = 0;
+  it("retires the local session before a queued exact mutation can run", async () => {
+    const handle = vi
+      .fn()
+      .mockRejectedValueOnce(new CrestodianInferenceUnavailableError("conversation"))
+      .mockResolvedValue({ text: "mutation ran", action: "none" });
+    const dispose = vi.fn(async () => undefined);
+    const events: Array<{ payload?: { state?: string; errorMessage?: string } }> = [];
 
     await runCrestodianTui(
       {
-        deps: { loadOverview: async () => ({ ...overview, defaultModel: undefined }) },
-        runModelSetup,
+        deps: { loadOverview: async () => overview },
         runTui: async (opts) => {
-          runTuiCalls += 1;
-          if (runTuiCalls > 1) {
-            return { exitReason: "exit" };
-          }
           const backend = opts.backend as unknown as {
-            setRequestExitHandler: (handler: () => void) => void;
             sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
+            setRequestExitHandler: (handler: () => void) => void;
+            onEvent?: (event: { payload?: { state?: string; errorMessage?: string } }) => void;
             engine: {
-              handle: () => Promise<{
-                text: string;
-                action: "open-tui";
-                handoff: { kind: "model-setup" };
-              }>;
+              handle: typeof handle;
+              dispose: typeof dispose;
             };
           };
-          backend.engine.handle = async () => ({
-            text: "Opening masked model-provider setup in the terminal.",
-            action: "open-tui",
-            handoff: { kind: "model-setup" },
-          });
-          await new Promise<void>((resolve) => {
+          backend.engine.handle = handle;
+          backend.engine.dispose = dispose;
+          backend.onEvent = (event) => events.push(event);
+
+          const requestedExit = new Promise<void>((resolve) => {
             backend.setRequestExitHandler(resolve);
-            void backend.sendChat({ message: "yes" });
           });
-          return { exitReason: "exit" };
-        },
-      },
-      { log: vi.fn(), error, exit },
-    );
-
-    expect(exit).not.toHaveBeenCalled();
-    expect(error).toHaveBeenCalledWith(
-      "Model provider setup failed: embedded model setup exited with code 1",
-    );
-    expect(runTuiCalls).toBe(2);
-  });
-
-  it("consumes a returned model-setup request before resuming after the wizard", async () => {
-    const runModelSetup = vi.fn(async () => ({
-      model: "openai/gpt-5.5",
-    }));
-    const runAgentTui = vi.fn(async () => ({
-      exitReason: "return-to-crestodian" as const,
-      crestodianMessage: "configure model provider",
-    }));
-    const messages: Array<string | undefined> = [];
-    let runTuiCalls = 0;
-
-    await runCrestodianTui(
-      {
-        deps: {
-          loadOverview: async () => ({ ...overview, defaultModel: undefined }),
-          runTui: runAgentTui,
-        },
-        runModelSetup,
-        runTui: async (opts) => {
-          runTuiCalls += 1;
-          messages.push(opts.message);
-          if (runTuiCalls === 3) {
-            return { exitReason: "exit" };
-          }
-          const backend = opts.backend as unknown as {
-            setRequestExitHandler: (handler: () => void) => void;
-            sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
-            engine: {
-              handle: () => Promise<{
-                text: string;
-                action: "open-tui";
-                handoff: { kind: "open-tui" } | { kind: "model-setup"; workspace?: string };
-              }>;
-            };
-          };
-          backend.engine.handle = async () =>
-            runTuiCalls === 1
-              ? {
-                  text: "Opening agent.",
-                  action: "open-tui",
-                  handoff: { kind: "open-tui" },
-                }
-              : {
-                  text: "Opening masked model-provider setup in the terminal.",
-                  action: "open-tui",
-                  handoff: { kind: "model-setup" },
-                };
-          await new Promise<void>((resolve) => {
-            backend.setRequestExitHandler(resolve);
-            void backend.sendChat({ message: opts.message ?? "talk to agent" });
-          });
+          await backend.sendChat({ message: "status please" });
+          await backend.sendChat({ message: "config set gateway.port 19001" });
+          await requestedExit;
+          await new Promise((resolve) => setTimeout(resolve, 0));
           return { exitReason: "exit" };
         },
       },
       createRuntime(),
     );
 
-    expect(runAgentTui).toHaveBeenCalledOnce();
-    expect(runModelSetup).toHaveBeenCalledOnce();
-    expect(messages).toEqual([undefined, "configure model provider", undefined]);
+    expect(handle).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(events).toHaveLength(2);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            state: "error",
+            errorMessage: expect.stringContaining("working inference"),
+          }),
+        }),
+      ]),
+    );
+    expect(events.some((event) => event.payload?.state === "final")).toBe(false);
   });
+
   it("launches setup handoffs after the chat TUI is disposed", async () => {
     const cases: Array<{
       handoff: Extract<CrestodianOperation, { kind: "open-setup" }>;
       expected: string;
     }> = [
-      {
-        handoff: { kind: "open-setup", target: "guided" },
-        expected: "guided:/tmp/custom-workspace:true",
-      },
-      {
-        handoff: { kind: "open-setup", target: "classic" },
-        expected: "classic:true:/tmp/custom-workspace:true",
-      },
       {
         handoff: { kind: "open-setup", target: "channels", channel: "slack" },
         expected: "channels:slack:false",
@@ -326,7 +245,6 @@ describe("runCrestodianTui", () => {
         {
           deps: { loadOverview: async () => overview },
           setupWorkspace: "/tmp/custom-workspace",
-          setupAcceptRisk: true,
           runTui: async (opts) => {
             const backend = opts.backend as unknown as {
               sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
@@ -355,14 +273,6 @@ describe("runCrestodianTui", () => {
             await requestedExit;
             return { exitReason: "exit" };
           },
-          runGuidedSetup: async (opts) => {
-            events.push(`guided:${opts.workspace ?? "default"}:${String(opts.acceptRisk)}`);
-          },
-          runClassicSetup: async (opts) => {
-            events.push(
-              `classic:${String(opts.classic)}:${opts.workspace ?? "default"}:${String(opts.acceptRisk)}`,
-            );
-          },
           runChannelsAdd: async (opts, _runtime, params) => {
             events.push(`channels:${opts.channel ?? "all"}:${String(params?.hasFlags)}`);
           },
@@ -373,5 +283,4 @@ describe("runCrestodianTui", () => {
       expect(events).toEqual(["disposed", expected]);
     }
   });
-
 });

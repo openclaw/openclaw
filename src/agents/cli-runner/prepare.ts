@@ -347,7 +347,7 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: params.agentId,
   });
-  const agentDir = resolveAgentDir(params.config ?? {}, sessionAgentId);
+  const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
   let effectiveAuthProfileId =
     requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined;
@@ -693,10 +693,18 @@ export async function prepareCliRunContext(
         sessionMode: "none" as const,
       };
     })();
+    const processPerTurnBackend = (() => {
+      const { liveSession: _liveSession, ...backend } = preparedBackend.backend;
+      return backend;
+    })();
     const preparedBackendFinal = {
       ...preparedBackend,
       backend: {
-        ...(isSideQuestion ? sideQuestionBackend : preparedBackend.backend),
+        ...(isSideQuestion
+          ? sideQuestionBackend
+          : params.disableCliLiveSession
+            ? processPerTurnBackend
+            : preparedBackend.backend),
         ...(preparedBackendClearEnv.length > 0
           ? { clearEnv: uniqueStrings(preparedBackendClearEnv) }
           : {}),
@@ -1078,6 +1086,8 @@ export async function prepareCliRunContext(
       config: contextEngineConfig,
       agentId: params.agentId,
     });
+    // Context remains session-owned. Trusted helper runs may borrow a different
+    // agentDir only for model/auth execution.
     const contextEngineAgentDir = resolveAgentDir(contextEngineConfig, contextEngineSessionAgentId);
     const resolvedContextEngine = await resolveContextEngine(contextEngineConfig, {
       agentDir: contextEngineAgentDir,

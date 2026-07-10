@@ -71,11 +71,14 @@ Where does the **Gateway** run?
   only run for a fresh or incomplete Gateway.
 
 Once the Gateway is ready, onboarding looks for AI access you already have:
-a Claude Code, Codex, or Gemini CLI login, or `OPENAI_API_KEY` /
+a Claude Code or Codex login, or `OPENAI_API_KEY` /
 `ANTHROPIC_API_KEY`. The best option is tested with a real completion and
 only saved after it answers; when a test fails the app automatically tries
 the next option and shows why the previous one failed. If several options
 are found you can switch between them before continuing.
+
+Gemini CLI remains available for normal agents after setup, but it is not
+offered here because it cannot enforce the tool-free inference probe.
 
 If nothing is found (or nothing works), the manual key/token picker loads the
 Gateway's active text-inference provider plugins instead of using a fixed app
@@ -95,12 +98,13 @@ other optional features; it is also available later under Settings → Crestodia
 Onboarding requests TCC permissions for: Automation (AppleScript), Notifications, Accessibility, Screen Recording, Microphone, Speech Recognition, Camera, and Location.
 
 </Step>
-<Step title="Onboarding Chat (dedicated session)">
-  After inference and the remaining setup complete, the app opens a separate agent onboarding chat so the agent can
-  introduce itself and guide next steps without mixing that exchange into the
-  normal conversation history. Crestodian can help finish setup after inference;
-  the agent onboarding chat does not replace it. See [Bootstrapping](/start/bootstrapping) for what
-  happens on the gateway host during the agent's first real turn.
+<Step title="Finish">
+  After inference passes, Crestodian owns the remaining optional setup and can
+  hand you off to the normal agent chat. Finishing the permission walkthrough
+  opens that same chat; the app does not create a workspace or launch a separate
+  agent setup conversation before Crestodian. See
+  [Bootstrapping](/start/bootstrapping) for what happens on the gateway host
+  during the agent's first real turn.
 </Step>
 </Steps>
 

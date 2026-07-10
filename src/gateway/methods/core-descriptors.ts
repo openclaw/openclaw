@@ -68,6 +68,8 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "plugins.sessionAction", scope: "dynamic" },
   { name: "crestodian.chat", scope: "operator.admin" },
   { name: "crestodian.setup.detect", scope: "operator.admin" },
+  // Failed activation candidates are non-mutating probes. Keep this admin-only
+  // without the shared three-write budget so the automatic ladder can finish.
   { name: "crestodian.setup.activate", scope: "operator.admin" },
   { name: "wizard.start", scope: "operator.admin" },
   { name: "wizard.next", scope: "operator.admin" },
@@ -272,6 +274,8 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "agents.workspace.list", scope: "operator.read" },
   { name: "agents.workspace.get", scope: "operator.read" },
   { name: "tts.speak", scope: "operator.write" },
+  // Additive protocol methods append here to preserve existing advertised indices.
+  { name: "crestodian.setup.verify", scope: "operator.admin" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

@@ -175,6 +175,8 @@ export type RunEmbeddedAgentParams = {
   agentHarnessRuntimeOverride?: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
+  /** Suppress persistent auth selection/health bookkeeping for observational probes. */
+  authProfileStateMode?: "read-write" | "read-only";
   thinkLevel?: ThinkLevel;
   fastMode?: FastMode;
   /** Stable outer-run start time for auto fast-mode cutoff across retries/fallbacks. */

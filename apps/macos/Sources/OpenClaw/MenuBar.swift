@@ -506,53 +506,124 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static func shouldOpenDashboardInsteadOfOnboarding(
         connectionMode: AppState.ConnectionMode,
         onboardingSeen: Bool,
-        hasStoredConnectionMode: Bool,
+        crestodianResumePending: Bool,
         gatewayConnected: Bool,
         configuredInferenceModel: String?) -> Bool
     {
         let model = configuredInferenceModel?.trimmingCharacters(in: .whitespacesAndNewlines)
         return connectionMode != .unconfigured &&
             !onboardingSeen &&
-            !hasStoredConnectionMode &&
+            !crestodianResumePending &&
             gatewayConnected &&
             model?.isEmpty == false
     }
 
+    static func isCurrentFirstRunInferenceProbe(
+        expectedConnectionMode: AppState.ConnectionMode,
+        currentConnectionMode: AppState.ConnectionMode,
+        expectedRouteIdentity: String?,
+        currentRouteIdentity: String?,
+        gatewayRouteIsCurrent: Bool) -> Bool
+    {
+        expectedConnectionMode != .unconfigured &&
+            expectedConnectionMode == currentConnectionMode &&
+            expectedRouteIdentity != nil &&
+            expectedRouteIdentity == currentRouteIdentity &&
+            gatewayRouteIsCurrent
+    }
+
+    static func shouldPresentScheduledFirstRunOnboarding(
+        expectedConnectionMode: AppState.ConnectionMode,
+        currentConnectionMode: AppState.ConnectionMode,
+        expectedRouteIdentity: String?,
+        currentRouteIdentity: String?,
+        onboardingSeen: Bool) -> Bool
+    {
+        !onboardingSeen &&
+            expectedConnectionMode == currentConnectionMode &&
+            expectedRouteIdentity == currentRouteIdentity
+    }
+
     private func scheduleFirstRunOnboardingIfNeeded(gatewayConnected: Bool) async {
         let connectionMode = AppStateStore.shared.connectionMode
-        let onboardingSeen = AppStateStore.shared.onboardingSeen
-        // A stored app mode means onboarding already selected a Gateway; reconnecting
-        // must not turn an interrupted first-run flow into a completed installation.
-        let hasStoredConnectionMode = UserDefaults.standard.object(forKey: connectionModeKey) != nil
+        let expectedRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity()
         var configuredInferenceModel: String?
         if connectionMode != .unconfigured,
-           !onboardingSeen,
-           !hasStoredConnectionMode,
-           gatewayConnected,
-           let route = await GatewayConnection.shared.captureRoute()
+           !AppStateStore.shared.onboardingSeen,
+           gatewayConnected
         {
+            guard let route = await GatewayConnection.shared.captureRoute() else {
+                self.scheduleFirstRunOnboardingRecovery()
+                return
+            }
             // Bind inference discovery to the connected route. A socket without a
             // default-agent model cannot run Crestodian and must stay in onboarding.
-            configuredInferenceModel = try? await GatewayConnection.shared.configuredInferenceModel(
-                ifCurrentRoute: route)
+            do {
+                configuredInferenceModel = try await GatewayConnection.shared.configuredInferenceModel(
+                    ifCurrentRoute: route)
+            } catch {
+                // A transient read failure is not evidence that inference is absent.
+                // Onboarding retries the same read without mutating on failure.
+                self.scheduleFirstRunOnboardingRecovery()
+                return
+            }
+            let gatewayRouteIsCurrent = await GatewayConnection.shared.isCurrentRoute(route)
+            let currentRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity()
+            guard Self.isCurrentFirstRunInferenceProbe(
+                expectedConnectionMode: connectionMode,
+                currentConnectionMode: AppStateStore.shared.connectionMode,
+                expectedRouteIdentity: expectedRouteIdentity,
+                currentRouteIdentity: currentRouteIdentity,
+                gatewayRouteIsCurrent: gatewayRouteIsCurrent)
+            else {
+                self.scheduleFirstRunOnboardingRecovery()
+                return
+            }
         }
+        let onboardingSeen = AppStateStore.shared.onboardingSeen
+        let crestodianResumePending = OnboardingCrestodianResumeStore.isPending(for: expectedRouteIdentity)
         let shouldOpenDashboard = Self.shouldOpenDashboardInsteadOfOnboarding(
             connectionMode: connectionMode,
             onboardingSeen: onboardingSeen,
-            hasStoredConnectionMode: hasStoredConnectionMode,
+            crestodianResumePending: crestodianResumePending,
             gatewayConnected: gatewayConnected,
             configuredInferenceModel: configuredInferenceModel)
         if connectionMode != .unconfigured, onboardingSeen || shouldOpenDashboard {
-            OnboardingController.markComplete()
+            // A previously completed route must not erase another Gateway's
+            // still-active activation lease merely because it is selected now.
+            OnboardingController.markComplete(clearSelectedRouteResume: !onboardingSeen)
             if shouldOpenDashboard {
                 self.openDashboardAction()
             }
             return
         }
+        self.scheduleFirstRunOnboardingPresentation(
+            expectedConnectionMode: connectionMode,
+            expectedRouteIdentity: expectedRouteIdentity)
+    }
+
+    private func scheduleFirstRunOnboardingRecovery() {
+        self.scheduleFirstRunOnboardingPresentation(
+            expectedConnectionMode: AppStateStore.shared.connectionMode,
+            expectedRouteIdentity: OnboardingCrestodianResumeStore.selectedRouteIdentity())
+    }
+
+    private func scheduleFirstRunOnboardingPresentation(
+        expectedConnectionMode: AppState.ConnectionMode,
+        expectedRouteIdentity: String?)
+    {
         let seenVersion = UserDefaults.standard.integer(forKey: onboardingVersionKey)
-        let shouldShow = seenVersion < currentOnboardingVersion || !onboardingSeen
+        let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
         guard shouldShow else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            let currentRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity()
+            guard Self.shouldPresentScheduledFirstRunOnboarding(
+                expectedConnectionMode: expectedConnectionMode,
+                currentConnectionMode: AppStateStore.shared.connectionMode,
+                expectedRouteIdentity: expectedRouteIdentity,
+                currentRouteIdentity: currentRouteIdentity,
+                onboardingSeen: AppStateStore.shared.onboardingSeen)
+            else { return }
             OnboardingController.shared.show()
         }
     }

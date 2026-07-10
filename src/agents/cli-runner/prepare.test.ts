@@ -344,6 +344,67 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     ).toBe(false);
   });
 
+  it("honors an explicit auth agent directory independently of session identity", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const modelOwnerAgentDir = path.join(dir, "ops-agent");
+    const crestodianAgentDir = path.join(dir, "crestodian-agent");
+    const prepareExecution = vi.fn(async () => undefined);
+    fs.mkdirSync(modelOwnerAgentDir, { recursive: true });
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "test-cli",
+          pluginId: "test-plugin",
+          bundleMcp: false,
+          prepareExecution,
+          config: {
+            command: "test-cli",
+            args: ["--print"],
+            output: "text",
+            input: "arg",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:crestodian:main",
+        agentId: "crestodian",
+        sessionFile,
+        workspaceDir: dir,
+        agentDir: modelOwnerAgentDir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        authProfileId: "test-cli:ops",
+        timeoutMs: 1_000,
+        runId: "run-test-explicit-agent-dir",
+        config: {
+          agents: {
+            list: [
+              { id: "ops", default: true, agentDir: modelOwnerAgentDir },
+              { id: "crestodian", agentDir: crestodianAgentDir },
+            ],
+          },
+        },
+      });
+
+      expect(context.effectiveAuthProfileId).toBe("test-cli:ops");
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentDir: modelOwnerAgentDir,
+          authProfileId: "test-cli:ops",
+        }),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("passes raw refreshed OAuth profile fields to profile-owned CLI preparation", async () => {
     const { dir, sessionFile } = createSessionFile();
     const agentDir = path.join(dir, "agents", "main", "agent");
@@ -3375,6 +3436,42 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(context.requiredClaudeLiveSessionGeneration).toBe("warm-live-generation");
       expect(context.openClawHistoryPrompt).toContain("earlier warm context");
       expect(context.openClawHistoryPrompt).toContain("warm follow-up");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("disables Claude live transport while preserving native transcript resume", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      setClaudeCliBackendForPrepareTest({ liveSession: true });
+      const transcriptCheck = vi.fn(async () => true);
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: vi.fn(async () => false),
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:crestodian:main",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "approve the proposal",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-crestodian-process-per-turn",
+        cliSessionBinding: { sessionId: "native-claude-sid" },
+        config: createCliBackendConfig(),
+        disableCliLiveSession: true,
+      });
+
+      expect(context.preparedBackend.backend.liveSession).toBeUndefined();
+      expect(context.preparedBackend.backend.sessionMode).toBe("existing");
+      expect(context.reusableCliSession).toEqual({
+        mode: "reuse",
+        sessionId: "native-claude-sid",
+      });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

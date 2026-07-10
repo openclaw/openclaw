@@ -169,10 +169,10 @@ describe("registerOnboardCommand", () => {
 
     expect(mocks.runCrestodianWithInference).toHaveBeenCalledWith(
       {
-        message: undefined,
         yes: false,
         json: true,
         interactive: true,
+        welcomeVariant: "onboarding",
       },
       runtime,
       {},
@@ -180,15 +180,15 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
-  it("keeps --modern noninteractive overview behavior behind the inference gate", async () => {
+  it("uses the single-output noninteractive overview behind the inference gate", async () => {
     await runCli(["onboard", "--modern", "--non-interactive", "--accept-risk"]);
 
     expect(mocks.runCrestodianWithInference).toHaveBeenCalledWith(
       {
-        message: "overview",
         yes: false,
         json: false,
         interactive: false,
+        welcomeVariant: "onboarding",
       },
       runtime,
       { acceptRisk: true },
@@ -199,9 +199,59 @@ describe("registerOnboardCommand", () => {
   it("preserves guided fallback context for --modern", async () => {
     await runCli(["onboard", "--modern", "--workspace", "/tmp/work", "--accept-risk"]);
 
-    expect(mocks.runCrestodianWithInference).toHaveBeenCalledWith(expect.any(Object), runtime, {
-      workspace: "/tmp/work",
-      acceptRisk: true,
-    });
+    expect(mocks.runCrestodianWithInference).toHaveBeenCalledWith(
+      expect.objectContaining({
+        welcomeVariant: "onboarding",
+        setupWorkspace: "/tmp/work",
+      }),
+      runtime,
+      {
+        workspace: "/tmp/work",
+        acceptRisk: true,
+      },
+    );
+  });
+
+  it("requires --accept-risk before noninteractive modern onboarding", async () => {
+    await runCli(["onboard", "--modern", "--non-interactive"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--accept-risk"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("onboard --modern"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runCrestodianWithInference).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "classic mode", args: ["--classic"] },
+    { label: "reset", args: ["--reset"] },
+    { label: "provider auth", args: ["--mistral-api-key", "test-key"] },
+    { label: "remote mode", args: ["--mode", "remote"] },
+    { label: "Gateway config", args: ["--gateway-port", "18789"] },
+    { label: "negated daemon config", args: ["--no-install-daemon"] },
+    { label: "migration", args: ["--import-from", "hermes"] },
+    { label: "skip flags", args: ["--skip-channels"] },
+  ])("rejects $label flags that --modern does not use", async ({ args }) => {
+    await runCli(["onboard", "--modern", ...args]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(args[0]!));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runCrestodianWithInference).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps noninteractive JSON modern onboarding to one overview request", async () => {
+    await runCli(["onboard", "--modern", "--non-interactive", "--accept-risk", "--json"]);
+
+    expect(mocks.runCrestodianWithInference).toHaveBeenCalledWith(
+      expect.objectContaining({
+        json: true,
+        interactive: false,
+        welcomeVariant: "onboarding",
+      }),
+      runtime,
+      { acceptRisk: true },
+    );
+    expect(mocks.runCrestodianWithInference.mock.calls[0]?.[0]).not.toHaveProperty("message");
   });
 });

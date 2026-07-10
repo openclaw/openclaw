@@ -1,4 +1,6 @@
 // Crestodian command gate: prove inference before starting conversational setup.
+
+import { requestExitAfterOneShotOutput } from "../cli/one-shot-exit.js";
 import type { RunCrestodianOptions } from "../crestodian/crestodian.js";
 import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
@@ -26,6 +28,26 @@ function isOneShotRequest(opts: RunCrestodianOptions): boolean {
   return Boolean(opts.json || opts.message?.trim() || opts.interactive === false);
 }
 
+function formatOneShotExecutionError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function failOneShotExecution(
+  opts: RunCrestodianOptions,
+  runtime: RuntimeEnv,
+  error: unknown,
+): void {
+  const message = formatOneShotExecutionError(error);
+  if (opts.json) {
+    writeRuntimeJson(runtime, { ok: false, error: message });
+  } else {
+    runtime.error(message);
+  }
+  if (!requestExitAfterOneShotOutput(runtime, 1)) {
+    runtime.exit(1);
+  }
+}
+
 /**
  * Start Crestodian only after the configured default model completes a real
  * turn. Interactive failures return to inference onboarding; automation fails
@@ -37,19 +59,48 @@ export async function runCrestodianWithInference(
   onboardingOptions: Pick<OnboardOptions, "workspace" | "acceptRisk"> = {},
   deps: CrestodianWithInferenceDeps = {},
 ): Promise<void> {
+  if (opts.yes && !opts.message?.trim()) {
+    failOneShotExecution(
+      opts,
+      runtime,
+      new Error("Crestodian --yes requires --message so approval is limited to one request."),
+    );
+    return;
+  }
   const oneShot = isOneShotRequest(opts);
   if (!oneShot && !hasInteractiveTty(opts)) {
     runtime.error("Crestodian needs an interactive TTY. Use --message for one command.");
     runtime.exit(1);
     return;
   }
-  const verifyInference =
-    deps.verifyInference ?? (await import("../crestodian/setup-inference.js")).verifySetupInference;
-  const inference = await withConsoleSubsystemsSuppressed(() => verifyInference({ runtime }));
+  let inference: Awaited<ReturnType<VerifySetupInference>>;
+  try {
+    const verifyInference =
+      deps.verifyInference ??
+      (await import("../crestodian/setup-inference.js")).verifySetupInference;
+    inference = await withConsoleSubsystemsSuppressed(() => verifyInference({ runtime }));
+  } catch (error) {
+    if (!oneShot) {
+      throw error;
+    }
+    failOneShotExecution(opts, runtime, error);
+    return;
+  }
   if (inference.ok) {
     const runCrestodian =
       deps.runCrestodian ?? (await import("../crestodian/crestodian.js")).runCrestodian;
-    await runCrestodian(opts, runtime);
+    try {
+      await runCrestodian(opts, runtime);
+    } catch (error) {
+      if (!oneShot) {
+        throw error;
+      }
+      failOneShotExecution(opts, runtime, error);
+      return;
+    }
+    if (oneShot) {
+      requestExitAfterOneShotOutput(runtime);
+    }
     return;
   }
 
@@ -67,7 +118,9 @@ export async function runCrestodianWithInference(
         [`Crestodian requires working inference: ${inference.error}`, guidance].join("\n"),
       );
     }
-    runtime.exit(1);
+    if (!requestExitAfterOneShotOutput(runtime, 1)) {
+      runtime.exit(1);
+    }
     return;
   }
 

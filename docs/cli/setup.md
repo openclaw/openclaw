@@ -14,6 +14,10 @@ it verifies and persists inference first, then starts Crestodian to configure
 the workspace, Gateway, channels, skills, and health. Use `--baseline` when you
 only need to initialize config/workspace folders without the wizard.
 
+In guided mode, `--workspace <dir>` is the workspace proposed to Crestodian;
+it is persisted only after you approve that proposal. Baseline, classic, and
+noninteractive setup persist the supplied workspace through their normal flow.
+
 `setup` accepts the same onboarding flags as `openclaw onboard`, including
 auth (`--auth-choice`, `--token`, provider key flags), Gateway
 (`--gateway-port`, `--gateway-bind`, `--gateway-auth`, `--install-daemon`),
@@ -33,7 +37,7 @@ alias for the inference-gated Crestodian assistant and has no `setup` equivalent
 
 | Flag                       | Description                                                                                         |
 | -------------------------- | --------------------------------------------------------------------------------------------------- |
-| `--workspace <dir>`        | Agent workspace directory (default `~/.openclaw/workspace`; stored as `agents.defaults.workspace`). |
+| `--workspace <dir>`        | Workspace proposal in guided mode; persisted directly by baseline, classic, and noninteractive setup. |
 | `--baseline`               | Create baseline config/workspace/session folders without onboarding.                                |
 | `--wizard`                 | Accepted for compatibility; setup runs onboarding by default.                                       |
 | `--non-interactive`        | Run onboarding without prompts.                                                                     |
@@ -48,6 +52,9 @@ alias for the inference-gated Crestodian assistant and has no `setup` equivalent
 | `--remote-url <url>`       | Remote Gateway WebSocket URL.                                                                       |
 | `--remote-token <token>`   | Remote Gateway token (optional).                                                                    |
 | `--json`                   | Output a JSON summary.                                                                              |
+
+`--classic` and `--non-interactive` are mutually exclusive: classic opens the
+prompted wizard, while noninteractive setup uses the automation path.
 
 ### Baseline mode
 

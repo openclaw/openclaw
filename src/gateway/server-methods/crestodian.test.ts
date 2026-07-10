@@ -1,11 +1,13 @@
 // crestodian.chat handler tests: session reuse, reset, and action mapping.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CrestodianChatEngine } from "../../crestodian/chat-engine.js";
+import { CrestodianInferenceUnavailableError } from "../../crestodian/inference-error.js";
 import {
   getCommandLaneSnapshot,
   resetCommandQueueStateForTest,
 } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { defaultRuntime } from "../../runtime.js";
 import { createDeferred } from "../../test-utils/deferred.js";
 import { crestodianHandlers, type CrestodianChatSession } from "./crestodian.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -161,6 +163,43 @@ describe("crestodian.chat", () => {
     expect(getCommandLaneSnapshot(CommandLane.Crestodian).activeCount).toBe(0);
   });
 
+  it.each([
+    {
+      name: "working",
+      result: { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 25 },
+    },
+    {
+      name: "unavailable",
+      result: {
+        ok: false as const,
+        status: "unavailable" as const,
+        error: "no configured model",
+      },
+    },
+  ])("returns the structured $name inference verification result", async ({ result }) => {
+    setupInferenceMocks.verifySetupInference.mockResolvedValueOnce(result);
+    const { calls, respond } = makeRespond();
+
+    await crestodianHandlers["crestodian.setup.verify"]({ params: {}, respond } as never);
+
+    expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledWith({
+      runtime: defaultRuntime,
+    });
+    expect(calls).toEqual([{ ok: true, payload: result, error: undefined }]);
+  });
+
+  it("rejects unknown setup verification params without running inference", async () => {
+    const { calls, respond } = makeRespond();
+
+    await crestodianHandlers["crestodian.setup.verify"]({
+      params: { modelRef: "openai/gpt-5.5" },
+      respond,
+    } as never);
+
+    expect(setupInferenceMocks.verifySetupInference).not.toHaveBeenCalled();
+    expect(calls[0]?.ok).toBe(false);
+  });
+
   it("forwards setup activation on the gateway lane until its response is sent", async () => {
     const started = createDeferred();
     const release = createDeferred();
@@ -234,7 +273,47 @@ describe("crestodian.chat", () => {
     expect(call.payload).toMatchObject({ reply: "did the thing", action: "none" });
   });
 
-  it("tracks concurrent requests as active until each RPC response is sent", async () => {
+  it("drops a failed session and requires fresh inference on retry", async () => {
+    const engine = new CrestodianChatEngine({});
+    vi.spyOn(engine, "handle").mockRejectedValue(
+      new CrestodianInferenceUnavailableError("conversation"),
+    );
+    const dispose = vi.spyOn(engine, "dispose").mockResolvedValue();
+    const sessions = new Map<string, CrestodianChatSession>([["s1", seededSession({ engine })]]);
+    const context = makeContext(sessions);
+
+    const failed = await callChat(context, { sessionId: "s1", message: "status please" });
+
+    expect(failed).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("working inference"),
+      },
+    });
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(sessions.has("s1")).toBe(false);
+    expect(setupInferenceMocks.verifySetupInference).not.toHaveBeenCalled();
+
+    const retried = await callChat(context, { sessionId: "s1" });
+
+    expect(retried.ok).toBe(true);
+    expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledOnce();
+    expect(sessions.has("s1")).toBe(true);
+  });
+
+  it("does not relabel unrelated session failures as inference errors", async () => {
+    const engine = new CrestodianChatEngine({});
+    vi.spyOn(engine, "handle").mockRejectedValue(new Error("wizard bug"));
+    const sessions = new Map<string, CrestodianChatSession>([["s1", seededSession({ engine })]]);
+
+    await expect(
+      callChat(makeContext(sessions), { sessionId: "s1", message: "status please" }),
+    ).rejects.toThrow("wizard bug");
+    expect(sessions.has("s1")).toBe(true);
+  });
+
+  it("tracks every accepted request as active while serializing expensive execution", async () => {
     const firstStarted = createDeferred();
     const secondStarted = createDeferred();
     const releaseFirst = createDeferred();
@@ -272,19 +351,72 @@ describe("crestodian.chat", () => {
       },
     } as never);
 
-    await Promise.all([firstStarted.promise, secondStarted.promise]);
+    await firstStarted.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(getCommandLaneSnapshot(CommandLane.Crestodian)).toMatchObject({
       activeCount: 2,
       queuedCount: 0,
     });
+    expect(secondEngine.handle).not.toHaveBeenCalled();
     releaseFirst.resolve();
     await first;
+    await secondStarted.promise;
     expect(getCommandLaneSnapshot(CommandLane.Crestodian).activeCount).toBe(1);
     releaseSecond.resolve();
     await second;
 
     expect(activeAtResponse).toEqual([2, 1]);
     expect(getCommandLaneSnapshot(CommandLane.Crestodian).activeCount).toBe(0);
+  });
+
+  it("keeps the session map bounded during concurrent unique initialization", async () => {
+    const evictionStarted = createDeferred();
+    const releaseEviction = createDeferred();
+    const oldest = seededSession({ lastUsedAt: 0 });
+    const disposeOldest = vi.spyOn(oldest.engine, "dispose").mockImplementation(async () => {
+      evictionStarted.resolve();
+      await releaseEviction.promise;
+    });
+    const sessions = new Map<string, CrestodianChatSession>([["oldest", oldest]]);
+    for (let index = 1; index < 8; index += 1) {
+      sessions.set(`existing-${index}`, seededSession({ lastUsedAt: index }));
+    }
+    const loadOverview = vi
+      .spyOn(CrestodianChatEngine.prototype, "loadOverview")
+      .mockResolvedValue({
+        config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: null },
+        agents: [],
+        defaultAgentId: "main",
+        defaultModel: "openai/gpt-5.5",
+        tools: {
+          codex: { available: false },
+          claude: { available: false },
+          gemini: { available: false },
+          apiKeys: { openai: false, anthropic: false },
+        },
+        gateway: { url: "ws://127.0.0.1:18789", source: "test", reachable: true },
+        references: {
+          docsUrl: "https://docs.openclaw.ai",
+          sourceUrl: "https://github.com/openclaw/openclaw",
+        },
+      } as never);
+
+    try {
+      const context = makeContext(sessions);
+      const first = callChat(context, { sessionId: "new-1" });
+      const second = callChat(context, { sessionId: "new-2" });
+      await evictionStarted.promise;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      releaseEviction.resolve();
+      await Promise.all([first, second]);
+
+      expect(disposeOldest).toHaveBeenCalledOnce();
+      expect(sessions.size).toBe(8);
+      expect(sessions.has("new-1")).toBe(true);
+      expect(sessions.has("new-2")).toBe(true);
+    } finally {
+      loadOverview.mockRestore();
+    }
   });
 
   it("forwards sensitive-input metadata to clients", async () => {

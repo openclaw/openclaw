@@ -139,10 +139,12 @@ When debugging real providers/models (requires real creds):
 - Crestodian first-run Docker smoke: `pnpm test:docker:crestodian-first-run`
   - Starts from an empty OpenClaw state dir and first proves the packaged
     `openclaw crestodian` CLI fails closed without inference. It then
-    live-activates a fake Claude inference backend, verifies the probe prompt,
-    and only after that runs the packaged Crestodian commands for workspace,
-    model, agent, Discord plugin, and SecretRef setup. It validates config and
-    audit entries. The same lane is also exposed in QA Lab by
+    tests and activates fake Claude through the packaged activation module.
+    Only afterward does a fuzzy packaged CLI request reach the planner and
+    resolve to typed setup, followed by one-shot model, agent, Discord plugin,
+    and SecretRef operations. It validates config and audit entries. This is
+    supporting gate/operation evidence, not an interactive onboarding or
+    Crestodian agent/tool/approval proof. The same lane is exposed in QA Lab by
     `pnpm openclaw qa suite --scenario crestodian-ring-zero-setup`.
 - Moonshot/Kimi cost smoke: with `MOONSHOT_API_KEY` set, run
   `openclaw models list --provider moonshot --json`, then run an isolated

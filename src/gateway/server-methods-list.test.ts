@@ -2,7 +2,10 @@
  * Tests the registered gateway server method list and exported method names.
  */
 import { describe, expect, it } from "vitest";
-import { listCoreGatewayMethodNames } from "./methods/core-descriptors.js";
+import {
+  CORE_GATEWAY_METHOD_SPECS,
+  listCoreGatewayMethodNames,
+} from "./methods/core-descriptors.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 
@@ -27,6 +30,27 @@ describe("listGatewayMethods", () => {
 
   it("advertises Control UI GitHub previews", () => {
     expect(listGatewayMethods()).toContain("controlUi.githubPreview");
+  });
+
+  it("advertises Crestodian setup methods with their dispatch policy", () => {
+    const methods = listGatewayMethods();
+    expect(methods).toContain("crestodian.setup.verify");
+    expect(coreGatewayHandlers["crestodian.setup.verify"]).toEqual(expect.any(Function));
+    expect(
+      CORE_GATEWAY_METHOD_SPECS.find((spec) => spec.name === "crestodian.setup.verify")
+        ?.controlPlaneWrite,
+    ).toBeUndefined();
+    // Candidate activation is an admin-only probe that persists only on
+    // success. The generic three-write budget would strand the automatic
+    // fallback ladder before its fourth candidate or a manual retry.
+    expect(
+      CORE_GATEWAY_METHOD_SPECS.find((spec) => spec.name === "crestodian.setup.activate")
+        ?.controlPlaneWrite,
+    ).toBeUndefined();
+    expect(methods.indexOf("crestodian.setup.verify")).toBeGreaterThan(
+      methods.indexOf("tts.speak"),
+    );
+    expect(methods.indexOf("wizard.start")).toBe(methods.indexOf("crestodian.setup.activate") + 1);
   });
 
   it("does not advertise hidden core handlers", () => {

@@ -11,9 +11,10 @@
   "commands": [
     {
       "id": "setup",
-      "message": "setup workspace {defaultWorkspace} model {model}",
+      "message": "please finish basic setup with workspace {defaultWorkspace}",
       "expectOutput": "[crestodian] done: crestodian.setup",
-      "approve": true
+      "approve": true,
+      "planner": true
     },
     {
       "id": "default-model",
@@ -23,7 +24,7 @@
     },
     {
       "id": "agent",
-      "message": "create agent {agentId} workspace {agentWorkspace} model {model}",
+      "message": "create agent {agentId} workspace {agentWorkspace}",
       "expectOutput": "[crestodian] done: agents.create",
       "approve": true
     },

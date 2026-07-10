@@ -47,8 +47,12 @@ export type RunCliAgentParams = {
   trigger?: EmbeddedRunTrigger;
   sessionFile: string;
   workspaceDir: string;
+  /** Trusted model/auth owner directory. Defaults to the session agent directory. */
+  agentDir?: string;
   /** Task working directory for CLI execution. Defaults to workspaceDir. */
   cwd?: string;
+  /** Start a fresh CLI process so per-turn MCP authority is reloaded from this run. */
+  disableCliLiveSession?: boolean;
   config?: OpenClawConfig;
   prompt: string;
   transcriptPrompt?: string;

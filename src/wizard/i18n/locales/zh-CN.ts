@@ -233,7 +233,7 @@ export const zh_CN = {
     guided: {
       aiAccessTitle: "AI 访问",
       apiKeyPrompt: "{label} 的 API key 或 token",
-      appliedTitle: "设置已应用",
+      appliedTitle: "推理已就绪",
       detected: "AI 检测完成。",
       detectedCandidate: "{label} — {detail}{recommended}",
       detectedTitle: "找到的 AI",
@@ -252,6 +252,8 @@ export const zh_CN = {
       foundNothing: "未在此机器上检测到现有 AI 访问方式。",
       intro: "连接你的 AI",
       manualChoice: "你想如何连接 AI？",
+      noInferenceOptions:
+        "尚无可用的推理选项。请先登录 Claude Code 或 Codex，或配置 API 密钥提供商，然后重新运行引导。",
       recommendedSuffix: " — 推荐",
       repliedIn: "AI 检查：在 {seconds} 秒内回复",
       retryCandidate: "重试 {label}（{detail}）",
@@ -263,9 +265,7 @@ export const zh_CN = {
       tryCandidate: "尝试 {label}（{detail}）",
       ttyRequired:
         "Onboarding 需要交互式 TTY。自动化请使用 `openclaw onboard --non-interactive --accept-risk ...`。",
-      useClassic: "使用经典分步向导",
       welcomeTitle: "设置选项",
-      workspace: "工作区目录",
     },
     setup: {
       authChoiceFailedRetry: "请选择其他提供商或认证方式，或选择暂时跳过。",

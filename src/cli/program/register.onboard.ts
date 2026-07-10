@@ -17,6 +17,7 @@ import type {
 } from "../../commands/onboard-types.js";
 import { resolveProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { formatCliCommand } from "../command-format.js";
 import { parsePort } from "../shared/parse-port.js";
 
 function resolveInstallDaemonFlag(
@@ -41,6 +42,34 @@ function resolveInstallDaemonFlag(
     return Boolean(opts.installDaemon);
   }
   return undefined;
+}
+
+const MODERN_ONBOARD_OPTION_KEYS = new Set([
+  "modern",
+  "workspace",
+  "acceptRisk",
+  "nonInteractive",
+  "json",
+]);
+
+function listUnsupportedModernOptions(command: Command): string[] {
+  const optionsByKey = new Map<string, (typeof command.options)[number]>();
+  for (const option of command.options) {
+    const key = option.attributeName();
+    if (MODERN_ONBOARD_OPTION_KEYS.has(key) || command.getOptionValueSource(key) !== "cli") {
+      continue;
+    }
+    const existing = optionsByKey.get(key);
+    const valueIsNegated = command.getOptionValue(key) === false;
+    if (!existing || option.negate === valueIsNegated) {
+      // Positive and --no-* forms can share one Commander attribute. Report
+      // only the spelling whose parsed value actually won.
+      optionsByKey.set(key, option);
+    }
+  }
+  return [...optionsByKey.values()]
+    .map((option) => option.long ?? option.short ?? option.flags)
+    .toSorted();
 }
 
 const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({
@@ -164,7 +193,10 @@ export function registerOnboardCommand(program: Command): void {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/onboard", "docs.openclaw.ai/cli/onboard")}\n`,
     )
-    .option("--workspace <dir>", "Agent workspace directory (default: ~/.openclaw/workspace)")
+    .option(
+      "--workspace <dir>",
+      "Workspace proposal for guided setup; persisted by classic/non-interactive setup",
+    )
     .option(
       "--reset",
       "Reset config + credentials + sessions before running onboard (workspace only with --reset-scope full)",
@@ -219,14 +251,37 @@ export function registerOnboardCommand(program: Command): void {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
       if (opts.modern) {
+        const unsupportedOptions = listUnsupportedModernOptions(commandRuntime);
+        if (unsupportedOptions.length > 0) {
+          defaultRuntime.error(
+            [
+              `--modern cannot be combined with: ${unsupportedOptions.join(", ")}.`,
+              "Run those setup options without --modern, or remove them to open Crestodian.",
+            ].join("\n"),
+          );
+          defaultRuntime.exit(1);
+          return;
+        }
+        if (opts.nonInteractive && opts.acceptRisk !== true) {
+          defaultRuntime.error(
+            [
+              "Non-interactive setup requires explicit risk acknowledgement.",
+              "Read: https://docs.openclaw.ai/security",
+              `Re-run with: ${formatCliCommand("openclaw onboard --modern --non-interactive --accept-risk ...")}`,
+            ].join("\n"),
+          );
+          defaultRuntime.exit(1);
+          return;
+        }
         const { runCrestodianWithInference } =
           await import("../../commands/crestodian-with-inference.js");
         await runCrestodianWithInference(
           {
-            message: opts.nonInteractive ? "overview" : undefined,
             yes: false,
             json: Boolean(opts.json),
             interactive: !opts.nonInteractive,
+            welcomeVariant: "onboarding",
+            ...(opts.workspace ? { setupWorkspace: opts.workspace as string } : {}),
           },
           defaultRuntime,
           {

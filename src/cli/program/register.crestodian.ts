@@ -12,7 +12,7 @@ export function registerCrestodianCommand(program: Command) {
     .command("crestodian")
     .description("Open the ring-zero setup and repair helper")
     .option("-m, --message <text>", "Run one Crestodian request")
-    .option("--yes", "Approve persistent config writes for this request", false)
+    .option("--yes", "Approve persistent config writes for one --message request", false)
     .option("--json", "Output startup overview as JSON", false)
     .addHelpText(
       "after",

@@ -7,7 +7,9 @@ import { resolveCrestodianOperation } from "./dialogue.js";
 import {
   executeCrestodianOperation,
   isPersistentCrestodianOperation,
+  parseCrestodianOperation,
   type CrestodianCommandDeps,
+  type CrestodianOperation,
 } from "./operations.js";
 import {
   formatCrestodianOverview,
@@ -36,8 +38,6 @@ export type RunCrestodianOptions = {
   welcomeVariant?: "onboarding";
   /** Workspace override for the proposed first-run setup (from --workspace). */
   setupWorkspace?: string;
-  /** Risk acknowledgement already collected by the calling onboarding flow. */
-  setupAcceptRisk?: boolean;
   onReady?: () => void;
   deps?: CrestodianCommandDeps;
   formatOverview?: (overview: CrestodianOverview) => string;
@@ -62,11 +62,13 @@ function crestodianCommandDepsFromOptions(
 }
 
 async function runOneShot(
-  input: string,
+  operation: CrestodianOperation,
   runtime: RuntimeEnv,
   opts: RunCrestodianOptions,
 ): Promise<void> {
-  const operation = await resolveCrestodianOperation(input, runtime, opts);
+  if (operation.kind === "none" && operation.message === "") {
+    return;
+  }
   await executeCrestodianOperation(operation, runtime, {
     approved: opts.yes === true || !isPersistentCrestodianOperation(operation),
     deps: crestodianCommandDepsFromOptions(opts),
@@ -85,7 +87,13 @@ export async function runCrestodian(
   }
 
   if (opts.message?.trim()) {
-    // One-shot mode always shows the overview first so planned changes have local context.
+    const parsed = parseCrestodianOperation(opts.message);
+    if (parsed.kind === "overview") {
+      await runOneShot(parsed, runtime, opts);
+      return;
+    }
+    // Show local context before an assistant interprets fuzzy input. Reuse the
+    // same snapshot for planning so reply-only plans do not print before it.
     const overview = await withProgress(
       {
         label: "Loading Crestodian overview…",
@@ -97,16 +105,25 @@ export async function runCrestodian(
     );
     runtime.log((opts.formatOverview ?? formatCrestodianOverview)(overview));
     runtime.log("");
-    await runOneShot(opts.message, runtime, opts);
+    const operation = await resolveCrestodianOperation(opts.message, runtime, {
+      ...opts,
+      loadOverview: async () => overview,
+    });
+    await runOneShot(operation, runtime, opts);
     return;
   }
 
-  const interactive = opts.interactive ?? true;
+  if (opts.interactive === false) {
+    const overview = await (opts.loadOverview ?? loadCrestodianOverview)();
+    runtime.log((opts.formatOverview ?? formatCrestodianOverview)(overview));
+    return;
+  }
+
   const input = opts.input ?? defaultStdin;
   const output = opts.output ?? defaultStdout;
   const inputIsTty = (input as { isTTY?: boolean }).isTTY === true;
   const outputIsTty = (output as { isTTY?: boolean }).isTTY === true;
-  if (!interactive || !inputIsTty || !outputIsTty) {
+  if (!inputIsTty || !outputIsTty) {
     // Without a TTY, Crestodian cannot safely ask for confirmation; require --message instead.
     runtime.error("Crestodian needs an interactive TTY. Use --message for one command.");
     runtime.exit(1);

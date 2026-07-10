@@ -6,8 +6,10 @@ import {
   validateCrestodianChatParams,
   validateCrestodianSetupActivateParams,
   validateCrestodianSetupDetectParams,
+  validateCrestodianSetupVerifyParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { CrestodianChatEngine } from "../../crestodian/chat-engine.js";
+import { isCrestodianInferenceUnavailableError } from "../../crestodian/inference-error.js";
 import { buildOnboardingWelcome } from "../../crestodian/onboarding-welcome.js";
 import { formatCrestodianStartupMessage } from "../../crestodian/overview.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
@@ -33,6 +35,8 @@ export type CrestodianChatSession = {
 };
 
 const MAX_CRESTODIAN_SESSIONS = 8;
+const CRESTODIAN_GATEWAY_EXECUTION_KEY = "gateway";
+const crestodianGatewayExecutionQueue = new KeyedAsyncQueue();
 const crestodianSessionQueues = new WeakMap<Map<string, CrestodianChatSession>, KeyedAsyncQueue>();
 
 function getCrestodianSessionQueue(sessions: Map<string, CrestodianChatSession>): KeyedAsyncQueue {
@@ -48,7 +52,12 @@ async function runCrestodianGatewayTask(task: () => Promise<void>): Promise<void
   // Track every accepted RPC as active, never queued: restart draining snapshots
   // active ids, so a queued Crestodian request could otherwise outlive its socket.
   setCommandLaneConcurrency(CommandLane.Crestodian, Number.MAX_SAFE_INTEGER);
-  await enqueueCommandInLane(CommandLane.Crestodian, task);
+  await enqueueCommandInLane(CommandLane.Crestodian, () =>
+    // Bound expensive detection, activation, and agent turns without hiding
+    // accepted work from restart draining. This also makes session eviction and
+    // setup writes atomic with respect to other Crestodian gateway requests.
+    crestodianGatewayExecutionQueue.enqueue(CRESTODIAN_GATEWAY_EXECUTION_KEY, task),
+  );
 }
 
 async function evictOldestSession(sessions: Map<string, CrestodianChatSession>): Promise<void> {
@@ -87,10 +96,27 @@ export const crestodianHandlers: GatewayRequestHandlers = {
       respond(true, await detectSetupInference(), undefined);
     });
   },
+  /** Re-run the exact current default-agent inference route without mutating setup. */
+  "crestodian.setup.verify": async ({ params, respond }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateCrestodianSetupVerifyParams,
+        "crestodian.setup.verify",
+        respond,
+      )
+    ) {
+      return;
+    }
+    await runCrestodianGatewayTask(async () => {
+      const { verifySetupInference } = await import("../../crestodian/setup-inference.js");
+      respond(true, await verifySetupInference({ runtime: defaultRuntime }), undefined);
+    });
+  },
   /**
    * Structured onboarding: live-test one candidate and persist it on success.
-   * Serialized per gateway process implicitly by the app driving one attempt
-   * at a time; a failed attempt never mutates config (see setup-inference.ts).
+   * Serialized per gateway process by runCrestodianGatewayTask; a failed
+   * attempt never mutates config (see setup-inference.ts).
    */
   "crestodian.setup.activate": async ({ params, respond }) => {
     if (
@@ -178,7 +204,27 @@ export const crestodianHandlers: GatewayRequestHandlers = {
           respond(true, { sessionId, reply: session.welcome, action: "none" }, undefined);
           return;
         }
-        const reply = await session.engine.handle(params.message);
+        let reply: Awaited<ReturnType<CrestodianChatEngine["handle"]>>;
+        try {
+          reply = await session.engine.handle(params.message);
+        } catch (error) {
+          if (!isCrestodianInferenceUnavailableError(error)) {
+            throw error;
+          }
+          // A failed inference turn invalidates this conversation. Remove the
+          // exact engine before cleanup so a retry must pass the live gate and
+          // cannot resume partial proposal or CLI-session state.
+          if (sessions.get(sessionId)?.engine === session.engine) {
+            sessions.delete(sessionId);
+          }
+          try {
+            await session.engine.dispose();
+          } catch {
+            // The inference error is authoritative; cleanup stays best-effort.
+          }
+          respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, error.message));
+          return;
+        }
         // The TUI-only "open-tui" handoff becomes a client-visible "open-agent"
         // signal: the app should move the user to their normal agent chat.
         const action =

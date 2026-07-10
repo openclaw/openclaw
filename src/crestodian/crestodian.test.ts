@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { runCrestodian } from "./crestodian.js";
 import { createCrestodianTestRuntime } from "./crestodian.test-helpers.js";
+import { CrestodianInferenceUnavailableError } from "./inference-error.js";
 import type { CrestodianOverview } from "./overview.js";
 
 const overview: CrestodianOverview = {
@@ -64,9 +65,12 @@ describe("runCrestodian", () => {
     expect(lines.join("\n")).toContain("[crestodian] planner: openai/gpt-5.5");
     expect(lines.join("\n")).toContain("[crestodian] interpreted: restart gateway");
     expect(lines.join("\n")).toContain("Plan: restart the Gateway. Say yes to apply.");
+    expect(lines.indexOf("Default model: openai/gpt-5.5")).toBeLessThan(
+      lines.findIndex((line) => line.includes("[crestodian] planner:")),
+    );
   });
 
-  it("keeps deterministic parsing ahead of the assistant planner", async () => {
+  it("keeps exact one-shot parsing ahead of the assistant planner", async () => {
     const { runtime, lines } = createCrestodianTestRuntime();
     let plannerCalls = 0;
     let onReadyCalls = 0;
@@ -89,6 +93,54 @@ describe("runCrestodian", () => {
     expect(plannerCalls).toBe(0);
     expect(onReadyCalls).toBe(0);
     expect(lines.join("\n")).toContain("Default model:");
+  });
+
+  it("prints an explicit one-shot overview exactly once", async () => {
+    const { runtime, lines } = createCrestodianTestRuntime();
+
+    await runCrestodian(
+      {
+        message: "overview",
+        formatOverview: () => "formatted overview",
+        loadOverview: async () => overview,
+      },
+      runtime,
+    );
+
+    expect(lines).toEqual(["formatted overview"]);
+  });
+
+  it.each([
+    { name: "no plan", plan: null },
+    { name: "invalid command", plan: { command: "invent a new operation" } },
+  ])("fails a fuzzy one-shot when inference returns $name", async ({ plan }) => {
+    const { runtime } = createCrestodianTestRuntime();
+
+    await expect(
+      runCrestodian(
+        {
+          message: "please make things nicer",
+          planWithAssistant: async () => plan,
+          ...crestodianOverviewDeps,
+        },
+        runtime,
+      ),
+    ).rejects.toBeInstanceOf(CrestodianInferenceUnavailableError);
+  });
+
+  it("prints a valid reply-only one-shot plan", async () => {
+    const { runtime, lines } = createCrestodianTestRuntime();
+
+    await runCrestodian(
+      {
+        message: "explain the current setup",
+        planWithAssistant: async () => ({ reply: "The current setup is healthy." }),
+        ...crestodianOverviewDeps,
+      },
+      runtime,
+    );
+
+    expect(lines).toEqual(["Default model: openai/gpt-5.5", "", "The current setup is healthy."]);
   });
 
   it("starts interactive Crestodian in the TUI shell", async () => {
@@ -115,6 +167,31 @@ describe("runCrestodian", () => {
     expect(lines.join("\n")).not.toContain("Say: status");
   });
 
+  it("prints the formatted overview exactly once when interactive mode is disabled", async () => {
+    const { runtime, lines } = createCrestodianTestRuntime();
+    let loadOverviewCalls = 0;
+    let runInteractiveTuiCalls = 0;
+
+    await runCrestodian(
+      {
+        interactive: false,
+        loadOverview: async () => {
+          loadOverviewCalls += 1;
+          return overview;
+        },
+        formatOverview: () => "formatted overview",
+        runInteractiveTui: async () => {
+          runInteractiveTuiCalls += 1;
+        },
+      },
+      runtime,
+    );
+
+    expect(loadOverviewCalls).toBe(1);
+    expect(runInteractiveTuiCalls).toBe(0);
+    expect(lines).toEqual(["formatted overview"]);
+  });
+
   it.each([
     {
       name: "stdin is not a TTY",
@@ -127,12 +204,6 @@ describe("runCrestodian", () => {
       input: { isTTY: true } as unknown as NodeJS.ReadableStream,
       output: { isTTY: false } as unknown as NodeJS.WritableStream,
       interactive: true,
-    },
-    {
-      name: "interactive mode is disabled",
-      input: { isTTY: true } as unknown as NodeJS.ReadableStream,
-      output: { isTTY: true } as unknown as NodeJS.WritableStream,
-      interactive: false,
     },
   ])("exits non-zero when $name", async ({ input, output, interactive }) => {
     const { runtime, lines } = createCrestodianTestRuntime();
