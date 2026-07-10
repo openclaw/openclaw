@@ -380,7 +380,12 @@ export function applyAnthropicConfigDefaults(params: {
         if (Object.hasOwn(nextModels, ref)) {
           continue;
         }
-        nextModels[ref] = { params: { cacheRetention: "short" } };
+        Object.defineProperty(nextModels, ref, {
+          configurable: true,
+          enumerable: true,
+          value: { params: { cacheRetention: "short" } },
+          writable: true,
+        });
         modelsMutated = true;
       }
     }
