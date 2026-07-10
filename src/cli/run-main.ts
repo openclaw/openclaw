@@ -874,6 +874,14 @@ export async function runCli(argv: string[] = process.argv) {
   // Enforce the minimum supported runtime before gateway selection can read or recover config.
   assertSupportedRuntime();
 
+  if (!isHelpOrVersionInvocation && isGatewayRunInvocation) {
+    await startupTrace.measure("gateway-run-deferred-activation", async () => {
+      const { waitForDeferredGatewayActivation } =
+        await import("./gateway-cli/deferred-activation.js");
+      await waitForDeferredGatewayActivation();
+    });
+  }
+
   if (!isHelpOrVersionInvocation && (isGatewayRunInvocation || shouldLoadCliDotEnv())) {
     await startupTrace.measure("dotenv", async () => {
       if (isRemoteAgentDispatchInvocation(normalizedArgv, normalizedInvocation.primary)) {

@@ -39,6 +39,9 @@ const pinConfigDirMock = vi.hoisted(() => vi.fn());
 const pinRuntimePathsMock = vi.hoisted(() => vi.fn());
 const ensurePathMock = vi.hoisted(() => vi.fn());
 const assertRuntimeMock = vi.hoisted(() => vi.fn());
+const waitForDeferredGatewayActivationMock = vi.hoisted(() =>
+  vi.fn(async () => ({ mode: "disabled" as const })),
+);
 const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
 const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
 const listRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn((): unknown[] => []));
@@ -235,6 +238,10 @@ vi.mock("../infra/runtime-guard.js", () => ({
   assertSupportedRuntime: assertRuntimeMock,
 }));
 
+vi.mock("./gateway-cli/deferred-activation.js", () => ({
+  waitForDeferredGatewayActivation: waitForDeferredGatewayActivationMock,
+}));
+
 vi.mock("../plugins/memory-runtime.js", () => ({
   closeActiveMemorySearchManagers: closeActiveMemorySearchManagersMock,
 }));
@@ -396,6 +403,7 @@ describe("runCli exit behavior", () => {
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
     vi.clearAllMocks();
+    waitForDeferredGatewayActivationMock.mockResolvedValue({ mode: "disabled" });
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
       valid: true,
@@ -2159,13 +2167,96 @@ describe("runCli exit behavior", () => {
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
   });
 
+  it.each([
+    ["gateway run", ["node", "openclaw", "gateway", "run"]],
+    ["bare gateway", ["node", "openclaw", "gateway"]],
+  ])(
+    "waits for deferred activation before gateway startup side effects for %s",
+    async (_name, argv) => {
+      const events: string[] = [];
+      assertRuntimeMock.mockImplementation(() => {
+        events.push("runtime");
+      });
+      waitForDeferredGatewayActivationMock.mockImplementation(async () => {
+        events.push("activation:start");
+        await Promise.resolve();
+        events.push("activation:end");
+        return { mode: "disabled" };
+      });
+      loadDotEnvMock.mockImplementation(() => {
+        events.push("dotenv");
+      });
+      readConfigFileSnapshotMock.mockImplementation(async () => {
+        events.push("config-snapshot");
+        return {
+          exists: true,
+          valid: true,
+          sourceConfig: { gateway: { mode: "local" } },
+        };
+      });
+      normalizeEnvMock.mockImplementation(() => {
+        events.push("normalize");
+      });
+      loadConfigMock.mockImplementation(() => {
+        events.push("config-load");
+        return {};
+      });
+      startProxyMock.mockImplementation(async () => {
+        events.push("proxy");
+        return null;
+      });
+
+      await runCli(argv);
+
+      expect(waitForDeferredGatewayActivationMock).toHaveBeenCalledTimes(1);
+      const runtimeGuardOrder = assertRuntimeMock.mock.invocationCallOrder[0] ?? 0;
+      const activationOrder = waitForDeferredGatewayActivationMock.mock.invocationCallOrder[0] ?? 0;
+      const dotenvOrder = loadDotEnvMock.mock.invocationCallOrder[0] ?? 0;
+      const configReadOrder = readConfigFileSnapshotMock.mock.invocationCallOrder[0] ?? 0;
+      const normalizeOrder = normalizeEnvMock.mock.invocationCallOrder[0] ?? 0;
+      const proxyOrder = startProxyMock.mock.invocationCallOrder[0] ?? 0;
+      expect(runtimeGuardOrder).toBeGreaterThan(0);
+      expect(activationOrder).toBeGreaterThan(runtimeGuardOrder);
+      expect(dotenvOrder).toBeGreaterThan(activationOrder);
+      expect(configReadOrder).toBeGreaterThan(activationOrder);
+      expect(normalizeOrder).toBeGreaterThan(activationOrder);
+      expect(proxyOrder).toBeGreaterThan(activationOrder);
+      expect(events.indexOf("activation:end")).toBeLessThan(events.indexOf("dotenv"));
+      expect(events.indexOf("activation:end")).toBeLessThan(events.indexOf("config-snapshot"));
+      expect(events.indexOf("activation:end")).toBeLessThan(events.indexOf("normalize"));
+      expect(events.indexOf("activation:end")).toBeLessThan(events.indexOf("proxy"));
+    },
+  );
+
+  it.each([
+    ["root help", ["node", "openclaw", "--help"]],
+    ["version", ["node", "openclaw", "--version"]],
+    ["non-gateway command", ["node", "openclaw", "status"]],
+  ])("skips deferred activation for %s", async (_name, argv) => {
+    if (_name === "version") {
+      buildProgramMock.mockReturnValueOnce({
+        commands: [],
+        parseAsync: vi.fn().mockResolvedValueOnce(undefined),
+      });
+    }
+    if (_name === "non-gateway command") {
+      tryRouteCliMock.mockResolvedValueOnce(true);
+    }
+
+    await runCli(argv);
+
+    expect(waitForDeferredGatewayActivationMock).not.toHaveBeenCalled();
+  });
+
   it("validates the runtime before selecting gateway config", async () => {
     await runCli(["node", "openclaw", "gateway", "run"]);
 
     const runtimeGuardOrder = assertRuntimeMock.mock.invocationCallOrder[0] ?? 0;
+    const activationOrder = waitForDeferredGatewayActivationMock.mock.invocationCallOrder[0] ?? 0;
     const configReadOrder = readConfigFileSnapshotMock.mock.invocationCallOrder[0] ?? 0;
     expect(runtimeGuardOrder).toBeGreaterThan(0);
-    expect(configReadOrder).toBeGreaterThan(runtimeGuardOrder);
+    expect(activationOrder).toBeGreaterThan(runtimeGuardOrder);
+    expect(configReadOrder).toBeGreaterThan(activationOrder);
   });
 
   it("re-pins runtime paths after selecting gateway config", async () => {
