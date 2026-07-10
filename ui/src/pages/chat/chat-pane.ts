@@ -7,6 +7,10 @@ import type {
   TaskSuggestionsAcceptResult,
   TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  ControlUiSessionPullRequest,
+  ControlUiSessionPullRequests,
+} from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
@@ -72,6 +76,11 @@ import {
 } from "./chat-state.ts";
 import { renderChat, resetChatViewState, type ChatProps } from "./chat-view.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
+import {
+  chatPullRequestId,
+  dismissChatPullRequest,
+  listDismissedChatPullRequests,
+} from "./components/chat-pull-requests.ts";
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
@@ -161,6 +170,10 @@ class ChatPane extends OpenClawLightDomElement {
   private readonly taskSuggestionBusyIds = new Set<string>();
   private readonly taskSuggestionOperations = new Map<string, symbol>();
   private taskSuggestionsRequestVersion = 0;
+  private sessionPullRequests: ControlUiSessionPullRequest[] = [];
+  private sessionPullRequestsRateLimited = false;
+  private sessionPullRequestsRequestVersion = 0;
+  private dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
 
   private captureConnectionScope(): ChatPaneConnectionScope | null {
     const context = this.context;
@@ -250,6 +263,60 @@ class ChatPane extends OpenClawLightDomElement {
       // Keep event-delivered cards when a background reconciliation fails.
     }
   }
+
+  private async refreshSessionPullRequests(): Promise<void> {
+    const requestVersion = ++this.sessionPullRequestsRequestVersion;
+    const scope = this.captureConnectionScope();
+    if (
+      !scope ||
+      !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "controlUi.sessionPullRequests")
+    ) {
+      this.sessionPullRequests = [];
+      this.sessionPullRequestsRateLimited = false;
+      this.requestUpdate();
+      return;
+    }
+    const sessionKey = scope.state.sessionKey;
+    if (!sessionKey.trim()) {
+      return;
+    }
+    try {
+      const result = await scope.client.request<ControlUiSessionPullRequests>(
+        "controlUi.sessionPullRequests",
+        { sessionKey, ...scopedAgentParamsForSession(scope.state, sessionKey) },
+      );
+      if (
+        requestVersion !== this.sessionPullRequestsRequestVersion ||
+        !this.isConnectionScopeCurrent(scope) ||
+        sessionKey !== scope.state.sessionKey
+      ) {
+        return;
+      }
+      this.sessionPullRequests = result.pullRequests;
+      this.sessionPullRequestsRateLimited = result.rateLimited;
+      this.dismissedSessionPullRequestIds = listDismissedChatPullRequests(sessionKey);
+      this.requestUpdate();
+    } catch {
+      // PR chips are an optional affordance; keep the last snapshot so a
+      // transient gateway or GitHub failure does not clear the row.
+    }
+  }
+
+  private resetSessionPullRequests(): void {
+    this.sessionPullRequestsRequestVersion += 1;
+    this.sessionPullRequests = [];
+    this.sessionPullRequestsRateLimited = false;
+    this.dismissedSessionPullRequestIds = new Set();
+  }
+
+  private readonly dismissSessionPullRequest = (pullRequest: ControlUiSessionPullRequest): void => {
+    const sessionKey = this.state?.sessionKey;
+    if (!sessionKey) {
+      return;
+    }
+    this.dismissedSessionPullRequestIds = dismissChatPullRequest(sessionKey, pullRequest);
+    this.requestUpdate();
+  };
 
   private handleTaskSuggestionEvent(event: TaskSuggestionEvent): void {
     if (event.action === "created") {
@@ -418,6 +485,7 @@ class ChatPane extends OpenClawLightDomElement {
     this.taskSuggestions = [];
     this.taskSuggestionBusyIds.clear();
     this.taskSuggestionOperations.clear();
+    this.resetSessionPullRequests();
     this.markSessionRead(nextSessionRow);
     if (previousSessionKey !== nextSessionKey) {
       state.announceSessionSwitch?.(nextSessionKey, nextSessionLabel);
@@ -429,6 +497,7 @@ class ChatPane extends OpenClawLightDomElement {
     const historyLoad = loadChatHistory(state);
     state.requestUpdate();
     void this.refreshTaskSuggestions();
+    void this.refreshSessionPullRequests();
     const scheduleHistoryScroll = () => {
       if (state.sessionKey !== nextSessionKey) {
         return;
@@ -732,6 +801,13 @@ class ChatPane extends OpenClawLightDomElement {
         this.applyGatewaySnapshot(snapshot);
       }),
     );
+    // PRs open, merge, and finish CI outside any gateway event stream, so the
+    // chip row refreshes on a coarse timer between session/connect refreshes.
+    const pullRequestTimer = window.setInterval(
+      () => void this.refreshSessionPullRequests(),
+      60_000,
+    );
+    chatState.addCleanup(() => window.clearInterval(pullRequestTimer));
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;
@@ -788,6 +864,7 @@ class ChatPane extends OpenClawLightDomElement {
     this.taskSuggestions = [];
     this.taskSuggestionBusyIds.clear();
     this.taskSuggestionOperations.clear();
+    this.resetSessionPullRequests();
     this.nativeDraftCleanup?.();
     this.nativeDraftCleanup = null;
     this.announceCommandPaletteTarget(null);
@@ -981,6 +1058,7 @@ class ChatPane extends OpenClawLightDomElement {
       void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());
       void state.loadAssistantIdentity();
       void this.refreshTaskSuggestions();
+      void this.refreshSessionPullRequests();
     }
     state.requestUpdate?.();
   }
@@ -1163,6 +1241,11 @@ class ChatPane extends OpenClawLightDomElement {
       sessionWorkspace,
       paneHeaderActive: this.showPaneHeader,
       taskSuggestions: this.taskSuggestions,
+      pullRequests: this.sessionPullRequests.filter(
+        (pullRequest) => !this.dismissedSessionPullRequestIds.has(chatPullRequestId(pullRequest)),
+      ),
+      pullRequestsRateLimited: this.sessionPullRequestsRateLimited,
+      onDismissPullRequest: this.dismissSessionPullRequest,
       taskSuggestionBusyIds: this.taskSuggestionBusyIds,
       canAcceptTaskSuggestions:
         state.connected &&

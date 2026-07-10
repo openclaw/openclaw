@@ -250,10 +250,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   }
 
   override disconnectedCallback() {
-    this.closeCustomizeMenu();
-    this.closeSessionMenu();
-    this.closeSessionGroupMenu();
-    this.closeSessionSortMenu();
+    this.dismissTransientMenus();
     this.gatewaySource = null;
     this.gatewayClient = null;
     for (const timer of this.routePreloadTimers.values()) {
@@ -261,6 +258,22 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
     this.routePreloadTimers.clear();
     super.disconnectedCallback();
+  }
+
+  // The shell calls this before CSS hides the panel or drawer. Mounted menus
+  // keep their document-level shortcuts alive even when an ancestor is hidden.
+  dismissTransientMenus(): boolean {
+    const hadTransientMenu = Boolean(
+      this.customizeMenuPosition ||
+      this.sessionMenu ||
+      this.sessionGroupMenu ||
+      this.sessionSortMenuPosition,
+    );
+    this.closeCustomizeMenu();
+    this.closeSessionMenu();
+    this.closeSessionGroupMenu();
+    this.closeSessionSortMenu();
+    return hadTransientMenu;
   }
 
   private readonly updateSessions = (sessions: SessionCapability) => {
@@ -925,14 +938,60 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.closeSessionSortMenu();
   };
 
+  // Registered only while one of the transient menus is open. Keeping this
+  // listener lifecycle-bound prevents menu shortcuts from consuming page keys.
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
+      event.preventDefault();
       event.stopPropagation();
       this.closeCustomizeMenu({ restoreFocus: true });
       this.closeSessionGroupMenu({ restoreFocus: true });
       this.closeSessionSortMenu({ restoreFocus: true });
+      return;
     }
+    if (event.key === "Tab") {
+      // Menu items stay outside the page tab order. Restore the durable trigger
+      // before the browser performs its normal forward/backward Tab movement.
+      this.closeCustomizeMenu({ restoreFocus: true });
+      this.closeSessionGroupMenu({ restoreFocus: true });
+      this.closeSessionSortMenu({ restoreFocus: true });
+      return;
+    }
+    this.moveTransientMenuFocus(event);
   };
+
+  private moveTransientMenuFocus(event: KeyboardEvent) {
+    const menu = this.querySelector<HTMLElement>(
+      ".sidebar-customize-menu, .sidebar-session-group-menu, .sidebar-session-sort-menu",
+    );
+    if (!menu) {
+      return;
+    }
+    const items = Array.from(
+      menu.querySelectorAll<HTMLElement>(
+        '[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]',
+      ),
+    ).filter((item) => !item.matches(":disabled"));
+    if (items.length === 0) {
+      return;
+    }
+    const activeIndex = items.indexOf(document.activeElement as HTMLElement);
+    let nextIndex: number;
+    if (event.key === "ArrowDown") {
+      nextIndex = (activeIndex + 1) % items.length;
+    } else if (event.key === "ArrowUp") {
+      nextIndex = activeIndex <= 0 ? items.length - 1 : activeIndex - 1;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = items.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    items[nextIndex]?.focus();
+  }
 
   private togglePinnedRoute(routeId: SidebarNavRoute) {
     const pinned = this.sidebarPinnedRoutes;
@@ -962,6 +1021,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               type="button"
               class="sidebar-customize-menu__item"
               role="menuitemcheckbox"
+              tabindex="-1"
               aria-checked=${String(pinned)}
               @click=${() => this.togglePinnedRoute(routeId)}
             >
@@ -980,6 +1040,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           type="button"
           class="sidebar-customize-menu__item"
           role="menuitem"
+          tabindex="-1"
           @click=${() => {
             this.onUpdatePinnedRoutes?.([...DEFAULT_SIDEBAR_PINNED_ROUTES]);
             this.closeCustomizeMenu({ restoreFocus: true });
@@ -1082,6 +1143,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           type="button"
           class="session-menu__item"
           role="menuitem"
+          tabindex="-1"
           ?disabled=${!this.connected}
           @click=${() => {
             this.closeSessionGroupMenu();
@@ -1095,6 +1157,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           type="button"
           class="session-menu__item"
           role="menuitem"
+          tabindex="-1"
           @click=${() => {
             this.closeSessionGroupMenu();
             this.createSessionGroup();
@@ -1108,6 +1171,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           type="button"
           class="session-menu__item session-menu__item--destructive"
           role="menuitem"
+          tabindex="-1"
           ?disabled=${!this.connected}
           @click=${() => {
             this.closeSessionGroupMenu();
@@ -1144,6 +1208,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               type="button"
               class="sidebar-session-sort-menu__item"
               role="menuitemradio"
+              tabindex="-1"
               aria-checked=${String(this.sessionsGrouping === option.grouping)}
               @click=${() => {
                 this.setSessionsGrouping(option.grouping);
@@ -1165,6 +1230,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               type="button"
               class="sidebar-session-sort-menu__item"
               role="menuitemradio"
+              tabindex="-1"
               aria-checked=${String(this.sessionSortMode === option.mode)}
               @click=${() => {
                 this.sessionSortMode = option.mode;

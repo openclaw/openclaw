@@ -103,6 +103,28 @@ function mockSuccessfulClaudeJsonlRun() {
   );
 }
 
+function createCancelableLiveRunLifecycle() {
+  let resolveExit!: (exit: RunExit) => void;
+  const exited = new Promise<RunExit>((resolve) => {
+    resolveExit = resolve;
+  });
+  return {
+    wait: vi.fn(() => exited),
+    cancel: vi.fn((_reason?: string) => {
+      resolveExit({
+        reason: "manual-cancel",
+        exitCode: null,
+        exitSignal: null,
+        durationMs: 1,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    }),
+  };
+}
+
 function buildPreparedCliRunContext(params: {
   provider: "claude-cli" | "codex-cli" | "google-gemini-cli";
   model: string;
@@ -631,6 +653,24 @@ describe("runCliAgent spawn path", () => {
     expect(resolveArgsInput.baseArgs).toEqual(["-p", "--output-format", "stream-json"]);
     const input = mockCallArg(supervisorSpawnMock) as { argv?: string[] };
     expect(requireArgAfter(input.argv, "--effort")).toBe("high");
+  });
+
+  it("maps Ultra to the strongest generic CLI backend level", async () => {
+    mockSuccessfulClaudeJsonlRun();
+    const resolveExecutionArgs = vi.fn(({ baseArgs }) => baseArgs);
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-claude-ultra-args",
+        thinkLevel: "ultra",
+        resolveExecutionArgs,
+      }),
+    );
+
+    const resolveArgsInput = requireRecord(mockCallArg(resolveExecutionArgs), "resolved args");
+    expect(resolveArgsInput.thinkingLevel).toBe("max");
   });
 
   it("passes prepared backend env to the spawned CLI process", async () => {
@@ -2700,6 +2740,7 @@ ${JSON.stringify({
       }),
       end: vi.fn(),
     };
+    const liveRunLifecycle = createCancelableLiveRunLifecycle();
     supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
       const input = (args[0] ?? {}) as {
         env?: Record<string, string>;
@@ -2712,8 +2753,7 @@ ${JSON.stringify({
         pid: 3061,
         startedAtMs: Date.now(),
         stdin,
-        wait: vi.fn(() => new Promise(() => {})),
-        cancel: vi.fn(),
+        ...liveRunLifecycle,
       };
     });
     const context = buildPreparedCliRunContext({
@@ -2742,6 +2782,7 @@ ${JSON.stringify({
         deniedReason: "plugin-approval",
       },
     ]);
+    expect(liveRunLifecycle.cancel).toHaveBeenCalledWith("manual-cancel");
   });
 
   it("keeps identical parallel Claude live tool outcomes explicitly unknown", async () => {
@@ -2822,6 +2863,7 @@ ${JSON.stringify({
       }),
       end: vi.fn(),
     };
+    const liveRunLifecycle = createCancelableLiveRunLifecycle();
     supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
       const input = (args[0] ?? {}) as {
         env?: Record<string, string>;
@@ -2834,8 +2876,7 @@ ${JSON.stringify({
         pid: 3062,
         startedAtMs: Date.now(),
         stdin,
-        wait: vi.fn(() => new Promise(() => {})),
-        cancel: vi.fn(),
+        ...liveRunLifecycle,
       };
     });
     const context = buildPreparedCliRunContext({
@@ -2870,6 +2911,7 @@ ${JSON.stringify({
         errorCode: "tool_outcome_unknown",
       },
     ]);
+    expect(liveRunLifecycle.cancel).toHaveBeenCalledWith("manual-cancel");
   });
 
   it.each([

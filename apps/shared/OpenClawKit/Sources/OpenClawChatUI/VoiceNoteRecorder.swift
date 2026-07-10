@@ -29,7 +29,9 @@ public protocol VoiceNoteAudioCapture: AnyObject {
 
 extension VoiceNoteAudioCapture {
     /// Metering is a UI nicety; test captures may skip it.
-    public func currentLevel() -> Double? { nil }
+    public func currentLevel() -> Double? {
+        nil
+    }
 }
 
 /// A completed voice-note recording ready to stage as a chat attachment.
@@ -98,7 +100,9 @@ public final class OpenClawVoiceNoteRecorder {
     }
 
     public var isRecording: Bool {
-        if case .recording = self.state { return true }
+        if case .recording = self.state {
+            return true
+        }
         return false
     }
 
@@ -151,7 +155,7 @@ public final class OpenClawVoiceNoteRecorder {
     public func start() async -> Bool {
         guard self.state == .idle || self.errorMessage != nil else { return false }
         guard self.captureAdmissionHandler() else {
-            self.fail(message: String(localized: "Push-to-talk is using the microphone."))
+            self.fail(message: String(localized: "Another feature is using the microphone."))
             return false
         }
 
@@ -199,7 +203,9 @@ public final class OpenClawVoiceNoteRecorder {
     /// Cancels permission or capture and removes any temporary audio file.
     public func cancel() {
         // The chat view model owns the file after claiming the handoff.
-        if case .staging = self.state { return }
+        if case .staging = self.state {
+            return
+        }
         let fileURL: URL? = switch self.state {
         case let .recording(_, fileURL):
             fileURL

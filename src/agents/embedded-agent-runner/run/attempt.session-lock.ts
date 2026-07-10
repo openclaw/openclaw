@@ -1203,6 +1203,11 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   // An aborted prompt can settle after attempt teardown. Never let its finally
   // path reacquire a retained lock that no owner remains to release.
   let disposed = false;
+  // Prompt-finally reacquisition can overlap attempt cleanup. Serialize that
+  // ownership handoff so cleanup adopts an in-flight reacquire, and skip any
+  // later reacquire once cleanup has begun or it could orphan a retained lock.
+  let lockLifecycle: Promise<void> = Promise.resolve();
+  let cleanupStarted = false;
   // Set when an active retained write prevents immediate held-lock release.
   // The scope completion path retries release after the retained use unwinds.
   let releaseHeldLockDeferred = false;
@@ -1213,6 +1218,15 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   const heldLockDrainWaiters = new Set<() => void>();
   const sessionFileFenceKey = resolveSessionFileFenceKey(params.lockOptions.sessionFile);
   const controllerFenceId = Symbol(sessionFileFenceKey);
+
+  function runLockLifecycle<T>(run: () => Promise<T>): Promise<T> {
+    const operation = lockLifecycle.then(run);
+    lockLifecycle = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
+  }
 
   function setFenceGeneration(generation: number): void {
     fenceGeneration = generation;
@@ -2025,47 +2039,63 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       return result;
     },
     async reacquireAfterPrompt(): Promise<void> {
-      await waitForHeldLockDrain();
-      if (disposed || takeoverDetected || heldLock) {
+      if (cleanupStarted) {
         return;
       }
-      const lock = await acquireLock();
-      if (disposed) {
-        await lock.release();
-        return;
-      }
-      try {
-        heldLock = lock;
-        await assertSessionFileFence();
-      } catch (err) {
-        heldLock = undefined;
-        await lock.release();
-        throw err;
-      }
+      await runLockLifecycle(async () => {
+        await waitForHeldLockDrain();
+        if (disposed || takeoverDetected || heldLock) {
+          return;
+        }
+        let lock: SessionLock;
+        try {
+          lock = await acquireLock();
+        } catch (err) {
+          if (isSessionWriteLockAcquireError(err)) {
+            takeoverDetected = true;
+          }
+          throw err;
+        }
+        if (disposed) {
+          await lock.release();
+          return;
+        }
+        try {
+          heldLock = lock;
+          await assertSessionFileFence();
+        } catch (err) {
+          heldLock = undefined;
+          await lock.release();
+          throw err;
+        }
+      });
     },
     waitForSessionEvents: waitForSessionEventQueue,
     withSessionWriteLock,
     async acquireForCleanup(cleanupParams?: { session?: unknown }): Promise<SessionLock> {
+      cleanupStarted = true;
       if (cleanupParams?.session) {
         await waitForSessionEventQueue(cleanupParams.session);
       }
-      if (takeoverDetected) {
-        return noopLock;
-      }
-      const cleanupLock = await acquireCleanupLock();
-      if (!cleanupLock) {
-        return noopLock;
-      }
-      try {
-        await assertSessionFileFence();
-      } catch (err) {
-        await cleanupLock.release();
-        if (err instanceof EmbeddedAttemptSessionTakeoverError) {
+      return await runLockLifecycle(async () => {
+        if (takeoverDetected) {
           return noopLock;
         }
-        throw err;
-      }
-      return cleanupLock;
+        const cleanupLock = await acquireCleanupLock();
+        if (!cleanupLock) {
+          return noopLock;
+        }
+        try {
+          await assertSessionFileFence();
+        } catch (err) {
+          await cleanupLock.release();
+          if (err instanceof EmbeddedAttemptSessionTakeoverError) {
+            return noopLock;
+          }
+          throw err;
+        }
+        return cleanupLock;
+      });
     },
     hasSessionTakeover(): boolean {
       return takeoverDetected;
