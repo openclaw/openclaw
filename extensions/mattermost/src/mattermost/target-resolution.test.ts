@@ -88,22 +88,60 @@ describe("mattermost target resolution", () => {
     expect(fetchMattermostUser).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to channel targets on 404 lookups", async () => {
+  it("falls back to channel targets on 404 lookups and caches the result", async () => {
     createMattermostClient.mockReturnValue({ client: true });
     fetchMattermostUser.mockRejectedValue(new Error("Mattermost API 404 Not Found"));
     const input = "bcde1234abcd1234abcd1234ab";
+    const params = {
+      input,
+      token: "token",
+      baseUrl: "https://mm.example.com",
+    };
 
-    await expect(
-      resolveMattermostOpaqueTarget({
-        input,
-        token: "token",
-        baseUrl: "https://mm.example.com",
-      }),
-    ).resolves.toEqual({
+    await expect(resolveMattermostOpaqueTarget(params)).resolves.toEqual({
       kind: "channel",
       id: input,
       to: `channel:${input}`,
     });
+    await expect(resolveMattermostOpaqueTarget(params)).resolves.toEqual({
+      kind: "channel",
+      id: input,
+      to: `channel:${input}`,
+    });
+
+    expect(createMattermostClient).toHaveBeenCalledTimes(1);
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(1);
+  });
+
+  it("evicts in insertion order after the opaque cache reaches its cap", async () => {
+    createMattermostClient.mockReturnValue({ client: true });
+    const baseUrl = "https://mm.example.com";
+    const token = "opaque-cache-token";
+    const firstId = "0".repeat(26);
+    const idFor = (index: number) => index.toString(36).padStart(26, "0");
+
+    fetchMattermostUser.mockRejectedValueOnce(new Error("Mattermost API 404 Not Found"));
+    await expect(
+      resolveMattermostOpaqueTarget({ input: firstId, token, baseUrl }),
+    ).resolves.toMatchObject({ kind: "channel" });
+
+    fetchMattermostUser.mockResolvedValue({ id: "user" });
+    for (let index = 1; index < 1024; index += 1) {
+      await resolveMattermostOpaqueTarget({ input: idFor(index), token, baseUrl });
+    }
+    await resolveMattermostOpaqueTarget({ input: firstId, token, baseUrl });
+    await resolveMattermostOpaqueTarget({ input: idFor(1024), token, baseUrl });
+
+    fetchMattermostUser.mockClear();
+    fetchMattermostUser.mockRejectedValueOnce(new Error("Mattermost API 404 Not Found"));
+    await expect(
+      resolveMattermostOpaqueTarget({ input: firstId, token, baseUrl }),
+    ).resolves.toMatchObject({ kind: "channel" });
+    await expect(
+      resolveMattermostOpaqueTarget({ input: idFor(1024), token, baseUrl }),
+    ).resolves.toMatchObject({ kind: "user" });
+
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(1);
   });
 
   it("uses account resolution when token/base url are not passed", async () => {

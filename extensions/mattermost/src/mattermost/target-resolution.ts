@@ -1,4 +1,5 @@
 // Mattermost plugin module implements target resolution behavior.
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMattermostAccount } from "./accounts.js";
@@ -15,7 +16,14 @@ type MattermostOpaqueTargetResolution = {
   to: string;
 };
 
+const MATTERMOST_OPAQUE_TARGET_CACHE_MAX_ENTRIES = 1024;
 const mattermostOpaqueTargetCache = new Map<string, boolean>();
+
+function cacheMattermostOpaqueTarget(key: string, value: boolean): void {
+  mattermostOpaqueTargetCache.set(key, value);
+  // Keep the newest resolved IDs while bounding process-lifetime retention.
+  pruneMapToMaxSize(mattermostOpaqueTargetCache, MATTERMOST_OPAQUE_TARGET_CACHE_MAX_ENTRIES);
+}
 
 function cacheKey(baseUrl: string, token: string, id: string): string {
   return `${baseUrl}::${token}::${id}`;
@@ -89,11 +97,11 @@ export async function resolveMattermostOpaqueTarget(params: {
   });
   try {
     await fetchMattermostUser(client, input);
-    mattermostOpaqueTargetCache.set(key, true);
+    cacheMattermostOpaqueTarget(key, true);
     return { kind: "user", id: input, to: `user:${input}` };
   } catch (err) {
     if (parseMattermostApiStatus(err) === 404) {
-      mattermostOpaqueTargetCache.set(key, false);
+      cacheMattermostOpaqueTarget(key, false);
     }
     return { kind: "channel", id: input, to: `channel:${input}` };
   }
