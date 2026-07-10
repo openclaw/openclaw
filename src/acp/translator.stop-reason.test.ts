@@ -621,7 +621,10 @@ describe("acp translator stop reason mapping", () => {
   });
 
   it("emits the full revised text on a replace delta, not a byte-offset slice", async () => {
-    const sessionUpdate = vi.fn(async (_params?: Record<string, unknown>) => {});
+    const sessionUpdateCalls: Record<string, unknown>[] = [];
+    const sessionUpdate = vi.fn(async (params: Record<string, unknown>) => {
+      sessionUpdateCalls.push(params);
+    });
     const connection = createAcpConnection();
     connection.sessionUpdate = sessionUpdate as typeof connection.sessionUpdate;
     const sessionStore = createInMemorySessionStore();
@@ -663,9 +666,9 @@ describe("acp translator stop reason mapping", () => {
     );
     await Promise.resolve();
 
-    const appendChunks = sessionUpdate.mock.calls
-      .map((call) => call[0])
-      .filter((p) => p?.update?.sessionUpdate === "agent_message_chunk");
+    const appendChunks = sessionUpdateCalls.filter(
+      (p) => p?.update?.sessionUpdate === "agent_message_chunk",
+    );
     expect(appendChunks).toHaveLength(1);
     expect(appendChunks[0].update.content.text).toBe("Hello world");
 
@@ -684,9 +687,9 @@ describe("acp translator stop reason mapping", () => {
     );
     await Promise.resolve();
 
-    const allChunks = sessionUpdate.mock.calls
-      .map((call) => call[0])
-      .filter((p) => p?.update?.sessionUpdate === "agent_message_chunk");
+    const allChunks = sessionUpdateCalls.filter(
+      (p) => p?.update?.sessionUpdate === "agent_message_chunk",
+    );
     expect(allChunks).toHaveLength(2);
     // The replace delta must emit the FULL new text, not a byte-offset slice.
     // "Goodbye world".slice(11) would be "d" (corrupted), but the fix emits all 13 chars.
@@ -705,7 +708,10 @@ describe("acp translator stop reason mapping", () => {
   });
 
   it("emits the full revised text on a replace delta for a shorter revision", async () => {
-    const sessionUpdate = vi.fn(async (_params?: Record<string, unknown>) => {});
+    const sessionUpdateCalls: Record<string, unknown>[] = [];
+    const sessionUpdate = vi.fn(async (params: Record<string, unknown>) => {
+      sessionUpdateCalls.push(params);
+    });
     const connection = createAcpConnection();
     connection.sessionUpdate = sessionUpdate as typeof connection.sessionUpdate;
     const sessionStore = createInMemorySessionStore();
@@ -747,9 +753,9 @@ describe("acp translator stop reason mapping", () => {
     );
     await Promise.resolve();
 
-    const appendChunks = sessionUpdate.mock.calls
-      .map((call) => call[0])
-      .filter((p) => p?.update?.sessionUpdate === "agent_message_chunk");
+    const appendChunks = sessionUpdateCalls.filter(
+      (p) => p?.update?.sessionUpdate === "agent_message_chunk",
+    );
     expect(appendChunks).toHaveLength(1);
     expect(appendChunks[0].update.content.text).toBe("Hello world!");
 
@@ -768,9 +774,9 @@ describe("acp translator stop reason mapping", () => {
     );
     await Promise.resolve();
 
-    const allChunks = sessionUpdate.mock.calls
-      .map((call) => call[0])
-      .filter((p) => p?.update?.sessionUpdate === "agent_message_chunk");
+    const allChunks = sessionUpdateCalls.filter(
+      (p) => p?.update?.sessionUpdate === "agent_message_chunk",
+    );
     expect(allChunks).toHaveLength(2);
     // Before the fix, "Hi".length (2) <= sentSoFar (12) would return early and
     // emit nothing. After the fix, the full "Hi" is emitted.
