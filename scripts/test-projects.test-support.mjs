@@ -1663,7 +1663,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   [
     "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs",
-    ["test/scripts/docker-build-helper.test.ts"],
+    ["test/scripts/codex-install-assertions.test.ts", "test/scripts/docker-build-helper.test.ts"],
   ],
   ["scripts/e2e/lib/codex-install-utils.mjs", ["test/scripts/codex-install-assertions.test.ts"]],
   [
@@ -3267,7 +3267,11 @@ function resolveDocsI18nGoTargets(changedPath) {
   if (!/^scripts\/docs-i18n\/(?:go\.(?:mod|sum)|[^/]+\.go)$/u.test(changedPath)) {
     return null;
   }
-  return ["test/scripts/docs-i18n.test.ts"];
+  const targets = ["test/scripts/docs-i18n.test.ts"];
+  if (changedPath === "scripts/docs-i18n/go.mod") {
+    targets.push("test/scripts/ci-workflow-guards.test.ts");
+  }
+  return targets;
 }
 
 function resolveK8sManifestTargets(changedPath) {

@@ -1,4 +1,5 @@
 // Package Acceptance Workflow tests cover package acceptance workflow script behavior.
+import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -55,6 +56,14 @@ type WorkflowStep = {
   with?: Record<string, string>;
 };
 
+type WorkflowMatrixEntry = {
+  advisory?: boolean;
+  command?: string;
+  profiles?: string;
+  suite_group?: string;
+  suite_id?: string;
+};
+
 type WorkflowJob = {
   concurrency?: {
     group?: string;
@@ -66,6 +75,11 @@ type WorkflowJob = {
   needs?: string | string[];
   permissions?: Record<string, string>;
   "runs-on"?: string;
+  strategy?: {
+    matrix?: {
+      include?: WorkflowMatrixEntry[];
+    };
+  };
   "timeout-minutes"?: number | string;
   steps?: WorkflowStep[];
 };
@@ -105,6 +119,16 @@ function workflowStep(job: WorkflowJob, stepName: string): WorkflowStep {
   return step;
 }
 
+function workflowMatrixEntry(path: string, jobName: string, suiteId: string): WorkflowMatrixEntry {
+  const entry = workflowJob(path, jobName).strategy?.matrix?.include?.find(
+    (candidate) => candidate.suite_id === suiteId,
+  );
+  if (!entry) {
+    throw new Error(`Expected workflow matrix entry ${suiteId} in ${jobName}`);
+  }
+  return entry;
+}
+
 function expectTextToIncludeAll(text: string | undefined, snippets: string[]): void {
   if (text === undefined) {
     throw new Error("Expected text to be defined before checking snippets");
@@ -112,6 +136,30 @@ function expectTextToIncludeAll(text: string | undefined, snippets: string[]): v
   for (const snippet of snippets) {
     expect(text).toContain(snippet);
   }
+}
+
+function runPackageAcceptanceSummary(params: {
+  advisory?: boolean;
+  telegramEnabled: boolean;
+  telegramResult: string;
+}) {
+  const summary = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "summary");
+  const script = workflowStep(summary, "Verify package acceptance results").run;
+  if (!script) {
+    throw new Error("Expected package acceptance summary script");
+  }
+  return spawnSync("bash", ["-c", script], {
+    encoding: "utf8",
+    env: {
+      ADVISORY: String(params.advisory ?? false),
+      DOCKER_RESULT: "success",
+      PACKAGE_INTEGRITY_RESULT: "success",
+      PACKAGE_TELEGRAM_RESULT: params.telegramResult,
+      PATH: process.env.PATH,
+      RESOLVE_RESULT: "success",
+      TELEGRAM_ENABLED: String(params.telegramEnabled),
+    },
+  });
 }
 
 describe("package acceptance workflow", () => {
@@ -668,7 +716,7 @@ describe("package acceptance workflow", () => {
 
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
     const retryCalls = workflow.split("\n").filter((line) => line.includes("gh_with_retry "));
-    expect(retryCalls).toHaveLength(28);
+    expect(retryCalls).toHaveLength(30);
     for (const call of retryCalls) {
       expect(call).toMatch(/gh_with_retry (api|run view)/u);
     }
@@ -1032,8 +1080,6 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_group: native-live-extensions-media-video");
     expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,minimax");
     expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=openai,openrouter,xai");
-    expect(workflow).toContain("suite_group: native-live-src-gateway-profiles-opencode-go");
-    expect(workflow).toContain("opencode-go/mimo-v2-omni");
     expect(workflow).toContain(
       "inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic'",
     );
@@ -1053,6 +1099,47 @@ describe("package artifact reuse", () => {
     expect(
       workflow.match(/moonshot\) require_any Moonshot MOONSHOT_API_KEY KIMI_API_KEY ;;/gu),
     ).toHaveLength(2);
+  });
+
+  it("pins DeepSeek live profiles to both current V4 model refs", () => {
+    const deepSeek = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-deepseek",
+    );
+    const openCodeGo = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-opencode-go-deepseek-glm",
+    );
+
+    expect(deepSeek).toMatchObject({
+      advisory: true,
+      command:
+        "OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek OPENCLAW_LIVE_GATEWAY_MODELS=deepseek/deepseek-v4-flash,deepseek/deepseek-v4-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
+      profiles: "full",
+    });
+    expect(openCodeGo.command).toContain(
+      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/deepseek-v4-flash,opencode-go/deepseek-v4-pro",
+    );
+  });
+
+  it("pins OpenCode Go MiMo live profiles to both current V2.5 model refs", () => {
+    const mimo = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-opencode-go-mimo",
+    );
+
+    expect(mimo).toMatchObject({
+      advisory: true,
+      command:
+        "OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2.5,opencode-go/mimo-v2.5-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
+      profiles: "full",
+      suite_group: "native-live-src-gateway-profiles-opencode-go",
+    });
+    expect(mimo.command).not.toContain("opencode-go/mimo-v2-omni");
+    expect(mimo.command).not.toContain("opencode-go/mimo-v2-pro");
   });
 
   it("runs Docker live harnesses from trusted helper scripts", () => {
@@ -1773,6 +1860,42 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain("npm_telegram:");
   });
 
+  it.each([
+    { telegramEnabled: true, telegramResult: "success" },
+    { telegramEnabled: false, telegramResult: "skipped" },
+  ])(
+    "accepts Telegram result $telegramResult when enabled=$telegramEnabled",
+    ({ telegramEnabled, telegramResult }) => {
+      const result = runPackageAcceptanceSummary({ telegramEnabled, telegramResult });
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+    },
+  );
+
+  it("rejects a skipped Telegram lane when package acceptance enabled it", () => {
+    const result = runPackageAcceptanceSummary({
+      telegramEnabled: true,
+      telegramResult: "skipped",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("::error::package_telegram ended with skipped");
+  });
+
+  it("preserves advisory handling for an unexpectedly skipped Telegram lane", () => {
+    const result = runPackageAcceptanceSummary({
+      advisory: true,
+      telegramEnabled: true,
+      telegramResult: "skipped",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "::warning::package_telegram ended with skipped; package acceptance is advisory for this caller.",
+    );
+  });
+
   it("gives release build steps enough Node heap", () => {
     for (const workflowPath of [LIVE_E2E_WORKFLOW, RELEASE_CHECKS_WORKFLOW]) {
       const jobs = readWorkflow(workflowPath).jobs ?? {};
@@ -1831,7 +1954,7 @@ describe("package artifact reuse", () => {
       'args+=(-f cross_os_suite_filter="$CROSS_OS_SUITE_FILTER")',
       'case "$RERUN_GROUP" in',
       "release-checks|install-smoke|cross-os|live-e2e|package|qa|qa-parity|qa-live)",
-      "cancel-in-progress: ${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') }}",
+      "cancel-in-progress: ${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') || startsWith(inputs.ref, 'release/') }}",
       "Verify release checks accepted Tideclaw alpha advisory lanes",
       "release_checks_advisory_only",
       "release_check_blocking_job",
@@ -2086,9 +2209,9 @@ describe("package artifact reuse", () => {
     expect(fullReleaseWorkflow).toContain('OPENCLAW_EXTENSIONS="diagnostics-otel,codex"');
     expect(fullReleaseWorkflow).not.toContain("/app/src/agents/templates/HEARTBEAT.md");
     expect(fullReleaseWorkflow).toContain("inputs.rerun_group == 'all'");
-    expect(fullReleaseWorkflow).toContain(
-      "needs.docker_runtime_assets_preflight.result == 'success'",
-    );
+    // The preflight no longer gates lane dispatch; the umbrella verifier
+    // enforces its result instead.
+    expect(fullReleaseWorkflow).toContain('"$DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT" != "success"');
     expect(npmWorkflow).toContain("full_release_validation_run_id");
     expect(npmWorkflow).toContain("release_publish_run_id");
     expect(npmWorkflow).toContain("Real publish requires full_release_validation_run_id");
