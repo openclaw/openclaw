@@ -50,28 +50,81 @@ describe("release candidate checklist", () => {
     expect(output).toHaveLength(2 * 1024 * 1024);
   });
 
-  it("requires candidate tooling to come from the clean tagged checkout", () => {
+  it("keeps the frozen release target separate from clean trusted workflow tooling", () => {
     expect(
       validateCandidateCheckout({
         targetSha: "a".repeat(40),
-        headSha: "a".repeat(40),
-        trackedStatus: "",
+        targetHeadSha: "a".repeat(40),
+        targetTrackedStatus: "",
+        toolingSha: "b".repeat(40),
+        trustedToolingSha: "b".repeat(40),
+        toolingTrackedStatus: "",
+        workflowRef: "main",
       }),
-    ).toEqual({ status: "passed", targetSha: "a".repeat(40) });
+    ).toEqual({
+      status: "passed",
+      targetSha: "a".repeat(40),
+      toolingSha: "b".repeat(40),
+      workflowRef: "main",
+    });
     expect(() =>
       validateCandidateCheckout({
         targetSha: "a".repeat(40),
-        headSha: "b".repeat(40),
-        trackedStatus: "",
+        targetHeadSha: "c".repeat(40),
+        targetTrackedStatus: "",
+        toolingSha: "b".repeat(40),
+        trustedToolingSha: "b".repeat(40),
+        toolingTrackedStatus: "",
+        workflowRef: "main",
       }),
-    ).toThrow("but HEAD is");
+    ).toThrow("target worktree HEAD");
     expect(() =>
       validateCandidateCheckout({
         targetSha: "a".repeat(40),
-        headSha: "a".repeat(40),
-        trackedStatus: " M scripts/release-candidate-checklist.mjs",
+        targetHeadSha: "a".repeat(40),
+        targetTrackedStatus: " M package.json",
+        toolingSha: "b".repeat(40),
+        trustedToolingSha: "b".repeat(40),
+        toolingTrackedStatus: "",
+        workflowRef: "main",
       }),
-    ).toThrow("requires a clean tracked worktree");
+    ).toThrow("clean tracked target worktree");
+    expect(() =>
+      validateCandidateCheckout({
+        targetSha: "a".repeat(40),
+        targetHeadSha: "a".repeat(40),
+        targetTrackedStatus: "",
+        toolingSha: "b".repeat(40),
+        trustedToolingSha: "c".repeat(40),
+        toolingTrackedStatus: "",
+        workflowRef: "main",
+      }),
+    ).toThrow("does not match trusted main");
+    expect(() =>
+      validateCandidateCheckout({
+        targetSha: "a".repeat(40),
+        targetHeadSha: "a".repeat(40),
+        targetTrackedStatus: "",
+        toolingSha: "b".repeat(40),
+        trustedToolingSha: "b".repeat(40),
+        toolingTrackedStatus: " M scripts/release-candidate-checklist.mjs",
+        workflowRef: "main",
+      }),
+    ).toThrow("clean tracked tooling checkout");
+    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    expect(source).toContain('const TOOLING_ROOT = fileURLToPath(new URL("../", import.meta.url))');
+    expect(source).toContain("`+refs/heads/${workflowRef}:${remoteRef}`");
+    expect(source).toContain('"worktree", "add", "--detach", toolingRoot, trustedToolingSha');
+    expect(source).toContain(
+      '[join(toolingRoot, "scripts/release-candidate-checklist.mjs"), ...argv]',
+    );
+    expect(source).toContain("cwd: targetRoot");
+    expect(source).toContain('"worktree", "remove", "--force", toolingRoot');
+    expect(source).toContain(
+      "const trustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT)",
+    );
+    expect(source).toContain('targetHeadSha: gitRevParse("HEAD", targetRoot)');
+    expect(source).toContain("toolingTrackedStatus: gitTrackedStatus(TOOLING_ROOT)");
   });
 
   it("validates the exact tag changelog before dispatching the release matrix", () => {

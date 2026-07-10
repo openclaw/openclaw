@@ -66,6 +66,8 @@ describe("release wrapper scripts", () => {
       "v2026.6.21-beta.1",
       "--release-sha",
       "a".repeat(40),
+      "--release-publish-run-attempt",
+      "1",
       "--release-publish-run-id",
       "123",
     ]);
@@ -88,6 +90,8 @@ describe("release wrapper scripts", () => {
         releaseSha,
         "--release-publish-branch",
         "main",
+        "--release-publish-run-attempt",
+        "1",
         "--release-publish-run-id",
         "123",
         "--plugin-publish-scope",

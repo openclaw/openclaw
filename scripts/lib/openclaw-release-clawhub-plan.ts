@@ -26,6 +26,7 @@ type OpenClawReleaseClawHubPlanArgs = {
   releaseTag: string;
   releaseSha: string;
   releasePublishBranch: string;
+  releasePublishRunAttempt: string;
   releasePublishRunId: string;
   pluginPublishScope: PluginReleaseSelectionMode;
   plugins: string[];
@@ -95,6 +96,14 @@ function requireCommitSha(value: string | undefined, label: string): string {
   return sha;
 }
 
+function requirePositiveInteger(value: string | undefined, label: string): string {
+  const result = requireArg(value, label);
+  if (!/^[1-9][0-9]*$/u.test(result)) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+  return result;
+}
+
 function runUrl(repository: string, runId: string): string {
   return `https://github.com/${repository}/actions/runs/${runId}`;
 }
@@ -119,6 +128,8 @@ function createDispatchTarget(params: {
   releasePublishRunId: string;
   releasePublishBranch: string;
   includePublishScope: boolean;
+  releaseTag?: string;
+  releasePublishRunAttempt?: string;
   targetRef?: string;
 }): ClawHubDispatchTarget {
   if (params.packages.length === 0) {
@@ -140,6 +151,10 @@ function createDispatchTarget(params: {
     inputs: {
       ...(params.includePublishScope ? { publish_scope: "selected" } : {}),
       ...(params.targetRef ? { ref: params.targetRef } : {}),
+      ...(params.releaseTag ? { release_tag: params.releaseTag } : {}),
+      ...(params.releasePublishRunAttempt
+        ? { release_publish_run_attempt: params.releasePublishRunAttempt }
+        : {}),
       plugins,
       release_publish_run_id: params.releasePublishRunId,
       release_publish_branch: params.releasePublishBranch,
@@ -207,6 +222,7 @@ export function parseOpenClawReleaseClawHubPlanArgs(
   let releaseTag: string | undefined;
   let releaseSha: string | undefined;
   let releasePublishBranch: string | undefined;
+  let releasePublishRunAttempt: string | undefined;
   let releasePublishRunId: string | undefined;
   let pluginPublishScope: PluginReleaseSelectionMode | undefined;
   let plugins: string[] = [];
@@ -232,6 +248,9 @@ export function parseOpenClawReleaseClawHubPlanArgs(
         break;
       case "--release-publish-branch":
         releasePublishBranch = next();
+        break;
+      case "--release-publish-run-attempt":
+        releasePublishRunAttempt = next();
         break;
       case "--release-publish-run-id":
         releasePublishRunId = next();
@@ -263,6 +282,10 @@ export function parseOpenClawReleaseClawHubPlanArgs(
     releaseTag: requireArg(releaseTag, "--release-tag"),
     releaseSha: requireCommitSha(releaseSha, "--release-sha"),
     releasePublishBranch: requireArg(releasePublishBranch, "--release-publish-branch"),
+    releasePublishRunAttempt: requirePositiveInteger(
+      releasePublishRunAttempt,
+      "--release-publish-run-attempt",
+    ),
     releasePublishRunId: requireArg(releasePublishRunId, "--release-publish-run-id"),
     pluginPublishScope: resolvedPluginPublishScope,
     plugins,
@@ -280,6 +303,10 @@ export async function buildOpenClawReleaseClawHubPlan(
   const releaseTag = requireArg(args.releaseTag, "releaseTag");
   const releaseSha = requireCommitSha(args.releaseSha, "releaseSha");
   const releasePublishBranch = requireArg(args.releasePublishBranch, "releasePublishBranch");
+  const releasePublishRunAttempt = requirePositiveInteger(
+    args.releasePublishRunAttempt,
+    "releasePublishRunAttempt",
+  );
   const releasePublishRunId = requireArg(args.releasePublishRunId, "releasePublishRunId");
   const plan = await collectPluginClawHubReleasePlan({
     rootDir: options.rootDir ?? resolve("."),
@@ -315,6 +342,8 @@ export async function buildOpenClawReleaseClawHubPlan(
       releasePublishRunId,
       releasePublishBranch,
       includePublishScope: false,
+      releaseTag,
+      releasePublishRunAttempt,
       targetRef: releaseSha,
     }),
     summary: {

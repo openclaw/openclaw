@@ -3155,6 +3155,7 @@ describe("package artifact reuse", () => {
       releasePublishJob,
       "Checkout trusted release tooling",
     );
+    const trustedClawHubPlan = workflowStep(releasePublishJob, "Resolve ClawHub release plan");
 
     expect(packageJson.scripts?.["release:verify-beta"]).toBe(
       "node --import tsx scripts/release-verify-beta.ts",
@@ -3284,6 +3285,19 @@ describe("package artifact reuse", () => {
     });
     expect(releaseWorkflow).toContain(
       '"${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-release-clawhub-plan.ts"',
+    );
+    expect(trustedClawHubPlan.run).toContain(
+      '"${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-release-clawhub-plan.ts"',
+    );
+    expect(trustedClawHubPlan.run).toContain('--release-sha "${TARGET_SHA}"');
+    expect(trustedClawHubPlan.run).toContain(
+      '--release-publish-run-attempt "${GITHUB_RUN_ATTEMPT}"',
+    );
+    expect(trustedClawHubPlan.run).not.toContain("cd .release-harness");
+    expect(releaseWorkflow).toContain("Attest ClawHub bootstrap approval");
+    expect(releaseWorkflow).toContain("Upload ClawHub bootstrap approval");
+    expect(releaseWorkflow).toContain(
+      "clawhub-bootstrap-approval-${{ github.run_id }}-${{ github.run_attempt }}",
     );
     expect(releaseWorkflow).toContain(
       '"${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-release-clawhub-runtime-state.ts"',
@@ -3436,6 +3450,15 @@ describe("package artifact reuse", () => {
       "Download and verify immutable ClawHub bootstrap artifact",
     );
     expect(clawHubNewWorkflow).toContain("Rehash immutable ClawHub bootstrap artifacts");
+    expect(clawHubNewWorkflow).toContain("Download parent ClawHub bootstrap approval");
+    expect(clawHubNewWorkflow).toContain("RELEASE_APPROVAL_KIND: clawhub-bootstrap");
+    expect(clawHubNewWorkflow).toContain("gh attestation verify");
+    expect(clawHubNewWorkflow).toContain(
+      "actions/runs/${RELEASE_PUBLISH_RUN_ID}/attempts/${EXPECTED_RUN_ATTEMPT}",
+    );
+    expect(clawHubNewWorkflow).toContain('--source-digest "${EXPECTED_WORKFLOW_SHA}"');
+    expect(clawHubNewWorkflow).toContain('git rev-parse "${RELEASE_TAG}^{commit}"');
+    expect(clawHubNewWorkflow).not.toContain("refs/remotes/origin/release");
     expect(clawHubNewWorkflow).toContain("Require configure-only registry bytes to match target");
     expect(clawHubNewWorkflow).toContain(
       "Reconfirm configure-only registry bytes before credentials",
@@ -3449,10 +3472,10 @@ describe("package artifact reuse", () => {
     expect(clawHubNewWorkflow).toContain("GitHub Actions immutable bootstrap retry");
     expect(clawHubNewWorkflow).toContain("configure-only");
     expect(clawHubNewWorkflow).toContain(
-      "EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}",
+      "EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch }}",
     );
     expect(clawHubNewWorkflow).toContain(
-      "TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}",
+      "TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch }}",
     );
     expect(clawHubNewWorkflow).toContain("trusted-publisher set");
     expect(clawHubNewWorkflow).toContain("--workflow-filename plugin-clawhub-release.yml");
@@ -3464,6 +3487,7 @@ describe("package artifact reuse", () => {
     expect(openclawNpmWorkflow).toContain("environment: npm-release");
     expect(releaseWorkflow).toContain("default: from-validation");
     expect(releaseWorkflow).toContain('--release-publish-branch "${CHILD_WORKFLOW_REF}"');
+    expect(releaseWorkflow).toContain('--release-publish-run-attempt "${GITHUB_RUN_ATTEMPT}"');
     expect(releaseWorkflow).toContain('--release-publish-run-id "${GITHUB_RUN_ID}"');
     expect(releaseWorkflow).toContain('--release-sha "${TARGET_SHA}"');
     expect(releaseWorkflow).toContain(

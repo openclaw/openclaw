@@ -8,16 +8,24 @@ on:
         required: true
         type: string
       ref:
-        description: Exact 40-character target commit SHA reachable from main, release/*, or the matching Tideclaw alpha branch
+        description: Exact 40-character target commit SHA approved by the parent release workflow
+        required: true
+        type: string
+      release_tag:
+        description: Exact release tag that must peel to ref
         required: true
         type: string
       release_publish_run_id:
         description: Approved OpenClaw Release Publish workflow run id
-        required: false
+        required: true
+        type: string
+      release_publish_run_attempt:
+        description: Exact approving OpenClaw Release Publish workflow run attempt
+        required: true
         type: string
       release_publish_branch:
         description: Branch name of the approving OpenClaw Release Publish workflow run
-        required: false
+        required: true
         type: string
       dry_run:
         description: Validate the token-gated ClawHub bootstrap handoff without publishing.
@@ -71,50 +79,31 @@ jobs:
       - name: Resolve checked-out ref
         id: ref
         env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
           TARGET_REF: ${{ inputs.ref }}
-          TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
         run: |
           set -euo pipefail
+          [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]] || {
+            echo "Plugin ClawHub bootstrap release_tag is invalid." >&2
+            exit 1
+          }
           [[ "${TARGET_REF}" =~ ^[a-f0-9]{40}$ ]] || {
             echo "Plugin ClawHub bootstrap ref must be a full lowercase commit SHA." >&2
             exit 1
           }
-          git fetch --no-tags origin \
-            +refs/heads/main:refs/remotes/origin/main \
-            '+refs/heads/release/*:refs/remotes/origin/release/*'
-          if [[ "${TRUSTED_PUBLISH_BRANCH}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
-            git fetch --no-tags origin \
-              "+refs/heads/${TRUSTED_PUBLISH_BRANCH}:refs/remotes/origin/${TRUSTED_PUBLISH_BRANCH}"
-          fi
+          git fetch --force --no-tags origin \
+            "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
           git cat-file -e "${TARGET_REF}^{commit}" || {
             echo "Unable to resolve requested publish ref: ${TARGET_REF}" >&2
             exit 1
           }
+          tag_sha="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          [[ "${tag_sha}" == "${TARGET_REF}" ]] || {
+            echo "Plugin ClawHub bootstrap target ${TARGET_REF} does not match ${RELEASE_TAG} (${tag_sha})." >&2
+            exit 1
+          }
           git checkout --detach "${TARGET_REF}"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Validate ref is on a trusted publish branch
-        env:
-          TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
-        run: |
-          set -euo pipefail
-          if git merge-base --is-ancestor HEAD origin/main; then
-            exit 0
-          fi
-          while IFS= read -r release_ref; do
-            if git merge-base --is-ancestor HEAD "${release_ref}"; then
-              exit 0
-            fi
-          done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
-          if [[ "${TRUSTED_PUBLISH_BRANCH}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
-            alpha_branch="${TRUSTED_PUBLISH_BRANCH}"
-            git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
-            if git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
-              exit 0
-            fi
-          fi
-          echo "Plugin ClawHub bootstraps must target a commit reachable from main, release/*, or the matching Tideclaw alpha branch." >&2
-          exit 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -217,7 +206,7 @@ jobs:
 
       - name: Validate Tideclaw alpha plugin channels
         env:
-          TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
+          TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch }}
         run: |
           set -euo pipefail
           if [[ ! "${TRUSTED_PUBLISH_BRANCH}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
@@ -244,8 +233,18 @@ jobs:
     timeout-minutes: 20
     permissions:
       actions: read
+      attestations: read
       contents: read
     steps:
+      - name: Download parent ClawHub bootstrap approval
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: clawhub-bootstrap-approval-${{ inputs.release_publish_run_id }}-${{ inputs.release_publish_run_attempt }}
+          path: ${{ runner.temp }}/clawhub-bootstrap-approval
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.release_publish_run_id }}
+          github-token: ${{ github.token }}
+
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -254,25 +253,45 @@ jobs:
 
       - name: Validate release publish approval run
         env:
+          APPROVAL_PATH: ${{ runner.temp }}/clawhub-bootstrap-approval/approval.json
           GH_TOKEN: ${{ github.token }}
+          RELEASE_APPROVAL_KIND: clawhub-bootstrap
+          RELEASE_PACKAGES: ${{ inputs.plugins }}
           RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
-          EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
+          EXPECTED_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
         run: |
           set -euo pipefail
-          if [[ -z "${RELEASE_PUBLISH_RUN_ID// }" ]]; then
-            if [[ "${GITHUB_ACTOR}" == "github-actions[bot]" ]]; then
-              echo "Plugin ClawHub bootstrap dispatched by another workflow must include release_publish_run_id." >&2
-              exit 1
-            fi
-            echo "Direct Plugin ClawHub New dispatch; relying on this workflow's clawhub-plugin-bootstrap environment approval."
-            exit 0
-          fi
           direct_recovery=false
           if [[ "${GITHUB_ACTOR}" != "github-actions[bot]" ]]; then
             direct_recovery=true
             echo "Direct Plugin ClawHub New recovery with release_publish_run_id; relying on this workflow's clawhub-plugin-bootstrap environment approval."
           fi
-          RUN_JSON="$(gh run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,status,conclusion,url)"
+          RUN_JSON="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_PUBLISH_RUN_ID}/attempts/${EXPECTED_RUN_ATTEMPT}" |
+              jq '{
+                workflowName: .name,
+                headBranch: .head_branch,
+                headSha: .head_sha,
+                event,
+                status,
+                conclusion,
+                url: .html_url,
+                runAttempt: .run_attempt
+              }'
+          )"
+          EXPECTED_WORKFLOW_SHA="$(
+            jq -er '.headSha | select(test("^[a-f0-9]{40}$"))' <<< "${RUN_JSON}"
+          )"
+          gh attestation verify "${APPROVAL_PATH}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/openclaw-release-publish.yml" \
+            --source-ref "refs/heads/${EXPECTED_WORKFLOW_BRANCH}" \
+            --source-digest "${EXPECTED_WORKFLOW_SHA}" \
+            --deny-self-hosted-runners
           printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
 
   validate_bootstrap_trusted_publisher_cli:
@@ -349,17 +368,17 @@ jobs:
 
       - name: Checkout target revision
         env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
           TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
-          TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin \
-            +refs/heads/main:refs/remotes/origin/main \
-            '+refs/heads/release/*:refs/remotes/origin/release/*'
-          if [[ "${TRUSTED_PUBLISH_BRANCH}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
-            git fetch --no-tags origin \
-              "+refs/heads/${TRUSTED_PUBLISH_BRANCH}:refs/remotes/origin/${TRUSTED_PUBLISH_BRANCH}"
-          fi
+          git fetch --force --no-tags origin \
+            "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          tag_sha="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          [[ "${tag_sha}" == "${TARGET_SHA}" ]] || {
+            echo "Plugin ClawHub bootstrap target ${TARGET_SHA} does not match ${RELEASE_TAG} (${tag_sha})." >&2
+            exit 1
+          }
           git checkout --detach "${TARGET_SHA}"
 
       - name: Checkout trusted workflow tooling

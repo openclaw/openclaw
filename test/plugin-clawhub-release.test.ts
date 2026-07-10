@@ -1059,6 +1059,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
         releaseTag: "v2026.4.1-beta.1",
         releaseSha: "a".repeat(40),
         releasePublishBranch: "main",
+        releasePublishRunAttempt: "2",
         releasePublishRunId: "12345",
         pluginPublishScope: "all-publishable",
         plugins: [],
@@ -1091,7 +1092,9 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
       packages: ["@openclaw/demo-two", "@openclaw/demo-three"],
       inputs: {
         ref: "a".repeat(40),
+        release_tag: "v2026.4.1-beta.1",
         plugins: "@openclaw/demo-two,@openclaw/demo-three",
+        release_publish_run_attempt: "2",
         release_publish_run_id: "12345",
         release_publish_branch: "main",
       },
@@ -1140,6 +1143,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
         releaseTag: "v2026.4.1-beta.1",
         releaseSha: "b".repeat(40),
         releasePublishBranch: "release/2026.4.1",
+        releasePublishRunAttempt: "3",
         releasePublishRunId: "12345",
         pluginPublishScope: "selected",
         plugins: ["@openclaw/demo-plugin"],
@@ -1159,7 +1163,9 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
       packages: ["@openclaw/demo-plugin"],
       inputs: {
         ref: "b".repeat(40),
+        release_tag: "v2026.4.1-beta.1",
         plugins: "@openclaw/demo-plugin",
+        release_publish_run_attempt: "3",
         release_publish_run_id: "12345",
         release_publish_branch: "release/2026.4.1",
       },
@@ -1182,6 +1188,8 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
         "c".repeat(40),
         "--release-publish-branch",
         "main",
+        "--release-publish-run-attempt",
+        "1",
         "--release-publish-run-id",
         "12345",
         "--plugin-publish-scope",
@@ -1198,6 +1206,8 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
       "v2026.4.1-beta.1",
       "--release-publish-branch",
       "release/2026.4.1",
+      "--release-publish-run-attempt",
+      "1",
       "--release-publish-run-id",
       "12345",
     ];
@@ -1207,6 +1217,25 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
     expect(() =>
       parseOpenClawReleaseClawHubPlanArgs([...baseArgs, "--release-sha", "ABCDEF"]),
     ).toThrow("--release-sha must be a full 40-character lowercase commit SHA.");
+  });
+
+  it("requires an exact parent release run attempt for bootstrap approval binding", () => {
+    const args = [
+      "--release-tag",
+      "v2026.4.1-beta.1",
+      "--release-sha",
+      "c".repeat(40),
+      "--release-publish-branch",
+      "main",
+      "--release-publish-run-id",
+      "12345",
+    ];
+    expect(() => parseOpenClawReleaseClawHubPlanArgs(args)).toThrow(
+      "--release-publish-run-attempt is required.",
+    );
+    expect(() =>
+      parseOpenClawReleaseClawHubPlanArgs([...args, "--release-publish-run-attempt", "0"]),
+    ).toThrow("--release-publish-run-attempt must be a positive integer.");
   });
 });
 

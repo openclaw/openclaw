@@ -557,6 +557,94 @@ jobs:
         with:
           install-bun: "false"
 
+      - name: Resolve ClawHub release plan
+        id: clawhub_plan
+        env:
+          TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+          CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
+          PLUGINS: ${{ inputs.plugins }}
+        run: |
+          set -euo pipefail
+          plan_path="${RUNNER_TEMP}/openclaw-release-clawhub-plan.json"
+          plan_args=(
+            --release-tag "${RELEASE_TAG}"
+            --release-sha "${TARGET_SHA}"
+            --release-publish-branch "${CHILD_WORKFLOW_REF}"
+            --release-publish-run-attempt "${GITHUB_RUN_ATTEMPT}"
+            --release-publish-run-id "${GITHUB_RUN_ID}"
+            --plugin-publish-scope "${PLUGIN_PUBLISH_SCOPE}"
+          )
+          if [[ -n "${PLUGINS// }" ]]; then
+            plan_args+=(--plugins "${PLUGINS}")
+          fi
+
+          CLAWHUB_REGISTRY="${CLAWHUB_REGISTRY:-https://clawhub.ai}" \
+            node --import tsx \
+              "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-release-clawhub-plan.ts" \
+              "${plan_args[@]}" > "${plan_path}"
+          cat "${plan_path}"
+
+          bootstrap_should_dispatch="$(jq -er '.bootstrap.shouldDispatch' "${plan_path}")"
+          echo "bootstrap_should_dispatch=${bootstrap_should_dispatch}" >> "${GITHUB_OUTPUT}"
+          if [[ "${bootstrap_should_dispatch}" != "true" ]]; then
+            exit 0
+          fi
+
+          jq -e \
+            --arg branch "${CHILD_WORKFLOW_REF}" \
+            --arg attempt "${GITHUB_RUN_ATTEMPT}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg tag "${RELEASE_TAG}" \
+            --arg target "${TARGET_SHA}" \
+            '.bootstrap.ref == "main" and
+             .bootstrap.inputs.ref == $target and
+             .bootstrap.inputs.release_tag == $tag and
+             .bootstrap.inputs.release_publish_branch == $branch and
+             .bootstrap.inputs.release_publish_run_attempt == $attempt and
+             .bootstrap.inputs.release_publish_run_id == $run_id' \
+            "${plan_path}" >/dev/null
+
+          approval_dir="${RUNNER_TEMP}/clawhub-bootstrap-approval"
+          mkdir -p "${approval_dir}"
+          PLAN_PATH="${plan_path}" APPROVAL_PATH="${approval_dir}/approval.json" \
+            node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+
+          const plan = JSON.parse(readFileSync(process.env.PLAN_PATH, "utf8"));
+          const packages = [...plan.bootstrap.packages].sort((a, b) => a.localeCompare(b));
+          const approval = {
+            version: 1,
+            kind: "clawhub-bootstrap",
+            repository: process.env.GITHUB_REPOSITORY,
+            workflow: "OpenClaw Release Publish",
+            parentRunId: process.env.GITHUB_RUN_ID,
+            parentRunAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+            workflowBranch: process.env.CHILD_WORKFLOW_REF,
+            workflowSha: process.env.GITHUB_SHA,
+            releaseTag: process.env.RELEASE_TAG,
+            targetSha: process.env.TARGET_SHA,
+            packages,
+          };
+          writeFileSync(process.env.APPROVAL_PATH, `${JSON.stringify(approval, null, 2)}\n`);
+          NODE
+
+      - name: Attest ClawHub bootstrap approval
+        if: ${{ steps.clawhub_plan.outputs.bootstrap_should_dispatch == 'true' }}
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: ${{ runner.temp }}/clawhub-bootstrap-approval/approval.json
+
+      - name: Upload ClawHub bootstrap approval
+        if: ${{ steps.clawhub_plan.outputs.bootstrap_should_dispatch == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: clawhub-bootstrap-approval-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/clawhub-bootstrap-approval/approval.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Prepare GitHub release notes
         if: ${{ inputs.publish_openclaw_npm }}
         env:
@@ -640,6 +728,7 @@ jobs:
           WINDOWS_NODE_INSTALLER_DIGESTS: ${{ needs.resolve_release_target.outputs.windows_node_installer_digests }}
           POSTPUBLISH_EVIDENCE_DIR: ${{ runner.temp }}/openclaw-release-postpublish-evidence
           FULL_RELEASE_VALIDATION_MANIFEST_DIR: ${{ runner.temp }}/full-release-validation-manifest
+          CLAWHUB_PLAN_PATH: ${{ runner.temp }}/openclaw-release-clawhub-plan.json
         run: |
           set -euo pipefail
 
@@ -1032,24 +1121,8 @@ jobs:
           }
 
           resolve_clawhub_release_plan() {
-            local -a plan_args
-
-            clawhub_plan_path="${RUNNER_TEMP}/openclaw-release-clawhub-plan.json"
-            plan_args=(
-              --release-tag "${RELEASE_TAG}"
-              --release-sha "${TARGET_SHA}"
-              --release-publish-branch "${CHILD_WORKFLOW_REF}"
-              --release-publish-run-id "${GITHUB_RUN_ID}"
-              --plugin-publish-scope "${PLUGIN_PUBLISH_SCOPE}"
-            )
-            if [[ -n "${PLUGINS// }" ]]; then
-              plan_args+=(--plugins "${PLUGINS}")
-            fi
-
-            CLAWHUB_REGISTRY="${CLAWHUB_REGISTRY:-https://clawhub.ai}" \
-              node --import tsx \
-                "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-release-clawhub-plan.ts" \
-                "${plan_args[@]}" > "${clawhub_plan_path}"
+            clawhub_plan_path="${CLAWHUB_PLAN_PATH}"
+            test -s "${clawhub_plan_path}"
 
             echo "Resolved OpenClaw release ClawHub dispatch plan:"
             cat "${clawhub_plan_path}"
