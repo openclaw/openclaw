@@ -27,6 +27,13 @@ type NodeProxyAgentWithOptions = HttpAgent & {
   timeout?: number;
 };
 
+// Node.js http.Agent defaults maxSockets to Infinity. A proxy agent without
+// an explicit limit can open unlimited connections to the upstream, risking
+// socket exhaustion under high concurrency. Cap per-origin and total sockets
+// unless the caller sets an explicit value through agentOptions.
+const DEFAULT_NODE_PROXY_MAX_SOCKETS = 256;
+const DEFAULT_NODE_PROXY_MAX_TOTAL_SOCKETS = 1024;
+
 const require = createRequire(import.meta.url);
 
 /** Selects either ambient env proxy resolution or a caller-supplied fixed proxy URL. */
@@ -196,6 +203,19 @@ function createFixedNodeProxyAgent(
   });
   if (agent === undefined) {
     throw new Error(`${UNSUPPORTED_PROXY_PROTOCOL_MESSAGE} Got ${parsedProxyUrl.protocol}`);
+  }
+  // Apply bounded defaults so a proxy agent without explicit limits cannot open
+  // unlimited connections. Callers override by passing maxSockets / maxTotalSockets
+  // in agentOptions.
+  // Proxyline's createAmbientNodeProxyAgent returns a node:http.Agent (or node:https.Agent)
+  // at runtime, which carries maxSockets / maxTotalSockets. The proxyline type is narrower
+  // than NodeProxyAgentWithOptions, so cast through unknown when the runtime shape matches.
+  const agentTyped = agent as unknown as NodeProxyAgentWithOptions;
+  if (agentTyped.maxSockets === Infinity || agentTyped.maxSockets === undefined) {
+    agentTyped.maxSockets = DEFAULT_NODE_PROXY_MAX_SOCKETS;
+  }
+  if (agentTyped.maxTotalSockets === Infinity || agentTyped.maxTotalSockets === undefined) {
+    agentTyped.maxTotalSockets = DEFAULT_NODE_PROXY_MAX_TOTAL_SOCKETS;
   }
   applyNodeAgentOptions(agent as HttpAgent, options.agentOptions);
   return agent as HttpAgent;

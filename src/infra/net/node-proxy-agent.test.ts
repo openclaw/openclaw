@@ -59,4 +59,40 @@ describe("createNodeProxyAgent", () => {
       expect(agentState?.keepAlive).toBe(true);
     });
   });
+
+  it("sets default maxSockets and maxTotalSockets when no explicit limit is provided", () => {
+    withProxyEnv({ HTTPS_PROXY: "http://proxy.example:8080" }, () => {
+      const agent = createNodeProxyAgent({
+        mode: "env",
+        targetUrl: "https://api.example.test/v1/chat",
+      });
+
+      const agentState = agent as {
+        maxSockets?: number;
+        maxTotalSockets?: number;
+      };
+      expect(agentState?.maxSockets).toBe(256);
+      expect(agentState?.maxTotalSockets).toBe(1024);
+    });
+  });
+
+  it("allows explicit agentOptions.maxSockets to override the default", () => {
+    withProxyEnv({ HTTPS_PROXY: "http://proxy.example:8080" }, () => {
+      const agent = createNodeProxyAgent({
+        mode: "env",
+        targetUrl: "https://api.example.test/v1/chat",
+        agentOptions: {
+          maxSockets: 128,
+        },
+      });
+
+      const agentState = agent as {
+        maxSockets?: number;
+        maxTotalSockets?: number;
+      };
+      expect(agentState?.maxSockets).toBe(128);
+      // maxTotalSockets still gets the default since only maxSockets was overridden
+      expect(agentState?.maxTotalSockets).toBe(1024);
+    });
+  });
 });

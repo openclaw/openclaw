@@ -171,6 +171,16 @@ describe("createHttp1ProxyAgent", () => {
       expect.any(Function),
     );
   });
+
+  it("caps proxy client Pool connections at the default limit when no override is set", () => {
+    installUndiciRuntimeDeps();
+
+    createHttp1ProxyAgent({ uri: "https://proxy.test:8443" });
+    invokeProxyClientFactory(requireProxyAgentOptions());
+
+    const clientOpts = requireClientOptions();
+    expect(clientOpts.connections).toBe(256);
+  });
 });
 
 describe("createHttp1EnvHttpProxyAgent", () => {
@@ -185,5 +195,15 @@ describe("createHttp1EnvHttpProxyAgent", () => {
       expect.not.objectContaining({ servername: "127.0.0.1" }),
       expect.any(Function),
     );
+  });
+
+  it("caps env proxy client Pool connections at the default limit", () => {
+    installUndiciRuntimeDeps();
+
+    createHttp1EnvHttpProxyAgent({ httpsProxy: "https://proxy.test:8443" });
+    invokeProxyClientFactory(requireEnvHttpProxyAgentOptions());
+
+    const clientOpts = requireClientOptions();
+    expect(clientOpts.connections).toBe(256);
   });
 });
