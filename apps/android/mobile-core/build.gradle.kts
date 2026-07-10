@@ -2,14 +2,18 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
 
 plugins {
-  alias(libs.plugins.android.library)
+  alias(libs.plugins.android.kotlin.multiplatform.library)
   alias(libs.plugins.kotlin.multiplatform)
   alias(libs.plugins.kotlin.serialization)
   id("co.touchlab.skie") version "0.10.13"
 }
 
 kotlin {
-  androidTarget {
+  android {
+    namespace = "ai.openclaw.mobile.core"
+    compileSdk = 37
+    minSdk = 31
+
     compilerOptions {
       jvmTarget.set(JvmTarget.JVM_17)
     }
@@ -37,15 +41,6 @@ kotlin {
     commonMain.dependencies {
       implementation(libs.kotlinx.serialization.json)
     }
-  }
-}
-
-android {
-  namespace = "ai.openclaw.mobile.core"
-  compileSdk = 37
-
-  defaultConfig {
-    minSdk = 31
   }
 }
 

@@ -97,8 +97,10 @@ val hasAndroidReleaseSigning =
 
 val wantsAndroidReleaseBuild =
   gradle.startParameter.taskNames.any { taskName ->
-    taskName.contains("Release", ignoreCase = true) ||
-      Regex("""(^|:)(bundle|assemble)$""").containsMatchIn(taskName)
+    val appTask = !taskName.startsWith(":") || taskName.startsWith(":app:")
+    appTask &&
+      (taskName.contains("Release", ignoreCase = true) ||
+        taskName in setOf("assemble", "bundle", ":app:assemble", ":app:bundle"))
   }
 val missingAndroidBuildMetadata =
   explicitOpenClawBuildCommit == null || explicitOpenClawBuildTimestamp == null

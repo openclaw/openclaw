@@ -77,17 +77,17 @@ private extension TalkDirective {
         self.init(
             voiceId: core.voiceId,
             modelId: core.modelId,
-            speed: core.speed,
-            rateWPM: core.rateWpm,
-            stability: core.stability,
-            similarity: core.similarity,
-            style: core.style,
-            speakerBoost: core.speakerBoost,
-            seed: core.seed.flatMap(Int.init(exactly:)),
+            speed: core.speed?.doubleValue,
+            rateWPM: core.rateWpm?.intValue,
+            stability: core.stability?.doubleValue,
+            similarity: core.similarity?.doubleValue,
+            style: core.style?.doubleValue,
+            speakerBoost: core.speakerBoost?.boolValue,
+            seed: core.seed.flatMap { Int(exactly: $0.int64Value) },
             normalize: core.normalize,
             language: core.language,
             outputFormat: core.outputFormat,
-            latencyTier: core.latencyTier,
-            once: core.once)
+            latencyTier: core.latencyTier?.intValue,
+            once: core.once?.boolValue)
     }
 }
