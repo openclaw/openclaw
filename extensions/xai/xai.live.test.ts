@@ -15,11 +15,13 @@ import {
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isBillingErrorMessage } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
+import { createCodeExecutionTool } from "./code-execution.js";
 import plugin from "./index.js";
 import { XAI_DEFAULT_STT_MODEL } from "./stt.js";
 
 const XAI_API_KEY = process.env.XAI_API_KEY ?? "";
 const LIVE_IMAGE_MODEL = process.env.OPENCLAW_LIVE_XAI_IMAGE_MODEL?.trim() || "grok-imagine-image";
+const ENABLE_VIDEO_15_LIVE = process.env.OPENCLAW_LIVE_XAI_VIDEO_15 === "1";
 const liveEnabled = XAI_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 const EMPTY_AUTH_STORE = { version: 1, profiles: {} } as const;
@@ -62,6 +64,27 @@ function createReferencePng(): Buffer {
   return encodePngRgba(buf, width, height);
 }
 
+function createVideoReferencePng(): Buffer {
+  const width = 384;
+  const height = 384;
+  const buf = Buffer.alloc(width * height * 4, 255);
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const blue = Math.round(160 + (80 * y) / height);
+      fillPixel(buf, x, y, width, 32, 96, blue, 255);
+    }
+  }
+
+  for (let y = 112; y < 272; y += 1) {
+    for (let x = 112; x < 272; x += 1) {
+      fillPixel(buf, x, y, width, 255, 153, 51, 255);
+    }
+  }
+
+  return encodePngRgba(buf, width, height);
+}
+
 async function createTempAgentDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "xai-plugin-live-"));
 }
@@ -91,6 +114,41 @@ function isRealtimeOpenBillingDrift(error: Error): boolean {
 }
 
 describeLive("xai plugin live", () => {
+  it("runs remote code execution with the current default model", async () => {
+    await runXaiLiveCase("code-execution", async () => {
+      const tool = createCodeExecutionTool({
+        config: {
+          plugins: {
+            entries: {
+              xai: {
+                config: {
+                  webSearch: { apiKey: XAI_API_KEY },
+                  codeExecution: { enabled: true, maxTurns: 1, timeoutSeconds: 90 },
+                },
+              },
+            },
+          },
+        },
+      });
+      if (!tool) {
+        throw new Error("expected code_execution tool to be registered");
+      }
+
+      const result = await tool.execute("code-execution:xai-live", {
+        task: "Use the code interpreter to calculate the sum of the integers from 1 through 100.",
+      });
+      const details = (result.details ?? {}) as {
+        content?: string;
+        model?: string;
+        usedCodeExecution?: boolean;
+      };
+
+      expect(details.model).toBe("grok-4.3");
+      expect(details.usedCodeExecution).toBe(true);
+      expect(details.content).toContain("5050");
+    });
+  }, 120_000);
+
   it("synthesizes TTS through the registered speech provider", async () => {
     await runXaiLiveCase("tts", async () => {
       const { speechProviders } = await registerXaiPlugin();
@@ -321,4 +379,54 @@ describeLive("xai plugin live", () => {
       }
     });
   }, 300_000);
+
+  it.skipIf(!ENABLE_VIDEO_15_LIVE)(
+    "generates a Grok Imagine Video 1.5 clip from one image",
+    async () => {
+      await runXaiLiveCase("video-1.5", async () => {
+        const { videoProviders } = await registerXaiPlugin();
+        const videoProvider = requireRegisteredProvider(videoProviders, "xai");
+        const cfg = createLiveConfig();
+        const agentDir = await createTempAgentDir();
+
+        try {
+          const generated = await videoProvider.generateVideo({
+            provider: "xai",
+            model: "grok-imagine-video-1.5",
+            prompt:
+              "Animate the orange square with a subtle slow rotation. Keep the framing fixed.",
+            cfg,
+            agentDir,
+            authStore: EMPTY_AUTH_STORE,
+            timeoutMs: 10 * 60_000,
+            durationSeconds: 1,
+            resolution: "1080P",
+            inputImages: [
+              {
+                buffer: createVideoReferencePng(),
+                mimeType: "image/png",
+                fileName: "video-reference.png",
+              },
+            ],
+          });
+
+          expect(generated.model).toBe("grok-imagine-video-1.5");
+          expect(generated.videos).toHaveLength(1);
+          const video = generated.videos[0];
+          if (!video?.buffer) {
+            throw new Error("xAI Video 1.5 did not return a buffered video");
+          }
+          expect(video.mimeType.startsWith("video/")).toBe(true);
+          expect(video.buffer.byteLength).toBeGreaterThan(1_000);
+          const outputPath = process.env.OPENCLAW_LIVE_XAI_VIDEO_15_OUTPUT?.trim();
+          if (outputPath) {
+            await fs.writeFile(outputPath, video.buffer);
+          }
+        } finally {
+          await fs.rm(agentDir, { recursive: true, force: true });
+        }
+      });
+    },
+    12 * 60_000,
+  );
 });
