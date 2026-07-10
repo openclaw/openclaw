@@ -133,6 +133,8 @@ const schemaValueKeywords = new Set([
   "unevaluatedProperties",
 ]);
 const schemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
+// Keep in sync with ajv-formats 3.x formatNames; MCP schemas may use draft
+// vocabularies, but Ajv only validates the formats registered by this package.
 const ajvKnownFormats = new Set([
   "binary",
   "byte",
@@ -143,15 +145,14 @@ const ajvKnownFormats = new Set([
   "email",
   "float",
   "hostname",
-  "idn-email",
-  "idn-hostname",
   "int32",
   "int64",
   "ipv4",
   "ipv6",
-  "iri",
-  "iri-reference",
+  "iso-date-time",
+  "iso-time",
   "json-pointer",
+  "json-pointer-uri-fragment",
   "password",
   "regex",
   "relative-json-pointer",

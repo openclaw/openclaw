@@ -353,22 +353,60 @@ describe("session MCP runtime", () => {
       const validator = createBundleMcpJsonSchemaValidator().getValidator<{
         duration: string;
         email: string;
+        idnEmail: string;
+        isoTime: string;
+        jsonPointerFragment: string;
       }>({
         type: "object",
         properties: {
           duration: { type: "string", format: "google-duration" },
           email: { type: "string", format: "email" },
+          idnEmail: { type: "string", format: "idn-email" },
+          isoTime: { type: "string", format: "iso-time" },
+          jsonPointerFragment: {
+            type: "string",
+            format: "json-pointer-uri-fragment",
+          },
         },
-        required: ["duration", "email"],
+        required: ["duration", "email", "idnEmail", "isoTime", "jsonPointerFragment"],
         additionalProperties: false,
       });
 
       expect(warnSpy).not.toHaveBeenCalled();
-      expect(validator({ duration: "not parsed by OpenClaw", email: "bad" }).valid).toBe(false);
+      expect(
+        validator({
+          duration: "not parsed by OpenClaw",
+          email: "bad",
+          idnEmail: "not checked by ajv-formats",
+          isoTime: "09:30:15Z",
+          jsonPointerFragment: "#/valid/path",
+        }).valid,
+      ).toBe(false);
       expect(
         validator({
           duration: "not parsed by OpenClaw",
           email: "ops@example.com",
+          idnEmail: "not checked by ajv-formats",
+          isoTime: "not an iso time",
+          jsonPointerFragment: "#/valid/path",
+        }).valid,
+      ).toBe(false);
+      expect(
+        validator({
+          duration: "not parsed by OpenClaw",
+          email: "ops@example.com",
+          idnEmail: "not checked by ajv-formats",
+          isoTime: "09:30:15Z",
+          jsonPointerFragment: "not a uri fragment",
+        }).valid,
+      ).toBe(false);
+      expect(
+        validator({
+          duration: "not parsed by OpenClaw",
+          email: "ops@example.com",
+          idnEmail: "not checked by ajv-formats",
+          isoTime: "09:30:15Z",
+          jsonPointerFragment: "#/valid/path",
         }).valid,
       ).toBe(true);
     } finally {
@@ -905,6 +943,64 @@ describe("session MCP runtime", () => {
       expect(catalog.diagnostics?.[0]?.message).toContain("object");
     } finally {
       await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("lists MCP tools whose schemas mix unknown formats with ajv-formats registry formats", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-schema-formats-"));
+    const serverPath = path.join(tempDir, "schema-formats.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      tools: [
+        {
+          name: "format_probe",
+          inputSchema: {
+            type: "object",
+            properties: {
+              duration: { type: "string", format: "google-duration" },
+              idnEmail: { type: "string", format: "idn-email" },
+              isoTime: { type: "string", format: "iso-time" },
+              jsonPointerFragment: {
+                type: "string",
+                format: "json-pointer-uri-fragment",
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-schema-formats",
+      sessionKey: "agent:test:session-schema-formats",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            schemaFormats: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      expect(warnSpy).not.toHaveBeenCalled();
+      expect(catalog.diagnostics ?? []).toEqual([]);
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["format_probe"]);
+      expect(catalog.servers.schemaFormats?.toolCount).toBe(1);
+      await waitForFileText(logPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+    } finally {
+      await runtime.dispose();
+      warnSpy.mockRestore();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
