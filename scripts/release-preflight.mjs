@@ -8,79 +8,81 @@ import { parseReleaseVersion } from "./lib/npm-publish-plan.mjs";
 const parsedArgs = parseArgs(process.argv.slice(2));
 const fix = parsedArgs.fix;
 const macosInfoPlistPath = "apps/macos/Sources/OpenClaw/Resources/Info.plist";
+const nodeCommand = (...args) => ({ args, bin: "node" });
+const pnpmCommand = (...args) => ({ args, bin: "pnpm" });
 const releaseTasks = [
   {
     id: "root-dependency-ownership",
     name: "root dependency ownership",
     scopes: ["dependencies"],
-    check: ["deps:root-ownership:check"],
+    check: pnpmCommand("deps:root-ownership:check"),
   },
   {
     id: "plugin-versions",
     name: "plugin versions",
     scopes: ["plugins", "version"],
-    fix: ["plugins:sync"],
-    check: ["plugins:sync:check"],
+    fix: nodeCommand("--import", "tsx", "scripts/sync-plugin-versions.ts"),
+    check: nodeCommand("--import", "tsx", "scripts/sync-plugin-versions.ts", "--check"),
   },
   {
     id: "npm-shrinkwraps",
     name: "npm shrinkwraps",
     scopes: ["dependencies", "version"],
-    fix: ["deps:shrinkwrap:changed:generate"],
+    fix: nodeCommand("scripts/generate-npm-shrinkwrap.mjs", "--changed"),
     fixAfter: ["plugin-versions", "plugin-sdk-exports"],
-    check: ["deps:shrinkwrap:check"],
+    check: nodeCommand("scripts/generate-npm-shrinkwrap.mjs", "--all", "--check"),
   },
   {
     id: "plugin-inventory",
     name: "plugin inventory",
     scopes: ["plugins", "version"],
-    fix: ["plugins:inventory:gen"],
+    fix: nodeCommand("scripts/generate-plugin-inventory-doc.mjs", "--write"),
     fixAfter: ["plugin-versions", "plugin-sdk-exports"],
-    check: ["plugins:inventory:check"],
+    check: nodeCommand("scripts/generate-plugin-inventory-doc.mjs", "--check"),
   },
   {
     id: "config-schema",
     name: "base config schema",
     scopes: ["config"],
-    fix: ["config:schema:gen"],
-    check: ["config:schema:check"],
+    fix: pnpmCommand("config:schema:gen"),
+    check: pnpmCommand("config:schema:check"),
   },
   {
     id: "channel-config",
     name: "bundled channel config metadata",
     scopes: ["config"],
-    fix: ["config:channels:gen"],
-    check: ["config:channels:check"],
+    fix: pnpmCommand("config:channels:gen"),
+    check: pnpmCommand("config:channels:check"),
   },
   {
     id: "config-docs",
     name: "config docs baseline",
     scopes: ["config"],
-    fix: ["config:docs:gen"],
+    fix: pnpmCommand("config:docs:gen"),
     fixAfter: ["config-schema", "channel-config"],
-    check: ["config:docs:check"],
+    check: pnpmCommand("config:docs:check"),
   },
   {
     id: "plugin-sdk-exports",
     name: "plugin SDK exports",
     scopes: ["plugin-sdk"],
-    fix: ["plugin-sdk:sync-exports"],
+    fix: pnpmCommand("plugin-sdk:sync-exports"),
     fixAfter: ["plugin-versions"],
-    check: ["plugin-sdk:check-exports"],
+    check: pnpmCommand("plugin-sdk:check-exports"),
   },
   {
     id: "plugin-sdk-api",
     name: "plugin SDK API baseline",
     scopes: ["plugin-sdk"],
-    fix: ["plugin-sdk:api:gen"],
+    fix: pnpmCommand("plugin-sdk:api:gen"),
     fixAfter: ["plugin-sdk-exports"],
-    check: ["plugin-sdk:api:check"],
+    check: pnpmCommand("plugin-sdk:api:check"),
   },
   {
     id: "plugin-sdk-surface",
     name: "plugin SDK surface budget",
     scopes: ["plugin-sdk"],
-    check: ["plugin-sdk:surface:check"],
+    check: pnpmCommand("plugin-sdk:surface:check"),
   },
 ];
 const selectedTasks = releaseTasks.filter((task) => taskMatchesScopes(task, parsedArgs.scopes));
@@ -223,7 +225,7 @@ async function runTaskGraph({ commandKey, jobs, tasks }) {
     .map((task) => ({
       id: task.id,
       name: task.name,
-      args: task[commandKey],
+      ...task[commandKey],
       after: commandKey === "fix" ? (task.fixAfter ?? []) : [],
     }));
   const selectedIds = new Set(runnableTasks.map((task) => task.id));
@@ -279,11 +281,11 @@ async function runTaskGraph({ commandKey, jobs, tasks }) {
 }
 
 async function runCommand(command) {
-  console.log(`\n[release-preflight] ${command.name}: pnpm ${command.args.join(" ")}`);
+  console.log(`\n[release-preflight] ${command.name}: ${formatCommand(command)}`);
   try {
     return await runManagedCommand({
       args: command.args,
-      bin: "pnpm",
+      bin: command.bin,
     });
   } catch (error) {
     console.error(error);
@@ -298,8 +300,12 @@ function printFailures(title, failures) {
 
 function printCommandFailures(failures) {
   for (const failure of failures) {
-    console.error(`- ${failure.name}: exit ${failure.status} (pnpm ${failure.args.join(" ")})`);
+    console.error(`- ${failure.name}: exit ${failure.status} (${formatCommand(failure)})`);
   }
+}
+
+function formatCommand(command) {
+  return [command.bin, ...command.args].join(" ");
 }
 
 function printSkipped(skipped) {
