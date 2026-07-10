@@ -175,10 +175,18 @@ export async function applyManagerRuntimeControls(params: {
           });
         }
         for (const [key, value] of configOptions) {
+          const normalizedKey = normalizeLowercaseStringOrEmpty(key);
+          // Skip unadvertised optional tuning keys (thinking, effort) instead of throwing.
+          // These are best-effort hints that backends may not support, similar to timeout.
+          // See: https://github.com/openclaw/openclaw/issues/103802
           if (
             advertisedKeys.size > 0 &&
-            !advertisedKeys.has(normalizeLowercaseStringOrEmpty(key))
+            !advertisedKeys.has(normalizedKey) &&
+            (normalizedKey === "thinking" || normalizedKey === "effort")
           ) {
+            continue;
+          }
+          if (advertisedKeys.size > 0 && !advertisedKeys.has(normalizedKey)) {
             throw new AcpRuntimeError(
               "ACP_BACKEND_UNSUPPORTED_CONTROL",
               `ACP backend "${backend}" does not accept config key "${key}".`,
