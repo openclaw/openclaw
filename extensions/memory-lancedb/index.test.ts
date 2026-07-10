@@ -1583,6 +1583,139 @@ describe("memory plugin e2e", () => {
     }
   });
 
+  test("gates auto-recall and auto-capture on the agent's memorySearch.enabled", async () => {
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const add = vi.fn(async () => undefined);
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          vectorSearch: vi.fn(() => ({ limit: vi.fn(() => ({ toArray: vi.fn(async () => []) })) })),
+          countRows: vi.fn(async () => 0),
+          add,
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+    const pluginEntryConfig = {
+      embedding: {
+        apiKey: OPENAI_API_KEY,
+        model: "text-embedding-3-small",
+      },
+      dbPath: getDbPath(),
+      autoCapture: true,
+      autoRecall: true,
+    };
+    let configFile: Record<string, unknown> = {
+      agents: {
+        defaults: { memorySearch: { enabled: true } },
+        list: [
+          { id: "main", memorySearch: { enabled: true } },
+          { id: "xiaohuo", memorySearch: { enabled: false } },
+        ],
+      },
+      plugins: {
+        entries: {
+          "memory-lancedb": { config: pluginEntryConfig },
+        },
+      },
+    };
+
+    vi.resetModules();
+    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
+      ensureGlobalUndiciEnvProxyDispatcher,
+    }));
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        post = vi.fn((_path: string, opts: { body?: unknown }) =>
+          invokeEmbeddingCreate(embeddingsCreate, opts.body),
+        );
+      },
+    }));
+    vi.doMock("./lancedb-runtime.js", () => ({
+      loadLanceDbModule,
+    }));
+
+    try {
+      const { default: dynamicMemoryPlugin } = await import("./index.js");
+      const on = vi.fn();
+      const mockApi = {
+        id: "memory-lancedb",
+        name: "Memory (LanceDB)",
+        source: "test",
+        config: {},
+        pluginConfig: pluginEntryConfig,
+        runtime: {
+          config: {
+            current: () => configFile,
+          },
+        },
+        logger: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        registerTool: vi.fn(),
+        registerCli: vi.fn(),
+        registerService: vi.fn(),
+        on,
+        resolvePath: (p: string) => p,
+      };
+
+      dynamicMemoryPlugin.register(mockApi as any);
+
+      const beforePromptBuild = on.mock.calls.find(
+        ([hookName]) => hookName === "before_prompt_build",
+      )?.[1];
+      const agentEnd = on.mock.calls.find(([hookName]) => hookName === "agent_end")?.[1];
+      expect(beforePromptBuild).toBeTypeOf("function");
+      expect(agentEnd).toBeTypeOf("function");
+
+      const recallEvent = {
+        prompt: "what editor should i use?",
+        messages: [{ role: "user", content: "what editor should i use?" }],
+      };
+      const captureEvent = {
+        success: true,
+        messages: [{ role: "user", content: "I prefer Helix for editing code every day." }],
+      };
+
+      // Disabled agent: neither recall nor capture may touch the shared store.
+      const recallDisabled = await beforePromptBuild?.(recallEvent, { agentId: "xiaohuo" });
+      await agentEnd?.(captureEvent, { agentId: "xiaohuo", sessionKey: "agent:xiaohuo:main" });
+      expect(recallDisabled).toBeUndefined();
+      expect(embeddingsCreate).not.toHaveBeenCalled();
+      expect(add).not.toHaveBeenCalled();
+
+      // Enabled agent: recall and capture proceed as before.
+      await beforePromptBuild?.(recallEvent, { agentId: "main" });
+      await agentEnd?.(captureEvent, { agentId: "main", sessionKey: "agent:main:main" });
+      expect(embeddingsCreate).toHaveBeenCalled();
+      expect(add).toHaveBeenCalledTimes(1);
+
+      // Defaults-level disable applies to agents without a per-agent entry.
+      embeddingsCreate.mockClear();
+      configFile = {
+        ...configFile,
+        agents: { defaults: { memorySearch: { enabled: false } } },
+      };
+      const recallDefaultDisabled = await beforePromptBuild?.(recallEvent, {
+        agentId: "unlisted",
+      });
+      expect(recallDefaultDisabled).toBeUndefined();
+      expect(embeddingsCreate).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+      vi.doUnmock("openai");
+      vi.doUnmock("./lancedb-runtime.js");
+      vi.resetModules();
+    }
+  });
+
   test("fails closed for auto-recall when the live plugin entry is removed", async () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],

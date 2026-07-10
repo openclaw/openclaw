@@ -1428,6 +1428,23 @@ export default definePluginEntry({
     const embeddings = createEmbeddings(api, cfg);
     const autoCaptureCursors = new Map<string, AutoCaptureCursor>();
     let memoryRecallCooldown: { until: number; error: string } | undefined;
+    // Mirrors core resolveMemorySearchConfig gating: the per-agent entry wins
+    // over agents.defaults, and unset means enabled. Without this gate, shared
+    // LanceDB memories leak into agents that disabled memory search (#103590).
+    const agentMemorySearchEnabled = (agentId: string | undefined): boolean => {
+      const runtimeCfg = api.runtime.config?.current?.() as OpenClawConfig | undefined;
+      if (!runtimeCfg) {
+        return true;
+      }
+      const agentEntry = agentId
+        ? runtimeCfg.agents?.list?.find((entry) => entry.id === agentId)
+        : undefined;
+      return (
+        agentEntry?.memorySearch?.enabled ??
+        runtimeCfg.agents?.defaults?.memorySearch?.enabled ??
+        true
+      );
+    };
     const resolveCurrentHookConfig = () => {
       const runtimePluginConfig = resolveLivePluginConfigObject(
         api.runtime.config?.current
@@ -1863,9 +1880,12 @@ export default definePluginEntry({
     // ========================================================================
 
     // Auto-recall: inject relevant memories during prompt build
-    api.on("before_prompt_build", async (event) => {
+    api.on("before_prompt_build", async (event, ctx) => {
       const currentCfg = resolveCurrentHookConfig();
       if (!currentCfg.autoRecall) {
+        return undefined;
+      }
+      if (!agentMemorySearchEnabled(ctx?.agentId)) {
         return undefined;
       }
       if (!event.prompt || event.prompt.length < 5) {
@@ -1925,6 +1945,11 @@ export default definePluginEntry({
     api.on("agent_end", async (event, ctx) => {
       const currentCfg = resolveCurrentHookConfig();
       if (!currentCfg.autoCapture) {
+        return;
+      }
+      // Capture is the sibling leak: a memory-disabled agent's conversations
+      // must not be written into the shared store other agents recall from.
+      if (!agentMemorySearchEnabled(ctx?.agentId)) {
         return;
       }
       if (!event.success || !event.messages || event.messages.length === 0) {

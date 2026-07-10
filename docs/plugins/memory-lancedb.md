@@ -206,6 +206,12 @@ Auto-capture also rejects text that looks like envelope/transport metadata,
 prompt-injection payloads, or already-injected `<relevant-memories>` context,
 and caps at 3 captured memories per agent turn.
 
+Auto-recall and auto-capture respect the per-agent memory gate: an agent with
+`memorySearch.enabled: false` (in `agents.list[]` or via `agents.defaults`)
+gets no `<relevant-memories>` injection and contributes nothing to the shared
+memory store, even when the plugin-level `autoRecall`/`autoCapture` flags are
+on.
+
 ## Commands
 
 `memory-lancedb` registers the `ltm` CLI namespace whenever it is installed
