@@ -283,7 +283,7 @@ describe("sendMessageSlack blocks", () => {
     expect((receiptPart?.raw as Record<string, unknown> | undefined)?.channelId).toBe("C123");
   });
 
-  it("retries rejected native charts as accessible text", async () => {
+  it("retries rejected native charts as visible accessible fallback blocks", async () => {
     const client = createSlackSendTestClient();
     client.chat.postMessage.mockRejectedValueOnce(
       Object.assign(new Error("An API error occurred: invalid_blocks"), {
@@ -316,15 +316,23 @@ describe("sendMessageSlack blocks", () => {
     expect(postedMessage(client, 0).text).toBe(
       "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
     );
-    expect(postedMessage(client, 1).blocks).toBeUndefined();
+    expect(postedMessage(client, 1).blocks).toEqual([
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
+          verbatim: true,
+        },
+      },
+    ]);
     expect(postedMessage(client, 1).text).toBe(
       "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
     );
   });
 
-  it("keeps overlong chart retries within the Slack text limit", async () => {
+  it("chunks overlong chart fallbacks instead of truncating screen-reader text", async () => {
     const client = createSlackSendTestClient();
-    client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
     const categories = Array.from({ length: 20 }, (_point, pointIndex) =>
       `Category-${String(pointIndex)}`.padEnd(20, "x"),
     );
@@ -353,10 +361,15 @@ describe("sendMessageSlack blocks", () => {
       blocks,
     });
 
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
-    expect(postedMessage(client, 0).text).toHaveLength(SLACK_TEXT_LIMIT);
-    expect(postedMessage(client, 1).text).toBe(postedMessage(client, 0).text);
-    expect(postedMessage(client, 1).blocks).toBeUndefined();
+    const posts = client.chat.postMessage.mock.calls.map((_call, index) =>
+      postedMessage(client, index),
+    );
+    expect(posts.length).toBeGreaterThan(1);
+    expect(posts.every((post) => post.blocks === undefined)).toBe(true);
+    expect(
+      posts.every((post) => Array.from(String(post.text ?? "")).length <= SLACK_TEXT_LIMIT),
+    ).toBe(true);
+    expect(posts.map((post) => String(post.text ?? "")).join("\n")).toContain("Series-11");
   });
 
   it("retries rejected native tables once with complete accessible text", async () => {
@@ -402,14 +415,58 @@ describe("sendMessageSlack blocks", () => {
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
     expect(postedMessage(client, 0).blocks).toEqual(blocks);
     expect(postedMessage(client, 0).text).toBe(fallback);
-    expect(postedMessage(client, 1).blocks).toBeUndefined();
+    expect(postedMessage(client, 1).blocks).toEqual([
+      blocks[0],
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: [
+            "Pipeline report (table)",
+            "- Account: &lt;@U123&gt;; ARR: $125k",
+            "- Account: Globex; ARR: $82k",
+          ].join("\n"),
+          verbatim: true,
+        },
+      },
+    ]);
     expect(postedMessage(client, 1).text).toBe(fallback);
   });
 
-  it("chunks overlong table fallbacks without posting native blocks", async () => {
+  it("marks data-derived fallback mrkdwn verbatim", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
+
+    await sendMessageSlack("channel:C123", "", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      blocks: [
+        {
+          type: "data_table",
+          caption: "Alerts",
+          rows: [[{ type: "raw_text", text: "Owner" }], [{ type: "raw_text", text: "@here" }]],
+        },
+      ] as never,
+    });
+
+    expect(postedMessage(client, 1).blocks).toEqual([
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "Alerts (table)\n- Owner: @here",
+          verbatim: true,
+        },
+      },
+    ]);
+  });
+
+  it("chunks overlong table fallbacks while preserving sibling blocks", async () => {
     const client = createSlackSendTestClient();
     const header = "Account".padEnd(80, "x");
     const blocks = [
+      { type: "section", text: { type: "mrkdwn", text: "Overview" } },
       {
         type: "data_table",
         caption: "Large pipeline",
@@ -423,24 +480,90 @@ describe("sendMessageSlack blocks", () => {
           ]),
         ],
       },
+      {
+        type: "data_visualization",
+        title: "Revenue mix",
+        chart: {
+          type: "pie",
+          segments: [
+            { label: "Product", value: 60 },
+            { label: "Services", value: 40 },
+          ],
+        },
+      },
+      {
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            text: { type: "plain_text", text: "Refresh" },
+            action_id: "refresh",
+            value: "refresh",
+          },
+        ],
+      },
     ] as never;
 
-    await sendMessageSlack("channel:C123", "", {
+    const result = await sendMessageSlack("channel:C123", "", {
       token: "xoxb-test",
       cfg: SLACK_TEST_CFG,
       client,
       blocks,
+      threadTs: "171234.100",
+      replyBroadcast: true,
     });
 
-    expect(client.chat.postMessage.mock.calls.length).toBeGreaterThan(1);
+    expect(client.chat.postMessage.mock.calls.length).toBeGreaterThan(2);
     const posts = client.chat.postMessage.mock.calls.map((_call, index) =>
       postedMessage(client, index),
     );
-    expect(posts.every((post) => post.blocks === undefined)).toBe(true);
+    expect(posts[0]?.blocks).toEqual([blocks[3]]);
+    expect(posts.slice(1).every((post) => post.blocks === undefined)).toBe(true);
+    expect(posts[0]?.reply_broadcast).toBeUndefined();
+    expect(posts[1]?.reply_broadcast).toBe(true);
+    expect(posts.every((post) => post.thread_ts === "171234.100")).toBe(true);
+    expect(result.receipt.parts[0]?.kind).toBe("card");
+    expect(result.receipt.parts.slice(1).every((part) => part.kind === "text")).toBe(true);
+    expect(result.receipt.parts.map((part) => part.index)).toEqual(
+      Array.from({ length: result.receipt.parts.length }, (_entry, index) => index),
+    );
     const deliveredText = posts.map((post) => post.text).join("\n");
     expect(deliveredText).toContain(`- ${header}: &lt;@U123&gt;`);
     expect(deliveredText).toContain(`- ${header}: account-99`);
+    expect(deliveredText).toContain("Revenue mix (pie chart)");
+    expect(deliveredText.match(/Overview/g)).toHaveLength(1);
     expect(deliveredText).not.toContain("<@U123>");
+  });
+
+  it("does not repeat retained block text in long separate text sends", async () => {
+    const client = createSlackSendTestClient();
+    const blocks = [
+      { type: "section", text: { type: "mrkdwn", text: "Visible summary" } },
+    ] as const;
+    const authoredText = `start-${"x".repeat(8_100)}-tail`;
+
+    await sendMessageSlack("channel:C123", authoredText, {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      blocks: [...blocks],
+      separateTextAndBlocks: true,
+      textIsSlackMrkdwn: true,
+    });
+
+    const posts = client.chat.postMessage.mock.calls.map((_call, index) =>
+      postedMessage(client, index),
+    );
+    expect(posts[0]?.blocks).toEqual(blocks);
+    expect(posts[0]?.text).toBe("Visible summary");
+    expect(posts.slice(1).every((post) => post.blocks === undefined)).toBe(true);
+    const chunkedText = posts
+      .slice(1)
+      .map((post) => String(post.text ?? ""))
+      .join("\n");
+    expect(chunkedText).toContain("start-");
+    expect(chunkedText).toContain("-tail");
+    expect(chunkedText).not.toContain("Visible summary");
   });
 
   it("does not retry invalid non-data blocks", async () => {
@@ -493,7 +616,58 @@ describe("sendMessageSlack blocks", () => {
     expect(postedMessage(client, 0).blocks).toEqual(blocks);
   });
 
-  it("drops every block and preserves chart data when mixed blocks are rejected", async () => {
+  it("includes every raw block and control in successful accessibility text", async () => {
+    const client = createSlackSendTestClient();
+    const blocks = [
+      { type: "section", text: { type: "mrkdwn", text: "Details" } },
+      {
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            action_id: "approve",
+            text: { type: "plain_text", text: "Approve" },
+            value: "approve",
+          },
+        ],
+      },
+    ];
+
+    await sendMessageSlack("channel:C123", "Summary", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      blocks,
+    });
+
+    expect(postedMessage(client, 0).text).toBe("Summary\n\nDetails\n\n- Approve");
+    expect(postedMessage(client, 0).blocks).toEqual(blocks);
+  });
+
+  it("chunks overlong raw text blocks without truncating accessibility text", async () => {
+    const client = createSlackSendTestClient();
+    const blocks = Array.from({ length: 3 }, (_entry, index) => ({
+      type: "section",
+      text: { type: "mrkdwn", text: `${String(index)}${"x".repeat(2999)}-tail` },
+    }));
+
+    await sendMessageSlack("channel:C123", "", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      blocks,
+    });
+
+    const posts = client.chat.postMessage.mock.calls.map((_call, index) =>
+      postedMessage(client, index),
+    );
+    expect(posts.length).toBeGreaterThan(1);
+    expect(posts.every((post) => post.blocks === undefined)).toBe(true);
+    expect(posts.map((post) => post.text ?? "").join("\n")).toContain("2xxx");
+    expect(posts.map((post) => post.text ?? "").join("\n")).toContain("-tail");
+  });
+
+  it("replaces rejected native charts while preserving sibling blocks", async () => {
     const client = createSlackSendTestClient();
     client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
     const blocks = [
@@ -520,10 +694,90 @@ describe("sendMessageSlack blocks", () => {
 
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
     expect(postedMessage(client, 0).blocks).toEqual(blocks);
-    expect(postedMessage(client, 1).blocks).toBeUndefined();
+    expect(postedMessage(client, 1).blocks).toEqual([
+      blocks[0],
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
+          verbatim: true,
+        },
+      },
+    ]);
     expect(postedMessage(client, 1).text).toBe(
       "Overview\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
     );
+  });
+
+  it("propagates invalid_blocks when a retained sibling is also invalid", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage.mockRejectedValue({ data: { error: "invalid_blocks" } });
+
+    await expect(
+      sendMessageSlack("channel:C123", "Overview", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        blocks: [
+          { type: "section", text: { type: "mrkdwn", text: "Invalid sibling" } },
+          {
+            type: "data_visualization",
+            title: "Revenue mix",
+            chart: {
+              type: "pie",
+              segments: [{ label: "Product", value: 60 }],
+            },
+          },
+        ] as never,
+      }),
+    ).rejects.toMatchObject({ data: { error: "invalid_blocks" } });
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(postedMessage(client, 1).blocks).toEqual([
+      { type: "section", text: { type: "mrkdwn", text: "Invalid sibling" } },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "Revenue mix (pie chart)\n- Product: 60",
+          verbatim: true,
+        },
+      },
+    ]);
+  });
+
+  it("fails closed when native fallback expansion would drop 49 siblings", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
+    const categories = Array.from(
+      { length: 20 },
+      (_entry, index) => `category-${String(index)}-${"x".repeat(80)}`,
+    );
+
+    await expect(
+      sendMessageSlack("channel:C123", "", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        blocks: [
+          ...Array.from({ length: 49 }, () => ({ type: "divider" })),
+          {
+            type: "data_visualization",
+            title: "Large chart",
+            chart: {
+              type: "bar",
+              axis_config: { categories },
+              series: Array.from({ length: 2 }, (_entry, index) => ({
+                name: `Series ${String(index)}`,
+                data: categories.map((label) => ({ label, value: index })),
+              })),
+            },
+          },
+        ] as never,
+      }),
+    ).rejects.toThrow(/fallback requires .* blocks to retain every sibling/i);
+    expect(client.chat.postMessage).toHaveBeenCalledOnce();
   });
 
   it("uses canonical Slack response thread for block receipts and participation", async () => {
@@ -710,7 +964,7 @@ describe("sendMessageSlack blocks", () => {
     expect(postedMessage(client).text).toBe("Shared a file");
   });
 
-  it("caps long fallback text while preserving blocks", async () => {
+  it("chunks long block fallback text without truncation", async () => {
     const client = createSlackSendTestClient();
     const longContextText = "a".repeat(3000);
     const blocks = [
@@ -731,10 +985,16 @@ describe("sendMessageSlack blocks", () => {
       blocks,
     });
 
-    const post = postedMessage(client);
-    expect(String(post.text).endsWith("…")).toBe(true);
-    expect(post.blocks).toBe(blocks);
-    expect(post.text).toHaveLength(SLACK_TEXT_LIMIT);
+    const posts = client.chat.postMessage.mock.calls.map((_call, index) =>
+      postedMessage(client, index),
+    );
+    expect(posts.length).toBeGreaterThan(1);
+    expect(posts.every((post) => post.blocks === undefined)).toBe(true);
+    expect(posts.every((post) => Array.from(String(post.text)).length <= SLACK_TEXT_LIMIT)).toBe(
+      true,
+    );
+    expect(posts.map((post) => String(post.text)).join("")).toContain(longContextText);
+    expect(posts.map((post) => String(post.text)).join("")).not.toContain("…");
   });
 
   it("rejects blocks combined with mediaUrl", async () => {

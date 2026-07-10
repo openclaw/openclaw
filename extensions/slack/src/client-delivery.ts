@@ -14,6 +14,7 @@ import { hasSlackDataTableBlock } from "./data-table.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import {
   appendSlackNativeDataFallbackText,
+  buildSlackNativeDataFallbackBlocks,
   hasSlackNativeDataBlock,
   isSlackInvalidBlocksError,
 } from "./native-data-blocks.js";
@@ -245,11 +246,11 @@ export async function postSlackMessageBestEffort(params: {
         throw error;
       }
       const { blocks, ...textPayload } = payload;
-      // Slack rejects unsupported native data blocks before posting, so one text-only
-      // retry preserves the accessible summary without duplicating a send. send.ts
-      // routes oversized table fallbacks through text chunking before this call.
+      // Replace only native data blocks. If an authored sibling is actually invalid,
+      // the retry still fails closed instead of silently discarding its controls.
       logVerbose("slack send: native data block rejected, retrying with text fallback");
       const fallbackText = appendSlackNativeDataFallbackText(payload.text ?? "", blocks);
+      const fallbackBlocks = buildSlackNativeDataFallbackBlocks(blocks);
       return {
         response: await withSlackDnsRequestRetry("chat.postMessage", () =>
           postChatMessage({
@@ -257,6 +258,7 @@ export async function postSlackMessageBestEffort(params: {
             text: hasSlackDataTableBlock(blocks)
               ? fallbackText
               : truncateSlackText(fallbackText, SLACK_TEXT_LIMIT),
+            ...(fallbackBlocks?.length ? { blocks: fallbackBlocks } : {}),
           }),
         ),
         identity,

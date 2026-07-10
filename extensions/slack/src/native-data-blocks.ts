@@ -1,9 +1,13 @@
 // Shared detection and text fallback for Slack's native chart and table blocks.
+import type { Block, KnownBlock } from "@slack/web-api";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import { hasSlackDataTableBlock, renderSlackDataTableMrkdwnFallbackText } from "./data-table.js";
 import {
   hasSlackDataVisualizationBlock,
   renderSlackDataVisualizationMrkdwnFallbackText,
 } from "./data-visualization.js";
+import { SLACK_SECTION_TEXT_MAX } from "./presentation.js";
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -44,11 +48,42 @@ export function renderSlackNativeDataFallbackText(value: unknown): string | unde
   return undefined;
 }
 
+/** Replace rejected native data with visible mrkdwn while retaining valid sibling blocks. */
+export function buildSlackNativeDataFallbackBlocks(
+  blocks?: readonly (Block | KnownBlock)[],
+): (Block | KnownBlock)[] | undefined {
+  if (!blocks) {
+    return undefined;
+  }
+  const fallbackBlocks: (Block | KnownBlock)[] = [];
+  for (const block of blocks) {
+    const fallbackText = renderSlackNativeDataFallbackText(block);
+    if (!fallbackText) {
+      fallbackBlocks.push(block);
+      continue;
+    }
+    fallbackBlocks.push(
+      ...chunkTextForOutbound(fallbackText, SLACK_SECTION_TEXT_MAX).map(
+        (text): KnownBlock => ({
+          type: "section",
+          text: { type: "mrkdwn", text, verbatim: true },
+        }),
+      ),
+    );
+  }
+  if (fallbackBlocks.length > SLACK_MAX_BLOCKS) {
+    throw new Error(
+      `Slack native-data fallback requires ${String(fallbackBlocks.length)} blocks to retain every sibling; Slack allows ${String(SLACK_MAX_BLOCKS)}`,
+    );
+  }
+  return fallbackBlocks;
+}
+
 function comparableText(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
 }
 
-/** Preserve every native data block's content once when Slack requires a text-only retry. */
+/** Preserve every native data block's content once in the accessible fallback. */
 export function appendSlackNativeDataFallbackText(
   text: string,
   blocks?: readonly unknown[],

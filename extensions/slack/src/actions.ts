@@ -7,13 +7,13 @@ import { z } from "zod";
 import { resolveSlackAccount } from "./accounts.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient, getSlackWriteClient } from "./client.js";
-import { hasSlackDataTableBlock } from "./data-table.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
 import {
   appendSlackNativeDataFallbackText,
+  buildSlackNativeDataFallbackBlocks,
   hasSlackNativeDataBlock,
   isSlackInvalidBlocksError,
 } from "./native-data-blocks.js";
@@ -316,6 +316,7 @@ export async function sendSlackMessage(
     uploadTitle?: string;
     blocks?: (Block | KnownBlock)[];
     textIsSlackMrkdwn?: boolean;
+    separateTextAndBlocks?: boolean;
   },
 ) {
   return await sendMessageSlack(to, content, {
@@ -330,6 +331,7 @@ export async function sendSlackMessage(
     threadTs: opts.threadTs,
     replyBroadcast: opts.replyBroadcast,
     ...(opts.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
+    ...(opts.separateTextAndBlocks ? { separateTextAndBlocks: true } : {}),
     ...(opts.uploadFileName ? { uploadFileName: opts.uploadFileName } : {}),
     ...(opts.uploadTitle ? { uploadTitle: opts.uploadTitle } : {}),
     blocks: opts.blocks,
@@ -349,9 +351,9 @@ export async function editSlackMessage(
   const nativeFallbackText = hasNativeData
     ? appendSlackNativeDataFallbackText(editText, blocks)
     : editText;
-  if (hasSlackDataTableBlock(blocks) && nativeFallbackText.length > SLACK_TEXT_LIMIT) {
+  if (blocks && nativeFallbackText.length > SLACK_TEXT_LIMIT) {
     throw new Error(
-      `Slack table fallback exceeds the ${String(SLACK_TEXT_LIMIT)}-character edit limit. Send a new message instead.`,
+      `Slack block accessibility fallback exceeds OpenClaw's ${String(SLACK_TEXT_LIMIT)}-character per-edit limit. Send a new message instead.`,
     );
   }
   const text = hasNativeData
@@ -370,10 +372,12 @@ export async function editSlackMessage(
       throw error;
     }
     logVerbose("slack edit: native data block rejected, retrying with text fallback");
+    const fallbackBlocks = buildSlackNativeDataFallbackBlocks(blocks);
     await client.chat.update({
       channel: channelId,
       ts: messageId,
       text: truncateSlackText(appendSlackNativeDataFallbackText(text, blocks), SLACK_TEXT_LIMIT),
+      ...(fallbackBlocks?.length ? { blocks: fallbackBlocks } : {}),
     });
   }
 }

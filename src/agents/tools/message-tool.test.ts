@@ -1950,6 +1950,13 @@ describe("message tool schema scoping", () => {
       expect(presentationSchemaJson).not.toContain('"exclusiveMinimum"');
       expect(presentationBlockItemSchema).toMatchObject({ type: "object" });
       expect(presentationBlockItemSchema).not.toHaveProperty("anyOf");
+      expect(
+        (
+          presentationBlockItemSchema as {
+            properties?: { rows?: { items?: { items?: unknown } } };
+          }
+        ).properties?.rows?.items?.items,
+      ).toEqual({ type: ["string", "number"] });
       expect(properties.components).toBeUndefined();
       expect(properties.blocks).toBeUndefined();
       expect(properties.buttons).toBeUndefined();

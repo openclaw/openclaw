@@ -112,7 +112,7 @@ import {
   selectTelegramGroupHistoryAfterLastSelf,
 } from "./group-history-window.js";
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
-import { materializeTelegramUnsupportedPresentationFallback } from "./interactive-fallback.js";
+import { canonicalizeTelegramPresentationPayload } from "./interactive-fallback.js";
 import {
   createLaneDeliveryStateTracker,
   createLaneTextDeliverer,
@@ -1743,9 +1743,7 @@ export const dispatchTelegramMessage = async ({
         delete payloadForPlan.isReasoning;
       }
       const normalized = projectPayloadForDelivery(payloadForPlan);
-      return normalized
-        ? materializeTelegramUnsupportedPresentationFallback(normalized)
-        : undefined;
+      return normalized ? canonicalizeTelegramPresentationPayload(normalized) : undefined;
     };
     const usesNativeTelegramQuote = (payload: ReplyPayload): boolean => {
       if (replyQuoteText != null) {

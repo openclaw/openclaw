@@ -464,6 +464,66 @@ describe("registerTelegramNativeCommands", () => {
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
   });
 
+  it("delivers presentation-only tables returned by plugin commands", async () => {
+    const presentation = {
+      title: "FY25 outlook",
+      blocks: [
+        {
+          type: "table",
+          caption: "Pipeline",
+          headers: ["Account", "Stage"],
+          rows: [["Acme", "Won"]],
+        },
+      ],
+    };
+    const { handler } = registerPlugCommand({ result: { presentation } });
+
+    await handler(createPrivateCommandContext());
+
+    expect(replyAt(firstDeliverRepliesParams())).toMatchObject({ presentation });
+    expect(replyAt(firstDeliverRepliesParams()).text).toBeUndefined();
+  });
+
+  it("delivers Telegram button-only plugin command replies", async () => {
+    const buttons = [[{ text: "Retry", callback_data: "retry" }]];
+    const { handler } = registerPlugCommand({
+      result: { channelData: { telegram: { buttons } } },
+    });
+
+    await handler(createPrivateCommandContext());
+
+    expect(replyAt(firstDeliverRepliesParams())).toEqual({
+      channelData: { telegram: { buttons } },
+    });
+  });
+
+  it("targets reaction-only plugin replies at the invoking command message", async () => {
+    const { handler } = registerPlugCommand({
+      result: { channelData: { telegram: { reaction: { emoji: "🔥" } } } },
+    });
+
+    await handler(createPrivateCommandContext({ messageId: 321 }));
+
+    const deliveryParams = firstDeliverRepliesParams();
+    expect(replyAt(deliveryParams)).toEqual({
+      replyToId: "321",
+      channelData: { telegram: { reaction: { emoji: "🔥" } } },
+    });
+    expect(deliveryParams.replyToMode).toBe("all");
+  });
+
+  it("uses the empty-response fallback for unrelated metadata-only plugin results", async () => {
+    const { handler } = registerPlugCommand({
+      result: { channelData: { plugin: { traceId: "trace-1" } } },
+    });
+
+    await handler(createPrivateCommandContext());
+
+    expect(replyAt(firstDeliverRepliesParams())).toEqual({
+      text: "No response generated. Please try again.",
+    });
+  });
+
   it("replies to unmatched plugin commands in the originating forum topic", async () => {
     const { handler, sendMessage } = registerPlugCommand();
     pluginCommandMocks.matchPluginCommand.mockReturnValue(null as never);

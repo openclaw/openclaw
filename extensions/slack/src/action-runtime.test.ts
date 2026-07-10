@@ -1395,7 +1395,6 @@ describe("handleSlackAction", () => {
     const context = createReplyToFirstContext(hasRepliedRef);
     const content = "x".repeat(8001);
     const blocks = [{ type: "divider" }];
-    sendSlackMessage.mockResolvedValueOnce({ channelId: "controls" });
     sendSlackMessage.mockResolvedValueOnce({ channelId: "content" });
 
     const result = await handleSlackAction(
@@ -1410,21 +1409,14 @@ describe("handleSlackAction", () => {
       context,
     );
 
-    expect(sendSlackMessage).toHaveBeenCalledTimes(2);
-    expectSlackSendCall(0, "channel:C123", "", {
+    expect(sendSlackMessage).toHaveBeenCalledOnce();
+    expectSlackSendCall(0, "channel:C123", content, {
       cfg,
       blocks,
-      threadTs: "1111111111.111111",
-    });
-    expect(requireRecordArg(sendSlackMessage, "sendSlackMessage", 0, 2)).not.toHaveProperty(
-      "replyBroadcast",
-    );
-    const textOptions = expectSlackSendCall(1, "channel:C123", content, {
-      cfg,
       replyBroadcast: true,
+      separateTextAndBlocks: true,
       threadTs: "1111111111.111111",
     });
-    expect(textOptions).not.toHaveProperty("blocks");
     expect(hasRepliedRef.value).toBe(true);
     expect(result.details).toEqual({
       ok: true,
@@ -1448,17 +1440,13 @@ describe("handleSlackAction", () => {
       cfg,
     );
 
-    expect(sendSlackMessage).toHaveBeenCalledTimes(2);
-    expectSlackSendCall(0, "channel:C123", "", {
+    expect(sendSlackMessage).toHaveBeenCalledOnce();
+    expectSlackSendCall(0, "channel:C123", content, {
       cfg,
       blocks,
+      separateTextAndBlocks: true,
       threadTs: undefined,
     });
-    const textOptions = expectSlackSendCall(1, "channel:C123", content, {
-      cfg,
-      threadTs: undefined,
-    });
-    expect(textOptions).not.toHaveProperty("blocks");
   });
 
   it.each([

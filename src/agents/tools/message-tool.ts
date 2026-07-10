@@ -575,7 +575,12 @@ const presentationBlockSchema = Type.Object({
   yLabel: Type.Optional(Type.String()),
   caption: Type.Optional(Type.String()),
   headers: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
-  rows: Type.Optional(Type.Array(Type.Array(Type.Unknown(), { minItems: 1 }), { minItems: 1 })),
+  rows: Type.Optional(
+    Type.Array(
+      Type.Array(Type.Unsafe<string | number>({ type: ["string", "number"] }), { minItems: 1 }),
+      { minItems: 1 },
+    ),
+  ),
   rowHeaderColumnIndex: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 

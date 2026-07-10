@@ -136,21 +136,19 @@ describe("deliverReplies identity passthrough", () => {
       }),
     );
 
-    expect(sendMock).toHaveBeenCalledTimes(2);
-    const [_blockTarget, blockText, blockOptions] = requireSendCall(0);
-    expect(blockText).toBe("");
-    expect(blockOptions.blocks).toEqual([
+    expect(sendMock).toHaveBeenCalledOnce();
+    const [_target, text, options] = requireSendCall();
+    expect(options.blocks).toEqual([
       expect.objectContaining({
         type: "actions",
         elements: [expect.objectContaining({ type: "button", value: "refresh" })],
       }),
     ]);
-    const [_target, text, options] = requireSendCall(1);
     expect(text).toContain("- Account: &lt;@U123&gt;");
     expect(text).toContain("- Account: account-99");
     expect(text.length).toBeGreaterThan(8000);
     expect(options.textIsSlackMrkdwn).toBe(true);
-    expect(options.blocks).toBeUndefined();
+    expect(options.separateTextAndBlocks).toBe(true);
   });
 
   it("delivers media before native chart blocks with the same reply context", async () => {
@@ -250,7 +248,7 @@ describe("deliverReplies identity passthrough", () => {
     const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(event).toMatchObject({
       to: "C123",
-      content: "Revenue summary",
+      content: "Revenue summary\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
       success: true,
     });
     expect(event).not.toHaveProperty("messageId");
@@ -325,7 +323,7 @@ describe("deliverReplies identity passthrough", () => {
     expect(sendMock).toHaveBeenCalledOnce();
     const [target, text, options] = requireSendCall();
     expect(target).toBe("C123");
-    expect(text).toBe("");
+    expect(text).toBe("- Option A");
     expect(options.blocks).toStrictEqual(blocks);
   });
 
@@ -547,7 +545,38 @@ describe("deliverSlackSlashReplies chunking", () => {
     });
   });
 
-  it("retries rejected native charts as a text-only slash response", async () => {
+  it("sends block-only slash replies when their fallback exceeds the chunk limit", async () => {
+    const respond = vi.fn(async () => undefined);
+    const blocks = [
+      {
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            action_id: "refresh",
+            text: { type: "plain_text", text: "Refresh" },
+            value: "refresh",
+          },
+        ],
+      },
+    ];
+
+    await deliverSlackSlashReplies({
+      replies: [{ channelData: { slack: { blocks } } }],
+      respond,
+      ephemeral: true,
+      textLimit: 8,
+    });
+
+    expect(respond).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith({
+      text: "- Refresh",
+      blocks,
+      response_type: "ephemeral",
+    });
+  });
+
+  it("retries rejected native charts as visible fallback blocks", async () => {
     const respond = vi
       .fn(async () => undefined)
       .mockRejectedValueOnce({ response: { data: { error: "invalid_blocks" } } });
@@ -586,11 +615,22 @@ describe("deliverSlackSlashReplies chunking", () => {
     });
     expect(respond).toHaveBeenNthCalledWith(2, {
       text: "Overview\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
+      blocks: [
+        blocks[0],
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
+            verbatim: true,
+          },
+        },
+      ],
       response_type: "ephemeral",
     });
   });
 
-  it("retries rejected native tables once with complete text and no blocks", async () => {
+  it("retries rejected native tables once with visible complete fallback blocks", async () => {
     const respond = vi
       .fn(async () => undefined)
       .mockRejectedValueOnce({ response: { data: { error: "invalid_blocks" } } });
@@ -644,24 +684,150 @@ describe("deliverSlackSlashReplies chunking", () => {
     });
     expect(respond).toHaveBeenNthCalledWith(2, {
       text: fallback,
+      blocks: [
+        blocks[0],
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: [
+              "Pipeline report (table)",
+              "- Account: Acme; ARR: $125k",
+              "- Account: Globex; ARR: $82k",
+            ].join("\n"),
+            verbatim: true,
+          },
+        },
+      ],
       response_type: "ephemeral",
     });
   });
 
-  it("chunks overlong table fallbacks into text-only slash responses", async () => {
+  it("propagates invalid_blocks when a slash fallback retains an invalid sibling", async () => {
+    const invalidBlocks = { response: { data: { error: "invalid_blocks" } } };
+    const respond = vi.fn(async () => invalidBlocks);
+
+    await expect(
+      deliverSlackSlashReplies({
+        replies: [
+          {
+            text: "Overview",
+            channelData: {
+              slack: {
+                blocks: [
+                  { type: "section", text: { type: "mrkdwn", text: "Invalid sibling" } },
+                  {
+                    type: "data_visualization",
+                    title: "Revenue mix",
+                    chart: {
+                      type: "pie",
+                      segments: [{ label: "Product", value: 60 }],
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        ],
+        respond,
+        ephemeral: true,
+        textLimit: 8000,
+      }),
+    ).rejects.toBe(invalidBlocks);
+
+    expect(respond).toHaveBeenCalledTimes(2);
+  });
+
+  it("chunks a long chart fallback before slash delivery while retaining siblings", async () => {
+    const respond = vi.fn(
+      async (_message: { text: string; blocks?: unknown; response_type?: string }) => undefined,
+    );
+    const categories = Array.from(
+      { length: 20 },
+      (_entry, index) => `category-${String(index)}-${"x".repeat(80)}`,
+    );
+
+    await deliverSlackSlashReplies({
+      replies: [
+        {
+          channelData: {
+            slack: {
+              blocks: [
+                ...Array.from({ length: 47 }, () => ({ type: "divider" })),
+                {
+                  type: "data_visualization",
+                  title: "Large chart",
+                  chart: {
+                    type: "bar",
+                    axis_config: { categories },
+                    series: Array.from({ length: 7 }, (_entry, index) => ({
+                      name: `Series ${String(index)}`,
+                      data: categories.map((label) => ({ label, value: index })),
+                    })),
+                  },
+                },
+              ],
+            },
+          },
+        },
+      ],
+      respond,
+      ephemeral: true,
+      textLimit: 8000,
+    });
+
+    expect(respond.mock.calls.length).toBeGreaterThan(1);
+    expect(respond.mock.calls[0]?.[0]).toMatchObject({
+      blocks: Array.from({ length: 47 }, () => ({ type: "divider" })),
+    });
+    expect(
+      respond.mock.calls.slice(1).every(([message]) => !(message as { blocks?: unknown }).blocks),
+    ).toBe(true);
+    expect(
+      respond.mock.calls.map(([message]) => (message as { text?: string }).text ?? "").join("\n"),
+    ).toContain("Series 6");
+  });
+
+  it("chunks overlong table fallbacks while preserving slash-response sibling blocks", async () => {
     const respond = vi.fn(
       async (_message: { text: string; blocks?: unknown; response_type?: string }) => undefined,
     );
     const header = "Account".padEnd(80, "x");
     const blocks = [
+      { type: "section", text: { type: "mrkdwn", text: "Overview" } },
       {
         type: "data_table",
         caption: "Large pipeline",
         rows: [
           [{ type: "raw_text", text: header }],
           ...Array.from({ length: 100 }, (_entry, index) => [
-            { type: "raw_text", text: `account-${String(index)}` },
+            {
+              type: "raw_text",
+              text: index === 0 ? "<@U123>" : `account-${String(index)}`,
+            },
           ]),
+        ],
+      },
+      {
+        type: "data_visualization",
+        title: "Revenue mix",
+        chart: {
+          type: "pie",
+          segments: [
+            { label: "Product", value: 60 },
+            { label: "Services", value: 40 },
+          ],
+        },
+      },
+      {
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            text: { type: "plain_text", text: "Refresh" },
+            action_id: "refresh",
+            value: "refresh",
+          },
         ],
       },
     ] as never;
@@ -673,10 +839,69 @@ describe("deliverSlackSlashReplies chunking", () => {
       textLimit: 8000,
     });
 
-    expect(respond.mock.calls.length).toBeGreaterThan(1);
+    expect(respond.mock.calls.length).toBeGreaterThan(2);
     const messages = respond.mock.calls.map(([message]) => message);
-    expect(messages.every((message) => message.blocks === undefined)).toBe(true);
-    expect(messages.map((message) => message.text).join("\n")).toContain(`- ${header}: account-99`);
+    expect(messages[0]?.blocks).toEqual([blocks[3]]);
+    expect(messages.slice(1).every((message) => message.blocks === undefined)).toBe(true);
+    const deliveredText = messages.map((message) => message.text).join("\n");
+    expect(deliveredText).toContain(`- ${header}: &lt;@U123&gt;`);
+    expect(deliveredText).toContain(`- ${header}: account-99`);
+    expect(deliveredText).toContain("Revenue mix (pie chart)");
+    expect(deliveredText).not.toContain("<@U123>");
+  });
+
+  it("explains slash replies that exceed Slack's response_url budget before sending content", async () => {
+    const respond = vi.fn(async () => undefined);
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+
+    await deliverSlackSlashReplies({
+      replies: [{ text: "a".repeat(40_001) }],
+      respond,
+      ephemeral: true,
+      textLimit: 8000,
+      messageSentHookTarget: "user:U1",
+    });
+
+    expect(respond).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith({
+      text: expect.stringContaining("6 responses needed; 5 available"),
+      response_type: "ephemeral",
+    });
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledOnce();
+    expect(messageHookRunner.runMessageSent.mock.calls[0]?.[0]).toMatchObject({
+      to: "user:U1",
+      success: false,
+      error: expect.stringContaining("6 responses needed; 5 available"),
+    });
+  });
+
+  it("shares the response_url budget across streamed slash deliveries", async () => {
+    const respond = vi.fn(
+      async (_message: { text: string; blocks?: unknown; response_type?: string }) => undefined,
+    );
+    const responseUrlBudget = { used: 0 };
+
+    await deliverSlackSlashReplies({
+      replies: [{ text: "a".repeat(16_001) }],
+      respond,
+      responseUrlBudget,
+      ephemeral: true,
+      textLimit: 8000,
+    });
+    await deliverSlackSlashReplies({
+      replies: [{ text: "b".repeat(16_001) }],
+      respond,
+      responseUrlBudget,
+      ephemeral: true,
+      textLimit: 8000,
+    });
+
+    expect(responseUrlBudget).toEqual({ used: 4, closed: true });
+    expect(respond).toHaveBeenCalledTimes(4);
+    expect(respond.mock.calls[3]?.[0]).toEqual({
+      text: expect.stringContaining("3 responses needed; 2 available"),
+      response_type: "ephemeral",
+    });
   });
 
   it("preserves controls while chunking non-native tables with media links", async () => {
@@ -718,6 +943,60 @@ describe("deliverSlackSlashReplies chunking", () => {
     expect(deliveredText).toContain("- Account: account-99");
     expect(deliveredText).toContain("https://example.com/report.png");
     expect(deliveredText).not.toContain("<@U123>");
+  });
+
+  it("uses one sibling prelude when portable and raw tables both require fallback", async () => {
+    const respond = vi.fn(
+      async (_message: { text: string; blocks?: unknown; response_type?: string }) => undefined,
+    );
+    const header = "Raw account".padEnd(80, "x");
+    const rawBlocks = [
+      { type: "section", text: { type: "mrkdwn", text: "Raw overview" } },
+      {
+        type: "data_table",
+        caption: "Raw pipeline",
+        rows: [
+          [{ type: "raw_text", text: header }],
+          ...Array.from({ length: 100 }, (_entry, index) => [
+            { type: "raw_text", text: `raw-${String(index)}` },
+          ]),
+        ],
+      },
+    ] as never;
+
+    await deliverSlackSlashReplies({
+      replies: [
+        {
+          presentation: largePortableTablePresentation(),
+          channelData: { slack: { blocks: rawBlocks } },
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Refresh", value: "refresh" }],
+              },
+            ],
+          },
+        },
+      ],
+      respond,
+      ephemeral: true,
+      textLimit: 8000,
+    });
+
+    const messages = respond.mock.calls.map(([message]) => message);
+    expect(messages[0]?.blocks).toEqual([
+      rawBlocks[0],
+      expect.objectContaining({
+        type: "actions",
+        elements: [expect.objectContaining({ type: "button", value: "refresh" })],
+      }),
+    ]);
+    expect(messages.slice(1).every((message) => message.blocks === undefined)).toBe(true);
+    const deliveredText = messages.map((message) => message.text).join("\n");
+    expect(deliveredText).toContain("- Account: account-99");
+    expect(deliveredText).toContain(`- ${header}: raw-99`);
+    expect(deliveredText.match(/Raw overview/g)).toHaveLength(1);
   });
 
   it("suppresses reasoning payloads in slash replies", async () => {

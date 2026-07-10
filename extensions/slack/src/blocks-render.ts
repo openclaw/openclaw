@@ -329,6 +329,7 @@ export function buildSlackPresentationBlocks(
           elements: [
             {
               type: "mrkdwn",
+              verbatim: true,
               text: truncateSlackText(
                 renderSlackMessagePresentationChartFallbackText(block),
                 SLACK_SECTION_TEXT_MAX,
@@ -442,11 +443,14 @@ export function canRenderSlackPresentationTables(
 }
 
 /** True when native Slack rendering preserves every portable control. */
-export function canRenderSlackPresentation(presentation: MessagePresentation): boolean {
+export function canRenderSlackPresentation(
+  presentation: MessagePresentation,
+  options: SlackBlockRenderOptions = {},
+): boolean {
   if (presentation.title && !isWithinSlackLimit(presentation.title.trim(), SLACK_HEADER_TEXT_MAX)) {
     return false;
   }
-  if (!canRenderSlackPresentationTables(presentation)) {
+  if (!canRenderSlackPresentationTables(presentation, options)) {
     return false;
   }
   for (const block of presentation.blocks) {
@@ -459,7 +463,11 @@ export function canRenderSlackPresentation(presentation: MessagePresentation): b
     if (block.type === "buttons") {
       const allButtonsRenderable =
         block.buttons.length <= SLACK_ACTION_BLOCK_ELEMENTS_MAX &&
-        block.buttons.every((button) => resolveSlackPresentationButtonTarget(button) !== undefined);
+        block.buttons.every(
+          (button) =>
+            isWithinSlackLimit(button.label, SLACK_ACTION_LABEL_MAX) &&
+            resolveSlackPresentationButtonTarget(button) !== undefined,
+        );
       if (!allButtonsRenderable) {
         return false;
       }
@@ -468,11 +476,14 @@ export function canRenderSlackPresentation(presentation: MessagePresentation): b
     if (block.type === "select") {
       const allOptionsRenderable =
         block.options.length <= SLACK_STATIC_SELECT_OPTIONS_MAX &&
-        block.options.every((option) =>
-          isRenderableSlackOption({
-            label: option.label,
-            value: resolveSlackControlValue(option),
-          }),
+        (!block.placeholder || isWithinSlackLimit(block.placeholder, SLACK_ACTION_LABEL_MAX)) &&
+        block.options.every(
+          (option) =>
+            isWithinSlackLimit(option.label, SLACK_ACTION_LABEL_MAX) &&
+            isRenderableSlackOption({
+              label: option.label,
+              value: resolveSlackControlValue(option),
+            }),
         );
       if (!allOptionsRenderable) {
         return false;
@@ -483,6 +494,8 @@ export function canRenderSlackPresentation(presentation: MessagePresentation): b
       if (!canRenderSlackDataVisualization(block)) {
         return false;
       }
+      // The renderer preserves valid charts beyond Slack's native two-block
+      // budget as visible context, so count overflow is still lossless here.
       continue;
     }
     if (block.type === "table") {

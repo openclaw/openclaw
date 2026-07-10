@@ -453,7 +453,7 @@ describe("buildSlackPresentationBlocks", () => {
     ).toEqual([
       {
         type: "context",
-        elements: [{ type: "mrkdwn", text: `${title} (pie chart)\n- Product: 60` }],
+        elements: [{ type: "mrkdwn", text: `${title} (pie chart)\n- Product: 60`, verbatim: true }],
       },
     ]);
   });
@@ -495,6 +495,7 @@ describe("buildSlackPresentationBlocks", () => {
         {
           type: "mrkdwn",
           text: "Active sessions (area chart)\n- Sessions: 09:00: 3",
+          verbatim: true,
         },
       ],
     });
@@ -529,6 +530,7 @@ describe("buildSlackPresentationBlocks", () => {
           {
             type: "mrkdwn",
             text: "Presentation chart (pie chart)\n- Closed: 8",
+            verbatim: true,
           },
         ],
       },
