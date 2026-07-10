@@ -209,7 +209,8 @@ describe("chunkDiscordText", () => {
     // With maxLines: 10 and Reasoning:\n_ prefix, chunk 1 holds
     // lines 1-10 (Reasoning + 9 body lines). Chunk 2 starts at
     // line 11 = the code fence. The rebalancing guard must not
-    // prepend _ to ```python.
+    // prepend _ to ```python, and must not leave a trailing _
+    // on the preceding chunk either.
     const body = [
       "1. line",
       "2. line",
@@ -230,16 +231,23 @@ describe("chunkDiscordText", () => {
     const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
     expect(chunks.length).toBeGreaterThan(1);
 
-    // chunk 2 starts with "```python" — the closing _ from chunk 1
-    // must not be prepended to this line.
+    // The code-fence chunk must not have a leading italic underscore.
+    // Every chunk must have balanced delimiters — no orphan _``` or
+    // trailing _ that is never reopened.
     for (const chunk of chunks) {
       expect(chunk).not.toMatch(/_```/);
     }
+    // The chunk immediately before the code fence must not end with an
+    // unmatched underscore.
+    const fenceIdx = chunks.findIndex((c) => c.trimStart().startsWith("```"));
+    expect(fenceIdx).toBeGreaterThan(0);
+    expect(chunks[fenceIdx - 1].trimEnd().endsWith("_")).toBe(false);
   });
 
   it("does not prepend italics underscore to start of chunk when it opens with inline code", () => {
     // Same reasoning as above: chunk 2 opens with `inline code`,
-    // not a normal text line.
+    // not a normal text line. Both close on the preceding chunk
+    // and reopen on this one must be skipped to keep delimiters balanced.
     const body = [
       "1. line",
       "2. line",
@@ -261,5 +269,10 @@ describe("chunkDiscordText", () => {
     for (const chunk of chunks) {
       expect(chunk).not.toMatch(/_`/);
     }
+    // The chunk immediately before the inline-code chunk must not end
+    // with an unmatched underscore.
+    const inlineIdx = chunks.findIndex((c) => c.trimStart().startsWith("`"));
+    expect(inlineIdx).toBeGreaterThan(0);
+    expect(chunks[inlineIdx - 1].trimEnd().endsWith("_")).toBe(false);
   });
 });

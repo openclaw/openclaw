@@ -302,28 +302,31 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
     return chunks;
   }
 
+  // Code fences and inline code naturally break italic context — skip
+  // both close (current) and reopen (next) so no chunk carries an
+  // unmatched delimiter.
+  const startsWithCode = (s: string) => s.trimStart().startsWith("`");
+
   const adjusted = [...chunks];
   for (let i = 0; i < adjusted.length; i++) {
-    const isLast = i === adjusted.length - 1;
     const current = adjusted[i];
+    const next = i < adjusted.length - 1 ? adjusted[i + 1] : null;
 
-    // Ensure current chunk closes italics so Discord renders it italicized.
-    const needsClosing = !current.trimEnd().endsWith("_");
-    if (needsClosing) {
+    const skipClose =
+      current.trimEnd().endsWith("_") ||
+      startsWithCode(current) ||
+      (next !== null && startsWithCode(next));
+    if (!skipClose) {
       adjusted[i] = `${current}_`;
     }
 
-    if (isLast) {
+    if (next === null) {
       break;
     }
 
-    // Re-open italics on the next chunk if needed.
-    const next = adjusted[i + 1];
-    const leadingWhitespaceLen = next.length - next.trimStart().length;
-    const leadingWhitespace = next.slice(0, leadingWhitespaceLen);
-    const nextBody = next.slice(leadingWhitespaceLen);
-    if (!nextBody.startsWith("_") && !nextBody.startsWith("`")) {
-      adjusted[i + 1] = `${leadingWhitespace}_${nextBody}`;
+    if (!next.trimStart().startsWith("_") && !startsWithCode(next)) {
+      const wsLen = next.length - next.trimStart().length;
+      adjusted[i + 1] = `${next.slice(0, wsLen)}_${next.trimStart()}`;
     }
   }
 
