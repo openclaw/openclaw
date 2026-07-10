@@ -482,22 +482,137 @@ jobs:
   run_live_telegram:
     name: Run Telegram live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
+    if: needs.validate_selected_ref.outputs.trusted_reason != 'open-pr-head'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 60
     environment: qa-live-shared
     steps:
-      - name: Checkout selected ref
+      - name: Checkout trusted Telegram QA bootstrap
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+
+      - name: Setup candidate build toolchain
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+          install-deps: "false"
+          use-actions-cache: "false"
+
+      - name: Checkout candidate runtime
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           fetch-depth: 1
+          path: .candidate
 
-      - name: Setup Node environment
+      - name: Verify candidate checkout SHA
+        env:
+          EXPECTED_CANDIDATE_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_sha="$(git -C .candidate rev-parse HEAD)"
+
+          if [[ "$candidate_sha" != "$EXPECTED_CANDIDATE_SHA" ]]; then
+            echo "Telegram QA candidate resolved to ${candidate_sha}, expected ${EXPECTED_CANDIDATE_SHA}." >&2
+            exit 1
+          fi
+
+          echo "Candidate runtime/plugin SHA: ${candidate_sha}"
+
+      - name: Install candidate dependencies
+        env:
+          CI: "true"
+        run: |
+          pnpm --dir .candidate install \
+            --store-dir "$RUNNER_TEMP/openclaw-telegram-candidate-pnpm-store" \
+            --prefer-offline \
+            --frozen-lockfile \
+            --ignore-scripts=false \
+            --config.engine-strict=false \
+            --config.enable-pre-post-scripts=true \
+            --config.side-effects-cache=true
+
+      - name: Build candidate runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=12288
+        working-directory: .candidate
+        run: node scripts/build-all.mjs qaRuntime
+
+      - name: Move built candidate outside trusted workspace
+        env:
+          EXPECTED_CANDIDATE_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_root="$RUNNER_TEMP/openclaw-telegram-candidate"
+          rm -rf "$candidate_root"
+          mv .candidate "$candidate_root"
+          candidate_sha="$(git -C "$candidate_root" rev-parse HEAD)"
+          if [[ "$candidate_sha" != "$EXPECTED_CANDIDATE_SHA" ]]; then
+            echo "Moved Telegram QA candidate resolved to ${candidate_sha}, expected ${EXPECTED_CANDIDATE_SHA}." >&2
+            exit 1
+          fi
+          echo "Moved candidate runtime/plugin SHA: ${candidate_sha}"
+
+      - name: Checkout trusted Telegram QA harness
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          clean: true
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+
+      - name: Verify trusted harness and candidate SHAs
+        env:
+          EXPECTED_CANDIDATE_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+          TRUSTED_HARNESS_SHA: ${{ github.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_root="$RUNNER_TEMP/openclaw-telegram-candidate"
+          trusted_harness_sha="$(git rev-parse HEAD)"
+          candidate_sha="$(git -C "$candidate_root" rev-parse HEAD)"
+
+          if [[ "$trusted_harness_sha" != "$TRUSTED_HARNESS_SHA" ]]; then
+            echo "Trusted Telegram QA harness resolved to ${trusted_harness_sha}, expected ${TRUSTED_HARNESS_SHA}." >&2
+            exit 1
+          fi
+          if [[ "$candidate_sha" != "$EXPECTED_CANDIDATE_SHA" ]]; then
+            echo "Telegram QA candidate resolved to ${candidate_sha}, expected ${EXPECTED_CANDIDATE_SHA}." >&2
+            exit 1
+          fi
+          if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
+            echo "Trusted Telegram QA checkout is not clean after restoration." >&2
+            git status --short
+            exit 1
+          fi
+
+          echo "Trusted Telegram QA harness SHA: ${trusted_harness_sha}"
+          echo "Candidate runtime/plugin SHA: ${candidate_sha}"
+          {
+            echo "## Telegram QA source attestation"
+            echo
+            echo "- Trusted harness and scenarios: \`${trusted_harness_sha}\` (\`github.workflow_sha\`)"
+            echo "- Candidate runtime and plugins: \`${candidate_sha}\` (\`${RUNNER_TEMP}/openclaw-telegram-candidate\`)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Setup trusted harness Node environment
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
+          install-deps: "true"
+
+      - name: Build trusted QA harness
+        env:
+          NODE_OPTIONS: --max-old-space-size=12288
+        run: node scripts/build-all.mjs qaRuntime
 
       - &qa_live_required_credentials_step
         name: Validate required QA credential env
@@ -521,11 +636,6 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SITE_URL
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
 
-      - name: Build private QA runtime
-        env:
-          NODE_OPTIONS: --max-old-space-size=12288
-        run: pnpm build
-
       - name: Run Telegram live lane
         id: run_lane
         shell: bash
@@ -540,7 +650,9 @@ jobs:
         run: |
           set -euo pipefail
 
+          candidate_root="$RUNNER_TEMP/openclaw-telegram-candidate"
           output_dir=".artifacts/qa-e2e/telegram-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          artifact_dir="${candidate_root}/${output_dir}"
           scenario_args=()
 
           if [[ -n "${INPUT_SCENARIO// }" ]]; then
@@ -553,10 +665,17 @@ jobs:
             done
           fi
 
-          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+          mkdir -p "$artifact_dir"
+          {
+            printf 'trusted_harness_sha=%s\n' "$(git rev-parse HEAD)"
+            printf 'candidate_runtime_plugin_sha=%s\n' "$(git -C "$candidate_root" rev-parse HEAD)"
+            printf 'trusted_scenario_source=github.workflow_sha\n'
+            printf 'candidate_repo_root=%s\n' "$candidate_root"
+          } > "${artifact_dir}/source-attestation.txt"
+          echo "output_dir=${artifact_dir}" >> "$GITHUB_OUTPUT"
 
           pnpm openclaw qa telegram \
-            --repo-root . \
+            --repo-root "$candidate_root" \
             --output-dir "${output_dir}" \
             --provider-mode live-frontier \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \

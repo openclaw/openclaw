@@ -1474,18 +1474,168 @@ jobs:
       OPENCLAW_BUILD_PRIVATE_QA: "1"
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
-      - name: Checkout selected ref
+      - name: Checkout trusted Telegram QA bootstrap
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+
+      - name: Setup candidate build toolchain
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+          install-deps: "false"
+          use-actions-cache: "false"
+
+      - name: Checkout candidate runtime
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
+          path: .candidate
 
-      - name: Setup Node environment
+      - name: Verify candidate checkout SHA
+        env:
+          EXPECTED_CANDIDATE_SHA: ${{ needs.resolve_target.outputs.revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_sha="$(git -C .candidate rev-parse HEAD)"
+
+          if [[ "$candidate_sha" != "$EXPECTED_CANDIDATE_SHA" ]]; then
+            echo "Telegram QA candidate resolved to ${candidate_sha}, expected ${EXPECTED_CANDIDATE_SHA}." >&2
+            exit 1
+          fi
+
+          echo "Candidate runtime/plugin SHA: ${candidate_sha}"
+
+      - name: Validate candidate release provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_sha="$(git -C .candidate rev-parse HEAD)"
+
+          git -C .candidate fetch --no-tags origin \
+            '+refs/heads/main:refs/remotes/origin/main' \
+            '+refs/heads/release/*:refs/remotes/origin/release/*' \
+            '+refs/heads/release-ci/*:refs/remotes/origin/release-ci/*' \
+            '+refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*' \
+            '+refs/heads/tideclaw/alpha/*:refs/remotes/origin/tideclaw/alpha/*'
+          git -C .candidate fetch --tags origin '+refs/tags/v*:refs/tags/v*'
+
+          trusted_reason=""
+          if git -C .candidate merge-base --is-ancestor "$candidate_sha" refs/remotes/origin/main; then
+            trusted_reason="main-ancestor"
+          elif git -C .candidate tag --points-at "$candidate_sha" | grep -Eq '^v'; then
+            trusted_reason="release-tag"
+          elif git -C .candidate for-each-ref \
+            --format='%(objectname)' \
+            refs/remotes/origin/release \
+            refs/remotes/origin/release-ci \
+            refs/remotes/origin/extended-stable \
+            refs/remotes/origin/tideclaw/alpha |
+            grep -Fxq "$candidate_sha"; then
+            trusted_reason="trusted-branch-head"
+          fi
+
+          if [[ -z "$trusted_reason" ]]; then
+            echo "Telegram QA candidate ${candidate_sha} is not trusted for same-runner secret-bearing validation." >&2
+            echo "Allowed candidates are main ancestors, v* tags, or exact heads of release/*, release-ci/*, extended-stable/*, and tideclaw/alpha/*." >&2
+            exit 1
+          fi
+          echo "Telegram QA candidate trust reason: ${trusted_reason}"
+
+      - name: Install candidate dependencies
+        env:
+          CI: "true"
+        run: |
+          pnpm --dir .candidate install \
+            --store-dir "$RUNNER_TEMP/openclaw-telegram-candidate-pnpm-store" \
+            --prefer-offline \
+            --frozen-lockfile \
+            --ignore-scripts=false \
+            --config.engine-strict=false \
+            --config.enable-pre-post-scripts=true \
+            --config.side-effects-cache=true
+
+      - name: Build candidate runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        working-directory: .candidate
+        run: node scripts/build-all.mjs qaRuntime
+
+      - name: Move built candidate outside trusted workspace
+        env:
+          EXPECTED_CANDIDATE_SHA: ${{ needs.resolve_target.outputs.revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_root="$RUNNER_TEMP/openclaw-telegram-candidate"
+          rm -rf "$candidate_root"
+          mv .candidate "$candidate_root"
+          candidate_sha="$(git -C "$candidate_root" rev-parse HEAD)"
+          if [[ "$candidate_sha" != "$EXPECTED_CANDIDATE_SHA" ]]; then
+            echo "Moved Telegram QA candidate resolved to ${candidate_sha}, expected ${EXPECTED_CANDIDATE_SHA}." >&2
+            exit 1
+          fi
+          echo "Moved candidate runtime/plugin SHA: ${candidate_sha}"
+
+      - name: Checkout trusted Telegram QA harness
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          clean: true
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+
+      - name: Verify trusted harness and candidate SHAs
+        env:
+          EXPECTED_CANDIDATE_SHA: ${{ needs.resolve_target.outputs.revision }}
+          TRUSTED_HARNESS_SHA: ${{ github.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_root="$RUNNER_TEMP/openclaw-telegram-candidate"
+          trusted_harness_sha="$(git rev-parse HEAD)"
+          candidate_sha="$(git -C "$candidate_root" rev-parse HEAD)"
+
+          if [[ "$trusted_harness_sha" != "$TRUSTED_HARNESS_SHA" ]]; then
+            echo "Trusted Telegram QA harness resolved to ${trusted_harness_sha}, expected ${TRUSTED_HARNESS_SHA}." >&2
+            exit 1
+          fi
+          if [[ "$candidate_sha" != "$EXPECTED_CANDIDATE_SHA" ]]; then
+            echo "Telegram QA candidate resolved to ${candidate_sha}, expected ${EXPECTED_CANDIDATE_SHA}." >&2
+            exit 1
+          fi
+          if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
+            echo "Trusted Telegram QA checkout is not clean after restoration." >&2
+            git status --short
+            exit 1
+          fi
+
+          echo "Trusted Telegram QA harness SHA: ${trusted_harness_sha}"
+          echo "Candidate runtime/plugin SHA: ${candidate_sha}"
+          {
+            echo "## Telegram QA source attestation"
+            echo
+            echo "- Trusted harness and scenarios: \`${trusted_harness_sha}\` (\`github.workflow_sha\`)"
+            echo "- Candidate runtime and plugins: \`${candidate_sha}\` (\`${RUNNER_TEMP}/openclaw-telegram-candidate\`)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Setup trusted harness Node environment
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
+          install-deps: "true"
+
+      - name: Build trusted QA harness
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: node scripts/build-all.mjs qaRuntime
 
       - &release_qa_required_credentials_step
         name: Validate required QA credential env
@@ -1507,11 +1657,6 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SITE_URL
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
 
-      - name: Build private QA runtime
-        env:
-          NODE_OPTIONS: --max-old-space-size=8192
-        run: node scripts/build-all.mjs qaRuntime
-
       - name: Run Telegram live lane
         id: run_lane
         shell: bash
@@ -1523,13 +1668,22 @@ jobs:
         run: |
           set -euo pipefail
 
+          candidate_root="$RUNNER_TEMP/openclaw-telegram-candidate"
           output_dir=".artifacts/qa-e2e/telegram-live-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+          artifact_dir="${candidate_root}/${output_dir}"
+          mkdir -p "$artifact_dir"
+          {
+            printf 'trusted_harness_sha=%s\n' "$(git rev-parse HEAD)"
+            printf 'candidate_runtime_plugin_sha=%s\n' "$(git -C "$candidate_root" rev-parse HEAD)"
+            printf 'trusted_scenario_source=github.workflow_sha\n'
+            printf 'candidate_repo_root=%s\n' "$candidate_root"
+          } > "${artifact_dir}/source-attestation.txt"
+          echo "output_dir=${artifact_dir}" >> "$GITHUB_OUTPUT"
 
           for attempt in 1 2; do
             attempt_output_dir="${output_dir}/attempt-${attempt}"
             if pnpm openclaw qa telegram \
-              --repo-root . \
+              --repo-root "$candidate_root" \
               --output-dir "${attempt_output_dir}" \
               --provider-mode mock-openai \
               --model mock-openai/gpt-5.5 \
@@ -1552,7 +1706,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-qa-live-telegram-${{ needs.resolve_target.outputs.revision }}
-          path: .artifacts/qa-e2e/
+          path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
           if-no-files-found: error
 
