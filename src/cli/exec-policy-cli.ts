@@ -12,6 +12,8 @@ import {
   type ExecPolicyScopeSnapshot,
 } from "../infra/exec-approvals-effective.js";
 import {
+  maxAsk,
+  minSecurity,
   normalizeExecAsk,
   normalizeExecSecurity,
   normalizeExecTarget,
@@ -27,9 +29,6 @@ import {
 import { defaultRuntime } from "../runtime.js";
 
 type ExecPolicyPresetName = "yolo" | "cautious" | "deny-all";
-
-const EXEC_SECURITY_PERMISSIVENESS = { deny: 0, allowlist: 1, full: 2 } as const;
-const EXEC_ASK_PERMISSIVENESS = { always: 0, "on-miss": 1, off: 2 } as const;
 
 type ExecPolicyResolved = {
   host?: ExecTarget;
@@ -233,10 +232,8 @@ function buildExecPolicyApprovalsRollback(params: {
     const originalValue = params.original.defaults?.[field];
     const rollbackDoesNotLoosen =
       field === "ask"
-        ? EXEC_ASK_PERMISSIVENESS[originalDefaults.ask] <=
-          EXEC_ASK_PERMISSIVENESS[currentDefaults.ask]
-        : EXEC_SECURITY_PERMISSIVENESS[originalDefaults[field]] <=
-          EXEC_SECURITY_PERMISSIVENESS[currentDefaults[field]];
+        ? maxAsk(originalDefaults.ask, currentDefaults.ask) === originalDefaults.ask
+        : minSecurity(originalDefaults[field], currentDefaults[field]) === originalDefaults[field];
     if (
       appliedValue !== undefined &&
       currentValue === params.written.defaults?.[field] &&
