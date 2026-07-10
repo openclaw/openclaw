@@ -1513,17 +1513,27 @@ jobs:
           echo "Candidate runtime/plugin SHA: ${candidate_sha}"
 
       - name: Validate candidate release provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           candidate_sha="$(git -C .candidate rev-parse HEAD)"
 
+          pr_head_count="$(
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              "repos/${GITHUB_REPOSITORY}/commits/${candidate_sha}/pulls" \
+              --jq '[.[] | select(.state == "open" and .head.repo.full_name == "'"${GITHUB_REPOSITORY}"'" and .head.sha == "'"${candidate_sha}"'")] | length'
+          )"
+          if [[ "$pr_head_count" != "0" ]]; then
+            echo "Telegram QA candidate ${candidate_sha} is an open same-repository PR head and cannot enter same-runner secret-bearing validation." >&2
+            exit 1
+          fi
+
           git -C .candidate fetch --no-tags origin \
             '+refs/heads/main:refs/remotes/origin/main' \
-            '+refs/heads/release/*:refs/remotes/origin/release/*' \
-            '+refs/heads/release-ci/*:refs/remotes/origin/release-ci/*' \
-            '+refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*' \
-            '+refs/heads/tideclaw/alpha/*:refs/remotes/origin/tideclaw/alpha/*'
+            '+refs/heads/release/*:refs/remotes/origin/release/*'
           git -C .candidate fetch --tags origin '+refs/tags/v*:refs/tags/v*'
 
           trusted_reason=""
@@ -1533,17 +1543,14 @@ jobs:
             trusted_reason="release-tag"
           elif git -C .candidate for-each-ref \
             --format='%(objectname)' \
-            refs/remotes/origin/release \
-            refs/remotes/origin/release-ci \
-            refs/remotes/origin/extended-stable \
-            refs/remotes/origin/tideclaw/alpha |
+            refs/remotes/origin/release |
             grep -Fxq "$candidate_sha"; then
-            trusted_reason="trusted-branch-head"
+            trusted_reason="release-branch-head"
           fi
 
           if [[ -z "$trusted_reason" ]]; then
             echo "Telegram QA candidate ${candidate_sha} is not trusted for same-runner secret-bearing validation." >&2
-            echo "Allowed candidates are main ancestors, v* tags, or exact heads of release/*, release-ci/*, extended-stable/*, and tideclaw/alpha/*." >&2
+            echo "Allowed candidates are main ancestors, v* tags, or exact heads of protected release/* branches." >&2
             exit 1
           fi
           echo "Telegram QA candidate trust reason: ${trusted_reason}"

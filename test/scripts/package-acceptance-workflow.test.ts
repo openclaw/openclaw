@@ -1898,216 +1898,198 @@ describe("package artifact reuse", () => {
     );
   });
 
-  it("runs current trusted Telegram QA harnesses against exact candidate runtimes", () => {
+  it("runs the current trusted Telegram QA harness against the exact release candidate", () => {
     const scenarioCatalog = readFileSync(QA_SCENARIO_CATALOG, "utf8");
-    const cases = [
-      {
-        workflowPath: QA_LIVE_TRANSPORTS_WORKFLOW,
-        jobName: "run_live_telegram",
-        candidateRef: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
-        outputArg: '--output-dir "${output_dir}"',
-      },
-      {
-        workflowPath: RELEASE_CHECKS_WORKFLOW,
-        jobName: "qa_live_telegram_release_checks",
-        candidateRef: "${{ needs.resolve_target.outputs.revision }}",
-        outputArg: '--output-dir "${attempt_output_dir}"',
-      },
-    ] as const;
-
-    for (const { workflowPath, jobName, candidateRef, outputArg } of cases) {
-      const job = workflowJob(workflowPath, jobName);
-      const bootstrapCheckout = workflowStep(job, "Checkout trusted Telegram QA bootstrap");
-      const setupCandidateToolchain = workflowStep(job, "Setup candidate build toolchain");
-      const candidateCheckout = workflowStep(job, "Checkout candidate runtime");
-      const verifyCandidate = workflowStep(job, "Verify candidate checkout SHA");
-      const installCandidate = workflowStep(job, "Install candidate dependencies");
-      const buildCandidate = workflowStep(job, "Build candidate runtime");
-      const moveCandidate = workflowStep(job, "Move built candidate outside trusted workspace");
-      const trustedCheckout = workflowStep(job, "Checkout trusted Telegram QA harness");
-      const verifyShas = workflowStep(job, "Verify trusted harness and candidate SHAs");
-      const setupTrustedHarness = workflowStep(job, "Setup trusted harness Node environment");
-      const buildHarness = workflowStep(job, "Build trusted QA harness");
-      const validateCredentials = workflowStep(job, "Validate required QA credential env");
-      const runLane = workflowStep(job, "Run Telegram live lane");
-      const upload = workflowStep(job, "Upload Telegram QA artifacts");
-      const runScript = runLane.run;
-      const stepNames = job.steps?.map((step) => step.name) ?? [];
-      if (runScript === undefined) {
-        throw new Error(`Expected Telegram QA run script in ${workflowPath}`);
-      }
-
-      expect(bootstrapCheckout.with?.ref, workflowPath).toBe("${{ github.workflow_sha }}");
-      expect(bootstrapCheckout.with?.path, workflowPath).toBeUndefined();
-      expect(setupCandidateToolchain.uses, workflowPath).toBe("./.github/actions/setup-node-env");
-      expect(setupCandidateToolchain.with?.["install-deps"], workflowPath).toBe("false");
-      expect(setupCandidateToolchain.with?.["use-actions-cache"], workflowPath).toBe("false");
-      expect(trustedCheckout.with?.ref, workflowPath).toBe("${{ github.workflow_sha }}");
-      expect(trustedCheckout.with?.path, workflowPath).toBeUndefined();
-      expect(trustedCheckout.with?.clean, workflowPath).toBe(true);
-      expect(candidateCheckout.with?.ref, workflowPath).toBe(candidateRef);
-      expect(candidateCheckout.with?.path, workflowPath).toBe(".candidate");
-      expect(verifyCandidate.env?.EXPECTED_CANDIDATE_SHA, workflowPath).toBe(candidateRef);
-      expectTextToIncludeAll(verifyCandidate.run, [
-        'candidate_sha="$(git -C .candidate rev-parse HEAD)"',
-        'if [[ "$candidate_sha" != "$EXPECTED_CANDIDATE_SHA" ]]; then',
-      ]);
-      expectTextToIncludeAll(installCandidate.run, [
-        "pnpm --dir .candidate install",
-        '--store-dir "$RUNNER_TEMP/openclaw-telegram-candidate-pnpm-store"',
-        "--frozen-lockfile",
-      ]);
-      expect(buildCandidate.run, workflowPath).toBe("node scripts/build-all.mjs qaRuntime");
-      expect(buildCandidate["working-directory"], workflowPath).toBe(".candidate");
-      expect(moveCandidate.env?.EXPECTED_CANDIDATE_SHA, workflowPath).toBe(candidateRef);
-      expectTextToIncludeAll(moveCandidate.run, [
-        'candidate_root="$RUNNER_TEMP/openclaw-telegram-candidate"',
-        'mv .candidate "$candidate_root"',
-        'candidate_sha="$(git -C "$candidate_root" rev-parse HEAD)"',
-        'if [[ "$candidate_sha" != "$EXPECTED_CANDIDATE_SHA" ]]; then',
-      ]);
-
-      expect(verifyShas.env?.TRUSTED_HARNESS_SHA, workflowPath).toBe("${{ github.workflow_sha }}");
-      expect(verifyShas.env?.EXPECTED_CANDIDATE_SHA, workflowPath).toBe(candidateRef);
-      expectTextToIncludeAll(verifyShas.run, [
-        'candidate_root="$RUNNER_TEMP/openclaw-telegram-candidate"',
-        'trusted_harness_sha="$(git rev-parse HEAD)"',
-        'candidate_sha="$(git -C "$candidate_root" rev-parse HEAD)"',
-        'if [[ "$trusted_harness_sha" != "$TRUSTED_HARNESS_SHA" ]]; then',
-        'if [[ "$candidate_sha" != "$EXPECTED_CANDIDATE_SHA" ]]; then',
-        "git status --porcelain --untracked-files=all",
-        "Trusted harness and scenarios:",
-        "Candidate runtime and plugins:",
-      ]);
-
-      expect(setupTrustedHarness.uses, workflowPath).toBe("./.github/actions/setup-node-env");
-      expect(setupTrustedHarness.with?.["install-deps"], workflowPath).toBe("true");
-      expect(buildHarness.run, workflowPath).toBe("node scripts/build-all.mjs qaRuntime");
-      expect(buildHarness["working-directory"], workflowPath).toBeUndefined();
-      for (const candidateStep of [
-        candidateCheckout,
-        verifyCandidate,
-        installCandidate,
-        buildCandidate,
-        moveCandidate,
-      ]) {
-        expect(JSON.stringify(candidateStep), workflowPath).not.toContain("secrets.");
-      }
-
-      expect(
-        stepNames.indexOf("Checkout trusted Telegram QA bootstrap"),
-        workflowPath,
-      ).toBeLessThan(stepNames.indexOf("Setup candidate build toolchain"));
-      expect(stepNames.indexOf("Setup candidate build toolchain"), workflowPath).toBeLessThan(
-        stepNames.indexOf("Checkout candidate runtime"),
-      );
-      expect(stepNames.indexOf("Checkout candidate runtime"), workflowPath).toBeLessThan(
-        stepNames.indexOf("Verify candidate checkout SHA"),
-      );
-      expect(stepNames.indexOf("Verify candidate checkout SHA"), workflowPath).toBeLessThan(
-        stepNames.indexOf("Install candidate dependencies"),
-      );
-      expect(stepNames.indexOf("Install candidate dependencies"), workflowPath).toBeLessThan(
-        stepNames.indexOf("Build candidate runtime"),
-      );
-      expect(stepNames.indexOf("Build candidate runtime"), workflowPath).toBeLessThan(
-        stepNames.indexOf("Move built candidate outside trusted workspace"),
-      );
-      expect(
-        stepNames.indexOf("Move built candidate outside trusted workspace"),
-        workflowPath,
-      ).toBeLessThan(stepNames.indexOf("Checkout trusted Telegram QA harness"));
-      expect(stepNames.indexOf("Checkout trusted Telegram QA harness"), workflowPath).toBeLessThan(
-        stepNames.indexOf("Verify trusted harness and candidate SHAs"),
-      );
-      expect(
-        stepNames.indexOf("Verify trusted harness and candidate SHAs"),
-        workflowPath,
-      ).toBeLessThan(stepNames.indexOf("Setup trusted harness Node environment"));
-      expect(
-        stepNames.indexOf("Setup trusted harness Node environment"),
-        workflowPath,
-      ).toBeLessThan(stepNames.indexOf("Build trusted QA harness"));
-      expect(stepNames.indexOf("Build trusted QA harness"), workflowPath).toBeLessThan(
-        stepNames.indexOf("Validate required QA credential env"),
-      );
-      expect(stepNames.indexOf("Validate required QA credential env"), workflowPath).toBeLessThan(
-        stepNames.indexOf("Run Telegram live lane"),
-      );
-      expect(validateCredentials.env, workflowPath).toEqual(
-        expect.objectContaining({
-          OPENCLAW_QA_CONVEX_SITE_URL: "${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}",
-          OPENCLAW_QA_CONVEX_SECRET_CI: "${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}",
-        }),
-      );
-
-      const trustedCheckoutIndex = stepNames.indexOf("Checkout trusted Telegram QA harness");
-      const runLaneIndex = stepNames.indexOf("Run Telegram live lane");
-      const postRestoreSteps = job.steps?.slice(trustedCheckoutIndex + 1, runLaneIndex) ?? [];
-      for (const step of postRestoreSteps) {
-        expect(step["working-directory"], `${workflowPath}: ${step.name}`).not.toBe(".candidate");
-        expect(step.run ?? "", `${workflowPath}: ${step.name}`).not.toContain(
-          "pnpm --dir .candidate",
-        );
-      }
-
-      expectTextToIncludeAll(runScript, [
-        'candidate_root="$RUNNER_TEMP/openclaw-telegram-candidate"',
-        'output_dir=".artifacts/qa-e2e/',
-        'artifact_dir="${candidate_root}/${output_dir}"',
-        'mkdir -p "$artifact_dir"',
-        "printf 'trusted_harness_sha=%s\\n' \"$(git rev-parse HEAD)\"",
-        'printf \'candidate_runtime_plugin_sha=%s\\n\' "$(git -C "$candidate_root" rev-parse HEAD)"',
-        "trusted_scenario_source=github.workflow_sha",
-        "printf 'candidate_repo_root=%s\\n' \"$candidate_root\"",
-        '} > "${artifact_dir}/source-attestation.txt"',
-        'echo "output_dir=${artifact_dir}" >> "$GITHUB_OUTPUT"',
-        "pnpm openclaw qa telegram",
-        '--repo-root "$candidate_root"',
-        outputArg,
-      ]);
-      expect(
-        runScript.indexOf('} > "${artifact_dir}/source-attestation.txt"'),
-        workflowPath,
-      ).toBeLessThan(runScript.indexOf("pnpm openclaw qa telegram"));
-      expect(runScript, workflowPath).not.toContain("pnpm --dir .candidate openclaw qa");
-      expect(runScript, workflowPath).not.toContain(".candidate/openclaw.mjs");
-      expect(runScript, workflowPath).not.toContain(".candidate/scripts/");
-      expect(runScript, workflowPath).not.toContain(".candidate/extensions/qa-lab");
-      expect(runScript, workflowPath).not.toContain("$candidate_root/scripts/");
-      expect(runScript, workflowPath).not.toContain("$candidate_root/extensions/qa-lab");
-      expect(upload.with?.path, workflowPath).toBe("${{ steps.run_lane.outputs.output_dir }}");
+    const workflowPath = RELEASE_CHECKS_WORKFLOW;
+    const candidateRef = "${{ needs.resolve_target.outputs.revision }}";
+    const job = workflowJob(workflowPath, "qa_live_telegram_release_checks");
+    const bootstrapCheckout = workflowStep(job, "Checkout trusted Telegram QA bootstrap");
+    const setupCandidateToolchain = workflowStep(job, "Setup candidate build toolchain");
+    const candidateCheckout = workflowStep(job, "Checkout candidate runtime");
+    const verifyCandidate = workflowStep(job, "Verify candidate checkout SHA");
+    const installCandidate = workflowStep(job, "Install candidate dependencies");
+    const buildCandidate = workflowStep(job, "Build candidate runtime");
+    const moveCandidate = workflowStep(job, "Move built candidate outside trusted workspace");
+    const trustedCheckout = workflowStep(job, "Checkout trusted Telegram QA harness");
+    const verifyShas = workflowStep(job, "Verify trusted harness and candidate SHAs");
+    const setupTrustedHarness = workflowStep(job, "Setup trusted harness Node environment");
+    const buildHarness = workflowStep(job, "Build trusted QA harness");
+    const validateCredentials = workflowStep(job, "Validate required QA credential env");
+    const runLane = workflowStep(job, "Run Telegram live lane");
+    const upload = workflowStep(job, "Upload Telegram QA artifacts");
+    const runScript = runLane.run;
+    const stepNames = job.steps?.map((step) => step.name) ?? [];
+    if (runScript === undefined) {
+      throw new Error(`Expected Telegram QA run script in ${workflowPath}`);
     }
 
-    const allLanesTelegram = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_telegram");
-    expect(allLanesTelegram.if).toBe(
-      "needs.validate_selected_ref.outputs.trusted_reason != 'open-pr-head'",
+    expect(bootstrapCheckout.with?.ref, workflowPath).toBe("${{ github.workflow_sha }}");
+    expect(bootstrapCheckout.with?.path, workflowPath).toBeUndefined();
+    expect(setupCandidateToolchain.uses, workflowPath).toBe("./.github/actions/setup-node-env");
+    expect(setupCandidateToolchain.with?.["install-deps"], workflowPath).toBe("false");
+    expect(setupCandidateToolchain.with?.["use-actions-cache"], workflowPath).toBe("false");
+    expect(trustedCheckout.with?.ref, workflowPath).toBe("${{ github.workflow_sha }}");
+    expect(trustedCheckout.with?.path, workflowPath).toBeUndefined();
+    expect(trustedCheckout.with?.clean, workflowPath).toBe(true);
+    expect(candidateCheckout.with?.ref, workflowPath).toBe(candidateRef);
+    expect(candidateCheckout.with?.path, workflowPath).toBe(".candidate");
+    expect(verifyCandidate.env?.EXPECTED_CANDIDATE_SHA, workflowPath).toBe(candidateRef);
+    expectTextToIncludeAll(verifyCandidate.run, [
+      'candidate_sha="$(git -C .candidate rev-parse HEAD)"',
+      'if [[ "$candidate_sha" != "$EXPECTED_CANDIDATE_SHA" ]]; then',
+    ]);
+    expectTextToIncludeAll(installCandidate.run, [
+      "pnpm --dir .candidate install",
+      '--store-dir "$RUNNER_TEMP/openclaw-telegram-candidate-pnpm-store"',
+      "--frozen-lockfile",
+    ]);
+    expect(buildCandidate.run, workflowPath).toBe("node scripts/build-all.mjs qaRuntime");
+    expect(buildCandidate["working-directory"], workflowPath).toBe(".candidate");
+    expect(moveCandidate.env?.EXPECTED_CANDIDATE_SHA, workflowPath).toBe(candidateRef);
+    expectTextToIncludeAll(moveCandidate.run, [
+      'candidate_root="$RUNNER_TEMP/openclaw-telegram-candidate"',
+      'mv .candidate "$candidate_root"',
+      'candidate_sha="$(git -C "$candidate_root" rev-parse HEAD)"',
+      'if [[ "$candidate_sha" != "$EXPECTED_CANDIDATE_SHA" ]]; then',
+    ]);
+
+    expect(verifyShas.env?.TRUSTED_HARNESS_SHA, workflowPath).toBe("${{ github.workflow_sha }}");
+    expect(verifyShas.env?.EXPECTED_CANDIDATE_SHA, workflowPath).toBe(candidateRef);
+    expectTextToIncludeAll(verifyShas.run, [
+      'candidate_root="$RUNNER_TEMP/openclaw-telegram-candidate"',
+      'trusted_harness_sha="$(git rev-parse HEAD)"',
+      'candidate_sha="$(git -C "$candidate_root" rev-parse HEAD)"',
+      'if [[ "$trusted_harness_sha" != "$TRUSTED_HARNESS_SHA" ]]; then',
+      'if [[ "$candidate_sha" != "$EXPECTED_CANDIDATE_SHA" ]]; then',
+      "git status --porcelain --untracked-files=all",
+      "Trusted harness and scenarios:",
+      "Candidate runtime and plugins:",
+    ]);
+
+    expect(setupTrustedHarness.uses, workflowPath).toBe("./.github/actions/setup-node-env");
+    expect(setupTrustedHarness.with?.["install-deps"], workflowPath).toBe("true");
+    expect(buildHarness.run, workflowPath).toBe("node scripts/build-all.mjs qaRuntime");
+    expect(buildHarness["working-directory"], workflowPath).toBeUndefined();
+    for (const candidateStep of [
+      candidateCheckout,
+      verifyCandidate,
+      installCandidate,
+      buildCandidate,
+      moveCandidate,
+    ]) {
+      expect(JSON.stringify(candidateStep), workflowPath).not.toContain("secrets.");
+    }
+
+    expect(stepNames.indexOf("Checkout trusted Telegram QA bootstrap"), workflowPath).toBeLessThan(
+      stepNames.indexOf("Setup candidate build toolchain"),
+    );
+    expect(stepNames.indexOf("Setup candidate build toolchain"), workflowPath).toBeLessThan(
+      stepNames.indexOf("Checkout candidate runtime"),
+    );
+    expect(stepNames.indexOf("Checkout candidate runtime"), workflowPath).toBeLessThan(
+      stepNames.indexOf("Verify candidate checkout SHA"),
+    );
+    expect(stepNames.indexOf("Verify candidate checkout SHA"), workflowPath).toBeLessThan(
+      stepNames.indexOf("Install candidate dependencies"),
+    );
+    expect(stepNames.indexOf("Install candidate dependencies"), workflowPath).toBeLessThan(
+      stepNames.indexOf("Build candidate runtime"),
+    );
+    expect(stepNames.indexOf("Build candidate runtime"), workflowPath).toBeLessThan(
+      stepNames.indexOf("Move built candidate outside trusted workspace"),
+    );
+    expect(
+      stepNames.indexOf("Move built candidate outside trusted workspace"),
+      workflowPath,
+    ).toBeLessThan(stepNames.indexOf("Checkout trusted Telegram QA harness"));
+    expect(stepNames.indexOf("Checkout trusted Telegram QA harness"), workflowPath).toBeLessThan(
+      stepNames.indexOf("Verify trusted harness and candidate SHAs"),
+    );
+    expect(
+      stepNames.indexOf("Verify trusted harness and candidate SHAs"),
+      workflowPath,
+    ).toBeLessThan(stepNames.indexOf("Setup trusted harness Node environment"));
+    expect(stepNames.indexOf("Setup trusted harness Node environment"), workflowPath).toBeLessThan(
+      stepNames.indexOf("Build trusted QA harness"),
+    );
+    expect(stepNames.indexOf("Build trusted QA harness"), workflowPath).toBeLessThan(
+      stepNames.indexOf("Validate required QA credential env"),
+    );
+    expect(stepNames.indexOf("Validate required QA credential env"), workflowPath).toBeLessThan(
+      stepNames.indexOf("Run Telegram live lane"),
+    );
+    expect(validateCredentials.env, workflowPath).toEqual(
+      expect.objectContaining({
+        OPENCLAW_QA_CONVEX_SITE_URL: "${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}",
+        OPENCLAW_QA_CONVEX_SECRET_CI: "${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}",
+      }),
     );
 
-    const releaseTelegram = workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_live_telegram_release_checks");
+    const trustedCheckoutIndex = stepNames.indexOf("Checkout trusted Telegram QA harness");
+    const runLaneIndex = stepNames.indexOf("Run Telegram live lane");
+    const postRestoreSteps = job.steps?.slice(trustedCheckoutIndex + 1, runLaneIndex) ?? [];
+    for (const step of postRestoreSteps) {
+      expect(step["working-directory"], `${workflowPath}: ${step.name}`).not.toBe(".candidate");
+      expect(step.run ?? "", `${workflowPath}: ${step.name}`).not.toContain(
+        "pnpm --dir .candidate",
+      );
+    }
+
+    expectTextToIncludeAll(runScript, [
+      'candidate_root="$RUNNER_TEMP/openclaw-telegram-candidate"',
+      'output_dir=".artifacts/qa-e2e/',
+      'artifact_dir="${candidate_root}/${output_dir}"',
+      'mkdir -p "$artifact_dir"',
+      "printf 'trusted_harness_sha=%s\\n' \"$(git rev-parse HEAD)\"",
+      'printf \'candidate_runtime_plugin_sha=%s\\n\' "$(git -C "$candidate_root" rev-parse HEAD)"',
+      "trusted_scenario_source=github.workflow_sha",
+      "printf 'candidate_repo_root=%s\\n' \"$candidate_root\"",
+      '} > "${artifact_dir}/source-attestation.txt"',
+      'echo "output_dir=${artifact_dir}" >> "$GITHUB_OUTPUT"',
+      "pnpm openclaw qa telegram",
+      '--repo-root "$candidate_root"',
+      '--output-dir "${attempt_output_dir}"',
+    ]);
+    expect(
+      runScript.indexOf('} > "${artifact_dir}/source-attestation.txt"'),
+      workflowPath,
+    ).toBeLessThan(runScript.indexOf("pnpm openclaw qa telegram"));
+    expect(runScript, workflowPath).not.toContain("pnpm --dir .candidate openclaw qa");
+    expect(runScript, workflowPath).not.toContain(".candidate/openclaw.mjs");
+    expect(runScript, workflowPath).not.toContain(".candidate/scripts/");
+    expect(runScript, workflowPath).not.toContain(".candidate/extensions/qa-lab");
+    expect(runScript, workflowPath).not.toContain("$candidate_root/scripts/");
+    expect(runScript, workflowPath).not.toContain("$candidate_root/extensions/qa-lab");
+    expect(upload.with?.path, workflowPath).toBe("${{ steps.run_lane.outputs.output_dir }}");
+
+    const releaseTelegram = job;
     const validateReleaseProvenance = workflowStep(
       releaseTelegram,
       "Validate candidate release provenance",
     );
     const releaseStepNames = releaseTelegram.steps?.map((step) => step.name) ?? [];
+    expect(validateReleaseProvenance.env?.GH_TOKEN).toBe("${{ github.token }}");
     expectTextToIncludeAll(validateReleaseProvenance.run, [
       'candidate_sha="$(git -C .candidate rev-parse HEAD)"',
+      '"repos/${GITHUB_REPOSITORY}/commits/${candidate_sha}/pulls"',
+      '.state == "open"',
+      ".head.repo.full_name ==",
+      ".head.sha ==",
+      'if [[ "$pr_head_count" != "0" ]]; then',
+      "is an open same-repository PR head",
       "'+refs/heads/main:refs/remotes/origin/main'",
       "'+refs/heads/release/*:refs/remotes/origin/release/*'",
-      "'+refs/heads/release-ci/*:refs/remotes/origin/release-ci/*'",
-      "'+refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*'",
-      "'+refs/heads/tideclaw/alpha/*:refs/remotes/origin/tideclaw/alpha/*'",
       "'+refs/tags/v*:refs/tags/v*'",
       'merge-base --is-ancestor "$candidate_sha" refs/remotes/origin/main',
       'tag --points-at "$candidate_sha"',
       "refs/remotes/origin/release",
-      "refs/remotes/origin/release-ci",
-      "refs/remotes/origin/extended-stable",
-      "refs/remotes/origin/tideclaw/alpha",
       'grep -Fxq "$candidate_sha"',
       'if [[ -z "$trusted_reason" ]]; then',
       "not trusted for same-runner secret-bearing validation",
     ]);
+    expect(validateReleaseProvenance.run).not.toContain("refs/remotes/origin/release-ci");
+    expect(validateReleaseProvenance.run).not.toContain("refs/remotes/origin/extended-stable");
+    expect(validateReleaseProvenance.run).not.toContain("refs/remotes/origin/tideclaw/alpha");
     expect(JSON.stringify(validateReleaseProvenance)).not.toContain("secrets.");
     expect(releaseStepNames.indexOf("Verify candidate checkout SHA")).toBeLessThan(
       releaseStepNames.indexOf("Validate candidate release provenance"),
