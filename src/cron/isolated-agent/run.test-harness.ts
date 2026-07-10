@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { vi, type Mock } from "vitest";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 
 // Central mock harness for isolated cron agent run orchestration tests.
@@ -54,6 +55,7 @@ export const resolveAllowedModelRefMock = createMock();
 export const resolveConfiguredModelRefMock = createMock();
 export const resolveHooksGmailModelMock = createMock();
 export const resolveThinkingDefaultMock = createMock();
+export const resolveEffectiveAgentRuntimeMock = createMock();
 export const runWithModelFallbackMock = createMock();
 export const runEmbeddedAgentMock = createMock();
 export const runCliAgentMock = createMock();
@@ -123,6 +125,8 @@ vi.mock("./run.runtime.js", () => ({
   DEFAULT_CONTEXT_TOKENS: 128000,
   isCliProvider: isCliProviderMock,
   resolveThinkingDefault: resolveThinkingDefaultMock,
+  resolveEffectiveAgentRuntime: resolveEffectiveAgentRuntimeMock,
+  resolveSessionRuntimeOverrideForProvider,
   buildWorkspaceSkillSnapshot: buildWorkspaceSkillSnapshotMock,
   getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
   resolveAgentTimeoutMs: resolveAgentTimeoutMsMock,
@@ -249,6 +253,26 @@ vi.mock("./run-execution.runtime.js", () => ({
   getCliSessionId: getCliSessionIdMock,
   runCliAgent: runCliAgentMock,
   resolveFastModeState: resolveFastModeStateMock,
+  resolveCandidateThinkingLevel: (params: {
+    provider: string;
+    modelId: string;
+    level?: string;
+    catalog?: unknown[];
+  }) => {
+    if (!params.level) {
+      return undefined;
+    }
+    const policy = {
+      provider: params.provider,
+      model: params.modelId,
+      level: params.level,
+      catalog: params.catalog,
+      agentRuntime: resolveEffectiveAgentRuntimeMock(params),
+    };
+    return isThinkingLevelSupportedMock(policy)
+      ? params.level
+      : resolveSupportedThinkingLevelMock(policy);
+  },
   resolveCronAgentLane: resolveCronAgentLaneMock,
   LiveSessionModelSwitchError,
   runWithModelFallback: runWithModelFallbackMock,
@@ -478,6 +502,7 @@ function resetRunConfigMocks(): void {
   resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-5.4" } });
   resolveHooksGmailModelMock.mockReturnValue(null);
   resolveThinkingDefaultMock.mockReturnValue("off");
+  resolveEffectiveAgentRuntimeMock.mockReturnValue("openclaw");
   getModelRefStatusMock.mockReturnValue({ allowed: false });
   resolveCronStyleNowMock.mockReturnValue({
     formattedTime: "2026-02-10 12:00",
