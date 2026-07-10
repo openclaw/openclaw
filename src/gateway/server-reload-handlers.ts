@@ -17,6 +17,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCronJobsStorePath } from "../cron/store.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -468,12 +469,26 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
     if (plan.restartCron) {
       params.onCronRestart?.();
-      state.cronState.cron.stop();
-      state.cronState.stopExitWatchers?.();
+      const stopCronForHotReload = state.cronState.stopCronForHotReload;
+      const nextCronStorePath = resolveCronJobsStorePath(nextConfig.cron?.store);
+      const nextCronEnabled =
+        process.env.OPENCLAW_SKIP_CRON !== "1" && nextConfig.cron?.enabled !== false;
+      const preserveCronExitWatchers =
+        nextCronEnabled &&
+        state.cronState.storePath === nextCronStorePath &&
+        stopCronForHotReload !== undefined;
+      // Hot reload keeps unchanged, same-store on-exit watcher children alive; the
+      // rebuilt cron service updates their callbacks before reconcile cancels removed jobs.
+      if (preserveCronExitWatchers) {
+        stopCronForHotReload();
+      } else {
+        state.cronState.cron.stop();
+      }
       nextState.cronState = buildGatewayCronService({
         cfg: nextConfig,
         deps: params.deps,
         broadcast: params.broadcast,
+        exitWatchers: preserveCronExitWatchers ? state.cronState.exitWatchers : undefined,
       });
       startGatewayCronWithLogging({
         cron: nextState.cronState.cron,

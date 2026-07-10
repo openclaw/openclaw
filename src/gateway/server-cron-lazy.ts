@@ -45,6 +45,40 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     return await cronStateLoader.load();
   };
 
+  const stopLoadedCron = (
+    resolved: LoadedGatewayCronState,
+    opts: { cancelExitWatchers: boolean },
+  ) => {
+    resolved.started = false;
+    if (!opts.cancelExitWatchers && resolved.state.stopCronForHotReload) {
+      resolved.state.stopCronForHotReload();
+      return;
+    }
+    resolved.state.cron.stop();
+    if (opts.cancelExitWatchers) {
+      resolved.state.stopExitWatchers?.();
+    }
+  };
+
+  const stopCronForHotReload = () => {
+    stopped = true;
+    if (loaded) {
+      stopLoadedCron(loaded, { cancelExitWatchers: false });
+      return;
+    }
+    const loading = cronStateLoader.peek();
+    if (loading) {
+      void loading
+        .then((resolved) => {
+          if (!stopped) {
+            return;
+          }
+          stopLoadedCron(resolved, { cancelExitWatchers: false });
+        })
+        .catch(() => {});
+    }
+  };
+
   const cron: CronServiceContract = {
     async start() {
       stopped = false;
@@ -65,17 +99,13 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
       // If stop raced the lazy import/start path, immediately stop the loaded
       // scheduler so shutdown does not leave a background loop alive.
       if (stopped && resolved.started) {
-        resolved.started = false;
-        resolved.state.cron.stop();
-        resolved.state.stopExitWatchers?.();
+        stopLoadedCron(resolved, { cancelExitWatchers: true });
       }
     },
     stop() {
       stopped = true;
       if (loaded) {
-        loaded.started = false;
-        loaded.state.cron.stop();
-        loaded.state.stopExitWatchers?.();
+        stopLoadedCron(loaded, { cancelExitWatchers: true });
         return;
       }
       const loading = cronStateLoader.peek();
@@ -87,9 +117,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
             if (!stopped) {
               return;
             }
-            resolved.started = false;
-            resolved.state.cron.stop();
-            resolved.state.stopExitWatchers?.();
+            stopLoadedCron(resolved, { cancelExitWatchers: true });
           })
           .catch(() => {});
       }
@@ -151,5 +179,9 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     cron,
     storePath,
     cronEnabled,
+    stopCronForHotReload,
+    get exitWatchers() {
+      return loaded?.state.exitWatchers;
+    },
   };
 }

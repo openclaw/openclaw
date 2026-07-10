@@ -57,7 +57,11 @@ import {
 } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { createCronExitWatchers, type CronExitResult } from "./cron-exit-watchers.js";
+import {
+  createCronExitWatchers,
+  type CronExitResult,
+  type CronExitWatchers,
+} from "./cron-exit-watchers.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
@@ -69,6 +73,8 @@ export type GatewayCronState = {
   cronEnabled: boolean;
   reconcileExitWatchers?: () => Promise<void>;
   stopExitWatchers?: () => void;
+  stopCronForHotReload?: () => void;
+  exitWatchers?: CronExitWatchers;
 };
 
 function formatOnExitRunSummary(exit: CronExitResult): string {
@@ -192,6 +198,7 @@ export function buildGatewayCronService(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  exitWatchers?: CronExitWatchers;
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
   const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
@@ -380,7 +387,7 @@ export function buildGatewayCronService(params: {
   };
 
   // Built after cron so watcher exit callbacks can call back into the service.
-  const exitWatchersRef: { current: ReturnType<typeof createCronExitWatchers> | undefined } = {
+  const exitWatchersRef: { current: CronExitWatchers | undefined } = {
     current: undefined,
   };
   const reconcileExitWatchers = async () => {
@@ -765,7 +772,7 @@ export function buildGatewayCronService(params: {
     },
   });
 
-  exitWatchersRef.current = createCronExitWatchers({
+  const exitWatcherHandlers = {
     getProcessSupervisor,
     persistCompletion: async (jobId) => {
       await cron.update(jobId, { enabled: false });
@@ -775,7 +782,9 @@ export function buildGatewayCronService(params: {
         run: (jobId, payload) => cron.run(jobId, "force", payload ? { payload } : undefined),
       }),
     logger: cronLogger,
-  });
+  } satisfies Parameters<typeof createCronExitWatchers>[0];
+  exitWatchersRef.current = params.exitWatchers ?? createCronExitWatchers(exitWatcherHandlers);
+  params.exitWatchers?.updateHandlers(exitWatcherHandlers);
   const stopCron = cron.stop.bind(cron);
   cron.stop = () => {
     stopCron();
@@ -788,5 +797,7 @@ export function buildGatewayCronService(params: {
     cronEnabled,
     reconcileExitWatchers,
     stopExitWatchers: () => exitWatchersRef.current?.cancelAll(),
+    stopCronForHotReload: stopCron,
+    exitWatchers: exitWatchersRef.current,
   };
 }

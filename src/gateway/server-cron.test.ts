@@ -351,6 +351,39 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("reuses on-exit watchers for hot reload without cancelling active children", async () => {
+    vi.stubEnv("OPENCLAW_SKIP_CRON", "0");
+    const exitWatchers = {
+      reconcile: vi.fn(),
+      cancel: vi.fn(),
+      cancelAll: vi.fn(),
+      activeJobIds: vi.fn(() => ["job-a"]),
+      updateHandlers: vi.fn(),
+    };
+    const cfg = createCronConfig("server-cron-hot-reload-exit-watchers");
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+      exitWatchers,
+    });
+
+    try {
+      expect(state.exitWatchers).toBe(exitWatchers);
+      expect(exitWatchers.updateHandlers).toHaveBeenCalledTimes(1);
+
+      state.stopCronForHotReload?.();
+      expect(exitWatchers.cancelAll).not.toHaveBeenCalled();
+
+      state.cron.stop();
+      expect(exitWatchers.cancelAll).toHaveBeenCalledTimes(1);
+    } finally {
+      state.cron.stop();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("backs off isolated cron setup timeout without gateway restart", async () => {
     vi.useFakeTimers();
     const cfg = createCronConfig("server-cron-isolated-setup-timeout");
