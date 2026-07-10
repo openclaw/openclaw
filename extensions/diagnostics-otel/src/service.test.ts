@@ -5308,62 +5308,6 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
-  test("keeps truncated GenAI input message Unicode boundaries intact", async () => {
-    const service = createDiagnosticsOtelService();
-    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
-      traces: true,
-      captureContent: {
-        enabled: true,
-        inputMessages: true,
-        outputMessages: false,
-      },
-    });
-    await service.start(ctx);
-
-    emitTrustedModelCallCompletedWithContent(
-      {
-        runId: "run-1",
-        callId: "call-1",
-        provider: "openai",
-        model: "gpt-5.4",
-        durationMs: 80,
-      },
-      {
-        inputMessages: [
-          {
-            role: "user",
-            content: `${"x".repeat(8177)}🚀${"y".repeat(140_000)}`,
-          },
-        ],
-      },
-    );
-    await flushDiagnosticEvents();
-
-    const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
-      (call) => call[0] === "openclaw.model.call",
-    );
-    const attrs = (modelCall?.[1] as { attributes?: Record<string, unknown> } | undefined)
-      ?.attributes;
-    const genAiInput = stringAttribute(attrs, "gen_ai.input.messages");
-    expect(genAiInput).not.toContain("\\ud83d");
-
-    const messages = JSON.parse(genAiInput) as Array<{
-      parts?: Array<{ content?: string }>;
-    }>;
-    const content = messages[0]?.parts?.[0]?.content;
-    expect(content).toBe(`${"x".repeat(8177)}...(truncated)`);
-    let hasLoneHighSurrogate = false;
-    for (const character of content ?? "") {
-      const code = character.charCodeAt(0);
-      if (code >= 0xd800 && code <= 0xdbff && character.length === 1) {
-        hasLoneHighSurrogate = true;
-        break;
-      }
-    }
-    expect(hasLoneHighSurrogate).toBe(false);
-    await service.stop?.(ctx);
-  });
-
   test("keeps single oversized GenAI messages and tool definitions parseable", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
@@ -5377,6 +5321,9 @@ describe("diagnostics-otel service", () => {
     });
     await service.start(ctx);
 
+    // The 8,192-character candidate budget leaves an 8,178-character text prefix;
+    // place a surrogate pair across that boundary so serialized JSON must stay valid.
+    const surrogateBoundaryPrefix = "x".repeat(8177);
     emitTrustedModelCallCompletedWithContent(
       {
         runId: "run-1",
@@ -5389,7 +5336,9 @@ describe("diagnostics-otel service", () => {
         inputMessages: [
           {
             role: "user",
-            content: `single-message-${"x".repeat(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS)}`,
+            content: `${surrogateBoundaryPrefix}🚀${"y".repeat(
+              MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS,
+            )}`,
           },
         ],
         toolDefinitions: [
@@ -5420,13 +5369,14 @@ describe("diagnostics-otel service", () => {
     const toolDefinitions = stringAttribute(attrs, "gen_ai.tool.definitions");
     expect(genAiInput.length).toBeLessThanOrEqual(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS);
     expect(toolDefinitions.length).toBeLessThanOrEqual(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS);
+    expect(genAiInput).not.toContain("\\ud83d");
     expect(JSON.parse(genAiInput)).toEqual([
       {
         role: "user",
         parts: [
           {
             type: "text",
-            content: expect.stringContaining("single-message-"),
+            content: `${surrogateBoundaryPrefix}...(truncated)`,
           },
         ],
       },
