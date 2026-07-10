@@ -1,8 +1,8 @@
 // Gateway assistant-avatar tests cover selected-source precedence and safe fallbacks.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   openGatewayAssistantAvatar,
@@ -16,13 +16,12 @@ const REAL_PNG = Buffer.from(
   "base64",
 );
 const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("base64")}`;
-const tempRoots: string[] = [];
+const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
 function createWorkspace(): { workspace: string; cfg: OpenClawConfig } {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-avatar-"));
+  const root = tempRoots.make("openclaw-gateway-avatar-");
   const workspace = path.join(root, "workspace");
   fs.mkdirSync(workspace);
-  tempRoots.push(root);
   return {
     workspace,
     cfg: { agents: { list: [{ id: "main", workspace }] } },
@@ -33,12 +32,6 @@ function projectAvatar(cfg: OpenClawConfig): GatewayAssistantAvatarProjection {
   const identity = resolveAssistantIdentity({ cfg, agentId: "main" });
   return resolveGatewayAssistantAvatar({ cfg, identity });
 }
-
-afterEach(() => {
-  for (const root of tempRoots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
 
 describe("resolveGatewayAssistantAvatar", () => {
   it("inlines the selected local file", () => {

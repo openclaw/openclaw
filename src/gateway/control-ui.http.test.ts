@@ -6,7 +6,8 @@ import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { normalizeAssistantIdentity } from "../../ui/src/lib/assistant-identity.ts";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -33,6 +34,7 @@ const REAL_PNG = Buffer.from(
   "base64",
 );
 const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("base64")}`;
+const avatarTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("handleControlUiHttpRequest", () => {
   function createAvatarConfig(workspace: string, avatar: string): OpenClawConfig {
@@ -1490,7 +1492,7 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it("serves local avatar bytes through hardened avatar handler", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-http-"));
+    const tmp = avatarTempDirs.make("openclaw-avatar-http-");
     try {
       const avatarPath = path.join(tmp, "main.png");
       await fs.writeFile(avatarPath, "avatar-bytes\n");
@@ -1515,7 +1517,7 @@ describe("handleControlUiHttpRequest", () => {
   ] as const)(
     "validates %s avatar requests without reading bytes and closes the descriptor",
     async (_name, url, method) => {
-      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-no-read-"));
+      const tmp = avatarTempDirs.make("openclaw-avatar-no-read-");
       const read = vi.spyOn(fsSync, "read");
       const closeSync = vi.spyOn(fsSync, "closeSync");
       try {
@@ -1539,7 +1541,7 @@ describe("handleControlUiHttpRequest", () => {
   );
 
   it("rejects hardlinked avatar bytes and reports matching metadata", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-http-hardlink-"));
+    const tmp = avatarTempDirs.make("openclaw-avatar-http-hardlink-");
     try {
       await fs.writeFile(path.join(tmp, "original.png"), REAL_PNG);
       await fs.link(path.join(tmp, "original.png"), path.join(tmp, "avatar.png"));
@@ -1567,7 +1569,7 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it("bounds an avatar route file that grows after its descriptor is pinned", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-http-growth-"));
+    const tmp = avatarTempDirs.make("openclaw-avatar-http-growth-");
     const avatarPath = path.join(tmp, "avatar.png");
     try {
       await fs.writeFile(avatarPath, REAL_PNG);

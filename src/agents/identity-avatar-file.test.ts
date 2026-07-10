@@ -1,8 +1,8 @@
 // Internal avatar-file tests cover pinned reads, limits, and workspace boundaries.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { AVATAR_MAX_BYTES, AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-policy.js";
 import {
@@ -11,24 +11,17 @@ import {
   resolveAgentAvatarUrlFromSource,
 } from "./identity-avatar-file.js";
 
-const tempRoots: string[] = [];
+const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
 function createWorkspace(): { workspace: string; cfg: OpenClawConfig } {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-avatar-file-"));
+  const root = tempRoots.make("openclaw-avatar-file-");
   const workspace = path.join(root, "workspace");
   fs.mkdirSync(workspace);
-  tempRoots.push(root);
   return {
     workspace,
     cfg: { agents: { list: [{ id: "main", workspace }] } },
   };
 }
-
-afterEach(() => {
-  for (const root of tempRoots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
 
 describe("local agent avatar files", () => {
   it("reads a pinned local file with the shared MIME policy", () => {
