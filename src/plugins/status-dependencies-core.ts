@@ -49,10 +49,12 @@ export function normalizePluginDependencySpecs(params: {
   dependencies: PluginDependencySpecMap;
   optionalDependencies: PluginDependencySpecMap;
 } {
-  return {
-    dependencies: normalizeDependencyMap(params.dependencies),
-    optionalDependencies: normalizeDependencyMap(params.optionalDependencies),
-  };
+  const optionalDependencies = normalizeDependencyMap(params.optionalDependencies);
+  const dependencies = normalizeDependencyMap(params.dependencies);
+  for (const name of Object.keys(optionalDependencies)) {
+    delete dependencies[name];
+  }
+  return { dependencies, optionalDependencies };
 }
 
 function dependencyPathSegments(name: string): string[] | null {
