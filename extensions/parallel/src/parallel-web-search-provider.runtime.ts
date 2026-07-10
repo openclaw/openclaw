@@ -8,12 +8,11 @@ import {
   DEFAULT_SEARCH_COUNT,
   mergeScopedSearchConfig,
   readCachedSearchPayload,
-  readConfiguredSecretString,
   readNumberParam,
-  readProviderEnvValue,
   readStringArrayParam,
   readStringParam,
   resolveProviderWebSearchPluginConfig,
+  resolveWebSearchProviderCredential,
   resolveSearchCacheTtlMs,
   resolveSearchTimeoutSeconds,
   type SearchConfigRecord,
@@ -38,6 +37,7 @@ import {
 
 const PARALLEL_BASE_URL = "https://api.parallel.ai";
 const PARALLEL_SEARCH_PATHNAME = "/v1/search";
+const PARALLEL_API_KEY_ENV_VAR = "PARALLEL_API_KEY";
 const PARALLEL_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 // Parallel's /v1/search returns a bounded result set, but the body is external
 // (web-search upstream) and untrusted. Cap the successful JSON read so a
@@ -51,7 +51,7 @@ const PLUGIN_VERSION = readPluginPackageVersion({ require });
 const USER_AGENT = `openclaw-parallel/${PLUGIN_VERSION} (${process.platform})`;
 
 type ParallelConfig = {
-  apiKey?: string;
+  apiKey?: unknown;
   baseUrl?: string;
 };
 
@@ -63,10 +63,11 @@ function resolveParallelConfig(searchConfig?: SearchConfigRecord): ParallelConfi
 }
 
 function resolveParallelApiKey(parallel?: ParallelConfig): string | undefined {
-  return (
-    readConfiguredSecretString(parallel?.apiKey, "tools.web.search.parallel.apiKey") ??
-    readProviderEnvValue(["PARALLEL_API_KEY"])
-  );
+  return resolveWebSearchProviderCredential({
+    credentialValue: parallel?.apiKey,
+    path: "tools.web.search.parallel.apiKey",
+    envVars: [PARALLEL_API_KEY_ENV_VAR],
+  });
 }
 
 function invalidBaseUrlPayload(value: string) {

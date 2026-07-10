@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
 type EndpointCall = {
@@ -70,6 +70,10 @@ describe("parallel web search provider", () => {
     endpointMockState.responses = [];
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("exposes the expected metadata and selection wiring", () => {
     const provider = createParallelWebSearchProvider();
     if (!provider.applySelectionConfig) {
@@ -129,7 +133,67 @@ describe("parallel web search provider", () => {
   });
 
   it("prefers scoped configured api keys over environment fallbacks", () => {
+    vi.stubEnv("PARALLEL_API_KEY", "parallel-env-fallback");
+
     expect(testing.resolveParallelApiKey({ apiKey: "par-secret" })).toBe("par-secret");
+  });
+
+  it("uses the documented Parallel environment fallback when no api key is configured", () => {
+    vi.stubEnv("PARALLEL_API_KEY", "parallel-env-fallback");
+
+    expect(testing.resolveParallelApiKey({})).toBe("parallel-env-fallback");
+  });
+
+  it("resolves env SecretRef api keys from the documented Parallel env var", () => {
+    vi.stubEnv("PARALLEL_API_KEY", "parallel-env-ref-key");
+
+    expect(
+      testing.resolveParallelApiKey({
+        apiKey: {
+          source: "env",
+          provider: "default",
+          id: "PARALLEL_API_KEY",
+        },
+      }),
+    ).toBe("parallel-env-ref-key");
+  });
+
+  it("does not use ambient env fallback when configured SecretRefs are unavailable", () => {
+    vi.stubEnv("PARALLEL_API_KEY", "parallel-env-fallback");
+    vi.stubEnv("MISSING_PARALLEL_API_KEY_REF", "");
+
+    expect(
+      testing.resolveParallelApiKey({
+        apiKey: {
+          source: "env",
+          provider: "default",
+          id: "MISSING_PARALLEL_API_KEY_REF",
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      testing.resolveParallelApiKey({
+        apiKey: {
+          source: "file",
+          provider: "vault",
+          id: "/parallel/api-key",
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("resolves env SecretRef api keys from configured env ref names", () => {
+    vi.stubEnv("CUSTOM_PARALLEL_API_KEY_REF", "parallel-custom-ref-key");
+
+    expect(
+      testing.resolveParallelApiKey({
+        apiKey: {
+          source: "env",
+          provider: "default",
+          id: "CUSTOM_PARALLEL_API_KEY_REF",
+        },
+      }),
+    ).toBe("parallel-custom-ref-key");
   });
 
   it("resolves Parallel search base URL overrides", () => {
