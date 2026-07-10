@@ -77,6 +77,7 @@ function createBuiltinAdapter(): PlatformAdapter {
         maxBytes: options.maxBytes,
         maxRedirects: options.maxRedirects,
         timeoutMs: options.timeoutMs,
+        responseHeaderTimeoutMs: options.responseHeaderTimeoutMs,
         ssrfPolicy: options.ssrfPolicy,
         requestInit: options.requestInit,
       });
