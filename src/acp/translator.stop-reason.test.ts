@@ -621,9 +621,11 @@ describe("acp translator stop reason mapping", () => {
   });
 
   it("emits the full revised text on a replace delta, not a byte-offset slice", async () => {
-    const sessionUpdateCalls: Record<string, unknown>[] = [];
+    const sessionUpdateCalls: Array<{
+      update?: { sessionUpdate?: string; content?: { text?: string } };
+    }> = [];
     const sessionUpdate = vi.fn(async (params: Record<string, unknown>) => {
-      sessionUpdateCalls.push(params);
+      sessionUpdateCalls.push(params as (typeof sessionUpdateCalls)[number]);
     });
     const connection = createAcpConnection();
     connection.sessionUpdate = sessionUpdate as typeof connection.sessionUpdate;
@@ -708,9 +710,11 @@ describe("acp translator stop reason mapping", () => {
   });
 
   it("emits the full revised text on a replace delta for a shorter revision", async () => {
-    const sessionUpdateCalls: Record<string, unknown>[] = [];
+    const sessionUpdateCalls: Array<{
+      update?: { sessionUpdate?: string; content?: { text?: string } };
+    }> = [];
     const sessionUpdate = vi.fn(async (params: Record<string, unknown>) => {
-      sessionUpdateCalls.push(params);
+      sessionUpdateCalls.push(params as (typeof sessionUpdateCalls)[number]);
     });
     const connection = createAcpConnection();
     connection.sessionUpdate = sessionUpdate as typeof connection.sessionUpdate;
