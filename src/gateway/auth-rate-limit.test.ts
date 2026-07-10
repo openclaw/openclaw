@@ -169,8 +169,8 @@ describe("auth rate limiter", () => {
     limiter.recordFailure("10.0.1.4");
 
     expect(limiter.size()).toBe(3);
-    expect(limiter.check("10.0.1.1").remaining).toBe(2);
-    expect(limiter.check("10.0.1.4").remaining).toBe(1);
+    expect(limiter.check("10.0.1.1").remaining).toBe(1);
+    expect(limiter.check("10.0.1.4").allowed).toBe(false);
   });
 
   it("preserves locked entries when flood eviction runs", () => {
@@ -186,8 +186,21 @@ describe("auth rate limiter", () => {
 
     expect(limiter.size()).toBe(3);
     expect(limiter.check("10.0.2.1").allowed).toBe(false);
-    expect(limiter.check("10.0.2.2").remaining).toBe(2);
-    expect(limiter.check("10.0.2.4").remaining).toBe(1);
+    expect(limiter.check("10.0.2.2").remaining).toBe(1);
+    expect(limiter.check("10.0.2.4").allowed).toBe(false);
+  });
+
+  it("does not evict live failure counters during an identity flood", () => {
+    createLimiter({ maxEntries: 2, pruneIntervalMs: 0 });
+
+    limiter.recordFailure("10.0.2.10");
+    limiter.recordFailure("10.0.2.11");
+    limiter.recordFailure("10.0.2.12");
+    limiter.recordFailure("10.0.2.10");
+
+    expect(limiter.size()).toBe(2);
+    expect(limiter.check("10.0.2.10").allowed).toBe(false);
+    expect(limiter.check("10.0.2.12").allowed).toBe(false);
   });
 
   it("fails closed when every tracked entry is locked", () => {

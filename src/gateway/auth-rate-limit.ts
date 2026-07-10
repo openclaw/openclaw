@@ -34,7 +34,7 @@ export interface RateLimitConfig {
   exemptLoopback?: boolean;
   /** Background prune interval in milliseconds; set <= 0 to disable auto-prune.  @default 60_000 */
   pruneIntervalMs?: number;
-  /** Maximum tracked client identities before old unlocked entries are evicted.  @default 10_000 */
+  /** Maximum tracked client identities before unseen identities fail closed.  @default 10_000 */
   maxEntries?: number;
 }
 
@@ -300,13 +300,8 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
       return true;
     }
 
-    // Preserve active lockouts so a flood cannot evict the attacker's own block.
-    for (const [entryKey, entry] of entries) {
-      if (!entry.lockedUntil || now >= entry.lockedUntil) {
-        entries.delete(entryKey);
-        return true;
-      }
-    }
+    // Every remaining entry has a live failure window or lockout. Evicting one
+    // would reset its counter, so reject unseen identities until capacity frees.
     return false;
   }
 
