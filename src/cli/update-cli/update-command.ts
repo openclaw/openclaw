@@ -3858,7 +3858,6 @@ async function updateCommandInternal(
   let currentVersion: string | null = null;
   let targetVersion: string | null = null;
   let downgradeRisk = false;
-  let fallbackToLatest = false;
   let packageInstallSpec: string | null = null;
   let packageInstallEnv: NodeJS.ProcessEnv | undefined;
   let packageInstallCwd: string | undefined;
@@ -3980,7 +3979,6 @@ async function updateCommandInternal(
         env: packageInstallEnv,
       }).then((resolved) => {
         tag = resolved.tag;
-        fallbackToLatest = channel === "beta" && resolved.tag === "latest";
         return resolved.version;
       });
     }
@@ -3995,7 +3993,6 @@ async function updateCommandInternal(
       (requestedChannel === null || requestedChannel === storedChannel);
     downgradeRisk =
       canResolveRegistryVersionForPackageTarget(tag) &&
-      !fallbackToLatest &&
       currentVersion != null &&
       (targetVersion == null ? tag !== "latest" : cmp != null && cmp > 0);
     packageInstallSpec ??= resolveGlobalInstallSpec({
@@ -4045,9 +4042,6 @@ async function updateCommandInternal(
     const notes: string[] = [];
     if (opts.tag && updateInstallKind === "git") {
       notes.push("--tag applies to npm installs only; git updates ignore it.");
-    }
-    if (fallbackToLatest) {
-      notes.push("Beta channel resolves to latest for this run (fallback).");
     }
     if (managedServiceRootRedirect) {
       notes.push(

@@ -312,16 +312,16 @@ describe("resolveNpmChannelTag", () => {
     expect(result.error).toBe("HTTP 404");
   });
 
-  it("falls back to latest when beta is older", async () => {
+  it("returns beta tag version without comparing to latest", async () => {
     versionByTag.beta = "1.0.0-beta.1";
     versionByTag.latest = "1.0.1-1";
 
     const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000, runCommand });
 
-    expect(resolved).toEqual({ tag: "latest", version: "1.0.1-1" });
+    expect(resolved).toEqual({ tag: "beta", version: "1.0.0-beta.1" });
   });
 
-  it("keeps beta when beta is not older", async () => {
+  it("returns beta tag even when latest is older", async () => {
     versionByTag.beta = "1.0.2-beta.1";
     versionByTag.latest = "1.0.1-1";
 
@@ -330,13 +330,13 @@ describe("resolveNpmChannelTag", () => {
     expect(resolved).toEqual({ tag: "beta", version: "1.0.2-beta.1" });
   });
 
-  it("falls back to latest when beta has same base as stable", async () => {
+  it("returns beta tag even when stable has same base version", async () => {
     versionByTag.beta = "1.0.1-beta.2";
     versionByTag.latest = "1.0.1";
 
     const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000, runCommand });
 
-    expect(resolved).toEqual({ tag: "latest", version: "1.0.1" });
+    expect(resolved).toEqual({ tag: "beta", version: "1.0.1-beta.2" });
   });
 
   it("keeps non-beta channels unchanged", async () => {

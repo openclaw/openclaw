@@ -645,28 +645,6 @@ export async function resolveNpmChannelTag(params: {
     env: params.env,
     runCommand: params.runCommand,
   });
-  if (params.channel !== "beta") {
-    return { tag: channelTag, version: channelStatus.version };
-  }
-
-  const latestStatus = await fetchNpmTagVersion({
-    tag: "latest",
-    timeoutMs: params.timeoutMs,
-    command: params.command,
-    cwd: params.cwd,
-    env: params.env,
-    runCommand: params.runCommand,
-  });
-  if (!latestStatus.version) {
-    return { tag: channelTag, version: channelStatus.version };
-  }
-  if (!channelStatus.version) {
-    return { tag: "latest", version: latestStatus.version };
-  }
-  const cmp = compareSemverStrings(channelStatus.version, latestStatus.version);
-  if (cmp != null && cmp < 0) {
-    return { tag: "latest", version: latestStatus.version };
-  }
   return { tag: channelTag, version: channelStatus.version };
 }
 
