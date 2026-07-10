@@ -1201,6 +1201,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       let lastSplitTurnSection = "";
       let currentInstructions = structuredInstructions;
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
+      // Set on every audited attempt; still defined after the loop means the
+      // guard rejected the final attempt too and compaction must fail closed.
+      let finalQualityFailureReasons: string[] | undefined;
       let lastSuccessfulSummary: string | null = null;
 
       for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
@@ -1282,6 +1285,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           identifierPolicy,
         });
         summary = summaryWithPreservedTurns;
+        finalQualityFailureReasons = quality.ok ? undefined : quality.reasons;
         if (quality.ok || attempt >= totalAttempts - 1) {
           break;
         }
@@ -1297,6 +1301,21 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         currentInstructions = qualityFeedbackReasons
           ? `${structuredInstructions}\n\n${qualityFeedbackInstruction}\n\n${qualityFeedbackReasons}`
           : `${structuredInstructions}\n\n${qualityFeedbackInstruction}`;
+      }
+
+      if (finalQualityFailureReasons) {
+        // Quality-audit rejection must fail closed like the exception path
+        // below: adopting a summary the guard just proved structurally broken
+        // silently replaces older history with known-bad content (#103931).
+        const reasons = finalQualityFailureReasons.join(", ");
+        log.warn(
+          `Compaction safeguard: summary failed quality audit after ${totalAttempts} attempt(s) (${reasons}); cancelling compaction to preserve history`,
+        );
+        setCompactionSafeguardCancelReason(
+          ctx.sessionManager,
+          `Compaction safeguard rejected the summary after ${totalAttempts} attempt(s): ${reasons}`,
+        );
+        return { cancel: true };
       }
 
       // Cap the main history body first, then append split-turn context, preserved
