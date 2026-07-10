@@ -16,7 +16,8 @@ import Testing
         lanHost: String?,
         tailnetDns: String?,
         gatewayPort: Int?,
-        fingerprint: String?) -> GatewayDiscoveryModel.DiscoveredGateway
+        fingerprint: String?,
+        tlsEnabled: Bool = true) -> GatewayDiscoveryModel.DiscoveredGateway
     {
         let endpoint: NWEndpoint = .service(name: "Test", type: "_openclaw-gw._tcp", domain: "local.", interface: nil)
         return GatewayDiscoveryModel.DiscoveredGateway(
@@ -28,7 +29,7 @@ import Testing
             tailnetDns: tailnetDns,
             gatewayPort: gatewayPort,
             canvasPort: nil,
-            tlsEnabled: true,
+            tlsEnabled: tlsEnabled,
             tlsFingerprintSha256: fingerprint,
             cliPath: nil)
     }
@@ -73,6 +74,48 @@ import Testing
         let params = controller._test_resolveDiscoveredTLSParams(gateway: gateway)
         #expect(params?.expectedFingerprint == nil)
         #expect(params?.allowTOFU == false)
+    }
+
+    @Test @MainActor func `discovered gateway availability requires advertised TLS or a stored pin`() {
+        let unpinnedID = "test|\(UUID().uuidString)"
+        let pinnedID = "test|\(UUID().uuidString)"
+        defer {
+            clearTLSFingerprint(stableID: unpinnedID)
+            clearTLSFingerprint(stableID: pinnedID)
+        }
+        self.clearTLSFingerprint(stableID: unpinnedID)
+        self.clearTLSFingerprint(stableID: pinnedID)
+
+        let controller = self.makeController()
+        let unavailable = self.makeDiscoveredGateway(
+            stableID: unpinnedID,
+            lanHost: "gateway.local",
+            tailnetDns: nil,
+            gatewayPort: 18789,
+            fingerprint: "untrusted-txt-fingerprint",
+            tlsEnabled: false)
+        let advertisedTLS = self.makeDiscoveredGateway(
+            stableID: unpinnedID,
+            lanHost: "gateway.local",
+            tailnetDns: nil,
+            gatewayPort: 18789,
+            fingerprint: nil)
+        let pinned = self.makeDiscoveredGateway(
+            stableID: pinnedID,
+            lanHost: "gateway.local",
+            tailnetDns: nil,
+            gatewayPort: 18789,
+            fingerprint: nil,
+            tlsEnabled: false)
+
+        #expect(controller.discoveredGatewayConnectionAvailability(unavailable) == .secureTransportRequired)
+        #expect(controller.discoveredGatewayConnectionAvailability(unavailable).canConnect == false)
+        #expect(controller.discoveredGatewayConnectionAvailability(unavailable).guidanceText?
+            .contains("trusted LAN") == true)
+        #expect(controller.discoveredGatewayConnectionAvailability(advertisedTLS) == .available)
+
+        GatewayTLSStore.saveFingerprint("stored-pin", stableID: pinnedID)
+        #expect(controller.discoveredGatewayConnectionAvailability(pinned) == .available)
     }
 
     @Test @MainActor func `autoconnect requires stored pin for discovered gateways`() {

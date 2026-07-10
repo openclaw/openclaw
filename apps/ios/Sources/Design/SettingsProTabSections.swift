@@ -974,29 +974,45 @@ extension SettingsProTab {
     }
 
     func discoveredGatewayRow(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(verbatim: gateway.name)
-                    .font(OpenClawType.subheadSemiBold)
-                Text(verbatim: self.gatewayDetailLines(gateway).joined(separator: " • "))
-                    .font(OpenClawType.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 8)
-            Button {
-                Task { await self.connect(gateway) }
-            } label: {
-                if self.connectingGatewayID == gateway.id {
-                    ProgressView().controlSize(.small)
+        let availability = self.gatewayController.discoveredGatewayConnectionAvailability(gateway)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(verbatim: gateway.name)
+                        .font(OpenClawType.subheadSemiBold)
+                    Text(verbatim: self.gatewayDetailLines(gateway).joined(separator: " • "))
+                        .font(OpenClawType.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 8)
+                if availability.canConnect {
+                    Button {
+                        Task { await self.connect(gateway) }
+                    } label: {
+                        if self.connectingGatewayID == gateway.id {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text(availability.actionTitle)
+                                .font(OpenClawType.captionSemiBold)
+                        }
+                    }
+                    .font(OpenClawType.captionSemiBold)
+                    .buttonStyle(.bordered)
+                    .disabled(self.connectingGatewayID != nil)
                 } else {
-                    Text("Connect")
+                    Text(availability.actionTitle)
                         .font(OpenClawType.captionSemiBold)
+                        .foregroundStyle(OpenClawBrand.warn)
                 }
             }
-            .font(OpenClawType.captionSemiBold)
-            .buttonStyle(.bordered)
-            .disabled(self.connectingGatewayID != nil)
+
+            if let guidanceText = availability.guidanceText {
+                Text(guidanceText)
+                    .font(OpenClawType.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 

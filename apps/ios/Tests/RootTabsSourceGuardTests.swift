@@ -1081,6 +1081,28 @@ struct RootTabsSourceGuardTests {
         #expect(!modelSource.contains("expectedGeneration: UInt64?"))
     }
 
+    @Test func `discovered gateway surfaces share secure connection availability`() throws {
+        let controllerSource = try String(
+            contentsOf: Self.gatewayConnectionControllerSourceURL(),
+            encoding: .utf8)
+        let settingsSource = try String(
+            contentsOf: Self.settingsProTabSectionsSourceURL(),
+            encoding: .utf8)
+        let quickSetupSource = try String(
+            contentsOf: Self.gatewayQuickSetupSourceURL(),
+            encoding: .utf8)
+        let onboardingSource = try String(
+            contentsOf: Self.onboardingWizardSourceURL(),
+            encoding: .utf8)
+
+        #expect(controllerSource.contains("enum DiscoveredGatewayConnectionAvailability"))
+        #expect(controllerSource.contains("gateway.tlsEnabled || GatewayTLSStore.loadFingerprint"))
+        #expect(controllerSource.contains("Enable Gateway TLS or Tailscale Serve"))
+        #expect(settingsSource.contains("discoveredGatewayConnectionAvailability(gateway)"))
+        #expect(quickSetupSource.contains("discoveredGatewayConnectionAvailability(candidate)"))
+        #expect(onboardingSource.contains("discoveredGatewayConnectionAvailability(gateway)"))
+    }
+
     @Test func `gateway credential fields update before endpoint persistence is available`() throws {
         let onboardingSource = try String(contentsOf: Self.onboardingWizardSourceURL(), encoding: .utf8)
         let settingsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
@@ -1538,6 +1560,13 @@ struct RootTabsSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Onboarding/OnboardingWizardView.swift")
+    }
+
+    private static func gatewayQuickSetupSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Gateway/GatewayQuickSetupSheet.swift")
     }
 
     private static func qrScannerSourceURL() -> URL {

@@ -720,34 +720,50 @@ struct OnboardingWizardView: View {
                 } else {
                     ForEach(self.gatewayController.gateways) { gateway in
                         let hasHost = self.gatewayHasResolvableHost(gateway)
+                        let availability = self.gatewayController.discoveredGatewayConnectionAvailability(gateway)
 
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(gateway.name)
-                                    .font(OpenClawType.body)
-                                if let host = gateway.lanHost ?? gateway.tailnetDns {
-                                    Text(host)
-                                        .font(OpenClawType.footnote)
-                                        .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(gateway.name)
+                                        .font(OpenClawType.body)
+                                    if let host = gateway.lanHost ?? gateway.tailnetDns {
+                                        Text(host)
+                                            .font(OpenClawType.footnote)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
-                            }
-                            Spacer()
-                            Button {
-                                Task { await self.connectDiscoveredGateway(gateway) }
-                            } label: {
-                                if self.connectingGatewayID == gateway.id {
-                                    ProgressView()
-                                        .progressViewStyle(.circular)
-                                } else if !hasHost {
-                                    Text("Resolving…")
-                                        .font(OpenClawType.subheadSemiBold)
+                                Spacer()
+                                if availability.canConnect {
+                                    Button {
+                                        Task { await self.connectDiscoveredGateway(gateway) }
+                                    } label: {
+                                        if self.connectingGatewayID == gateway.id {
+                                            ProgressView()
+                                                .progressViewStyle(.circular)
+                                        } else if !hasHost {
+                                            Text("Resolving…")
+                                                .font(OpenClawType.subheadSemiBold)
+                                        } else {
+                                            Text(availability.actionTitle)
+                                                .font(OpenClawType.subheadSemiBold)
+                                        }
+                                    }
+                                    .font(OpenClawType.subheadSemiBold)
+                                    .disabled(self.connectingGatewayID != nil || !hasHost)
                                 } else {
-                                    Text("Connect")
+                                    Text(availability.actionTitle)
                                         .font(OpenClawType.subheadSemiBold)
+                                        .foregroundStyle(OpenClawBrand.warn)
                                 }
                             }
-                            .font(OpenClawType.subheadSemiBold)
-                            .disabled(self.connectingGatewayID != nil || !hasHost)
+
+                            if let guidanceText = availability.guidanceText {
+                                Text(guidanceText)
+                                    .font(OpenClawType.footnote)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                     }
                 }
