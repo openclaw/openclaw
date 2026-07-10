@@ -2987,9 +2987,9 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {
       const tempDir = createFixtureDir("openclaw-cmd-wrapper-downgraded-");
-      const scriptPath = path.join(tempDir, "check_mail.cmd");
-      fs.writeFileSync(scriptPath, "@echo off\r\necho ok\r\n");
-      const command = ["env", "FOO=bar", "cmd.exe", "/d", "/s", "/c", `${scriptPath} --limit 5`];
+      const commandName = "check_mail.cmd";
+      const command = ["env", "FOO=bar", "cmd.exe", "/d", "/s", "/c", `${commandName} --limit 5`];
+      const ordinaryPattern = "*";
       const prepared = buildSystemRunApprovalPlan({ command, cwd: tempDir });
       expect(prepared.ok).toBe(true);
       if (!prepared.ok) {
@@ -3006,7 +3006,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           agents: {
             main: {
               allowlist: [
-                { pattern: scriptPath },
+                { pattern: ordinaryPattern },
                 { pattern: commandPattern, source: "allow-always" },
               ],
             },
@@ -3019,7 +3019,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
               current.agents = {
                 ...current.agents,
                 main: {
-                  allowlist: [{ pattern: scriptPath }, { pattern: commandPattern }],
+                  allowlist: [{ pattern: ordinaryPattern }, { pattern: commandPattern }],
                 },
               };
               saveExecApprovals(current);
