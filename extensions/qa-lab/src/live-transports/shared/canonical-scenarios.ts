@@ -122,6 +122,7 @@ export async function runCanonicalLiveScenarios(params: {
   options: LiveTransportQaCommandOptions & {
     providerMode: "mock-openai" | "aimock" | "live-frontier";
     repoRoot: string;
+    sutOpenClawCommand?: string;
   };
   scenarioIds: string[];
 }) {
@@ -145,6 +146,9 @@ export async function runCanonicalLiveScenarios(params: {
     providerMode: params.options.providerMode,
     repoRoot: params.options.repoRoot,
     scenarioIds: params.scenarioIds,
+    ...(params.options.sutOpenClawCommand
+      ? { sutOpenClawCommand: params.options.sutOpenClawCommand }
+      : {}),
   });
 }
 

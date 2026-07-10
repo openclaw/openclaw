@@ -1,3 +1,6 @@
+import { constants as fsConstants } from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { readQaSuiteFailedScenarioCountFromFile } from "../../suite-summary.js";
 import {
   assertKnownScenarioIds,
@@ -15,8 +18,42 @@ import { resolveLiveTransportQaRunOptions } from "../shared/live-transport-cli.r
 import { createTelegramQaTransportAdapter } from "./adapter.runtime.js";
 import { listTelegramQaScenarioCatalog, runTelegramQaLive } from "./telegram-live.runtime.js";
 
+const TELEGRAM_QA_SUT_OPENCLAW_COMMAND_ENV = "OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND";
+
+async function resolveTelegramQaSutOpenClawCommand(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string | undefined> {
+  const configuredCommand = env[TELEGRAM_QA_SUT_OPENCLAW_COMMAND_ENV];
+  if (configuredCommand === undefined) {
+    return undefined;
+  }
+  const command = configuredCommand.trim();
+  if (!command || !path.isAbsolute(command)) {
+    throw new Error(
+      `${TELEGRAM_QA_SUT_OPENCLAW_COMMAND_ENV} must be an absolute executable file path.`,
+    );
+  }
+  try {
+    const commandStat = await fs.stat(command);
+    if (!commandStat.isFile()) {
+      throw new Error("configured path is not a file");
+    }
+    await fs.access(command, fsConstants.X_OK);
+  } catch (error) {
+    throw new Error(
+      `${TELEGRAM_QA_SUT_OPENCLAW_COMMAND_ENV} must point to an executable file: ${command}`,
+      { cause: error },
+    );
+  }
+  return command;
+}
+
 export async function runQaTelegramCommand(opts: LiveTransportQaCommandOptions) {
-  const runOptions = resolveLiveTransportQaRunOptions(opts);
+  const sutOpenClawCommand = await resolveTelegramQaSutOpenClawCommand();
+  const runOptions = {
+    ...resolveLiveTransportQaRunOptions(opts),
+    ...(sutOpenClawCommand ? { sutOpenClawCommand } : {}),
+  };
   if (runOptions.listScenarios) {
     const scenarios = [
       ...listCanonicalScenarios({

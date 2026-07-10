@@ -85,6 +85,7 @@ describe("canonical live-transport scenarios", () => {
       options: {
         providerMode: "mock-openai",
         repoRoot: "/tmp/openclaw-repo",
+        sutOpenClawCommand: "/usr/local/bin/openclaw-telegram-sut-launcher",
       },
       scenarioIds: ["telegram-help-command"],
     });
@@ -94,6 +95,7 @@ describe("canonical live-transport scenarios", () => {
         channelDriver: "live",
         channelId: "telegram",
         scenarioIds: ["telegram-help-command"],
+        sutOpenClawCommand: "/usr/local/bin/openclaw-telegram-sut-launcher",
       }),
     );
   });

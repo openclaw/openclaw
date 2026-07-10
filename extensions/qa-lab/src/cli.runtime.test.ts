@@ -999,6 +999,84 @@ describe("qa cli runtime", () => {
     );
   });
 
+  it("uses the trusted Telegram launcher for canonical and legacy gateways", async () => {
+    const launcherPath = path.join(telegramArtifactsDir, "openclaw-telegram-sut-launcher");
+    await fs.writeFile(launcherPath, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    const previousLauncher = process.env.OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND;
+    process.env.OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND = launcherPath;
+    try {
+      await runQaTelegramCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        scenarioIds: ["telegram-help-command", "telegram-stream-final-single-message"],
+      });
+    } finally {
+      if (previousLauncher === undefined) {
+        delete process.env.OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND;
+      } else {
+        process.env.OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND = previousLauncher;
+      }
+    }
+
+    expect(runCanonicalLiveScenarios).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({ sutOpenClawCommand: launcherPath }),
+      }),
+    );
+    expect(runTelegramQaLive).toHaveBeenCalledWith(
+      expect.objectContaining({ sutOpenClawCommand: launcherPath }),
+    );
+  });
+
+  it("rejects relative Telegram launcher paths before starting a gateway", async () => {
+    const previousLauncher = process.env.OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND;
+    process.env.OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND = "relative-launcher";
+    try {
+      await expect(
+        runQaTelegramCommand({
+          repoRoot: "/tmp/openclaw-repo",
+          scenarioIds: ["telegram-help-command"],
+        }),
+      ).rejects.toThrow(
+        "OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND must be an absolute executable file path.",
+      );
+    } finally {
+      if (previousLauncher === undefined) {
+        delete process.env.OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND;
+      } else {
+        process.env.OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND = previousLauncher;
+      }
+    }
+
+    expect(runCanonicalLiveScenarios).not.toHaveBeenCalled();
+    expect(runTelegramQaLive).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-executable Telegram launcher files before starting a gateway", async () => {
+    const launcherPath = path.join(telegramArtifactsDir, "non-executable-launcher");
+    await fs.writeFile(launcherPath, "#!/bin/sh\nexit 0\n", { mode: 0o600 });
+    const previousLauncher = process.env.OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND;
+    process.env.OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND = launcherPath;
+    try {
+      await expect(
+        runQaTelegramCommand({
+          repoRoot: "/tmp/openclaw-repo",
+          scenarioIds: ["telegram-help-command"],
+        }),
+      ).rejects.toThrow(
+        `OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND must point to an executable file: ${launcherPath}`,
+      );
+    } finally {
+      if (previousLauncher === undefined) {
+        delete process.env.OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND;
+      } else {
+        process.env.OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND = previousLauncher;
+      }
+    }
+
+    expect(runCanonicalLiveScenarios).not.toHaveBeenCalled();
+    expect(runTelegramQaLive).not.toHaveBeenCalled();
+  });
+
   it("rejects unknown mixed Telegram selections before starting canonical scenarios", async () => {
     await expect(
       runQaTelegramCommand({

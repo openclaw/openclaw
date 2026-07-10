@@ -68,6 +68,9 @@ const QA_GATEWAY_CHILD_RESTART_BOUNDARY_TIMEOUT_MS = 90_000;
 const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_CONVEX_SECRET_CI",
   "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER",
+  "OPENCLAW_QA_TELEGRAM_GROUP_ID",
+  "OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN",
+  "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN",
 ]);
 
 export type QaGatewayChildStateMutationContext = {
@@ -93,6 +96,13 @@ export type QaGatewayChildListeningContext = {
   configPath: string;
   runtimeEnv: NodeJS.ProcessEnv;
 };
+
+function scrubQaGatewayChildSecretEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  for (const envKey of QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS) {
+    delete env[envKey];
+  }
+  return env;
+}
 
 function createQaGatewayEmptyTransport() {
   return {
@@ -321,6 +331,7 @@ export function buildQaRuntimeEnv(params: {
   compatibilityHostVersion?: string;
   providerMode?: QaProviderMode;
   baseEnv?: NodeJS.ProcessEnv;
+  runtimeEnvPatch?: NodeJS.ProcessEnv;
   forwardHostHomeForClaudeCli?: boolean;
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
@@ -368,12 +379,10 @@ export function buildQaRuntimeEnv(params: {
       : {}),
   };
   const normalizedEnv = normalizeQaProviderModeEnv(env, params.providerMode);
+  Object.assign(normalizedEnv, params.runtimeEnvPatch);
   delete normalizedEnv[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];
   delete normalizedEnv[QA_LIVE_SETUP_TOKEN_VALUE_ENV];
-  for (const envKey of QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS) {
-    delete normalizedEnv[envKey];
-  }
-  return normalizedEnv;
+  return scrubQaGatewayChildSecretEnv(normalizedEnv);
 }
 
 function isRetryableGatewayCallError(details: string): boolean {
@@ -995,15 +1004,10 @@ export async function startQaGatewayChild(params: {
           stagedBundledPluginsRoot,
           compatibilityHostVersion: stagedPluginRuntime.runtimeHostVersion,
           providerMode,
+          runtimeEnvPatch: params.runtimeEnvPatch,
           forwardHostHomeForClaudeCli: liveProviderIds.includes("claude-cli"),
           claudeCliAuthMode: params.claudeCliAuthMode,
         });
-        if (params.runtimeEnvPatch) {
-          env = {
-            ...env,
-            ...params.runtimeEnvPatch,
-          };
-        }
       }
       if (!env) {
         throw new Error("qa gateway runtime env not initialized");

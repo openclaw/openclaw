@@ -170,6 +170,7 @@ export type QaSuiteRunParams = {
   channelId?: string;
   evidenceMode?: QaScorecardEvidenceMode;
   repoRoot?: string;
+  sutOpenClawCommand?: string;
   outputDir?: string;
   providerMode?: QaProviderMode;
   transportId?: QaTransportId;
@@ -576,6 +577,7 @@ function buildQaIsolatedScenarioWorkerParams(params: {
     adapterOptions: params.input?.adapterOptions,
     channelId: params.input?.channelId,
     repoRoot: params.repoRoot,
+    sutOpenClawCommand: params.input?.sutOpenClawCommand,
     outputDir: params.outputDir,
     providerMode: params.providerMode,
     transportId: params.transportId,
@@ -1670,6 +1672,12 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     writeQaSuiteProgress(progressEnabled, "gateway start");
     const activeGateway = await startQaGatewayChild({
       repoRoot,
+      command: params?.sutOpenClawCommand
+        ? {
+            executablePath: params.sutOpenClawCommand,
+            usePackagedPlugins: true,
+          }
+        : undefined,
       providerBaseUrl: activeMock ? `${activeMock.baseUrl}/v1` : undefined,
       transport,
       transportBaseUrl: lab.listenUrl,
