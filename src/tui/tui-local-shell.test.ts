@@ -141,7 +141,7 @@ describe("createLocalShellRunner", () => {
     const spawnOptions = requireSpawnOptions(spawnCommand);
     expect(spawnOptions.env?.OPENCLAW_SHELL).toBe("tui-local");
     expect(spawnOptions.env?.PATH).toBe("/tmp/bin");
-    expect(harness.messages).toContain("local shell: enabled for this session");
+    expect(harness.messages).toContain("local shell: enabled for this session (local only)");
   });
 
   it("keeps stderr visible instead of evicting it when stdout fills the output cap", async () => {
@@ -275,7 +275,7 @@ describe("createLocalShellRunner", () => {
     });
 
     const run = harness.runLocalShellLine("!echo hi");
-    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+    harness.getLastSelector()?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
     await run;
 
     expect(injectBashExecution).toHaveBeenCalledTimes(1);
@@ -301,13 +301,34 @@ describe("createLocalShellRunner", () => {
     });
 
     const run = harness.runLocalShellLine("!!cat secrets.env");
-    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+    harness.getLastSelector()?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
     await run;
 
     expect(injectBashExecution).toHaveBeenCalledTimes(1);
     expect(injectBashExecution).toHaveBeenCalledWith(
       expect.objectContaining({ command: "cat secrets.env", excludeFromContext: true }),
     );
+  });
+
+  it("does not persist anything when consent was local-only", async () => {
+    // "Yes, local only" is the default-safe choice and must match shipped
+    // pre-persistence behavior exactly: nothing reaches history or the model.
+    const injectBashExecution = vi.fn(async () => ({ ok: true }));
+    const harness = createShellHarness({
+      spawnCommand: makeCompletingSpawn(
+        "hi",
+        0,
+      ) as unknown as typeof import("node:child_process").spawn,
+      getSessionScope: () => ({ sessionKey: "main", agentId: "work" }),
+      injectBashExecution,
+    });
+
+    const run = harness.runLocalShellLine("!echo hi");
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes, local only" });
+    await run;
+
+    expect(injectBashExecution).not.toHaveBeenCalled();
+    expect(harness.messages).toContain("[local] hi");
   });
 
   it("does not persist when no session scope is available", async () => {
@@ -322,7 +343,7 @@ describe("createLocalShellRunner", () => {
     });
 
     const run = harness.runLocalShellLine("!echo hi");
-    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+    harness.getLastSelector()?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
     await run;
 
     expect(injectBashExecution).not.toHaveBeenCalled();
@@ -340,7 +361,7 @@ describe("createLocalShellRunner", () => {
     });
 
     const run = harness.runLocalShellLine("!echo hi");
-    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+    harness.getLastSelector()?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
     await run;
 
     expect(
@@ -367,7 +388,7 @@ describe("createLocalShellRunner", () => {
     });
 
     const run = harness.runLocalShellLine("!does-not-exist");
-    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+    harness.getLastSelector()?.onSelect?.({ value: "yes-share", label: "Yes, and share with the agent" });
     await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledTimes(1));
 
     emitter.emit("error", new Error("ENOENT"));

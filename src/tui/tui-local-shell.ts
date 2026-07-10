@@ -36,8 +36,9 @@ type LocalShellDeps = {
   maxOutputChars?: number;
   /** Session scope to persist the command result under. Omit to skip persistence entirely. */
   getSessionScope?: () => { sessionKey: string; agentId?: string } | undefined;
-  /** Persists the command+output to session history. `!` sets excludeFromContext: false so the
-   * agent sees it on its next turn; `!!` sets it true so it stays in scrollback/history only. */
+  /** Persists the command+output to session history; only called after the user picks the
+   * share option at the consent prompt. `!` sets excludeFromContext: false so the agent sees
+   * it on its next turn; `!!` sets it true so it stays in scrollback/history only. */
   injectBashExecution?: (
     result: LocalShellExecutionResult,
   ) => Promise<{ ok: boolean; error?: string }>;
@@ -46,6 +47,9 @@ type LocalShellDeps = {
 export function createLocalShellRunner(deps: LocalShellDeps) {
   let localExecAsked = false;
   let localExecAllowed = false;
+  // Sharing is opt-in per session: without it `!`/`!!` stay purely local (the
+  // shipped pre-persistence behavior) and no output reaches history or the model.
+  let persistAllowed = false;
   const createSelector = deps.createSelector ?? createSearchableSelectList;
   const spawnCommand = deps.spawnCommand ?? spawn;
   const getCwd = deps.getCwd ?? tryProcessCwd;
@@ -66,19 +70,28 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
       deps.chatLog.addSystem(
         "This runs commands on YOUR machine (not the gateway) and may delete files or reveal secrets.",
       );
-      deps.chatLog.addSystem("Select Yes/No (arrows + Enter), Esc to cancel.");
+      deps.chatLog.addSystem(
+        "Sharing also saves commands+output to session history; the agent sees `!` output next turn (`!!` stays history-only).",
+      );
+      deps.chatLog.addSystem("Select an option (arrows + Enter), Esc to cancel.");
       const selector = createSelector(
         [
           { value: "no", label: "No" },
-          { value: "yes", label: "Yes" },
+          { value: "yes", label: "Yes, local only" },
+          { value: "yes-share", label: "Yes, and share with the agent" },
         ],
-        2,
+        3,
       );
       selector.onSelect = (item) => {
         deps.closeOverlay(overlayHandle);
-        if (item.value === "yes") {
+        if (item.value === "yes" || item.value === "yes-share") {
           localExecAllowed = true;
-          deps.chatLog.addSystem("local shell: enabled for this session");
+          persistAllowed = item.value === "yes-share";
+          deps.chatLog.addSystem(
+            persistAllowed
+              ? "local shell: enabled; output is saved to history and `!` output is shared with the agent"
+              : "local shell: enabled for this session (local only)",
+          );
           resolve(true);
         } else {
           deps.chatLog.addSystem("local shell: not enabled");
@@ -141,7 +154,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
       result: Omit<LocalShellExecutionResult, "command" | "excludeFromContext">,
     ) => {
       const scope = deps.getSessionScope?.();
-      if (!scope || !deps.injectBashExecution) {
+      if (!persistAllowed || !scope || !deps.injectBashExecution) {
         return;
       }
       const persisted = await deps.injectBashExecution({
