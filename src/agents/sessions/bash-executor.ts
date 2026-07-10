@@ -6,6 +6,7 @@
  * - Direct calls from modes that need bash execution
  */
 
+import { Buffer } from "node:buffer";
 import type { WriteStream } from "node:fs";
 import { stripAnsiSequences } from "../../../packages/terminal-core/src/ansi.js";
 import { sanitizeBinaryOutput } from "../shell-utils.js";
@@ -113,10 +114,10 @@ export async function executeBashWithOperations(
 
     // Keep rolling buffer
     outputChunks.push(text);
-    outputBytes += text.length;
+    outputBytes += Buffer.byteLength(text, "utf8");
     while (outputBytes > maxOutputBytes && outputChunks.length > 1) {
       const removed = outputChunks.shift()!;
-      outputBytes -= removed.length;
+      outputBytes -= Buffer.byteLength(removed, "utf8");
     }
 
     // Stream to callback
