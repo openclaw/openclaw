@@ -439,6 +439,11 @@ export const en: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Lobster visits",
+      lobsterVisitsOn: "Drops by occasionally",
+      lobsterVisitsOff: "Never visits",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -517,6 +522,10 @@ export const en: TranslationMap = {
     settingsGroupConnections: "Connections",
     settingsGroupAgents: "Agents & Tools",
     settingsGroupSystem: "System",
+    settingsSearchLabel: "Search settings",
+    settingsSearchPlaceholder: "Search settings…",
+    settingsSearchNoResults: "No matching settings.",
+    settingsSearchClear: "Clear settings search",
     exitSettings: "Back to app",
     expand: "Expand sidebar",
     collapse: "Collapse sidebar",
@@ -635,7 +644,9 @@ export const en: TranslationMap = {
   },
   tasksPage: {
     active: "Active",
+    activeSub: "Queued and running background work.",
     recent: "Recent",
+    recentSub: "Latest completed, failed, and cancelled tasks.",
     loading: "Loading tasks…",
     empty: "No background tasks yet.",
     emptyActive: "No queued or running tasks.",
@@ -1770,10 +1781,6 @@ export const en: TranslationMap = {
       retrySend: "Retry send",
       retryQueuedMessage: "Retry queued message",
     },
-    modelPicker: {
-      faster: "Faster",
-      smarter: "Smarter",
-    },
     pairingQrExpired: {
       title: "Pairing QR expired",
       reason: "Run /pair qr again to generate a fresh setup code.",
@@ -1968,8 +1975,7 @@ export const en: TranslationMap = {
     },
     summary: {
       enabled: "Enabled",
-      yes: "Yes",
-      no: "No",
+      scheduler: "Scheduler",
       jobs: "Jobs",
       nextWake: "Next wake",
       refreshing: "Refreshing...",

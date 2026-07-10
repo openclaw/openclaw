@@ -447,6 +447,11 @@ export const it: TranslationMap = {
     noEvents: "Ancora nessun evento.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Visite dell'aragosta",
+      lobsterVisitsOn: "Passa ogni tanto",
+      lobsterVisitsOff: "Non passa mai",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -526,6 +531,10 @@ export const it: TranslationMap = {
     settingsGroupConnections: "Connessioni",
     settingsGroupAgents: "Agenti e strumenti",
     settingsGroupSystem: "Sistema",
+    settingsSearchLabel: "Cerca nelle impostazioni",
+    settingsSearchPlaceholder: "Cerca nelle impostazioni…",
+    settingsSearchNoResults: "Nessuna impostazione corrispondente.",
+    settingsSearchClear: "Cancella la ricerca nelle impostazioni",
     exitSettings: "Torna all'app",
     expand: "Espandi barra laterale",
     collapse: "Comprimi barra laterale",
@@ -645,7 +654,9 @@ export const it: TranslationMap = {
   },
   tasksPage: {
     active: "Attive",
+    activeSub: "Lavori in background in coda e in esecuzione.",
     recent: "Recenti",
+    recentSub: "Ultime attività completate, non riuscite e annullate.",
     loading: "Caricamento attività…",
     empty: "Nessuna attività in background al momento.",
     emptyActive: "Nessuna attività in coda o in esecuzione.",
@@ -1797,10 +1808,6 @@ export const it: TranslationMap = {
       retrySend: "Riprova invio",
       retryQueuedMessage: "Riprova messaggio in coda",
     },
-    modelPicker: {
-      faster: "Più veloce",
-      smarter: "Più intelligente",
-    },
     pairingQrExpired: {
       title: "QR di pairing scaduto",
       reason: "Esegui di nuovo /pair qr per generare un nuovo codice di configurazione.",
@@ -2001,8 +2008,7 @@ export const it: TranslationMap = {
     },
     summary: {
       enabled: "Abilitato",
-      yes: "Sì",
-      no: "No",
+      scheduler: "Pianificatore",
       jobs: "Processi",
       nextWake: "Prossimo risveglio",
       refreshing: "Aggiornamento...",

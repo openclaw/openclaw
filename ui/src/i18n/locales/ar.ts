@@ -440,6 +440,11 @@ export const ar: TranslationMap = {
     noEvents: "لا توجد أحداث بعد.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "زيارات الكركند",
+      lobsterVisitsOn: "يزور من حين لآخر",
+      lobsterVisitsOff: "لا يزور أبدًا",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -518,6 +523,10 @@ export const ar: TranslationMap = {
     settingsGroupConnections: "الاتصالات",
     settingsGroupAgents: "الوكلاء والأدوات",
     settingsGroupSystem: "النظام",
+    settingsSearchLabel: "البحث في الإعدادات",
+    settingsSearchPlaceholder: "البحث في الإعدادات…",
+    settingsSearchNoResults: "لا توجد إعدادات مطابقة.",
+    settingsSearchClear: "مسح البحث في الإعدادات",
     exitSettings: "العودة إلى التطبيق",
     expand: "توسيع الشريط الجانبي",
     collapse: "طي الشريط الجانبي",
@@ -636,7 +645,9 @@ export const ar: TranslationMap = {
   },
   tasksPage: {
     active: "نشطة",
+    activeSub: "الأعمال الخلفية قيد الانتظار والتشغيل.",
     recent: "الأخيرة",
+    recentSub: "أحدث المهام المكتملة والفاشلة والملغاة.",
     loading: "جارٍ تحميل المهام…",
     empty: "لا توجد مهام خلفية بعد.",
     emptyActive: "لا توجد مهام في قائمة الانتظار أو قيد التشغيل.",
@@ -1762,10 +1773,6 @@ export const ar: TranslationMap = {
       retrySend: "إعادة محاولة الإرسال",
       retryQueuedMessage: "إعادة محاولة الرسالة في قائمة الانتظار",
     },
-    modelPicker: {
-      faster: "أسرع",
-      smarter: "أذكى",
-    },
     pairingQrExpired: {
       title: "انتهت صلاحية رمز الاقتران QR",
       reason: "شغّل ‎/pair qr‎ مرة أخرى لإنشاء رمز إعداد جديد.",
@@ -1960,8 +1967,7 @@ export const ar: TranslationMap = {
     },
     summary: {
       enabled: "مفعّل",
-      yes: "نعم",
-      no: "لا",
+      scheduler: "المجدول",
       jobs: "المهام",
       nextWake: "التنبيه التالي",
       refreshing: "جارٍ التحديث...",

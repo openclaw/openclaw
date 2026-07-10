@@ -447,6 +447,11 @@ export const ja_JP: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "ロブスターの訪問",
+      lobsterVisitsOn: "ときどき立ち寄る",
+      lobsterVisitsOff: "訪問しない",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -525,6 +530,10 @@ export const ja_JP: TranslationMap = {
     settingsGroupConnections: "接続",
     settingsGroupAgents: "エージェントとツール",
     settingsGroupSystem: "システム",
+    settingsSearchLabel: "設定を検索",
+    settingsSearchPlaceholder: "設定を検索…",
+    settingsSearchNoResults: "一致する設定はありません。",
+    settingsSearchClear: "設定の検索をクリア",
     exitSettings: "アプリに戻る",
     expand: "サイドバーを展開",
     collapse: "サイドバーを折りたたむ",
@@ -644,7 +653,9 @@ export const ja_JP: TranslationMap = {
   },
   tasksPage: {
     active: "アクティブ",
+    activeSub: "キューに入っているバックグラウンド作業と実行中のバックグラウンド作業。",
     recent: "最近",
+    recentSub: "完了、失敗、キャンセルされた最新のタスク。",
     loading: "タスクを読み込み中…",
     empty: "バックグラウンドタスクはまだありません。",
     emptyActive: "キュー内または実行中のタスクはありません。",
@@ -1790,10 +1801,6 @@ export const ja_JP: TranslationMap = {
       retrySend: "送信を再試行",
       retryQueuedMessage: "キュー内のメッセージを再試行",
     },
-    modelPicker: {
-      faster: "より速く",
-      smarter: "より賢く",
-    },
     pairingQrExpired: {
       title: "ペアリングQRの有効期限が切れました",
       reason: "新しいセットアップコードを生成するには、もう一度 /pair qr を実行してください。",
@@ -1990,8 +1997,7 @@ export const ja_JP: TranslationMap = {
     },
     summary: {
       enabled: "有効",
-      yes: "はい",
-      no: "いいえ",
+      scheduler: "スケジューラー",
       jobs: "ジョブ",
       nextWake: "次回のウェイク",
       refreshing: "更新中...",

@@ -439,6 +439,11 @@ export const zh_TW: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "龍蝦造訪",
+      lobsterVisitsOn: "偶爾來訪",
+      lobsterVisitsOff: "從不來訪",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -516,6 +521,10 @@ export const zh_TW: TranslationMap = {
     settingsGroupConnections: "連線",
     settingsGroupAgents: "代理程式與工具",
     settingsGroupSystem: "系統",
+    settingsSearchLabel: "搜尋設定",
+    settingsSearchPlaceholder: "搜尋設定…",
+    settingsSearchNoResults: "沒有相符的設定。",
+    settingsSearchClear: "清除設定搜尋內容",
     exitSettings: "返回應用程式",
     expand: "展開側邊欄",
     collapse: "折疊側邊欄",
@@ -634,7 +643,9 @@ export const zh_TW: TranslationMap = {
   },
   tasksPage: {
     active: "進行中",
+    activeSub: "已佇列及執行中的背景工作。",
     recent: "最近",
+    recentSub: "最新完成、失敗及已取消的工作。",
     loading: "正在載入任務…",
     empty: "尚無背景任務。",
     emptyActive: "沒有排入佇列或正在執行的任務。",
@@ -1743,10 +1754,6 @@ export const zh_TW: TranslationMap = {
       retrySend: "重新傳送",
       retryQueuedMessage: "重試佇列中的訊息",
     },
-    modelPicker: {
-      faster: "更快",
-      smarter: "更智慧",
-    },
     pairingQrExpired: {
       title: "配對 QR 碼已過期",
       reason: "請再次執行 /pair qr 以產生新的設定碼。",
@@ -1938,8 +1945,7 @@ export const zh_TW: TranslationMap = {
     },
     summary: {
       enabled: "已啟用",
-      yes: "是",
-      no: "否",
+      scheduler: "排程器",
       jobs: "工作",
       nextWake: "下次喚醒",
       refreshing: "重新整理中...",

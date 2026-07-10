@@ -446,6 +446,11 @@ export const ru: TranslationMap = {
     noEvents: "Событий пока нет.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Визиты омара",
+      lobsterVisitsOn: "Заглядывает время от времени",
+      lobsterVisitsOff: "Никогда не заходит",
+    },
     security: {
       browserEnabled: "Браузер включен",
       toolProfile: "Профиль инструмента",
@@ -524,6 +529,10 @@ export const ru: TranslationMap = {
     settingsGroupConnections: "Подключения",
     settingsGroupAgents: "Агенты и инструменты",
     settingsGroupSystem: "Системная",
+    settingsSearchLabel: "Поиск по настройкам",
+    settingsSearchPlaceholder: "Поиск по настройкам…",
+    settingsSearchNoResults: "Подходящие настройки не найдены.",
+    settingsSearchClear: "Очистить поиск по настройкам",
     exitSettings: "Назад в приложение",
     expand: "Развернуть боковую панель",
     collapse: "Свернуть боковую панель",
@@ -644,7 +653,9 @@ export const ru: TranslationMap = {
   },
   tasksPage: {
     active: "Активно",
+    activeSub: "Фоновые задания в очереди и выполняющиеся сейчас.",
     recent: "Недавние",
+    recentSub: "Последние завершенные, неудачные и отмененные задачи.",
     loading: "Загрузка задач…",
     empty: "Фоновых задач пока нет.",
     emptyActive: "Нет задач в очереди или в работе.",
@@ -1798,10 +1809,6 @@ export const ru: TranslationMap = {
       retrySend: "Повторить отправку",
       retryQueuedMessage: "Повторить сообщение в очереди",
     },
-    modelPicker: {
-      faster: "Быстрее",
-      smarter: "Умнее",
-    },
     pairingQrExpired: {
       title: "QR-код сопряжения истек",
       reason: "Запустите /pair qr еще раз, чтобы создать новый код настройки.",
@@ -1997,8 +2004,7 @@ export const ru: TranslationMap = {
     },
     summary: {
       enabled: "Включено",
-      yes: "Да",
-      no: "Нет",
+      scheduler: "Планировщик",
       jobs: "Задачи",
       nextWake: "Следующее пробуждение",
       refreshing: "Обновление...",

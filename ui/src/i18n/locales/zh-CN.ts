@@ -439,6 +439,11 @@ export const zh_CN: TranslationMap = {
     noEvents: "暂无事件。",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "龙虾来访",
+      lobsterVisitsOn: "偶尔来访",
+      lobsterVisitsOff: "从不来访",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -516,6 +521,10 @@ export const zh_CN: TranslationMap = {
     settingsGroupConnections: "连接",
     settingsGroupAgents: "代理与工具",
     settingsGroupSystem: "系统",
+    settingsSearchLabel: "搜索设置",
+    settingsSearchPlaceholder: "搜索设置…",
+    settingsSearchNoResults: "没有匹配的设置。",
+    settingsSearchClear: "清除设置搜索内容",
     exitSettings: "返回应用",
     expand: "展开侧边栏",
     collapse: "折叠侧边栏",
@@ -634,7 +643,9 @@ export const zh_CN: TranslationMap = {
   },
   tasksPage: {
     active: "活跃",
+    activeSub: "已排队和正在运行的后台任务。",
     recent: "最近",
+    recentSub: "最近已完成、失败和已取消的任务。",
     loading: "正在加载任务…",
     empty: "还没有后台任务。",
     emptyActive: "没有排队或正在运行的任务。",
@@ -1741,10 +1752,6 @@ export const zh_CN: TranslationMap = {
       retrySend: "重试发送",
       retryQueuedMessage: "重试排队消息",
     },
-    modelPicker: {
-      faster: "更快",
-      smarter: "更智能",
-    },
     pairingQrExpired: {
       title: "配对二维码已过期",
       reason: "再次运行 /pair qr 以生成新的设置代码。",
@@ -1936,8 +1943,7 @@ export const zh_CN: TranslationMap = {
     },
     summary: {
       enabled: "已启用",
-      yes: "是",
-      no: "否",
+      scheduler: "调度器",
       jobs: "任务数",
       nextWake: "下次唤醒",
       refreshing: "刷新中...",
