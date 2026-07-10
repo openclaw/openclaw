@@ -236,6 +236,120 @@ describe("hasConfiguredWebSearchCredential", () => {
     ).toBe(true);
   });
 
+  it("limits explicit provider checks to the selected provider", () => {
+    manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "brave",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["brave"] },
+        },
+        {
+          id: "searxng",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["searxng"] },
+        },
+        {
+          id: "duckduckgo",
+          origin: "bundled",
+          contracts: { webSearchProviders: ["duckduckgo"] },
+        },
+      ],
+    });
+    publicArtifactMocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockReturnValue(
+      [
+        {
+          id: "duckduckgo",
+          pluginId: "duckduckgo",
+          requiresCredential: false,
+        },
+      ],
+    );
+    const unrelatedSearxngConfig = {
+      plugins: {
+        entries: {
+          searxng: {
+            config: {
+              webSearch: {
+                baseUrl: "https://searxng.example.test",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          ...unrelatedSearxngConfig,
+          tools: { web: { search: { provider: "brave" } } },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(false);
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "brave",
+                searxng: {
+                  apiKey: "searxng-key",
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(false);
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: unrelatedSearxngConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(true);
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          ...unrelatedSearxngConfig,
+          tools: { web: { search: { provider: "duckduckgo" } } },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(true);
+
+    expect(
+      hasConfiguredWebSearchCredential({
+        config: {
+          tools: { web: { search: { provider: "brave" } } },
+          plugins: {
+            entries: {
+              brave: {
+                config: {
+                  webSearch: {
+                    apiKey: "brave-key",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        env: {},
+        origin: "bundled",
+      }),
+    ).toBe(true);
+  });
+
   it("treats explicit keyless web search providers as configured", () => {
     manifestMocks.loadManifestMetadataSnapshot.mockReturnValue({
       plugins: [
