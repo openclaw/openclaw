@@ -73,13 +73,15 @@ describe("createChannelRunQueue", () => {
 
     expect(setStatus).toHaveBeenCalledTimes(3);
     const [initialStatus, busyStatus, finalStatus] = setStatus.mock.calls.map(([status]) => status);
-    expect(initialStatus).toEqual({ activeRuns: 0, busy: false });
+    expect(initialStatus).toEqual({ activeRuns: 0, busy: false, activeRunStartedAt: null });
     expect(busyStatus?.activeRuns).toBe(1);
     expect(busyStatus?.busy).toBe(true);
     expect(typeof busyStatus?.lastRunActivityAt).toBe("number");
+    expect(typeof busyStatus?.activeRunStartedAt).toBe("number");
     expect(finalStatus?.activeRuns).toBe(0);
     expect(finalStatus?.busy).toBe(false);
     expect(typeof finalStatus?.lastRunActivityAt).toBe("number");
+    expect(finalStatus?.activeRunStartedAt).toBeNull();
     expect(onError).toHaveBeenCalledWith(taskError);
   });
 

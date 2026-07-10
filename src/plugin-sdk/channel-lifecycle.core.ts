@@ -75,7 +75,7 @@ export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRun
           if (!runState.isActive()) {
             return;
           }
-          runState.onRunStart();
+          const runHandle = runState.onRunStart();
           try {
             // Deactivation can happen while this key waited behind older work.
             if (!runState.isActive()) {
@@ -83,7 +83,7 @@ export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRun
             }
             await task({ lifecycleSignal: params.abortSignal });
           } finally {
-            runState.onRunEnd();
+            runState.onRunEnd(runHandle);
           }
         })
         .catch(reportError);

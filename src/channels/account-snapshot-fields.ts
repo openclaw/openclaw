@@ -247,6 +247,9 @@ export function projectSafeChannelAccountSnapshotFields(
     ...(readNullableNumber(record, "lastRunActivityAt") !== undefined
       ? { lastRunActivityAt: readNullableNumber(record, "lastRunActivityAt") }
       : {}),
+    ...(readNullableNumber(record, "activeRunStartedAt") !== undefined
+      ? { activeRunStartedAt: readNullableNumber(record, "activeRunStartedAt") }
+      : {}),
     ...(mode ? { mode } : {}),
     ...(dmPolicy ? { dmPolicy } : {}),
     ...(readStringArray(record, "allowFrom")

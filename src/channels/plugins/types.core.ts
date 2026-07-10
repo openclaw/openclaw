@@ -221,6 +221,7 @@ export type ChannelAccountSnapshot = {
   busy?: boolean;
   activeRuns?: number;
   lastRunActivityAt?: number | null;
+  activeRunStartedAt?: number | null;
   mode?: string;
   dmPolicy?: string;
   allowFrom?: string[];

@@ -11,6 +11,7 @@ type ChannelHealthSnapshot = {
   busy?: boolean;
   activeRuns?: number;
   lastRunActivityAt?: number | null;
+  activeRunStartedAt?: number | null;
   lastEventAt?: number | null;
   lastConnectedAt?: number | null;
   lastTransportActivityAt?: number | null;
@@ -81,6 +82,10 @@ export function evaluateChannelHealth(
     typeof snapshot.lastRunActivityAt === "number" && Number.isFinite(snapshot.lastRunActivityAt)
       ? snapshot.lastRunActivityAt
       : null;
+  const activeRunStartedAt =
+    typeof snapshot.activeRunStartedAt === "number" && Number.isFinite(snapshot.activeRunStartedAt)
+      ? snapshot.activeRunStartedAt
+      : null;
   const lastTransportActivityAt =
     typeof snapshot.lastTransportActivityAt === "number" &&
     Number.isFinite(snapshot.lastTransportActivityAt)
@@ -96,11 +101,15 @@ export function evaluateChannelHealth(
     if (!busyStateInitializedForLifecycle) {
       // Fall through to normal startup/disconnect checks below.
     } else {
+      const runStartAge =
+        activeRunStartedAt == null ? null : Math.max(0, policy.now - activeRunStartedAt);
       const runActivityAge =
-        lastRunActivityAt == null
+        lastRunActivityAt == null ? null : Math.max(0, policy.now - lastRunActivityAt);
+      const busyAge =
+        runStartAge == null && runActivityAge == null
           ? Number.POSITIVE_INFINITY
-          : Math.max(0, policy.now - lastRunActivityAt);
-      if (runActivityAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
+          : Math.max(runStartAge ?? 0, runActivityAge ?? 0);
+      if (busyAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
         return { healthy: true, reason: "busy" };
       }
       return { healthy: false, reason: "stuck" };
