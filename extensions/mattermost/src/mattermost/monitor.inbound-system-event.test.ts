@@ -1239,7 +1239,7 @@ describe("mattermost inbound user posts", () => {
     expect(replyOptions?.disableBlockStreaming).toBe(false);
   });
 
-  it("preserves text-tool-text boundaries without splitting tool updates", async () => {
+  it("preserves text-tool-text boundaries while grouping interleaved tool updates", async () => {
     const blockConfig: OpenClawConfig = {
       channels: {
         mattermost: {
@@ -1275,7 +1275,7 @@ describe("mattermost inbound user posts", () => {
     const abortController = new AbortController();
     mockState.abortController = abortController;
     let sameToolUpdateBoundaryCount = -1;
-    let secondToolDraft = "";
+    let interleavedToolDraft = "";
     let secondPartialArrivedBeforeBoundarySettled = false;
     mockState.dispatchReplyFromConfig.mockImplementation(async (params) => {
       await params.replyOptions?.onAssistantMessageStart?.();
@@ -1309,7 +1309,14 @@ describe("mattermost inbound user posts", () => {
         detailMode: "raw",
         args: { command: "pwd" },
       });
-      secondToolDraft = String(draftUpdate.mock.calls.at(-1)?.[0] ?? "");
+      await params.replyOptions?.onToolStart?.({
+        toolCallId: "bash-1",
+        name: "bash",
+        phase: "update",
+        detailMode: "raw",
+        args: { command: "ls -alh" },
+      });
+      interleavedToolDraft = String(draftUpdate.mock.calls.at(-1)?.[0] ?? "");
 
       const assistantBoundary = params.replyOptions?.onAssistantMessageStart?.();
       params.replyOptions?.onPartialReply?.({ text: "Done." });
@@ -1343,9 +1350,9 @@ describe("mattermost inbound user posts", () => {
     const replyOptions = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].replyOptions;
     expect(replyOptions?.disableBlockStreaming).toBe(true);
     expect(sameToolUpdateBoundaryCount).toBe(1);
-    expect(secondToolDraft).toContain("pwd");
-    expect(secondToolDraft).not.toContain("ls -al");
-    expect(forceNewMessage).toHaveBeenCalledTimes(3);
+    expect(interleavedToolDraft).toContain("pwd");
+    expect(interleavedToolDraft).toContain("ls -alh");
+    expect(forceNewMessage).toHaveBeenCalledTimes(2);
     expect(secondPartialArrivedBeforeBoundarySettled).toBe(true);
     expect(draftUpdate).toHaveBeenNthCalledWith(1, "A much longer first block");
     expect(draftUpdate).toHaveBeenLastCalledWith("Done.");

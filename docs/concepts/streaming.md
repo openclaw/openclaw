@@ -147,8 +147,8 @@ block delivery there. Use `streaming.block.enabled` (or the legacy
 exception: it has no draft-preview block transport, so `streaming.mode:
 "block"` disables native streaming entirely and the reply lands as regular
 block delivery instead of native partial/progress streaming. Mattermost also
-differs: in `block` mode it rotates the preview to a fresh post at each
-completed text or tool block, so earlier blocks stay visible as separate posts
+differs: in `block` mode it rotates the preview between completed text and
+tool-activity blocks, so earlier blocks stay visible as separate posts
 instead of being overwritten in one editable draft.
 
 ### Channel mapping
@@ -249,8 +249,8 @@ Slack-only:
   preview post that finalizes in place when the final answer is safe to send.
 - In `progress` mode, streams thinking and tool activity into a single status
   preview that finalizes in place when the final answer is safe to send.
-- In `block` mode, starts a fresh post at each completed text or tool boundary;
-  repeated progress updates for the same tool continue editing its current post.
+- In `block` mode, rotates between completed text and tool-activity posts;
+  parallel and consecutive tool updates share the current tool-activity post.
 - Falls back to sending a fresh final post if the preview post was deleted or
   is otherwise unavailable at finalize time.
 - Final media/error payloads cancel pending preview updates before normal
@@ -288,8 +288,9 @@ Supported surfaces:
   personal chats.
 - Telegram has shipped with tool-progress preview updates enabled since
   `v2026.4.22`; keeping them enabled preserves that released behavior.
-- **Mattermost** already folds tool activity into its single draft preview post
-  (see above).
+- **Mattermost** folds tool activity into one preview post in `partial` and
+  `progress` modes, or one tool-activity post between text blocks in `block`
+  mode (see above).
 - Tool-progress edits follow the active preview streaming mode; they are
   skipped when preview streaming is `off` or when block streaming has taken
   over the message. On Telegram, `streaming.mode: "off"` is final-only: generic

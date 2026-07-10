@@ -1754,6 +1754,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           },
         });
         let lastPartialText = "";
+        let blockPreviewInToolActivity = false;
         const progressDraft = createChannelProgressDraftCompositor({
           entry: account.config,
           mode: account.streamingMode,
@@ -1766,6 +1767,17 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             }
           },
         });
+        const enterBlockPreviewToolActivity = async () => {
+          if (account.streamingMode !== "block" || blockPreviewInToolActivity) {
+            return;
+          }
+          const boundarySettled = previewBoundaryController.noteBoundary();
+          // Parallel tools share one activity post. Rotating per tool would route a late update
+          // for an earlier tool into the newest tool's post.
+          blockPreviewInToolActivity = true;
+          progressDraft.reset();
+          await boundarySettled;
+        };
         const previewState: MattermostDraftPreviewState = {
           finalizedViaPreviewPost: false,
         };
@@ -1821,6 +1833,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             return;
           }
           lastPartialText = cleaned;
+          blockPreviewInToolActivity = false;
           draftStream.update(cleaned);
           previewBoundaryController.noteUpdate();
         };
@@ -2019,6 +2032,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                           onAssistantMessageStart: async () => {
                             const boundarySettled = previewBoundaryController.noteBoundary();
                             lastPartialText = "";
+                            blockPreviewInToolActivity = false;
                             progressDraft.resetReasoningProgress();
                             if (account.streamingMode !== "progress") {
                               progressDraft.reset();
@@ -2028,6 +2042,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                           onReasoningEnd: async () => {
                             const boundarySettled = previewBoundaryController.noteBoundary();
                             lastPartialText = "";
+                            blockPreviewInToolActivity = false;
                             progressDraft.resetReasoningProgress();
                             if (account.streamingMode !== "progress") {
                               progressDraft.reset();
@@ -2043,20 +2058,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                               return;
                             }
                             if (!lastPartialText) {
+                              blockPreviewInToolActivity = false;
                               draftStream.update("Thinking…");
                               previewBoundaryController.noteUpdate();
                             }
                           },
                           onToolStart: async (payloadValue) => {
-                            if (payloadValue.phase !== "update") {
-                              const boundarySettled = previewBoundaryController.noteBoundary();
-                              // Block previews rotate posts here, so the new post must not inherit
-                              // the previous block's accumulated progress lines.
-                              if (account.streamingMode === "block") {
-                                progressDraft.reset();
-                              }
-                              await boundarySettled;
-                            }
+                            await enterBlockPreviewToolActivity();
                             if (!draftToolProgressEnabled) {
                               return;
                             }
@@ -2083,6 +2091,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                             if (!draftToolProgressEnabled) {
                               return;
                             }
+                            await enterBlockPreviewToolActivity();
                             await progressDraft.pushToolProgress(
                               buildChannelProgressDraftLineForEntry(account.config, {
                                 event: "item",
