@@ -129,6 +129,7 @@ export function createBlockReplyPipeline(params: {
   let didStream = false;
   let didStreamTerminalReply = false;
   let didLogTimeout = false;
+  let finalizing = false;
 
   const hasSeenOrQueuedPayloadKey = (payloadKey: string) =>
     seenKeys.has(payloadKey) || sentKeys.has(payloadKey) || pendingKeys.has(payloadKey);
@@ -138,8 +139,8 @@ export function createBlockReplyPipeline(params: {
     void coalescer?.flush({ force: true });
   };
 
-  const sendPayload = (payload: ReplyPayload, bypassSeenCheck = false, bypassAbort = false) => {
-    if (aborted && !bypassAbort) {
+  const sendPayload = (payload: ReplyPayload, bypassSeenCheck = false) => {
+    if (aborted && !finalizing) {
       return;
     }
     const payloadKey = createBlockReplyPayloadKey(payload);
@@ -160,7 +161,7 @@ export function createBlockReplyPipeline(params: {
     const abortController = new AbortController();
     sendChain = sendChain
       .then(async () => {
-        if (aborted && !bypassAbort) {
+        if (aborted && !finalizing) {
           return false;
         }
         await withTimeout(
@@ -231,10 +232,7 @@ export function createBlockReplyPipeline(params: {
         onFlush: (payload) => {
           bufferedAssistantMessageIndex = undefined;
           bufferedKeys.clear();
-          // Coalescer independently gates abort via shouldAbort;
-          // force-flush during finalization must reach onBlockReply
-          // even after the pipeline is marked aborted.
-          sendPayload(payload, /* bypassSeenCheck */ true, /* bypassAbort */ true);
+          sendPayload(payload, /* bypassSeenCheck */ true);
         },
       })
     : null;
@@ -321,6 +319,13 @@ export function createBlockReplyPipeline(params: {
   };
 
   const flush = async (options?: { force?: boolean }) => {
+    // When force-flushing an aborted pipeline (e.g. agent-runner's final
+    // flush before stop), the coalescer's buffered tail text needs to reach
+    // sendPayload. Marking finalizing here allows that; the alternative
+    // (setting it only in stop()) would miss the flush → stop ordering.
+    if (options?.force) {
+      finalizing = true;
+    }
     await coalescer?.flush(options);
     bufferedAssistantMessageIndex = undefined;
     flushBuffered();
@@ -328,6 +333,12 @@ export function createBlockReplyPipeline(params: {
   };
 
   const stop = () => {
+    finalizing = true;
+    // Flush any buffered text so the final payload is not lost even when
+    // the pipeline was already aborted (e.g. by a delivery timeout).
+    // This is the only safe recovery path that accepts payloads after
+    // abort — all other paths are gated by the aborted flag.
+    void coalescer?.flush({ force: true });
     coalescer?.stop();
   };
 

@@ -497,3 +497,49 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
     setTimeoutSpy.mockRestore();
   });
 });
+
+describe("createBlockReplyPipeline abort + finalization recovery", () => {
+  it("delivers buffered coalescer text when a prior sendChain delivery times out before final flush", async () => {
+    vi.useFakeTimers();
+    let firstDelivery = true;
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (_payload, options) => {
+        if (firstDelivery) {
+          firstDelivery = false;
+          // The first delivery (media payload, sent directly to sendChain)
+          // hangs until timeout → aborts the pipeline.
+          await waitForAbort(options?.abortSignal);
+          return "timeout" as never;
+        }
+      },
+      timeoutMs: 1,
+      coalescing: {
+        minChars: 500, // text stays buffered below minChars
+        maxChars: 2000,
+        idleMs: 1000,
+        joiner: "",
+      },
+    });
+
+    // Enqueue media payload → goes directly to sendPayload (bypasses coalescer).
+    // This delivery will time out and trigger the pipeline abort.
+    pipeline.enqueue({ mediaUrls: ["file:///photo.png"] });
+    // Enqueue text that buffers in the coalescer (under minChars=500)
+    pipeline.enqueue({ text: "Tail text that must survive abort" });
+    await Promise.resolve();
+
+    expect(pipeline.hasBuffered()).toBe(true);
+
+    // Trigger flush → the media payload hits sendChain and times out,
+    // setting aborted=true. The coalescer flush then tries to deliver
+    // the buffered text through the now-aborted pipeline.
+    const flushing = pipeline.flush({ force: true });
+    await vi.advanceTimersByTimeAsync(1);
+    await flushing;
+
+    expect(pipeline.isAborted()).toBe(true);
+
+    // The buffered tail text should be tracked as sent via the pipeline
+    expect(pipeline.hasSentPayload({ text: "Tail text that must survive abort" })).toBe(true);
+  });
+});

@@ -94,8 +94,8 @@ export function createBlockReplyCoalescer(params: {
         resetBuffer();
         return;
       }
-      // force=true: still attempt to flush; the pipeline accepts
-      // coalescer-sourced payloads even when aborted.
+      // force=true: still attempt to flush. The pipeline's exclusive
+      // finalizing path gates delivery, so this is safe.
     }
     if (!bufferText) {
       return;
