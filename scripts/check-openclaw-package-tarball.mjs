@@ -11,6 +11,7 @@ import { LOCAL_BUILD_METADATA_DIST_PATHS } from "./lib/local-build-metadata-path
 import {
   collectPackageDistImports,
   collectPackageDistImportErrors,
+  collectPackageDistModuleSpecifiers,
   expandPackageDistImportClosure,
 } from "./lib/package-dist-imports.mjs";
 
@@ -111,7 +112,139 @@ function listBundleDependencies(packageJson) {
     : [];
 }
 
-function collectRequiredBundledWorkspaceDependencyErrors(packageJson, entrySet) {
+function collectRuntimeExportTargets(value) {
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap(collectRuntimeExportTargets);
+  }
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  return Object.entries(value)
+    .filter(([condition]) => condition !== "types")
+    .flatMap(([, target]) => collectRuntimeExportTargets(target));
+}
+
+function listPackageExportEntries(exportsField) {
+  if (
+    exportsField &&
+    typeof exportsField === "object" &&
+    !Array.isArray(exportsField) &&
+    Object.keys(exportsField).some((key) => key.startsWith("."))
+  ) {
+    return Object.entries(exportsField);
+  }
+  return [[".", exportsField]];
+}
+
+function resolvePackageExportTargets(exportEntries, subpath) {
+  const exact = exportEntries.find(([key]) => key === subpath);
+  if (exact) {
+    return collectRuntimeExportTargets(exact[1]);
+  }
+  for (const [key, value] of exportEntries) {
+    const wildcardIndex = key.indexOf("*");
+    if (wildcardIndex === -1) {
+      continue;
+    }
+    const prefix = key.slice(0, wildcardIndex);
+    const suffix = key.slice(wildcardIndex + 1);
+    if (!subpath.startsWith(prefix) || !subpath.endsWith(suffix)) {
+      continue;
+    }
+    const matched = subpath.slice(prefix.length, subpath.length - suffix.length);
+    return collectRuntimeExportTargets(value).map((target) => target.replaceAll("*", matched));
+  }
+  return [];
+}
+
+function normalizeBundledPackageTarget(name, target, errors) {
+  if (!target.startsWith("./")) {
+    errors.push(`bundled ${name} has non-relative runtime export target ${target}`);
+    return "";
+  }
+  const normalized = path.posix.normalize(target.slice(2));
+  if (!normalized || normalized.startsWith("../") || normalized === "..") {
+    errors.push(`bundled ${name} has unsafe runtime export target ${target}`);
+    return "";
+  }
+  return normalized;
+}
+
+function collectBundledPackageRuntimeErrors({ name, entries, files, readText }) {
+  const errors = [];
+  const packagePrefix = `node_modules/${name}/`;
+  const manifestPath = `${packagePrefix}package.json`;
+  let bundledPackageJson;
+  try {
+    bundledPackageJson = JSON.parse(readText(manifestPath));
+  } catch (error) {
+    errors.push(
+      `unreadable bundled ${name} package.json: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return errors;
+  }
+  if (bundledPackageJson.name !== name) {
+    errors.push(`bundled ${name} package.json must name ${name}`);
+  }
+
+  const exportEntries = listPackageExportEntries(bundledPackageJson.exports);
+  const requiredTargets = new Set();
+  for (const [subpath, value] of exportEntries) {
+    if (subpath.includes("*")) {
+      continue;
+    }
+    for (const target of collectRuntimeExportTargets(value)) {
+      requiredTargets.add(target);
+    }
+  }
+
+  const usedSubpaths = new Set();
+  for (const { specifier } of collectPackageDistModuleSpecifiers({ files, readText })) {
+    if (specifier === name) {
+      usedSubpaths.add(".");
+    } else if (specifier.startsWith(`${name}/`)) {
+      usedSubpaths.add(`./${specifier.slice(name.length + 1)}`);
+    }
+  }
+  for (const subpath of usedSubpaths) {
+    const targets = resolvePackageExportTargets(exportEntries, subpath);
+    if (targets.length === 0) {
+      errors.push(`bundled ${name} does not export runtime subpath ${subpath}`);
+      continue;
+    }
+    for (const target of targets) {
+      requiredTargets.add(target);
+    }
+  }
+
+  for (const target of requiredTargets) {
+    if (target.includes("*")) {
+      continue;
+    }
+    const normalizedTarget = normalizeBundledPackageTarget(name, target, errors);
+    if (normalizedTarget && !entries.has(`${packagePrefix}${normalizedTarget}`)) {
+      errors.push(`bundled ${name} is missing runtime export ${normalizedTarget}`);
+    }
+  }
+
+  const bundledFiles = files
+    .filter((file) => file.startsWith(packagePrefix))
+    .map((file) => file.slice(packagePrefix.length));
+  errors.push(
+    ...collectPackageDistImportErrors({
+      files: bundledFiles,
+      readText: (file) => readText(`${packagePrefix}${file}`),
+    }).map((error) => `bundled ${name} ${error}`),
+  );
+  return errors;
+}
+
+function collectRequiredBundledWorkspaceDependencyErrors(packageJson, entrySet, files, readText) {
   const errors = [];
   if (!packageJson || typeof packageJson !== "object") {
     return errors;
@@ -134,7 +267,16 @@ function collectRequiredBundledWorkspaceDependencyErrors(packageJson, entrySet) 
     }
     if (!entrySet.has(`node_modules/${name}/package.json`)) {
       errors.push(`package.json dependencies.${name} must be bundled in node_modules/${name}`);
+      continue;
     }
+    errors.push(
+      ...collectBundledPackageRuntimeErrors({
+        name,
+        entries: entrySet,
+        files,
+        readText,
+      }),
+    );
   }
 
   return errors;
@@ -302,7 +444,14 @@ if (entrySet.has("package.json")) {
     packageVersion = typeof packageJson.version === "string" ? packageJson.version : "";
     errors.push(...collectWorkspaceProtocolDependencyErrors(packageJson, "package.json"));
     if (cliArgs.requireBundledWorkspaceDeps) {
-      errors.push(...collectRequiredBundledWorkspaceDependencyErrors(packageJson, entrySet));
+      errors.push(
+        ...collectRequiredBundledWorkspaceDependencyErrors(
+          packageJson,
+          entrySet,
+          normalized,
+          readTarEntry,
+        ),
+      );
     }
   } catch {
     packageVersion = "";
