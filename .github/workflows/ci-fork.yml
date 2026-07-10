@@ -5,6 +5,7 @@ name: Fork CI
 # Only essential jobs: lint, build, test.
 
 on:
+  workflow_dispatch:
   push:
     branches: ['**']  # all branches
     paths-ignore:
