@@ -557,7 +557,12 @@ class ChatControllerOutboxTest {
       restarted.handleGatewayEvent("health", null)
       advanceUntilIdle()
       assertEquals(1, gateway.sentMessages.size)
-      assertEquals(ChatOutboxStatus.Failed, restarted.outboxItems.value.single().status)
+      assertEquals(
+        ChatOutboxStatus.Failed,
+        restarted.outboxItems.value
+          .single()
+          .status,
+      )
 
       restarted.retryOutboxCommand(failed.id)
       advanceUntilIdle()
