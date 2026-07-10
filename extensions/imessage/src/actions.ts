@@ -418,9 +418,21 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     normalizeOptionalLowercaseString(toolContext?.currentChannelProvider) === "imessage" &&
     GROUP_MANAGEMENT_ACTIONS.has(action),
   messageActionTargetAliases: {
-    react: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-    edit: { aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"] },
-    unsend: { aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"] },
+    react: {
+      aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+      resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
+    },
+    edit: {
+      aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+      resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
+    },
+    unsend: {
+      aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+      resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
+    },
     reply: {
       aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"],
       deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
@@ -451,11 +463,31 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
       resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
     },
-    renameGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-    setGroupIcon: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-    addParticipant: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-    removeParticipant: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-    leaveGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+    renameGroup: {
+      aliases: ["chatGuid", "chatIdentifier", "chatId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+      resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
+    },
+    setGroupIcon: {
+      aliases: ["chatGuid", "chatIdentifier", "chatId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+      resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
+    },
+    addParticipant: {
+      aliases: ["chatGuid", "chatIdentifier", "chatId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+      resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
+    },
+    removeParticipant: {
+      aliases: ["chatGuid", "chatIdentifier", "chatId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+      resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
+    },
+    leaveGroup: {
+      aliases: ["chatGuid", "chatIdentifier", "chatId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+      resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
+    },
   },
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
   handleAction: async ({

@@ -81,7 +81,7 @@ type ActionTargetAliasSpec = {
   aliases: string[];
 };
 
-export type ActionDeliveryTargetAliasSpec = {
+export type ActionDeliveryTargetAliasSpec = ActionTargetAliasSpec & {
   deliveryTargetAliases?: string[];
   resolveDeliveryTarget?: (params: { args: Record<string, unknown> }) => string | undefined;
 };
@@ -145,6 +145,37 @@ export function resolveActionDeliveryTargetAlias(
     throw new Error(`Action ${action} received conflicting delivery target aliases.`);
   }
   return targets[0];
+}
+
+/** Reports whether a plugin alias identifies an existing resource rather than a conversation. */
+export function actionHasResourceReference(
+  action: ChannelMessageActionName,
+  params: Record<string, unknown>,
+  options?: { channel?: string; aliasSpec?: ActionDeliveryTargetAliasSpec },
+): boolean {
+  const channel = normalizeOptionalLowercaseString(options?.channel);
+  if (!channel || !hasPotentialPluginActionParam(params)) {
+    return false;
+  }
+  const aliases =
+    options?.aliasSpec ??
+    getBootstrapChannelPlugin(channel)?.actions?.messageActionTargetAliases?.[action];
+  // Legacy alias specs do not distinguish conversations from resources.
+  // Do not infer ambient authority unless the owner explicitly partitions them.
+  if (!aliases?.deliveryTargetAliases) {
+    return false;
+  }
+  const deliveryAliases = new Set(aliases.deliveryTargetAliases);
+  return aliases.aliases.some((alias) => {
+    if (deliveryAliases.has(alias)) {
+      return false;
+    }
+    const value = params[alias];
+    if (typeof value === "string") {
+      return Boolean(normalizeOptionalString(value));
+    }
+    return typeof value === "number" && Number.isFinite(value);
+  });
 }
 
 /**

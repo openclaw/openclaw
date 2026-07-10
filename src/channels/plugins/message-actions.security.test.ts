@@ -90,6 +90,10 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     channel?: ChannelPlugin["id"];
     origin?: string;
     strayPolicy?: string;
+    normalizeTarget?: (raw: string) => string | undefined;
+    messageActionTargetAliases?: NonNullable<
+      NonNullable<ChannelPlugin["actions"]>["messageActionTargetAliases"]
+    >;
   }) {
     const channel = params?.channel ?? "discord";
     const plugin: ChannelPlugin = {
@@ -101,6 +105,13 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
           listAccountIds: () => ["default"],
         },
       }),
+      ...(params?.normalizeTarget
+        ? {
+            messaging: {
+              normalizeTarget: params.normalizeTarget,
+            },
+          }
+        : {}),
       actions: {
         ...(params?.strayPolicy
           ? ({ conversationReadPolicy: params.strayPolicy } as Record<string, unknown>)
@@ -108,6 +119,7 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
         describeMessageTool: () => ({ actions: ["read", "send"] }),
         supportsAction,
         requiresTrustedRequesterSender,
+        messageActionTargetAliases: params?.messageActionTargetAliases,
         handleAction,
       },
     };
@@ -417,6 +429,378 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
         toolContext: {
           currentChannelProvider: "telegram",
           currentChannelId: "current",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("uses bundled provider target normalization for equivalent exact-current forms", async () => {
+    const normalizeTarget = vi.fn((raw: string) => {
+      const room = raw
+        .trim()
+        .replace(/^(?:nextcloud-talk|nc-talk|nc):/i, "")
+        .replace(/^room:/i, "")
+        .trim();
+      return room ? `nextcloud-talk:${room.toLowerCase()}` : undefined;
+    });
+    setReadPlugin({
+      channel: "nextcloud-talk",
+      origin: "bundled",
+      normalizeTarget,
+    });
+
+    await dispatchChannelMessageAction({
+      channel: "nextcloud-talk",
+      action: "read",
+      cfg: {} as OpenClawConfig,
+      params: { to: "nc:room:Current" },
+      accountId: "default",
+      requesterAccountId: "default",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "nextcloud-talk",
+        currentChannelId: "nextcloud-talk:current",
+      },
+    });
+
+    expect(normalizeTarget).toHaveBeenCalled();
+    expect(handleAction).toHaveBeenCalledOnce();
+  });
+
+  it("does not use an external provider normalizer to widen delegated reads", async () => {
+    const normalizeTarget = vi.fn(() => "discord:channel:current");
+    setReadPlugin({
+      channel: "discord",
+      origin: "workspace",
+      normalizeTarget,
+    });
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "discord",
+        action: "read",
+        cfg: {} as OpenClawConfig,
+        params: { channelId: "other" },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentChannelId: "channel:current",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(normalizeTarget).not.toHaveBeenCalled();
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("does not let failed bundled target normalization fall through as resource-only", async () => {
+    setReadPlugin({
+      channel: "imessage",
+      origin: "bundled",
+      normalizeTarget: (raw) => (raw.includes("current") ? raw : undefined),
+      messageActionTargetAliases: {
+        read: {
+          aliases: ["messageId"],
+        },
+      },
+    });
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "imessage",
+        action: "read",
+        cfg: {} as OpenClawConfig,
+        params: {
+          target: "malformed-target",
+          to: "chat_guid:iMessage;+;current",
+          messageId: "current-message",
+        },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "imessage",
+          currentChannelId: "chat_guid:iMessage;+;current",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("uses bundled delivery aliases for an exact-current provider target", async () => {
+    const resolveDeliveryTarget = vi.fn(({ args }: { args: Record<string, unknown> }) => {
+      const chatGuid = typeof args.chatGuid === "string" ? args.chatGuid.trim() : "";
+      return chatGuid ? `chat_guid:${chatGuid}` : undefined;
+    });
+    setReadPlugin({
+      channel: "imessage",
+      origin: "bundled",
+      normalizeTarget: (raw) => raw.trim() || undefined,
+      messageActionTargetAliases: {
+        read: {
+          aliases: ["chatGuid", "messageId"],
+          deliveryTargetAliases: ["chatGuid"],
+          resolveDeliveryTarget,
+        },
+      },
+    });
+
+    await dispatchChannelMessageAction({
+      channel: "imessage",
+      action: "read",
+      cfg: {} as OpenClawConfig,
+      params: { chatGuid: "iMessage;+;current" },
+      accountId: "default",
+      requesterAccountId: "default",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "imessage",
+        currentChannelId: "chat_guid:iMessage;+;current",
+      },
+    });
+
+    expect(resolveDeliveryTarget).toHaveBeenCalledOnce();
+    expect(handleAction).toHaveBeenCalledOnce();
+  });
+
+  it("uses a bundled numeric chatId delivery alias for an exact-current provider target", async () => {
+    const resolveDeliveryTarget = vi.fn(({ args }: { args: Record<string, unknown> }) =>
+      typeof args.chatId === "number" && Number.isInteger(args.chatId) && args.chatId > 0
+        ? `chat_id:${args.chatId}`
+        : undefined,
+    );
+    setReadPlugin({
+      channel: "imessage",
+      origin: "bundled",
+      normalizeTarget: (raw) => raw.trim() || undefined,
+      messageActionTargetAliases: {
+        react: {
+          aliases: ["chatId", "messageId"],
+          deliveryTargetAliases: ["chatId"],
+          resolveDeliveryTarget,
+        },
+      },
+    });
+
+    await dispatchChannelMessageAction({
+      channel: "imessage",
+      action: "react",
+      cfg: {} as OpenClawConfig,
+      params: { chatId: 42, messageId: "current-message" },
+      accountId: "default",
+      requesterAccountId: "default",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "imessage",
+        currentChannelId: "chat_id:42",
+      },
+    });
+
+    expect(resolveDeliveryTarget).toHaveBeenCalledOnce();
+    expect(handleAction).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an unnormalizable bundled delivery alias even with a valid sibling target", async () => {
+    setReadPlugin({
+      channel: "imessage",
+      origin: "bundled",
+      normalizeTarget: (raw) => (raw.includes("current") ? raw : undefined),
+      messageActionTargetAliases: {
+        read: {
+          aliases: ["chatGuid"],
+          deliveryTargetAliases: ["chatGuid"],
+          resolveDeliveryTarget: ({ args }) =>
+            typeof args.chatGuid === "string" ? `chat_guid:${args.chatGuid}` : undefined,
+        },
+      },
+    });
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "imessage",
+        action: "read",
+        cfg: {} as OpenClawConfig,
+        params: {
+          to: "chat_guid:iMessage;+;current",
+          chatGuid: "iMessage;+;other",
+        },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "imessage",
+          currentChannelId: "chat_guid:iMessage;+;current",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { action: "react" as const, params: { messageId: "current-message" } },
+    { action: "edit" as const, params: { messageId: "current-message" } },
+    { action: "unsend" as const, params: { messageId: "current-message" } },
+    { action: "poll-vote" as const, params: { pollId: "current-poll" } },
+  ])(
+    "does not treat bundled $action resource-only input as conversation authority",
+    async (testCase) => {
+      setReadPlugin({
+        channel: "imessage",
+        origin: "bundled",
+        messageActionTargetAliases: {
+          [testCase.action]: {
+            aliases: Object.keys(testCase.params),
+          },
+        },
+      });
+
+      await expect(
+        dispatchChannelMessageAction({
+          channel: "imessage",
+          action: testCase.action,
+          cfg: {} as OpenClawConfig,
+          params: testCase.params,
+          accountId: "work",
+          requesterAccountId: "work",
+          conversationReadOrigin: "delegated",
+          toolContext: {
+            currentChannelProvider: "imessage",
+            currentChannelId: "chat_guid:iMessage;+;current",
+          },
+        }),
+      ).rejects.toThrow("requires the exact current conversation and account");
+      expect(handleAction).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not let a bundled resource id override an explicit cross-conversation target", async () => {
+    setReadPlugin({
+      channel: "imessage",
+      origin: "bundled",
+      messageActionTargetAliases: {
+        read: {
+          aliases: ["messageId"],
+        },
+      },
+    });
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "imessage",
+        action: "read",
+        cfg: {} as OpenClawConfig,
+        params: {
+          target: "chat_guid:iMessage;+;other",
+          messageId: "current-message",
+        },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "imessage",
+          currentChannelId: "chat_guid:iMessage;+;current",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("does not let an external resource alias opt into targetless delegated reads", async () => {
+    const resolveDeliveryTarget = vi.fn(() => "chat_guid:iMessage;+;current");
+    setReadPlugin({
+      channel: "imessage",
+      origin: "workspace",
+      messageActionTargetAliases: {
+        read: {
+          aliases: ["messageId"],
+          resolveDeliveryTarget,
+        },
+      },
+    });
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "imessage",
+        action: "read",
+        cfg: {} as OpenClawConfig,
+        params: { messageId: "current-message" },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "imessage",
+          currentChannelId: "chat_guid:iMessage;+;current",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(resolveDeliveryTarget).not.toHaveBeenCalled();
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("allows bundled targetless sticker-cache reads only in matching current context", async () => {
+    setReadPlugin({ channel: "telegram", origin: "bundled" });
+
+    await dispatchChannelMessageAction({
+      channel: "telegram",
+      action: "sticker-search",
+      cfg: {} as OpenClawConfig,
+      params: { query: "party", limit: 5 },
+      accountId: "work",
+      requesterAccountId: "work",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "123",
+      },
+    });
+
+    expect(handleAction).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      name: "missing current provider",
+      accountId: "default",
+      requesterAccountId: "default",
+      currentChannelProvider: undefined,
+    },
+    {
+      name: "wrong current provider",
+      accountId: "default",
+      requesterAccountId: "default",
+      currentChannelProvider: "discord",
+    },
+    {
+      name: "wrong account",
+      accountId: "other",
+      requesterAccountId: "default",
+      currentChannelProvider: "telegram",
+      currentChannelId: "123",
+    },
+    {
+      name: "missing current target",
+      accountId: "default",
+      requesterAccountId: "default",
+      currentChannelProvider: "telegram",
+      currentChannelId: undefined,
+    },
+  ])("rejects bundled targetless sticker-cache reads with $name", async (testCase) => {
+    setReadPlugin({ channel: "telegram", origin: "bundled" });
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "telegram",
+        action: "sticker-search",
+        cfg: {} as OpenClawConfig,
+        params: { query: "party", limit: 5 },
+        accountId: testCase.accountId,
+        requesterAccountId: testCase.requesterAccountId,
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: testCase.currentChannelProvider,
+          currentChannelId: "currentChannelId" in testCase ? testCase.currentChannelId : "123",
         },
       }),
     ).rejects.toThrow("requires the exact current conversation and account");

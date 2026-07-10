@@ -66,11 +66,13 @@ function normalizeHostConversationTarget(params: {
   value: unknown;
   channel: string;
   impliedKind?: HostConversationTargetKind;
+  normalizeTarget?: (raw: string) => string | undefined;
 }): HostConversationTarget | undefined {
   if (typeof params.value !== "string") {
     return undefined;
   }
-  const value = params.value.trim();
+  const rawValue = params.value.trim();
+  const value = params.normalizeTarget ? params.normalizeTarget(rawValue)?.trim() : rawValue;
   if (!value) {
     return undefined;
   }
@@ -166,13 +168,37 @@ function hasMatchingCurrentProviderContext(ctx: ChannelMessageActionContext): bo
   return Boolean(currentProvider && currentProvider === ctx.channel.trim().toLowerCase());
 }
 
-function isExactCurrentConversation(params: { ctx: ChannelMessageActionContext }): boolean {
+function hasCurrentConversationTarget(ctx: ChannelMessageActionContext): boolean {
+  return [ctx.toolContext?.currentChannelId, ctx.toolContext?.currentMessagingTarget].some(
+    (value) => typeof value === "string" && Boolean(value.trim()),
+  );
+}
+
+function hasTargetInput(value: unknown): boolean {
+  if (typeof value === "string") {
+    return Boolean(value.trim());
+  }
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isExactCurrentConversation(params: {
+  ctx: ChannelMessageActionContext;
+  plugin: ChannelPlugin;
+  pluginOrigin: string | undefined;
+}): boolean {
   if (
     !hasMatchingCurrentProviderContext(params.ctx) ||
     !hasMatchingCurrentAccountContext(params.ctx)
   ) {
     return false;
   }
+  const normalizeTarget =
+    params.pluginOrigin === "bundled" ? params.plugin.messaging?.normalizeTarget : undefined;
+  const aliasSpec =
+    params.pluginOrigin === "bundled"
+      ? params.plugin.actions?.messageActionTargetAliases?.[params.ctx.action]
+      : undefined;
+  const deliveryTargetAliases = new Set(aliasSpec?.deliveryTargetAliases ?? []);
   const requestedTargets = new Map<string, HostConversationTarget>();
   for (const [key, impliedKind] of [
     ["target", undefined],
@@ -181,17 +207,41 @@ function isExactCurrentConversation(params: { ctx: ChannelMessageActionContext }
     ["roomId", "room"],
     ["chatId", "chat"],
   ] as const) {
-    addHostConversationTarget(
-      requestedTargets,
-      normalizeHostConversationTarget({
-        value: params.ctx.params[key],
-        channel: params.ctx.channel,
-        impliedKind,
-      }),
+    const rawTarget = params.ctx.params[key];
+    if (deliveryTargetAliases.has(key)) {
+      continue;
+    }
+    const normalizedTarget = normalizeHostConversationTarget({
+      value: rawTarget,
+      channel: params.ctx.channel,
+      impliedKind,
+      normalizeTarget,
+    });
+    if (hasTargetInput(rawTarget) && !normalizedTarget) {
+      return false;
+    }
+    addHostConversationTarget(requestedTargets, normalizedTarget);
+  }
+  if (params.pluginOrigin === "bundled") {
+    const hasDeliveryAliasInput = (aliasSpec?.deliveryTargetAliases ?? []).some((alias) =>
+      hasTargetInput(params.ctx.params[alias]),
     );
+    const resolvedAliasTarget = aliasSpec?.resolveDeliveryTarget?.({ args: params.ctx.params });
+    const normalizedAliasTarget = normalizeHostConversationTarget({
+      value: resolvedAliasTarget,
+      channel: params.ctx.channel,
+      normalizeTarget,
+    });
+    if (
+      (hasDeliveryAliasInput && !resolvedAliasTarget) ||
+      (resolvedAliasTarget !== undefined && !normalizedAliasTarget)
+    ) {
+      return false;
+    }
+    addHostConversationTarget(requestedTargets, normalizedAliasTarget);
   }
   const requestedTargetList = Array.from(requestedTargets.values());
-  if (requestedTargetList.length === 0 || hasConflictingTargetKinds(requestedTargetList)) {
+  if (hasConflictingTargetKinds(requestedTargetList)) {
     return false;
   }
   const currentTargets = new Map<string, HostConversationTarget>();
@@ -204,11 +254,15 @@ function isExactCurrentConversation(params: { ctx: ChannelMessageActionContext }
       normalizeHostConversationTarget({
         value,
         channel: params.ctx.channel,
+        normalizeTarget,
       }),
     );
   }
   const currentTargetList = Array.from(currentTargets.values());
-  if (hasConflictingTargetKinds(currentTargetList)) {
+  if (currentTargetList.length === 0 || hasConflictingTargetKinds(currentTargetList)) {
+    return false;
+  }
+  if (requestedTargetList.length === 0) {
     return false;
   }
   return requestedTargetList.every((requestedTarget) =>
@@ -221,6 +275,7 @@ function isExactCurrentConversation(params: { ctx: ChannelMessageActionContext }
 
 function assertConversationReadAllowed(params: {
   ctx: ChannelMessageActionContext;
+  plugin: ChannelPlugin;
   pluginOrigin: string | undefined;
 }): void {
   const usesBundledProviderReadGate =
@@ -234,7 +289,20 @@ function assertConversationReadAllowed(params: {
   ) {
     return;
   }
-  if (isExactCurrentConversation({ ctx: params.ctx })) {
+  const isBundledCurrentContextCacheRead =
+    params.pluginOrigin === "bundled" &&
+    params.ctx.action === "sticker-search" &&
+    hasMatchingCurrentProviderContext(params.ctx) &&
+    hasMatchingCurrentAccountContext(params.ctx) &&
+    hasCurrentConversationTarget(params.ctx);
+  if (
+    isBundledCurrentContextCacheRead ||
+    isExactCurrentConversation({
+      ctx: params.ctx,
+      plugin: params.plugin,
+      pluginOrigin: params.pluginOrigin,
+    })
+  ) {
     return;
   }
   throw new Error(
@@ -273,6 +341,7 @@ export async function dispatchChannelMessageAction(
   // prove the exact current conversation before any plugin callback can run.
   assertConversationReadAllowed({
     ctx,
+    plugin,
     pluginOrigin: registration.origin,
   });
   // Some plugin actions depend on the sender identity to enforce channel-local
