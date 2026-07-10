@@ -8,6 +8,7 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { TextContent } from "../../llm/types.js";
+import { estimateStringChars } from "../../utils/cjk-chars.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveAgentContextLimits } from "../agent-scope.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -247,8 +248,11 @@ export function truncateToolResultText(
  * Calculate the maximum allowed characters for a single tool result
  * based on the model's context window tokens.
  *
- * Uses a rough 4 chars ≈ 1 token heuristic (conservative for English text;
- * actual ratio varies by tokenizer).
+ * The budget uses a flat 4 chars/token conversion to derive a character cap
+ * from the token share.  The comparison side (getToolResultTextLength) uses
+ * estimateStringChars for CJK-aware weighting, so dense CJK content inflates
+ * the measured length and triggers truncation at a lower physical character
+ * count — which is correct because CJK text consumes ~1 token per character.
  */
 export function calculateMaxToolResultChars(contextWindowTokens: number): number {
   return calculateMaxToolResultCharsWithCap(
@@ -276,7 +280,9 @@ export function calculateMaxToolResultCharsWithCap(
   hardCapChars: number,
 ): number {
   const maxTokens = Math.floor(contextWindowTokens * MAX_TOOL_RESULT_CONTEXT_SHARE);
-  // Rough conversion: ~4 chars per token on average
+  // Token-to-char budget: the flat 4x factor produces an estimated-char cap.
+  // getToolResultTextLength uses estimateStringChars so CJK content measures
+  // larger against this cap and triggers truncation at the correct token share.
   const maxChars = maxTokens * 4;
   return Math.min(maxChars, Math.max(1, hardCapChars));
 }
@@ -339,7 +345,7 @@ export function getToolResultTextLength(msg: AgentMessage): number {
     if (isToolResultTextBlock(block)) {
       const text = block.text;
       if (typeof text === "string") {
-        totalLength += text.length;
+        totalLength += estimateStringChars(text);
       }
     }
   }
@@ -378,18 +384,25 @@ export function truncateToolResultMessage(
       return block; // Keep non-text blocks (images) as-is
     }
     const textBlock = block;
-    if (typeof textBlock.text !== "string") {
+    if (typeof textBlock.text !== "string" || textBlock.text.length === 0) {
       return block;
     }
-    // Proportional budget for this block
-    const blockShare = textBlock.text.length / totalTextChars;
-    const defaultSuffix = suffixFactory(
-      Math.max(1, textBlock.text.length - Math.floor(maxChars * blockShare)),
+    // CJK-aware proportional budget: estimateStringChars inflates CJK chars so
+    // they consume a proportional share of the token-derived character budget.
+    const blockEstimatedChars = estimateStringChars(textBlock.text);
+    const blockShare = blockEstimatedChars / totalTextChars;
+    // Convert the estimated-char budget back to a physical-char budget that
+    // truncateToolResultText can use for UTF-16 slicing.  Dense CJK text gets a
+    // smaller physical budget (≈ budget/4) because each char costs ~1 token;
+    // pure ASCII gets budget ≈ proportionalBudget (≈ 1 token per 4 chars).
+    const inflationRatio = blockEstimatedChars / textBlock.text.length;
+    const proportionalEstimatedBudget = Math.floor(maxChars * blockShare);
+    const physicalBudget = Math.floor(
+      proportionalEstimatedBudget / Math.max(1, inflationRatio),
     );
-    const proportionalBudget = Math.floor(maxChars * blockShare);
     const blockBudget = Math.max(
       1,
-      Math.min(maxChars, Math.max(minKeepChars + defaultSuffix.length, proportionalBudget)),
+      Math.min(textBlock.text.length, Math.max(minKeepChars, physicalBudget)),
     );
     const truncatedText = truncateToolResultText(textBlock.text, blockBudget, {
       suffix: suffixFactory,
