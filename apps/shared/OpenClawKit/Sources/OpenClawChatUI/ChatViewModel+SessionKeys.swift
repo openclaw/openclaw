@@ -79,10 +79,18 @@ extension OpenClawChatViewModel {
         }
         let normalizedContract = sessionRoutingContract?
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let routeContract: String? = if self.usesMutableContractRouting(
+            sessionKey: candidate,
+            contract: normalizedContract)
+        {
+            normalizedContract?.isEmpty == false ? normalizedContract : nil
+        } else {
+            nil
+        }
         return ModelPatchTarget(
             canonicalSessionKey: targetKey,
             agentID: targetAgentID,
-            sessionRoutingContract: normalizedContract?.isEmpty == false ? normalizedContract : nil)
+            sessionRoutingContract: routeContract)
     }
 
     func sessionEntryForThinking(

@@ -544,10 +544,14 @@ public final class OpenClawChatViewModel {
     }
 
     private func usesMutableContractRouting(for contract: String?) -> Bool {
-        if self.usesMutableAgentRouting {
+        self.usesMutableContractRouting(sessionKey: self.sessionKey, contract: contract)
+    }
+
+    func usesMutableContractRouting(sessionKey: String, contract: String?) -> Bool {
+        if Self.agentID(fromSessionKey: sessionKey) == nil {
             return true
         }
-        let parts = self.sessionKey
+        let parts = sessionKey
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
         guard parts.count == 3 else { return false }

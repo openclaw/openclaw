@@ -6981,6 +6981,101 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-beta")
     }
 
+    @Test func `routing contract change preserves model patch ordering for one canonical session`() async throws {
+        let firstPatchGate = AsyncGate()
+        let sessionKey = "agent:alpha:thread"
+        let sessions = sessionsResponse(
+            sessionEntry(key: sessionKey, updatedAt: 1, model: nil))
+        let models = [
+            modelChoice(id: "model-a", name: "Model A", provider: "openai"),
+            modelChoice(id: "model-b", name: "Model B", provider: "openai"),
+        ]
+        let (transport, vm) = await makeViewModel(
+            sessionKey: sessionKey,
+            activeAgentId: "alpha",
+            historyResponses: [historyPayload(sessionKey: sessionKey, sessionId: "sess-thread")],
+            sessionRoutingContract: "per-sender|main|alpha",
+            sessionsResponses: [sessions],
+            modelResponses: [models],
+            setSessionModelHook: { model in
+                if model == "openai/model-a" {
+                    await firstPatchGate.wait()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-thread")
+        await MainActor.run { vm.selectModel("openai/model-a") }
+        try await waitUntil("first model patch starts") {
+            await transport.patchedModels() == ["openai/model-a"]
+        }
+
+        await MainActor.run {
+            vm.syncSessionRoutingContract("per-sender|work|alpha")
+            vm.selectModel("openai/model-b")
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await transport.patchedModels() == ["openai/model-a"])
+
+        await firstPatchGate.open()
+        try await waitUntil("second model patch follows the first") {
+            await transport.patchedModels() == ["openai/model-a", "openai/model-b"]
+        }
+        await vm.waitForPendingModelPatches(in: sessionKey)
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/model-b")
+    }
+
+    @Test func `contract-sensitive route change keeps replacement model patch independent`() async throws {
+        let firstPatchGate = AsyncGate()
+        let sessionKey = "agent:alpha:work"
+        let sessions = sessionsResponse(
+            sessionEntry(key: sessionKey, updatedAt: 1, model: nil))
+        let models = [
+            modelChoice(id: "model-a", name: "Model A", provider: "openai"),
+            modelChoice(id: "model-b", name: "Model B", provider: "openai"),
+        ]
+        let oldContract = "global|work|alpha"
+        let newContract = "per-sender|work|alpha"
+        let (transport, vm) = await makeViewModel(
+            sessionKey: sessionKey,
+            activeAgentId: "alpha",
+            historyResponses: [
+                historyPayload(sessionKey: sessionKey, sessionId: "sess-old"),
+                historyPayload(sessionKey: sessionKey, sessionId: "sess-new"),
+            ],
+            sessionRoutingContract: oldContract,
+            sessionsResponses: [sessions, sessions],
+            modelResponses: [models, models],
+            setSessionModelHook: { model in
+                if model == "openai/model-a" {
+                    await firstPatchGate.wait()
+                }
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-old")
+        await MainActor.run { vm.selectModel("openai/model-a") }
+        try await waitUntil("old-route model patch starts") {
+            await transport.patchedModels() == ["openai/model-a"]
+        }
+
+        await MainActor.run { vm.syncSessionRoutingContract(newContract) }
+        try await waitUntil("replacement route bootstraps") {
+            await MainActor.run { vm.sessionId == "sess-new" }
+        }
+        await MainActor.run { vm.selectModel("openai/model-b") }
+        try await waitUntil("replacement route model patch completes") {
+            await transport.patchedModels() == ["openai/model-a", "openai/model-b"]
+        }
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/model-b")
+
+        await firstPatchGate.open()
+        await vm.waitForPendingModelPatches(
+            in: sessionKey,
+            canonicalSessionKey: sessionKey,
+            agentID: nil,
+            sessionRoutingContract: oldContract)
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/model-b")
+    }
+
     @Test func `late model completion does not replay current session selection into previous session`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let initialSessions = OpenClawChatSessionsListResponse(
