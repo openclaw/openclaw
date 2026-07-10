@@ -425,6 +425,50 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
+  it("does NOT block gateway readiness for informational 'already existed' warnings", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    autoMigrateLegacyStateDir.mockResolvedValueOnce({
+      migrated: false,
+      skipped: false,
+      changes: [],
+      warnings: [
+        "Left task registry sidecar in place because 3 rows already existed in shared state: key1",
+        "Left plugin-state sidecar in place because 2 rows already existed in shared state: key2",
+      ],
+    });
+
+    const result = await runDoctorConfigPreflight({
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      requireStartupMigrationCheckpoint: true,
+    });
+
+    expect(result).toBeDefined();
+    expect(recordSuccessfulStartupMigrations).toHaveBeenCalledOnce();
+    expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
+  });
+
+  it("still blocks gateway readiness for real migration failure warnings", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    autoMigrateLegacyStateDir.mockResolvedValueOnce({
+      migrated: false,
+      skipped: false,
+      changes: [],
+      warnings: ["Failed migrating task registry sidecar: permission denied"],
+    });
+
+    await expect(
+      runDoctorConfigPreflight({
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        requireStartupMigrationCheckpoint: true,
+      }),
+    ).rejects.toThrow("refusing to report the gateway ready");
+
+    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
+    expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
+  });
+
   it("blocks gateway readiness when plugin repair warnings remain", async () => {
     needsStartupMigrationCheckpoint.mockReturnValue(true);
     runPostCorePluginConvergence.mockResolvedValueOnce(
