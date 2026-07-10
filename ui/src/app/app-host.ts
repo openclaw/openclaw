@@ -50,7 +50,7 @@ type ShellRouteState = {
 };
 
 type AppSidebarElement = HTMLElement & {
-  dismissTransientMenus: () => void;
+  dismissTransientMenus: () => boolean;
 };
 
 // Stable references so the sidebar's enabledRouteIds property does not churn
@@ -552,7 +552,9 @@ class OpenClawShell extends OpenClawLightDomElement {
       navCollapsed: nextNavCollapsed,
     });
     if (nextNavCollapsed) {
-      this.querySelector<HTMLElement>(".topbar-panel-toggle")?.focus();
+      void this.updateComplete.then(() => {
+        this.querySelector<HTMLElement>(".shell-nav-expand")?.focus();
+      });
     }
   }
 
@@ -586,14 +588,21 @@ class OpenClawShell extends OpenClawLightDomElement {
   }
 
   private readonly handleWindowResize = () => {
-    if (isMobileNavLayout() && !this.navDrawerOpen) {
-      this.dismissSidebarTransientMenus();
-    }
+    const dismissedHiddenMenus =
+      isMobileNavLayout() && !this.navDrawerOpen && this.dismissSidebarTransientMenus();
     this.requestUpdate();
+    if (dismissedHiddenMenus) {
+      void this.updateComplete.then(() => {
+        this.querySelector<HTMLElement>(".topbar-nav-toggle")?.focus();
+      });
+    }
   };
 
-  private dismissSidebarTransientMenus() {
-    this.querySelector<AppSidebarElement>("openclaw-app-sidebar")?.dismissTransientMenus();
+  private dismissSidebarTransientMenus(): boolean {
+    return (
+      this.querySelector<AppSidebarElement>("openclaw-app-sidebar")?.dismissTransientMenus() ??
+      false
+    );
   }
 
   private readonly handleShellKeydown = (event: KeyboardEvent) => {

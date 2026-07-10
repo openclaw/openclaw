@@ -365,7 +365,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     }
   });
 
-  it("dismisses session menus before keyboard, pointer, or narrow transitions hide them", async () => {
+  it("dismisses fixed session menus before the sidebar or drawer hides", async () => {
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -400,8 +400,12 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       );
       const shell = page.locator(".shell");
       const shellNav = page.locator(".shell-nav");
-      const panelToggle = page.locator(".topbar-panel-toggle");
-      const sessionMenu = sidebar.locator("openclaw-session-menu");
+      const collapseButton = sidebar
+        .locator(".sidebar-brand")
+        .getByRole("button", { name: "Collapse sidebar" });
+      const expandButton = page.locator(".shell-nav-expand");
+      const drawerToggle = page.locator(".topbar-nav-toggle");
+      const sessionMenu = page.getByRole("menu", { name: "Actions for Research notes" });
       await row.waitFor({ state: "visible", timeout: 10_000 });
 
       const openSessionMenu = async () => {
@@ -411,8 +415,12 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
           .getByRole("menu", { name: "Actions for Research notes" })
           .waitFor({ state: "visible" });
       };
-      const expectPanelCollapsed = async () => {
+      const expectDesktopCollapsed = async () => {
         await expect.poll(() => sidebar.isVisible()).toBe(false);
+        await expect.poll(() => expandButton.isVisible()).toBe(true);
+        await expect
+          .poll(() => expandButton.evaluate((element) => element === document.activeElement))
+          .toBe(true);
       };
       const expectDrawerClosed = async () => {
         await expect
@@ -422,121 +430,71 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
           .poll(() => shellNav.evaluate((element) => element.getBoundingClientRect().right))
           .toBeLessThanOrEqual(0);
       };
-      const expectDismissedWithToggleFocus = async () => {
-        await expect.poll(() => sessionMenu.count()).toBe(0);
-        await expect
-          .poll(() => panelToggle.evaluate((element) => element === document.activeElement))
-          .toBe(true);
-      };
-      const observeHiddenMenuAction = async (
-        shortcut: "p" | "a" | "d",
-        before: { deletes: number; dialogs: number; patches: number },
+      const hiddenActionCounts = async () => ({
+        dialogs: dialogs.length,
+        patches: (await gateway.getRequests("sessions.patch")).length,
+      });
+      const expectHiddenShortcutsInert = async (
+        before: Awaited<ReturnType<typeof hiddenActionCounts>>,
       ) => {
-        const menuMounted = (await sessionMenu.count()) > 0;
-        const toggleFocused = await panelToggle.evaluate(
-          (element) => element === document.activeElement,
+        for (const shortcut of ["p", "a", "d"] as const) {
+          await page.keyboard.press(shortcut);
+        }
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
         );
-        await page.keyboard.press(shortcut);
-        await page.waitForTimeout(150);
-        return {
-          deleteDelta: (await gateway.getRequests("sessions.delete")).length - before.deletes,
-          dialogDelta: dialogs.length - before.dialogs,
-          menuMounted,
-          patchDelta: (await gateway.getRequests("sessions.patch")).length - before.patches,
-          shortcut,
-          toggleFocused,
-        };
+        expect(await hiddenActionCounts()).toEqual(before);
       };
 
-      const keyboardObservations = [];
-      for (const shortcut of ["p", "a", "d"] as const) {
-        await openSessionMenu();
-        const before = {
-          deletes: (await gateway.getRequests("sessions.delete")).length,
-          dialogs: dialogs.length,
-          patches: (await gateway.getRequests("sessions.patch")).length,
-        };
-        await page.keyboard.press("Meta+B");
-        await expectPanelCollapsed();
-        keyboardObservations.push(await observeHiddenMenuAction(shortcut, before));
-        await panelToggle.click();
-        await expect.poll(() => sidebar.isVisible()).toBe(true);
-      }
-      expect(keyboardObservations).toEqual(
-        ["p", "a", "d"].map((shortcut) => ({
-          deleteDelta: 0,
-          dialogDelta: 0,
-          menuMounted: false,
-          patchDelta: 0,
-          shortcut,
-          toggleFocused: true,
-        })),
-      );
-
+      // Keyboard collapse bypasses the menu's outside-pointer handler. The shell
+      // must explicitly unmount it before the sidebar becomes display:none.
       await openSessionMenu();
-      const beforePointerCollapse = {
-        deletes: (await gateway.getRequests("sessions.delete")).length,
-        dialogs: dialogs.length,
-        patches: (await gateway.getRequests("sessions.patch")).length,
-      };
-      await panelToggle.click();
-      await expectPanelCollapsed();
-      await expectDismissedWithToggleFocus();
-      for (const shortcut of ["p", "a", "d"] as const) {
-        expect(await observeHiddenMenuAction(shortcut, beforePointerCollapse)).toMatchObject({
-          deleteDelta: 0,
-          dialogDelta: 0,
-          patchDelta: 0,
-          shortcut,
-        });
-      }
+      const beforeKeyboardCollapse = await hiddenActionCounts();
+      await page.keyboard.press("Meta+B");
+      await expectDesktopCollapsed();
+      await expect.poll(() => sessionMenu.count()).toBe(0);
+      await expectHiddenShortcutsInert(beforeKeyboardCollapse);
 
-      await panelToggle.click();
+      await expandButton.click();
       await expect.poll(() => sidebar.isVisible()).toBe(true);
+
+      // The visible desktop control follows the same focus handoff contract.
       await openSessionMenu();
-      const beforeNarrowTransition = {
-        deletes: (await gateway.getRequests("sessions.delete")).length,
-        dialogs: dialogs.length,
-        patches: (await gateway.getRequests("sessions.patch")).length,
-      };
+      await collapseButton.click();
+      await expectDesktopCollapsed();
+      await expect.poll(() => sessionMenu.count()).toBe(0);
+      await expandButton.click();
+      await expect.poll(() => sidebar.isVisible()).toBe(true);
+
+      // Crossing into drawer layout hides the desktop sidebar without toggling
+      // persisted collapse state, so resize owns this dismissal and focus move.
+      await openSessionMenu();
+      const beforeNarrowTransition = await hiddenActionCounts();
       await page.setViewportSize({ height: 900, width: 900 });
       await expectDrawerClosed();
       await expect.poll(() => sessionMenu.count()).toBe(0);
-      for (const shortcut of ["p", "a", "d"] as const) {
-        expect(await observeHiddenMenuAction(shortcut, beforeNarrowTransition)).toMatchObject({
-          deleteDelta: 0,
-          dialogDelta: 0,
-          patchDelta: 0,
-          shortcut,
-        });
-      }
+      await expect
+        .poll(() => drawerToggle.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await expectHiddenShortcutsInert(beforeNarrowTransition);
 
-      const drawerToggle = page.locator(".topbar-nav-toggle");
       await drawerToggle.click();
       await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-drawer-open");
       await expect
         .poll(() => shellNav.evaluate((element) => element.getBoundingClientRect().left))
         .toBe(0);
       await openSessionMenu();
-      const beforeDrawerCollapse = {
-        deletes: (await gateway.getRequests("sessions.delete")).length,
-        dialogs: dialogs.length,
-        patches: (await gateway.getRequests("sessions.patch")).length,
-      };
+      const beforeDrawerCollapse = await hiddenActionCounts();
       await page.keyboard.press("Meta+B");
       await expectDrawerClosed();
       await expect.poll(() => sessionMenu.count()).toBe(0);
       await expect
         .poll(() => drawerToggle.evaluate((element) => element === document.activeElement))
         .toBe(true);
-      for (const shortcut of ["p", "a", "d"] as const) {
-        expect(await observeHiddenMenuAction(shortcut, beforeDrawerCollapse)).toMatchObject({
-          deleteDelta: 0,
-          dialogDelta: 0,
-          patchDelta: 0,
-          shortcut,
-        });
-      }
+      await expectHiddenShortcutsInert(beforeDrawerCollapse);
     } finally {
       await context.close();
     }

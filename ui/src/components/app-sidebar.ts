@@ -262,11 +262,18 @@ class AppSidebar extends OpenClawLightDomContentsElement {
 
   // The shell calls this before CSS hides the panel or drawer. Mounted menus
   // keep their document-level shortcuts alive even when an ancestor is hidden.
-  dismissTransientMenus() {
+  dismissTransientMenus(): boolean {
+    const hadTransientMenu = Boolean(
+      this.customizeMenuPosition ||
+      this.sessionMenu ||
+      this.sessionGroupMenu ||
+      this.sessionSortMenuPosition,
+    );
     this.closeCustomizeMenu();
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
+    return hadTransientMenu;
   }
 
   private readonly updateSessions = (sessions: SessionCapability) => {
