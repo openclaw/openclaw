@@ -29,7 +29,13 @@ const updateScreenshots = process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1";
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/plugins");
 const desktopViewport = { height: 1000, width: 1440 };
 const mobileViewport = { height: 852, width: 393 };
-const pluginMethods = ["plugins.list", "plugins.search", "plugins.install", "plugins.setEnabled"];
+const pluginMethods = [
+  "plugins.list",
+  "plugins.search",
+  "plugins.install",
+  "plugins.setEnabled",
+  "plugins.uninstall",
+];
 
 const workboardDisabled = {
   id: "workboard",
@@ -43,6 +49,8 @@ const workboardDisabled = {
   state: "disabled",
   featured: true,
   order: 10,
+  category: "tool",
+  removable: false,
 } satisfies PluginCatalogItem;
 
 const workboardEnabled = {
@@ -76,11 +84,14 @@ const calendarPlugin = {
   installed: true,
   enabled: true,
   state: "enabled",
+  category: "tool",
+  removable: true,
 } satisfies PluginCatalogItem;
 
 const initialInventory = inventory([workboardDisabled, lobsterPlugin]);
 const installedInventory = inventory([workboardDisabled, lobsterPlugin, calendarPlugin]);
 const finalInventory = inventory([workboardEnabled, lobsterPlugin, calendarPlugin]);
+const uninstalledInventory = inventory([workboardEnabled, lobsterPlugin]);
 
 const calendarSearchResponse = {
   results: [
@@ -94,10 +105,19 @@ const calendarSearchResponse = {
         isOfficial: false,
         summary: "Plan and coordinate work from a shared calendar.",
         latestVersion: "1.2.3",
+        downloads: 1420,
+        verificationTier: "source-linked",
       },
     },
   ],
 } satisfies PluginSearchResponse;
+
+const uninstallResult = {
+  ok: true,
+  pluginId: "calendar-plus",
+  restartRequired: true,
+  removed: ["config entry", "install record", "directory"],
+};
 
 const installResult = {
   ok: true,
@@ -248,6 +268,14 @@ function pluginMethodResponses() {
         },
       ],
     },
+    "plugins.uninstall": {
+      cases: [
+        {
+          match: { pluginId: "calendar-plus" },
+          response: uninstallResult,
+        },
+      ],
+    },
   };
 }
 
@@ -286,10 +314,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await gateway.waitForRequest("config.get");
 
       const workboardCard = page.locator('[data-plugin-id="workboard"]');
-      await page.getByRole("heading", { name: "Included with OpenClaw" }).waitFor();
-      await page.getByRole("heading", { name: "Official picks" }).waitFor();
-      const lobsterCard = page.locator('[data-plugin-id="lobster"]');
-      await lobsterCard.getByRole("button", { name: "Install Lobster" }).waitFor();
+      await page.getByRole("heading", { name: "Tools" }).waitFor();
+      await page.getByRole("heading", { name: "MCP servers" }).waitFor();
       expect(await page.getByRole("link", { name: "Browse ClawHub" }).getAttribute("href")).toBe(
         CLAWHUB_BROWSE_URL,
       );
@@ -297,7 +323,20 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         await workboardCard.getByRole("switch", { name: "Enable Workboard" }).isChecked(),
       ).toBe(false);
       expect(await workboardCard.textContent()).toContain("Disabled");
-      await captureScreenshot(page, "01-catalog-desktop.png");
+      await captureScreenshot(page, "01-installed-desktop.png");
+
+      await page.getByRole("tab", { name: /^Discover/u }).click();
+      await page.getByRole("heading", { name: "Featured" }).waitFor();
+      await page.getByRole("heading", { name: "Connect your world" }).waitFor();
+      const lobsterCard = page.locator('[data-plugin-id="lobster"]');
+      await lobsterCard.getByRole("button", { name: "Install Lobster" }).waitFor();
+      // Bundled cover art renders instead of monogram tiles for curated plugins.
+      await lobsterCard.locator(".plugins-cover img").waitFor({ state: "attached" });
+      await page
+        .locator('[data-connector-id="github"]')
+        .getByRole("button", { name: "Add", exact: true })
+        .waitFor();
+      await captureScreenshot(page, "02-discover-desktop.png");
 
       await page.getByRole("tab", { name: /^ClawHub/u }).click();
       await page.getByRole("searchbox", { name: "Search plugins" }).fill("calendar");
@@ -306,8 +345,10 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const searchRow = page.locator('[data-package-name="calendar-plus"]');
       await searchRow.waitFor({ state: "visible" });
       expect(await searchRow.textContent()).toContain("Calendar Plus");
+      expect(await searchRow.textContent()).toContain("Verified source");
+      expect(await searchRow.textContent()).toContain("1.4K");
       await page.getByRole("searchbox", { name: "Search plugins" }).blur();
-      await captureScreenshot(page, "02-search-desktop.png");
+      await captureScreenshot(page, "03-search-desktop.png");
 
       await gateway.deferNext("plugins.install");
       await searchRow.getByRole("button", { name: "Install Calendar Plus", exact: true }).click();
@@ -373,7 +414,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         state: "attached",
       });
 
-      await page.getByRole("tab", { name: /^Recommended/u }).click();
+      await page.getByRole("tab", { name: /^Installed/u }).click();
       await page.getByRole("searchbox", { name: "Search plugins" }).fill("");
       await workboardCard.waitFor({ state: "visible" });
       const listCountBeforeEnable = (await gateway.getRequests("plugins.list")).length;
@@ -405,12 +446,33 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await gateway.resolveDeferred("config.get", configSnapshot(true));
       await expect.poll(() => workboardCard.getAttribute("aria-busy")).toBe("false");
 
-      await page.getByRole("tab", { name: /^Installed/u }).click();
       await workboardCard.getByRole("switch", { name: "Disable Workboard" }).waitFor({
         state: "attached",
       });
-      await page.locator('[data-plugin-id="calendar-plus"]').waitFor({ state: "visible" });
-      await captureScreenshot(page, "03-enabled-installed-desktop.png");
+      const calendarRow = page.locator('[data-plugin-id="calendar-plus"]');
+      await calendarRow.waitFor({ state: "visible" });
+      await captureScreenshot(page, "04-enabled-installed-desktop.png");
+
+      // Removable installs expose a confirm-guarded uninstall that refreshes inventory.
+      await calendarRow.getByRole("button", { name: "Remove Calendar Plus" }).click();
+      const uninstallCountBefore = (await gateway.getRequests("plugins.uninstall")).length;
+      await gateway.deferNext("plugins.list");
+      // Keep the authoritative config refresh on the workboard-enabled snapshot
+      // so the conditional sidebar route assertion below stays meaningful.
+      await gateway.deferNext("config.get");
+      await calendarRow.getByRole("button", { name: "Remove", exact: true }).click();
+      const uninstallRequest = await waitForNextRequest(
+        gateway,
+        "plugins.uninstall",
+        uninstallCountBefore,
+      );
+      expect(requestParams(uninstallRequest)).toEqual({ pluginId: "calendar-plus" });
+      await gateway.resolveDeferred("plugins.list", uninstalledInventory);
+      await gateway.resolveDeferred("config.get", configSnapshot(true));
+      await calendarRow.waitFor({ state: "detached" });
+      expect(await page.locator(".plugins-page-notice").textContent()).toContain(
+        "Removed calendar-plus",
+      );
 
       await page.setViewportSize(mobileViewport);
       await expect
@@ -428,7 +490,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         )
         .toBeLessThanOrEqual(0);
       await workboardCard.waitFor({ state: "visible" });
-      await captureScreenshot(page, "04-installed-mobile.png");
+      await captureScreenshot(page, "05-installed-mobile.png");
 
       await page.setViewportSize(desktopViewport);
       const settingsSidebar = page.locator(".settings-sidebar");

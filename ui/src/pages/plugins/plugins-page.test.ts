@@ -47,6 +47,7 @@ type TestPluginsPage = HTMLElement & {
 type RuntimeConfigTestState = {
   configFormDirty: boolean;
   lastError: string | null;
+  configSnapshot?: { sourceConfig: Record<string, unknown>; hash: string } | null;
 };
 
 function createPlugin(overrides: Partial<PluginCatalogItem> = {}): PluginCatalogItem {
@@ -128,6 +129,42 @@ function createGateway(client: GatewayBrowserClient, connected = true): GatewayH
   };
 }
 
+type RuntimeConfigTestHarness = {
+  runtimeConfig: {
+    state: RuntimeConfigTestState;
+    refresh: ApplicationContext["runtimeConfig"]["refresh"];
+    ensureLoaded: ReturnType<typeof vi.fn>;
+    patch: ReturnType<typeof vi.fn>;
+    subscribe: (listener: (state: RuntimeConfigTestState) => void) => () => void;
+  };
+  notify: () => void;
+};
+
+function createRuntimeConfigHarness(
+  refreshConfig: ApplicationContext["runtimeConfig"]["refresh"],
+  runtimeConfigState: RuntimeConfigTestState,
+): RuntimeConfigTestHarness {
+  const listeners = new Set<(state: RuntimeConfigTestState) => void>();
+  const runtimeConfig = {
+    state: runtimeConfigState,
+    refresh: refreshConfig,
+    ensureLoaded: vi.fn(async () => undefined),
+    patch: vi.fn(async () => true),
+    subscribe(listener: (state: RuntimeConfigTestState) => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  return {
+    runtimeConfig,
+    notify: () => {
+      for (const listener of listeners) {
+        listener(runtimeConfigState);
+      }
+    },
+  };
+}
+
 function createContext(
   gateway: ApplicationGateway,
   refreshConfig: ApplicationContext["runtimeConfig"]["refresh"],
@@ -135,10 +172,12 @@ function createContext(
     configFormDirty: false,
     lastError: null,
   },
+  harness = createRuntimeConfigHarness(refreshConfig, runtimeConfigState),
 ): ApplicationContext {
   return {
     gateway,
-    runtimeConfig: { refresh: refreshConfig, state: runtimeConfigState },
+    basePath: "",
+    runtimeConfig: harness.runtimeConfig,
   } as unknown as ApplicationContext;
 }
 
@@ -533,5 +572,164 @@ describe("PluginsPage", () => {
 
     freshMutation.resolve({ ok: true, plugin: enabledPlugin, restartRequired: false });
     await vi.waitFor(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
+  });
+
+  it("uninstalls a removable plugin after inline confirmation", async () => {
+    const removable = createPlugin({
+      id: "community-thing",
+      name: "Community Thing",
+      origin: "global",
+      removable: true,
+      featured: false,
+    });
+    const calls: Array<[string, unknown]> = [];
+    const { client } = createClient(async (method, params) => {
+      calls.push([method, params]);
+      if (method === "plugins.uninstall") {
+        return {
+          ok: true,
+          pluginId: "community-thing",
+          restartRequired: true,
+          removed: ["config entry", "install record", "directory"],
+        };
+      }
+      if (method === "plugins.list") {
+        return createResult();
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(
+        harness.gateway,
+        vi.fn(async () => undefined),
+      ),
+      {
+        gateway: harness.gateway,
+        gatewaySnapshot: harness.gateway.snapshot,
+        result: { plugins: [createPlugin(), removable], diagnostics: [], mutationAllowed: true },
+        error: null,
+      },
+    );
+
+    page
+      .querySelector<HTMLButtonElement>('[data-plugin-id="community-thing"] .plugins-remove')
+      ?.click();
+    await page.updateComplete;
+    page
+      .querySelector<HTMLButtonElement>(
+        '[data-plugin-id="community-thing"] .plugins-remove-confirm .btn.danger',
+      )
+      ?.click();
+
+    await vi.waitFor(() =>
+      expect(calls).toContainEqual(["plugins.uninstall", { pluginId: "community-thing" }]),
+    );
+    await vi.waitFor(() =>
+      expect(page.querySelector(".plugins-page-notice")?.textContent).toContain(
+        "Removed community-thing",
+      ),
+    );
+    expect(calls).toContainEqual(["plugins.list", {}]);
+  });
+
+  it("adds an MCP server through the shared config seam", async () => {
+    const { client } = createClient(async (method) => {
+      if (method === "plugins.list") {
+        return createResult();
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const gatewayHarness = createGateway(client);
+    const runtimeConfigState: RuntimeConfigTestState = {
+      configFormDirty: false,
+      lastError: null,
+      configSnapshot: { sourceConfig: { mcp: { servers: {} } }, hash: "base" },
+    };
+    const configHarness = createRuntimeConfigHarness(
+      vi.fn(async () => undefined),
+      runtimeConfigState,
+    );
+    const { page } = await mountPage(
+      createContext(
+        gatewayHarness.gateway,
+        configHarness.runtimeConfig.refresh,
+        runtimeConfigState,
+        configHarness,
+      ),
+      {
+        gateway: gatewayHarness.gateway,
+        gatewaySnapshot: gatewayHarness.gateway.snapshot,
+        result: createResult(),
+        error: null,
+      },
+    );
+
+    const addButton = [
+      ...page.querySelectorAll<HTMLButtonElement>(".plugins-group__actions .btn"),
+    ].find((button) => button.textContent?.includes("Add server"));
+    addButton?.click();
+    await page.updateComplete;
+
+    const form = page.querySelector<HTMLFormElement>(".plugins-mcp-form")!;
+    form.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "context7";
+    form.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value =
+      "https://mcp.context7.com/mcp";
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+
+    await vi.waitFor(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
+    const patchArgs = configHarness.runtimeConfig.patch.mock.calls[0][0] as {
+      raw: Record<string, unknown>;
+      note: string;
+    };
+    expect(patchArgs.note).toContain("context7");
+    expect(patchArgs.raw).toEqual({
+      mcp: { servers: { context7: { url: "https://mcp.context7.com/mcp" } } },
+    });
+    await vi.waitFor(() =>
+      expect(page.querySelector('[role="status"].plugins-row-message')?.textContent).toContain(
+        "Added MCP server context7",
+      ),
+    );
+  });
+
+  it("rejects invalid MCP server names before touching config", async () => {
+    const { client } = createClient(async () => createResult());
+    const gatewayHarness = createGateway(client);
+    const configHarness = createRuntimeConfigHarness(
+      vi.fn(async () => undefined),
+      { configFormDirty: false, lastError: null, configSnapshot: { sourceConfig: {}, hash: "h" } },
+    );
+    const { page } = await mountPage(
+      createContext(
+        gatewayHarness.gateway,
+        configHarness.runtimeConfig.refresh,
+        configHarness.runtimeConfig.state,
+        configHarness,
+      ),
+      {
+        gateway: gatewayHarness.gateway,
+        gatewaySnapshot: gatewayHarness.gateway.snapshot,
+        result: createResult(),
+        error: null,
+      },
+    );
+
+    const addButton = [
+      ...page.querySelectorAll<HTMLButtonElement>(".plugins-group__actions .btn"),
+    ].find((button) => button.textContent?.includes("Add server"));
+    addButton?.click();
+    await page.updateComplete;
+    const form = page.querySelector<HTMLFormElement>(".plugins-mcp-form")!;
+    form.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "bad name!";
+    form.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value = "https://x.example/mcp";
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+
+    await vi.waitFor(() =>
+      expect(page.querySelector('[role="alert"].plugins-row-message')?.textContent).toContain(
+        "Server names use",
+      ),
+    );
+    expect(configHarness.runtimeConfig.patch).not.toHaveBeenCalled();
   });
 });

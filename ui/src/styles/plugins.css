@@ -1,4 +1,4 @@
-/* Plugins catalog: quiet editorial shelves with compact, local identity tiles. */
+/* Plugins manager: inventory rows, cover-art store shelves, and MCP connectors. */
 .plugins-workspace {
   width: 100%;
   max-width: 1480px;
@@ -50,7 +50,12 @@
 .plugins-empty__icon svg,
 .plugins-readonly svg,
 .plugins-clawhub-link svg,
-.plugins-refresh svg {
+.plugins-refresh svg,
+.plugins-remove svg,
+.plugins-downloads svg,
+.plugins-badge svg,
+.plugins-group__actions svg,
+.plugins-action-note svg {
   width: 100%;
   height: 100%;
   fill: none;
@@ -185,9 +190,94 @@
   padding-top: 20px;
 }
 
+.plugins-page-notice {
+  margin-top: 14px;
+}
+
+/* ---------- overview strip ---------- */
+
+.plugins-overview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.plugins-overview__stat {
+  display: grid;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px;
+  background: linear-gradient(135deg, var(--card-highlight), transparent 42%), var(--card);
+}
+
+.plugins-overview__value {
+  color: var(--text-strong);
+  font-size: 22px;
+  font-weight: 680;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.plugins-overview__stat--ok .plugins-overview__value {
+  color: var(--ok);
+}
+
+.plugins-overview__stat--danger .plugins-overview__value {
+  color: var(--danger);
+}
+
+.plugins-overview__label {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+/* ---------- filter chips ---------- */
+
+.plugins-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+
+.plugins-filters button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 5px 12px;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 580;
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+
+.plugins-filters button:hover {
+  border-color: var(--border-hover);
+  color: var(--text-strong);
+}
+
+.plugins-filters button.active {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--accent-subtle);
+  color: var(--text-strong);
+}
+
+/* ---------- groups / shelves ---------- */
+
 .plugins-groups {
   display: grid;
   gap: 28px;
+}
+
+/* The MCP section renders as a direct panel child after the grouped inventory. */
+.plugins-panel > .plugins-group {
+  margin-top: 28px;
 }
 
 .plugins-group__heading {
@@ -211,21 +301,132 @@
   font-size: var(--control-ui-text-xs);
 }
 
+.plugins-group__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.plugins-group__actions .btn span {
+  width: 14px;
+  height: 14px;
+}
+
+.plugins-group__link {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  text-decoration: none;
+}
+
+.plugins-group__link:hover {
+  color: var(--text-strong);
+  text-decoration: underline;
+}
+
+.plugins-group__hint {
+  margin: -4px 2px 12px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.5;
+}
+
+/* ---------- art tiles + covers ---------- */
+
+.plugins-tile {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
+}
+
+.plugins-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.plugins-tile--fallback {
+  background: linear-gradient(135deg, var(--plugins-art-a), var(--plugins-art-b));
+  border-color: transparent;
+  color: rgb(255 255 255 / 92%);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 25%);
+}
+
+.plugins-tile--fallback svg,
+.plugins-cover--fallback svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.plugins-cover {
+  display: grid;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  place-items: center;
+  overflow: hidden;
+  border-radius: calc(var(--radius-lg) - 4px);
+  background: var(--bg-elevated);
+}
+
+.plugins-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform var(--duration-slow) var(--ease-out);
+}
+
+@media (hover: hover) {
+  .plugins-card:hover .plugins-cover img {
+    transform: scale(1.03);
+  }
+}
+
+.plugins-cover--fallback {
+  background: linear-gradient(135deg, var(--plugins-art-a), var(--plugins-art-b));
+  color: rgb(255 255 255 / 92%);
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 25%);
+}
+
+/* ---------- store cards ---------- */
+
 .plugins-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(min(230px, 100%), 1fr));
+  gap: 12px;
+}
+
+.plugins-grid--featured {
+  grid-template-columns: repeat(auto-fill, minmax(min(264px, 100%), 1fr));
 }
 
 .plugins-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 14px;
+  padding: 10px 10px 12px;
   background: linear-gradient(135deg, var(--card-highlight), transparent 42%), var(--card);
   box-shadow: var(--shadow-sm);
   transition:
@@ -242,49 +443,12 @@
   }
 }
 
-.plugins-card--error {
-  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
-}
-
-.plugins-card__main {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  min-width: 0;
-}
-
-.plugins-tile {
+.plugins-card__body {
   display: grid;
-  width: 46px;
-  height: 46px;
-  flex: 0 0 46px;
-  place-items: center;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
-  border-radius: 13px;
-  background:
-    radial-gradient(circle at 22% 18%, var(--accent-subtle), transparent 52%),
-    linear-gradient(145deg, var(--bg-elevated), var(--secondary));
-  color: var(--accent);
-  box-shadow: inset 0 1px 0 var(--card-highlight);
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 700;
-  letter-spacing: -0.04em;
-}
-
-.plugins-tile svg {
-  width: 21px;
-  height: 21px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.6px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.plugins-card__copy {
+  flex: 1 1 auto;
+  gap: 4px;
   min-width: 0;
+  padding: 0 4px;
 }
 
 .plugins-card__title-row {
@@ -314,9 +478,9 @@
   font-size: var(--control-ui-text-xs);
 }
 
-.plugins-card__copy p {
+.plugins-card__body p {
   display: -webkit-box;
-  margin: 4px 0 0;
+  margin: 0;
   overflow: hidden;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
@@ -329,7 +493,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 8px;
+  margin-top: 4px;
   overflow: hidden;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
@@ -342,10 +506,150 @@
   color: var(--border-hover);
 }
 
+.plugins-card__meta > span:first-child::before {
+  content: none;
+}
+
+.plugins-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 4px;
+}
+
+/* ---------- inventory rows ---------- */
+
+.plugins-rows {
+  display: grid;
+  gap: 8px;
+}
+
+.plugins-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
+  background: linear-gradient(135deg, var(--card-highlight), transparent 42%), var(--card);
+  transition: border-color var(--duration-normal) var(--ease-out);
+}
+
+@media (hover: hover) {
+  .plugins-row:hover {
+    border-color: var(--border-strong);
+  }
+}
+
+.plugins-row--error {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+.plugins-row__copy {
+  min-width: 0;
+}
+
+.plugins-row__title {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.plugins-row__title h3 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 640;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugins-row__copy p {
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugins-row__target {
+  font-family: var(--mono);
+}
+
+.plugins-row__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  white-space: nowrap;
+}
+
+.plugins-row__meta > span:not(:first-child)::before {
+  content: "·";
+  margin-right: 6px;
+  color: var(--border-hover);
+}
+
+.plugins-row__package {
+  overflow: hidden;
+  font-family: var(--mono);
+  text-overflow: ellipsis;
+}
+
+.plugins-row__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-self: end;
+}
+
+.plugins-remove {
+  width: 30px;
+  height: 30px;
+  padding: 6px;
+  color: var(--muted);
+}
+
+.plugins-remove:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+
+.plugins-remove-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger);
+  font-size: var(--control-ui-text-xs);
+  white-space: nowrap;
+}
+
+.plugins-remove-confirm .btn.danger {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+
+/* ---------- badges + state ---------- */
+
 .plugins-state,
 .plugins-badge {
   display: inline-flex;
   align-items: center;
+  gap: 4px;
   border-radius: var(--radius-full);
   padding: 3px 7px;
   background: var(--bg-muted);
@@ -367,11 +671,32 @@
 
 .plugins-badge {
   background: var(--accent-2-subtle);
-  color: var(--text-strong);
 }
 
-.plugins-card__action {
-  justify-self: end;
+.plugins-badge--mcp {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.plugins-badge--verified {
+  background: var(--ok-subtle);
+  color: var(--ok);
+}
+
+.plugins-badge svg {
+  width: 11px;
+  height: 11px;
+}
+
+.plugins-downloads {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.plugins-downloads svg {
+  width: 12px;
+  height: 12px;
 }
 
 .plugins-install {
@@ -382,6 +707,21 @@
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
+
+.plugins-action-note--ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ok);
+  font-weight: 620;
+}
+
+.plugins-action-note--ok svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* ---------- switch ---------- */
 
 .plugins-switch {
   display: flex;
@@ -450,6 +790,65 @@
   opacity: 0.48;
   cursor: not-allowed;
 }
+
+/* ---------- MCP form ---------- */
+
+.plugins-mcp-form {
+  display: grid;
+  grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 12px;
+  background: var(--bg-elevated);
+}
+
+.plugins-mcp-form label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.plugins-mcp-form label span {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 580;
+}
+
+.plugins-mcp-form input {
+  min-width: 0;
+  height: 36px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 0 10px;
+  background: var(--card);
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-sm);
+}
+
+.plugins-mcp-form input:focus-visible {
+  border-color: var(--ring);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.plugins-mcp-form__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.plugins-mcp-empty {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  padding: 18px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  text-align: center;
+}
+
+/* ---------- messages / empty / errors ---------- */
 
 .plugins-row-message {
   grid-column: 1 / -1;
@@ -530,11 +929,7 @@
   font-size: var(--control-ui-text-sm);
 }
 
-@media (max-width: 980px) {
-  .plugins-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
+/* ---------- responsive ---------- */
 
 @media (max-width: 768px) {
   .plugins-content-header {
@@ -558,25 +953,28 @@
   .plugins-toolbar__actions {
     justify-content: space-between;
   }
+
+  .plugins-mcp-form {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
 }
 
 @media (max-width: 560px) {
-  .plugins-card {
-    grid-template-columns: minmax(0, 1fr);
+  .plugins-row {
+    grid-template-columns: auto minmax(0, 1fr);
   }
 
-  .plugins-card__action {
-    justify-self: stretch;
-    padding-left: 58px;
-  }
-
-  .plugins-card__action .plugins-install {
-    width: 100%;
-    min-height: 40px;
-  }
-
-  .plugins-card__action .plugins-switch {
+  .plugins-row__actions {
+    grid-column: 1 / -1;
     justify-content: space-between;
+    justify-self: stretch;
+    width: 100%;
+  }
+
+  .plugins-remove-confirm {
+    flex-wrap: wrap;
+    white-space: normal;
   }
 
   .plugins-row-message {
@@ -592,5 +990,10 @@
   .plugins-clawhub-link,
   .plugins-refresh {
     min-height: 44px;
+  }
+
+  .plugins-card__footer .plugins-install {
+    width: 100%;
+    min-height: 40px;
   }
 }
