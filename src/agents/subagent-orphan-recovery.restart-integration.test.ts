@@ -259,9 +259,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
     expect(updated).toBe(1);
     expect(callGateway).not.toHaveBeenCalled();
     expect(runs.some((entry) => entry.runId === staleRecord.runId)).toBe(false);
-    expect(runs).toContainEqual(
-      expect.objectContaining({ runId: freshRecord.runId, endedAt: undefined }),
-    );
+    expect(runs).toContainEqual(expect.objectContaining({ runId: freshRecord.runId }));
+    expect(runs.find((entry) => entry.runId === freshRecord.runId)?.endedAt).toBeUndefined();
     expect(findTaskByRunId(staleRecord.runId)).toMatchObject({ status: "failed" });
     expect(findTaskByRunId(freshRecord.runId)).toMatchObject({ status: "running" });
   });

@@ -847,7 +847,7 @@ describe("subagent registry persistence", () => {
     );
 
     restartRegistry();
-    await flushQueuedRegistryWork();
+    await waitForRegistryWork(() => vi.mocked(scheduleOrphanRecovery).mock.calls.length > 0);
 
     expect(callGateway).not.toHaveBeenCalled();
     expect(scheduleOrphanRecovery).toHaveBeenCalledOnce();
