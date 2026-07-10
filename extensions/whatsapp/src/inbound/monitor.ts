@@ -851,7 +851,11 @@ export async function attachWebInboxToSocket(
       if (!currentSock) {
         throw new Error(RECONNECT_IN_PROGRESS_ERROR);
       }
-      return await currentSock.executeUSyncQuery(query);
+      return await withWhatsAppSocketOperationTimeout(
+        "executeUSyncQuery",
+        currentSock.executeUSyncQuery(query),
+        sendOperationTimeoutMs,
+      );
     },
     getAuthState: () => getCurrentSock()?.authState,
     getLIDForPN: async (jid) => {
@@ -859,21 +863,33 @@ export async function attachWebInboxToSocket(
       if (!currentSock) {
         throw new Error(RECONNECT_IN_PROGRESS_ERROR);
       }
-      return await currentSock.signalRepository.lidMapping.getLIDForPN(jid);
+      return await withWhatsAppSocketOperationTimeout(
+        "getLIDForPN",
+        currentSock.signalRepository.lidMapping.getLIDForPN(jid),
+        sendOperationTimeoutMs,
+      );
     },
     fetchAccountReachoutTimelock: async () => {
       const currentSock = getCurrentSock();
       if (!currentSock) {
         throw new Error(RECONNECT_IN_PROGRESS_ERROR);
       }
-      return await currentSock.fetchAccountReachoutTimelock();
+      return await withWhatsAppSocketOperationTimeout(
+        "fetchAccountReachoutTimelock",
+        currentSock.fetchAccountReachoutTimelock(),
+        sendOperationTimeoutMs,
+      );
     },
     fetchNewChatMessageCap: async () => {
       const currentSock = getCurrentSock();
       if (!currentSock) {
         throw new Error(RECONNECT_IN_PROGRESS_ERROR);
       }
-      return await currentSock.fetchNewChatMessageCap();
+      return await withWhatsAppSocketOperationTimeout(
+        "fetchNewChatMessageCap",
+        currentSock.fetchNewChatMessageCap(),
+        sendOperationTimeoutMs,
+      );
     },
   };
 
