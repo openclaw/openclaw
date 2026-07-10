@@ -383,7 +383,7 @@ describe("installSignalCliFromRelease", () => {
     const originalMkdtemp = fs.mkdtemp.bind(fs);
     const mkdtempSpy = vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix) => {
       const dir = await originalMkdtemp(prefix as string);
-      if (String(dir).includes("openclaw-signal-")) {
+      if (dir.includes("openclaw-signal-")) {
         createdTempDirs.push(dir);
       }
       return dir;
