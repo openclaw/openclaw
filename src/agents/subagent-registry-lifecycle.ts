@@ -1484,21 +1484,44 @@ export function createSubagentRegistryLifecycleController(params: {
       }
       if (recoveryRequested) {
         const ownsInterruptedRecovery = entry.terminalOwner === "interrupted-recovery";
-        // Persisted legacy/current rows can carry only part of a terminal
-        // transition. Any such evidence is an existing winner, not proof
-        // that restart recovery may overwrite it.
+        // Mismatched partial terminal evidence is an existing winner and must
+        // not be overwritten. Exact normalized evidence may be the same recovery
+        // request deferred by restart admission, so drain it.
         const hasTerminalEvidence =
           typeof entry.endedAt === "number" ||
           entry.outcome !== undefined ||
           entry.endedReason !== undefined ||
           entry.execution?.status === "terminal";
+        const expectedElapsedMs =
+          typeof entry.startedAt === "number" && typeof completeParams.endedAt === "number"
+            ? Math.max(0, completeParams.endedAt - entry.startedAt)
+            : undefined;
+        const outcomeMatchesInterruptedRecovery = (outcome: SubagentRunOutcome | undefined) =>
+          completeParams.outcome.status === "error" &&
+          outcome?.status === "error" &&
+          outcome.error === completeParams.outcome.error &&
+          (outcome.startedAt === undefined || outcome.startedAt === entry.startedAt) &&
+          (outcome.endedAt === undefined || outcome.endedAt === completeParams.endedAt) &&
+          (outcome.elapsedMs === undefined || outcome.elapsedMs === expectedElapsedMs);
+        const executionMatchesInterruptedRecovery =
+          entry.execution?.status !== "terminal" ||
+          (entry.execution.endedAt === completeParams.endedAt &&
+            (entry.execution.startedAt === undefined ||
+              entry.execution.startedAt === entry.startedAt) &&
+            outcomeMatchesInterruptedRecovery(entry.execution.outcome));
+        const matchesRequestedInterruptedTerminal =
+          typeof completeParams.endedAt === "number" &&
+          entry.endedAt === completeParams.endedAt &&
+          outcomeMatchesInterruptedRecovery(entry.outcome) &&
+          entry.endedReason === SUBAGENT_ENDED_REASON_ERROR &&
+          executionMatchesInterruptedRecovery;
         if (
           !ownsInterruptedRecovery &&
           (entry.killReconciliation !== undefined ||
             entry.endedReason === SUBAGENT_ENDED_REASON_KILLED ||
             entry.pauseReason === "sessions_yield" ||
             typeof entry.cleanupCompletedAt === "number" ||
-            hasTerminalEvidence)
+            (hasTerminalEvidence && !matchesRequestedInterruptedTerminal))
         ) {
           return;
         }

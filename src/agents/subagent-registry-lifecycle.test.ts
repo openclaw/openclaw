@@ -607,6 +607,11 @@ describe("subagent registry lifecycle hardening", () => {
       { outcome: { status: "error", error: "existing failure" } },
       { endedReason: SUBAGENT_ENDED_REASON_ERROR },
       { execution: { status: "terminal", endedAt: 4_000 } },
+      {
+        endedAt: 4_000,
+        outcome: { status: "error", error: "existing failure" },
+        endedReason: SUBAGENT_ENDED_REASON_ERROR,
+      },
     ];
     for (const evidence of terminalEvidence) {
       const entry = createRunEntry(evidence);
@@ -624,6 +629,81 @@ describe("subagent registry lifecycle hardening", () => {
       expect(entry).toEqual(original);
       expect(persistOrThrow).not.toHaveBeenCalled();
     }
+    expect(taskExecutorMocks.failTaskRunByRunId).not.toHaveBeenCalled();
+    expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
+  });
+
+  it("drains exact interrupted terminal evidence after restart admission reopens", async () => {
+    const interruptedOutcome = {
+      status: "error" as const,
+      error: "restart interrupted run",
+      startedAt: 2_000,
+      endedAt: 4_000,
+      elapsedMs: 2_000,
+    };
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      outcome: interruptedOutcome,
+      endedReason: SUBAGENT_ENDED_REASON_ERROR,
+      execution: {
+        status: "terminal",
+        startedAt: 2_000,
+        endedAt: 4_000,
+        outcome: interruptedOutcome,
+      },
+    });
+    const persistOrThrow = vi.fn();
+    await createLifecycleController({ entry, persistOrThrow }).completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "error", error: "restart interrupted run" },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      triggerCleanup: false,
+      recoverInterrupted: true,
+    });
+
+    expect(entry).toMatchObject({
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_ERROR,
+      terminalOwner: "interrupted-recovery",
+      outcome: { status: "error", error: "restart interrupted run" },
+      execution: { status: "terminal", endedAt: 4_000 },
+    });
+    expect(persistOrThrow).toHaveBeenCalled();
+  });
+
+  it("preserves conflicting nested terminal evidence during interrupted recovery", async () => {
+    const interruptedOutcome = {
+      status: "error" as const,
+      error: "restart interrupted run",
+      startedAt: 2_000,
+      endedAt: 4_000,
+      elapsedMs: 2_000,
+    };
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      outcome: interruptedOutcome,
+      endedReason: SUBAGENT_ENDED_REASON_ERROR,
+      execution: {
+        status: "terminal",
+        startedAt: 2_000,
+        endedAt: 3_999,
+        outcome: { status: "error", error: "provider failure" },
+      },
+    });
+    const original = structuredClone(entry);
+    const persistOrThrow = vi.fn();
+    await createLifecycleController({ entry, persistOrThrow }).completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "error", error: "restart interrupted run" },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      triggerCleanup: false,
+      recoverInterrupted: true,
+    });
+
+    expect(entry).toEqual(original);
+    expect(persistOrThrow).not.toHaveBeenCalled();
     expect(taskExecutorMocks.failTaskRunByRunId).not.toHaveBeenCalled();
     expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
   });

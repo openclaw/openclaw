@@ -1818,20 +1818,21 @@ export async function finalizeInterruptedSubagentRun(params: {
   ) {
     return hasCompleteSubagentTerminalState(entry) ? 1 : 0;
   }
+  const completionParams: CompleteSubagentRunParams = {
+    runId,
+    endedAt,
+    outcome: {
+      status: "error",
+      error: params.error,
+    },
+    reason: SUBAGENT_ENDED_REASON_ERROR,
+    sendFarewell: true,
+    accountId: entry.requesterOrigin?.accountId,
+    triggerCleanup: true,
+    recoverInterrupted: true,
+  };
   try {
-    await completeSubagentRun({
-      runId,
-      endedAt,
-      outcome: {
-        status: "error",
-        error: params.error,
-      },
-      reason: SUBAGENT_ENDED_REASON_ERROR,
-      sendFarewell: true,
-      accountId: entry.requesterOrigin?.accountId,
-      triggerCleanup: true,
-      recoverInterrupted: true,
-    });
+    await completeSubagentRun(completionParams);
     // A successfully finalized stale generation can be retired once a newer
     // generation owns the session; the captured exact row still has its result.
     const finalized = subagentRuns.get(runId) ?? entry;
@@ -1839,6 +1840,14 @@ export async function finalizeInterruptedSubagentRun(params: {
     // Keep scheduler retries alive until the exact row is fully terminal.
     return hasCompleteSubagentTerminalState(finalized) ? 1 : 0;
   } catch (error) {
+    if (isGatewayRestartDraining() && subagentRuns.get(runId) === entry) {
+      log.warn("subagent completion deferred during gateway restart", {
+        source: "explicit-failed-mark",
+        runId,
+      });
+      scheduleSubagentCompletionRetryAfterRestart(completionParams, "explicit-failed-mark", entry);
+      return 1;
+    }
     log.warn("failed to durably finalize interrupted subagent run", {
       runId,
       childSessionKey: entry.childSessionKey,
