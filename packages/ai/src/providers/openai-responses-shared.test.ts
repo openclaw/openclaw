@@ -2534,7 +2534,7 @@ describe("Azure OpenAI Responses content type support", () => {
     const push = stream.push.bind(stream);
     stream.push = (event) => {
       if (event.type === "text_start" || event.type === "text_delta") {
-        const block = event.partial.content[event.contentIndex];
+        const block = event.partial?.content[event.contentIndex];
         liveTextSignatures.push(block?.type === "text" ? block.textSignature : undefined);
       }
       push(event);

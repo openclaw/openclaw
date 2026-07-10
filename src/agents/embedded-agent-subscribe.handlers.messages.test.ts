@@ -1336,8 +1336,8 @@ describe("handleMessageUpdate commentary phase", () => {
       }),
     );
 
-    // Emit-always: the bus sees the commentary delta with its phase tag, but
-    // reply-text buffers stay untouched.
+    // Emit-always: the bus sees the commentary delta with its phase tag. The raw
+    // cumulative buffer retains it for end-event dedupe, but reply blocks stay untouched.
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
     const commentaryEvent = firstMockArg(onAgentEvent, "agent event") as
       | { stream?: string; data?: { delta?: string; phase?: string } }
@@ -1345,7 +1345,7 @@ describe("handleMessageUpdate commentary phase", () => {
     expect(commentaryEvent?.stream).toBe("assistant");
     expect(commentaryEvent?.data?.phase).toBe("commentary");
     expect(commentaryEvent?.data?.delta).toBe("Working...");
-    expect(ctx.state.deltaBuffer).toBe("");
+    expect(ctx.state.deltaBuffer).toBe("Working...");
     expect(ctx.state.blockBuffer).toBe("");
 
     handleMessageUpdate(
