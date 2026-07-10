@@ -1767,6 +1767,7 @@
     "release:plugins:npm:plan": "node --import tsx scripts/plugin-npm-release-plan.ts",
     "release:verify-beta": "node --import tsx scripts/release-verify-beta.ts",
     "release:prep": "node scripts/release-preflight.mjs --fix",
+    "release:prep:version": "node scripts/release-preflight.mjs --fix --scope version",
     "release:version": "node --import tsx scripts/release-version.ts",
     "runtime-sidecars:check": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --check",
     "runtime-sidecars:gen": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --write",
