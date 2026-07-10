@@ -790,9 +790,14 @@ export function startDiagnosticHeartbeat(
     // times this callback actually ran, or a block long enough to blow past
     // the escalation window would still only ever register as tick 1 (#34).
     if (livenessSample !== null && !hasOpenDiagnosticWork(work)) {
+      // Floor, not round: a heartbeat firing modestly late (e.g. ~45s, 1.5x
+      // the nominal 30s tick) is one delayed tick, not two — rounding up
+      // would cross the escalation threshold after only ~75s of jittery
+      // timing instead of ~90s / three completed ticks, undermining the
+      // noise gate this escalation is meant to preserve.
       const impliedTicks = Math.max(
         1,
-        Math.round(livenessSample.intervalMs / HEARTBEAT_TICK_INTERVAL_MS),
+        Math.floor(livenessSample.intervalMs / HEARTBEAT_TICK_INTERVAL_MS),
       );
       consecutiveIdleLivenessStallTicks += impliedTicks;
     } else {

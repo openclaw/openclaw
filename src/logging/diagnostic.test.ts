@@ -690,6 +690,39 @@ describe("stuck session diagnostics threshold", () => {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("sustainedIdleStallTicks=4"));
   });
 
+  it("does not round a modestly-delayed tick up into an extra stall tick (#34)", () => {
+    // A heartbeat firing ~1.5x late (45s instead of 30s) is ordinary timer
+    // jitter, not a multi-tick block — rounding that up to 2 implied ticks
+    // would let two such jittery ticks cross the 3-tick escalation threshold
+    // after only ~75s, undermining the noise gate this escalation exists to
+    // preserve. It must floor to 1 implied tick, same as an on-time tick.
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+        },
+      },
+      {
+        emitMemorySample: createEmitMemorySampleMock(),
+        sampleLiveness: () => ({
+          reasons: ["event_loop_delay"],
+          intervalMs: 45_000,
+          eventLoopDelayP99Ms: 1_500,
+          eventLoopDelayMaxMs: 2_000,
+        }),
+      },
+    );
+
+    vi.advanceTimersByTime(30_000); // tick 1 (reported late as 45s): 1 implied tick
+    vi.advanceTimersByTime(30_000); // tick 2: 2 implied ticks total — still below threshold
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(30_000); // tick 3: 3 implied ticks — now sustained
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("sustainedIdleStallTicks=3"));
+  });
+
   it("does not start the heartbeat when diagnostics are disabled by config", () => {
     const emitMemorySample = createEmitMemorySampleMock();
 
