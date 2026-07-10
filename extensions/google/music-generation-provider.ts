@@ -26,6 +26,7 @@ type GoogleInlineDataPart = {
 
 type GoogleGenerateMusicResponse = {
   candidates?: Array<{
+    finishReason?: string;
     content?: {
       parts?: Array<{
         text?: string;
@@ -34,6 +35,9 @@ type GoogleGenerateMusicResponse = {
       }>;
     };
   }>;
+  promptFeedback?: {
+    blockReason?: string;
+  };
 };
 
 function resolveConfiguredGoogleMusicBaseUrl(req: MusicGenerationRequest): string | undefined {
@@ -100,6 +104,20 @@ function extractTracks(params: { payload: GoogleGenerateMusicResponse; model: st
   return { tracks, lyrics };
 }
 
+function resolveTerminalNoAudioReason(payload: GoogleGenerateMusicResponse): string | undefined {
+  const blockReason = normalizeOptionalString(payload.promptFeedback?.blockReason);
+  if (blockReason && !blockReason.endsWith("_UNSPECIFIED")) {
+    return `prompt blocked (${blockReason})`;
+  }
+  for (const candidate of payload.candidates ?? []) {
+    const finishReason = normalizeOptionalString(candidate.finishReason);
+    if (finishReason && finishReason !== "STOP" && finishReason !== "FINISH_REASON_UNSPECIFIED") {
+      return `generation stopped (${finishReason})`;
+    }
+  }
+  return undefined;
+}
+
 export function buildGoogleMusicGenerationProvider(): MusicGenerationProvider {
   return {
     ...createGoogleMusicGenerationProviderMetadata(),
@@ -138,29 +156,38 @@ export function buildGoogleMusicGenerationProvider(): MusicGenerationProvider {
           timeout: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         },
       });
-      const response = (await client.models.generateContent({
-        model,
-        contents: [
-          { text: buildMusicPrompt(req) },
-          ...(req.inputImages ?? []).map((image) => ({
-            inlineData: {
-              mimeType: normalizeOptionalString(image.mimeType) || "image/png",
-              data: image.buffer?.toString("base64") ?? "",
-            },
-          })),
-        ],
-        config: {
-          responseModalities: ["AUDIO", "TEXT"],
-        },
-      })) as GoogleGenerateMusicResponse;
-
-      const { tracks, lyrics } = extractTracks({
-        payload: response,
-        model,
-      });
-      if (tracks.length === 0) {
+      let generated: ReturnType<typeof extractTracks> | undefined;
+      // Lyria promises audio for successful Clip responses, but has returned
+      // unblocked text-only payloads transiently. Never retry explicit stops.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const response = (await client.models.generateContent({
+          model,
+          contents: [
+            { text: buildMusicPrompt(req) },
+            ...(req.inputImages ?? []).map((image) => ({
+              inlineData: {
+                mimeType: normalizeOptionalString(image.mimeType) || "image/png",
+                data: image.buffer?.toString("base64") ?? "",
+              },
+            })),
+          ],
+          config: {
+            responseModalities: ["AUDIO", "TEXT"],
+          },
+        })) as GoogleGenerateMusicResponse;
+        generated = extractTracks({ payload: response, model });
+        if (generated.tracks.length > 0) {
+          break;
+        }
+        const terminalReason = resolveTerminalNoAudioReason(response);
+        if (terminalReason) {
+          throw new Error(`Google music generation returned no audio: ${terminalReason}`);
+        }
+      }
+      if (!generated || generated.tracks.length === 0) {
         throw new Error("Google music generation response missing audio data");
       }
+      const { tracks, lyrics } = generated;
       return {
         tracks,
         ...(lyrics.length > 0 ? { lyrics } : {}),
