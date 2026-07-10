@@ -97,7 +97,7 @@ describe("agent runtime identity token", () => {
   it("round-trips signed message action context and rejects it after expiry", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();
-    const token = runtimeToken.mintAgentRuntimeIdentityToken({
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "session-1",
       messageActionContext: {

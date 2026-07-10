@@ -489,7 +489,7 @@ describe("gateway tool defaults", () => {
     await withGatewayToolCallerIdentity(
       { agentId: "ops", sessionKey: "agent:ops:telegram:group:room-1" },
       async () => {
-        const token = resolveMessageActionAgentRuntimeIdentityToken({
+        const token = await resolveMessageActionAgentRuntimeIdentityToken({
           opts: {},
           target: "local",
           turnCapability,
@@ -509,13 +509,13 @@ describe("gateway tool defaults", () => {
           },
         });
         expect(
-          resolveMessageActionAgentRuntimeIdentityToken({
+          await resolveMessageActionAgentRuntimeIdentityToken({
             opts: {},
             target: "local",
           }),
         ).toBeUndefined();
         expect(
-          resolveMessageActionAgentRuntimeIdentityToken({
+          await resolveMessageActionAgentRuntimeIdentityToken({
             opts: {},
             target: "remote",
             turnCapability,
@@ -524,7 +524,7 @@ describe("gateway tool defaults", () => {
           }),
         ).toBeUndefined();
         expect(
-          resolveMessageActionAgentRuntimeIdentityToken({
+          await resolveMessageActionAgentRuntimeIdentityToken({
             opts: { gatewayToken: "explicit" },
             target: "local",
             turnCapability,

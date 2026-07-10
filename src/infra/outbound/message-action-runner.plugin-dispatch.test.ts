@@ -373,7 +373,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("dispatches messageId/chatId-based plugin actions through the shared runner", async () => {
-      const resolveAgentRuntimeIdentityToken = vi.fn(() => "unused-agent-runtime-token");
+      const resolveAgentRuntimeIdentityToken = vi.fn(async () => "unused-agent-runtime-token");
       await runMessageAction({
         cfg: {
           channels: {
@@ -794,7 +794,7 @@ describe("runMessageAction plugin dispatch", () => {
         added: "✅",
       });
 
-      const resolveAgentRuntimeIdentityToken = vi.fn(() => "agent-runtime-token");
+      const resolveAgentRuntimeIdentityToken = vi.fn(async () => "agent-runtime-token");
       const result = await runMessageAction({
         cfg: {
           channels: {

@@ -328,13 +328,13 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
   return await mintAgentRuntimeIdentityToken(identity);
 }
 
-export function resolveMessageActionAgentRuntimeIdentityToken(params: {
+export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
   opts: GatewayCallOptions;
   target: "local" | "remote";
   turnCapability?: string;
   runId?: string;
   sessionId?: string;
-}): string | undefined {
+}): Promise<string | undefined> {
   const identity = getGatewayToolCallerIdentity();
   if (!identity) {
     return undefined;
@@ -354,7 +354,7 @@ export function resolveMessageActionAgentRuntimeIdentityToken(params: {
   if (!messageActionContext) {
     return undefined;
   }
-  return mintAgentRuntimeIdentityToken({
+  return await mintAgentRuntimeIdentityToken({
     ...identity,
     messageActionContext,
   });

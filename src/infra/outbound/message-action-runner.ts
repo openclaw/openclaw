@@ -110,7 +110,7 @@ export type MessageActionRunnerGateway = {
   url?: string;
   token?: string;
   timeoutMs?: number;
-  resolveAgentRuntimeIdentityToken?: () => string | undefined;
+  resolveAgentRuntimeIdentityToken?: () => Promise<string | undefined>;
   clientName: GatewayClientName;
   clientDisplayName?: string;
   mode: GatewayClientMode;
@@ -224,6 +224,7 @@ async function callGatewayMessageAction<T>(params: {
 }): Promise<T> {
   const { callGatewayLeastPrivilege } = await loadMessageActionGatewayRuntime();
   const gateway = resolveGatewayActionOptions(params.gateway);
+  const agentRuntimeIdentityToken = await params.gateway?.resolveAgentRuntimeIdentityToken?.();
   return await callGatewayLeastPrivilege<T>({
     url: gateway.url,
     token: gateway.token,
@@ -233,7 +234,7 @@ async function callGatewayMessageAction<T>(params: {
     clientName: gateway.clientName,
     clientDisplayName: gateway.clientDisplayName,
     mode: gateway.mode,
-    agentRuntimeIdentityToken: params.gateway?.resolveAgentRuntimeIdentityToken?.(),
+    agentRuntimeIdentityToken,
   });
 }
 
