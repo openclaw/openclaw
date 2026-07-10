@@ -152,6 +152,12 @@ describe("Dockerfile", () => {
     expect(extensionManifestIndex).toBeGreaterThan(-1);
     expect(dockerfile).toContain("for manifest in /tmp/packages/*/package.json");
     expect(dockerfile).toContain(
+      `if [ ! -f "/tmp/\${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" ]; then`,
+    );
+    expect(dockerfile).toContain("LC_ALL=C sort -u");
+    expect(dockerfile).toContain("invalid OPENCLAW_EXTENSIONS plugin id: $ext");
+    expect(dockerfile).toContain("unknown OPENCLAW_EXTENSIONS plugin id: $ext");
+    expect(dockerfile).not.toContain(
       `if [ -f "/tmp/\${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" ]; then`,
     );
     expect(postinstallIndex).toBeLessThan(installIndex);
@@ -199,7 +205,7 @@ describe("Dockerfile", () => {
       "export OPENCLAW_BUILD_PRIVATE_QA=1 OPENCLAW_ENABLE_PRIVATE_QA_CLI=1",
     );
     const buildDockerIndex = collapsed.indexOf(
-      'OPENCLAW_RUN_NODE_SKIP_DTS_BUILD="$OPENCLAW_DOCKER_BUILD_SKIP_DTS" OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB="$OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB" NODE_OPTIONS="$OPENCLAW_DOCKER_BUILD_NODE_OPTIONS" pnpm_config_verify_deps_before_run=false pnpm build:docker',
+      'OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS="$OPENCLAW_EXTENSIONS" OPENCLAW_RUN_NODE_SKIP_DTS_BUILD="$OPENCLAW_DOCKER_BUILD_SKIP_DTS" OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB="$OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB" NODE_OPTIONS="$OPENCLAW_DOCKER_BUILD_NODE_OPTIONS" pnpm_config_verify_deps_before_run=false pnpm build:docker',
     );
     const qaLabBuildIndex = collapsed.indexOf(
       "pnpm_config_verify_deps_before_run=false pnpm qa:lab:build",
@@ -211,6 +217,9 @@ describe("Dockerfile", () => {
 
     expect(qaLabExtensionCheckIndex).toBeGreaterThan(-1);
     expect(buildDockerIndex).toBeGreaterThan(-1);
+    expect(collapsed).not.toContain(
+      'OPENCLAW_DOCKER_BUILD_EXTENSIONS="$OPENCLAW_EXTENSIONS" OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=',
+    );
     expect(qaLabBuildIndex).toBeGreaterThan(-1);
     expect(qaLabDistCopyIndex).toBeGreaterThan(-1);
     expect(runtimeAssetsIndex).toBeGreaterThan(-1);
@@ -265,7 +274,7 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain("ARG OPENCLAW_DOCKER_BUILD_SKIP_DTS=1");
     expect(dockerfile).toContain("ARG OPENCLAW_BUNDLED_PLUGIN_DIR");
     expect(dockerfile).toContain(
-      "Opt-in plugin dependencies at build time (space- or comma-separated directory names).",
+      "Opt-in plugin dependencies and supported runtime builds (space- or comma-separated ids).",
     );
     expect(dockerfile).toContain(
       'Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,matrix" .',

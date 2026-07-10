@@ -1,4 +1,4 @@
-# Opt-in plugin dependencies at build time (space- or comma-separated directory names).
+# Opt-in plugin dependencies and supported runtime builds (space- or comma-separated ids).
 # Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,matrix" .
 #
 # Multi-stage build produces a minimal runtime image without build tools,
@@ -40,11 +40,20 @@ RUN --mount=type=bind,source=packages,target=/tmp/packages,readonly \
       mkdir -p "/out/packages/$pkg_name" && \
       cp "$manifest" "/out/packages/$pkg_name/package.json"; \
     done && \
-    for ext in $(printf '%s\n' "$OPENCLAW_EXTENSIONS" | tr ',' ' '); do \
-      if [ -f "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" ]; then \
-        mkdir -p "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext" && \
-        cp "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json"; \
+    for ext in $(printf '%s\n' "$OPENCLAW_EXTENSIONS" | tr ',' '\n' | tr ' ' '\n' | sed '/^$/d' | LC_ALL=C sort -u); do \
+      case "$ext" in \
+        [a-z0-9]*) ;; \
+        *) echo "ERROR: invalid OPENCLAW_EXTENSIONS plugin id: $ext" >&2; exit 1 ;; \
+      esac; \
+      case "$ext" in \
+        *[!a-z0-9-]*) echo "ERROR: invalid OPENCLAW_EXTENSIONS plugin id: $ext" >&2; exit 1 ;; \
+      esac; \
+      if [ ! -f "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" ]; then \
+        echo "ERROR: unknown OPENCLAW_EXTENSIONS plugin id: $ext" >&2; \
+        exit 1; \
       fi; \
+      mkdir -p "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext" && \
+      cp "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json"; \
     done
 
 # ── Stage 2: Build ──────────────────────────────────────────────
@@ -139,7 +148,7 @@ RUN set -eu; \
     if printf '%s\n' "$OPENCLAW_EXTENSIONS" | tr ',' ' ' | tr ' ' '\n' | grep -qx 'qa-lab'; then \
       export OPENCLAW_BUILD_PRIVATE_QA=1 OPENCLAW_ENABLE_PRIVATE_QA_CLI=1; \
     fi; \
-    OPENCLAW_RUN_NODE_SKIP_DTS_BUILD="$OPENCLAW_DOCKER_BUILD_SKIP_DTS" OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB="$OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB" NODE_OPTIONS="$OPENCLAW_DOCKER_BUILD_NODE_OPTIONS" pnpm_config_verify_deps_before_run=false pnpm build:docker; \
+    OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS="$OPENCLAW_EXTENSIONS" OPENCLAW_RUN_NODE_SKIP_DTS_BUILD="$OPENCLAW_DOCKER_BUILD_SKIP_DTS" OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB="$OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB" NODE_OPTIONS="$OPENCLAW_DOCKER_BUILD_NODE_OPTIONS" pnpm_config_verify_deps_before_run=false pnpm build:docker; \
     pnpm_config_verify_deps_before_run=false pnpm ui:build
 RUN if printf '%s\n' "$OPENCLAW_EXTENSIONS" | tr ',' ' ' | tr ' ' '\n' | grep -qx 'qa-lab'; then \
       pnpm_config_verify_deps_before_run=false pnpm qa:lab:build && \
