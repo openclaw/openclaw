@@ -16,7 +16,9 @@ export type LobsterPetAct =
   | "nap"
   | "bubble"
   | "scuttle"
-  | "startle";
+  | "startle"
+  | "cheer"
+  | "molt";
 
 export type LobsterPetMode = "idle" | "busy" | "offline";
 
@@ -83,6 +85,8 @@ export const LOBSTER_PET_ACT_DURATION_MS: Record<LobsterPetAct, number> = {
   bubble: 2600,
   scuttle: 1250,
   startle: 750,
+  cheer: 1300,
+  molt: 2600,
 };
 
 const PERSONALITIES: Record<LobsterPetPersonalityId, ActProfile> = {
@@ -243,6 +247,66 @@ const VISIT_SHY_CHANCE = 0.25;
 const VISIT_FIRST_DELAY_MS = [15_000, 180_000] as const;
 const VISIT_STAY_MS = [90_000, 300_000] as const;
 const VISIT_GAP_MS = [360_000, 1_080_000] as const;
+
+// Seeded pet names; rare palettes carry signature names. Shown via the
+// sprite's native title tooltip, so no i18n surface.
+const PET_NAMES = [
+  "Pinchy",
+  "Barnaby",
+  "Thermidor",
+  "Clawdette",
+  "Sheldon",
+  "Scuttles",
+  "Bisque",
+  "Crusty",
+  "Snips",
+  "Bubbles",
+  "Clawdia",
+  "Ferdinand",
+  "Maple",
+  "Pearl",
+  "Biscuit",
+  "Captain",
+  "Ziggy",
+  "Noodle",
+  "Waffles",
+  "Pippin",
+  "Squirt",
+  "Chip",
+  "Clementine",
+  "Moss",
+] as const;
+
+const RARE_NAMES: Partial<Record<LobsterPetPaletteId, string>> = {
+  blue: "Blueberry",
+  gold: "Goldie",
+  calico: "Patches",
+  abyss: "Lantern",
+  ghost: "Boo",
+  split: "Picasso",
+  retro: "OG",
+};
+
+export function lobsterPetName(look: LobsterPetLook, seed: number): string {
+  return RARE_NAMES[look.palette.id] ?? PET_NAMES[(seed >>> 3) % PET_NAMES.length];
+}
+
+// Rare-event loads, planned per seed so tests can probe them purely: a molt
+// load sheds its shell during the first idle act and sizes up one tier; a
+// twin load brings a mini copycat along on every visit.
+export function isLobsterMoltLoad(seed: number): boolean {
+  return mulberry32((seed ^ 0x301d) >>> 0)() < 0.12;
+}
+
+export function isLobsterTwinLoad(seed: number): boolean {
+  return mulberry32((seed ^ 0x7715) >>> 0)() < 0.04;
+}
+
+// Late-night visitors are always sleepy, whatever their daytime personality.
+export function isLobsterNightTime(now: Date = new Date()): boolean {
+  const hour = now.getHours();
+  return hour >= 22 || hour < 6;
+}
 
 function fnv1a(value: string): number {
   let hash = 0x811c9dc5;
@@ -423,6 +487,15 @@ const TAIL_FAN = svg`
   </g>
 `;
 
+// Shown while grumpy (poked too much): angry brows and a frown.
+const GRUMPY_FACE = svg`
+  <g stroke="#0a1014" stroke-linecap="round" fill="none">
+    <path d="M37 24 L51 28" stroke-width="3.5" />
+    <path d="M69 28 L83 24" stroke-width="3.5" />
+    <path d="M50 48 Q60 42 70 48" stroke-width="3" />
+  </g>
+`;
+
 const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
   perky: svg`
     <g class="lob-antennae" stroke="var(--lob-shell)" stroke-width="4" stroke-linecap="round" fill="none">
@@ -440,7 +513,10 @@ const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
 
 // Same species as icons.lobster / the dreams-scene sleeper: smooth dome body
 // with stubby legs, side claws, antennae, and teal-glint eyes.
-function renderLobsterSvg(look: LobsterPetLook) {
+function renderLobsterSvg(
+  look: LobsterPetLook,
+  options: { grumpy?: boolean; shell?: boolean } = {},
+) {
   return svg`
     <svg
       class="lobster-pet__svg"
@@ -475,7 +551,7 @@ function renderLobsterSvg(look: LobsterPetLook) {
       ${look.palette.id === "split" ? SPLIT_HALF : nothing}
       ${look.palette.id === "calico" ? CALICO_SPOTS : nothing}
       <ellipse cx="48" cy="28" rx="20" ry="11" fill="#ffffff" opacity="0.1" />
-      <g class="lob-eye-open">
+      <g class="lob-eye-open" style=${options.shell ? "display:none" : ""}>
         <circle cx="45" cy="32" r="5.5" fill="#0a1014" />
         <circle cx="75" cy="32" r="5.5" fill="#0a1014" />
         <circle cx="46.5" cy="30.5" r="2.2" fill="var(--lob-glint, #00e5cc)" />
@@ -499,7 +575,8 @@ function renderLobsterSvg(look: LobsterPetLook) {
           `
           : nothing
       }
-      ${look.accessory === "none" ? nothing : ACCESSORY_SPRITES[look.accessory]}
+      ${options.grumpy && look.palette.id !== "retro" ? GRUMPY_FACE : nothing}
+      ${look.accessory === "none" || options.shell ? nothing : ACCESSORY_SPRITES[look.accessory]}
     </svg>
   `;
 }
@@ -522,6 +599,14 @@ export class LobsterPet extends LitElement {
   @state() private anchor: LobsterPetAnchor = "ledge";
   @state() private scheduledVisiting = false;
   @state() private dismissed = false;
+  @state() private grumpy = false;
+  @state() private shellVisible = false;
+  private shellSpotPct = 50;
+  private shellScale = 2;
+  private molted = false;
+  private moltPlanned = false;
+  private twinPlanned = false;
+  private shellTimer: number | null = null;
 
   private look: LobsterPetLook | null = null;
   private rng: () => number = mulberry32(0);
@@ -531,6 +616,8 @@ export class LobsterPet extends LitElement {
   private enterTimer: number | null = null;
   private visitTimer: number | null = null;
   private leaveTimer: number | null = null;
+  private grumpyTimer: number | null = null;
+  private pokeTimes: number[] = [];
   private restartPending = false;
 
   override connectedCallback() {
@@ -542,6 +629,14 @@ export class LobsterPet extends LitElement {
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.clearActTimers();
     this.clearVisitTimers();
+    if (this.grumpyTimer !== null) {
+      window.clearTimeout(this.grumpyTimer);
+      this.grumpyTimer = null;
+    }
+    if (this.shellTimer !== null) {
+      window.clearTimeout(this.shellTimer);
+      this.shellTimer = null;
+    }
     super.disconnectedCallback();
   }
 
@@ -566,11 +661,21 @@ export class LobsterPet extends LitElement {
       this.act = null;
       this.dismissed = false;
       this.presence = "out";
+      this.molted = false;
+      this.shellVisible = false;
+      if (this.shellTimer !== null) {
+        window.clearTimeout(this.shellTimer);
+        this.shellTimer = null;
+      }
+      this.moltPlanned = isLobsterMoltLoad(this.seed);
+      this.twinPlanned = isLobsterTwinLoad(this.seed);
       this.scheduleVisits();
     } else if (changed.has("mode") && this.presence === "in" && !prefersReducedMotion()) {
-      // Status flips get an immediate reaction; the act-end timer then
-      // reschedules from the new mode's pool.
-      this.performAct("startle");
+      // Status flips get an immediate reaction; a finished run (busy -> idle)
+      // earns a celebration, everything else a startle. The act-end timer
+      // then reschedules from the new mode's pool.
+      const previousMode = changed.get("mode") as LobsterPetMode | undefined;
+      this.performAct(previousMode === "busy" && this.mode === "idle" ? "cheer" : "startle");
     }
     this.reconcilePresence();
   }
@@ -626,12 +731,45 @@ export class LobsterPet extends LitElement {
     }
   };
 
+  // Pokes are fun until they are not: 3 fast pokes turn it grumpy for a
+  // minute, 10 send it off in a huff until a later visit. Offline pets are
+  // on duty and never huff.
   private readonly handlePoke = () => {
     if (prefersReducedMotion()) {
       return;
     }
+    const now = Date.now();
+    this.pokeTimes = [...this.pokeTimes.filter((at) => now - at < 6000), now];
+    if (this.pokeTimes.length >= 10 && this.mode !== "offline") {
+      this.huffOff();
+      return;
+    }
+    if (this.pokeTimes.length >= 3) {
+      this.enterGrumpy();
+    }
     this.performAct("startle");
   };
+
+  private enterGrumpy() {
+    this.grumpy = true;
+    if (this.grumpyTimer !== null) {
+      window.clearTimeout(this.grumpyTimer);
+    }
+    this.grumpyTimer = window.setTimeout(() => {
+      this.grumpyTimer = null;
+      this.grumpy = false;
+    }, 60_000);
+  }
+
+  private huffOff() {
+    this.pokeTimes = [];
+    this.grumpy = false;
+    // Ends the current visit only; unlike a right-click dismissal the pet
+    // still returns on a later scheduled visit.
+    this.clearVisitTimers();
+    this.scheduledVisiting = false;
+    this.armArrival(randomBetween(this.visitRng, VISIT_GAP_MS[0], VISIT_GAP_MS[1]));
+  }
 
   // Right-click shoos the pet away for the rest of this page load.
   private readonly handleShoo = (event: Event) => {
@@ -711,6 +849,9 @@ export class LobsterPet extends LitElement {
     if (this.mode === "busy" || this.mode === "offline") {
       return LOBSTER_PET_MODE_ACTS[this.mode];
     }
+    if (isLobsterNightTime()) {
+      return PERSONALITIES.sleepy;
+    }
     return this.look ? PERSONALITIES[this.look.personality] : null;
   }
 
@@ -737,6 +878,10 @@ export class LobsterPet extends LitElement {
       if (!nextProfile || document.hidden || this.presence !== "in") {
         return;
       }
+      if (this.moltPlanned && !this.molted && this.mode === "idle") {
+        this.performAct("molt");
+        return;
+      }
       this.performAct(pickWeighted(this.rng, nextProfile.acts));
     }, delay);
   }
@@ -751,8 +896,39 @@ export class LobsterPet extends LitElement {
     this.actEndTimer = window.setTimeout(() => {
       this.actEndTimer = null;
       this.act = null;
+      if (act === "molt") {
+        this.completeMolt();
+      }
       this.scheduleNextAct();
     }, LOBSTER_PET_ACT_DURATION_MS[act]);
+  }
+
+  // Shedding: the old shell stays behind and slowly fades while the pet
+  // steps aside one size bigger. Once per load.
+  private completeMolt() {
+    this.molted = true;
+    if (this.look) {
+      const tiers = [1.7, 2, 2.5];
+      const index = tiers.indexOf(this.look.scale);
+      // The shed shell keeps the true pre-molt size; a max-tier pet sheds a
+      // max-tier shell.
+      this.shellScale = this.look.scale;
+      this.look = { ...this.look, scale: tiers[Math.min(index + 1, tiers.length - 1)] };
+    }
+    this.shellSpotPct = this.spotPct;
+    this.shellVisible = true;
+    const zone = this.currentZone();
+    this.spotPct = Math.min(
+      zone[1],
+      Math.max(zone[0], this.spotPct + (this.facing === 1 ? 9 : -9)),
+    );
+    if (this.shellTimer !== null) {
+      window.clearTimeout(this.shellTimer);
+    }
+    this.shellTimer = window.setTimeout(() => {
+      this.shellTimer = null;
+      this.shellVisible = false;
+    }, 60_000);
   }
 
   private startScuttle() {
@@ -770,46 +946,62 @@ export class LobsterPet extends LitElement {
     this.spotPct = target;
   }
 
-  override render() {
-    const look = this.look;
-    if (!look || this.presence === "out") {
-      return nothing;
-    }
-    const classes = [
-      "lobster-pet",
-      `lobster-pet--${this.mode}`,
-      `lobster-pet--palette-${look.palette.id}`,
-      this.presence === "leaving" ? "lobster-pet--away" : "",
-      this.entering ? "lobster-pet--entering" : "",
-      this.act ? `lobster-pet--act-${this.act}` : "",
-    ]
-      .filter(Boolean)
-      .join(" ");
-    // The bar anchor stands inside the ~30px footer bar, so cap the sprite.
-    const scale = this.anchor === "bar" ? Math.min(look.scale, BAR_MAX_SCALE) : look.scale;
+  private spriteStyle(look: LobsterPetLook, scale: number, spotPct: number, facing: 1 | -1) {
     // Glint color stays class-driven (see lobster-pet.css): an inline
     // --lob-glint would out-cascade the offline grey override.
-    const style = [
+    return [
       `--lob-shell:${look.palette.shell}`,
       `--lob-claw:${look.palette.claw}`,
       `--lob-scale:${scale}`,
-      `--lob-x:${this.spotPct}%`,
-      `--lob-face:${this.facing}`,
+      `--lob-x:${spotPct}%`,
+      `--lob-face:${facing}`,
       `--lob-blink-delay:${look.blinkDelayS}s`,
       `--lob-w:${LOBSTER_PET_BUILD_MULS[look.build].w}`,
       `--lob-h:${LOBSTER_PET_BUILD_MULS[look.build].h}`,
       `--lob-claw-scale:${LOBSTER_PET_CLAW_MULS[look.clawSize]}`,
     ].join(";");
+  }
+
+  // The bar anchor stands inside the ~30px footer bar, so cap the sprite.
+  private anchoredScale(scale: number): number {
+    return this.anchor === "bar" ? Math.min(scale, BAR_MAX_SCALE) : scale;
+  }
+
+  private renderSprite(look: LobsterPetLook, twin: boolean) {
+    const classes = [
+      "lobster-pet",
+      `lobster-pet--${this.mode}`,
+      `lobster-pet--palette-${look.palette.id}`,
+      twin ? "lobster-pet--twin" : "",
+      this.presence === "leaving" ? "lobster-pet--away" : "",
+      this.entering ? "lobster-pet--entering" : "",
+      this.grumpy ? "lobster-pet--grumpy" : "",
+      this.act ? `lobster-pet--act-${this.act}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const zone = this.currentZone();
+    // The twin tags along on the parent's trailing side and copies every act
+    // a beat later (--lob-act-delay feeds each act's animation-delay).
+    const spotPct = twin
+      ? Math.min(zone[1], Math.max(zone[0], this.spotPct + (this.facing === 1 ? -12 : 12)))
+      : this.spotPct;
+    const scale = this.anchoredScale(twin ? look.scale * 0.55 : look.scale);
+    const style = twin
+      ? `${this.spriteStyle(look, scale, spotPct, this.facing === 1 ? -1 : 1)};--lob-act-delay:0.18s`
+      : this.spriteStyle(look, scale, spotPct, this.facing);
+    const name = lobsterPetName(look, this.seed);
     return html`
       <div
         class=${classes}
         style=${style}
         aria-hidden="true"
+        title=${twin ? `${name} Jr.` : name}
         @pointerdown=${this.handlePoke}
         @contextmenu=${this.handleShoo}
       >
         <div class="lobster-pet__body">
-          ${renderLobsterSvg(look)}
+          ${renderLobsterSvg(look, { grumpy: this.grumpy })}
           <span class="lobster-pet__z" style="--i:0">z</span>
           <span class="lobster-pet__z" style="--i:1">z</span>
           <span class="lobster-pet__z" style="--i:2">Z</span>
@@ -818,6 +1010,40 @@ export class LobsterPet extends LitElement {
           <span class="lobster-pet__bubble" style="--i:2"></span>
         </div>
       </div>
+    `;
+  }
+
+  // The abandoned shell: the pre-molt silhouette, frozen and slowly fading.
+  private renderShell(look: LobsterPetLook) {
+    const style = this.spriteStyle(
+      look,
+      this.anchoredScale(this.shellScale),
+      this.shellSpotPct,
+      this.facing,
+    );
+    return html`
+      <div class="lobster-pet lobster-pet--shell" style=${style} aria-hidden="true">
+        <div class="lobster-pet__body">${renderLobsterSvg(look, { shell: true })}</div>
+      </div>
+    `;
+  }
+
+  override render() {
+    const look = this.look;
+    if (!look) {
+      return nothing;
+    }
+    const showSprites = this.presence !== "out";
+    // The shell may outlive the visit while it fades, but dismissal and the
+    // visits setting silence it like everything else.
+    const showShell = this.shellVisible && this.visitsEnabled && !this.dismissed;
+    if (!showSprites && !showShell) {
+      return nothing;
+    }
+    return html`
+      ${showShell ? this.renderShell(look) : nothing}
+      ${showSprites ? this.renderSprite(look, false) : nothing}
+      ${showSprites && this.twinPlanned ? this.renderSprite(look, true) : nothing}
     `;
   }
 }
