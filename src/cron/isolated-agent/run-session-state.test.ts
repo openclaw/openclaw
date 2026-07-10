@@ -35,7 +35,7 @@ function makeCronSession(entry = makeSessionEntry()): MutableCronSession {
 }
 
 describe("createPersistCronSessionEntry", () => {
-  it("persists isolated cron state only under the stable cron session key", async () => {
+  it("persists isolated cron state under both stable and run-specific session keys", async () => {
     const cronSession = makeCronSession(
       makeSessionEntry({
         sessionFile: await createTranscriptFile(),
@@ -52,7 +52,7 @@ describe("createPersistCronSessionEntry", () => {
         const store: Record<string, SessionEntry> = {};
         update(store);
         expect(store["agent:main:cron:job"]).toBe(cronSession.sessionEntry);
-        expect(store["agent:main:cron:job:run:run-session-id"]).toBeUndefined();
+        expect(store["agent:main:cron:job:run:run-session-id"]).toBe(cronSession.sessionEntry);
       },
     );
 
@@ -60,13 +60,14 @@ describe("createPersistCronSessionEntry", () => {
       isFastTestEnv: false,
       cronSession,
       agentSessionKey: "agent:main:cron:job",
+      runSessionKey: "agent:main:cron:job:run:run-session-id",
       updateSessionStore,
     });
 
     await persist();
 
     expect(cronSession.store["agent:main:cron:job"]).toBe(cronSession.sessionEntry);
-    expect(cronSession.store["agent:main:cron:job:run:run-session-id"]).toBeUndefined();
+    expect(cronSession.store["agent:main:cron:job:run:run-session-id"]).toBe(cronSession.sessionEntry);
   });
 
   it("does not register cron sessions as resumable until the transcript exists", async () => {

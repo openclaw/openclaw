@@ -77,6 +77,7 @@ export function createPersistCronSessionEntry(params: {
   isFastTestEnv: boolean;
   cronSession: MutableCronSession;
   agentSessionKey: string;
+  runSessionKey?: string;
   updateSessionStore: UpdateSessionStore;
 }): PersistCronSessionEntry {
   return async () => {
@@ -134,12 +135,27 @@ export function createPersistCronSessionEntry(params: {
         });
       }
       store[params.agentSessionKey] = committedEntry;
+      if (
+        params.runSessionKey &&
+        params.runSessionKey !== params.agentSessionKey &&
+        persistedEntry.sessionId
+      ) {
+        // Keep cron run-log Open Chat links resolvable to the transcript they logged.
+        store[params.runSessionKey] = committedEntry;
+      }
     });
     // The storage projection may intentionally omit resume identity until its
     // transcript exists. Keep that projection out of the active run object.
     params.cronSession.sessionEntry = mergedLiveEntry;
     params.cronSession.initialSessionEntry = structuredClone(committedEntry);
     params.cronSession.store[params.agentSessionKey] = committedEntry;
+    if (
+      params.runSessionKey &&
+      params.runSessionKey !== params.agentSessionKey &&
+      persistedEntry.sessionId
+    ) {
+      params.cronSession.store[params.runSessionKey] = committedEntry;
+    }
   };
 }
 
