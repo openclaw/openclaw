@@ -7,6 +7,7 @@ import {
   isGatewaySubordinateWorkAdmissionClosed,
   isGatewayWorkAdmissionClosed,
   markGatewayRestartDraining,
+  retainGatewayRootWorkAdmissionContinuation,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkContinuation,
   runWithGatewayRootWorkAdmission,
@@ -87,6 +88,37 @@ it("synchronously reserves a tracked continuation across a closed suspension fen
   expect(getActiveGatewayRootWorkCount()).toBe(1);
   releaseContinuation();
   await continuation;
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+});
+
+it("retains an admitted request root across its handler return", async () => {
+  const root = tryBeginGatewayRootWorkAdmission();
+  expect(root).not.toBeNull();
+  let continueChild = () => {};
+  let releaseContinuation = () => {};
+  let subordinateAdmissionClosed: boolean | undefined;
+  let child: Promise<void> | undefined;
+  const childGate = new Promise<void>((resolve) => {
+    continueChild = resolve;
+  });
+
+  await root?.run(async () => {
+    const retainedRelease = retainGatewayRootWorkAdmissionContinuation();
+    expect(retainedRelease).not.toBeNull();
+    releaseContinuation = retainedRelease ?? (() => {});
+    child = (async () => {
+      await childGate;
+      subordinateAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
+    })();
+  });
+
+  root?.release();
+  expect(getActiveGatewayRootWorkCount()).toBe(1);
+  continueChild();
+  await child;
+  expect(subordinateAdmissionClosed).toBe(false);
+  releaseContinuation();
+  releaseContinuation();
   expect(getActiveGatewayRootWorkCount()).toBe(0);
 });
 

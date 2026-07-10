@@ -12,6 +12,7 @@ export class GatewayDrainingError extends Error {
 }
 
 type GatewayRootWorkAdmission = {
+  references: number;
   released: boolean;
 };
 
@@ -58,19 +59,30 @@ export type GatewayRestartSignalAdmissionLease = {
 };
 
 function createGatewayRootWorkAdmission(): GatewayRootWorkAdmissionLease {
-  const admission: GatewayRootWorkAdmission = { released: false };
+  const admission: GatewayRootWorkAdmission = { references: 1, released: false };
   GATEWAY_WORK_ADMISSION_STATE.activeRootWork.add(admission);
+  const release = createGatewayRootWorkRelease(admission);
   return {
     ownsRoot: true,
-    release: () => {
-      if (admission.released) {
-        return;
-      }
-      admission.released = true;
-      GATEWAY_WORK_ADMISSION_STATE.activeRootWork.delete(admission);
-    },
+    release,
     run: async <T>(run: () => Promise<T>) =>
       await GATEWAY_WORK_ADMISSION_STATE.currentRootWork.run(admission, run),
+  };
+}
+
+function createGatewayRootWorkRelease(admission: GatewayRootWorkAdmission): () => void {
+  let leaseReleased = false;
+  return () => {
+    if (leaseReleased || admission.released) {
+      return;
+    }
+    leaseReleased = true;
+    admission.references -= 1;
+    if (admission.references > 0) {
+      return;
+    }
+    admission.released = true;
+    GATEWAY_WORK_ADMISSION_STATE.activeRootWork.delete(admission);
   };
 }
 
@@ -262,6 +274,16 @@ export function runWithGatewayIndependentRootWorkContinuation<T>(
   return admission.run(run).finally(admission.release);
 }
 
+/** Transfers an admitted request root to work that intentionally outlives its handler. */
+export function retainGatewayRootWorkAdmissionContinuation(): (() => void) | null {
+  const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
+  if (!current || current.released) {
+    return null;
+  }
+  current.references += 1;
+  return createGatewayRootWorkRelease(current);
+}
+
 /** Active root requests/ticks, optionally excluding the caller running prepare. */
 export function getActiveGatewayRootWorkCount(opts?: { excludeCurrent?: boolean }): number {
   let count = GATEWAY_WORK_ADMISSION_STATE.activeRootWork.size;
@@ -322,6 +344,7 @@ export function resetGatewayWorkAdmission(): void {
   // SIGUSR1 can abandon old async chains before their finally blocks run.
   // Retire their ALS records so surviving chains must re-enter admission.
   for (const admission of GATEWAY_WORK_ADMISSION_STATE.activeRootWork) {
+    admission.references = 0;
     admission.released = true;
   }
   GATEWAY_WORK_ADMISSION_STATE.activeRootWork.clear();
