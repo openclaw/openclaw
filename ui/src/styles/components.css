@@ -3015,17 +3015,42 @@
 
 .worktrees-table .table-head,
 .worktrees-table .table-row {
-  grid-template-columns: 1fr 1fr 1.4fr 0.8fr 0.9fr 0.9fr;
+  grid-template-columns: 1fr 1fr 1.3fr 0.9fr 0.7fr 0.9fr 0.9fr;
 }
 
-@media (max-width: 1100px) {
+.worktrees-create {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.worktrees-create label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.worktrees-create input {
+  min-width: 180px;
+}
+
+/* Settings caps .settings-workspace at 1120px, so the table container is ~1080px
+   wide; a 1100px stack breakpoint would collapse the grid at every window size. */
+@media (max-width: 900px) {
   .worktrees-table .table-head,
   .worktrees-table .table-row {
     grid-template-columns: 1fr;
   }
 }
 
-@container (max-width: 1100px) {
+@container (max-width: 900px) {
   .worktrees-table .table-head,
   .worktrees-table .table-row {
     grid-template-columns: 1fr;

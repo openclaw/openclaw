@@ -130,9 +130,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             "includeGlobal": AnyCodable(true),
             "includeUnknown": AnyCodable(false),
         ]
-        if let limit {
-            params["limit"] = AnyCodable(limit)
-        }
+        if let limit { params["limit"] = AnyCodable(limit) }
         let normalizedSearch = search?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let normalizedSearch, !normalizedSearch.isEmpty {
             params["search"] = AnyCodable(normalizedSearch)
@@ -433,9 +431,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
 
                 let stream = await GatewayConnection.shared.subscribe()
                 for await push in stream {
-                    if Task.isCancelled {
-                        return
-                    }
+                    if Task.isCancelled { return }
                     if let evt = Self.mapPushToTransportEvent(push) {
                         continuation.yield(evt)
                     }
@@ -755,9 +751,7 @@ final class WebChatSwiftUIWindowController {
     }
 
     private func installDismissMonitor() {
-        if ProcessInfo.processInfo.isRunningTests {
-            return
-        }
+        if ProcessInfo.processInfo.isRunningTests { return }
         guard self.dismissMonitor == nil, self.window != nil else { return }
         self.dismissMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown])

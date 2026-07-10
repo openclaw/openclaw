@@ -889,12 +889,15 @@ export const dispatchTelegramMessage = async ({
   let replyAbortControllerQueued = false;
   let queuedTurnAdmitted = false;
   let dispatchWasSuperseded;
+  // Queued source dispatches release their generation before admission but retain this controller.
+  // Its aborted bit preserves supersession across the later async adoption handoff.
   const isDispatchSuperseded = () =>
-    replyFenceGeneration !== undefined &&
-    isTelegramReplyFenceSuperseded({
-      key: activeReplyFenceKey,
-      generation: replyFenceGeneration,
-    });
+    replyAbortController.signal.aborted ||
+    (replyFenceGeneration !== undefined &&
+      isTelegramReplyFenceSuperseded({
+        key: activeReplyFenceKey,
+        generation: replyFenceGeneration,
+      }));
   const releaseReplyFence = () => {
     if (replyFenceGeneration === undefined) {
       return;
@@ -907,8 +910,9 @@ export const dispatchTelegramMessage = async ({
   };
   const adoptReplyTurn = async () => {
     await onTurnAdopted?.();
-    // Fence abort authority ends only after durable adoption succeeds. Core
-    // then becomes the sole owner of killing the adopted run.
+    // Fence abort and supersession authority end after durable adoption.
+    // Core then owns all interruption of the adopted run.
+    releaseReplyFence();
     releaseTelegramReplyFenceAbortController(activeReplyFenceKey, replyAbortController);
   };
   // Block mode sizes preview rotation steps from streaming.preview.chunk (same

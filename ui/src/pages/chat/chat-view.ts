@@ -161,6 +161,8 @@ export type ChatProps = {
   onDismissTaskSuggestion?: (suggestion: TaskSuggestion) => void;
   pullRequests?: ControlUiSessionPullRequest[];
   pullRequestsRateLimited?: boolean;
+  pullRequestsExpanded?: boolean;
+  onExpandPullRequests?: () => void;
   onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
 };
 
@@ -173,7 +175,7 @@ export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
-  const canCompose = props.connected && props.canSend;
+  const canCompose = props.canSend;
   let chatSection: HTMLElement | null = null;
 
   const thread = renderChatThread({
@@ -188,6 +190,7 @@ export function renderChat(props: ChatProps) {
     queue: props.queue,
     showThinking: props.showThinking,
     showToolCalls: props.showToolCalls,
+    runActive: Boolean(props.canAbort),
     sessions: props.sessions,
     assistantName: props.assistantName,
     assistantAvatar: props.assistantAvatar,
@@ -400,6 +403,8 @@ export function renderChat(props: ChatProps) {
               ${renderChatPullRequests({
                 pullRequests: props.pullRequests ?? [],
                 rateLimited: props.pullRequestsRateLimited === true,
+                expanded: props.pullRequestsExpanded === true,
+                onExpand: () => props.onExpandPullRequests?.(),
                 onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
               })}
               ${chatColumnFooter}
