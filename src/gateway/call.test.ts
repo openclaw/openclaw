@@ -2074,6 +2074,33 @@ describe("callGateway error details", () => {
     expect(lastClientOptions?.preauthHandshakeTimeoutMs).toBe(30_000);
   });
 
+  it("falls back preauthHandshakeTimeoutMs to command timeoutMs when handshakeTimeoutMs is unset", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({ method: "health", timeoutMs: 77_000 });
+
+    expect(lastClientOptions?.preauthHandshakeTimeoutMs).toBe(77_000);
+  });
+
+  it("uses handshakeTimeoutMs even when timeoutMs is shorter", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", handshakeTimeoutMs: 30_000 },
+    });
+    setGatewayNetworkDefaults();
+
+    await callGateway({ method: "health", timeoutMs: 7_000 });
+
+    expect(lastClientOptions?.preauthHandshakeTimeoutMs).toBe(30_000);
+  });
+
+  it("falls back preauthHandshakeTimeoutMs to default timeout when neither handshakeTimeoutMs nor explicit timeout is set", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.preauthHandshakeTimeoutMs).toBeGreaterThanOrEqual(10_000);
+  });
+
   it("does not inject wrapper timeout defaults into expectFinal requests", async () => {
     setLocalLoopbackGatewayConfig();
 
