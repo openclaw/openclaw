@@ -6,15 +6,15 @@ import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-r
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
-  postSlackMessageWithIdentityFallback,
-  type SlackPostMessageIdentity,
-} from "./post-message-identity.js";
-import {
   appendSlackDataVisualizationFallbackText,
   hasSlackDataVisualizationBlock,
   isSlackInvalidBlocksError,
 } from "./data-visualization.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
+import {
+  postSlackMessageWithIdentityFallback,
+  type SlackPostMessageIdentity,
+} from "./post-message-identity.js";
 import {
   buildSlackPostMessagePayload,
   type SlackPostMessagePayload,
@@ -27,7 +27,7 @@ const SLACK_UPLOAD_SSRF_POLICY = {
   allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
   allowRfc2544BenchmarkRange: true,
 };
-const SLACK_UPLOAD_TOTAL_TIMEOUT_MS = 120_000;
+const SLACK_UPLOAD_POST_TIMEOUT_MS = 120_000;
 const SLACK_DNS_RETRY_CODES = new Set(["EAI_AGAIN", "ENOTFOUND", "UND_ERR_DNS_RESOLVE_FAILED"]);
 const SLACK_DNS_RETRY_ATTEMPTS = 2;
 const SLACK_DNS_RETRY_BASE_DELAY_MS = 250;
@@ -190,8 +190,10 @@ export async function uploadSlackFile(params: {
     throw new Error(`Failed to get upload URL: ${uploadUrlResp.error ?? "unknown error"}`);
   }
   const uploadFileId = uploadUrlResp.file_id;
+  // Bound only the byte transfer. Completion may commit server-side before its
+  // response arrives, so timing it out would create unsafe unknown-send retries.
   const { signal: uploadTimeoutSignal, cleanup: cleanupUploadTimeout } = buildTimeoutAbortSignal({
-    timeoutMs: SLACK_UPLOAD_TOTAL_TIMEOUT_MS,
+    timeoutMs: SLACK_UPLOAD_POST_TIMEOUT_MS,
     operation: "slack-upload-file",
     url: resolveSlackUploadTimeoutLogUrl(uploadUrlResp.upload_url),
   });
@@ -210,7 +212,7 @@ export async function uploadSlackFile(params: {
       }),
     );
     try {
-      if (!uploadResp.ok) {
+      if (uploadResp.status !== 200) {
         throw new Error(`Failed to upload file: HTTP ${uploadResp.status}`);
       }
     } finally {
@@ -221,6 +223,8 @@ export async function uploadSlackFile(params: {
   }
 
   await params.onPlatformSendDispatch?.();
+  // Slack allows this finalize call only once. Keep only the pre-connect DNS
+  // retry; a timeout or broader retry would create an unknown-send state.
   const completeResp = await withSlackDnsRequestRetry("files.completeUploadExternal", () =>
     params.client.files.completeUploadExternal({
       files: [{ id: uploadFileId, title: uploadTitle }],

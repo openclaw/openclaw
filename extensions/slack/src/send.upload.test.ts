@@ -18,6 +18,7 @@ const loadOutboundMediaFromUrlMock = vi.hoisted(() =>
   })),
 );
 const GUARDED_FETCH_TEST_TIMEOUT_MS = 250;
+const uploadTimeoutCleanup = vi.hoisted(() => vi.fn());
 const buildTimeoutAbortSignal = vi.hoisted(() =>
   vi.fn((params: { timeoutMs?: number }) => {
     if (!Number.isFinite(params.timeoutMs) || (params.timeoutMs ?? 0) <= 0) {
@@ -31,7 +32,10 @@ const buildTimeoutAbortSignal = vi.hoisted(() =>
     }, GUARDED_FETCH_TEST_TIMEOUT_MS);
     return {
       signal: controller.signal,
-      cleanup: () => clearTimeout(timeoutId),
+      cleanup: () => {
+        clearTimeout(timeoutId);
+        uploadTimeoutCleanup();
+      },
       refresh: () => {},
     };
   }),
@@ -217,6 +221,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
     ) as unknown as typeof fetch;
     fetchWithSsrFGuard.mockClear();
     buildTimeoutAbortSignal.mockClear();
+    uploadTimeoutCleanup.mockClear();
     loadOutboundMediaFromUrlMock.mockClear();
     clearSlackDmChannelCache();
     clearSlackThreadParticipationCache();
@@ -520,6 +525,59 @@ describe("sendMessageSlack file upload with user IDs", () => {
         expect(client.files.completeUploadExternal).not.toHaveBeenCalled();
       },
     );
+  });
+
+  it.each([201, 204])("rejects a non-200 byte-upload response (%s)", async (status) => {
+    const client = createUploadTestClient();
+    globalThis.fetch = vi.fn(async () => new Response(null, { status })) as unknown as typeof fetch;
+
+    await expect(
+      sendMessageSlack("channel:C123CHAN", "caption", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        mediaUrl: "/tmp/non-200.png",
+      }),
+    ).rejects.toThrow(`Failed to upload file: HTTP ${status}`);
+    expect(client.files.completeUploadExternal).not.toHaveBeenCalled();
+  });
+
+  it("ends the byte-upload timeout before waiting for completion", async () => {
+    const client = createUploadTestClient();
+    let markCompletionStarted: () => void = () => {};
+    const completionStarted = new Promise<void>((resolve) => {
+      markCompletionStarted = resolve;
+    });
+    let finishCompletion: (value: { ok: true }) => void = () => {};
+    const completionResult = new Promise<{ ok: true }>((resolve) => {
+      finishCompletion = resolve;
+    });
+    client.files.completeUploadExternal.mockImplementationOnce(() => {
+      markCompletionStarted();
+      return completionResult;
+    });
+
+    const sendPromise = sendMessageSlack("channel:C123CHAN", "caption", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/completion-pending.png",
+    });
+
+    await completionStarted;
+    expect(uploadTimeoutCleanup).toHaveBeenCalledOnce();
+    await expect(
+      Promise.race([
+        sendPromise.then(
+          () => "settled",
+          () => "settled",
+        ),
+        Promise.resolve("pending"),
+      ]),
+    ).resolves.toBe("pending");
+
+    finishCompletion({ ok: true });
+    await expect(sendPromise).resolves.toMatchObject({ messageId: "F001" });
   });
 
   it("uses explicit upload filename and title overrides when provided", async () => {
