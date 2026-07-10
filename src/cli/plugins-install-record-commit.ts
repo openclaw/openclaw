@@ -12,6 +12,7 @@ import {
   type TransformConfigFileWithRetryParams,
 } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
+import { extractShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -359,11 +360,13 @@ export async function commitConfigWriteWithPendingPluginInstalls(params: {
   movedInstallRecords: boolean;
   persistedHash: string | null;
 }> {
-  const sourceInstallRecords = params.sourceConfig?.plugins?.installs ?? {};
+  const sourceInstallRecords = extractShippedPluginInstallConfigRecords(params.sourceConfig);
   const nextPendingConfig = params.sourceConfig
     ? stripPendingPluginInstallRecords(
         params.nextConfig,
-        unchangedPendingPluginInstallRecordIds(params.nextConfig, params.sourceConfig),
+        unchangedPendingPluginInstallRecordIds(params.nextConfig, {
+          plugins: { installs: sourceInstallRecords },
+        }),
       )
     : params.nextConfig;
   if (
