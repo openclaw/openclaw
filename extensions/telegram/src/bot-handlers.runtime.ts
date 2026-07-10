@@ -1080,6 +1080,10 @@ export const registerTelegramHandlers = ({
             ...mediaRuntimeWithAbort,
           });
         } catch (mediaErr) {
+          // A session abort invalidates the whole buffered album. Let the durable spool retry it.
+          if (mediaRuntimeWithAbort.abortSignal?.aborted) {
+            throw mediaErr;
+          }
           if (!isRecoverableMediaGroupError(mediaErr)) {
             throw mediaErr;
           }
