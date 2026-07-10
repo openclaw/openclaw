@@ -1,7 +1,6 @@
 // Discovers, validates, and loads plugin metadata and runtime entrypoints.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -100,6 +99,7 @@ import {
   restoreMemoryPluginState,
 } from "./memory-state.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
+import { clearNativeRequireJavaScriptModuleCache } from "./native-module-require.js";
 import {
   fingerprintPluginDiscoveryContext,
   resolvePluginDiscoveryContext,
@@ -344,7 +344,6 @@ const { scoped: pluginLoaderCacheState, fullWorkspace: fullWorkspacePluginLoader
 // Node's shared require.cache, which must be purged at the in-process restart
 // boundary or reloads re-serve stale module exports (#103571).
 const importedPluginModulePathsForRestart = new Set<string>();
-const requireForPluginRestartCacheBust = createRequire(import.meta.url);
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
   "gateway",
@@ -398,30 +397,12 @@ export function clearPluginLoaderCache(): void {
 export function clearPluginCachesForInProcessRestart(): void {
   clearPluginLoaderCache();
   clearPluginManifestLoadCache();
-  const pluginModuleRoots = new Set<string>();
+  // Evict each tracked entrypoint plus its plugin-LOCAL dependency subtree (e.g. a
+  // helper.cjs beside the entry) through the existing native cache-clear owner, so a
+  // fresh entrypoint is never paired with stale local exports while shared OpenClaw
+  // and third-party singleton modules stay untouched.
   for (const modulePath of importedPluginModulePathsForRestart) {
-    try {
-      const resolved = requireForPluginRestartCacheBust.resolve(modulePath);
-      delete requireForPluginRestartCacheBust.cache[resolved];
-      pluginModuleRoots.add(path.dirname(resolved) + path.sep);
-    } catch {
-      // Best-effort: TS entrypoints resolve through jiti (per-load instances), and
-      // removed files simply have nothing to purge.
-    }
-  }
-  // Also evict plugin-LOCAL modules the entrypoints pulled in (e.g. a helper.cjs
-  // beside the entry): a fresh entrypoint must not receive stale exports from its
-  // previously cached local dependency graph. Bounding eviction to the plugin
-  // directories keeps shared OpenClaw and third-party singletons untouched.
-  if (pluginModuleRoots.size > 0) {
-    for (const cachedPath of Object.keys(requireForPluginRestartCacheBust.cache)) {
-      for (const root of pluginModuleRoots) {
-        if (cachedPath.startsWith(root)) {
-          delete requireForPluginRestartCacheBust.cache[cachedPath];
-          break;
-        }
-      }
-    }
+    clearNativeRequireJavaScriptModuleCache(modulePath);
   }
   importedPluginModulePathsForRestart.clear();
 }
