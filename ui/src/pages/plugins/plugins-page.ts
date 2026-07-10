@@ -98,9 +98,10 @@ function summarizeMcpServers(config: Record<string, unknown> | null): McpServerS
     .map(([name, value]) => {
       const server = asRecord(value) ?? {};
       const url = typeof server.url === "string" ? server.url : "";
+      // Command only, mirroring the config page: stdio args routinely carry
+      // tokens and this surface is visible to read-only operators.
       const command = typeof server.command === "string" ? server.command : "";
-      const args = Array.isArray(server.args) ? server.args.join(" ") : "";
-      const launch = url || [command, args].filter(Boolean).join(" ") || "missing transport";
+      const launch = url || command || "missing transport";
       return {
         name,
         enabled: server.enabled !== false,

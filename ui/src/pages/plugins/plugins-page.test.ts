@@ -710,7 +710,12 @@ describe("PluginsPage", () => {
         lastError: null,
         configSnapshot: {
           sourceConfig: {
-            mcp: { servers: { github: { url: "https://api.githubcopilot.com/mcp/" } } },
+            mcp: {
+              servers: {
+                github: { url: "https://api.githubcopilot.com/mcp/" },
+                local: { command: "npx", args: ["some-mcp", "--token", "tok-test-1234"] },
+              },
+            },
           },
           hash: "base",
         },
