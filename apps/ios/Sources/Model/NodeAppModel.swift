@@ -303,12 +303,14 @@ final class NodeAppModel {
     private let watchMessagingService: any WatchMessagingServicing
     #if DEBUG
     @ObservationIgnored private var testAgentRequestHandler: ((AgentDeepLink) async throws -> Void)?
+    @ObservationIgnored private var testTalkCapturePreparationHandler: (() async -> Void)?
+    @ObservationIgnored private var testTalkCaptureStartedHandler: (() async -> Void)?
     #endif
-    private var pttVoiceWakeLeaseCount = 0
+    private var pttVoiceWakeLeaseCaptureIds: Set<String> = []
     private var pttVoiceWakeWasSuspended = false
-    private var pttSessionOwnsVoiceWakeLease = false
-    private var talkInvokeInFlight = false
-    private var talkInvokeWaiters: [(id: UUID, continuation: CheckedContinuation<Bool, Never>)] = []
+    private var talkPttCommandEpoch: UInt64 = 0
+    private var talkPreparationInFlight = false
+    private var talkPreparationWaiters: [(id: UUID, continuation: CheckedContinuation<Bool, Never>)] = []
     private var talkVoiceWakeSuspended = false
     private var backgroundVoiceWakeSuspended = false
     private var backgroundTalkSuspended = false
@@ -351,7 +353,7 @@ final class NodeAppModel {
     var isTalkCaptureActive: Bool {
         // PTT owns its Voice Wake lease before permission and audio setup.
         // Count that pending interval so Chat cannot race another mic owner.
-        self.talkMode.isEnabled || self.talkMode.isPushToTalkActive || self.pttVoiceWakeLeaseCount > 0
+        self.talkMode.isEnabled || self.talkMode.isPushToTalkActive || !self.pttVoiceWakeLeaseCaptureIds.isEmpty
     }
 
     var localChatFixture: LocalChatFixture? {
@@ -574,6 +576,9 @@ final class NodeAppModel {
         self.watchMessagingService = watchMessagingService
         self.talkMode = talkMode
         self.voiceNoteRecorder = voiceNoteRecorder
+        self.talkMode.setPushToTalkCaptureEndHandler { [weak self] captureId in
+            self?.releasePttVoiceWakeLease(for: captureId)
+        }
         self.voiceNoteRecorder.setCaptureAdmissionHandler { [weak self] in
             self?.isTalkCaptureActive == false
         }
@@ -2072,52 +2077,74 @@ final class NodeAppModel {
     }
 
     private func handleTalkInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        try await self.acquireTalkInvoke()
-        defer { self.releaseTalkInvoke() }
-
-        if req.command == OpenClawTalkCommand.pttOnce.rawValue {
-            try self.rejectTalkCaptureWhileVoiceNoteActive()
-            self.acquirePttVoiceWakeLease()
-            defer { self.releasePttVoiceWakeLease() }
-            let payload = try await talkMode.runPushToTalkOnce()
-            let json = try Self.encodePayload(payload)
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
-        }
-
         switch req.command {
         case OpenClawTalkCommand.pttStart.rawValue:
-            try self.rejectTalkCaptureWhileVoiceNoteActive()
-            let acquiredLease = !self.pttSessionOwnsVoiceWakeLease
-            if acquiredLease {
-                self.acquirePttVoiceWakeLease()
-                self.pttSessionOwnsVoiceWakeLease = true
-            }
-            let payload: OpenClawTalkPTTStartPayload
+            let commandEpoch = self.talkPttCommandEpoch
+            var reservedCaptureId: String?
             do {
-                payload = try await self.talkMode.beginPushToTalk()
+                let payload = try await self.withTalkCapturePreparation(commandEpoch: commandEpoch) {
+                    try self.rejectTalkCaptureWhileVoiceNoteActive()
+                    return try await self.talkMode.beginPushToTalk(
+                        canStartCapture: { self.talkPttCommandEpoch == commandEpoch },
+                        onCaptureReserved: { captureId in
+                            reservedCaptureId = captureId
+                            self.acquirePttVoiceWakeLease(for: captureId)
+                        })
+                }
+                #if DEBUG
+                if let testTalkCaptureStartedHandler {
+                    await testTalkCaptureStartedHandler()
+                }
+                #endif
+                try self.ensureTalkPttCommandCurrent(commandEpoch)
+                let json = try Self.encodePayload(payload)
+                try self.ensureTalkPttCommandCurrent(commandEpoch)
+                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
             } catch {
-                if acquiredLease {
-                    self.pttSessionOwnsVoiceWakeLease = false
-                    self.releasePttVoiceWakeLease()
+                if let reservedCaptureId {
+                    _ = await self.talkMode.cancelPushToTalk(captureId: reservedCaptureId)
                 }
                 throw error
+            }
+        case OpenClawTalkCommand.pttOnce.rawValue:
+            let commandEpoch = self.talkPttCommandEpoch
+            var reservedCaptureId: String?
+            let start: TalkPushToTalkOnceStart
+            do {
+                start = try await self.withTalkCapturePreparation(commandEpoch: commandEpoch) {
+                    try self.rejectTalkCaptureWhileVoiceNoteActive()
+                    return try await self.talkMode.beginPushToTalkOnce(
+                        canStartCapture: { self.talkPttCommandEpoch == commandEpoch },
+                        onCaptureReserved: { captureId in
+                            reservedCaptureId = captureId
+                            self.acquirePttVoiceWakeLease(for: captureId)
+                        })
+                }
+            } catch {
+                if let reservedCaptureId {
+                    _ = await self.talkMode.cancelPushToTalk(captureId: reservedCaptureId)
+                }
+                throw error
+            }
+            let payload: OpenClawTalkPTTStopPayload
+            switch start {
+            case let .busy(busyPayload):
+                payload = busyPayload
+            case .started:
+                payload = await self.talkMode.awaitPushToTalkOnce(start)
             }
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         case OpenClawTalkCommand.pttStop.rawValue:
+            // Interrupt commands invalidate suspended preparation before touching
+            // capture state, then bypass the preparation queue entirely.
+            self.talkPttCommandEpoch &+= 1
             let payload = await talkMode.endPushToTalk()
-            if self.pttSessionOwnsVoiceWakeLease {
-                self.pttSessionOwnsVoiceWakeLease = false
-                self.releasePttVoiceWakeLease()
-            }
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         case OpenClawTalkCommand.pttCancel.rawValue:
+            self.talkPttCommandEpoch &+= 1
             let payload = await talkMode.cancelPushToTalk()
-            if self.pttSessionOwnsVoiceWakeLease {
-                self.pttSessionOwnsVoiceWakeLease = false
-                self.releasePttVoiceWakeLease()
-            }
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         default:
@@ -2137,27 +2164,51 @@ final class NodeAppModel {
         ])
     }
 
-    private func acquirePttVoiceWakeLease() {
-        if self.pttVoiceWakeLeaseCount == 0 {
+    private func acquirePttVoiceWakeLease(for captureId: String) {
+        guard self.pttVoiceWakeLeaseCaptureIds.insert(captureId).inserted else { return }
+        if self.pttVoiceWakeLeaseCaptureIds.count == 1 {
             self.pttVoiceWakeWasSuspended = self.voiceWake.suspendForExternalAudioCapture()
         }
-        self.pttVoiceWakeLeaseCount += 1
     }
 
-    private func releasePttVoiceWakeLease() {
-        guard self.pttVoiceWakeLeaseCount > 0 else { return }
-        self.pttVoiceWakeLeaseCount -= 1
-        guard self.pttVoiceWakeLeaseCount == 0 else { return }
-        // Overlapping one-shot and session PTT captures share one Voice Wake suspension.
-        // Resume only after the final owner releases it or microphone capture can overlap.
+    private func releasePttVoiceWakeLease(for captureId: String) {
+        guard self.pttVoiceWakeLeaseCaptureIds.remove(captureId) != nil else { return }
+        guard self.pttVoiceWakeLeaseCaptureIds.isEmpty else { return }
+        // Capture identity makes stale stop/cancel cleanup harmless. Resume Voice
+        // Wake only after the final live capture owner releases its lease.
         self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeWasSuspended)
         self.pttVoiceWakeWasSuspended = false
     }
 
-    private func acquireTalkInvoke() async throws {
-        if !self.talkInvokeInFlight {
+    private func withTalkCapturePreparation<T>(
+        commandEpoch: UInt64,
+        operation: () async throws -> T) async throws -> T
+    {
+        try await self.acquireTalkPreparation()
+        defer { self.releaseTalkPreparation() }
+        try self.ensureTalkPttCommandCurrent(commandEpoch)
+        #if DEBUG
+        if let testTalkCapturePreparationHandler {
+            await testTalkCapturePreparationHandler()
+        }
+        #endif
+        try self.ensureTalkPttCommandCurrent(commandEpoch)
+        return try await operation()
+    }
+
+    private func ensureTalkPttCommandCurrent(_ commandEpoch: UInt64) throws {
+        try Task.checkCancellation()
+        guard self.talkPttCommandEpoch == commandEpoch else {
+            throw NSError(domain: "TalkMode", code: 9, userInfo: [
+                NSLocalizedDescriptionKey: "PTT_CANCELLED: push-to-talk start was cancelled",
+            ])
+        }
+    }
+
+    private func acquireTalkPreparation() async throws {
+        if !self.talkPreparationInFlight {
             try Task.checkCancellation()
-            self.talkInvokeInFlight = true
+            self.talkPreparationInFlight = true
             return
         }
         let waiterID = UUID()
@@ -2167,11 +2218,11 @@ final class NodeAppModel {
                     continuation.resume(returning: false)
                     return
                 }
-                self.talkInvokeWaiters.append((id: waiterID, continuation: continuation))
+                self.talkPreparationWaiters.append((id: waiterID, continuation: continuation))
             }
         } onCancel: {
             Task { @MainActor in
-                self.cancelTalkInvokeWaiter(id: waiterID)
+                self.cancelTalkPreparationWaiter(id: waiterID)
             }
         }
         guard acquired else {
@@ -2181,22 +2232,22 @@ final class NodeAppModel {
         do {
             try Task.checkCancellation()
         } catch {
-            self.releaseTalkInvoke()
+            self.releaseTalkPreparation()
             throw error
         }
     }
 
-    private func cancelTalkInvokeWaiter(id: UUID) {
-        guard let index = self.talkInvokeWaiters.firstIndex(where: { $0.id == id }) else { return }
-        self.talkInvokeWaiters.remove(at: index).continuation.resume(returning: false)
+    private func cancelTalkPreparationWaiter(id: UUID) {
+        guard let index = self.talkPreparationWaiters.firstIndex(where: { $0.id == id }) else { return }
+        self.talkPreparationWaiters.remove(at: index).continuation.resume(returning: false)
     }
 
-    private func releaseTalkInvoke() {
-        guard !self.talkInvokeWaiters.isEmpty else {
-            self.talkInvokeInFlight = false
+    private func releaseTalkPreparation() {
+        guard !self.talkPreparationWaiters.isEmpty else {
+            self.talkPreparationInFlight = false
             return
         }
-        self.talkInvokeWaiters.removeFirst().continuation.resume(returning: true)
+        self.talkPreparationWaiters.removeFirst().continuation.resume(returning: true)
     }
 }
 
@@ -7315,12 +7366,32 @@ extension NodeAppModel {
         await self.handleInvoke(req, gatewayStableID: gatewayStableID)
     }
 
-    func _test_acquirePttVoiceWakeLease() {
-        self.acquirePttVoiceWakeLease()
+    func _test_acquirePttVoiceWakeLease(captureId: String) {
+        self.acquirePttVoiceWakeLease(for: captureId)
     }
 
-    func _test_releasePttVoiceWakeLease() {
-        self.releasePttVoiceWakeLease()
+    func _test_releasePttVoiceWakeLease(captureId: String) {
+        self.releasePttVoiceWakeLease(for: captureId)
+    }
+
+    func _test_setTalkCapturePreparationHandler(_ handler: (() async -> Void)?) {
+        self.testTalkCapturePreparationHandler = handler
+    }
+
+    func _test_setTalkCaptureStartedHandler(_ handler: (() async -> Void)?) {
+        self.testTalkCaptureStartedHandler = handler
+    }
+
+    func _test_talkPreparationWaiterCount() -> Int {
+        self.talkPreparationWaiters.count
+    }
+
+    func _test_talkPttCommandEpoch() -> UInt64 {
+        self.talkPttCommandEpoch
+    }
+
+    func _test_pttVoiceWakeLeaseCaptureIds() -> Set<String> {
+        self.pttVoiceWakeLeaseCaptureIds
     }
 
     static func _test_decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {

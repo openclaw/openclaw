@@ -24,6 +24,42 @@ private final class StreamFailureBox: @unchecked Sendable {
     }
 }
 
+enum TalkPushToTalkOnceStart {
+    case busy(OpenClawTalkPTTStopPayload)
+    case started(captureId: String)
+}
+
+@MainActor
+private final class TalkPushToTalkOnceOperation {
+    let captureId: String
+    private var result: OpenClawTalkPTTStopPayload?
+    private var continuation: CheckedContinuation<OpenClawTalkPTTStopPayload, Never>?
+
+    init(captureId: String) {
+        self.captureId = captureId
+    }
+
+    func wait() async -> OpenClawTalkPTTStopPayload {
+        if let result {
+            return result
+        }
+        return await withCheckedContinuation { continuation in
+            if let result = self.result {
+                continuation.resume(returning: result)
+            } else {
+                self.continuation = continuation
+            }
+        }
+    }
+
+    func finish(_ payload: OpenClawTalkPTTStopPayload) {
+        guard self.result == nil else { return }
+        self.result = payload
+        self.continuation?.resume(returning: payload)
+        self.continuation = nil
+    }
+}
+
 // This file intentionally centralizes talk mode state + behavior.
 // It's large, and splitting would force `private` -> `fileprivate` across many members.
 // We'll refactor into smaller files when the surface stabilizes.
@@ -95,8 +131,9 @@ final class TalkModeManager: NSObject {
     private var foregroundAudioCaptureAllowed = true
     private var resumeContinuousAfterPTT: Bool = false
     private var activePTTCaptureId: String?
+    private var pttCaptureEndHandler: (@MainActor (String) -> Void)?
     private var pttAutoStopEnabled: Bool = false
-    private var pttCompletion: CheckedContinuation<OpenClawTalkPTTStopPayload, Never>?
+    private var pttOnceOperations: [String: TalkPushToTalkOnceOperation] = [:]
     private var pttTimeoutTask: Task<Void, Never>?
 
     private let allowSimulatorCapture: Bool
@@ -592,12 +629,11 @@ final class TalkModeManager: NSObject {
         self.stopRecognition()
         self.stopSpeaking()
         self.lastInterruptedAtSeconds = nil
-        let pendingPTT = self.pttCompletion != nil
-        let pendingCaptureId = self.activePTTCaptureId ?? UUID().uuidString
+        let pendingCaptureId = self.activePTTCaptureId
         self.pttTimeoutTask?.cancel()
         self.pttTimeoutTask = nil
         self.pttAutoStopEnabled = false
-        if pendingPTT {
+        if let pendingCaptureId, self.pttOnceOperations[pendingCaptureId] != nil {
             let payload = OpenClawTalkPTTStopPayload(
                 captureId: pendingCaptureId,
                 transcript: nil,
@@ -605,7 +641,9 @@ final class TalkModeManager: NSObject {
             self.finishPTTOnce(payload)
         }
         self.resumeContinuousAfterPTT = false
-        self.activePTTCaptureId = nil
+        if let pendingCaptureId {
+            self.finishPushToTalkCapture(pendingCaptureId)
+        }
         TalkSystemSpeechSynthesizer.shared.stop()
         do {
             try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
@@ -618,12 +656,14 @@ final class TalkModeManager: NSObject {
     /// Suspends microphone usage without disabling Talk Mode.
     /// Used when the app backgrounds (or when we need to temporarily release the mic).
     func suspendForBackground(keepActive: Bool = false) -> Bool {
-        guard self.isEnabled else { return false }
+        guard self.isEnabled || self.activePTTCaptureId != nil else { return false }
         if keepActive {
             self.statusText = self.isListening ? "Listening" : self.statusText
             return false
         }
+        let pendingCaptureId = self.activePTTCaptureId
         let wasActive = self.isListening || self.isSpeaking || self.isPushToTalkActive
+        let shouldResumeContinuous = self.isEnabled && (wasActive || self.resumeContinuousAfterPTT)
 
         self.cancelPendingStart()
         self.isListening = false
@@ -636,12 +676,25 @@ final class TalkModeManager: NSObject {
         self.lastHeard = nil
         self.silenceTask?.cancel()
         self.silenceTask = nil
+        self.pttTimeoutTask?.cancel()
+        self.pttTimeoutTask = nil
+        self.pttAutoStopEnabled = false
+        self.resumeContinuousAfterPTT = false
 
         self.resetRealtimeRestartState()
         self.stopRealtimeSession()
         self.stopRecognition()
         self.stopSpeaking()
         self.lastInterruptedAtSeconds = nil
+        if let pendingCaptureId {
+            let payload = OpenClawTalkPTTStopPayload(
+                captureId: pendingCaptureId,
+                transcript: nil,
+                status: "cancelled")
+            self.finishPTTOnce(payload)
+            // Release Voice Wake only after PTT has relinquished the audio engine.
+            self.finishPushToTalkCapture(pendingCaptureId)
+        }
         TalkSystemSpeechSynthesizer.shared.stop()
 
         do {
@@ -651,7 +704,7 @@ final class TalkModeManager: NSObject {
         }
 
         Task { await self.unsubscribeAllChats() }
-        return wasActive
+        return shouldResumeContinuous
     }
 
     func resumeAfterBackground(wasSuspended: Bool, wasKeptActive: Bool = false) async {
@@ -663,7 +716,12 @@ final class TalkModeManager: NSObject {
         await self.start()
     }
 
-    func beginPushToTalk() async throws -> OpenClawTalkPTTStartPayload {
+    func beginPushToTalk(
+        canStartCapture: @MainActor () -> Bool = { true },
+        onCaptureReserved: @MainActor (String) -> Void = { _ in }) async throws -> OpenClawTalkPTTStartPayload
+    {
+        try Task.checkCancellation()
+        guard canStartCapture() else { throw Self.pushToTalkStartCancelledError() }
         guard self.gatewayConnected else {
             self.statusText = "Offline"
             throw NSError(domain: "TalkMode", code: 7, userInfo: [
@@ -689,42 +747,58 @@ final class TalkModeManager: NSObject {
 
         let captureId = UUID().uuidString
         self.activePTTCaptureId = captureId
+        onCaptureReserved(captureId)
         self.lastTranscript = ""
         self.lastHeard = nil
 
-        self.statusText = "Requesting permissions…"
-        if !self.allowSimulatorCapture {
-            let micOk = await Self.requestMicrophonePermission()
-            guard micOk else {
-                self.statusText = "Microphone permission denied"
-                throw NSError(domain: "TalkMode", code: 4, userInfo: [
-                    NSLocalizedDescriptionKey: "Microphone permission denied",
-                ])
-            }
-            let speechOk = await Self.requestSpeechPermission()
-            guard speechOk else {
-                self.statusText = Self.permissionMessage(
-                    kind: "Speech recognition",
-                    status: SFSpeechRecognizer.authorizationStatus())
-                throw NSError(domain: "TalkMode", code: 5, userInfo: [
-                    NSLocalizedDescriptionKey: "Speech recognition permission denied",
-                ])
-            }
-        }
-
         do {
+            self.statusText = "Requesting permissions…"
+            if !self.allowSimulatorCapture {
+                let micOk = await Self.requestMicrophonePermission()
+                try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
+                guard micOk else {
+                    self.statusText = "Microphone permission denied"
+                    throw NSError(domain: "TalkMode", code: 4, userInfo: [
+                        NSLocalizedDescriptionKey: "Microphone permission denied",
+                    ])
+                }
+                let speechOk = await Self.requestSpeechPermission()
+                try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
+                guard speechOk else {
+                    self.statusText = Self.permissionMessage(
+                        kind: "Speech recognition",
+                        status: SFSpeechRecognizer.authorizationStatus())
+                    throw NSError(domain: "TalkMode", code: 5, userInfo: [
+                        NSLocalizedDescriptionKey: "Speech recognition permission denied",
+                    ])
+                }
+            }
+
+            try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
             try Self.configureAudioSession()
             self.captureMode = .pushToTalk
-            try self.startRecognition()
+            try self.startRecognition(pttCaptureId: captureId)
+            try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
             self.isListening = true
             self.isPushToTalkActive = true
             self.statusText = "Listening (PTT)"
         } catch {
-            self.isListening = false
-            self.isUserSpeechDetected = false
-            self.isPushToTalkActive = false
-            self.captureMode = .idle
-            self.statusText = "Start failed: \(error.localizedDescription)"
+            if self.activePTTCaptureId == captureId {
+                self.stopRecognition()
+                self.isListening = false
+                self.isUserSpeechDetected = false
+                self.isPushToTalkActive = false
+                self.captureMode = .idle
+                self.finishPushToTalkCapture(captureId)
+                let nsError = error as NSError
+                let isPermissionError = nsError.domain == "TalkMode" && (nsError.code == 4 || nsError.code == 5)
+                let isCancelled = error is CancellationError || (nsError.domain == "TalkMode" && nsError.code == 9)
+                if isCancelled {
+                    self.statusText = "Ready"
+                } else if !isPermissionError {
+                    self.statusText = "Start failed: \(error.localizedDescription)"
+                }
+            }
             throw error
         }
 
@@ -733,12 +807,29 @@ final class TalkModeManager: NSObject {
 
     func endPushToTalk() async -> OpenClawTalkPTTStopPayload {
         let captureId = self.activePTTCaptureId ?? UUID().uuidString
+        return await self.endPushToTalk(captureId: captureId)
+    }
+
+    func endPushToTalk(captureId: String) async -> OpenClawTalkPTTStopPayload {
+        guard self.activePTTCaptureId == captureId else {
+            return OpenClawTalkPTTStopPayload(captureId: captureId, transcript: nil, status: "idle")
+        }
         guard self.isPushToTalkActive else {
+            let shouldResume = self.resumeContinuousAfterPTT
+            self.resumeContinuousAfterPTT = false
+            self.pttTimeoutTask?.cancel()
+            self.pttTimeoutTask = nil
+            self.pttAutoStopEnabled = false
+            self.statusText = "Ready"
+            self.finishPushToTalkCapture(captureId)
             let payload = OpenClawTalkPTTStopPayload(
                 captureId: captureId,
                 transcript: nil,
                 status: "idle")
             self.finishPTTOnce(payload)
+            if shouldResume {
+                await self.start()
+            }
             return payload
         }
 
@@ -757,91 +848,102 @@ final class TalkModeManager: NSObject {
 
         guard !transcript.isEmpty else {
             self.statusText = "Ready"
-            if self.resumeContinuousAfterPTT {
-                await self.start()
-            }
+            let shouldResume = self.resumeContinuousAfterPTT
             self.resumeContinuousAfterPTT = false
-            self.activePTTCaptureId = nil
+            self.finishPushToTalkCapture(captureId)
             let payload = OpenClawTalkPTTStopPayload(
                 captureId: captureId,
                 transcript: nil,
                 status: "empty")
             self.finishPTTOnce(payload)
+            if shouldResume {
+                await self.start()
+            }
             return payload
         }
 
         guard self.gatewayConnected else {
             self.statusText = "Gateway not connected"
-            if self.resumeContinuousAfterPTT {
-                await self.start()
-            }
+            let shouldResume = self.resumeContinuousAfterPTT
             self.resumeContinuousAfterPTT = false
-            self.activePTTCaptureId = nil
+            self.finishPushToTalkCapture(captureId)
             let payload = OpenClawTalkPTTStopPayload(
                 captureId: captureId,
                 transcript: transcript,
                 status: "offline")
             self.finishPTTOnce(payload)
+            if shouldResume {
+                await self.start()
+            }
             return payload
         }
 
-        self.statusText = "Thinking…"
-        Task { @MainActor in
-            await self.processTranscript(transcript, restartAfter: self.resumeContinuousAfterPTT)
-        }
+        let shouldResume = self.resumeContinuousAfterPTT
         self.resumeContinuousAfterPTT = false
-        self.activePTTCaptureId = nil
+        self.finishPushToTalkCapture(captureId)
         let payload = OpenClawTalkPTTStopPayload(
             captureId: captureId,
             transcript: transcript,
             status: "queued")
         self.finishPTTOnce(payload)
+        self.statusText = "Thinking…"
+        Task { @MainActor in
+            await self.processTranscript(transcript, restartAfter: shouldResume)
+        }
         return payload
     }
 
-    func runPushToTalkOnce(maxDurationSeconds: TimeInterval = 12) async throws -> OpenClawTalkPTTStopPayload {
-        if self.pttCompletion != nil {
-            _ = await self.cancelPushToTalk()
-        }
-
-        if self.isPushToTalkActive {
-            let captureId = self.activePTTCaptureId ?? UUID().uuidString
-            return OpenClawTalkPTTStopPayload(
+    func beginPushToTalkOnce(
+        maxDurationSeconds: TimeInterval = 12,
+        canStartCapture: @MainActor () -> Bool = { true },
+        onCaptureReserved: @MainActor (String) -> Void = { _ in }) async throws -> TalkPushToTalkOnceStart
+    {
+        if let captureId = self.activePTTCaptureId {
+            return .busy(OpenClawTalkPTTStopPayload(
                 captureId: captureId,
                 transcript: nil,
-                status: "busy")
+                status: "busy"))
         }
 
-        _ = try await self.beginPushToTalk()
+        let start = try await self.beginPushToTalk(
+            canStartCapture: canStartCapture,
+            onCaptureReserved: onCaptureReserved)
+        let captureId = start.captureId
+        self.pttOnceOperations[captureId] = TalkPushToTalkOnceOperation(captureId: captureId)
+        self.pttAutoStopEnabled = true
+        self.startSilenceMonitor(pttCaptureId: captureId)
+        self.schedulePTTTimeout(seconds: maxDurationSeconds, captureId: captureId)
+        return .started(captureId: captureId)
+    }
 
-        return await withTaskCancellationHandler {
-            await withCheckedContinuation { cont in
-                self.pttCompletion = cont
-                self.pttAutoStopEnabled = true
-                self.startSilenceMonitor()
-                self.schedulePTTTimeout(seconds: maxDurationSeconds)
+    func awaitPushToTalkOnce(_ start: TalkPushToTalkOnceStart) async -> OpenClawTalkPTTStopPayload {
+        switch start {
+        case let .busy(payload):
+            return payload
+        case let .started(captureId):
+            guard let operation = self.pttOnceOperations[captureId] else {
+                return OpenClawTalkPTTStopPayload(captureId: captureId, transcript: nil, status: "idle")
             }
-        } onCancel: {
-            Task { @MainActor in
-                _ = await self.cancelPushToTalk()
+            let payload = await withTaskCancellationHandler {
+                await operation.wait()
+            } onCancel: {
+                Task { @MainActor [weak self] in
+                    _ = await self?.cancelPushToTalk(captureId: captureId)
+                }
             }
+            self.pttOnceOperations.removeValue(forKey: captureId)
+            return payload
         }
     }
 
     func cancelPushToTalk() async -> OpenClawTalkPTTStopPayload {
         let captureId = self.activePTTCaptureId ?? UUID().uuidString
-        guard self.isPushToTalkActive else {
-            let payload = OpenClawTalkPTTStopPayload(
-                captureId: captureId,
-                transcript: nil,
-                status: "idle")
-            self.finishPTTOnce(payload)
-            self.pttAutoStopEnabled = false
-            self.pttTimeoutTask?.cancel()
-            self.pttTimeoutTask = nil
-            self.resumeContinuousAfterPTT = false
-            self.activePTTCaptureId = nil
-            return payload
+        return await self.cancelPushToTalk(captureId: captureId)
+    }
+
+    func cancelPushToTalk(captureId: String) async -> OpenClawTalkPTTStopPayload {
+        guard self.activePTTCaptureId == captureId else {
+            return OpenClawTalkPTTStopPayload(captureId: captureId, transcript: nil, status: "idle")
         }
 
         let shouldResume = self.resumeContinuousAfterPTT
@@ -855,7 +957,7 @@ final class TalkModeManager: NSObject {
         self.pttTimeoutTask?.cancel()
         self.pttTimeoutTask = nil
         self.resumeContinuousAfterPTT = false
-        self.activePTTCaptureId = nil
+        self.finishPushToTalkCapture(captureId)
         self.statusText = "Ready"
 
         let payload = OpenClawTalkPTTStopPayload(
@@ -870,7 +972,33 @@ final class TalkModeManager: NSObject {
         return payload
     }
 
-    private func startRecognition() throws {
+    private func ensurePushToTalkStartCurrent(
+        captureId: String,
+        canStartCapture: @MainActor () -> Bool) throws
+    {
+        try Task.checkCancellation()
+        guard self.activePTTCaptureId == captureId, canStartCapture() else {
+            throw Self.pushToTalkStartCancelledError()
+        }
+    }
+
+    private static func pushToTalkStartCancelledError() -> NSError {
+        NSError(domain: "TalkMode", code: 9, userInfo: [
+            NSLocalizedDescriptionKey: "PTT_CANCELLED: push-to-talk start was cancelled",
+        ])
+    }
+
+    func setPushToTalkCaptureEndHandler(_ handler: (@MainActor (String) -> Void)?) {
+        self.pttCaptureEndHandler = handler
+    }
+
+    private func finishPushToTalkCapture(_ captureId: String) {
+        guard self.activePTTCaptureId == captureId else { return }
+        self.activePTTCaptureId = nil
+        self.pttCaptureEndHandler?(captureId)
+    }
+
+    private func startRecognition(pttCaptureId: String? = nil) throws {
         #if targetEnvironment(simulator)
         if self.allowSimulatorCapture {
             self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
@@ -962,6 +1090,9 @@ final class TalkModeManager: NSObject {
                 + "engineRunning=\(self.audioEngine.isRunning)")
         self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self else { return }
+            if let pttCaptureId, self.activePTTCaptureId != pttCaptureId {
+                return
+            }
             if let error {
                 let msg = error.localizedDescription
                 let lowered = msg.lowercased()
@@ -1004,7 +1135,10 @@ final class TalkModeManager: NSObject {
                 }
             }
             Task { @MainActor in
-                await self.handleTranscript(transcript: transcript, isFinal: result.isFinal)
+                await self.handleTranscript(
+                    transcript: transcript,
+                    isFinal: result.isFinal,
+                    pttCaptureId: pttCaptureId)
             }
         }
     }
@@ -1060,7 +1194,14 @@ final class TalkModeManager: NSObject {
         }
     }
 
-    private func handleTranscript(transcript: String, isFinal: Bool) async {
+    private func handleTranscript(
+        transcript: String,
+        isFinal: Bool,
+        pttCaptureId: String? = nil) async
+    {
+        if let pttCaptureId, self.activePTTCaptureId != pttCaptureId {
+            return
+        }
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         let ttsActive = self.isSpeechOutputActive
         if ttsActive, self.interruptOnSpeech {
@@ -1081,7 +1222,11 @@ final class TalkModeManager: NSObject {
             GatewayDiagnostics.log("talk speech: final transcript chars=\(trimmed.count)")
             self.loggedPartialThisCycle = false
             if self.captureMode == .pushToTalk, self.pttAutoStopEnabled, self.isPushToTalkActive {
-                _ = await self.endPushToTalk()
+                if let pttCaptureId {
+                    _ = await self.endPushToTalk(captureId: pttCaptureId)
+                } else {
+                    _ = await self.endPushToTalk()
+                }
                 return
             }
             if self.captureMode == .continuous, !self.isSpeechOutputActive {
@@ -1090,18 +1235,22 @@ final class TalkModeManager: NSObject {
         }
     }
 
-    private func startSilenceMonitor() {
+    private func startSilenceMonitor(pttCaptureId: String? = nil) {
         self.silenceTask?.cancel()
         self.silenceTask = Task { [weak self] in
             guard let self else { return }
             while self.isEnabled || (self.isPushToTalkActive && self.pttAutoStopEnabled) {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                await self.checkSilence()
+                do {
+                    try await Task.sleep(nanoseconds: 200_000_000)
+                } catch {
+                    return
+                }
+                await self.checkSilence(pttCaptureId: pttCaptureId)
             }
         }
     }
 
-    private func checkSilence() async {
+    private func checkSilence(pttCaptureId: String? = nil) async {
         if self.captureMode == .continuous {
             guard self.isListening, !self.isSpeechOutputActive else { return }
             let transcript = self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1116,6 +1265,9 @@ final class TalkModeManager: NSObject {
         }
 
         guard self.captureMode == .pushToTalk, self.pttAutoStopEnabled else { return }
+        if let pttCaptureId {
+            guard self.activePTTCaptureId == pttCaptureId else { return }
+        }
         guard self.isListening, !self.isSpeaking, self.isPushToTalkActive else { return }
         let transcript = self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !transcript.isEmpty else { return }
@@ -1124,29 +1276,38 @@ final class TalkModeManager: NSObject {
         if Date().timeIntervalSince(lastActivity) < self.silenceWindow {
             return
         }
-        _ = await self.endPushToTalk()
+        if let pttCaptureId {
+            _ = await self.endPushToTalk(captureId: pttCaptureId)
+        } else {
+            _ = await self.endPushToTalk()
+        }
     }
 
     /// Guardrail for PTT once so we don't stay open indefinitely.
-    private func schedulePTTTimeout(seconds: TimeInterval) {
+    private func schedulePTTTimeout(seconds: TimeInterval, captureId: String) {
         guard seconds > 0 else { return }
         let nanos = UInt64(seconds * 1_000_000_000)
         self.pttTimeoutTask?.cancel()
         self.pttTimeoutTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: nanos)
-            await self?.handlePTTTimeout()
+            do {
+                try await Task.sleep(nanoseconds: nanos)
+            } catch {
+                return
+            }
+            await self?.handlePTTTimeout(captureId: captureId)
         }
     }
 
-    private func handlePTTTimeout() async {
-        guard self.pttAutoStopEnabled, self.isPushToTalkActive else { return }
-        _ = await self.endPushToTalk()
+    private func handlePTTTimeout(captureId: String) async {
+        guard self.activePTTCaptureId == captureId,
+              self.pttAutoStopEnabled,
+              self.isPushToTalkActive
+        else { return }
+        _ = await self.endPushToTalk(captureId: captureId)
     }
 
     private func finishPTTOnce(_ payload: OpenClawTalkPTTStopPayload) {
-        guard let continuation = pttCompletion else { return }
-        self.pttCompletion = nil
-        continuation.resume(returning: payload)
+        self.pttOnceOperations[payload.captureId]?.finish(payload)
     }
 
     private func processTranscript(_ transcript: String, restartAfter: Bool) async {
@@ -3432,6 +3593,21 @@ extension TalkModeManager {
 
     func _test_hasRecognitionRequest() -> Bool {
         self.recognitionRequest != nil
+    }
+
+    func _test_activePushToTalkCaptureId() -> String? {
+        self.activePTTCaptureId
+    }
+
+    func _test_handlePushToTalkTranscript(
+        _ transcript: String,
+        isFinal: Bool,
+        captureId: String) async
+    {
+        await self.handleTranscript(
+            transcript: transcript,
+            isFinal: isFinal,
+            pttCaptureId: captureId)
     }
 
     func _test_executionMode() -> TalkModeExecutionMode {

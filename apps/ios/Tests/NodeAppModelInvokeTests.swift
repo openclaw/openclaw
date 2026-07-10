@@ -92,6 +92,53 @@ private actor OverlappingCameraService: CameraServicing {
     }
 }
 
+@MainActor
+private final class TalkPreparationBarrier {
+    private var didEnter = false
+    private var enteredContinuation: CheckedContinuation<Void, Never>?
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func suspendFirstPreparation() async {
+        guard !self.didEnter else { return }
+        self.didEnter = true
+        self.enteredContinuation?.resume()
+        self.enteredContinuation = nil
+        await withCheckedContinuation { continuation in
+            self.releaseContinuation = continuation
+        }
+    }
+
+    func waitUntilEntered() async {
+        if self.didEnter {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            self.enteredContinuation = continuation
+        }
+    }
+
+    func release() {
+        self.releaseContinuation?.resume()
+        self.releaseContinuation = nil
+    }
+}
+
+@MainActor
+private func waitForTalkCondition(_ condition: @MainActor () -> Bool) async {
+    while !condition() {
+        await Task.yield()
+    }
+}
+
+private func talkRequest(id: String, command: OpenClawTalkCommand) -> BridgeInvokeRequest {
+    BridgeInvokeRequest(id: id, command: command.rawValue)
+}
+
+private func decodeTalkPayload<T: Decodable>(_ type: T.Type, from response: BridgeInvokeResponse) throws -> T {
+    let data = try #require(response.payloadJSON?.data(using: .utf8))
+    return try JSONDecoder().decode(type, from: data)
+}
+
 private func makeAgentDeepLinkURL(
     message: String,
     deliver: Bool = false,
@@ -856,21 +903,236 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         recorder.cancel()
     }
 
+    @Test @MainActor func `cancelled queued PTT start never acquires preparation`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let barrier = TalkPreparationBarrier()
+        talkMode.updateGatewayConnected(true)
+        appModel._test_setTalkCapturePreparationHandler { await barrier.suspendFirstPreparation() }
+        defer {
+            appModel._test_setTalkCapturePreparationHandler(nil)
+            appModel.voiceWake.stop()
+        }
+
+        let active = Task { @MainActor in
+            await appModel._test_handleInvoke(talkRequest(id: "ptt-active", command: .pttStart))
+        }
+        await barrier.waitUntilEntered()
+        let queued = Task { @MainActor in
+            await appModel._test_handleInvoke(talkRequest(id: "ptt-queued", command: .pttStart))
+        }
+        await waitForTalkCondition { appModel._test_talkPreparationWaiterCount() == 1 }
+
+        queued.cancel()
+        await waitForTalkCondition { appModel._test_talkPreparationWaiterCount() == 0 }
+        barrier.release()
+
+        let activeResponse = await active.value
+        let queuedResponse = await queued.value
+        let activePayload = try decodeTalkPayload(OpenClawTalkPTTStartPayload.self, from: activeResponse)
+        #expect(activeResponse.ok)
+        #expect(!queuedResponse.ok)
+        #expect(talkMode._test_activePushToTalkCaptureId() == activePayload.captureId)
+
+        #expect(await appModel._test_handleInvoke(talkRequest(id: "cleanup", command: .pttCancel)).ok)
+    }
+
+    @Test @MainActor func `PTT cancel invalidates suspended preparation without waiting`() async {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let barrier = TalkPreparationBarrier()
+        talkMode.updateGatewayConnected(true)
+        appModel._test_setTalkCapturePreparationHandler { await barrier.suspendFirstPreparation() }
+        defer {
+            appModel._test_setTalkCapturePreparationHandler(nil)
+            appModel.voiceWake.stop()
+        }
+
+        let start = Task { @MainActor in
+            await appModel._test_handleInvoke(talkRequest(id: "stale-start", command: .pttStart))
+        }
+        await barrier.waitUntilEntered()
+        let epoch = appModel._test_talkPttCommandEpoch()
+
+        let cancel = await appModel._test_handleInvoke(talkRequest(id: "cancel", command: .pttCancel))
+        #expect(cancel.ok)
+        #expect(appModel._test_talkPttCommandEpoch() == epoch + 1)
+        barrier.release()
+
+        #expect(await start.value.ok == false)
+        #expect(talkMode._test_activePushToTalkCaptureId() == nil)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `PTT start after cancel uses the new command epoch`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let barrier = TalkPreparationBarrier()
+        talkMode.updateGatewayConnected(true)
+        appModel._test_setTalkCapturePreparationHandler { await barrier.suspendFirstPreparation() }
+        defer {
+            appModel._test_setTalkCapturePreparationHandler(nil)
+            appModel.voiceWake.stop()
+        }
+
+        let stale = Task { @MainActor in
+            await appModel._test_handleInvoke(talkRequest(id: "old-epoch", command: .pttStart))
+        }
+        await barrier.waitUntilEntered()
+        #expect(await appModel._test_handleInvoke(talkRequest(id: "cancel", command: .pttCancel)).ok)
+        let fresh = Task { @MainActor in
+            await appModel._test_handleInvoke(talkRequest(id: "new-epoch", command: .pttStart))
+        }
+        await waitForTalkCondition { appModel._test_talkPreparationWaiterCount() == 1 }
+        barrier.release()
+
+        #expect(await stale.value.ok == false)
+        let freshResponse = await fresh.value
+        let freshPayload = try decodeTalkPayload(OpenClawTalkPTTStartPayload.self, from: freshResponse)
+        #expect(freshResponse.ok)
+        #expect(talkMode._test_activePushToTalkCaptureId() == freshPayload.captureId)
+
+        #expect(await appModel._test_handleInvoke(talkRequest(id: "cleanup", command: .pttCancel)).ok)
+    }
+
+    @Test @MainActor func `cancelled PTT start after capture activation cleans up the capture`() async {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        let barrier = TalkPreparationBarrier()
+        talkMode.updateGatewayConnected(true)
+        appModel._test_setTalkCaptureStartedHandler { await barrier.suspendFirstPreparation() }
+        defer {
+            appModel._test_setTalkCaptureStartedHandler(nil)
+            appModel.voiceWake.stop()
+        }
+
+        let start = Task { @MainActor in
+            await appModel._test_handleInvoke(talkRequest(id: "cancel-after-start", command: .pttStart))
+        }
+        await barrier.waitUntilEntered()
+        #expect(talkMode._test_activePushToTalkCaptureId() != nil)
+
+        start.cancel()
+        barrier.release()
+
+        #expect(await start.value.ok == false)
+        #expect(talkMode._test_activePushToTalkCaptureId() == nil)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `PTT stop and cancel interrupt active one-shot capture`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        talkMode.updateGatewayConnected(true)
+        defer { appModel.voiceWake.stop() }
+
+        let cancelledOnce = Task { @MainActor in
+            await appModel._test_handleInvoke(talkRequest(id: "once-cancel", command: .pttOnce))
+        }
+        await waitForTalkCondition { talkMode._test_activePushToTalkCaptureId() != nil }
+        let cancelledCaptureId = try #require(talkMode._test_activePushToTalkCaptureId())
+        let cancelResponse = await appModel._test_handleInvoke(talkRequest(id: "cancel", command: .pttCancel))
+        let cancelPayload = try decodeTalkPayload(OpenClawTalkPTTStopPayload.self, from: cancelResponse)
+        let cancelledOncePayload = try await decodeTalkPayload(
+            OpenClawTalkPTTStopPayload.self,
+            from: cancelledOnce.value)
+        #expect(cancelPayload.captureId == cancelledCaptureId)
+        #expect(cancelPayload.status == "cancelled")
+        #expect(cancelledOncePayload == cancelPayload)
+
+        let stoppedOnce = Task { @MainActor in
+            await appModel._test_handleInvoke(talkRequest(id: "once-stop", command: .pttOnce))
+        }
+        await waitForTalkCondition { talkMode._test_activePushToTalkCaptureId() != nil }
+        let stoppedCaptureId = try #require(talkMode._test_activePushToTalkCaptureId())
+        let stopResponse = await appModel._test_handleInvoke(talkRequest(id: "stop", command: .pttStop))
+        let stopPayload = try decodeTalkPayload(OpenClawTalkPTTStopPayload.self, from: stopResponse)
+        let stoppedOncePayload = try await decodeTalkPayload(OpenClawTalkPTTStopPayload.self, from: stoppedOnce.value)
+        #expect(stopPayload.captureId == stoppedCaptureId)
+        #expect(stopPayload.status == "empty")
+        #expect(stoppedOncePayload == stopPayload)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `stale PTT cleanup cannot stop a newer capture`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        talkMode.updateGatewayConnected(true)
+
+        let first = try await talkMode.beginPushToTalk()
+        #expect(await talkMode.cancelPushToTalk(captureId: first.captureId).status == "cancelled")
+        let second = try await talkMode.beginPushToTalk()
+
+        let stale = await talkMode.cancelPushToTalk(captureId: first.captureId)
+        #expect(stale.status == "idle")
+        #expect(talkMode._test_activePushToTalkCaptureId() == second.captureId)
+        #expect(talkMode.isPushToTalkActive)
+
+        #expect(await talkMode.cancelPushToTalk(captureId: second.captureId).status == "cancelled")
+    }
+
+    @Test @MainActor func `stale PTT recognition callback cannot mutate a newer capture`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        talkMode.updateGatewayConnected(true)
+
+        let first = try await talkMode.beginPushToTalkOnce(maxDurationSeconds: 0)
+        let firstCaptureId = try #require(talkMode._test_activePushToTalkCaptureId())
+        _ = await talkMode.cancelPushToTalk(captureId: firstCaptureId)
+        _ = await talkMode.awaitPushToTalkOnce(first)
+
+        let second = try await talkMode.beginPushToTalkOnce(maxDurationSeconds: 0)
+        let secondCaptureId = try #require(talkMode._test_activePushToTalkCaptureId())
+        await talkMode._test_handlePushToTalkTranscript(
+            "stale transcript",
+            isFinal: true,
+            captureId: firstCaptureId)
+
+        #expect(talkMode._test_activePushToTalkCaptureId() == secondCaptureId)
+        #expect(talkMode.isPushToTalkActive)
+
+        _ = await talkMode.cancelPushToTalk(captureId: secondCaptureId)
+        _ = await talkMode.awaitPushToTalkOnce(second)
+    }
+
+    @Test @MainActor func `backgrounding completes PTT once and releases its voice wake lease`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        talkMode.updateGatewayConnected(true)
+        defer { appModel.voiceWake.stop() }
+
+        let once = Task { @MainActor in
+            await appModel._test_handleInvoke(talkRequest(id: "once-background", command: .pttOnce))
+        }
+        await waitForTalkCondition { talkMode._test_activePushToTalkCaptureId() != nil }
+        let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds() == [captureId])
+
+        #expect(!talkMode.suspendForBackground())
+
+        let payload = try await decodeTalkPayload(OpenClawTalkPTTStopPayload.self, from: once.value)
+        #expect(payload.captureId == captureId)
+        #expect(payload.status == "cancelled")
+        #expect(talkMode._test_activePushToTalkCaptureId() == nil)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
     @Test @MainActor func `overlapping PTT owners keep voice wake suspended until final release`() {
         let appModel = NodeAppModel(talkMode: TalkModeManager(allowSimulatorCapture: true))
         appModel.voiceWake.isEnabled = true
         appModel.voiceWake.isListening = true
         appModel.voiceWake.statusText = "Listening"
 
-        appModel._test_acquirePttVoiceWakeLease()
+        appModel._test_acquirePttVoiceWakeLease(captureId: "capture-a")
         #expect(appModel.isTalkCaptureActive == true)
-        appModel._test_acquirePttVoiceWakeLease()
+        appModel._test_acquirePttVoiceWakeLease(captureId: "capture-a")
+        appModel._test_acquirePttVoiceWakeLease(captureId: "capture-b")
+        #expect(appModel.voiceWake._test_isSuspendedForExternalAudio() == true)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds() == ["capture-a", "capture-b"])
+
+        appModel._test_releasePttVoiceWakeLease(captureId: "stale-capture")
+        appModel._test_releasePttVoiceWakeLease(captureId: "capture-a")
         #expect(appModel.voiceWake._test_isSuspendedForExternalAudio() == true)
 
-        appModel._test_releasePttVoiceWakeLease()
-        #expect(appModel.voiceWake._test_isSuspendedForExternalAudio() == true)
-
-        appModel._test_releasePttVoiceWakeLease()
+        appModel._test_releasePttVoiceWakeLease(captureId: "capture-b")
         #expect(appModel.voiceWake._test_isSuspendedForExternalAudio() == false)
         #expect(appModel.isTalkCaptureActive == false)
         appModel.voiceWake.stop()
@@ -882,13 +1144,13 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let appModel = NodeAppModel(
             talkMode: TalkModeManager(allowSimulatorCapture: true),
             voiceNoteRecorder: recorder)
-        appModel._test_acquirePttVoiceWakeLease()
+        appModel._test_acquirePttVoiceWakeLease(captureId: "voice-note-race")
 
         #expect(await recorder.start() == false)
         #expect(recorder.isRecording == false)
         #expect(capture.permissionRequestCount == 0)
 
-        appModel._test_releasePttVoiceWakeLease()
+        appModel._test_releasePttVoiceWakeLease(captureId: "voice-note-race")
     }
 
     @Test @MainActor func `late watch snapshot is repaired after gateway switch`() async throws {
