@@ -72,8 +72,9 @@ cleanup() {
   trap - EXIT
 
   if [[ -n "$GATEWAY_PGID" ]]; then
-    # A parked process group ignores TERM until it is continued, so cleanup always
-    # resumes the traced tree before sending the bounded TERM/KILL shutdown.
+    # Tracees may still be parked while the strace leader keeps draining ptrace
+    # events, so cleanup resumes any stopped members before bounded TERM/KILL.
+    continue_stopped_non_leader_tracees
     kill -CONT -- "-$GATEWAY_PGID" 2>/dev/null || true
     kill -TERM -- "-$GATEWAY_PGID" 2>/dev/null || true
     if ! wait_for_process_group_exit 80 0.05; then
@@ -139,30 +140,144 @@ list_process_group_members() {
   ps -o pid=,pgid=,state= -e | awk -v pgid="$pgid" '$2 == pgid { print $1 " " $3 }'
 }
 
-process_group_has_members() {
-  local pgid=$1
-  local members
-  members="$(list_process_group_members "$pgid")"
-  [[ -n "$members" ]]
+process_state_is_stopped() {
+  case "$1" in
+    T|t) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
-process_group_is_stopped() {
-  local pgid=$1
-  local saw_member=0
+process_state_is_zombie_or_dead() {
+  case "$1" in
+    Z|z|X|x) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+process_state_is_live() {
+  ! process_state_is_zombie_or_dead "$1"
+}
+
+process_group_has_live_members_from_listing() {
+  local members=$1
   local pid state
 
   while read -r pid state; do
     if [[ -z "${pid:-}" ]]; then
       continue
     fi
-    saw_member=1
-    case "$state" in
-      T|t|Z|z|X|x) ;;
-      *) return 1 ;;
-    esac
-  done < <(list_process_group_members "$pgid")
+    if process_state_is_live "$state"; then
+      return 0
+    fi
+  done <<<"$members"
 
-  [[ $saw_member -eq 1 ]]
+  return 1
+}
+
+process_group_has_live_non_leader_members_from_listing() {
+  local leader_pid=$1
+  local members=$2
+  local pid state
+
+  while read -r pid state; do
+    if [[ -z "${pid:-}" || "$pid" == "$leader_pid" ]]; then
+      continue
+    fi
+    if process_state_is_live "$state"; then
+      return 0
+    fi
+  done <<<"$members"
+
+  return 1
+}
+
+list_live_unstopped_non_leader_pids_from_listing() {
+  local leader_pid=$1
+  local members=$2
+  local pid state
+
+  while read -r pid state; do
+    if [[ -z "${pid:-}" || "$pid" == "$leader_pid" ]]; then
+      continue
+    fi
+    if ! process_state_is_live "$state"; then
+      continue
+    fi
+    if process_state_is_stopped "$state"; then
+      continue
+    fi
+    printf '%s\n' "$pid"
+  done <<<"$members"
+}
+
+list_stopped_non_leader_pids_from_listing() {
+  local leader_pid=$1
+  local members=$2
+  local pid state
+
+  while read -r pid state; do
+    if [[ -z "${pid:-}" || "$pid" == "$leader_pid" ]]; then
+      continue
+    fi
+    if ! process_state_is_stopped "$state"; then
+      continue
+    fi
+    printf '%s\n' "$pid"
+  done <<<"$members"
+}
+
+process_group_live_non_leader_members_are_stopped_from_listing() {
+  local leader_pid=$1
+  local members=$2
+  local saw_live_non_leader=0
+  local pid state
+
+  while read -r pid state; do
+    if [[ -z "${pid:-}" || "$pid" == "$leader_pid" ]]; then
+      continue
+    fi
+    if ! process_state_is_live "$state"; then
+      continue
+    fi
+    saw_live_non_leader=1
+    if ! process_state_is_stopped "$state"; then
+      return 1
+    fi
+  done <<<"$members"
+
+  [[ $saw_live_non_leader -eq 1 ]]
+}
+
+process_group_has_live_members() {
+  local pgid=$1
+  local members
+
+  members="$(list_process_group_members "$pgid")"
+  process_group_has_live_members_from_listing "$members"
+}
+
+process_group_has_live_non_leader_members() {
+  local leader_pid=$1
+  local pgid=$2
+  local members
+
+  members="$(list_process_group_members "$pgid")"
+  process_group_has_live_non_leader_members_from_listing "$leader_pid" "$members"
+}
+
+continue_stopped_non_leader_tracees() {
+  local members
+  local -a stopped_pids=()
+
+  if [[ -z "$GATEWAY_PGID" || -z "$GATEWAY_PID" ]]; then
+    return 0
+  fi
+
+  members="$(list_process_group_members "$GATEWAY_PGID")"
+  mapfile -t stopped_pids < <(list_stopped_non_leader_pids_from_listing "$GATEWAY_PID" "$members")
+  if [[ ${#stopped_pids[@]} -gt 0 ]]; then
+    kill -CONT -- "${stopped_pids[@]}" 2>/dev/null || true
+  fi
 }
 
 wait_for_process_group_exit() {
@@ -175,7 +290,7 @@ wait_for_process_group_exit() {
   fi
 
   for ((attempt = 1; attempt <= attempts; attempt += 1)); do
-    if ! process_group_has_members "$GATEWAY_PGID"; then
+    if ! process_group_has_live_members "$GATEWAY_PGID"; then
       return 0
     fi
     sleep "$sleep_s"
@@ -196,7 +311,7 @@ wait_for_http_ok() {
     if curl -fsS --max-time 2 "$url" >"$body_path" 2>/dev/null; then
       return 0
     fi
-    if [[ -n "$GATEWAY_PGID" ]] && ! process_group_has_members "$GATEWAY_PGID"; then
+    if [[ -n "$GATEWAY_PGID" && -n "$GATEWAY_PID" ]] && ! process_group_has_live_non_leader_members "$GATEWAY_PID" "$GATEWAY_PGID"; then
       WAIT_FAILURE_REASON="process-group-exited"
       return 1
     fi
@@ -207,20 +322,84 @@ wait_for_http_ok() {
   return 1
 }
 
-wait_for_process_group_stopped() {
+wait_for_live_non_leader_tracees_stopped() {
   local attempts=$1
   local sleep_s=$2
   local attempt
+  local members
+  local -a live_unstopped_pids=()
 
   WAIT_FAILURE_REASON=""
   for ((attempt = 1; attempt <= attempts; attempt += 1)); do
-    if [[ -n "$GATEWAY_PGID" ]] && process_group_is_stopped "$GATEWAY_PGID"; then
-      return 0
-    fi
-    if [[ -n "$GATEWAY_PGID" ]] && ! process_group_has_members "$GATEWAY_PGID"; then
+    members="$(list_process_group_members "$GATEWAY_PGID")"
+    if ! process_group_has_live_non_leader_members_from_listing "$GATEWAY_PID" "$members"; then
       WAIT_FAILURE_REASON="process-group-exited"
       return 1
     fi
+
+    mapfile -t live_unstopped_pids < <(list_live_unstopped_non_leader_pids_from_listing "$GATEWAY_PID" "$members")
+    if [[ ${#live_unstopped_pids[@]} -gt 0 ]]; then
+      kill -STOP -- "${live_unstopped_pids[@]}" 2>/dev/null || true
+    fi
+
+    members="$(list_process_group_members "$GATEWAY_PGID")"
+    if process_group_live_non_leader_members_are_stopped_from_listing "$GATEWAY_PID" "$members"; then
+      return 0
+    fi
+
+    sleep "$sleep_s"
+  done
+
+  WAIT_FAILURE_REASON="timeout"
+  return 1
+}
+
+combined_trace_output_size_bytes() {
+  shopt -s nullglob
+  local trace_files=("$TRACE_PREFIX"*)
+  local total_bytes=0
+  local trace_file file_bytes
+  shopt -u nullglob
+
+  for trace_file in "${trace_files[@]}"; do
+    file_bytes="$(wc -c <"$trace_file")"
+    file_bytes="${file_bytes//[[:space:]]/}"
+    total_bytes=$((total_bytes + file_bytes))
+  done
+
+  printf '%s\n' "$total_bytes"
+}
+
+wait_for_trace_quiescence() {
+  local attempts=$1
+  local sleep_s=$2
+  local required_stable_polls=$3
+  local attempt
+  local members
+  local current_size
+  local previous_size=""
+  local stable_polls=0
+
+  WAIT_FAILURE_REASON=""
+  for ((attempt = 1; attempt <= attempts; attempt += 1)); do
+    members="$(list_process_group_members "$GATEWAY_PGID")"
+    if ! process_group_has_live_non_leader_members_from_listing "$GATEWAY_PID" "$members"; then
+      WAIT_FAILURE_REASON="process-group-exited"
+      return 1
+    fi
+
+    current_size="$(combined_trace_output_size_bytes)"
+    if [[ "$current_size" == "$previous_size" ]]; then
+      stable_polls=$((stable_polls + 1))
+    else
+      previous_size="$current_size"
+      stable_polls=1
+    fi
+
+    if [[ $stable_polls -ge $required_stable_polls ]]; then
+      return 0
+    fi
+
     sleep "$sleep_s"
   done
 
@@ -253,6 +432,44 @@ assert_no_matches() {
   rm -f "$matches_file"
 }
 
+run_self_tests() {
+  local members
+  local unstopped
+  local stopped
+
+  members=$'100 S\n101 T\n102 t\n103 Z'
+  process_group_has_live_members_from_listing "$members" || fail "self-test: expected live members to ignore zombie rows"
+  process_group_has_live_non_leader_members_from_listing "100" "$members" || fail "self-test: expected live non-leader members to exclude the strace leader"
+  process_group_live_non_leader_members_are_stopped_from_listing "100" "$members" || fail "self-test: expected stopped non-leader members to satisfy the parked-state predicate"
+
+  if process_group_has_live_members_from_listing $'100 Z'; then
+    fail "self-test: zombie-only groups must not count as live"
+  fi
+
+  if process_group_has_live_non_leader_members_from_listing "100" $'100 S\n101 Z'; then
+    fail "self-test: zombie-only non-leader rows must not count as live tracees"
+  fi
+
+  unstopped="$(list_live_unstopped_non_leader_pids_from_listing "100" $'100 S\n101 S\n102 T\n103 Z')"
+  if [[ "$unstopped" != "101" ]]; then
+    fail "self-test: expected only live unstopped non-leader pid 101, got '${unstopped}'"
+  fi
+
+  stopped="$(list_stopped_non_leader_pids_from_listing "100" $'100 S\n101 T\n102 t\n103 Z')"
+  if [[ "$stopped" != $'101\n102' ]]; then
+    fail "self-test: expected stopped non-leader pids 101 and 102, got '${stopped}'"
+  fi
+
+  RESULT="PASS"
+  RESULT_NOTE="self-test-passed"
+  printf 'PASS: shell helper self-tests passed\n'
+  exit 0
+}
+
+if [[ "${1:-}" == "--self-test" ]]; then
+  run_self_tests
+fi
+
 if [[ "$(uname -s)" != "Linux" ]]; then
   skip "gateway deferred state-I/O proof requires Linux strace/curl; run via Crabbox/Testbox"
 fi
@@ -264,6 +481,7 @@ assert_tool node
 assert_tool ps
 assert_tool setsid
 assert_tool strace
+assert_tool wc
 
 if [[ ! -f "$ROOT_DIR/openclaw.mjs" ]]; then
   fail "missing openclaw.mjs launcher at repo root"
@@ -304,22 +522,32 @@ if ! wait_for_http_ok "http://127.0.0.1:${CONTROL_PORT}/healthz" "$HEALTHZ_BODY"
   esac
 fi
 
-# Freeze the dedicated traced process group so the strace files stay quiescent
-# while the pre-activation snapshot and negative-match assertions run.
-if ! kill -STOP -- "-$GATEWAY_PGID" 2>/dev/null; then
-  fail_phase "park-before-snapshot" "failed to stop the dedicated process group"
-fi
-
-if ! wait_for_process_group_stopped 200 0.01; then
+# Park only the live non-leader tracees. The setsid leader is strace and must
+# keep running so it can drain ptrace events before the snapshot/grep checks.
+if ! wait_for_live_non_leader_tracees_stopped 200 0.01; then
   case "$WAIT_FAILURE_REASON" in
     process-group-exited)
-      fail_phase "park-before-snapshot" "process group exited before all traced members reached the stopped state"
+      fail_phase "park-before-snapshot" "process group exited before all live non-leader tracees reached the stopped state"
       ;;
     timeout)
-      fail_phase "park-before-snapshot" "timed out waiting for all traced members to reach the stopped state"
+      fail_phase "park-before-snapshot" "timed out waiting for all live non-leader tracees to reach the stopped state"
       ;;
     *)
       fail_phase "park-before-snapshot" "wait failed (${WAIT_FAILURE_REASON:-unknown})"
+      ;;
+  esac
+fi
+
+if ! wait_for_trace_quiescence 200 0.02 3; then
+  case "$WAIT_FAILURE_REASON" in
+    process-group-exited)
+      fail_phase "quiesce-before-snapshot" "process group exited before the pre-activation trace output became quiescent"
+      ;;
+    timeout)
+      fail_phase "quiesce-before-snapshot" "timed out waiting for the pre-activation trace output to become quiescent"
+      ;;
+    *)
+      fail_phase "quiesce-before-snapshot" "wait failed (${WAIT_FAILURE_REASON:-unknown})"
       ;;
   esac
 fi
@@ -339,7 +567,7 @@ assert_no_matches \
   pre_activation_gateway_port_access \
   grep -R -E -n "bind\\(.*${GATEWAY_PORT}|connect\\(.*${GATEWAY_PORT}" "$PRE_ACTIVATION_TRACE_DIR"
 
-kill -CONT -- "-$GATEWAY_PGID" 2>/dev/null || true
+continue_stopped_non_leader_tracees
 
 if ! curl -fsS --max-time 2 \
   -X POST \
