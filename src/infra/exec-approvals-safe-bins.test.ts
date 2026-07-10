@@ -23,8 +23,6 @@ import {
 import { getTrustedSafeBinDirs } from "./exec-safe-bin-trust.js";
 
 describe("exec approvals safe bins", () => {
-  const systemFixtureTrustedDirs = new Set(["/bin", "/usr/bin"]);
-
   type SafeBinCase = {
     name: string;
     argv: string[];
@@ -36,6 +34,7 @@ describe("exec approvals safe bins", () => {
     rawExecutable?: string;
     cwd?: string;
     setup?: (cwd: string) => void;
+    trusted?: boolean;
   };
 
   function buildDeniedFlagVariantCases(params: {
@@ -281,6 +280,7 @@ describe("exec approvals safe bins", () => {
       resolvedPath: "/tmp/evil-bin/jq",
       expected: false,
       cwd: "/tmp",
+      trusted: false,
     },
     ...deniedFlagCases,
     {
@@ -403,7 +403,8 @@ describe("exec approvals safe bins", () => {
       },
       safeBins: normalizeSafeBins(testCase.safeBins ?? [executableName]),
       safeBinProfiles: testCase.safeBinProfiles,
-      trustedSafeBinDirs: systemFixtureTrustedDirs,
+      // This table isolates argv policy. Dedicated cases below exercise real path trust.
+      isTrustedSafeBinPathFn: () => testCase.trusted ?? true,
     });
     expect(ok).toBe(testCase.expected);
   });
