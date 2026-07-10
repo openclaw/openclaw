@@ -90,6 +90,16 @@ describe("printCronList", () => {
     expectLogsToInclude(logs, "isolated");
   });
 
+  it("keeps truncated names from ending in a lone surrogate", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const name = `${"x".repeat(20)}🚀tail`;
+
+    printCronList([createBaseJob({ name })], runtime);
+
+    expectLogsToInclude(logs, `${"x".repeat(20)}...`);
+    expect(logs.join("\n")).not.toContain("\ud83d");
+  });
+
   it("shows declaration metadata and existing run status", () => {
     const job = createBaseJob({
       declarationKey: "daily-report",
