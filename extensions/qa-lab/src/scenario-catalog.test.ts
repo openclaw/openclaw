@@ -229,6 +229,9 @@ describe("qa scenario catalog", () => {
       throw new Error(`expected Playwright scenario, got ${scenario.execution.kind}`);
     }
     expect(scenario.execution.path).toBe("ui/src/e2e/chat-flow.e2e.test.ts");
+    expect(scenario.execution.testNamePattern).toBe(
+      "sends a chat turn through the GUI and renders the final Gateway event",
+    );
     expect(scenario.execution.flow).toBeUndefined();
     expect(scenario.coverage?.primary).toContain("ui.control");
     expect(uxMatrix.execution.kind).toBe("script");
