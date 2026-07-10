@@ -158,22 +158,33 @@ export async function createThreadDiscord(
 ) {
   const rest = resolveDiscordRest(opts);
   const body: Record<string, unknown> = { name: payload.name };
-  if (payload.autoArchiveMinutes) {
-    body.auto_archive_duration = payload.autoArchiveMinutes;
-  }
   if (!payload.messageId && payload.type !== undefined) {
     body.type = payload.type;
   }
+  let channel: APIChannel | undefined;
   let channelType: ChannelType | undefined;
   if (!payload.messageId) {
     // Only detect channel kind for route-less thread creation.
     // If this lookup fails, keep prior behavior and let Discord validate.
     try {
-      const channel = await getChannel(rest, channelId);
+      channel = await getChannel(rest, channelId);
       channelType = channel?.type;
     } catch {
       channelType = undefined;
     }
+  }
+  // Inherit auto_archive_duration from the parent channel when the caller does
+  // not provide an explicit value. Forum and media channels expose
+  // default_auto_archive_duration; text channels omit it so the field is left
+  // unset, preserving Discord's server-side default.
+  // APIChannel is a union; default_auto_archive_duration only exists on guild
+  // channels (text, news, forum, media) so narrow via an intersection cast.
+  const archiveDuration =
+    payload.autoArchiveMinutes ??
+    (channel as { default_auto_archive_duration?: number } | undefined)
+      ?.default_auto_archive_duration;
+  if (archiveDuration !== undefined) {
+    body.auto_archive_duration = archiveDuration;
   }
   const isForumLike =
     channelType === ChannelType.GuildForum || channelType === ChannelType.GuildMedia;

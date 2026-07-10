@@ -220,7 +220,6 @@ describe("thread binding lifecycle", () => {
           params.channelId,
           {
             name: params.threadName,
-            autoArchiveMinutes: 60,
           },
           {
             accountId: params.accountId,
@@ -895,13 +894,14 @@ describe("thread binding lifecycle", () => {
     });
     expect(hoisted.createThreadDiscord).toHaveBeenCalledTimes(1);
     expect(mockCallArg(hoisted.createThreadDiscord, 0, 0, "createThreadDiscord")).toBe("parent-1");
-    expectFields(
-      mockCallArg(hoisted.createThreadDiscord, 0, 1, "createThreadDiscord"),
-      "thread options",
-      {
-        autoArchiveMinutes: 60,
-      },
-    );
+    expect(
+      (
+        mockCallArg(hoisted.createThreadDiscord, 0, 1, "createThreadDiscord") as Record<
+          string,
+          unknown
+        >
+      )?.name,
+    ).toBeTypeOf("string");
     expectFields(
       mockCallArg(hoisted.createThreadDiscord, 0, 2, "createThreadDiscord"),
       "thread context",
@@ -945,13 +945,14 @@ describe("thread binding lifecycle", () => {
     expectFields(childBinding, "child binding", { channelId: "parent-1" });
     expect(hoisted.restGet).toHaveBeenCalledTimes(1);
     expect(mockCallArg(hoisted.createThreadDiscord, 0, 0, "createThreadDiscord")).toBe("parent-1");
-    expectFields(
-      mockCallArg(hoisted.createThreadDiscord, 0, 1, "createThreadDiscord"),
-      "thread options",
-      {
-        autoArchiveMinutes: 60,
-      },
-    );
+    expect(
+      (
+        mockCallArg(hoisted.createThreadDiscord, 0, 1, "createThreadDiscord") as Record<
+          string,
+          unknown
+        >
+      )?.name,
+    ).toBeTypeOf("string");
     expectFields(
       mockCallArg(hoisted.createThreadDiscord, 0, 2, "createThreadDiscord"),
       "thread context",
@@ -1117,13 +1118,14 @@ describe("thread binding lifecycle", () => {
     expect(mockCallArg(hoisted.createThreadDiscord, 0, 0, "createThreadDiscord")).toBe(
       "parent-runtime",
     );
-    expectFields(
-      mockCallArg(hoisted.createThreadDiscord, 0, 1, "createThreadDiscord"),
-      "thread options",
-      {
-        autoArchiveMinutes: 60,
-      },
-    );
+    expect(
+      (
+        mockCallArg(hoisted.createThreadDiscord, 0, 1, "createThreadDiscord") as Record<
+          string,
+          unknown
+        >
+      )?.name,
+    ).toBeTypeOf("string");
     expectFields(
       mockCallArg(hoisted.createThreadDiscord, 0, 2, "createThreadDiscord"),
       "thread context",
@@ -1180,13 +1182,14 @@ describe("thread binding lifecycle", () => {
     expect(mockCallArg(hoisted.createThreadDiscord, 0, 0, "createThreadDiscord")).toBe(
       "1491611525914558667",
     );
-    expectFields(
-      mockCallArg(hoisted.createThreadDiscord, 0, 1, "createThreadDiscord"),
-      "thread options",
-      {
-        autoArchiveMinutes: 60,
-      },
-    );
+    expect(
+      (
+        mockCallArg(hoisted.createThreadDiscord, 0, 1, "createThreadDiscord") as Record<
+          string,
+          unknown
+        >
+      )?.name,
+    ).toBeTypeOf("string");
     expectFields(
       mockCallArg(hoisted.createThreadDiscord, 0, 2, "createThreadDiscord"),
       "thread context",

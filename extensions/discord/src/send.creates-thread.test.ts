@@ -156,6 +156,40 @@ describe("sendMessageDiscord", () => {
     });
   });
 
+  it("inherits default_auto_archive_duration for forum threads", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({
+      type: ChannelType.GuildForum,
+      default_auto_archive_duration: 1440,
+    });
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord("chan1", { name: "thread" }, discordClientOpts(rest));
+    expect(requestBody(postMock as unknown as MockCallSource)).toEqual({
+      name: "thread",
+      auto_archive_duration: 1440,
+      message: { content: "thread" },
+    });
+  });
+
+  it("prefers explicit autoArchiveMinutes over channel default", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({
+      type: ChannelType.GuildForum,
+      default_auto_archive_duration: 1440,
+    });
+    postMock.mockResolvedValue({ id: "t1" });
+    await createThreadDiscord(
+      "chan1",
+      { name: "thread", autoArchiveMinutes: 4320 },
+      discordClientOpts(rest),
+    );
+    expect(requestBody(postMock as unknown as MockCallSource)).toEqual({
+      name: "thread",
+      auto_archive_duration: 4320,
+      message: { content: "thread" },
+    });
+  });
+
   it("creates media threads with provided content", async () => {
     const { rest, getMock, postMock } = makeDiscordRest();
     getMock.mockResolvedValue({ type: ChannelType.GuildMedia });
