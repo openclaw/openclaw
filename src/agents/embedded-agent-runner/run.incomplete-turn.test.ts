@@ -1534,6 +1534,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       process.env.OPENCLAW_REASONING_ONLY_RETRY_LIMIT = "0";
       const { runEmbeddedAgent: freshRunEmbeddedAgent } = await loadRunOverflowCompactionHarness();
       await warmRunOverflowCompactionHarness(freshRunEmbeddedAgent);
+      resetRunOverflowCompactionHarnessMocks();
+      mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
       mockedClassifyFailoverReason.mockReturnValue(null);
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(
         makeAttemptResult({
