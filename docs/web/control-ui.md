@@ -332,7 +332,11 @@ The terminal is also available as a full-screen, terminal-only document at `/?vi
 Once a session is established, a dropped Gateway connection does not log you out. The dashboard
 stays visible with a floating amber "Gateway connection lost — Reconnecting…" pill under the top
 bar while the client retries automatically with backoff (800 ms up to 15 s). Live updates and
-actions pause until the connection returns; **Retry now** in the pill forces an immediate attempt.
+realtime/session actions pause until the connection returns; **Retry now** in the pill forces an
+immediate attempt. Chat remains editable: ordinary text and attachment sends are kept in the
+current tab's gateway/session-scoped browser storage, shown as waiting for reconnect, and sent
+automatically when the Gateway returns. Live controls and slash commands remain unavailable while
+offline.
 
 When this browser already holds credentials (a configured token/password or an approved device
 token), first opens and reloads show a small animated OpenClaw mark while the connection is

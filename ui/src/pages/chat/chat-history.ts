@@ -761,43 +761,66 @@ function hasAbortableChatSessionRun(state: ClearChatHistoryState): boolean {
   );
 }
 
-function clearCachedChatMessagesForSession(state: ClearChatHistoryState, sessionKey: string) {
+function clearCachedChatMessagesForSession(
+  state: ClearChatHistoryState,
+  sessionKey: string,
+  agentId?: string,
+) {
   if (!state.chatMessagesBySession) {
     return;
   }
-  clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey });
+  clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey, agentId });
 }
 
-export async function clearChatHistory(state: ClearChatHistoryState) {
+export async function clearChatHistory(state: ClearChatHistoryState): Promise<boolean> {
   if (!state.client || !state.connected) {
-    return;
+    return false;
   }
+  const client = state.client;
+  const connectionEpoch = state.connectionEpoch;
+  const sessionKey = state.sessionKey;
+  const agentParams = scopedAgentParamsForSession(state, sessionKey);
+  const runId = state.chatRunId;
   const hadActiveRun = hasAbortableChatSessionRun(state);
   try {
-    await state.sessions.reset(
-      state.sessionKey,
-      scopedAgentParamsForSession(state, state.sessionKey),
-    );
-    state.chatMessages = [];
-    clearCachedChatMessagesForSession(state, state.sessionKey);
-    state.chatSideResult = null;
-    state.chatReplyTarget = null;
-    reconcileChatRunLifecycle(state, {
-      outcome: hadActiveRun ? "interrupted" : undefined,
-      sessionStatus: "killed",
-      runId: state.chatRunId,
-      sessionKey: state.sessionKey,
-      clearLocalRun: true,
-      clearChatStream: true,
-      clearToolStream: true,
-      clearSideResultTerminalRuns: true,
-      clearRunStatus: !hadActiveRun,
-    });
-    await loadChatHistory(state);
+    const resetCurrentConnection = await state.sessions.reset(sessionKey, agentParams);
+    if (
+      !resetCurrentConnection ||
+      state.client !== client ||
+      state.connectionEpoch !== connectionEpoch ||
+      !state.connected
+    ) {
+      setChatError(state, "Gateway connection changed while clearing chat history.");
+      scheduleChatScroll(state);
+      return false;
+    }
   } catch (err) {
     setChatError(state, String(err));
+    scheduleChatScroll(state);
+    return false;
   }
+  clearCachedChatMessagesForSession(state, sessionKey, agentParams.agentId);
+  const visibleAgentId = scopedAgentParamsForSession(state, state.sessionKey).agentId;
+  if (state.sessionKey !== sessionKey || visibleAgentId !== agentParams.agentId) {
+    return true;
+  }
+  state.chatMessages = [];
+  state.chatSideResult = null;
+  state.chatReplyTarget = null;
+  reconcileChatRunLifecycle(state, {
+    outcome: hadActiveRun ? "interrupted" : undefined,
+    sessionStatus: "killed",
+    runId,
+    sessionKey,
+    clearLocalRun: true,
+    clearChatStream: true,
+    clearToolStream: true,
+    clearSideResultTerminalRuns: true,
+    clearRunStatus: !hadActiveRun,
+  });
+  await loadChatHistory(state);
   scheduleChatScroll(state);
+  return true;
 }
 
 export async function loadChatHistory(

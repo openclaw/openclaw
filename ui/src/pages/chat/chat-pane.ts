@@ -68,6 +68,7 @@ import {
   refreshPageChat,
   refreshRouteSessionOptions,
   resetChatStateForRouteSession,
+  retryChatComposerMemoryFallback,
   resolveAssistantAttachmentAuthToken,
   resolveChatAgentId,
   resolveChatAvatarUrl,
@@ -94,6 +95,12 @@ import {
   type DetailFullMessageResult,
   type SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
+import {
+  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
+  loadChatComposerSnapshot,
+  resolveStoredChatOutboxScope,
+  storedChatOutboxScopeKey,
+} from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
 import {
   hasAbortableSessionRun,
@@ -481,7 +488,42 @@ class ChatPane extends OpenClawLightDomElement {
     const previousSessionsResult = state.sessionsResult;
     const nextSessionRow = state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey);
     const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
-    resetChatStateForRouteSession(state, nextSessionKey);
+    const previousComposerScope =
+      this.chatState.composerScopeForRouteSwitch() ??
+      resolveStoredChatOutboxScope(state, previousSessionKey);
+    const previousComposerScopeKey = storedChatOutboxScopeKey(previousComposerScope);
+    const existingFallback = state.chatComposerFallbackByScope[previousComposerScopeKey];
+    const draftPersistResult = this.chatState.persistComposerForRouteSwitch();
+    const draftPersisted = draftPersistResult.status === "persisted";
+    const previousStoredSnapshot = loadChatComposerSnapshot(
+      state,
+      previousSessionKey,
+      previousComposerScope.agentId,
+    );
+    const previousStoredDraft = previousStoredSnapshot ? previousStoredSnapshot.draft : null;
+    const storedDraftMatches = previousStoredDraft === state.chatMessage;
+    const hasStagedAttachments = state.chatAttachments.length > 0;
+    const retainExistingFallback = Boolean(existingFallback && !storedDraftMatches);
+    const previousDraftRetry =
+      draftPersistResult.status === "storage-failed"
+        ? {
+            expectedDraftRevision: draftPersistResult.expectedDraftRevision,
+            draftRevision: draftPersistResult.draftRevision,
+          }
+        : existingFallback?.storageFailed && !storedDraftMatches
+          ? existingFallback.draftRetry
+          : undefined;
+    resetChatStateForRouteSession(state, nextSessionKey, {
+      retainPreviousComposerInMemory:
+        !draftPersisted || hasStagedAttachments || retainExistingFallback,
+      previousDraftRetry,
+      previousComposerScope,
+    });
+    retryChatComposerMemoryFallback(state, nextSessionKey);
+    // Route restoration is the new persistence baseline. An untouched pane
+    // must not later erase a draft written by another split pane. Memory-only
+    // fallbacks stay pane-local until a later edit persists successfully.
+    this.chatState.adoptComposerRoute();
     this.taskSuggestionsRequestVersion += 1;
     this.taskSuggestions = [];
     this.taskSuggestionBusyIds.clear();
@@ -495,7 +537,14 @@ class ChatPane extends OpenClawLightDomElement {
     void refreshChatAvatar(state);
     void refreshChatMetadata(state).finally(() => state.requestUpdate?.());
     const subscriptionSync = syncSelectedSessionMessageSubscription(state);
+    const composerStorageError = state.chatError === CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
     const historyLoad = loadChatHistory(state);
+    if (composerStorageError) {
+      // History loading clears the shared error slot synchronously. Restore the
+      // pane-local storage warning unless the retry above made the draft durable.
+      state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+      state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+    }
     state.requestUpdate();
     void this.refreshTaskSuggestions();
     void this.refreshSessionPullRequests();
@@ -793,10 +842,10 @@ class ChatPane extends OpenClawLightDomElement {
       this.setPaneSessionKey(this.sessionKey);
     }
     chatState.restoreComposer({ preserveCurrent: true });
+    chatState.startComposerPersistence();
     if (this.draft !== undefined) {
       this.state.handleChatDraftChange(this.draft);
     }
-    chatState.startComposerPersistence();
     chatState.addCleanup(
       this.context.gateway.subscribe((snapshot) => {
         this.applyGatewaySnapshot(snapshot);
@@ -1135,11 +1184,7 @@ class ChatPane extends OpenClawLightDomElement {
       state.sessionsResult?.sessions.some(
         (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
       ) === true;
-    const disabledReason = !state.connected
-      ? t("chat.disconnected")
-      : selectedSessionArchived
-        ? t("chat.archivedSessionDisabled")
-        : null;
+    const disabledReason = selectedSessionArchived ? t("chat.archivedSessionDisabled") : null;
     const canOpenRealtimeTalkSettings = hasOperatorAdminAccess(
       this.context.gateway.snapshot.hello?.auth ?? null,
     );
@@ -1176,7 +1221,7 @@ class ChatPane extends OpenClawLightDomElement {
       realtimeTalkInputLevel: state.realtimeTalkInputLevel,
       realtimeTalkConversation: state.realtimeTalkConversation,
       connected: state.connected,
-      canSend: state.connected && !selectedSessionArchived,
+      canSend: !selectedSessionArchived,
       disabledReason,
       error: state.lastError,
       sessions: state.sessionsResult,

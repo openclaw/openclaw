@@ -173,7 +173,7 @@ export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
-  const canCompose = props.connected && props.canSend;
+  const canCompose = props.canSend;
   let chatSection: HTMLElement | null = null;
 
   const thread = renderChatThread({

@@ -13,6 +13,7 @@ import {
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
   resolveUiGlobalAliasAgentId,
   resolveUiKnownSelectedGlobalAgentId,
@@ -152,7 +153,14 @@ export function visibleSessionMatches(
   agentId: string | undefined,
 ): boolean {
   if (host.sessionKey !== sessionKey) {
-    const hostAliasAgentId = resolveUiGlobalAliasAgentId(host, host.sessionKey);
+    const normalizedHostKey = normalizeLowercaseStringOrEmpty(host.sessionKey);
+    const isBareMainAlias =
+      normalizedHostKey === "main" || normalizedHostKey === resolveUiConfiguredMainKey(host);
+    const hostAliasAgentId =
+      resolveUiGlobalAliasAgentId(host, host.sessionKey) ??
+      (isBareMainAlias
+        ? (resolveUiKnownSelectedGlobalAgentId(host) ?? resolveUiDefaultAgentId(host))
+        : null);
     if (!hostAliasAgentId || !isUiGlobalSessionKey(sessionKey)) {
       return false;
     }

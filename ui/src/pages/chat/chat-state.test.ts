@@ -1,6 +1,7 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   applyRemoteSlashCommandsResult,
   resetChatSlashCommandMetadataForTest,
@@ -9,9 +10,12 @@ import {
   ChatStateController,
   handleChatManualRefresh,
   refreshChatMetadata,
+  resetChatStateForRouteSession,
+  retryChatComposerMemoryFallback,
   resolveChatAvatarUrl,
   type ChatPageHost,
 } from "./chat-state.ts";
+import { loadChatComposerSnapshot, persistChatComposerState } from "./composer-persistence.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 
@@ -251,6 +255,174 @@ describe("ChatStateController render lifecycle", () => {
     expect(cancelAnimationFrame).toHaveBeenCalledWith(42);
     expect(second.chatManualRefreshFrame).toBeNull();
     expect(second.chatManualRefreshInFlight).toBe(false);
+  });
+});
+
+describe("route composer fallback", () => {
+  function createRouteState(chatMessage: string) {
+    const resetChatInputHistoryNavigation = vi.fn();
+    const resetChatScroll = vi.fn();
+    const state = {
+      settings: { gatewayUrl: "ws://gateway.test/control" },
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main", mainKey: "main" },
+      hello: null,
+      sessionKey: "agent:main:first",
+      chatMessage,
+      chatComposerFallbackByScope: {},
+      chatQueue: [],
+      chatQueueByScope: {},
+      chatMessages: [],
+      chatMessagesBySession: new Map(),
+      chatAttachments: [
+        {
+          id: "staged-image",
+          mimeType: "image/png",
+          dataUrl: "data:image/png;base64,AAA",
+        },
+      ],
+      chatSideResultTerminalRuns: new Set(),
+      chatToolMessages: [],
+      chatStreamSegments: [],
+      toolStreamById: new Map(),
+      toolStreamOrder: [],
+      sessionsResult: null,
+      realtimeTalkConversation: [],
+      realtimeTalkConversationState: { phase: "idle" },
+      resetChatInputHistoryNavigation,
+      resetChatScroll,
+      requestUpdate: vi.fn(),
+    } as unknown as ChatPageHost;
+    return { resetChatInputHistoryNavigation, resetChatScroll, state };
+  }
+
+  it("keeps a draft in its pane when browser persistence fails across a route switch", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { resetChatInputHistoryNavigation, resetChatScroll, state } =
+      createRouteState("memory-only draft");
+
+    expect(
+      resetChatStateForRouteSession(state, "agent:main:second", {
+        retainPreviousComposerInMemory: true,
+        previousDraftRetry: { expectedDraftRevision: 0, draftRevision: 1 },
+      }),
+    ).toEqual({ restoredFallback: false, restoredStorageFailure: false });
+    expect(state.chatMessage).toBe("");
+    expect(state.chatAttachments).toEqual([]);
+
+    expect(resetChatStateForRouteSession(state, "agent:main:first")).toEqual({
+      restoredFallback: true,
+      restoredStorageFailure: true,
+    });
+    expect(state.chatMessage).toBe("memory-only draft");
+    expect(state.chatAttachments).toEqual([
+      {
+        id: "staged-image",
+        mimeType: "image/png",
+        dataUrl: "data:image/png;base64,AAA",
+      },
+    ]);
+    expect(state.chatError).toContain("remains available in this tab");
+    expect(resetChatInputHistoryNavigation).toHaveBeenCalledTimes(2);
+    expect(resetChatScroll).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps staged attachments in the pane without reporting a storage failure", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("");
+
+    expect(
+      resetChatStateForRouteSession(state, "agent:main:second", {
+        retainPreviousComposerInMemory: true,
+      }),
+    ).toEqual({ restoredFallback: false, restoredStorageFailure: false });
+    expect(state.chatError).toBeNull();
+
+    expect(resetChatStateForRouteSession(state, "agent:main:first")).toEqual({
+      restoredFallback: true,
+      restoredStorageFailure: false,
+    });
+    expect(state.chatMessage).toBe("");
+    expect(state.chatAttachments).toHaveLength(1);
+    expect(state.chatError).toBeNull();
+  });
+
+  it("retries a failed draft after storage recovers", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("retry this draft");
+    state.chatAttachments = [];
+
+    resetChatStateForRouteSession(state, "agent:main:second", {
+      retainPreviousComposerInMemory: true,
+      previousDraftRetry: { expectedDraftRevision: 0, draftRevision: 1 },
+    });
+    resetChatStateForRouteSession(state, "agent:main:first");
+
+    expect(retryChatComposerMemoryFallback(state, "agent:main:first")).toBe(true);
+    expect(loadChatComposerSnapshot(state, "agent:main:first")?.draft).toBe("retry this draft");
+    expect(state.chatComposerFallbackByScope).toEqual({});
+    expect(state.chatError).toBeNull();
+  });
+
+  it("does not overwrite a newer split-pane draft while retrying", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("pane A draft");
+    state.chatAttachments = [];
+    resetChatStateForRouteSession(state, "agent:main:second", {
+      retainPreviousComposerInMemory: true,
+      previousDraftRetry: { expectedDraftRevision: 0, draftRevision: 1 },
+    });
+
+    const { state: peer } = createRouteState("newer pane B draft");
+    peer.chatAttachments = [];
+    expect(persistChatComposerState(peer, "agent:main:first")).toBe(true);
+
+    resetChatStateForRouteSession(state, "agent:main:first");
+    expect(retryChatComposerMemoryFallback(state, "agent:main:first")).toBe(false);
+    expect(loadChatComposerSnapshot(state, "agent:main:first")?.draft).toBe("newer pane B draft");
+    expect(state.chatMessage).toBe("pane A draft");
+    expect(state.chatError).toContain("remains available in this tab");
+  });
+
+  it("keeps a stale-revision conflict pane-local instead of retrying it as storage failure", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("older pane A draft");
+    state.chatAttachments = [];
+    resetChatStateForRouteSession(state, "agent:main:second", {
+      retainPreviousComposerInMemory: true,
+    });
+
+    const { state: peer } = createRouteState("newer pane B draft");
+    peer.chatAttachments = [];
+    expect(persistChatComposerState(peer, "agent:main:first")).toBe(true);
+
+    resetChatStateForRouteSession(state, "agent:main:first");
+    expect(retryChatComposerMemoryFallback(state, "agent:main:first")).toBe(false);
+    expect(loadChatComposerSnapshot(state, "agent:main:first")?.draft).toBe("newer pane B draft");
+    expect(state.chatMessage).toBe("older pane A draft");
+    expect(state.chatError).toBeNull();
+  });
+
+  it("does not resurrect a stale fallback after a newer pane clears the draft", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("stale pane A draft");
+    state.chatAttachments = [];
+    resetChatStateForRouteSession(state, "agent:main:second", {
+      retainPreviousComposerInMemory: true,
+      previousDraftRetry: { expectedDraftRevision: 0, draftRevision: 1 },
+    });
+
+    const { state: peer } = createRouteState("newer pane B draft");
+    peer.chatAttachments = [];
+    expect(persistChatComposerState(peer, "agent:main:first")).toBe(true);
+    peer.chatMessage = "";
+    expect(persistChatComposerState(peer, "agent:main:first")).toBe(true);
+    expect(loadChatComposerSnapshot(peer, "agent:main:first")).toBeNull();
+
+    resetChatStateForRouteSession(state, "agent:main:first");
+    expect(retryChatComposerMemoryFallback(state, "agent:main:first")).toBe(false);
+    expect(loadChatComposerSnapshot(state, "agent:main:first")).toBeNull();
+    expect(state.chatMessage).toBe("stale pane A draft");
   });
 });
 

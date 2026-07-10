@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { resolveSessionNavigation } from "./navigation.ts";
+import { resolveSessionNavigation, visibleSessionMatches } from "./navigation.ts";
 
 function sessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
   return {
@@ -136,5 +136,30 @@ describe("resolveSessionNavigation", () => {
       ...recentSessions.map((row) => row.key),
     ]);
     expect(navigation.activeRowKey).toBeNull();
+  });
+});
+
+describe("visibleSessionMatches", () => {
+  it("matches bare main aliases to their selected canonical global scope", () => {
+    const host = {
+      sessionKey: "main",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main", mainKey: "main" },
+      hello: null,
+    };
+
+    expect(visibleSessionMatches(host, "global", "work")).toBe(true);
+    expect(visibleSessionMatches(host, "global", "main")).toBe(false);
+  });
+
+  it("matches configured bare main aliases to canonical global scope", () => {
+    const host = {
+      sessionKey: "workspace",
+      assistantAgentId: null,
+      agentsList: { defaultId: "work", mainKey: "workspace" },
+      hello: null,
+    };
+
+    expect(visibleSessionMatches(host, "global", "work")).toBe(true);
   });
 });

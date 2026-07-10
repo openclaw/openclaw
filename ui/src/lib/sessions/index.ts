@@ -167,7 +167,7 @@ export type SessionCapability = {
   setModelOverride: (key: string, value: string | null | undefined) => void;
   delete: (key: string, options?: SessionDeleteOptions) => Promise<boolean>;
   deleteMany: (targets: readonly SessionDeleteTarget[]) => Promise<SessionDeleteBatchResult>;
-  reset: (key: string, options?: SessionResetOptions) => Promise<void>;
+  reset: (key: string, options?: SessionResetOptions) => Promise<boolean>;
   compact: (key: string, options?: { agentId?: string | null }) => Promise<SessionCompactResult>;
   steer: (
     key: string,
@@ -938,16 +938,17 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return isCurrentConnection(scope) ? { deleted, errors } : { deleted: [], errors: [] };
   };
 
-  const reset = async (key: string, options: SessionResetOptions = {}): Promise<void> => {
+  const reset = async (key: string, options: SessionResetOptions = {}): Promise<boolean> => {
     const scope = captureConnection();
     if (!scope) {
-      return;
+      return false;
     }
     try {
       await requestSessionReset(scope.client, key, options);
+      return isCurrentConnection(scope);
     } catch (error) {
       if (!isCurrentConnection(scope)) {
-        return;
+        return false;
       }
       publish({ ...state, error: String(error) });
       throw error;
