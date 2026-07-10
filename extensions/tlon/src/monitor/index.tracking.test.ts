@@ -204,15 +204,19 @@ describe("monitorTlonProvider bounded tracking", () => {
     }
   });
 
-  it("retries failed invite work observed by an overlapping snapshot", async () => {
+  it("separates a re-added invite from stale in-flight work", async () => {
     const { controller, monitor, runtime } = await startMonitor();
     try {
       const chatHandler = eventHandlers.get("chat:/v3");
       expect(chatHandler).toBeDefined();
       pokeMock.mockClear();
-      let releaseFirst!: () => void;
-      const firstReleased = new Promise<void>((resolve) => {
-        releaseFirst = resolve;
+      let releaseOld!: () => void;
+      const oldReleased = new Promise<void>((resolve) => {
+        releaseOld = resolve;
+      });
+      let releaseCurrent!: () => void;
+      const currentReleased = new Promise<void>((resolve) => {
+        releaseCurrent = resolve;
       });
       let dmAttempts = 0;
       pokeMock.mockImplementation(async (payload: { mark?: string }) => {
@@ -221,27 +225,43 @@ describe("monitorTlonProvider bounded tracking", () => {
         }
         dmAttempts += 1;
         if (dmAttempts === 1) {
-          await firstReleased;
-          throw new Error("first RSVP failed");
+          await oldReleased;
+          return;
+        }
+        if (dmAttempts === 2) {
+          await currentReleased;
+          throw new Error("current RSVP failed");
         }
       });
 
       const snapshot = [{ ship: "~retryship" }];
       chatHandler?.(snapshot);
       await vi.waitFor(() => expect(dmAttempts).toBe(1));
+      chatHandler?.([]);
+      chatHandler?.(snapshot);
+      await vi.waitFor(() => expect(dmAttempts).toBe(2));
+
       chatHandler?.(snapshot);
       await new Promise((resolve) => {
         setTimeout(resolve, 0);
       });
-      expect(dmAttempts).toBe(1);
-      releaseFirst();
+      expect(dmAttempts).toBe(2);
 
-      await vi.waitFor(() => expect(dmAttempts).toBe(2));
+      releaseOld();
       await vi.waitFor(() =>
         expect(runtime.log).toHaveBeenCalledWith(
           expect.stringContaining("Auto-accepted DM invite from ~retryship"),
         ),
       );
+      expect(dmAttempts).toBe(2);
+      chatHandler?.(snapshot);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      expect(dmAttempts).toBe(2);
+
+      releaseCurrent();
+      await vi.waitFor(() => expect(dmAttempts).toBe(3));
     } finally {
       controller.abort();
       await monitor;

@@ -910,10 +910,10 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           .filter(Boolean);
         // The /v3 invite array is the active snapshot. Forget ships that left it
         // instead of retaining every invite seen during the monitor lifetime.
-        processedDmInvites.beginSnapshot(ships);
+        const inviteSnapshot = processedDmInvites.beginSnapshot(ships);
 
         for (const ship of ships) {
-          await processedDmInvites.process(ship, async () => {
+          await inviteSnapshot.process(ship, async () => {
             // Owner is always allowed
             if (isOwner(ship)) {
               try {
