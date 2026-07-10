@@ -160,13 +160,31 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain("done < /out/openclaw-selected-plugin-dirs");
     expect(dockerfile).toContain(`if [ -f "$ext_dir/package.json" ]; then`);
     expect(dockerfile).toContain(
-      "COPY --from=workspace-deps /out/openclaw-selected-plugin-dirs ./.openclaw-selected-plugin-dirs",
+      "COPY --from=workspace-deps /out/openclaw-selected-plugin-dirs /tmp/openclaw-selected-plugin-dirs",
     );
     expect(postinstallIndex).toBeLessThan(installIndex);
     expect(prepareIndex).toBeLessThan(installIndex);
     expect(distImportHelperIndex).toBeLessThan(installIndex);
     expect(packageManifestIndex).toBeLessThan(installIndex);
     expect(extensionManifestIndex).toBeLessThan(installIndex);
+  });
+
+  it("keeps validated plugin selection outside the build-context copy destination", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const selectionCopyIndex = dockerfile.indexOf(
+      "COPY --from=workspace-deps /out/openclaw-selected-plugin-dirs /tmp/openclaw-selected-plugin-dirs",
+    );
+    const buildContextCopyIndex = dockerfile.indexOf("COPY . .");
+
+    expect(selectionCopyIndex).toBeGreaterThan(-1);
+    expect(buildContextCopyIndex).toBeGreaterThan(selectionCopyIndex);
+    expect(dockerfile).not.toContain("/app/.openclaw-selected-plugin-dirs");
+    expect(dockerfile).not.toContain("./.openclaw-selected-plugin-dirs");
+    expect(dockerfile).toContain("grep -qx 'matrix' /tmp/openclaw-selected-plugin-dirs");
+    expect(dockerfile).toContain(
+      'selected_plugin_dirs="$(cat /tmp/openclaw-selected-plugin-dirs)"',
+    );
+    expect(dockerfile).toContain('OPENCLAW_EXTENSIONS="$(cat /tmp/openclaw-selected-plugin-dirs)"');
   });
 
   it("copies root package lifecycle scripts before pnpm install", async () => {
@@ -300,14 +318,14 @@ describe("Dockerfile", () => {
       "COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/",
     );
     expect(dockerfile).toContain(
-      'OPENCLAW_EXTENSIONS="$(cat /app/.openclaw-selected-plugin-dirs)" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
+      'OPENCLAW_EXTENSIONS="$(cat /tmp/openclaw-selected-plugin-dirs)" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
     );
     expect(dockerfile).toContain("readlink -f /app/node_modules/@openclaw/ai");
     expect(dockerfile).toContain('mv "$ai_runtime_tmp/ai" /app/node_modules/@openclaw/ai');
     expect(dockerfile).toContain("CI=true pnpm prune --prod \\");
     expect(dockerfile.indexOf("CI=true pnpm prune --prod \\")).toBeLessThan(
       dockerfile.indexOf(
-        'OPENCLAW_EXTENSIONS="$(cat /app/.openclaw-selected-plugin-dirs)" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
+        'OPENCLAW_EXTENSIONS="$(cat /tmp/openclaw-selected-plugin-dirs)" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
       ),
     );
     expect(dockerfile).toContain("--config.offline=true");
