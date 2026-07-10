@@ -25,7 +25,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **iOS discovered gateways:** replace dead-end Connect actions for TLS-less Bonjour gateways with consistent TLS, Tailscale Serve, and trusted-LAN manual-setup guidance across onboarding, Quick Setup, and Settings. (#99031) Thanks @odrobnik.
 - **OpenCode Zen model catalog:** refresh the provider-owned static seed for Claude Sonnet 5, Grok 4.5, Hy3 Free, Kimi K2.7 Code, and MiniMax M3 with verified routing, pricing, limits, and input capabilities, remove retired free-tier rows, and expose the same catalog through unauthenticated model listing. (#103184)
 - **Managed browser launch:** surface asynchronous Chrome bootstrap and runtime spawn failures as browser errors while keeping Gateway alive, and retain process error handling through later lifecycle failures.
 - **Gateway startup migrations:** release the shared migration lease before exiting when the selected config changes during startup, allowing immediate retries instead of blocking readiness until the five-minute lease expires. (#103145)

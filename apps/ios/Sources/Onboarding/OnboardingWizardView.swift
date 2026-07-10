@@ -719,7 +719,6 @@ struct OnboardingWizardView: View {
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(self.gatewayController.gateways) { gateway in
-                        let hasHost = self.gatewayHasResolvableHost(gateway)
                         let availability = self.gatewayController.discoveredGatewayConnectionAvailability(gateway)
 
                         VStack(alignment: .leading, spacing: 6) {
@@ -741,16 +740,13 @@ struct OnboardingWizardView: View {
                                         if self.connectingGatewayID == gateway.id {
                                             ProgressView()
                                                 .progressViewStyle(.circular)
-                                        } else if !hasHost {
-                                            Text("Resolving…")
-                                                .font(OpenClawType.subheadSemiBold)
                                         } else {
                                             Text(availability.actionTitle)
                                                 .font(OpenClawType.subheadSemiBold)
                                         }
                                     }
                                     .font(OpenClawType.subheadSemiBold)
-                                    .disabled(self.connectingGatewayID != nil || !hasHost)
+                                    .disabled(self.connectingGatewayID != nil)
                                 } else {
                                     Text(availability.actionTitle)
                                         .font(OpenClawType.subheadSemiBold)
@@ -1674,13 +1670,6 @@ extension OnboardingWizardView {
             self.manualTLS = false
             if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         }
-    }
-
-    private func gatewayHasResolvableHost(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> Bool {
-        let lanHost = gateway.lanHost?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !lanHost.isEmpty { return true }
-        let tailnetDns = gateway.tailnetDns?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return !tailnetDns.isEmpty
     }
 
     private func connectManual(setupAttemptID: UUID? = nil) async {

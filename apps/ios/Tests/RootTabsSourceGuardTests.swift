@@ -1094,13 +1094,19 @@ struct RootTabsSourceGuardTests {
         let onboardingSource = try String(
             contentsOf: Self.onboardingWizardSourceURL(),
             encoding: .utf8)
+        let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
 
         #expect(controllerSource.contains("enum DiscoveredGatewayConnectionAvailability"))
         #expect(controllerSource.contains("gateway.tlsEnabled || GatewayTLSStore.loadFingerprint"))
-        #expect(controllerSource.contains("Enable Gateway TLS or Tailscale Serve"))
+        #expect(controllerSource.contains("enter your Tailscale Serve HTTPS host in Manual Setup"))
         #expect(settingsSource.contains("discoveredGatewayConnectionAvailability(gateway)"))
         #expect(quickSetupSource.contains("discoveredGatewayConnectionAvailability(candidate)"))
+        #expect(quickSetupSource.contains("Text(\"Use Manual Setup\")"))
+        #expect(quickSetupSource.contains("self.gatewayController.preferredDiscoveredGateway()"))
         #expect(onboardingSource.contains("discoveredGatewayConnectionAvailability(gateway)"))
+        #expect(!onboardingSource.contains("gatewayHasResolvableHost"))
+        #expect(rootSource.contains("GatewayQuickSetupSheet(onUseManualSetup:"))
+        #expect(rootSource.contains("self.selectSettingsRoute(.gateway)"))
     }
 
     @Test func `gateway credential fields update before endpoint persistence is available`() throws {
@@ -1132,7 +1138,7 @@ struct RootTabsSourceGuardTests {
         let modeDefaults = try Self.extract(
             source,
             from: "private func applyModeDefaults(_ mode: OnboardingConnectionMode)",
-            to: "private func gatewayHasResolvableHost")
+            to: "private func connectManual")
 
         #expect(modeDefaults.contains("let previousStableID = self.currentManualGatewayStableID"))
         #expect(modeDefaults.contains("previousStableID != self.currentManualGatewayStableID"))

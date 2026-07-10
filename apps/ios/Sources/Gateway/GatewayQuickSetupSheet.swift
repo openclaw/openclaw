@@ -10,10 +10,16 @@ struct GatewayQuickSetupSheet: View {
     @Environment(GatewayConnectionController.self) private var gatewayController
     @Environment(\.dismiss) private var dismiss
 
+    let onUseManualSetup: () -> Void
+
     @AppStorage("onboarding.quickSetupDismissed") private var quickSetupDismissed: Bool = false
     @State private var connecting: Bool = false
     @State private var connectError: String?
     @State private var showGatewayProblemDetails: Bool = false
+
+    init(onUseManualSetup: @escaping () -> Void = {}) {
+        self.onUseManualSetup = onUseManualSetup
+    }
 
     var body: some View {
         NavigationStack {
@@ -87,6 +93,15 @@ struct GatewayQuickSetupSheet: View {
                                 }
                             }
                             .accessibilityElement(children: .combine)
+
+                            Button {
+                                self.onUseManualSetup()
+                            } label: {
+                                Text("Use Manual Setup")
+                                    .font(OpenClawType.subheadSemiBold)
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(OpenClawSecondaryActionButtonStyle())
                         }
 
                         if let connectError {
@@ -141,9 +156,7 @@ struct GatewayQuickSetupSheet: View {
     }
 
     private var bestCandidate: GatewayDiscoveryModel.DiscoveredGateway? {
-        self.gatewayController.gateways.first(where: {
-            self.gatewayController.discoveredGatewayConnectionAvailability($0).canConnect
-        }) ?? self.gatewayController.gateways.first
+        self.gatewayController.preferredDiscoveredGateway()
     }
 
     private func fullRowToggle(_ title: LocalizedStringKey, isOn: Binding<Bool>) -> some View {

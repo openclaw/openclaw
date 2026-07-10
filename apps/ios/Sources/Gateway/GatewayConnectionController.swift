@@ -91,7 +91,7 @@ final class GatewayConnectionController {
                 nil
             case .secureTransportRequired:
                 String(
-                    localized: "Enable Gateway TLS or Tailscale Serve, or use Manual Setup with Unencrypted only on a trusted LAN.")
+                    localized: "Enable Gateway TLS, or enter your Tailscale Serve HTTPS host in Manual Setup. Use Unencrypted only with a trusted private-LAN address.")
             }
         }
     }
@@ -286,6 +286,12 @@ final class GatewayConnectionController {
             return .available
         }
         return .secureTransportRequired
+    }
+
+    func preferredDiscoveredGateway() -> GatewayDiscoveryModel.DiscoveredGateway? {
+        self.gateways.first(where: {
+            self.discoveredGatewayConnectionAvailability($0).canConnect
+        }) ?? self.gateways.first
     }
 
     private func connectDiscoveredGateway(
@@ -1292,7 +1298,11 @@ final class GatewayConnectionController {
     {
         switch failure {
         case .endpointUnreachable:
-            "Can't reach gateway at \(host):\(port). Check Tailscale or LAN."
+            if host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")).hasSuffix(".ts.net") {
+                return String(
+                    localized: "Can't reach gateway at \(host):\(port). Verify Tailscale Serve is enabled and publishes this Gateway.")
+            }
+            return String(localized: "Can't reach gateway at \(host):\(port). Check Tailscale or LAN.")
         case .tlsHandshakeTimeout:
             "TLS fingerprint verification timed out for \(host):\(port). "
                 + "Secure endpoint was reached, but TLS did not finish in time."
