@@ -8,10 +8,7 @@ import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { resolveExpiresAtMsFromDurationSeconds } from "../infra/parse-finite-number.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
 import { buildOAuthRequestSignal } from "../llm/utils/oauth/abort.js";
-import {
-  extractProviderErrorDetail,
-  readProviderJsonResponse,
-} from "./provider-http-errors.js";
+import { assertOkOrThrowProviderError, readProviderJsonResponse } from "./provider-http-errors.js";
 
 const CHUTES_OAUTH_REQUEST_TIMEOUT_MS = 30_000;
 
@@ -160,12 +157,7 @@ export async function exchangeChutesCodeForTokens(params: {
     body,
     signal: buildOAuthRequestSignal({ timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS }),
   });
-  if (!response.ok) {
-    const detail = await extractProviderErrorDetail(response);
-    throw new Error(
-      `Chutes token exchange failed with status ${response.status}` + (detail ? `: ${detail}` : ""),
-    );
-  }
+  await assertOkOrThrowProviderError(response, "Chutes token exchange failed");
 
   const data = await readProviderJsonResponse<{
     access_token?: string;
@@ -240,12 +232,7 @@ export async function refreshChutesTokens(params: {
     body,
     signal: buildOAuthRequestSignal({ timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS }),
   });
-  if (!response.ok) {
-    const detail = await extractProviderErrorDetail(response);
-    throw new Error(
-      `Chutes token refresh failed with status ${response.status}` + (detail ? `: ${detail}` : ""),
-    );
-  }
+  await assertOkOrThrowProviderError(response, "Chutes token refresh failed");
 
   const data = await readProviderJsonResponse<{
     access_token?: string;
