@@ -530,7 +530,7 @@ Supported evidence entries:
 
 ## uiHints reference
 
-`uiHints` is a map from config field names to small rendering hints.
+`uiHints` is a map from config field names to small rendering hints. Keys can use dots for nested config fields, but no path segment may be `__proto__`, `constructor`, or `prototype`; setup rejects those names.
 
 ```json
 {

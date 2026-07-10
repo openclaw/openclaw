@@ -61,12 +61,12 @@
     "subtitles.plugins",
     "tabs.plugins"
   ],
-  "generatedAt": "2026-07-09T23:31:37.562Z",
+  "generatedAt": "2026-07-10T00:39:52.399Z",
   "locale": "uk",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "f89d0217e614b2049b8e01cb06295b595d526b98e1007cda153bca951b43b037",
-  "totalKeys": 1826,
-  "translatedKeys": 1766,
+  "sourceHash": "9a62b9bdf2611beaabf7a3224abc2a70b0a1218e51a53bc08ea2fca31bd52d4e",
+  "totalKeys": 1831,
+  "translatedKeys": 1771,
   "workflow": 1
 }

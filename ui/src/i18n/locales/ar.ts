@@ -440,6 +440,11 @@ export const ar: TranslationMap = {
     noEvents: "لا توجد أحداث بعد.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "زيارات الكركند",
+      lobsterVisitsOn: "يزور من حين لآخر",
+      lobsterVisitsOff: "لا يزور أبدًا",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -482,6 +487,10 @@ export const ar: TranslationMap = {
     settingsGroupConnections: "الاتصالات",
     settingsGroupAgents: "الوكلاء والأدوات",
     settingsGroupSystem: "النظام",
+    settingsSearchLabel: "البحث في الإعدادات",
+    settingsSearchPlaceholder: "البحث في الإعدادات…",
+    settingsSearchNoResults: "لا توجد إعدادات مطابقة.",
+    settingsSearchClear: "مسح البحث في الإعدادات",
     exitSettings: "العودة إلى التطبيق",
     expand: "توسيع الشريط الجانبي",
     collapse: "طي الشريط الجانبي",
@@ -1784,10 +1793,6 @@ export const ar: TranslationMap = {
       retry: "إعادة المحاولة",
       retrySend: "إعادة محاولة الإرسال",
       retryQueuedMessage: "إعادة محاولة الرسالة في قائمة الانتظار",
-    },
-    modelPicker: {
-      faster: "أسرع",
-      smarter: "أذكى",
     },
     pairingQrExpired: {
       title: "انتهت صلاحية رمز الاقتران QR",

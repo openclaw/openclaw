@@ -441,6 +441,11 @@ export const vi: TranslationMap = {
     noEvents: "Chưa có sự kiện nào.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Lượt ghé thăm của tôm hùm",
+      lobsterVisitsOn: "Thỉnh thoảng ghé qua",
+      lobsterVisitsOff: "Không bao giờ ghé thăm",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -483,6 +488,10 @@ export const vi: TranslationMap = {
     settingsGroupConnections: "Kết nối",
     settingsGroupAgents: "Tác nhân & Công cụ",
     settingsGroupSystem: "Hệ thống",
+    settingsSearchLabel: "Tìm kiếm cài đặt",
+    settingsSearchPlaceholder: "Tìm kiếm cài đặt…",
+    settingsSearchNoResults: "Không có cài đặt nào phù hợp.",
+    settingsSearchClear: "Xóa nội dung tìm kiếm cài đặt",
     exitSettings: "Quay lại ứng dụng",
     expand: "Mở rộng thanh bên",
     collapse: "Thu gọn thanh bên",
@@ -1796,10 +1805,6 @@ export const vi: TranslationMap = {
       retry: "Thử lại",
       retrySend: "Thử gửi lại",
       retryQueuedMessage: "Thử lại tin nhắn trong hàng đợi",
-    },
-    modelPicker: {
-      faster: "Nhanh hơn",
-      smarter: "Thông minh hơn",
     },
     pairingQrExpired: {
       title: "Mã QR ghép nối đã hết hạn",

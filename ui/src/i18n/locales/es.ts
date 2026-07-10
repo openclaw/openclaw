@@ -442,6 +442,11 @@ export const es: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Visitas de la langosta",
+      lobsterVisitsOn: "Pasa de vez en cuando",
+      lobsterVisitsOff: "Nunca visita",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -484,6 +489,10 @@ export const es: TranslationMap = {
     settingsGroupConnections: "Conexiones",
     settingsGroupAgents: "Agentes y herramientas",
     settingsGroupSystem: "Sistema",
+    settingsSearchLabel: "Buscar en la configuración",
+    settingsSearchPlaceholder: "Buscar en la configuración…",
+    settingsSearchNoResults: "No hay ningún ajuste que coincida.",
+    settingsSearchClear: "Borrar la búsqueda de ajustes",
     exitSettings: "Volver a la aplicación",
     expand: "Expandir barra lateral",
     collapse: "Contraer barra lateral",
@@ -1815,10 +1824,6 @@ export const es: TranslationMap = {
       retry: "Reintentar",
       retrySend: "Reintentar envío",
       retryQueuedMessage: "Reintentar mensaje en cola",
-    },
-    modelPicker: {
-      faster: "Más rápido",
-      smarter: "Más inteligente",
     },
     pairingQrExpired: {
       title: "Código QR de emparejamiento caducado",

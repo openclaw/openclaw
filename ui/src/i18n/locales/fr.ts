@@ -447,6 +447,11 @@ export const fr: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Visites du homard",
+      lobsterVisitsOn: "Passe de temps en temps",
+      lobsterVisitsOff: "Ne vient jamais",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -489,6 +494,10 @@ export const fr: TranslationMap = {
     settingsGroupConnections: "Connexions",
     settingsGroupAgents: "Agents et outils",
     settingsGroupSystem: "Système",
+    settingsSearchLabel: "Rechercher dans les paramètres",
+    settingsSearchPlaceholder: "Rechercher dans les paramètres…",
+    settingsSearchNoResults: "Aucun paramètre correspondant.",
+    settingsSearchClear: "Effacer la recherche dans les paramètres",
     exitSettings: "Retour à l’application",
     expand: "Développer la barre latérale",
     collapse: "Réduire la barre latérale",
@@ -1827,10 +1836,6 @@ export const fr: TranslationMap = {
       retry: "Réessayer",
       retrySend: "Réessayer l’envoi",
       retryQueuedMessage: "Réessayer le message en file d’attente",
-    },
-    modelPicker: {
-      faster: "Plus rapide",
-      smarter: "Plus intelligent",
     },
     pairingQrExpired: {
       title: "QR d'appairage expiré",

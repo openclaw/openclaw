@@ -441,6 +441,11 @@ export const hi: TranslationMap = {
     noEvents: "अभी कोई इवेंट नहीं।",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "लॉब्स्टर की विज़िट",
+      lobsterVisitsOn: "कभी-कभी आ जाता है",
+      lobsterVisitsOff: "कभी नहीं आता",
+    },
     security: {
       browserEnabled: "ब्राउज़र सक्षम",
       toolProfile: "टूल प्रोफ़ाइल",
@@ -483,6 +488,10 @@ export const hi: TranslationMap = {
     settingsGroupConnections: "कनेक्शन",
     settingsGroupAgents: "एजेंट और टूल्स",
     settingsGroupSystem: "सिस्टम",
+    settingsSearchLabel: "सेटिंग खोजें",
+    settingsSearchPlaceholder: "सेटिंग खोजें…",
+    settingsSearchNoResults: "कोई मेल खाती सेटिंग नहीं मिली।",
+    settingsSearchClear: "सेटिंग की खोज साफ़ करें",
     exitSettings: "ऐप पर वापस जाएँ",
     expand: "साइडबार फैलाएँ",
     collapse: "साइडबार समेटें",
@@ -1787,10 +1796,6 @@ export const hi: TranslationMap = {
       retry: "पुनः प्रयास करें",
       retrySend: "भेजने का पुनः प्रयास करें",
       retryQueuedMessage: "कतारबद्ध संदेश का पुनः प्रयास करें",
-    },
-    modelPicker: {
-      faster: "तेज़",
-      smarter: "अधिक बुद्धिमान",
     },
     pairingQrExpired: {
       title: "पेयरिंग QR की समय-सीमा समाप्त हो गई",

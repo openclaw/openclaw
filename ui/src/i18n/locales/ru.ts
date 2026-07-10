@@ -446,6 +446,11 @@ export const ru: TranslationMap = {
     noEvents: "Событий пока нет.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Визиты омара",
+      lobsterVisitsOn: "Заглядывает время от времени",
+      lobsterVisitsOff: "Никогда не заходит",
+    },
     security: {
       browserEnabled: "Браузер включен",
       toolProfile: "Профиль инструмента",
@@ -488,6 +493,10 @@ export const ru: TranslationMap = {
     settingsGroupConnections: "Подключения",
     settingsGroupAgents: "Агенты и инструменты",
     settingsGroupSystem: "Системная",
+    settingsSearchLabel: "Поиск по настройкам",
+    settingsSearchPlaceholder: "Поиск по настройкам…",
+    settingsSearchNoResults: "Подходящие настройки не найдены.",
+    settingsSearchClear: "Очистить поиск по настройкам",
     exitSettings: "Назад в приложение",
     expand: "Развернуть боковую панель",
     collapse: "Свернуть боковую панель",
@@ -1820,10 +1829,6 @@ export const ru: TranslationMap = {
       retry: "Повторить",
       retrySend: "Повторить отправку",
       retryQueuedMessage: "Повторить сообщение в очереди",
-    },
-    modelPicker: {
-      faster: "Быстрее",
-      smarter: "Умнее",
     },
     pairingQrExpired: {
       title: "QR-код сопряжения истек",

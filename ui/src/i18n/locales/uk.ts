@@ -442,6 +442,11 @@ export const uk: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    appearance: {
+      lobsterVisits: "Візити омара",
+      lobsterVisitsOn: "Час від часу заходить",
+      lobsterVisitsOff: "Ніколи не заходить",
+    },
     security: {
       browserEnabled: "Browser enabled",
       toolProfile: "Tool profile",
@@ -484,6 +489,10 @@ export const uk: TranslationMap = {
     settingsGroupConnections: "Підключення",
     settingsGroupAgents: "Агенти й інструменти",
     settingsGroupSystem: "Система",
+    settingsSearchLabel: "Пошук у налаштуваннях",
+    settingsSearchPlaceholder: "Пошук у налаштуваннях…",
+    settingsSearchNoResults: "Відповідних налаштувань не знайдено.",
+    settingsSearchClear: "Очистити пошук у налаштуваннях",
     exitSettings: "Назад до застосунку",
     expand: "Розгорнути бічну панель",
     collapse: "Згорнути бічну панель",
@@ -1808,10 +1817,6 @@ export const uk: TranslationMap = {
       retry: "Повторити",
       retrySend: "Повторити надсилання",
       retryQueuedMessage: "Повторити повідомлення в черзі",
-    },
-    modelPicker: {
-      faster: "Швидше",
-      smarter: "Розумніше",
     },
     pairingQrExpired: {
       title: "QR-код для пар'ювання застарів",
