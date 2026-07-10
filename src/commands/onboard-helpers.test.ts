@@ -19,9 +19,16 @@ import {
   resolveControlUiLinks,
   resolveLocalControlUiProbeLinks,
   summarizeExistingConfig,
+  testing,
   validateGatewayPasswordInput,
   waitForGatewayReachable,
 } from "./onboard-helpers.js";
+
+describe("onboard error summaries", () => {
+  it("keeps the bounded first line UTF-16 well-formed", () => {
+    expect(testing.summarizeError(`${"x".repeat(118)}🚀tail\nignored`)).toBe(`${"x".repeat(118)}…`);
+  });
+});
 
 const mocks = vi.hoisted(() => ({
   movePathToTrash: vi.fn(async (targetPath: string) => `${targetPath}.trashed`),

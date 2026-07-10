@@ -1941,7 +1941,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
   it("streams text-only finals into the answer message", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     const transcriptTimestamp = Date.now() + 1_000;
-    const context = createContext();
+    const context = createContext({
+      primaryCtx: {
+        me: {
+          id: 999,
+          is_bot: true,
+          first_name: "Telegram Bot Name",
+          username: "openclaw_bot",
+        },
+      } as TelegramMessageContext["primaryCtx"],
+    });
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
     mockDefaultSessionEntry();
     readLatestAssistantTextByIdentity.mockResolvedValue({
@@ -1964,6 +1973,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
       messageId: 2001,
     });
     expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
+      account: {
+        accountId: "default",
+        bot: {
+          id: 999,
+          is_bot: true,
+          first_name: "Telegram Bot Name",
+          username: "openclaw_bot",
+        },
+      },
       chatId: "123",
       messageId: 2001,
       text: "Final answer",
@@ -1975,7 +1993,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
   it("records streamed final replies into the prompt context cache", async () => {
     const storePath = `/tmp/openclaw-telegram-stream-context-${process.pid}-${Date.now()}.json`;
     const transcriptTimestamp = Date.now() + 1_000;
-    const context = createContext();
+    const context = createContext({
+      primaryCtx: {
+        me: {
+          id: 999,
+          is_bot: true,
+          first_name: "Telegram Bot Name",
+          username: "openclaw_bot",
+        },
+      } as TelegramMessageContext["primaryCtx"],
+    });
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
     mockDefaultSessionEntry();
     readLatestAssistantTextByIdentity.mockResolvedValue({
@@ -1994,6 +2021,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({
       context,
       cfg: { session: { store: storePath } },
+      telegramCfg: { name: "Configured Agent" },
       telegramDeps: {
         ...telegramDepsForTest,
         recordOutboundMessageForPromptContext: recordOutboundMessageForPromptContextActual,
@@ -2028,13 +2056,20 @@ describe("dispatchTelegramMessage draft streaming", () => {
       replyTargetWindowSize: 2,
     });
 
-    expect(conversationContext.map((entry) => entry.node.messageId)).toContain("1497");
-    expect(conversationContext.map((entry) => entry.node.body)).toContain(
-      "Done already: timeoutSeconds is now 7200s.",
-    );
-    expect(
-      conversationContext.find((entry) => entry.node.messageId === "1497")?.node.timestamp,
-    ).toBe(transcriptTimestamp);
+    const streamedReply = conversationContext.find((entry) => entry.node.messageId === "1497");
+    expect(streamedReply?.node).toMatchObject({
+      body: "Done already: timeoutSeconds is now 7200s.",
+      sender: "Configured Agent (you)",
+      senderId: "0",
+      timestamp: transcriptTimestamp,
+      sourceMessage: {
+        from: {
+          id: 0,
+          is_bot: true,
+          first_name: "Configured Agent (you)",
+        },
+      },
+    });
   });
 
   it("suppresses text-only tool payloads delivered after the final answer", async () => {
@@ -2053,6 +2088,77 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
     expect(answerDraftStream.update).toHaveBeenCalledWith("Final answer");
     expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("materializes chart-only finals into the active answer preview", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          presentation: {
+            title: "FY25 outlook",
+            blocks: [
+              {
+                type: "chart",
+                chartType: "pie",
+                title: "Revenue mix",
+                segments: [
+                  { label: "Product", value: 60 },
+                  { label: "Services", value: 40 },
+                ],
+              },
+            ],
+          },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "FY25 outlook\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(deliverInboundReplyWithMessageSendContext).not.toHaveBeenCalled();
+  });
+
+  it("appends chart data to final text before active preview finalization", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Quarterly results",
+          presentation: {
+            title: "FY25 outlook",
+            blocks: [
+              { type: "text", text: "Do not duplicate this block" },
+              {
+                type: "chart",
+                chartType: "bar",
+                title: "Revenue",
+                categories: ["Q1", "Q2"],
+                series: [{ name: "USD", values: [12, 18] }],
+              },
+            ],
+          },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "Quarterly results\n\nFY25 outlook\n\nRevenue (bar chart)\n- USD: Q1: 12; Q2: 18",
+    );
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith(
+      expect.stringContaining("Do not duplicate this block"),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(deliverInboundReplyWithMessageSendContext).not.toHaveBeenCalled();
   });
 
   it("mirrors preview-finalized finals into the session transcript", async () => {
@@ -6369,6 +6475,34 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(generateTopicLabel).not.toHaveBeenCalled();
     expect(bot.api["editForumTopic"]).not.toHaveBeenCalled();
+  });
+
+  it("truncates DM topic auto-rename input on UTF-16 boundaries", async () => {
+    const sessionKey = "agent:default:telegram:direct:123";
+    loadSessionStore.mockReturnValue({
+      [sessionKey]: { sessionId: "s1", updatedAt: 1 },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+    const bot = createBot();
+    const base = "a".repeat(499);
+    const rawBody = `${base}😀tail`;
+
+    await dispatchWithContext({
+      bot,
+      context: createContext({
+        ctxPayload: {
+          SessionKey: sessionKey,
+          RawBody: rawBody,
+        } as TelegramMessageContext["ctxPayload"],
+      }),
+      telegramCfg: { autoTopicLabel: true },
+    });
+
+    await vi.waitFor(() => {
+      expect(generateTopicLabel).toHaveBeenCalled();
+    });
+    const call = generateTopicLabel.mock.calls[0]?.[0] as { userMessage: string };
+    expect(call.userMessage).toBe(base);
   });
 
   it("does not emit a silent-reply fallback when the dispatcher reports a queued final reply", async () => {

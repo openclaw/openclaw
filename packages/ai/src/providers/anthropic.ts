@@ -9,7 +9,7 @@ import type {
   TextBlockParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
 import { getEnvApiKey } from "../env-api-keys.js";
-import { getAiTransportHost } from "../host.js";
+import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
   AnthropicMessagesCompat,
@@ -1111,7 +1111,8 @@ export const streamSimpleAnthropic: StreamFunction<
 };
 
 function isOAuthToken(apiKey: string): boolean {
-  return apiKey.includes("sk-ant-oat");
+  // Inspect the host-resolved shape only for auth routing; the SDK still receives the sentinel.
+  return getAiTransportHost().resolveSecretSentinel(apiKey).includes("sk-ant-oat");
 }
 
 function isAnthropicPublicEndpoint(baseUrl: string | undefined): boolean {
@@ -1161,6 +1162,7 @@ function createClient(
     /^kimi(?:-|$)/.test(model.provider) && thinkingEnabled
       ? { sanitizeSse: false as const }
       : undefined;
+  // Anthropic supports custom fetch, so sentinels stay opaque until guarded egress.
   const fetch = getAiTransportHost().buildModelFetch(model, undefined, fetchOptions);
 
   if (model.provider === "cloudflare-ai-gateway") {
@@ -1208,7 +1210,12 @@ function createClient(
     return { client, isOAuthToken: false, serverSideFallback: false };
   }
 
-  if (usesFoundryBearerAuth(model)) {
+  if (
+    usesFoundryBearerAuth({
+      ...model,
+      headers: resolveAiTransportHeaderSentinels(model.headers),
+    })
+  ) {
     const client = new Anthropic({
       apiKey: null,
       authToken: apiKey,

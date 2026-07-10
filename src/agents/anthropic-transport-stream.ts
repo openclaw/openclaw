@@ -62,6 +62,7 @@ import type {
   ThinkingLevel,
 } from "../llm/types.js";
 import "../llm/ai-transport-host.js";
+import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
   applyAnthropicPayloadPolicyToParams,
@@ -70,6 +71,7 @@ import {
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
+import { unwrapModelHeaderSentinelsForProviderEgress } from "./provider-secret-egress.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import type { StreamFn } from "./runtime/index.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
@@ -288,7 +290,9 @@ function adjustMaxTokensForThinking(params: {
 }
 
 function isAnthropicOAuthToken(apiKey: string): boolean {
-  return apiKey.includes("sk-ant-oat");
+  // Auth routing may inspect the real shape, but guarded fetch still receives the sentinel.
+  const resolved = looksLikeSecretSentinel(apiKey) ? resolveSecretSentinel(apiKey) : apiKey;
+  return (resolved ?? apiKey).includes("sk-ant-oat");
 }
 
 function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" | "baseUrl">) {
@@ -658,7 +662,7 @@ function tagPendingCommentaryText(content: TransportContentBlock[]): void {
 const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 
 /** Resolve the effective Anthropic API base URL from model or environment. */
-export function resolveAnthropicBaseUrl(baseUrl?: string): string {
+function resolveAnthropicBaseUrl(baseUrl?: string): string {
   return baseUrl?.trim() || process.env.ANTHROPIC_BASE_URL?.trim() || DEFAULT_ANTHROPIC_BASE_URL;
 }
 
@@ -910,7 +914,11 @@ function createAnthropicTransportClient(params: {
       isOAuthToken: false,
     };
   }
-  if (usesFoundryBearerAuth(model)) {
+  if (
+    usesFoundryBearerAuth(
+      unwrapModelHeaderSentinelsForProviderEgress(model, "Anthropic Foundry auth routing"),
+    )
+  ) {
     const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
     return {
       client: createAnthropicMessagesClient({

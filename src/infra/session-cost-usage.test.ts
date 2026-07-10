@@ -11,6 +11,7 @@ import {
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as usageFormat from "../utils/usage-format.js";
+import * as formatDatetime from "./format-time/format-datetime.js";
 import {
   discoverAllSessions,
   loadCostUsageSummary,
@@ -646,15 +647,33 @@ describe("session cost usage", () => {
 
     await withStateDir(root, async () => {
       await refreshCostUsageCache({ sessionFiles: sessionFiles.map((entry) => entry.sessionFile) });
-      const result = await loadSessionCostSummariesFromCache({
-        sessions: sessionFiles,
-        agentId: "main",
-        startMs: Date.UTC(2026, 1, 5),
-        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
-      });
+      const createDayFormatter = formatDatetime.createTimeZoneDayKeyFormatter;
+      let formatDayKeyCalls = 0;
+      const dayFormatterSpy = vi
+        .spyOn(formatDatetime, "createTimeZoneDayKeyFormatter")
+        .mockImplementation((timeZone) => {
+          const formatDayKey = createDayFormatter(timeZone);
+          return (date) => {
+            formatDayKeyCalls += 1;
+            return formatDayKey(date);
+          };
+        });
+      try {
+        const result = await loadSessionCostSummariesFromCache({
+          sessions: sessionFiles,
+          agentId: "main",
+          startMs: Date.UTC(2026, 1, 5),
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+          dayBucket: { mode: "time-zone", timeZone: "Europe/Vienna" },
+        });
 
-      expect(result.cacheStatus.status).toBe("fresh");
-      expect(result.summaries.map((summary) => summary?.totalTokens)).toEqual([1, 2]);
+        expect(result.cacheStatus.status).toBe("fresh");
+        expect(result.summaries.map((summary) => summary?.totalTokens)).toEqual([1, 2]);
+        expect(dayFormatterSpy).toHaveBeenCalledTimes(1);
+        expect(formatDayKeyCalls).toBe(2);
+      } finally {
+        dayFormatterSpy.mockRestore();
+      }
     });
   });
 
@@ -694,7 +713,7 @@ describe("session cost usage", () => {
         agentId: "main",
         startMs: Date.UTC(2026, 1, 11, 2),
         endMs: Date.UTC(2026, 1, 12, 1, 59, 59, 999),
-        dailyUtcOffsetMinutes: -120,
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: -120 },
       });
       const summary = requireValue(result.summaries[0], "offset session summary missing");
 
@@ -706,6 +725,86 @@ describe("session cost usage", () => {
       expect(new Set(summary.utcQuarterHourMessageCounts?.map((entry) => entry.date))).toEqual(
         new Set(["2026-02-12"]),
       );
+    });
+  });
+
+  it("rebuckets cost and session days with historical DST offsets", async () => {
+    const root = await makeSessionCostRoot("cost-cache-request-timezone");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-timezone.jsonl");
+    const usage = {
+      input: 10,
+      output: 5,
+      totalTokens: 15,
+      cost: { total: 0.00001 },
+    };
+    await fs.writeFile(
+      sessionFile,
+      [
+        {
+          type: "message",
+          timestamp: "2026-03-28T22:29:00.000Z",
+          message: { role: "user", content: "before DST" },
+        },
+        {
+          type: "message",
+          timestamp: "2026-03-28T22:30:00.000Z",
+          message: { role: "assistant", usage },
+        },
+        {
+          type: "message",
+          timestamp: "2026-03-29T22:29:00.000Z",
+          message: { role: "user", content: "after DST" },
+        },
+        {
+          type: "message",
+          timestamp: "2026-03-29T22:30:00.000Z",
+          message: { role: "assistant", usage },
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n"),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ agentId: "main", sessionFiles: [sessionFile] });
+      const dayBucket = { mode: "time-zone", timeZone: "Europe/Vienna" } as const;
+      const startMs = Date.parse("2026-03-27T23:00:00.000Z");
+      const endMs = Date.parse("2026-03-30T21:59:59.999Z");
+      const cost = await loadCostUsageSummaryFromCache({
+        agentId: "main",
+        startMs,
+        endMs,
+        dayBucket,
+        requestRefresh: false,
+      });
+      const sessions = await loadSessionCostSummariesFromCache({
+        sessions: [{ sessionId: "sess-timezone", sessionFile }],
+        agentId: "main",
+        startMs,
+        endMs,
+        dayBucket,
+        requestRefresh: false,
+      });
+      const session = requireValue(sessions.summaries[0], "timezone session summary missing");
+
+      expect(cost.days).toBe(3);
+      expect(cost.daily.map((entry) => [entry.date, entry.totalTokens])).toEqual([
+        ["2026-03-28", 15],
+        ["2026-03-29", 0],
+        ["2026-03-30", 15],
+      ]);
+      expect(session.activityDates).toEqual(["2026-03-28", "2026-03-30"]);
+      expect(session.dailyBreakdown?.map((entry) => [entry.date, entry.tokens])).toEqual([
+        ["2026-03-28", 15],
+        ["2026-03-30", 15],
+      ]);
+      expect(session.dailyMessageCounts?.map((entry) => entry.date)).toEqual([
+        "2026-03-28",
+        "2026-03-30",
+      ]);
     });
   });
 
@@ -803,7 +902,7 @@ describe("session cost usage", () => {
       const summary = await loadCostUsageSummary({
         startMs,
         endMs,
-        dailyUtcOffsetMinutes: -120,
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: -120 },
       });
 
       expect(summary.daily.map((entry) => entry.date)).toEqual(["2026-02-11"]);
@@ -1886,7 +1985,7 @@ describe("session cost usage", () => {
         sessionFile,
         startMs: Date.UTC(2026, 1, 4, 2),
         endMs: Date.UTC(2026, 1, 5, 1, 59, 59, 999),
-        dailyUtcOffsetMinutes: -120,
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: -120 },
         requestRefresh: false,
         refreshMode: "sync-when-empty",
       });
@@ -2721,6 +2820,39 @@ describe("session cost usage", () => {
     });
   });
 
+  it("keeps discovered first-message text on a UTF-16 boundary", async () => {
+    const root = await makeSessionCostRoot("discover-utf16-first-message");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const content = `${"a".repeat(99)}🚀tail`;
+    const fixtures = [
+      { sessionId: "sess-string", content },
+      { sessionId: "sess-block", content: [{ type: "text", text: content }] },
+    ];
+    for (const fixture of fixtures) {
+      await fs.writeFile(
+        path.join(sessionsDir, `${fixture.sessionId}.jsonl`),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-21T17:47:00.000Z",
+          message: { role: "user", content: fixture.content },
+        }),
+        "utf-8",
+      );
+    }
+
+    await withStateDir(root, async () => {
+      const messages = new Map(
+        (await discoverAllSessions()).map((session) => [
+          session.sessionId,
+          session.firstUserMessage,
+        ]),
+      );
+      expect(messages.get("sess-string")).toBe("a".repeat(99));
+      expect(messages.get("sess-block")).toBe("a".repeat(99));
+    });
+  });
+
   it("falls back to archived reset transcripts for per-session detail queries", async () => {
     const root = await makeSessionCostRoot("session-archive-fallback");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -2991,6 +3123,25 @@ example
     expect(logs).toHaveLength(1);
     expect(logs?.[0]?.role).toBe("user");
     expect(logs?.[0]?.content).toBe("hello there");
+  });
+
+  it("does not split surrogate pairs when truncating session log content", async () => {
+    const root = await makeSessionCostRoot("logs-utf16");
+    const sessionFile = path.join(root, "session.jsonl");
+    const content = "x".repeat(1999) + "🚀tail";
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-21T17:47:00.000Z",
+        message: { role: "assistant", content },
+      }),
+      "utf-8",
+    );
+
+    const logs = await loadSessionLogs({ sessionFile });
+
+    expect(logs?.[0]?.content).toBe(`${"x".repeat(1999)}…`);
   });
 
   it("normalizes malformed log timestamps with the transcript timestamp rules", async () => {

@@ -8,6 +8,8 @@ export type SessionCreateParams = {
   label?: string;
   model?: string;
   worktree?: boolean;
+  cwd?: string;
+  task?: string;
 };
 
 export function resolveSessionCreateParams(sessionKey = "", agentId?: string) {

@@ -1659,8 +1659,9 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
 });
 
 describe("VoiceCallWebhookServer classic response routing", () => {
-  it("keeps outbound calls on the top-level agent when the dialed number has an inbound route", async () => {
+  it("keeps outbound calls on their frozen agent when the dialed number has an inbound route", async () => {
     const call = createCall(Date.now());
+    call.agentId = "support";
     call.direction = "outbound";
     call.to = "+15550001111";
     call.sessionKey = "agent:top:voice:15550001111";
@@ -1696,8 +1697,9 @@ describe("VoiceCallWebhookServer classic response routing", () => {
     const params = requireFirstMockCall(
       mocks.generateVoiceResponse.mock.calls,
       "classic voice response",
-    )[0] as { voiceConfig?: VoiceCallConfig } | undefined;
+    )[0] as { agentId?: string; voiceConfig?: VoiceCallConfig } | undefined;
     expect(params?.voiceConfig?.agentId).toBe("top");
+    expect(params?.agentId).toBe("support");
     expect(speak).toHaveBeenCalledWith(call.callId, "Hello back", {
       listenAfterPlayback: true,
     });

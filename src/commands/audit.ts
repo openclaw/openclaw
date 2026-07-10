@@ -1,5 +1,6 @@
 /** Operator CLI for bounded metadata-only run/tool audit pages. */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   AuditEvent,
   AuditListParams,
@@ -63,7 +64,9 @@ function short(value: string | undefined, maxChars: number): string {
   if (!sanitized) {
     return "-";
   }
-  return sanitized.length <= maxChars ? sanitized : `${sanitized.slice(0, maxChars - 1)}…`;
+  return sanitized.length <= maxChars
+    ? sanitized
+    : `${truncateUtf16Safe(sanitized, maxChars - 1)}…`;
 }
 
 function formatAuditRows(events: AuditEvent[]): string[] {

@@ -748,13 +748,14 @@ async function initSessionStateAttemptLocked(
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
       persistedResponseUsage = entry.responseUsage;
+      persistedLabel = entry.label;
+      persistedDisplayName = entry.displayName;
     }
     // When a reset trigger (/new, /reset) starts a new session, also rotate the
-    // underlying CLI conversation and carry forward spawn lineage/label.
+    // underlying CLI conversation and carry forward spawn lineage.
     if (resetTriggered && entry) {
       // Explicit /new and /reset should rotate the underlying CLI conversation too.
       // Keep the model/auth choice, but force the next turn to mint a fresh CLI binding.
-      persistedLabel = entry.label;
       persistedSpawnedBy = entry.spawnedBy;
       persistedSpawnedWorkspaceDir = entry.spawnedWorkspaceDir;
       persistedSpawnedCwd = entry.spawnedCwd;
@@ -763,7 +764,6 @@ async function initSessionStateAttemptLocked(
       persistedSpawnDepth = entry.spawnDepth;
       persistedSubagentRole = entry.subagentRole;
       persistedSubagentControlScope = entry.subagentControlScope;
-      persistedDisplayName = entry.displayName;
     }
   }
 

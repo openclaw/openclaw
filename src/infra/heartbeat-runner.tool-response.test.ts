@@ -14,7 +14,7 @@ import {
 import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
-import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
+import { runHeartbeatOnce, testing, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
   seedMainSessionStore,
@@ -22,6 +22,13 @@ import {
 } from "./heartbeat-runner.test-utils.js";
 
 installHeartbeatRunnerTestRuntime();
+
+describe("heartbeat event previews", () => {
+  it("keeps the 200-code-unit preview UTF-16 well-formed", () => {
+    expect(testing.truncateHeartbeatPreview(`${"x".repeat(199)}🚀tail`)).toBe("x".repeat(199));
+    expect(testing.truncateHeartbeatPreview(undefined)).toBeUndefined();
+  });
+});
 
 describe("runHeartbeatOnce heartbeat response tool", () => {
   const TELEGRAM_GROUP = "-1001234567890";

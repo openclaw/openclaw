@@ -27,13 +27,13 @@ const PERSISTENT_NAMESPACE = "imessage.approval-reactions";
 const PERSISTENT_MAX_ENTRIES = 1000;
 const DEFAULT_REACTION_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
 
-export type IMessageApprovalReactionBinding = ApprovalReactionDecisionBinding;
+type IMessageApprovalReactionBinding = ApprovalReactionDecisionBinding;
 
 type IMessageApprovalReactionResolution = {
   approvalId: string;
   decision: ExecApprovalReplyDecision;
 };
-export type IMessageApprovalReactionHandleResult =
+type IMessageApprovalReactionHandleResult =
   | { handled: false; stopPolling: false }
   | { handled: true; stopPolling: false }
   | {
@@ -233,7 +233,7 @@ const imessageApprovalReactionTargets =
     readPersistedTarget,
   });
 
-export function listIMessageApprovalReactionBindings(
+function listIMessageApprovalReactionBindings(
   allowedDecisions: readonly ExecApprovalReplyDecision[],
 ): IMessageApprovalReactionBinding[] {
   return listApprovalReactionBindings({ allowedDecisions });

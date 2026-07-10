@@ -72,6 +72,21 @@ resolve_openclaw_effective_home() {
     echo "$openclaw_home"
 }
 
+resolve_openclaw_user_path() {
+    local input="$1"
+    local effective_home
+    effective_home="$(resolve_openclaw_effective_home)"
+    if [[ "$input" == "~" ]]; then
+        echo "$effective_home"
+    elif [[ "$input" == \~/* ]]; then
+        echo "${effective_home}${input:1}"
+    elif [[ "$input" == /* ]]; then
+        echo "$input"
+    else
+        echo "$PWD/$input"
+    fi
+}
+
 DOWNLOADER=""
 detect_downloader() {
     if command -v curl &> /dev/null; then
@@ -1058,8 +1073,6 @@ TAGLINES+=("I run on caffeine, JSON5, and the audacity of \"it worked on my mach
 TAGLINES+=("Gateway online—please keep hands, feet, and appendages inside the shell at all times.")
 TAGLINES+=("I speak fluent bash, mild sarcasm, and aggressive tab-completion energy.")
 TAGLINES+=("One CLI to rule them all, and one more restart because you changed the port.")
-TAGLINES+=("If it works, it's automation; if it breaks, it's a \"learning opportunity.\"")
-TAGLINES+=("Pairing codes exist because even bots believe in consent—and good security hygiene.")
 TAGLINES+=("Your .env is showing; don't worry, I'll pretend I didn't see it.")
 TAGLINES+=("I'll do the boring stuff while you dramatically stare at the logs like it's cinema.")
 TAGLINES+=("I'm not saying your workflow is chaotic... I'm just bringing a linter and a helmet.")
@@ -1070,13 +1083,10 @@ TAGLINES+=("Hot reload for config, cold sweat for deploys.")
 TAGLINES+=("I'm the assistant your terminal demanded, not the one your sleep schedule requested.")
 TAGLINES+=("I keep secrets like a vault... unless you print them in debug logs again.")
 TAGLINES+=("Automation with claws: minimal fuss, maximal pinch.")
-TAGLINES+=("I'm basically a Swiss Army knife, but with more opinions and fewer sharp edges.")
 TAGLINES+=("If you're lost, run doctor; if you're brave, run prod; if you're wise, run tests.")
 TAGLINES+=("Your task has been queued; your dignity has been deprecated.")
-TAGLINES+=("I can't fix your code taste, but I can fix your build and your backlog.")
 TAGLINES+=("I'm not magic—I'm just extremely persistent with retries and coping strategies.")
 TAGLINES+=("It's not \"failing,\" it's \"discovering new ways to configure the same thing wrong.\"")
-TAGLINES+=("Give me a workspace and I'll give you fewer tabs, fewer toggles, and more oxygen.")
 TAGLINES+=("I read logs so you can keep pretending you don't have to.")
 TAGLINES+=("If something's on fire, I can't extinguish it—but I can write a beautiful postmortem.")
 TAGLINES+=("I'll refactor your busywork like it owes me money.")
@@ -1086,13 +1096,10 @@ TAGLINES+=("I'm like tmux: confusing at first, then suddenly you can't live with
 TAGLINES+=("I can run local, remote, or purely on vibes—results may vary with DNS.")
 TAGLINES+=("If you can describe it, I can probably automate it—or at least make it funnier.")
 TAGLINES+=("Your config is valid, your assumptions are not.")
-TAGLINES+=("I don't just autocomplete—I auto-commit (emotionally), then ask you to review (logically).")
-TAGLINES+=("Less clicking, more shipping, fewer \"where did that file go\" moments.")
 TAGLINES+=("Claws out, commit in—let's ship something mildly responsible.")
 TAGLINES+=("I'll butter your workflow like a lobster roll: messy, delicious, effective.")
 TAGLINES+=("Shell yeah—I'm here to pinch the toil and leave you the glory.")
 TAGLINES+=("If it's repetitive, I'll automate it; if it's hard, I'll bring jokes and a rollback plan.")
-TAGLINES+=("Because texting yourself reminders is so 2024.")
 TAGLINES+=("WhatsApp, but make it ✨engineering✨.")
 TAGLINES+=("Turning \"I'll reply later\" into \"my bot replied instantly\".")
 TAGLINES+=("The only crab in your contacts you actually want to hear from. 🦞")
@@ -1109,7 +1116,6 @@ TAGLINES+=("WhatsApp automation without the \"please accept our new privacy poli
 TAGLINES+=("Chat APIs that don't require a Senate hearing.")
 TAGLINES+=("Because Threads wasn't the answer either.")
 TAGLINES+=("Your messages, your servers, Meta's tears.")
-TAGLINES+=("iMessage green bubble energy, but for everyone.")
 TAGLINES+=("Siri's competent cousin.")
 TAGLINES+=("Works on Android. Crazy concept, we know.")
 TAGLINES+=("No \$999 stand required.")
@@ -2496,7 +2502,7 @@ warn_shell_path_missing_dir() {
             echo ""
             ui_info "PATH updated in ${rc}: added ${label} (${dir})"
             echo "  New terminals pick this up automatically."
-            echo "  For this shell, run: source ${rc}"
+            echo "  For this shell, run: source ${rc}; hash -r"
             return 0
         fi
     done
@@ -2515,8 +2521,9 @@ openclaw_command_for_user() {
         return 0
     fi
 
-    local claw_dir="${claw%/*}"
-    if [[ "$claw_dir" != "$claw" ]] && path_has_dir "$ORIGINAL_PATH" "$claw_dir"; then
+    local original_claw=""
+    original_claw="$(PATH="$ORIGINAL_PATH" type -P openclaw 2>/dev/null || true)"
+    if [[ "$original_claw" == "$claw" ]]; then
         echo "openclaw"
         return 0
     fi
@@ -2649,6 +2656,25 @@ resolve_openclaw_bin() {
 
     echo ""
     return 1
+}
+
+resolve_installed_openclaw_bin() {
+    local installed_bin=""
+    if [[ "$INSTALL_METHOD" == "git" ]]; then
+        installed_bin="$HOME/.local/bin/openclaw"
+    elif [[ "$INSTALL_METHOD" == "npm" ]]; then
+        local npm_bin=""
+        npm_bin="$(npm_global_bin_dir || true)"
+        if [[ -n "$npm_bin" ]]; then
+            installed_bin="${npm_bin}/openclaw"
+        fi
+    fi
+
+    if [[ -n "$installed_bin" && -x "$installed_bin" ]]; then
+        echo "$installed_bin"
+        return 0
+    fi
+    resolve_openclaw_bin
 }
 
 install_openclaw_from_git() {
@@ -2888,68 +2914,32 @@ maybe_open_dashboard() {
     "$claw" dashboard || true
 }
 
-resolve_workspace_dir() {
-    local profile="${OPENCLAW_PROFILE:-default}"
+has_openclaw_config() {
     local effective_home
     effective_home="$(resolve_openclaw_effective_home)"
-    if [[ "${profile}" != "default" ]]; then
-        echo "${effective_home}/.openclaw/workspace-${profile}"
-    else
-        echo "${effective_home}/.openclaw/workspace"
-    fi
-}
-
-run_bootstrap_onboarding_if_needed() {
-    if [[ "${NO_ONBOARD}" == "1" ]]; then
+    if [[ -n "${OPENCLAW_CONFIG_PATH:-}" ]]; then
+        local config_path
+        config_path="$(resolve_openclaw_user_path "$OPENCLAW_CONFIG_PATH")"
+        [[ -f "$config_path" ]]
         return
     fi
 
-    local effective_home
-    effective_home="$(resolve_openclaw_effective_home)"
-    local config_path="${OPENCLAW_CONFIG_PATH:-$effective_home/.openclaw/openclaw.json}"
-    local legacy_config_path="${HOME}/.openclaw/openclaw.json"
-    local legacy_clawdbot_path="${HOME}/.clawdbot/clawdbot.json"
-    if [[ -f "${config_path}" || -f "$effective_home/.clawdbot/clawdbot.json" ]]; then
-        return
-    fi
-    if [[ -z "${OPENCLAW_CONFIG_PATH:-}" && "${effective_home}" != "${HOME}" ]]; then
-        if [[ -f "$legacy_config_path" || -f "$legacy_clawdbot_path" ]]; then
-            return
+    if [[ -n "${OPENCLAW_STATE_DIR:-}" ]]; then
+        local state_dir
+        state_dir="$(resolve_openclaw_user_path "$OPENCLAW_STATE_DIR")"
+        if [[ -f "$state_dir/openclaw.json" || -f "$state_dir/clawdbot.json" ]]; then
+            return 0
         fi
+        return 1
     fi
 
-    local workspace
-    workspace="$(resolve_workspace_dir)"
-    local bootstrap="${workspace}/BOOTSTRAP.md"
-
-    if [[ ! -f "${bootstrap}" ]]; then
-        return
+    if [[ -f "$effective_home/.openclaw/openclaw.json" ||
+        -f "$effective_home/.openclaw/clawdbot.json" ||
+        -f "$effective_home/.clawdbot/openclaw.json" ||
+        -f "$effective_home/.clawdbot/clawdbot.json" ]]; then
+        return 0
     fi
-
-    if ! is_promptable; then
-        local user_claw
-        user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
-        ui_info "BOOTSTRAP.md found but no TTY; run ${user_claw} onboard to finish setup"
-        return
-    fi
-
-    ui_info "BOOTSTRAP.md found; starting onboarding"
-    local claw="${OPENCLAW_BIN:-}"
-    if [[ -z "$claw" ]]; then
-        claw="$(resolve_openclaw_bin || true)"
-    fi
-    if [[ -z "$claw" ]]; then
-        ui_info "BOOTSTRAP.md found but openclaw not on PATH; skipping onboarding"
-        warn_openclaw_not_found
-        return
-    fi
-
-    "$claw" onboard || {
-        local user_claw
-        user_claw="$(openclaw_command_for_user "$claw")"
-        ui_error "Onboarding failed; run ${user_claw} onboard to retry"
-        return
-    }
+    return 1
 }
 
 load_install_version_helpers() {
@@ -3060,7 +3050,9 @@ refresh_gateway_service_if_loaded() {
     if run_quiet_step "Restarting gateway service" "$claw" gateway restart; then
         ui_success "Gateway service restarted"
     else
-        ui_warn "Gateway service restart failed; continuing. Run: openclaw gateway restart"
+        local user_claw
+        user_claw="$(openclaw_command_for_user "$claw")"
+        ui_warn "Gateway service restart failed; continuing. Run: ${user_claw} gateway restart"
         return 0
     fi
 
@@ -3071,6 +3063,7 @@ verify_installation() {
     if [[ "${VERIFY_INSTALL}" != "1" ]]; then
         return 0
     fi
+    local verify_gateway="${1:-true}"
 
     ui_stage "Verifying installation"
     local claw="${OPENCLAW_BIN:-}"
@@ -3085,10 +3078,14 @@ verify_installation() {
 
     run_quiet_step "Checking OpenClaw version" "$claw" --version || return 1
 
-    if is_gateway_daemon_loaded "$claw"; then
+    if [[ "$verify_gateway" != "true" ]]; then
+        ui_info "Setup not complete; skipping gateway service check"
+    elif is_gateway_daemon_loaded "$claw"; then
         run_quiet_step "Checking gateway service" "$claw" gateway status --deep || {
+            local user_claw
+            user_claw="$(openclaw_command_for_user "$claw")"
             ui_error "Install verify failed: gateway service unhealthy"
-            ui_info "Run: openclaw gateway status --deep"
+            ui_info "Run: ${user_claw} gateway status --deep"
             return 1
         }
     else
@@ -3163,7 +3160,6 @@ main() {
         is_upgrade=true
     fi
     local should_open_dashboard=false
-    local skip_onboard=false
 
     ui_stage "Preparing environment"
 
@@ -3218,7 +3214,7 @@ main() {
 
     ui_stage "Finalizing setup"
 
-    OPENCLAW_BIN="$(resolve_openclaw_bin || true)"
+    OPENCLAW_BIN="$(resolve_installed_openclaw_bin || true)"
     warn_duplicate_openclaw_global_installs || true
 
     # PATH warning: installs can succeed while the user's login shell still lacks npm's global bin dir.
@@ -3233,21 +3229,11 @@ main() {
         fi
     fi
 
-    refresh_gateway_service_if_loaded
-
-    # Step 6: Run doctor for migrations on upgrades and git installs
-    local run_doctor_after=false
-    if [[ "$is_upgrade" == "true" || "$INSTALL_METHOD" == "git" ]]; then
-        run_doctor_after=true
+    local config_present=false
+    if has_openclaw_config; then
+        config_present=true
+        refresh_gateway_service_if_loaded
     fi
-    if [[ "$run_doctor_after" == "true" ]]; then
-        if run_doctor; then
-            should_open_dashboard=true
-        fi
-    fi
-
-    # Step 7: If BOOTSTRAP.md is still present in the workspace, resume onboarding
-    run_bootstrap_onboarding_if_needed
 
     local installed_version
     installed_version=$(resolve_openclaw_version)
@@ -3304,17 +3290,46 @@ main() {
     echo ""
 
     if [[ "$INSTALL_METHOD" == "git" && -n "$final_git_dir" ]]; then
+        local user_claw
+        user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
         ui_section "Source install details"
         ui_kv "Checkout" "$final_git_dir"
         ui_kv "Wrapper" "$HOME/.local/bin/openclaw"
-        ui_kv "Update command" "openclaw update"
+        ui_kv "Update command" "${user_claw} update"
         ui_kv "Switch to npm" "curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method npm"
+    fi
+
+    if [[ "$config_present" != "true" ]]; then
+        if [[ "$NO_ONBOARD" == "1" ]]; then
+            local user_claw
+            user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
+            ui_info "Skipping onboard (requested); run ${user_claw} onboard later"
+        else
+            ui_info "Starting setup"
+            echo ""
+            if is_promptable; then
+                local claw="${OPENCLAW_BIN:-}"
+                if [[ -z "$claw" ]]; then
+                    claw="$(resolve_installed_openclaw_bin || true)"
+                fi
+                if [[ -z "$claw" ]]; then
+                    ui_info "Skipping onboarding (openclaw not on PATH yet)"
+                    warn_openclaw_not_found
+                    return 0
+                fi
+                exec </dev/tty
+                exec "$claw" onboard
+            fi
+            local user_claw
+            user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
+            ui_info "No TTY; run ${user_claw} onboard to finish setup"
+        fi
     elif [[ "$is_upgrade" == "true" ]]; then
         ui_info "Upgrade complete"
         if has_controlling_tty || [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
             local claw="${OPENCLAW_BIN:-}"
             if [[ -z "$claw" ]]; then
-                claw="$(resolve_openclaw_bin || true)"
+                claw="$(resolve_installed_openclaw_bin || true)"
             fi
             if [[ -z "$claw" ]]; then
                 ui_info "Skipping doctor (openclaw not on PATH yet)"
@@ -3345,75 +3360,50 @@ main() {
                 doctor_ok=1
             fi
             if (( doctor_ok )); then
+                should_open_dashboard=true
                 ui_info "Updating plugins"
                 OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" plugins update --all || true
             else
                 ui_warn "Doctor failed; skipping plugin updates"
             fi
         else
+            if run_doctor; then
+                should_open_dashboard=true
+            fi
             local user_claw
             user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
-            ui_info "No TTY; run ${user_claw} doctor and ${user_claw} plugins update --all manually"
+            ui_info "No TTY; run ${user_claw} plugins update --all manually"
         fi
     else
-        if [[ "$NO_ONBOARD" == "1" || "$skip_onboard" == "true" ]]; then
-            local user_claw
-            user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
-            ui_info "Skipping onboard (requested); run ${user_claw} onboard later"
-        else
-            local effective_home
-            effective_home="$(resolve_openclaw_effective_home)"
-            local config_path="${OPENCLAW_CONFIG_PATH:-$effective_home/.openclaw/openclaw.json}"
-            if [[ -f "${config_path}" || -f "$effective_home/.clawdbot/clawdbot.json" ]]; then
-                ui_info "Config already present; running doctor"
-                if run_doctor; then
-                    should_open_dashboard=true
-                fi
-                ui_info "Config already present; skipping onboarding"
-                skip_onboard=true
-            fi
-            ui_info "Starting setup"
-            echo ""
-            if is_promptable; then
-                local claw="${OPENCLAW_BIN:-}"
-                if [[ -z "$claw" ]]; then
-                    claw="$(resolve_openclaw_bin || true)"
-                fi
-                if [[ -z "$claw" ]]; then
-                    ui_info "Skipping onboarding (openclaw not on PATH yet)"
-                    warn_openclaw_not_found
-                    return 0
-                fi
-                exec </dev/tty
-                exec "$claw" onboard
-            fi
-            local user_claw
-            user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
-            ui_info "No TTY; run ${user_claw} onboard to finish setup"
-            return 0
+        ui_info "Config already present; running doctor"
+        if run_doctor; then
+            should_open_dashboard=true
         fi
+        ui_info "Config already present; skipping onboarding"
     fi
 
-    if command -v openclaw &> /dev/null; then
+    if [[ "$config_present" == "true" ]]; then
         local claw="${OPENCLAW_BIN:-}"
         if [[ -z "$claw" ]]; then
-            claw="$(resolve_openclaw_bin || true)"
+            claw="$(resolve_installed_openclaw_bin || true)"
         fi
         if [[ -n "$claw" ]] && is_gateway_daemon_loaded "$claw"; then
+            local user_claw
+            user_claw="$(openclaw_command_for_user "$claw")"
             if [[ "$DRY_RUN" == "1" ]]; then
-                ui_info "Gateway daemon detected; would restart (openclaw daemon restart)"
+                ui_info "Gateway daemon detected; would restart (${user_claw} daemon restart)"
             else
                 ui_info "Gateway daemon detected; restarting"
                 if OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" daemon restart >/dev/null 2>&1; then
                     ui_success "Gateway restarted"
                 else
-                    ui_warn "Gateway restart failed; try: openclaw daemon restart"
+                    ui_warn "Gateway restart failed; try: ${user_claw} daemon restart"
                 fi
             fi
         fi
     fi
 
-    if ! verify_installation; then
+    if ! verify_installation "$config_present"; then
         exit 1
     fi
 

@@ -323,7 +323,7 @@ export function buildStatusHealthRows(params: {
 }
 
 /** Formats event-loop latency/utilization health into one table detail string. */
-export function formatEventLoopHealthDetail(eventLoop: EventLoopHealthLike): string {
+function formatEventLoopHealthDetail(eventLoop: EventLoopHealthLike): string {
   const parts = [
     eventLoop.reasons.length > 0 ? `reasons ${eventLoop.reasons.join(",")}` : "healthy",
     `max ${Math.round(eventLoop.delayMaxMs)}ms`,

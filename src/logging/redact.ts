@@ -4,6 +4,7 @@ import { compileConfigRegex } from "../security/config-regex.js";
 import { readLoggingConfig } from "./config.js";
 import { replacePatternBounded } from "./redact-bounded.js";
 import { isFullContextToolPayloadRedaction } from "./redact-internal.js";
+import { redactRegisteredSecretValues } from "./secret-redaction-registry.js";
 
 export type RedactSensitiveMode = "off" | "tools";
 export type RedactPattern = string | RegExp;
@@ -987,18 +988,21 @@ export function redactSensitiveText(text: string, options?: RedactOptions): stri
   if (!text) {
     return text;
   }
+  const exactRedacted = redactRegisteredSecretValues(text, maskToken);
   const resolvedOptions = options ?? resolveConfigRedaction();
   if (normalizeMode(resolvedOptions.mode) === "off") {
-    return text;
+    return exactRedacted;
   }
-  if (!resolvedOptions.patterns?.length && !couldMatchDefaultRedactPatterns(text)) {
-    return text;
+  if (!resolvedOptions.patterns?.length && !couldMatchDefaultRedactPatterns(exactRedacted)) {
+    return exactRedacted;
   }
   const resolved = resolveRedactOptions(resolvedOptions);
   if (!resolved.patterns.length) {
-    return text;
+    return exactRedacted;
   }
-  return redactText(text, resolved.patterns, { redactFormBodies: resolved.redactFormBodies });
+  return redactText(exactRedacted, resolved.patterns, {
+    redactFormBodies: resolved.redactFormBodies,
+  });
 }
 
 export function redactToolDetail(detail: string): string {
@@ -1030,9 +1034,10 @@ export function redactToolPayloadTextWithConfig(
   if (!text) {
     return text;
   }
+  const exactRedacted = redactRegisteredSecretValues(text, maskToken);
   if (isFullContextToolPayloadRedaction(loggingConfig)) {
     const resolved = resolveRedactOptions(resolveToolPayloadRedaction(loggingConfig));
-    return redactText(text, resolved.patterns, {
+    return redactText(exactRedacted, resolved.patterns, {
       fullContext: true,
       redactFormBodies: resolved.redactFormBodies,
     });
@@ -1050,11 +1055,12 @@ function redactSensitiveFieldValueWithOptions(
   options: RedactOptions,
   path: readonly string[] = [key],
 ): string {
+  const exactRedacted = redactRegisteredSecretValues(value, maskToken);
   const resolved = resolveRedactOptions(options);
   if (resolved.mode === "off") {
-    return value;
+    return exactRedacted;
   }
-  const redacted = redactText(value, resolved.patterns, {
+  const redacted = redactText(exactRedacted, resolved.patterns, {
     redactFormBodies: resolved.redactFormBodies,
   });
   const shouldRedactAppPassword = redacted !== value || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key);
@@ -1073,17 +1079,17 @@ function redactSensitiveFieldValueWithOptions(
   }
   if (
     normalizedStructuredKey === "session" &&
-    STRUCTURED_INTERNAL_SOURCE_PATH_VALUE_RE.test(value)
+    STRUCTURED_INTERNAL_SOURCE_PATH_VALUE_RE.test(exactRedacted)
   ) {
-    return value;
+    return exactRedacted;
   }
   if (isSensitiveFieldKey(key)) {
-    if (isShellReferenceToKey(key, value)) {
-      return value;
+    if (isShellReferenceToKey(key, exactRedacted)) {
+      return exactRedacted;
     }
-    return maskToken(value);
+    return maskToken(exactRedacted);
   }
-  return value;
+  return exactRedacted;
 }
 
 export function redactSensitiveFieldValue(

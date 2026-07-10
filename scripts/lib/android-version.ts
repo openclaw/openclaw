@@ -14,7 +14,7 @@ type AndroidVersionManifest = {
   versionCode: number;
 };
 
-export type ResolvedAndroidVersion = {
+type ResolvedAndroidVersion = {
   canonicalVersion: string;
   changelogPath: string;
   releaseNotesPath: string;

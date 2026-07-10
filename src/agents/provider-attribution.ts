@@ -519,6 +519,25 @@ function buildNvidiaAttributionPolicy(
   };
 }
 
+function buildGoogleAttributionPolicy(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): ProviderAttributionPolicy {
+  const identity = resolveProviderAttributionIdentity(env);
+  return {
+    provider: "google",
+    enabledByDefault: true,
+    verification: "vendor-documented",
+    hook: "request-headers",
+    docsUrl: "https://ai.google.dev/gemini-api/docs/partner-integration",
+    reviewNote:
+      "Gemini API partner integration guidance requires x-goog-api-client on partner and library traffic.",
+    ...identity,
+    headers: {
+      "x-goog-api-client": `${OPENCLAW_ATTRIBUTION_ORIGINATOR}/${identity.version}`,
+    },
+  };
+}
+
 function buildOpenAIAttributionPolicy(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): ProviderAttributionPolicy {
@@ -581,18 +600,13 @@ export function listProviderAttributionPolicies(
   return [
     buildOpenRouterAttributionPolicy(env),
     buildNvidiaAttributionPolicy(env),
+    buildGoogleAttributionPolicy(env),
     buildOpenAIAttributionPolicy(env),
     buildXaiAttributionPolicy(env),
     buildSdkHookOnlyPolicy(
       "anthropic",
       "default-headers",
       "Anthropic JS SDK exposes defaultHeaders, but app attribution is not yet verified.",
-      env,
-    ),
-    buildSdkHookOnlyPolicy(
-      "google",
-      "user-agent-extra",
-      "Google GenAI JS SDK exposes userAgentExtra/httpOptions, but provider-side attribution is not yet verified.",
       env,
     ),
     buildSdkHookOnlyPolicy(
@@ -662,6 +676,9 @@ export function resolveProviderRequestPolicy(
   }
   if (!attributionProvider && endpointClass === "nvidia-native") {
     attributionProvider = "nvidia";
+  }
+  if (!attributionProvider && endpointClass === "google-generative-ai") {
+    attributionProvider = "google";
   }
 
   const attributionPolicy = attributionProvider

@@ -255,7 +255,25 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes live command retry helper changes through its regression test", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/ci-live-command-retry.sh"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/ci-live-command-retry.test.ts"],
+    });
+  });
+
   it("routes release wrapper changes through their owner tests", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/apple-release-source-check.sh"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/apple-release-source-check.test.ts"],
+    });
+    expect(resolveChangedTestTargetPlan(["scripts/ios-release-prepare.sh"])).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/ios-release-prepare.test.ts",
+        "test/scripts/ios-release-wrapper-args.test.ts",
+      ],
+    });
     expect(resolveChangedTestTargetPlan(["scripts/android-release.sh"])).toEqual({
       mode: "targets",
       targets: ["test/scripts/android-release-wrapper-args.test.ts"],
@@ -497,7 +515,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ],
       [
         "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs",
-        ["test/scripts/docker-build-helper.test.ts"],
+        [
+          "test/scripts/codex-install-assertions.test.ts",
+          "test/scripts/docker-build-helper.test.ts",
+        ],
       ],
       [
         "scripts/e2e/lib/codex-install-utils.mjs",
@@ -1181,15 +1202,19 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
-  it("keeps docs i18n Go module edits on Go module tests", () => {
-    for (const modulePath of [
-      "scripts/docs-i18n/main.go",
-      "scripts/docs-i18n/main_test.go",
-      "scripts/docs-i18n/go.mod",
-    ]) {
+  it("keeps docs i18n Go edits on their module and workflow guards", () => {
+    const cases = [
+      ["scripts/docs-i18n/main.go", ["test/scripts/docs-i18n.test.ts"]],
+      ["scripts/docs-i18n/main_test.go", ["test/scripts/docs-i18n.test.ts"]],
+      [
+        "scripts/docs-i18n/go.mod",
+        ["test/scripts/docs-i18n.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
+      ],
+    ] as const;
+    for (const [modulePath, targets] of cases) {
       expect(resolveChangedTestTargetPlan([modulePath]), modulePath).toEqual({
         mode: "targets",
-        targets: ["test/scripts/docs-i18n.test.ts"],
+        targets,
       });
     }
   });
@@ -1237,6 +1262,22 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/plugin-contract-test-plan.test.ts",
         "test/scripts/plugin-prerelease-test-plan.test.ts",
         "test/scripts/verify-pr-hosted-gates.test.ts",
+      ],
+    });
+  });
+
+  it("keeps generated locale publisher and inventory edits on workflow guards", () => {
+    expect(
+      resolveChangedTestTargetPlan([".github/actions/publish-generated-pr/action.yml"]),
+    ).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/ci-workflow-guards.test.ts"],
+    });
+    expect(resolveChangedTestTargetPlan(["scripts/native-app-i18n.ts"])).toEqual({
+      mode: "targets",
+      targets: [
+        "test/scripts/native-app-i18n.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
       ],
     });
   });
@@ -1475,10 +1516,21 @@ describe("scripts/test-projects changed-target routing", () => {
         ["test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts"],
       ],
       ["scripts/ios-run.sh", ["test/scripts/ios-run.test.ts"]],
+      ["scripts/ios-write-version-xcconfig.sh", ["test/scripts/ios-version.test.ts"]],
       ["scripts/create-dmg.sh", ["test/scripts/create-dmg.test.ts"]],
       ["scripts/make_appcast.sh", ["test/scripts/make-appcast.test.ts"]],
       ["scripts/package-mac-app.sh", ["test/scripts/package-mac-app.test.ts"]],
       ["scripts/package-mac-dist.sh", ["test/scripts/package-mac-dist.test.ts"]],
+      [
+        "scripts/lib/build-metadata.sh",
+        [
+          "src/docker-setup.e2e.test.ts",
+          "test/scripts/apple-release-source-check.test.ts",
+          "test/scripts/ios-version.test.ts",
+          "test/scripts/package-mac-app.test.ts",
+          "test/scripts/test-install-sh-docker.test.ts",
+        ],
+      ],
       [
         "scripts/lib/swift-toolchain.sh",
         ["test/scripts/package-mac-app.test.ts", "test/scripts/package-mac-dist.test.ts"],
@@ -1967,6 +2019,16 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/check-openclaw-package-tarball.test.ts",
           "test/scripts/postinstall-bundled-plugins.test.ts",
           "test/release-check.test.ts",
+        ],
+      ],
+      [
+        "scripts/lib/build-metadata.sh",
+        [
+          "src/docker-setup.e2e.test.ts",
+          "test/scripts/apple-release-source-check.test.ts",
+          "test/scripts/ios-version.test.ts",
+          "test/scripts/package-mac-app.test.ts",
+          "test/scripts/test-install-sh-docker.test.ts",
         ],
       ],
       [

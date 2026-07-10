@@ -18,7 +18,7 @@ describe("createQaSmokeCiMatrix", () => {
     expect(first.include).toHaveLength(3);
 
     const scenarioIds = first.include.flatMap((shard) => shard.scenario_ids);
-    expect(scenarioIds).toHaveLength(89);
+    expect(scenarioIds).toHaveLength(98);
     expect(new Set(scenarioIds).size).toBe(scenarioIds.length);
     const scenarioById = new Map(
       readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario] as const),

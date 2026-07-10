@@ -4,6 +4,7 @@
  */
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
 import {
   type CodexAppServerRequestMethod,
@@ -139,6 +140,12 @@ export class CodexAppServerClient {
     this.child = child;
     this.lines = createInterface({ input: child.stdout });
     this.lines.on("line", (line) => this.handleLine(line));
+    this.lines.on("error", (error) =>
+      this.closeWithError(error instanceof Error ? error : new Error(String(error))),
+    );
+    child.stdout.on("error", (error) =>
+      this.closeWithError(error instanceof Error ? error : new Error(String(error))),
+    );
     child.stderr.on("data", (chunk: Buffer | string) => {
       const text = chunk.toString("utf8");
       this.stderrTail = appendBoundedTail(this.stderrTail, text, CODEX_APP_SERVER_STDERR_TAIL_MAX);
@@ -146,6 +153,11 @@ export class CodexAppServerClient {
       if (trimmed) {
         embeddedAgentLog.debug(`codex app-server stderr: ${trimmed}`);
       }
+    });
+    // Codex reserves stderr for diagnostics; losing that stream must not tear
+    // down an otherwise healthy JSON-RPC connection on stdout.
+    child.stderr.on("error", (error) => {
+      embeddedAgentLog.warn("codex app-server stderr stream failed", { error });
     });
     child.once("error", (error) =>
       this.closeWithError(error instanceof Error ? error : new Error(String(error))),
@@ -728,7 +740,7 @@ function redactCodexAppServerLinePreview(value: string): string {
       "$1$2$3<redacted>$4",
     );
   return redacted.length > CODEX_APP_SERVER_PARSE_LOG_MAX
-    ? `${redacted.slice(0, CODEX_APP_SERVER_PARSE_LOG_MAX)}...`
+    ? `${truncateUtf16Safe(redacted, CODEX_APP_SERVER_PARSE_LOG_MAX)}...`
     : redacted;
 }
 

@@ -73,6 +73,9 @@
       "@openclaw/gateway-protocol/connect-error-details": [
         "./packages/gateway-protocol/src/connect-error-details.ts"
       ],
+      "@openclaw/gateway-protocol/frame-guards": [
+        "./packages/gateway-protocol/src/frame-guards.ts"
+      ],
       "@openclaw/gateway-protocol/schema": ["./packages/gateway-protocol/src/schema.ts"],
       "@openclaw/gateway-protocol/startup-unavailable": [
         "./packages/gateway-protocol/src/startup-unavailable.ts"

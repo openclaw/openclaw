@@ -8,7 +8,6 @@ import {
   normalizeSidebarPinnedRoutes,
   sidebarMoreRoutes,
 } from "./app-navigation.ts";
-import { routeIdFromPath } from "./app-routes.ts";
 
 describe("sidebar pinned routes", () => {
   it("defaults to a small pinned set drawn from the customizable routes", () => {
@@ -40,6 +39,15 @@ describe("sidebar pinned routes", () => {
     expect(normalizeSidebarPinnedRoutes([])).toEqual([]);
   });
 
+  it("keeps the plugin manager in the customizable workspace routes", () => {
+    expect(normalizeSidebarPinnedRoutes(["plugins", "overview", "plugins"])).toEqual([
+      "plugins",
+      "overview",
+    ]);
+    expect(sidebarMoreRoutes(["overview"])).toContain("plugins");
+    expect(SETTINGS_NAVIGATION_ROUTES).not.toContain("plugins");
+  });
+
   it("falls back to null for non-list values so callers use defaults", () => {
     expect(normalizeSidebarPinnedRoutes(undefined)).toBeNull();
     expect(normalizeSidebarPinnedRoutes({ overview: true })).toBeNull();
@@ -52,16 +60,5 @@ describe("sidebar pinned routes", () => {
     expect(more).not.toContain("overview");
     expect(more).not.toContain("usage");
     expect(new Set([...pinned, ...more])).toEqual(new Set(SIDEBAR_NAV_ROUTES));
-  });
-
-  it("routes every published settings slice", () => {
-    expect(routeIdFromPath("/communications")).toBe("communications");
-    expect(routeIdFromPath("/appearance")).toBe("appearance");
-    expect(routeIdFromPath("/automation")).toBe("automation");
-    expect(routeIdFromPath("/infrastructure")).toBe("infrastructure");
-    expect(routeIdFromPath("/ai-agents")).toBe("ai-agents");
-    expect(routeIdFromPath("/config")).toBe("config");
-    expect(routeIdFromPath("/channels")).toBe("channels");
-    expect(routeIdFromPath("/worktrees")).toBe("worktrees");
   });
 });

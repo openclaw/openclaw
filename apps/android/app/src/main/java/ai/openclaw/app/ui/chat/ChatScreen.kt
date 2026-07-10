@@ -106,6 +106,28 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
+/** Returns a pending assistant prompt only when chat can accept it immediately. */
+internal fun resolvePendingAssistantAutoSend(
+  pendingPrompt: String?,
+  healthOk: Boolean,
+  pendingRunCount: Int,
+): String? {
+  val prompt = pendingPrompt?.trim()?.ifEmpty { null } ?: return null
+  if (!healthOk || pendingRunCount > 0) return null
+  return prompt
+}
+
+/** Chooses the session key to load for initial chat hydration, if any. */
+internal fun resolveInitialChatLoadSessionKey(
+  sessionKey: String,
+  mainSessionKey: String,
+): String? {
+  val current = sessionKey.trim()
+  val main = mainSessionKey.trim().ifEmpty { "main" }
+  if (current.isNotEmpty() && current != "main" && current != main) return null
+  return main
+}
+
 /** Full chat surface that wires MainViewModel state to messages, attachments, voice, and composer actions. */
 @Composable
 fun ChatScreen(
@@ -186,6 +208,7 @@ fun ChatScreen(
     )
   val voiceNoteState by voiceNoteRecorder.state.collectAsState()
   val voiceNoteElapsedMs by voiceNoteRecorder.elapsedMs.collectAsState()
+  val voiceNoteLevel by voiceNoteRecorder.inputLevel.collectAsState()
   val pickImages =
     rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
       if (uris.isNullOrEmpty()) return@rememberLauncherForActivityResult
@@ -346,6 +369,7 @@ fun ChatScreen(
       onRemoveAttachment = { id -> attachments.removeAll { it.id == id } },
       voiceNoteState = voiceNoteState,
       voiceNoteElapsedMs = voiceNoteElapsedMs,
+      voiceNoteLevel = voiceNoteLevel,
       recordVoiceNoteEnabled = pendingRunCount == 0 && !micCaptureActive,
       onStartVoiceNote = { scope.launch { voiceNoteRecorder.start() } },
       onCancelVoiceNote = voiceNoteRecorder::cancel,
@@ -1087,6 +1111,7 @@ private fun ChatComposer(
   onRemoveAttachment: (String) -> Unit,
   voiceNoteState: VoiceNoteRecorderState,
   voiceNoteElapsedMs: Long,
+  voiceNoteLevel: Float,
   recordVoiceNoteEnabled: Boolean,
   onStartVoiceNote: () -> Unit,
   onCancelVoiceNote: () -> Unit,
@@ -1146,6 +1171,7 @@ private fun ChatComposer(
       if (voiceNoteState is VoiceNoteRecorderState.Recording) {
         VoiceNoteRecordingControls(
           elapsedMs = voiceNoteElapsedMs,
+          level = voiceNoteLevel,
           onCancel = onCancelVoiceNote,
           onDone = onFinishVoiceNote,
           modifier = Modifier.weight(1f),

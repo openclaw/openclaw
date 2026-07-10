@@ -9,7 +9,7 @@ import {
   asDateTimestampMs,
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
-import { resolveAgentAvatar, resolvePublicAgentAvatarSource } from "../agents/identity-avatar.js";
+import { resolvePublicAgentAvatarSource } from "../agents/identity-avatar.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import {
@@ -31,7 +31,10 @@ import { extractOriginalFilename } from "../media/store.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import {
+  DEFAULT_ASSISTANT_IDENTITY,
+  resolvePublicAssistantIdentity,
+} from "./assistant-identity.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -39,6 +42,7 @@ import {
 } from "./auth-rate-limit.js";
 import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
+  CONTROL_UI_BASE_PATH_ATTRIBUTE,
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   type ControlUiBootstrapConfig,
@@ -54,7 +58,6 @@ import {
   buildControlUiAvatarUrl,
   CONTROL_UI_AVATAR_PREFIX,
   normalizeControlUiBasePath,
-  resolveAssistantAvatarUrl,
 } from "./control-ui-shared.js";
 import { buildMissingScopeForbiddenBody, sendGatewayAuthFailure } from "./http-common.js";
 import {
@@ -173,7 +176,7 @@ const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
 ]);
 
 /** Rewrites root-absolute Control UI public asset hrefs for configured base paths. */
-export function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath: string): string {
+function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath: string): string {
   const normalized = normalizeControlUiBasePath(basePath);
   if (!normalized) {
     return html;
@@ -185,6 +188,15 @@ export function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath
     next = next.split(rootHref).join(baseHref);
   }
   return next;
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("'", "&#39;");
 }
 
 type ControlUiAvatarResolution =
@@ -788,12 +800,16 @@ function serveResolvedIndexHtml(
   basePath?: string,
   allowWasm?: boolean,
 ) {
-  const withBasePath = rewriteControlUiIndexHtmlPublicAssetHrefs(body, basePath ?? "");
+  const normalizedBasePath = normalizeControlUiBasePath(basePath);
+  const withBasePath = rewriteControlUiIndexHtmlPublicAssetHrefs(body, normalizedBasePath);
+  const basePathAttribute = normalizedBasePath
+    ? ` ${CONTROL_UI_BASE_PATH_ATTRIBUTE}="${escapeHtmlAttribute(normalizedBasePath)}"`
+    : "";
   // Let the app initialize fail-closed without guessing whether this document
   // was served with the terminal's WASM CSP allowance.
   const prepared = withBasePath.replace(
     /<html\b/i,
-    `<html ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"`,
+    `<html${basePathAttribute} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"`,
   );
   const hashes = computeInlineScriptHashes(prepared);
   // Always set the document CSP here (the index carries inline scripts) so the
@@ -997,18 +1013,13 @@ export async function handleControlUiHttpRequest(
     }
     const config = opts?.config;
     const identity = config
-      ? resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
-      : DEFAULT_ASSISTANT_IDENTITY;
-    const avatarValue = resolveAssistantAvatarUrl({
-      avatar: identity.avatar,
-      agentId: identity.agentId,
-      basePath,
-    });
-    const avatarMeta = config
-      ? controlUiAvatarResolutionMeta(
-          resolveAgentAvatar(config, identity.agentId, { includeUiOverride: true }),
-        )
-      : controlUiAvatarResolutionMeta(null);
+      ? resolvePublicAssistantIdentity({ cfg: config, agentId: opts?.agentId, basePath })
+      : {
+          ...DEFAULT_ASSISTANT_IDENTITY,
+          avatarSource: undefined,
+          avatarStatus: undefined,
+          avatarReason: undefined,
+        };
     if (req.method === "HEAD") {
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -1019,10 +1030,10 @@ export async function handleControlUiHttpRequest(
     sendJson(res, 200, {
       basePath,
       assistantName: identity.name,
-      assistantAvatar: avatarValue ?? identity.avatar,
-      assistantAvatarSource: avatarMeta.avatarSource,
-      assistantAvatarStatus: avatarMeta.avatarStatus,
-      assistantAvatarReason: avatarMeta.avatarReason,
+      assistantAvatar: identity.avatar,
+      assistantAvatarSource: identity.avatarSource,
+      assistantAvatarStatus: identity.avatarStatus,
+      assistantAvatarReason: identity.avatarReason,
       assistantAgentId: identity.agentId,
       serverVersion: resolveRuntimeServiceVersion(process.env),
       localMediaPreviewRoots: [...getAgentScopedMediaLocalRoots(config ?? {}, identity.agentId)],

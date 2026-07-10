@@ -38,8 +38,7 @@ type BrowserActResponse = {
   downloads?: BrowserDownloadResult[];
 };
 
-const BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS = 5_000;
-const BROWSER_DOWNLOAD_REQUEST_TIMEOUT_SLACK_MS = 5_000;
+const BROWSER_REQUEST_TIMEOUT_SLACK_MS = 5_000;
 
 type BrowserDownloadActionResult = BrowserActionTabResult & { download: BrowserDownloadResult };
 
@@ -52,24 +51,23 @@ function resolveBrowserActRequestTimeoutMs(req: BrowserActRequest): number {
   const candidateTimeouts =
     explicitTimeout === undefined
       ? [DEFAULT_BROWSER_ACTION_TIMEOUT_MS]
-      : [addTimerTimeoutGraceMs(explicitTimeout, BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS) ?? 1];
+      : [addTimerTimeoutGraceMs(explicitTimeout, BROWSER_REQUEST_TIMEOUT_SLACK_MS) ?? 1];
   if (req.kind === "wait") {
     const waitDuration = normalizePositiveTimeoutMs(req.timeMs);
     if (waitDuration !== undefined) {
       candidateTimeouts.push(
-        addTimerTimeoutGraceMs(waitDuration, BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS) ?? 1,
+        addTimerTimeoutGraceMs(waitDuration, BROWSER_REQUEST_TIMEOUT_SLACK_MS) ?? 1,
       );
     }
   }
   return Math.max(...candidateTimeouts);
 }
 
-function resolveBrowserDownloadRequestTimeoutMs(timeoutMs: unknown): number {
-  const waitTimeoutMs =
+function resolveBrowserOperationRequestTimeoutMs(timeoutMs: unknown): number {
+  const operationTimeoutMs =
     normalizePositiveTimeoutMs(timeoutMs) ?? DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS;
-  // Keep the HTTP client alive after the Playwright waiter expires so its
-  // timeout/error response reaches the caller instead of a transport abort.
-  return addTimerTimeoutGraceMs(waitTimeoutMs, BROWSER_DOWNLOAD_REQUEST_TIMEOUT_SLACK_MS) ?? 1;
+  // Let the browser operation report its own timeout/error before the client watchdog fires.
+  return addTimerTimeoutGraceMs(operationTimeoutMs, BROWSER_REQUEST_TIMEOUT_SLACK_MS) ?? 1;
 }
 
 async function postDownloadRequest(
@@ -84,7 +82,7 @@ async function postDownloadRequest(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-    timeoutMs: resolveBrowserDownloadRequestTimeoutMs(timeoutMs),
+    timeoutMs: resolveBrowserOperationRequestTimeoutMs(timeoutMs),
   });
 }
 
@@ -129,7 +127,7 @@ export async function browserArmDialog(
       targetId: opts.targetId,
       timeoutMs: opts.timeoutMs,
     }),
-    timeoutMs: 20000,
+    timeoutMs: resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
   });
 }
 
@@ -158,7 +156,7 @@ export async function browserArmFileChooser(
       targetId: opts.targetId,
       timeoutMs: opts.timeoutMs,
     }),
-    timeoutMs: 20000,
+    timeoutMs: resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
   });
 }
 

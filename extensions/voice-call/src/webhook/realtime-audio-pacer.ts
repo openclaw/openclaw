@@ -27,7 +27,7 @@ type RealtimeAudioQueueItem =
     };
 
 /** WebSocket send callback for realtime audio frames. */
-export type RealtimeAudioSend = (message: string) => boolean;
+type RealtimeAudioSend = (message: string) => boolean;
 
 /** Provider-specific serializer for media, clear, and mark frames. */
 export interface RealtimeAudioSerializer {

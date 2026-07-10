@@ -28,6 +28,11 @@ import { resolvePathEnvKey, resolveWindowsCmdExePath } from "./windows-cmd-helpe
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CRABBOX_METADATA_PROBE_TIMEOUT_MS = 5_000;
+// A cold Crabbox (first call after an upgrade, or one on a loaded machine) can
+// exceed the snappy default probe timeout while it renders `run --help` or does
+// first-run init. Retry the metadata probes once with this generous timeout so a
+// single slow probe does not hard-fail the wrapper and block all remote validation.
+const CRABBOX_METADATA_PROBE_RETRY_TIMEOUT_MS = 20_000;
 const ignoreRepoBinary = process.env.OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY === "1";
 const repoLocal = ignoreRepoBinary ? null : resolveCrabboxBinary(process.env, process.platform);
 const pathLocal = resolvePathBinary("crabbox", process.env, process.platform);
@@ -360,14 +365,14 @@ function buildBatchCommandLine(command, commandArgs) {
   return `"${[escapedCommand, ...escapedArgs].join(" ")}"`;
 }
 
-function checkedOutput(command, commandArgs) {
+function checkedOutput(command, commandArgs, timeoutMs = resolveMetadataProbeTimeoutMs(process.env)) {
   const invocation = spawnInvocation(command, commandArgs, process.env, process.platform);
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: repoRoot,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-    timeout: resolveMetadataProbeTimeoutMs(process.env),
+    timeout: timeoutMs,
     killSignal: "SIGKILL",
   });
   const timedOut = result.error?.name === "Error" && result.signal === "SIGKILL";
@@ -376,6 +381,19 @@ function checkedOutput(command, commandArgs) {
     text: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim(),
     stdout: (result.stdout ?? "").trim(),
   };
+}
+
+// Probe Crabbox metadata (`--version` / `run --help`) with one generous retry.
+// A cold Crabbox can be SIGKILLed by the snappy default timeout or emit nothing
+// on the first call, then be instant and clean on the next. Retrying keeps the
+// warm path fast (one ~instant probe) while stopping a single slow probe from
+// tripping the sanity/provider-list guards and blocking all remote validation.
+function probeCrabboxMetadata(command, commandArgs) {
+  const first = checkedOutput(command, commandArgs);
+  if (first.status === 0 && first.text.length > 0) {
+    return first;
+  }
+  return checkedOutput(command, commandArgs, CRABBOX_METADATA_PROBE_RETRY_TIMEOUT_MS);
 }
 
 function parseCrabboxVersion(value) {
@@ -3155,8 +3173,8 @@ function injectFullCheckoutLeaseReclaim(commandArgs) {
   return normalizedArgs;
 }
 
-const version = checkedOutput(binary, ["--version"]);
-const help = checkedOutput(binary, ["run", "--help"]);
+const version = probeCrabboxMetadata(binary, ["--version"]);
+const help = probeCrabboxMetadata(binary, ["run", "--help"]);
 const providers = parseProvidersFromHelp(help.text);
 const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
 const provider = selectedProvider(args, providers);

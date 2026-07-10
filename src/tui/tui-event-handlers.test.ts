@@ -379,6 +379,22 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.addSystem).toHaveBeenCalledWith("run aborted: edit failed secret");
   });
 
+  it("keeps truncated abort diagnostics on a UTF-16 boundary", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-emoji" },
+    });
+
+    const prefix = `${"word ".repeat(31)}abc`;
+    handleChatEvent({
+      runId: "run-emoji",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+      errorMessage: `${prefix}🚀tail`,
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith(`run aborted: ${prefix}…`);
+  });
+
   it("falls back to a bare abort line when there is no summary", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: "run-plain" },

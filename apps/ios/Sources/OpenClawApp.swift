@@ -169,7 +169,10 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     private func registerForRemoteNotificationsIfEnrollmentReady(_ application: UIApplication) async {
-        guard PushEnrollmentConsent.disclosureAccepted else { return }
+        guard NotificationServingPreference.isEnabled() else { return }
+        guard !PushBuildConfig.current.usesOpenClawHostedRelay
+            || PushEnrollmentConsent.disclosureAccepted
+        else { return }
         guard await Self.isNotificationAuthorizationAllowed() else { return }
         application.registerForRemoteNotifications()
     }
@@ -580,6 +583,7 @@ enum WatchPromptNotificationBridge {
     }
 
     private static func isNotificationAuthorizationAllowed() async -> Bool {
+        guard NotificationServingPreference.isEnabled() else { return false }
         let center = UNUserNotificationCenter.current()
         let status = await notificationAuthorizationStatus(center: center)
         return self.isAuthorizationStatusAllowed(status)
@@ -656,7 +660,7 @@ extension NodeAppModel {
             sessionKey: (normalizedSessionKey?.isEmpty == false) ? normalizedSessionKey : nil,
             gatewayStableID: (normalizedGatewayStableID?.isEmpty == false) ? normalizedGatewayStableID : nil,
             note: "source=ios.notification",
-            sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
+            sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
             transport: "ios.notification")
         await _bridgeConsumeMirroredWatchReply(event)
     }

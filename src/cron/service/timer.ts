@@ -1,6 +1,7 @@
 /** Cron timer loop, execution, catch-up, and run-result state transitions. */
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
+import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -119,7 +120,15 @@ type TimedCronRunOutcome = CronRunOutcome &
     activeJobMarker?: CronActiveJobMarker;
     startedAt: number;
     endedAt: number;
+    triggerEval?: CronTriggerEvalOutcome;
   };
+
+export type CronTriggerEvalOutcome = {
+  fired: boolean;
+  stateChanged: boolean;
+  state?: unknown;
+  busy?: true;
+};
 
 export type IsolatedAgentSetupTimeoutSignal = {
   error: string;
@@ -977,7 +986,14 @@ export function applyJobResult(
         // after the current run ended.  Prevents spin-loops when the
         // schedule computation lands in the same second due to
         // timezone/croner edge cases (see #17821).
-        const minNext = result.endedAt + MIN_REFIRE_GAP_MS;
+        // Trigger schedules obey the operator floor even when a cron expression
+        // would otherwise refire sooner after a successful payload run.
+        const minNext =
+          result.endedAt +
+          Math.max(
+            MIN_REFIRE_GAP_MS,
+            job.trigger ? resolveCronTriggerMinIntervalMs(state.deps.cronConfig) : 0,
+          );
         job.state.nextRunAtMs = resolveCronNextRunWithLowerBound({
           state,
           job,
@@ -986,7 +1002,13 @@ export function applyJobResult(
           context: "completion",
         });
       } else {
-        job.state.nextRunAtMs = naturalNext;
+        job.state.nextRunAtMs =
+          naturalNext !== undefined && job.trigger
+            ? Math.max(
+                naturalNext,
+                result.endedAt + resolveCronTriggerMinIntervalMs(state.deps.cronConfig),
+              )
+            : naturalNext;
       }
     } else {
       job.state.nextRunAtMs = undefined;
@@ -994,6 +1016,81 @@ export function applyJobResult(
   }
 
   return shouldDelete;
+}
+
+function applyTriggerEvaluationState(
+  job: CronJob,
+  triggerEval: CronTriggerEvalOutcome,
+  evaluatedAtMs: number,
+): void {
+  if (triggerEval.busy) {
+    return;
+  }
+  job.state.lastTriggerEvalAtMs = evaluatedAtMs;
+  job.state.triggerEvalCount = (job.state.triggerEvalCount ?? 0) + 1;
+  if (triggerEval.stateChanged) {
+    job.state.triggerState = triggerEval.state;
+  }
+  if (triggerEval.fired) {
+    job.state.lastTriggerFireAtMs = evaluatedAtMs;
+  }
+}
+
+/** Persists fired/error evaluation metadata and applies successful once-disarm policy. */
+export function applyTriggerRunResult(
+  job: CronJob,
+  result: { status: CronRunStatus; endedAt: number; triggerEval?: CronTriggerEvalOutcome },
+): void {
+  if (!result.triggerEval) {
+    return;
+  }
+  // Fired-run trigger state persists only on payload success: a failed or
+  // skipped run keeps the previous state so the next evaluation re-detects
+  // the change and fires again instead of silently losing the event.
+  const persistedEval =
+    result.status === "ok"
+      ? result.triggerEval
+      : { ...result.triggerEval, stateChanged: false, state: undefined };
+  applyTriggerEvaluationState(job, persistedEval, result.endedAt);
+  // A once trigger disarms only after the fired payload succeeds. Errors keep
+  // it armed so the normal backoff path can evaluate and retry later.
+  if (result.triggerEval.fired && job.trigger?.once === true && result.status === "ok") {
+    job.enabled = false;
+    job.state.nextRunAtMs = undefined;
+  }
+}
+
+/** Applies a quiet trigger tick without mutating normal run-history state. */
+export function applyTriggerNoFireResult(
+  state: CronServiceState,
+  job: CronJob,
+  result: { startedAt: number; endedAt: number; triggerEval: CronTriggerEvalOutcome },
+): void {
+  job.state.runningAtMs = undefined;
+  job.updatedAtMs = result.endedAt;
+  if (!result.triggerEval.busy) {
+    // A non-firing evaluation is successful scheduler work, not a payload run;
+    // reset error machinery while leaving lastRun/delivery history untouched.
+    job.state.consecutiveErrors = 0;
+    job.state.scheduleErrorCount = 0;
+    job.state.lastFailureAlertAtMs = undefined;
+    applyTriggerEvaluationState(job, result.triggerEval, result.endedAt);
+  }
+  try {
+    // Job-level computation keeps per-job cron staggering intact on quiet
+    // ticks; raw schedule math would collapse watchers onto exact boundaries.
+    const naturalNext = computeJobNextRunAtMs(job, result.endedAt);
+    const floorMs = Math.max(
+      MIN_REFIRE_GAP_MS,
+      resolveCronTriggerMinIntervalMs(state.deps.cronConfig),
+    );
+    // Quiet ticks still advance the schedule; the floor prevents scripts from
+    // becoming a headless hot loop even when cron resolves inside the window.
+    job.state.nextRunAtMs =
+      naturalNext === undefined ? undefined : Math.max(naturalNext, result.endedAt + floorMs);
+  } catch (err) {
+    recordScheduleComputeError({ state, job, err });
+  }
 }
 
 function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOutcome): void {
@@ -1005,6 +1102,9 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
   const jobs = store.jobs;
   const job = jobs.find((entry) => entry.id === result.jobId);
   if (!job) {
+    if (result.status === "ok" && result.triggerEval?.fired === false) {
+      return;
+    }
     if (result.status === "ok") {
       // A manual/queued run may finish after the job was removed. Preserve the
       // successful run log state without resurrecting the job in the store.
@@ -1031,6 +1131,18 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     return;
   }
 
+  if (result.status === "ok" && result.triggerEval && !result.triggerEval.fired) {
+    // Quiet trigger ticks intentionally emit no finished event: run history,
+    // plugin hooks, and completion notifications represent payload runs only.
+    applyTriggerNoFireResult(state, job, {
+      startedAt: result.startedAt,
+      endedAt: result.endedAt,
+      triggerEval: result.triggerEval,
+    });
+    state.pendingCatchupDeferralJobIds.delete(job.id);
+    return;
+  }
+
   const shouldDelete = applyJobResult(state, job, {
     status: result.status,
     error: result.error,
@@ -1040,6 +1152,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     startedAt: result.startedAt,
     endedAt: result.endedAt,
   });
+  applyTriggerRunResult(job, result);
   state.pendingCatchupDeferralJobIds.delete(job.id);
 
   emitJobFinished(state, job, result, result.startedAt);
@@ -1801,6 +1914,9 @@ async function runStartupCatchupCandidate(
       provider: result.provider,
       usage: result.usage,
       isolatedAgentSetupTimeout: result.isolatedAgentSetupTimeout,
+      // Quiet trigger ticks during startup catch-up must keep their eval
+      // outcome; dropping it would record them as successful payload runs.
+      triggerEval: result.triggerEval,
       startedAt,
       endedAt: state.deps.nowMs(),
     };
@@ -1916,6 +2032,7 @@ export async function executeJobCore(
       delivered?: boolean;
       deliveryAttempted?: boolean;
       delivery?: CronDeliveryTrace;
+      triggerEval?: CronTriggerEvalOutcome;
     }
 > {
   const resolveAbortError = () => ({
@@ -1949,11 +2066,65 @@ export async function executeJobCore(
   if (abortSignal?.aborted) {
     return resolveAbortError();
   }
-  if (job.sessionTarget === "main") {
-    return await executeMainSessionCronJob(state, job, abortSignal, waitWithAbort);
+  let effectiveJob = job;
+  let triggerEval: CronTriggerEvalOutcome | undefined;
+  if (job.trigger) {
+    const evaluator = state.deps.evaluateCronTrigger;
+    if (!evaluator) {
+      return { status: "error", error: "cron trigger evaluator is unavailable" };
+    }
+    const evaluation = await evaluator({
+      job,
+      script: job.trigger.script,
+      state: job.state.triggerState,
+      abortSignal,
+    });
+    if (evaluation.kind === "busy") {
+      state.deps.log.debug({ jobId: job.id }, "cron: trigger evaluation skipped while busy");
+      return {
+        status: "ok",
+        triggerEval: { fired: false, stateChanged: false, busy: true },
+      };
+    }
+    if (evaluation.kind === "error") {
+      return {
+        status: "error",
+        error: `cron trigger evaluation failed (${evaluation.code}): ${evaluation.error}`,
+        triggerEval: { fired: false, stateChanged: false },
+      };
+    }
+    const stateChanged = Object.hasOwn(evaluation, "state");
+    triggerEval = {
+      fired: evaluation.fire,
+      stateChanged,
+      ...(stateChanged ? { state: evaluation.state } : {}),
+    };
+    if (!evaluation.fire) {
+      return { status: "ok", triggerEval };
+    }
+    if (evaluation.message !== undefined) {
+      const payload =
+        job.payload.kind === "systemEvent"
+          ? { ...job.payload, text: `${job.payload.text}\n\n${evaluation.message}` }
+          : job.payload.kind === "agentTurn"
+            ? { ...job.payload, message: `${job.payload.message}\n\n${evaluation.message}` }
+            : job.payload;
+      effectiveJob = { ...job, payload };
+    }
+  }
+  if (effectiveJob.sessionTarget === "main") {
+    const result = await executeMainSessionCronJob(state, effectiveJob, abortSignal, waitWithAbort);
+    return triggerEval ? { ...result, triggerEval } : result;
   }
 
-  return await executeDetachedCronJob(state, job, abortSignal, resolveAbortError, options);
+  const result = await executeDetachedCronJob(
+    state,
+    effectiveJob,
+    abortSignal,
+    resolveAbortError,
+    options,
+  );
+  return triggerEval ? { ...result, triggerEval } : result;
 }
 
 async function executeMainSessionCronJob(
@@ -2209,6 +2380,7 @@ function emitJobFinished(
     status: CronRunStatus;
     delivered?: boolean;
     delivery?: CronDeliveryTrace;
+    triggerEval?: CronTriggerEvalOutcome;
   } & CronRunOutcome &
     CronRunTelemetry,
   runAtMs: number,
@@ -2231,6 +2403,7 @@ function emitJobFinished(
     runAtMs,
     durationMs: job.state.lastDurationMs,
     nextRunAtMs: job.state.nextRunAtMs,
+    ...(result.triggerEval?.fired ? { triggerFired: true } : {}),
     model: result.model,
     provider: result.provider,
     usage: result.usage,

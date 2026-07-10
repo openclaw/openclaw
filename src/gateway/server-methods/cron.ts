@@ -15,6 +15,7 @@ import {
   validateWakeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
 import {
   assertValidCronAnnounceDelivery,
   assertValidCronCreateDelivery,
@@ -73,9 +74,19 @@ type CronListCallerScopeContext = {
   };
 };
 
+class CronJobConfigRevisionConflictError extends Error {
+  constructor(
+    readonly expectedConfigRevision: string,
+    readonly actualConfigRevision: string,
+  ) {
+    super("cron job definition no longer matches the loaded version");
+  }
+}
+
 function cronJobReadView(job: CronJob) {
   return {
     ...job,
+    configRevision: resolveCronJobConfigRevision(job),
     nextRunAtMs: job.state.nextRunAtMs,
     lastRunAtMs: job.state.lastRunAtMs,
     lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus,
@@ -101,6 +112,7 @@ function compactCronListJob(job: CronJob) {
     enabled: job.enabled,
     nextRunAtMs: job.state.nextRunAtMs ?? null,
     scheduleKind: job.schedule.kind,
+    ...(job.trigger ? { trigger: true } : {}),
     lastRunAtMs: job.state.lastRunAtMs ?? null,
     lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus ?? null,
     lastRunError: job.state.lastError ?? null,
@@ -189,6 +201,7 @@ async function assertValidCronUpdatePatch(params: {
   const nextJob = structuredClone(params.currentJob);
   applyJobPatch(nextJob, params.patch, {
     defaultAgentId: params.defaultAgentId,
+    cronConfig: params.cfg.cron,
   });
   if ("delivery" in params.patch) {
     const delivery =
@@ -618,6 +631,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       id?: string;
       jobId?: string;
       patch: Record<string, unknown>;
+      expectedConfigRevision?: string;
     };
     const callerScope = readCronCallerScope(client);
     const jobId = p.id ?? p.jobId;
@@ -692,6 +706,15 @@ export const cronHandlers: GatewayRequestHandlers = {
         ) {
           throw new Error(`unknown cron job id: ${jobId}`);
         }
+        if (p.expectedConfigRevision !== undefined) {
+          const actualConfigRevision = resolveCronJobConfigRevision(lockedJob);
+          if (actualConfigRevision !== p.expectedConfigRevision) {
+            throw new CronJobConfigRevisionConflictError(
+              p.expectedConfigRevision,
+              actualConfigRevision,
+            );
+          }
+        }
         await assertValidCronUpdatePatch({
           cfg,
           defaultAgentId: context.cron.getDefaultAgentId(),
@@ -700,6 +723,24 @@ export const cronHandlers: GatewayRequestHandlers = {
         });
       });
     } catch (err) {
+      if (err instanceof CronJobConfigRevisionConflictError) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "cron job definition no longer matches the loaded version; review the latest version before retrying",
+            {
+              details: {
+                code: "CRON_JOB_CHANGED",
+                expectedConfigRevision: err.expectedConfigRevision,
+                actualConfigRevision: err.actualConfigRevision,
+              },
+            },
+          ),
+        );
+        return;
+      }
       if (
         !(err instanceof TypeError) &&
         !(err instanceof RangeError) &&
@@ -718,7 +759,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     context.logGateway.info("cron: job updated", { jobId });
-    respond(true, job, undefined);
+    respond(true, cronJobReadView(job), undefined);
   },
   "cron.remove": async ({ params, respond, context, client }) => {
     if (!validateCronRemoveParams(params)) {

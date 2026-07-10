@@ -115,7 +115,7 @@ export type WikiPageSummary = {
   updatedAt?: string;
 };
 
-export type WikiPageSummaryScanResult =
+type WikiPageSummaryScanResult =
   | { status: "valid"; page: WikiPageSummary }
   | { status: "invalid-frontmatter"; error: WikiPageFrontmatterError }
   | { status: "ignored" };
@@ -644,7 +644,7 @@ export function renderMarkdownFence(content: string, infoString = "text"): strin
   return `${fence}${infoString}\n${content}\n${fence}`;
 }
 
-export function inferWikiPageKind(relativePath: string): WikiPageKind | null {
+function inferWikiPageKind(relativePath: string): WikiPageKind | null {
   const normalized = relativePath.split(path.sep).join("/");
   if (normalized.startsWith("entities/")) {
     return "entity";

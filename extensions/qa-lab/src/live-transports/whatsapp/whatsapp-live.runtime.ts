@@ -51,7 +51,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-export type WhatsAppQaRuntimeEnv = {
+type WhatsAppQaRuntimeEnv = {
   driverAuthArchiveBase64: string;
   driverPhoneE164: string;
   sutAuthArchiveBase64: string;

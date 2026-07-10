@@ -126,7 +126,7 @@ export type ParentFlowLinkErrorCode =
   | "cancel_requested"
   | "terminal";
 
-export class ParentFlowLinkError extends Error {
+class ParentFlowLinkError extends Error {
   constructor(
     public readonly code: ParentFlowLinkErrorCode,
     message: string,
@@ -2405,6 +2405,13 @@ export async function cancelTaskById(params: {
       task: cloneTaskRecord(task),
     };
   }
+}
+
+// Callers that provide their own order use this cloned snapshot to avoid paying
+// for listTaskRecords' createdAt sort before immediately discarding that order.
+export function listTaskRecordsUnsorted(): TaskRecord[] {
+  ensureTaskRegistryReady();
+  return snapshotTaskRecords(tasks);
 }
 
 export function listTaskRecords(): TaskRecord[] {

@@ -73,6 +73,35 @@ function normalizeMainSystemEventCreateJob(params: {
 }
 
 describe("normalizeCronJobCreate", () => {
+  it("trims cron timezones and drops blank values", () => {
+    const trimmed = normalizeMainSystemEventCreateJob({
+      name: "trimmed-timezone",
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "  Europe/Vienna  " },
+    });
+    const blank = normalizeMainSystemEventCreateJob({
+      name: "blank-timezone",
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "   " },
+    });
+
+    expect(trimmed.schedule).toMatchObject({ tz: "Europe/Vienna" });
+    expect(blank.schedule).not.toHaveProperty("tz");
+  });
+
+  it("normalizes trigger scripts and preserves patch clears", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "watcher",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 30_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "changed" },
+      trigger: { script: "  json({ fire: true })  ", once: "true", ignored: true },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.trigger).toEqual({ script: "json({ fire: true })", once: true });
+    expect(normalizeCronJobPatch({ trigger: null })).toEqual({ trigger: null });
+  });
+
   it("trims agentId and drops null", () => {
     const normalized = normalizeCronJobCreate({
       name: "agent-set",

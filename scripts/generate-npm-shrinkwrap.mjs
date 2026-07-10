@@ -697,8 +697,9 @@ function normalizeNpmVersionDrift(lockfile) {
     if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
       continue;
     }
-    // npm 11 patch releases disagree on these package-lock v3 metadata fields.
-    // Keep the shrinkwrap stable across supported Node 24 patch versions.
+    // npm versions and mutable registry metadata disagree on these package-lock
+    // fields. None affect resolution, so keep generated shrinkwraps stable.
+    delete metadata.deprecated;
     delete metadata.libc;
     if (metadata.peer === true) {
       delete metadata.peer;

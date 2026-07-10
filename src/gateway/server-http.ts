@@ -25,6 +25,7 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
+import { isControlUiPluginManagerRequest } from "./control-ui-routing.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
@@ -53,6 +54,8 @@ type PluginHttpRequestHandler = (
     gatewayRequestOperatorScopes?: readonly string[];
   },
 ) => Promise<boolean>;
+
+type WatchNodeHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
 type PluginHttpUpgradeHandler = (
   req: IncomingMessage,
@@ -442,6 +445,7 @@ export function createGatewayHttpServer(opts: {
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   strictTransportSecurityHeader?: string;
   handleHooksRequest: HooksRequestHandler;
+  handleWatchNodeRequest?: WatchNodeHttpRequestHandler;
   handlePluginRequest?: PluginHttpRequestHandler;
   handlePluginUpgrade?: PluginHttpUpgradeHandler;
   shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
@@ -556,6 +560,12 @@ export function createGatewayHttpServer(opts: {
           run: () => handleHooksRequest(req, res),
         },
       ];
+      if (opts.handleWatchNodeRequest && scopedRequestPath.startsWith("/api/nodes/watch/")) {
+        requestStages.push({
+          name: "watch-node",
+          run: () => opts.handleWatchNodeRequest?.(req, res) ?? false,
+        });
+      }
       if (openAiCompatEnabled && isOpenAiModelsPath(scopedRequestPath)) {
         requestStages.push({
           name: "models",
@@ -676,9 +686,36 @@ export function createGatewayHttpServer(opts: {
           },
         });
       }
-      // Plugin routes run before the Control UI SPA catch-all so explicitly
-      // registered plugin endpoints stay reachable. Core built-in gateway
-      // routes above still keep precedence on overlapping paths.
+      if (
+        controlUiEnabled &&
+        isControlUiPluginManagerRequest({
+          basePath: controlUiBasePath,
+          pathname: scopedRequestPath,
+          method: req.method,
+        })
+      ) {
+        // This page must remain reachable when a plugin route is broken so the
+        // operator can disable it. Other explicit plugin routes retain precedence.
+        requestStages.push({
+          name: "control-ui-plugin-manager",
+          run: async () =>
+            (await getControlUiModule()).handleControlUiHttpRequest(req, res, {
+              basePath: controlUiBasePath,
+              config: configSnapshot,
+              terminalEnabled:
+                opts.isTerminalEnabled?.() ?? configSnapshot.gateway?.terminal?.enabled === true,
+              agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
+              root: controlUiRoot,
+              auth: resolvedAuthValue,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            }),
+        });
+      }
+      // Plugin routes run before the general Control UI SPA catch-all so
+      // explicitly registered endpoints stay reachable. Core routes and the
+      // plugin recovery surface staged above keep precedence.
       requestStages.push(
         ...buildPluginRequestStages({
           req,

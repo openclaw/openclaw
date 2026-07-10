@@ -10,6 +10,7 @@
  * @module @openclaw/oc-path/oc-path
  */
 
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "./sentinel.js";
 
 const OC_SCHEME = "oc://";
@@ -134,7 +135,7 @@ export function parseOcPath(input: string): OcPath {
   if (input.length > MAX_PATH_LENGTH) {
     fail(
       `oc:// path exceeds ${MAX_PATH_LENGTH} bytes (length: ${input.length})`,
-      input.slice(0, 80) + "…",
+      truncateUtf16Safe(input, 80) + "…",
       "OC_PATH_TOO_LONG",
     );
   }
@@ -147,7 +148,7 @@ export function parseOcPath(input: string): OcPath {
   if (normalized.length > MAX_PATH_LENGTH) {
     fail(
       `oc:// path exceeds ${MAX_PATH_LENGTH} bytes after NFC (length: ${normalized.length})`,
-      input.slice(0, 80) + "…",
+      truncateUtf16Safe(input, 80) + "…",
       "OC_PATH_TOO_LONG",
     );
   }
@@ -311,7 +312,7 @@ export function formatOcPath(path: OcPath): string {
   if (out.length > MAX_PATH_LENGTH) {
     fail(
       `Formatted oc:// exceeds ${MAX_PATH_LENGTH} bytes (length: ${out.length})`,
-      out.slice(0, 80) + "…",
+      truncateUtf16Safe(out, 80) + "…",
       "OC_PATH_TOO_LONG",
     );
   }
@@ -459,7 +460,7 @@ export function parseUnionSeg(seg: string): readonly string[] | null {
  * Value predicate `[key<op>value]`. Operators: `=` `!=` (string),
  * `<` `<=` `>` `>=` (numeric). Multi-char tried before single-char.
  */
-export type PredicateOp = "=" | "!=" | "<" | "<=" | ">" | ">=";
+type PredicateOp = "=" | "!=" | "<" | "<=" | ">" | ">=";
 
 const PREDICATE_OPS: readonly PredicateOp[] = ["!=", "<=", ">=", "<", ">", "="];
 
@@ -625,7 +626,7 @@ function scanBracketAware(s: string, onChar: ScanCallback, onUnbalanced: () => n
 }
 
 /** First top-level occurrence of `ch` in `s`; -1 when absent. */
-export function indexOfTopLevel(s: string, ch: string): number {
+function indexOfTopLevel(s: string, ch: string): number {
   let result = -1;
   const failLocal = (): never => {
     throw new OcPathError(`Unbalanced bracket/brace in oc:// path: ${s}`, s, "OC_PATH_UNBALANCED");

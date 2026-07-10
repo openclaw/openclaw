@@ -16,7 +16,7 @@ type ActiveFence = {
   marker: string;
 };
 
-export type QQBotMarkdownChunker = {
+type QQBotMarkdownChunker = {
   chunkText: (text: string, limit: number) => string[];
   flushPendingText: (limit: number) => string[];
 };

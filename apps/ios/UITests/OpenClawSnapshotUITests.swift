@@ -689,11 +689,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(port.waitForExistence(timeout: 5))
         port.tap()
         port.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 5) + "18920")
-        let useTLS = app.switches["Use TLS"]
-        XCTAssertTrue(useTLS.waitForExistence(timeout: 5))
-        if useTLS.value as? String != "0" {
-            useTLS.tap()
-        }
+        let unencrypted = app.buttons["Unencrypted"]
+        XCTAssertTrue(unencrypted.waitForExistence(timeout: 5))
+        unencrypted.tap()
         app.buttons["Connect"].tap()
 
         let tokenField = app.secureTextFields["Gateway Auth Token"]

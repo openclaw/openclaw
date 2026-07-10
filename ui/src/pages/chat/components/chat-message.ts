@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
+import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import {
   toSanitizedMarkdownHtml,
@@ -18,17 +19,6 @@ import type {
   NormalizedMessage,
   ToolCard,
 } from "../../../lib/chat/chat-types.ts";
-import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
-import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
-import { resolveUiHourCycleOptions } from "../../../lib/format.ts";
-import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
-import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
-import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { getSafeLocalStorage } from "../../../local-storage.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
-export { resolveAssistantTextAvatar } from "../../../lib/agents/display.ts";
-import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
-import "../../../components/tooltip.ts";
 import {
   extractThinkingCached,
   formatReasoningMarkdown,
@@ -45,8 +35,18 @@ import {
   formatCollapsedToolSummaryText,
   isToolCardError,
 } from "../../../lib/chat/tool-cards.ts";
+import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { resolveUiHourCycleOptions } from "../../../lib/format.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
+import "../../../components/tooltip.ts";
+import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
+import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
+import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
+import { detectTextDirection } from "../../../lib/text-direction.ts";
+import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
+import type { SidebarContent } from "./chat-sidebar.ts";
 import {
   renderExpandedToolCardContent,
   renderRawOutputToggle,
@@ -251,23 +251,6 @@ function buildBase64ImageUrl(params: { data: string; mediaType?: string }): stri
     : `data:${params.mediaType ?? "image/png"};base64,${params.data}`;
 }
 
-function getFileExtension(url: string): string | undefined {
-  const source = (() => {
-    try {
-      const trimmed = url.trim();
-      if (/^https?:\/\//i.test(trimmed)) {
-        return new URL(trimmed).pathname;
-      }
-    } catch {
-      // Fall back to the raw path when URL parsing fails.
-    }
-    return url;
-  })();
-  const fileName = source.split(/[\\/]/).pop() ?? source;
-  const match = /\.([a-zA-Z0-9]+)$/.exec(fileName);
-  return match?.[1]?.toLowerCase();
-}
-
 function isImageTranscriptMediaPath(path: string, mediaType: unknown): boolean {
   if (typeof mediaType === "string" && mediaType.trim()) {
     const normalized = mediaType.trim().toLowerCase();
@@ -278,7 +261,7 @@ function isImageTranscriptMediaPath(path: string, mediaType: unknown): boolean {
       return false;
     }
   }
-  const ext = getFileExtension(path);
+  const ext = getMediaFileExtension(path);
   return (
     ext !== undefined &&
     ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "heic", "heif", "avif"].includes(ext)
@@ -289,7 +272,7 @@ function isAudioTranscriptMediaPath(path: string, mediaType: unknown): boolean {
   if (typeof mediaType === "string" && mediaType.trim().toLowerCase().startsWith("audio/")) {
     return true;
   }
-  const ext = getFileExtension(path);
+  const ext = getMediaFileExtension(path);
   return (
     ext !== undefined &&
     ["aac", "flac", "m2a", "m4a", "mp3", "oga", "ogg", "opus", "wav"].includes(ext)
@@ -300,7 +283,7 @@ function isVideoTranscriptMediaPath(path: string, mediaType: unknown): boolean {
   if (typeof mediaType === "string" && mediaType.trim().toLowerCase().startsWith("video/")) {
     return true;
   }
-  const ext = getFileExtension(path);
+  const ext = getMediaFileExtension(path);
   return ext !== undefined && ["m4v", "mov", "mp4", "webm"].includes(ext);
 }
 

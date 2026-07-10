@@ -8,7 +8,7 @@ import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
-  applyRestartRecoveryLifecycle,
+  applySessionEntryReplacements,
   appendTranscriptMessage,
   appendTranscriptEvent,
   applySessionEntryLifecycleMutation,
@@ -18,9 +18,11 @@ import {
   cleanupSessionLifecycleArtifacts,
   commitReplySessionInitialization,
   createSessionEntryWithTranscript,
+  findTranscriptEvent,
   listSessionEntries,
   loadReplySessionInitializationSnapshot,
   loadSessionEntry,
+  loadTranscriptEvents,
   markSessionAbortTarget,
   openSessionEntryReadView,
   patchSessionEntry,
@@ -99,6 +101,68 @@ describe("session accessor file-backed seam", () => {
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
+  });
+
+  it("loads parsed transcript events from explicit and store-derived targets", async () => {
+    const header = { type: "session", id: "session-events", timestamp: 1 };
+    const message = { type: "message", id: "m1", message: { role: "assistant" } };
+    fs.writeFileSync(
+      transcriptPath,
+      `${JSON.stringify(header)}\n${JSON.stringify(message)}\nnot-json\n`,
+      "utf-8",
+    );
+    await upsertSessionEntry(
+      { sessionKey: "agent:main:main", storePath },
+      { sessionId: "session-events", sessionFile: transcriptPath, updatedAt: 10 },
+    );
+
+    const explicit = await loadTranscriptEvents({
+      sessionFile: transcriptPath,
+      sessionId: "session-events",
+    });
+    expect(explicit).toEqual([header, message]);
+
+    const derived = await loadTranscriptEvents({
+      sessionId: "session-events",
+      sessionKey: "agent:main:main",
+      storePath,
+    });
+    expect(derived).toEqual([header, message]);
+
+    const missing = await loadTranscriptEvents({
+      sessionFile: path.join(tempDir, "missing.jsonl"),
+      sessionId: "session-events",
+    });
+    expect(missing).toEqual([]);
+  });
+
+  it("finds the newest matching transcript event without loading the whole file", async () => {
+    const header = { type: "session", id: "session-find", timestamp: 1 };
+    const older = { type: "message", id: "m1", message: { role: "assistant", tag: "old" } };
+    const newer = { type: "message", id: "m2", message: { role: "assistant", tag: "new" } };
+    fs.writeFileSync(
+      transcriptPath,
+      `${JSON.stringify(header)}\n${JSON.stringify(older)}\n${JSON.stringify(newer)}\n`,
+      "utf-8",
+    );
+
+    const seen: unknown[] = [];
+    const found = await findTranscriptEvent(
+      { sessionFile: transcriptPath, sessionId: "session-find" },
+      (event) => {
+        seen.push(event);
+        return (event as { type?: string }).type === "message";
+      },
+    );
+    // Newest-first with early exit: the older message is never visited.
+    expect(found).toEqual({ event: newer });
+    expect(seen).toEqual([newer]);
+
+    const missing = await findTranscriptEvent(
+      { sessionFile: path.join(tempDir, "missing.jsonl"), sessionId: "session-find" },
+      () => true,
+    );
+    expect(missing).toBeUndefined();
   });
 
   it("opens a borrowed read view with raw exact-key probes and deferred enumeration", async () => {
@@ -1398,7 +1462,7 @@ describe("session accessor file-backed seam", () => {
     );
   });
 
-  it("applies restart recovery replacements without exposing mutable store rows", async () => {
+  it("applies explicit replacements without exposing mutable store rows", async () => {
     fs.writeFileSync(
       storePath,
       JSON.stringify(
@@ -1420,7 +1484,7 @@ describe("session accessor file-backed seam", () => {
       "utf8",
     );
 
-    const result = await applyRestartRecoveryLifecycle({
+    const result = await applySessionEntryReplacements({
       storePath,
       update: (entries) => {
         const main = entries.find((entry) => entry.sessionKey === "agent:main:main");
@@ -1452,6 +1516,23 @@ describe("session accessor file-backed seam", () => {
       status: "running",
       updatedAt: 20,
     });
+
+    const selectedKeys = await applySessionEntryReplacements({
+      sessionKeys: ["agent:main:main"],
+      storePath,
+      update: (entries) => ({ result: entries.map((entry) => entry.sessionKey) }),
+    });
+    expect(selectedKeys).toEqual(["agent:main:main"]);
+    await expect(
+      applySessionEntryReplacements({
+        sessionKeys: ["agent:main:main"],
+        storePath,
+        update: () => ({
+          replacements: [{ sessionKey: "agent:main:other", entry: store["agent:main:other"] }],
+          result: undefined,
+        }),
+      }),
+    ).rejects.toThrow("outside the selected key set");
   });
 
   it("branches checkpoint sessions without exposing mutable store rows", async () => {

@@ -38,7 +38,7 @@ channel is the communication surface.
 
 - OpenClaw with the bundled `codex` plugin available. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Codex app-server `0.142.0` or newer. The plugin manages a compatible
+- Codex app-server `0.143.0` or newer. The plugin manages a compatible
   binary by default, so a `codex` command on `PATH` does not affect normal
   startup.
 - Codex auth through `openclaw models auth login --provider openai`, an
@@ -577,6 +577,11 @@ browser, nodes, gateway, and `heartbeat_respond`, are available through
 Codex tool search under the `openclaw` namespace, keeping the initial model
 context smaller.
 
+Tools marked `catalogMode: "direct-only"`, including the OpenClaw `computer`
+tool, use the `openclaw_direct` namespace instead. Codex treats that namespace
+as `DirectModelOnly`, so those tools stay directly model-visible in normal and
+code-mode-only threads rather than crossing nested Code Mode `tools.*` calls.
+
 Web search uses Codex's hosted `web_search` tool by default when search is
 enabled and no managed provider is selected. Native hosted search and
 OpenClaw's managed `web_search` dynamic tool are mutually exclusive so
@@ -627,7 +632,7 @@ Supported `appServer` fields:
 | `authToken`                                   | unset                                                  | Bearer token for WebSocket transport. Accepts a literal string or SecretInput such as `${CODEX_APP_SERVER_TOKEN}`.                                                                                                                                                                                                                                                                              |
 | `headers`                                     | `{}`                                                   | Extra WebSocket headers. Header values accept literal strings or SecretInput values, for example `x-codex-client-session-token: "${CODEX_CLIENT_SESSION_TOKEN}"`.                                                                                                                                                                                                                               |
 | `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. OpenClaw keeps the selected `CODEX_HOME` and inherited `HOME` for local launches.                                                                                                                                                                           |
-| `codeModeOnly`                                | `false`                                                | Opt into Codex's code-mode-only tool surface. OpenClaw dynamic tools remain registered with Codex so nested `tools.*` calls return through the app-server `item/tool/call` bridge.                                                                                                                                                                                                              |
+| `codeModeOnly`                                | `false`                                                | Opt into Codex's code-mode-only tool surface. Ordinary OpenClaw dynamic tools remain available through nested `tools.*` calls; `openclaw_direct` tools stay directly model-visible.                                                                                                                                                                                                             |
 | `remoteWorkspaceRoot`                         | unset                                                  | Remote Codex app-server workspace root. When set, OpenClaw infers the local workspace root from the resolved OpenClaw workspace, preserves the current cwd suffix under this remote root, and sends only the final app-server cwd to Codex. If the cwd is outside the resolved OpenClaw workspace root, OpenClaw fails closed instead of sending a gateway-local path to the remote app-server. |
 | `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                                                                     |
 | `turnCompletionIdleTimeoutMs`                 | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`.                                                                                                                                                                                                                                                                    |
@@ -900,10 +905,10 @@ instead of a plain OpenAI API-key failure.
 Doctor rewrites legacy model refs to `openai/*`, removes stale session and
 whole-agent runtime pins, and preserves existing auth-profile overrides.
 
-**The app-server is rejected:** use Codex app-server `0.142.0` or newer.
+**The app-server is rejected:** use Codex app-server `0.143.0` or newer.
 Same-version prereleases or build-suffixed versions such as
-`0.142.0-alpha.2` or `0.142.0+custom` are rejected because OpenClaw tests
-the stable `0.142.0` protocol floor.
+`0.143.0-alpha.2` or `0.143.0+custom` are rejected because OpenClaw tests
+the stable `0.143.0` protocol floor.
 
 **`/codex status` cannot connect:** check that the bundled `codex` plugin
 is enabled, that `plugins.allow` includes it when an allowlist is

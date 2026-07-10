@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -16,6 +15,7 @@ import {
 } from "../agents/agent-scope.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import {
   forkSessionFromParent,
   resolveParentForkDecision,
@@ -107,9 +107,7 @@ export function buildDashboardSessionKey(agentId: string): string {
   return `agent:${agentId}:dashboard:${randomUUID()}`;
 }
 
-function inheritSessionRuntimeSelection(
-  parentEntry: SessionEntry | undefined,
-): Partial<SessionEntry> {
+function inheritSessionSelection(parentEntry: SessionEntry | undefined): Partial<SessionEntry> {
   if (!parentEntry) {
     return {};
   }
@@ -122,8 +120,6 @@ function inheritSessionRuntimeSelection(
     ...(parentEntry.agentRuntimeOverride
       ? { agentRuntimeOverride: parentEntry.agentRuntimeOverride }
       : {}),
-    ...(parentEntry.modelProvider ? { modelProvider: parentEntry.modelProvider } : {}),
-    ...(parentEntry.model ? { model: parentEntry.model } : {}),
     ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
     ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
     ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),
@@ -152,6 +148,7 @@ type CreateGatewaySessionResult =
       key: string;
       agentId: string;
       entry: SessionEntry;
+      resolved: { modelProvider: string; model: string };
       resetExisting: boolean;
     }
   | { ok: false; error: ErrorShape };
@@ -303,6 +300,7 @@ export async function createGatewaySession(params: {
         key: resetResult.key,
         agentId: resetResult.agentId,
         entry: resetResult.entry,
+        resolved: resetResult.resolved,
         resetExisting: true,
       };
     }
@@ -414,7 +412,7 @@ export async function createGatewaySession(params: {
         }
         const inheritedSelection = normalizeOptionalString(params.model)
           ? {}
-          : inheritSessionRuntimeSelection(currentParentSessionEntry);
+          : inheritSessionSelection(currentParentSessionEntry);
         const entry: SessionEntry = {
           ...patched.entry,
           ...inheritedSelection,
@@ -449,9 +447,11 @@ export async function createGatewaySession(params: {
         const fork = await forkSessionFromParent({
           parentEntry: currentParentSessionEntry,
           agentId: parentSessionTarget.agentId,
-          sessionsDir: path.dirname(parentSessionTarget.storePath),
+          parentSessionKey: canonicalParentSessionKey,
+          sessionKey: target.canonicalKey,
+          storePath: parentSessionTarget.storePath,
           // Keep the fork transcript owned by the child store across agent boundaries.
-          targetSessionsDir: path.dirname(target.storePath),
+          targetStorePath: target.storePath,
         });
         if (!fork) {
           return {
@@ -518,11 +518,17 @@ export async function createGatewaySession(params: {
       });
     }
 
+    const selectedModel = resolveSessionModelRef(params.cfg, created.entry, target.agentId);
+
     return {
       ok: true,
       key: target.canonicalKey,
       agentId: target.agentId,
       entry: created.entry,
+      resolved: {
+        modelProvider: selectedModel.provider,
+        model: selectedModel.model,
+      },
       resetExisting: false,
     };
   };

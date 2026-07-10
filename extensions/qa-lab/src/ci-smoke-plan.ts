@@ -12,7 +12,7 @@ const QA_SMOKE_PROFILE = "smoke-ci";
 const QA_SMOKE_DEFAULT_CHANNEL_SHARDS = 2;
 const QA_SMOKE_MAX_SHARDS = 8;
 
-export type QaSmokeCiShard = {
+type QaSmokeCiShard = {
   name: string;
   slug: string;
   channel: string;

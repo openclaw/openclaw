@@ -275,6 +275,7 @@ type TelegramLoginFlow = NonNullable<TelegramNativeCommandDeps["runModelsAuthLog
 
 function registerAndResolveStatusHandler(params: {
   cfg: OpenClawConfig;
+  runtimeCfg?: OpenClawConfig;
   allowFrom?: string[];
   groupAllowFrom?: string[];
   storeAllowFrom?: string[];
@@ -286,6 +287,7 @@ function registerAndResolveStatusHandler(params: {
 } {
   const {
     cfg,
+    runtimeCfg,
     allowFrom,
     groupAllowFrom,
     storeAllowFrom,
@@ -295,6 +297,7 @@ function registerAndResolveStatusHandler(params: {
   return registerAndResolveCommandHandlerBase({
     commandName: "status",
     cfg,
+    runtimeCfg,
     allowFrom: allowFrom ?? ["*"],
     groupAllowFrom: groupAllowFrom ?? [],
     storeAllowFrom,
@@ -307,6 +310,7 @@ function registerAndResolveStatusHandler(params: {
 function registerAndResolveCommandHandlerBase(params: {
   commandName: string;
   cfg: OpenClawConfig;
+  runtimeCfg?: OpenClawConfig;
   allowFrom: string[];
   groupAllowFrom: string[];
   storeAllowFrom?: string[];
@@ -322,6 +326,7 @@ function registerAndResolveCommandHandlerBase(params: {
   const {
     commandName,
     cfg,
+    runtimeCfg,
     allowFrom,
     groupAllowFrom,
     storeAllowFrom,
@@ -333,8 +338,16 @@ function registerAndResolveCommandHandlerBase(params: {
   } = params;
   const commandHandlers = new Map<string, TelegramCommandHandler>();
   const sendMessage = vi.fn().mockResolvedValue(undefined);
+  const baseRuntimeCfg = runtimeCfg ?? cfg;
+  const commandRuntimeCfg =
+    (baseRuntimeCfg.commands?.useAccessGroups !== false) === useAccessGroups
+      ? baseRuntimeCfg
+      : {
+          ...baseRuntimeCfg,
+          commands: { ...baseRuntimeCfg.commands, useAccessGroups },
+        };
   const telegramDeps: TelegramNativeCommandDeps = {
-    getRuntimeConfig: vi.fn(() => cfg),
+    getRuntimeConfig: vi.fn(() => commandRuntimeCfg),
     readChannelAllowFromStore: vi.fn(async () => storeAllowFrom ?? []),
     dispatchReplyWithBufferedBlockDispatcher: replyMocks.dispatchReplyWithBufferedBlockDispatcher,
     getPluginCommandSpecs: vi.fn(() => pluginCommandSpecs ?? []),
@@ -356,7 +369,6 @@ function registerAndResolveCommandHandlerBase(params: {
       cfg,
       allowFrom,
       groupAllowFrom,
-      useAccessGroups,
       telegramCfg,
       resolveTelegramGroupConfig,
       telegramDeps,
@@ -689,6 +701,23 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(call?.sessionKey).toBe(dispatchCall?.ctx?.CommandTargetSessionKey);
   });
 
+  it("keeps one live config snapshot through native command execution", async () => {
+    const startupCfg: OpenClawConfig = { session: { store: "/tmp/startup-sessions.json" } };
+    const runtimeCfg: OpenClawConfig = { session: { store: "/tmp/runtime-sessions.json" } };
+    const { handler } = registerAndResolveStatusHandler({ cfg: startupCfg, runtimeCfg });
+
+    await handler(createTelegramPrivateCommandContext());
+
+    const dispatchCall = requireRecord(
+      firstMockArg(
+        replyMocks.dispatchReplyWithBufferedBlockDispatcher,
+        "dispatchReplyWithBufferedBlockDispatcher",
+      ),
+      "dispatch call",
+    );
+    expect(dispatchCall.cfg).toBe(runtimeCfg);
+  });
+
   it("uses the target session model when building native argument menus", async () => {
     const cfg = {
       agents: {
@@ -942,15 +971,28 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
-  it("hydrates runtime catalog metadata for thinking menu defaults", async () => {
+  it("uses the read-only catalog for Claude CLI thinking menus", async () => {
     const cfg = {
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.5" },
+          model: { primary: "anthropic/claude-opus-4-8" },
         },
       },
     } as OpenClawConfig;
     sessionMocks.loadSessionStore.mockReturnValue({});
+    agentRuntimeMocks.loadModelCatalog.mockImplementation(async (params) => {
+      if (!params?.readOnly) {
+        throw new Error("native /think must not start full model discovery");
+      }
+      return [
+        {
+          provider: "anthropic",
+          id: "claude-opus-4-8",
+          name: "Claude Opus 4.8",
+          reasoning: true,
+        },
+      ];
+    });
 
     const { handler, sendMessage } = registerAndResolveCommandHandler({
       commandName: "think",
@@ -961,13 +1003,14 @@ describe("registerTelegramNativeCommands — session metadata", () => {
 
     expect(agentRuntimeMocks.loadModelCatalog).toHaveBeenCalledWith({
       config: cfg,
+      readOnly: true,
     });
     expectSendMessageCall({
       sendMessage,
       chatId: 100,
-      textIncludes: "Current thinking level: medium.\nChoose level for /think.",
+      textIncludes: "Current thinking level: off.\nChoose level for /think.",
       requireReplyMarkup: true,
-      label: "runtime catalog thinking menu",
+      label: "Claude CLI thinking menu",
     });
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });

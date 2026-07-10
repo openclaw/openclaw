@@ -5,7 +5,7 @@ import {
 } from "../agents/embedded-agent-runner/tool-result-truncation.js";
 import type { HealthFinding } from "./health-checks.js";
 
-export const TOOL_RESULT_CAP_CHECK_ID = "core/doctor/tool-result-cap";
+const TOOL_RESULT_CAP_CHECK_ID = "core/doctor/tool-result-cap";
 
 export type ToolResultCapDoctorIssue = {
   kind: "configured-above-runtime-ceiling" | "configured-below-auto-cap";

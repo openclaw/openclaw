@@ -40,4 +40,25 @@ describe("audit command parsing", () => {
     expect(row).toContain("main\\nforged");
     expect(row).toContain("run\\tcolumn");
   });
+
+  it("keeps truncated audit cells UTF-16 well-formed", () => {
+    const [, row] = testApi.formatAuditRows([
+      {
+        eventId: "event-utf16",
+        sequence: 1,
+        sourceSequence: 1,
+        occurredAt: 0,
+        kind: "tool_action",
+        action: "tool.action.finished",
+        status: "failed",
+        actor: { type: "agent", id: "main" },
+        agentId: `${"x".repeat(16)}🚀tail`,
+        runId: "run-utf16",
+        redaction: "metadata_only",
+      },
+    ]);
+
+    expect(row).toContain(`${"x".repeat(16)}…`);
+    expect(row).not.toContain("\uD83D");
+  });
 });

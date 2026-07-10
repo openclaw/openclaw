@@ -1,7 +1,11 @@
 // Tests bounded HTTP response reads and cleanup behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
+import {
+  readResponseTextPrefix,
+  readResponseTextSnippet,
+  readResponseWithLimit,
+} from "./http-body.js";
 
 function makeStream(chunks: Uint8Array[], delayMs?: number) {
   return new ReadableStream<Uint8Array>({
@@ -235,6 +239,18 @@ describe("readResponseTextSnippet", () => {
       options: { maxBytes: 7, maxChars: 50 },
       expected: "1234567…",
     },
+    {
+      name: "drops partial UTF-8 characters when snippets truncate at a byte boundary",
+      response: new Response(makeStream([new TextEncoder().encode("ab😀cd")])),
+      options: { maxBytes: 3, maxChars: 50 },
+      expected: "ab…",
+    },
+    {
+      name: "keeps character-limited snippets UTF-16 well-formed",
+      response: new Response(makeStream([new TextEncoder().encode("ab🚀tail")])),
+      options: { maxBytes: 64, maxChars: 3 },
+      expected: "ab…",
+    },
   ] as const)("$name", async ({ response, options, expected }) => {
     await expectReadResponseTextSnippetCase({ response, options, expected });
   });
@@ -245,6 +261,18 @@ describe("readResponseTextSnippet", () => {
         maxBytes: Number.NaN,
       }),
     ).rejects.toThrow(/maxBytes must be a non-negative finite number/);
+  });
+
+  it("cancels immediately when a diagnostic prefix fills the byte budget", async () => {
+    const cancel = vi.fn();
+    const response = new Response(makeStallingStream([new TextEncoder().encode("exact")], cancel));
+
+    await expect(readResponseTextPrefix(response, 5)).resolves.toEqual({
+      text: "exact",
+      size: 5,
+      truncated: true,
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   it.each([

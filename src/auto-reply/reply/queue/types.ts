@@ -19,6 +19,7 @@ import type {
   QueuedReplyDeliveryCorrelation,
   QueuedReplyLifecycle,
   SourceReplyDeliveryMode,
+  TaskSuggestionDeliveryMode,
 } from "../../get-reply-options.types.js";
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
@@ -35,6 +36,12 @@ export type QueueSettings = {
 };
 
 export type QueueDedupeMode = "message-id" | "prompt" | "none";
+
+export type QueueInsertPosition = "tail" | "front";
+
+export type EnqueueFollowupRunOptions = {
+  position?: QueueInsertPosition;
+};
 
 export class FollowupRunDeferredError extends Error {
   constructor(message = "Follow-up run deferred") {
@@ -71,6 +78,12 @@ export type FollowupRun = {
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
+  /** Force individual drain; never merge this run into a collect batch. */
+  disableCollectBatching?: boolean;
+  /** Internal marker for the one-shot stranded final recovery retry. */
+  strandedReplyRetry?: boolean;
+  /** Preserve priority runs when old-item queue overflow eviction runs before drain. */
+  protectFromQueueOverflow?: boolean;
   enqueuedAt: number;
   images?: Array<{ type: "image"; data: string; mimeType: string }>;
   imageOrder?: PromptImageOrderEntry[];
@@ -104,6 +117,7 @@ export type FollowupRun = {
     sessionKey?: string;
     runtimePolicySessionKey?: string;
     messageProvider?: string;
+    clientCaps?: string[];
     chatType?: ChatType;
     agentAccountId?: string;
     groupId?: string;
@@ -152,6 +166,7 @@ export type FollowupRun = {
     inputProvenance?: InputProvenance;
     extraSystemPrompt?: string;
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
     silentReplyPromptMode?: SilentReplyPromptMode;
     extraSystemPromptStatic?: string;
     cliSessionBindingFacts?: CliSessionBindingFacts;

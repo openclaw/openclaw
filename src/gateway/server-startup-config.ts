@@ -408,7 +408,7 @@ export function createRuntimeSecretsActivator(params: {
 }
 
 /** Throw a formatted startup error when the loaded config snapshot is invalid. */
-export function assertValidGatewayStartupConfigSnapshot(
+function assertValidGatewayStartupConfigSnapshot(
   snapshot: ConfigFileSnapshot,
   options: { includeDoctorHint?: boolean } = {},
 ): void {

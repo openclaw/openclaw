@@ -2,8 +2,11 @@
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "./openclaw-runtime-session.js";
 import {
   buildSessionEntry,
   listSessionFilesForAgent,

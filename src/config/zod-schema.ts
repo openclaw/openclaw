@@ -7,6 +7,7 @@ import {
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { base64UrlDecode, normalizeEd25519PublicKeyBase64Url } from "../infra/ed25519-signature.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   isValidControlUiChatMessageMaxWidth,
@@ -388,7 +389,12 @@ const McpServerSchema = z
     enabled: z.boolean().optional(),
     command: z.string().optional(),
     args: z.array(z.string()).optional(),
-    env: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+    env: z
+      .record(
+        z.string(),
+        z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
+      )
+      .optional(),
     cwd: z.string().optional(),
     workingDirectory: z.string().optional(),
     url: HttpUrlSchema.optional(),
@@ -493,11 +499,86 @@ function isPlainHttpsUrl(value: string): boolean {
   }
 }
 
-const MarketplaceVerificationSchema = z
+function isEd25519PublicKeyConfig(value: string): boolean {
+  if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(value)) {
+    return false;
+  }
+  if (!value.includes("BEGIN") && !/^[A-Za-z0-9_-]{43}$/.test(value)) {
+    return false;
+  }
+  try {
+    const normalized = normalizeEd25519PublicKeyBase64Url(value);
+    return normalized ? base64UrlDecode(normalized).length === 32 : false;
+  } catch {
+    return false;
+  }
+}
+
+const MarketplaceFeedTrustedPublicKeySchema = z
   .object({
-    mode: z.literal("unsigned"),
+    keyId: z.string().trim().min(1),
+    publicKey: z
+      .string()
+      .trim()
+      .min(1)
+      .refine(
+        (value) => isEd25519PublicKeyConfig(value),
+        "Expected Ed25519 public key as PEM or raw base64url",
+      ),
   })
   .strict();
+
+const MarketplaceVerificationSchema = z.union([
+  z
+    .object({
+      mode: z.literal("unsigned"),
+    })
+    .strict(),
+  z
+    .object({
+      mode: z.literal("signed"),
+      keys: z.array(MarketplaceFeedTrustedPublicKeySchema).min(1),
+      threshold: z.number().int().positive().optional(),
+    })
+    .strict()
+    .superRefine((value, ctx) => {
+      const seenKeyIds = new Map<string, number>();
+      const seenPublicKeys = new Map<string, number>();
+      value.keys.forEach((key, index) => {
+        const previousKeyIdIndex = seenKeyIds.get(key.keyId);
+        if (previousKeyIdIndex !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["keys", index, "keyId"],
+            message: "Signed marketplace feed publisher key IDs must be unique",
+          });
+        } else {
+          seenKeyIds.set(key.keyId, index);
+        }
+        const normalizedPublicKey = normalizeEd25519PublicKeyBase64Url(key.publicKey);
+        if (!normalizedPublicKey) {
+          return;
+        }
+        const previousPublicKeyIndex = seenPublicKeys.get(normalizedPublicKey);
+        if (previousPublicKeyIndex !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["keys", index, "publicKey"],
+            message: "Signed marketplace feed publisher public keys must be unique",
+          });
+        } else {
+          seenPublicKeys.set(normalizedPublicKey, index);
+        }
+      });
+      if (value.threshold !== undefined && value.threshold > value.keys.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["threshold"],
+          message: "Signed marketplace feed threshold cannot exceed configured key count",
+        });
+      }
+    }),
+]);
 
 const MarketplaceFeedProfileSchema = z
   .object({
@@ -921,6 +1002,13 @@ export const OpenClawSchema = z
         enabled: z.boolean().optional(),
         store: z.string().optional(),
         maxConcurrentRuns: z.number().int().positive().optional(),
+        triggers: z
+          .object({
+            enabled: z.boolean().optional(),
+            minIntervalMs: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
         retry: z
           .object({
             maxAttempts: z.number().int().min(0).max(10).optional(),

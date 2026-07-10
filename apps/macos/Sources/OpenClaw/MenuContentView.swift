@@ -49,18 +49,14 @@ struct MenuContent: View {
                         self.statusLine(label: macNodeStatus.label, color: macNodeStatus.color)
                     }
                     if self.pairingPrompter.pendingCount > 0 {
-                        let repairCount = self.pairingPrompter.pendingRepairCount
-                        let repairSuffix = repairCount > 0 ? " · \(repairCount) repair" : ""
-                        self.statusLine(
-                            label: "Pairing approval pending (\(self.pairingPrompter.pendingCount))\(repairSuffix)",
-                            color: .orange)
+                        self.pairingStatusLine(
+                            label: "Pairing approval pending (\(self.pairingPrompter.pendingCount))")
                     }
                     if self.devicePairingPrompter.pendingCount > 0 {
                         let repairCount = self.devicePairingPrompter.pendingRepairCount
                         let repairSuffix = repairCount > 0 ? " · \(repairCount) repair" : ""
-                        self.statusLine(
-                            label: "Device pairing pending (\(self.devicePairingPrompter.pendingCount))\(repairSuffix)",
-                            color: .orange)
+                        self.pairingStatusLine(
+                            label: "Device pairing pending (\(self.devicePairingPrompter.pendingCount))\(repairSuffix)")
                     }
                 }
             }
@@ -233,6 +229,13 @@ struct MenuContent: View {
                 } label: {
                     Label("Send Test Heartbeat", systemImage: "waveform.path.ecg")
                 }
+                #if DEBUG
+                Button {
+                    DebugActions.showPairingPanelDemo()
+                } label: {
+                    Label("Show Pairing Panel (Demo)", systemImage: "checkmark.shield")
+                }
+                #endif
                 if self.state.connectionMode == .remote {
                     Button {
                         Task { @MainActor in
@@ -415,6 +418,17 @@ struct MenuContent: View {
         .padding(.top, 2)
     }
 
+    /// Pending-pairing status lines reopen the approval panel (e.g. after "Not Now").
+    private func pairingStatusLine(label: String) -> some View {
+        Button {
+            PairingApprovalCenter.shared.showPanel()
+        } label: {
+            self.statusLine(label: label, color: .orange)
+        }
+        .buttonStyle(.plain)
+        .help("Show pairing requests")
+    }
+
     private var activeBinding: Binding<Bool> {
         Binding(get: { !self.state.isPaused }, set: { self.state.isPaused = !$0 })
     }
@@ -454,42 +468,45 @@ struct MenuContent: View {
     }
 
     private var selectedMicLabel: String {
-        if self.state.voiceWakeMicID.isEmpty { return self.defaultMicLabel }
+        if self.state.voiceWakeMicID.isEmpty {
+            return self.defaultMicLabel
+        }
         if let match = self.availableMics.first(where: { $0.uid == self.state.voiceWakeMicID }) {
             return match.name
         }
-        if !self.state.voiceWakeMicName.isEmpty { return self.state.voiceWakeMicName }
+        if !self.state.voiceWakeMicName.isEmpty {
+            return self.state.voiceWakeMicName
+        }
         return "Unavailable"
     }
 
+    @ViewBuilder
     private var microphoneMenuItems: some View {
-        Group {
-            if self.isSelectedMicUnavailable {
-                Label("Disconnected (using System default)", systemImage: "exclamationmark.triangle")
-                    .labelStyle(.titleAndIcon)
-                    .foregroundStyle(.secondary)
-                    .disabled(true)
-                Divider()
-            }
+        if self.isSelectedMicUnavailable {
+            Label("Disconnected (using System default)", systemImage: "exclamationmark.triangle")
+                .labelStyle(.titleAndIcon)
+                .foregroundStyle(.secondary)
+                .disabled(true)
+            Divider()
+        }
+        Button {
+            self.state.voiceWakeMicID = ""
+            self.state.voiceWakeMicName = ""
+        } label: {
+            Label(self.defaultMicLabel, systemImage: self.state.voiceWakeMicID.isEmpty ? "checkmark" : "")
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(.plain)
+
+        ForEach(self.availableMics) { mic in
             Button {
-                self.state.voiceWakeMicID = ""
-                self.state.voiceWakeMicName = ""
+                self.state.voiceWakeMicID = mic.uid
+                self.state.voiceWakeMicName = mic.name
             } label: {
-                Label(self.defaultMicLabel, systemImage: self.state.voiceWakeMicID.isEmpty ? "checkmark" : "")
+                Label(mic.name, systemImage: self.state.voiceWakeMicID == mic.uid ? "checkmark" : "")
                     .labelStyle(.titleAndIcon)
             }
             .buttonStyle(.plain)
-
-            ForEach(self.availableMics) { mic in
-                Button {
-                    self.state.voiceWakeMicID = mic.uid
-                    self.state.voiceWakeMicName = mic.name
-                } label: {
-                    Label(mic.name, systemImage: self.state.voiceWakeMicID == mic.uid ? "checkmark" : "")
-                        .labelStyle(.titleAndIcon)
-                }
-                .buttonStyle(.plain)
-            }
         }
     }
 
@@ -528,7 +545,9 @@ struct MenuContent: View {
             self.loadingMics = false
             return
         }
-        if !force, !self.availableMics.isEmpty { return }
+        if !force, !self.availableMics.isEmpty {
+            return
+        }
         self.loadingMics = true
         let discovery = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.external, .microphone],

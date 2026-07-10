@@ -6,7 +6,7 @@ const BETA_VERSION_REGEX =
   /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)-beta\.(?<beta>[1-9]\d*)$/;
 const CORRECTION_VERSION_REGEX =
   /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)-(?<correction>[1-9]\d*)$/;
-export const JUNE_2026_PATCH_FLOOR = 5;
+const JUNE_2026_PATCH_FLOOR = 5;
 
 /**
  * @typedef {object} ParsedReleaseVersion

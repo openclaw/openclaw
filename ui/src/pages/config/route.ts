@@ -13,10 +13,11 @@ function loadConfigRoute(context: ApplicationContext) {
   );
 }
 
-function configPage(id: ConfigPageId, path: string) {
+function configPage(id: ConfigPageId, path: string, aliases: readonly string[]) {
   return definePage({
     id,
     path,
+    aliases,
     loader: (context: ApplicationContext) => loadConfigRoute(context),
     component: () =>
       import("./config-page.ts").then(() => ({
@@ -27,11 +28,11 @@ function configPage(id: ConfigPageId, path: string) {
 }
 
 export const pages = [
-  configPage("config", "/config"),
-  configPage("communications", "/communications"),
-  configPage("appearance", "/appearance"),
-  configPage("automation", "/automation"),
-  configPage("mcp", "/mcp"),
-  configPage("infrastructure", "/infrastructure"),
-  configPage("ai-agents", "/ai-agents"),
+  configPage("config", "/settings/general", ["/config"]),
+  configPage("communications", "/settings/communications", ["/communications"]),
+  configPage("appearance", "/settings/appearance", ["/appearance"]),
+  configPage("automation", "/settings/automation", ["/automation"]),
+  configPage("mcp", "/settings/mcp", ["/mcp"]),
+  configPage("infrastructure", "/settings/infrastructure", ["/infrastructure"]),
+  configPage("ai-agents", "/settings/ai-agents", ["/ai-agents"]),
 ] as const;

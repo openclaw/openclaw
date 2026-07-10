@@ -18,11 +18,8 @@ import yaml from "highlight.js/lib/languages/yaml";
 import MarkdownIt from "markdown-it";
 import markdownItTaskLists from "markdown-it-task-lists";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
-import {
-  inferBasePathFromPathname,
-  normalizeBasePath,
-  routeIdFromPath,
-} from "../app-route-paths.ts";
+import { routeIdFromPath } from "../app-route-paths.ts";
+import { resolveControlUiBasePath } from "../app/browser.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { truncateText } from "../lib/format.ts";
@@ -396,10 +393,6 @@ const APP_RESOURCE_PATH_PREFIXES = [
   ["plugins", "diffs"],
   ["plugins", "diffs-language-pack"],
 ];
-type WindowWithControlUiBasePath = Window &
-  typeof globalThis & {
-    [key: string]: unknown;
-  };
 const markdownCache = new Map<string, string>();
 const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
 const FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
@@ -559,11 +552,7 @@ function currentControlUiBasePath(): string {
   if (typeof window === "undefined") {
     return "";
   }
-  const configured = (window as WindowWithControlUiBasePath)["__OPENCLAW_CONTROL_UI_BASE_PATH__"];
-  if (typeof configured === "string") {
-    return normalizeBasePath(configured);
-  }
-  return inferBasePathFromPathname(window.location.pathname);
+  return resolveControlUiBasePath(window.location.pathname);
 }
 
 function pathSegments(pathname: string): string[] {
@@ -695,8 +684,14 @@ function normalizeMarkdownImageLabel(text?: string | null): string {
   return trimmed ? trimmed : "image";
 }
 
+function normalizeMarkdownLineBreaks(value: string): string {
+  return value.replace(/\r\n?|[\u2028\u2029]/g, "\n");
+}
+
 function normalizeMarkdownInput(markdownLocal: string): string {
-  const input = stripUnsupportedCitationControlMarkers(markdownLocal).trim();
+  const input = normalizeMarkdownLineBreaks(
+    stripUnsupportedCitationControlMarkers(markdownLocal),
+  ).trim();
   if (!input) {
     return "";
   }
@@ -705,7 +700,7 @@ function normalizeMarkdownInput(markdownLocal: string): string {
 
 function formatTruncatedMarkdownInput(input: string): string {
   const truncated = truncateText(input, MARKDOWN_CHAR_LIMIT);
-  return appendMarkdownTruncationNotice(truncated).replace(/\r\n?/g, "\n");
+  return appendMarkdownTruncationNotice(truncated);
 }
 
 function appendMarkdownTruncationNotice(truncated: {
@@ -720,7 +715,7 @@ function appendMarkdownTruncationNotice(truncated: {
 }
 
 export function isMarkdownBlockArtText(value: string): boolean {
-  const lines = value.replace(/\r\n?/g, "\n").split("\n");
+  const lines = normalizeMarkdownLineBreaks(value).split("\n");
   const artLines = lines.filter((line) => line.trim().length > 0);
   if (artLines.length < 2) {
     return false;
@@ -1355,7 +1350,9 @@ export function toSanitizedMarkdownHtml(
   options: MarkdownRenderOptions = {},
 ): string {
   const renderOptions = normalizeMarkdownRenderOptions(options);
-  const rawInput = stripUnsupportedCitationControlMarkers(markdownLocal).replace(/\r\n?/g, "\n");
+  const rawInput = normalizeMarkdownLineBreaks(
+    stripUnsupportedCitationControlMarkers(markdownLocal),
+  );
   const input = rawInput.trim();
   if (!input) {
     return "";
@@ -1408,7 +1405,7 @@ export function toSanitizedMarkdownHtml(
 }
 
 function toEscapedPlainTextHtml(value: string): string {
-  return `<div class="markdown-plain-text-fallback">${escapeHtml(value.replace(/\r\n?/g, "\n"))}</div>`;
+  return `<div class="markdown-plain-text-fallback">${escapeHtml(normalizeMarkdownLineBreaks(value))}</div>`;
 }
 
 export function toStreamingPlainTextHtml(markdownLocal: string): string {
@@ -1423,7 +1420,9 @@ export function toStreamingMarkdownHtml(
   markdownLocal: string,
   options: MarkdownRenderOptions = {},
 ): string {
-  const rawInput = stripUnsupportedCitationControlMarkers(markdownLocal).replace(/\r\n?/g, "\n");
+  const rawInput = normalizeMarkdownLineBreaks(
+    stripUnsupportedCitationControlMarkers(markdownLocal),
+  );
   if (isMarkdownBlockArtText(rawInput)) {
     const truncated = truncateText(rawInput, MARKDOWN_CHAR_LIMIT);
     installHooks();
@@ -1438,10 +1437,11 @@ export function toStreamingMarkdownHtml(
     );
   }
 
-  const input = normalizeMarkdownInput(markdownLocal);
-  if (!input) {
+  const trimmedInput = rawInput.trim();
+  if (!trimmedInput) {
     return "";
   }
+  const input = formatTruncatedMarkdownInput(trimmedInput);
 
   const boundary = findStableStreamingMarkdownBoundary(input);
   if (boundary <= 0) {

@@ -103,7 +103,12 @@ The default sandbox backend uses Docker when `agents.defaults.sandbox` is enable
 ### Manual flow
 
 ```bash
-docker build -t openclaw:local -f Dockerfile .
+BUILD_GIT_COMMIT="$(git rev-parse HEAD)"
+BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+docker build \
+  --build-arg "GIT_COMMIT=${BUILD_GIT_COMMIT}" \
+  --build-arg "OPENCLAW_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}" \
+  -t openclaw:local -f Dockerfile .
 docker compose run --rm --no-deps --entrypoint node openclaw-gateway \
   dist/index.js onboard --mode local --no-install-daemon
 docker compose run --rm --no-deps --entrypoint node openclaw-gateway \
@@ -111,9 +116,36 @@ docker compose run --rm --no-deps --entrypoint node openclaw-gateway \
 docker compose up -d openclaw-gateway
 ```
 
+The Docker context excludes `.git`. Pass the source identity as build arguments
+as shown above so the image's About screen reports the checked-out commit and
+one build timestamp. `scripts/docker/setup.sh` resolves and passes both values
+automatically.
+
 <Note>
 Run `docker compose` from the repo root. If you enabled `OPENCLAW_EXTRA_MOUNTS` or `OPENCLAW_HOME_VOLUME`, the setup script writes `docker-compose.extra.yml`; include it after any `docker-compose.override.yml` you maintain yourself, e.g. `-f docker-compose.yml -f docker-compose.override.yml -f docker-compose.extra.yml`.
 </Note>
+
+### Upgrading container images
+
+When you replace the OpenClaw image but keep the same mounted state/config, the
+new gateway runs startup-safe upgrade migrations and plugin convergence before
+readiness. Routine image upgrades should not require a separate
+`openclaw doctor --fix` pass.
+
+If startup cannot complete those repairs safely, the gateway exits instead of
+reporting healthy. With a restart policy, Docker, Podman, or Kubernetes may show
+the gateway container restarting. Keep the mounted state volume, then run the
+same image once with `openclaw doctor --fix` as the container command, using the
+same state/config mounts the gateway uses:
+
+```bash
+docker run --rm -v <openclaw-state>:/home/node/.openclaw <image> openclaw doctor --fix
+podman run --rm -v <openclaw-state>:/home/node/.openclaw <image> openclaw doctor --fix
+```
+
+After doctor finishes, restart the gateway container with its default command.
+In Kubernetes, run the same command in a one-off Job or debug pod mounted to the
+same PVC, then restart the Deployment or StatefulSet.
 
 ### Environment variables
 

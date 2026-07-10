@@ -21,7 +21,7 @@ import type { DiscordConfig } from "./native-command.types.js";
 import { resolveDiscordNativeInteractionChannelContext } from "./native-interaction-channel-context.js";
 import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 
-export function resolveDiscordNativeCommandAllowlistAccess(params: {
+function resolveDiscordNativeCommandAllowlistAccess(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   sender: { id: string; name?: string; tag?: string };

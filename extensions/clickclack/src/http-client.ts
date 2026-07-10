@@ -38,10 +38,34 @@ function provenanceFields(provenance?: ClickClackMessageProvenance): Record<stri
 type ClientOptions = {
   baseUrl: string;
   token: string;
+  correlationId?: string;
   fetch?: typeof fetch;
 };
 
 const CLICKCLACK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const CLICKCLACK_CORRELATION_ID_MAX_LENGTH = 128;
+const CLICKCLACK_CORRELATION_ID_PATTERN = /^[A-Za-z0-9._:-]+$/u;
+const CLICKCLACK_CORRELATION_ID_HEADER = "X-Correlation-ID";
+// Keep REST and websocket JSON under the same bounded response budget. ClickClack
+// accepts 1 MiB request bodies, then wraps and re-encodes them as events, so a
+// valid frame can exceed 1 MiB before ws hands it to the event parser.
+const CLICKCLACK_INBOUND_JSON_LIMIT_BYTES = 16 * 1024 * 1024;
+
+/** Accepts the same bounded request-correlation shape as the ClickClack API. */
+export function normalizeClickClackCorrelationId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  if (
+    !normalized ||
+    normalized.length > CLICKCLACK_CORRELATION_ID_MAX_LENGTH ||
+    !CLICKCLACK_CORRELATION_ID_PATTERN.test(normalized)
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
 
 /**
  * Creates a typed client for the ClickClack API using bearer-token auth.
@@ -49,6 +73,7 @@ const CLICKCLACK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 export function createClickClackClient(options: ClientOptions) {
   const baseUrl = options.baseUrl.replace(/\/$/, "");
   const fetcher = options.fetch ?? fetch;
+  const correlationId = normalizeClickClackCorrelationId(options.correlationId);
   const headers = {
     Authorization: `Bearer ${options.token}`,
     Accept: "application/json",
@@ -59,6 +84,9 @@ export function createClickClackClient(options: ClientOptions) {
     for (const [key, value] of Object.entries(headers)) {
       requestHeaders.set(key, value);
     }
+    if (correlationId) {
+      requestHeaders.set(CLICKCLACK_CORRELATION_ID_HEADER, correlationId);
+    }
     if (init.body && !(init.body instanceof FormData)) {
       requestHeaders.set("Content-Type", "application/json");
     }
@@ -67,7 +95,9 @@ export function createClickClackClient(options: ClientOptions) {
       const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
       throw new Error(`ClickClack ${response.status}: ${detail}`);
     }
-    return await readProviderJsonResponse<T>(response, "ClickClack response");
+    return await readProviderJsonResponse<T>(response, "ClickClack response", {
+      maxBytes: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
+    });
   }
 
   return {
@@ -226,6 +256,7 @@ export function createClickClackClient(options: ClientOptions) {
         headers: {
           Authorization: `Bearer ${options.token}`,
         },
+        maxPayload: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
       });
     },
   };

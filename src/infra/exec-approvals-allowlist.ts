@@ -11,6 +11,7 @@ import { explainShellCommand } from "./command-explainer/extract.js";
 import type { CommandStep } from "./command-explainer/types.js";
 import {
   isDispatchWrapperExecutable,
+  resolveDispatchWrapperTrustPlan,
   unwrapDispatchWrappersForResolution,
 } from "./dispatch-wrapper-resolution.js";
 import {
@@ -53,6 +54,7 @@ import {
 } from "./exec-wrapper-resolution.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 import { expandHomePrefix } from "./home-dir.js";
+import { resolveKnownPackageManagerExecInvocation } from "./package-manager-exec-wrapper.js";
 import {
   POSIX_INLINE_COMMAND_FLAGS,
   isDirectShellPositionalCarrierCommand,
@@ -292,6 +294,64 @@ type SegmentMatchEvaluation = {
   match: ExecAllowlistEntry | null;
 };
 
+const MAX_PACKAGE_MANAGER_EXEC_UNWRAP_DEPTH = 6;
+
+type PackageManagerTrustTarget =
+  | { kind: "blocked" }
+  | { kind: "not-package-manager"; argv: string[] }
+  | { kind: "package-manager"; argv: string[] };
+
+// Package-manager exec keeps the outer argv for process launch, but durable
+// approval matching must use the inner trust target so stale outer-wrapper
+// allow-always entries cannot authorize a different wrapped payload.
+function resolvePackageManagerTrustTargetArgv(
+  argv: string[],
+  platform: NodeJS.Platform = process.platform,
+): PackageManagerTrustTarget {
+  let current = argv;
+  let sawPackageManagerExec = false;
+  for (let depth = 0; depth < MAX_PACKAGE_MANAGER_EXEC_UNWRAP_DEPTH; depth += 1) {
+    const dispatchPlan = resolveDispatchWrapperTrustPlan(current, undefined, platform);
+    if (dispatchPlan.policyBlocked) {
+      return { kind: "blocked" };
+    }
+    current = dispatchPlan.argv;
+    const packageManagerExec = resolveKnownPackageManagerExecInvocation(current);
+    if (packageManagerExec.kind === "unsafe-exec") {
+      return { kind: "blocked" };
+    }
+    if (packageManagerExec.kind !== "unwrapped") {
+      return sawPackageManagerExec
+        ? { kind: "package-manager", argv: current }
+        : { kind: "not-package-manager", argv: current };
+    }
+    sawPackageManagerExec = true;
+    current = packageManagerExec.argv;
+  }
+  return { kind: "blocked" };
+}
+
+function resolvePackageManagerAllowlistTargetArgv(
+  argv: string[],
+  platform: NodeJS.Platform = process.platform,
+): string[] | null | undefined {
+  const packageManagerTarget = resolvePackageManagerTrustTargetArgv(argv, platform);
+  if (packageManagerTarget.kind === "blocked") {
+    return null;
+  }
+  if (packageManagerTarget.kind !== "package-manager") {
+    return undefined;
+  }
+  const trustPlan = resolveExecWrapperTrustPlan(packageManagerTarget.argv, undefined, platform);
+  if (
+    trustPlan.policyBlocked ||
+    (trustPlan.shellWrapperExecutable && trustPlan.shellInlineCommand)
+  ) {
+    return null;
+  }
+  return trustPlan.argv;
+}
+
 function matchExecutableAllowlistForSegment(params: {
   allowlist: ExecAllowlistEntry[];
   candidateResolution: ExecutableResolution | null;
@@ -420,21 +480,36 @@ function resolveSegmentAllowlistMatch(params: {
     params.segment.resolution?.effectiveArgv && params.segment.resolution.effectiveArgv.length > 0
       ? params.segment.resolution.effectiveArgv
       : params.segment.argv;
-  const allowlistSegment =
-    effectiveArgv === params.segment.argv
-      ? params.segment
-      : { ...params.segment, argv: effectiveArgv };
-  const executableResolution = resolvePolicyTargetResolution(params.segment.resolution);
-  const executionResolution = resolveExecutionTargetResolution(params.segment.resolution);
-  const candidatePath = resolvePolicyTargetCandidatePath(
-    params.segment.resolution,
-    params.context.cwd,
+  const packageManagerTargetArgv = resolvePackageManagerAllowlistTargetArgv(
+    effectiveArgv,
+    (params.context.platform ?? undefined) as NodeJS.Platform | undefined,
   );
-  const trustPath = resolvePolicyTargetTrustPath(params.segment.resolution, params.context.cwd);
+  if (packageManagerTargetArgv === null) {
+    return { effectiveArgv, inlineCommand: null, match: null };
+  }
+  const matchArgv = packageManagerTargetArgv ?? effectiveArgv;
+  const matchResolution =
+    matchArgv === effectiveArgv
+      ? params.segment.resolution
+      : resolveCommandResolutionFromArgv(
+          matchArgv,
+          params.context.cwd,
+          params.context.env,
+          (params.context.platform ?? undefined) as NodeJS.Platform | undefined,
+        );
+  const allowlistSegment =
+    matchArgv === params.segment.argv
+      ? params.segment
+      : { ...params.segment, argv: matchArgv, resolution: matchResolution };
+  const executableResolution = resolvePolicyTargetResolution(matchResolution);
+  const executionResolution = resolveExecutionTargetResolution(params.segment.resolution);
+  const candidatePath = resolvePolicyTargetCandidatePath(matchResolution, params.context.cwd);
+  const trustPath = resolvePolicyTargetTrustPath(matchResolution, params.context.cwd);
   const candidateResolution =
     candidatePath && executableResolution
       ? { ...executableResolution, resolvedPath: candidatePath, resolvedRealPath: trustPath }
       : executableResolution;
+  const matchExecutionResolution = resolveExecutionTargetResolution(matchResolution);
   const inlineCommand = extractBindableShellWrapperInlineCommand(allowlistSegment.argv);
   const powerShellFileScriptArgv = resolvePowerShellFileScriptArgv({
     segment: allowlistSegment,
@@ -446,14 +521,14 @@ function resolveSegmentAllowlistMatch(params: {
   const executableMatch = matchExecutableAllowlistForSegment({
     allowlist: params.context.allowlist,
     candidateResolution,
-    effectiveArgv,
+    effectiveArgv: matchArgv,
     platform: params.context.platform,
     inlineCommand,
     isShellWrapperInvocation,
     isPositionalCarrierInvocation,
     allowlistTargetIsExecutionTarget: executableResolutionsReferToSameTarget(
       executableResolution,
-      executionResolution,
+      matchExecutionResolution ?? executionResolution,
     ),
   });
   const shellPositionalArgvCandidatePath =
@@ -490,7 +565,7 @@ function resolveSegmentAllowlistMatch(params: {
     ? (powerShellFileScriptArgv ??
       resolveShellWrapperScriptArgv({
         shellScriptCandidatePath,
-        effectiveArgv,
+        effectiveArgv: matchArgv,
         cwd: params.context.cwd,
       }))
     : null;
@@ -1113,6 +1188,17 @@ function resolveCandidateTrustPath(candidatePath: string | undefined): string | 
   });
 }
 
+function resolveAllowAlwaysPatternArgv(
+  argv: string[],
+  platform: NodeJS.Platform = process.platform,
+): string[] | null {
+  const packageManagerTarget = resolvePackageManagerTrustTargetArgv(argv, platform);
+  if (packageManagerTarget.kind === "blocked") {
+    return null;
+  }
+  return packageManagerTarget.argv;
+}
+
 function collectAllowAlwaysPatterns(params: {
   segment: ExecCommandSegment;
   cwd?: string;
@@ -1126,8 +1212,15 @@ function collectAllowAlwaysPatterns(params: {
     return;
   }
 
-  const trustPlan = resolveExecWrapperTrustPlan(
+  const patternArgv = resolveAllowAlwaysPatternArgv(
     params.segment.argv,
+    (params.platform ?? undefined) as NodeJS.Platform | undefined,
+  );
+  if (!patternArgv) {
+    return;
+  }
+  const trustPlan = resolveExecWrapperTrustPlan(
+    patternArgv,
     undefined,
     (params.platform ?? undefined) as NodeJS.Platform | undefined,
   );
@@ -1195,7 +1288,7 @@ function collectAllowAlwaysPatterns(params: {
     if (scriptPath) {
       const scriptTrustPath = resolveCandidateTrustPath(scriptPath) ?? scriptPath;
       const argPattern = buildScriptArgPatternFromArgv(
-        powerShellFileScriptArgv ?? params.segment.argv,
+        powerShellFileScriptArgv ?? segment.argv,
         scriptPath,
         params.cwd,
         params.platform,
