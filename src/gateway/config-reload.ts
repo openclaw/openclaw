@@ -443,7 +443,7 @@ export function startGatewayConfigReloader(opts: {
   let degradedToPolling = false;
   let watcherUsesPolling = false;
 
-  const createWatcher = () => {
+  const createWatcher = async () => {
     if (stopped) {
       return;
     }
@@ -462,6 +462,16 @@ export function startGatewayConfigReloader(opts: {
     watcher = next;
     watcherUsesPolling = next.options.usePolling;
     hotReloadStatus = "active";
+
+    // Reconcile against the current on-disk config after watcher recreation.
+    // Without this, any edit made during the watcher-down window (e.g., manual
+    // edit or separate `openclaw doctor --fix` run) would be silently adopted
+    // as the new baseline and never scheduled for reload.
+    // See: https://github.com/openclaw/openclaw/issues/103729
+    if (watcherRecreateRetries > 0 || degradedToPolling) {
+      opts.log.info("config watcher re-created; performing reconciliation read");
+      schedule();
+    }
   };
 
   const handleWatcherError = (source: typeof watcher, err: unknown) => {
@@ -483,9 +493,9 @@ export function startGatewayConfigReloader(opts: {
         opts.log.warn(
           `config watcher native retries exhausted; degrading to polling mode: ${String(err)}`,
         );
-        watcherRecreateTimer = setTimeout(() => {
+        watcherRecreateTimer = setTimeout(async () => {
           watcherRecreateTimer = null;
-          createWatcher();
+          await createWatcher();
         }, WATCHER_RECREATE_BACKOFF_MS[0] ?? 500);
         return;
       }
@@ -504,13 +514,15 @@ export function startGatewayConfigReloader(opts: {
     opts.log.warn(
       `config watcher error; re-creating watcher (attempt ${watcherRecreateRetries}/${WATCHER_RECREATE_MAX_RETRIES} in ${backoff}ms): ${String(err)}`,
     );
-    watcherRecreateTimer = setTimeout(() => {
+    watcherRecreateTimer = setTimeout(async () => {
       watcherRecreateTimer = null;
-      createWatcher();
+      await createWatcher();
     }, backoff);
   };
 
-  createWatcher();
+  // Initial watcher creation (no reconciliation needed on startup since
+  // the config was already read and applied before the first watcher exists).
+  void createWatcher();
 
   return {
     stop: async () => {
