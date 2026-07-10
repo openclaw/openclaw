@@ -339,6 +339,19 @@ describe("ExecApprovalManager", () => {
     await expect(decisionPromise).resolves.toBe("deny");
   });
 
+  it("preserves a protocol-valid provided approval id byte-for-byte", async () => {
+    const { manager, databaseOptions } = createPersistentManager();
+    const id = "\uFEFF";
+    const record = manager.create({ command: "echo exact" }, 60_000, id);
+    const decisionPromise = manager.register(record, 60_000);
+
+    expect(record.id).toBe(id);
+    expect(manager.lookupApprovalId(id)).toEqual({ kind: "exact", id });
+    expect(getOperatorApproval({ id, databaseOptions })).toMatchObject({ id, status: "pending" });
+    manager.resolveDetailed(id, "deny", { kind: "system", id: null });
+    await expect(decisionPromise).resolves.toBe("deny");
+  });
+
   it("rejects unrenderable persistent plugin requests before creating a row or waiter", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-manager-"));
     tempDirs.push(dir);

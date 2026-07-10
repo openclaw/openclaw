@@ -202,12 +202,8 @@ function requireString(value: string, label: string): string {
   return normalized;
 }
 
-function isCanonicalApprovalId(value: string): boolean {
-  return value === value.trim() && isWellFormedApprovalId(value);
-}
-
 function requireApprovalId(value: string): string {
-  if (!isCanonicalApprovalId(value)) {
+  if (!isWellFormedApprovalId(value)) {
     throw new Error("operator approval id must be non-empty, well-formed Unicode, and not . or ..");
   }
   return value;
@@ -314,7 +310,7 @@ function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApprovalRe
   const resolverKind = row.resolver_kind as OperatorApprovalResolverKind | null;
   if (
     !presentation ||
-    !isCanonicalApprovalId(row.approval_id) ||
+    !isWellFormedApprovalId(row.approval_id) ||
     !reviewerDeviceIds ||
     !audienceSessionKeys ||
     audienceSessionKeys.length > OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS ||

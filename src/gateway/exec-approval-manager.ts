@@ -204,7 +204,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     if (expiresAtMs === undefined) {
       throw new Error("approval expiry is unavailable");
     }
-    const resolvedId = id && id.trim().length > 0 ? id.trim() : randomUUID();
+    const resolvedId = id === null || id === undefined || id.length === 0 ? randomUUID() : id;
     const record: ExecApprovalRecord<TPayload> = {
       id: resolvedId,
       request,
@@ -1034,6 +1034,14 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       filter?: (record: ExecApprovalRecord<TPayload>) => boolean;
     } = {},
   ): ExecApprovalIdLookupResult {
+    const rawExact = this.getSnapshot(input);
+    if (rawExact) {
+      return (opts.includeResolved || rawExact.resolvedAtMs === undefined) &&
+        (opts.filter?.(rawExact) ?? true)
+        ? { kind: "exact", id: input }
+        : { kind: "none" };
+    }
+
     const normalized = input.trim();
     if (!normalized) {
       return { kind: "none" };

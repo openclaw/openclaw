@@ -219,6 +219,23 @@ describe("operator approval store", () => {
     expect(record).toMatchObject({ status: "expired", terminalReason: "timeout" });
   });
 
+  it("preserves protocol-valid boundary whitespace as opaque approval identity", () => {
+    const databaseOptions = createDatabaseOptions();
+    for (const [index, id] of ["\uFEFF", "\u00A0", " approval-edge "].entries()) {
+      const inserted = insertOperatorApproval({
+        approval: approval(id, { createdAtMs: 1_000 + index }),
+        databaseOptions,
+      });
+
+      expect(inserted).toMatchObject({ outcome: "inserted", record: { id } });
+      expect(getOperatorApproval({ id, nowMs: 2_000, databaseOptions })).toMatchObject({
+        id,
+        status: "pending",
+      });
+    }
+    expect(getOperatorApproval({ id: "approval-edge", nowMs: 2_000, databaseOptions })).toBeNull();
+  });
+
   it("rejects presentations outside the canonical safe protocol schema", () => {
     const databaseOptions = createDatabaseOptions();
     const base = approval("unsafe-presentation");
