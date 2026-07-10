@@ -43,10 +43,6 @@ import { consumeReplyUsageState } from "./reply/reply-usage-state.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 import type { ReplyPayload } from "./types.js";
 
-/** Default per-hook deadline. Overridable per dispatcher via
- *  dispatcherOptions.beforeDeliverTimeoutMs (#103684). */
-const DEFAULT_BEFORE_DELIVER_HOOK_TIMEOUT_MS = 30_000;
-
 type InternalDispatchReplyOptions = Omit<InternalGetReplyOptions, "onBlockReply">;
 
 type ForegroundReplyFenceState = {
@@ -451,12 +447,9 @@ function markReplyPayloadSendingBeforeDeliverInstalled(
   }
 }
 
-// Exported for real-behavior proof (scripts/proof/).
 function combineBeforeDeliverHooks(
-  opts?: { timeoutMs?: number },
   ...hooks: Array<ReplyDispatchBeforeDeliver | undefined>
 ): ReplyDispatchBeforeDeliver | undefined {
-  const timeoutMs = opts?.timeoutMs ?? DEFAULT_BEFORE_DELIVER_HOOK_TIMEOUT_MS;
   const activeHooks = hooks.filter((hook): hook is ReplyDispatchBeforeDeliver => Boolean(hook));
   if (activeHooks.length === 0) {
     return undefined;
@@ -468,27 +461,8 @@ function combineBeforeDeliverHooks(
       if (!current) {
         return null;
       }
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      let timedOut = false;
-      try {
-        const result: ReplyPayload | null = await Promise.race([
-          hook(current, info),
-          new Promise<ReplyPayload | null>((resolve) => {
-            timer = setTimeout(() => {
-              timedOut = true;
-              resolve(null);
-            }, timeoutMs);
-          }),
-        ]);
-        if (timedOut) {
-          logWarn(`beforeDeliver hook timed out after ${timeoutMs}ms; payload cancelled (#103684)`);
-        }
-        current = result ? copyReplyPayloadMetadata(current, result) : null;
-      } finally {
-        if (timer !== undefined) {
-          clearTimeout(timer);
-        }
-      }
+      const next = await hook(current, info);
+      current = next ? copyReplyPayloadMetadata(current, next) : null;
     }
     return current;
   };
@@ -630,18 +604,12 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
     finalized,
     replyPayloadRunState,
   );
-  const hookTimeoutOpts = { timeoutMs: params.dispatcherOptions.beforeDeliverTimeoutMs };
   const globalBeforeDeliver = combineBeforeDeliverHooks(
-    hookTimeoutOpts,
     replyPayloadBeforeDeliver,
     buildMessageSendingBeforeDeliver(finalized),
   );
   const configuredBeforeDeliver = params.dispatcherOptions.beforeDeliver
-    ? combineBeforeDeliverHooks(
-        hookTimeoutOpts,
-        params.dispatcherOptions.beforeDeliver,
-        replyPayloadBeforeDeliver,
-      )
+    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
     : globalBeforeDeliver;
   const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
     foregroundReplyFence || configuredBeforeDeliver
@@ -748,18 +716,12 @@ export async function dispatchInboundMessageWithDispatcher(params: {
     params.ctx,
     replyPayloadRunState,
   );
-  const hookTimeoutOpts = { timeoutMs: params.dispatcherOptions.beforeDeliverTimeoutMs };
   const globalBeforeDeliver = combineBeforeDeliverHooks(
-    hookTimeoutOpts,
     replyPayloadBeforeDeliver,
     buildMessageSendingBeforeDeliver(params.ctx),
   );
   const composedBeforeDeliver = params.dispatcherOptions.beforeDeliver
-    ? combineBeforeDeliverHooks(
-        hookTimeoutOpts,
-        params.dispatcherOptions.beforeDeliver,
-        replyPayloadBeforeDeliver,
-      )
+    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
     : globalBeforeDeliver;
   const dispatcher = createReplyDispatcher({
     ...params.dispatcherOptions,

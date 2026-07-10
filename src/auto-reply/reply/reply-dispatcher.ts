@@ -3,6 +3,7 @@ import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { generateSecureInt } from "../../infra/secure-random.js";
+import { logWarn } from "../../logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { sleep } from "../../utils.js";
@@ -126,7 +127,7 @@ export type ReplyDispatcherOptions = {
   humanDelay?: HumanDelayConfig;
   beforeDeliver?: ReplyDispatchBeforeDeliver;
   /** Per-hook deadline in ms. Hooks exceeding this limit are cancelled.
-   *  Default 30s. Set higher for channels with known slow hooks. */
+   *  Default 30s. Set 0 to disable the deadline. */
   beforeDeliverTimeoutMs?: number;
   onBeforeDeliverCancelled?: ReplyDispatchCancelHandler;
   /** Observe each queued payload settling, including cancellation and delivery failure. */
@@ -184,7 +185,34 @@ function normalizeReplyPayloadInternal(
 }
 
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
+  const timeoutMs = options.beforeDeliverTimeoutMs ?? 30_000;
   let beforeDeliver = options.beforeDeliver;
+  if (beforeDeliver && timeoutMs > 0) {
+    const inner = beforeDeliver;
+    beforeDeliver = async (payload, info) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let timedOut = false;
+      try {
+        const result = await Promise.race([
+          inner(payload, info),
+          new Promise<ReplyPayload | null>((resolve) => {
+            timer = setTimeout(() => {
+              timedOut = true;
+              resolve(null);
+            }, timeoutMs);
+          }),
+        ]);
+        if (timedOut) {
+          logWarn(`beforeDeliver hook timed out after ${timeoutMs}ms; payload cancelled (#103684)`);
+        }
+        return result;
+      } finally {
+        if (timer !== undefined) {
+          clearTimeout(timer);
+        }
+      }
+    };
+  }
   const appendedBeforeDeliverCancelledHooks: ReplyDispatchCancelHandler[] = [];
   let sendChain: Promise<void> = Promise.resolve();
   // Track in-flight deliveries so we can emit a reliable "idle" signal.

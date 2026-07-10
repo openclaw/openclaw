@@ -5,7 +5,7 @@
  *
  * Usage: node --import tsx scripts/proof/before-deliver-timeout.mts
  */
-import { createReplyDispatcher } from "../src/auto-reply/reply/reply-dispatcher.js";
+import { createReplyDispatcher } from "../../src/auto-reply/reply/reply-dispatcher.js";
 
 async function main() {
   console.log("=== #103733 lane recovery proof ===\n");
