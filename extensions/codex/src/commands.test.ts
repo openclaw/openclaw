@@ -3154,7 +3154,7 @@ describe("codex command", () => {
     const request = await handleCodexCommand(createContext(`diagnostics ${note}`, sessionFile), {
       deps,
     });
-    expect(request.text.split("\n")).toContain(`Note: ${expectedReason}`);
+    expect(requireResultText(request).split("\n")).toContain(`Note: ${expectedReason}`);
     const token = readDiagnosticsConfirmationToken(request);
     await handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps });
 
