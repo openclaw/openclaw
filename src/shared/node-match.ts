@@ -38,7 +38,7 @@ type ScoredNodeMatch = {
 /** Normalizes human node names into stable lookup keys for fuzzy CLI/API matching. */
 export function normalizeNodeKey(value: string) {
   return normalizeLowercaseStringOrEmpty(value)
-    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
     .replace(/^-+/, "")
     .replace(/-+$/, "");
 }

@@ -6,6 +6,7 @@ describe("shared/node-match", () => {
   it("normalizes node keys by lowercasing and collapsing separators", () => {
     expect(normalizeNodeKey(" Mac Studio! ")).toBe("mac-studio");
     expect(normalizeNodeKey("---PI__Node---")).toBe("pi-node");
+    expect(normalizeNodeKey("工作站 01")).toBe("工作站-01");
     expect(normalizeNodeKey("###")).toBe("");
   });
 
@@ -128,5 +129,14 @@ describe("shared/node-match", () => {
         "nope",
       ),
     ).toThrow(/unknown node: nope.*known: 100.0.0.1, pi-456/);
+  });
+
+  it("matches Unicode names without letting punctuation select them", () => {
+    const nodes = [
+      { nodeId: "cn-desktop", displayName: "工作站" },
+      { nodeId: "cn-laptop", displayName: "笔记本" },
+    ];
+    expect(resolveNodeIdFromCandidates(nodes, "工作站")).toBe("cn-desktop");
+    expect(() => resolveNodeIdFromCandidates(nodes, "###")).toThrow(/unknown node: ###/);
   });
 });
