@@ -82,19 +82,6 @@ function hasSameCost(left: unknown, right: ModelDefinitionConfig["cost"] | undef
   );
 }
 
-function shouldRefreshPositiveNumber(params: {
-  current: unknown;
-  previous: unknown;
-  next: unknown;
-}): boolean {
-  return (
-    isPositiveNumber(params.previous) &&
-    params.current === params.previous &&
-    isPositiveNumber(params.next) &&
-    params.next !== params.previous
-  );
-}
-
 function isShippedZeroCostAliasSnapshot(
   raw: ModelDefinitionDraft,
   previous: CatalogMetadataSnapshot | undefined,
@@ -104,6 +91,20 @@ function isShippedZeroCostAliasSnapshot(
     raw.contextWindow === previous?.contextWindow &&
     raw.maxTokens === previous?.maxTokens &&
     hasSameCost(raw.cost, ZERO_COST)
+  );
+}
+
+function isPreviousBundledMetadataSnapshot(
+  raw: ModelDefinitionDraft,
+  previous: CatalogMetadataSnapshot | undefined,
+): boolean {
+  if (!previous) {
+    return false;
+  }
+  return (
+    raw.contextWindow === previous.contextWindow &&
+    raw.maxTokens === previous.maxTokens &&
+    (hasSameCost(raw.cost, previous.cost) || isShippedZeroCostAliasSnapshot(raw, previous))
   );
 }
 
@@ -132,18 +133,16 @@ export function normalizeConfig(params: {
       return model;
     }
     const previousEntry = PREVIOUS_BUNDLED_METADATA[raw.id];
+    const hasPreviousBundledMetadata = isPreviousBundledMetadataSnapshot(raw, previousEntry);
 
     let modelMutated = false;
     const patched: Record<string, unknown> = {};
 
-    // Hydrate contextWindow from catalog when missing or not a positive number.
+    // Refresh only whole snapshots written by prior releases. A partial match can
+    // be an intentional user cap, so per-field refresh would silently erase it.
     if (
       (!isPositiveNumber(raw.contextWindow) ||
-        shouldRefreshPositiveNumber({
-          current: raw.contextWindow,
-          previous: previousEntry?.contextWindow,
-          next: catalogEntry.contextWindow,
-        })) &&
+        (hasPreviousBundledMetadata && raw.contextWindow !== catalogEntry.contextWindow)) &&
       isPositiveNumber(catalogEntry.contextWindow)
     ) {
       patched.contextWindow = catalogEntry.contextWindow;
@@ -153,11 +152,7 @@ export function normalizeConfig(params: {
     // Hydrate maxTokens from catalog when missing or not a positive number.
     if (
       (!isPositiveNumber(raw.maxTokens) ||
-        shouldRefreshPositiveNumber({
-          current: raw.maxTokens,
-          previous: previousEntry?.maxTokens,
-          next: catalogEntry.maxTokens,
-        })) &&
+        (hasPreviousBundledMetadata && raw.maxTokens !== catalogEntry.maxTokens)) &&
       isPositiveNumber(catalogEntry.maxTokens)
     ) {
       patched.maxTokens = catalogEntry.maxTokens;
@@ -166,9 +161,7 @@ export function normalizeConfig(params: {
 
     // Hydrate missing cost or refresh a known catalog-owned snapshot from a prior release.
     if (
-      (!hasCostValues(raw.cost) ||
-        hasSameCost(raw.cost, previousEntry?.cost) ||
-        isShippedZeroCostAliasSnapshot(raw, previousEntry)) &&
+      (!hasCostValues(raw.cost) || hasPreviousBundledMetadata) &&
       hasCostValues(catalogEntry.cost) &&
       !hasSameCost(raw.cost, catalogEntry.cost)
     ) {
