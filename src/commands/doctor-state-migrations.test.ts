@@ -556,7 +556,7 @@ function writeLegacyTaskStateSidecars(root: string): {
         "legacy-task-run",
         "Legacy cron task",
         "running",
-        "not_applicable",
+        "not-requested",
         "silent",
         100,
         110,
@@ -2802,6 +2802,7 @@ describe("doctor legacy state migrations", () => {
         requesterSessionKey: "",
         agentId: "ops",
         runId: "legacy-task-run",
+        deliveryStatus: "not_applicable",
       });
       expect(taskState.deliveryStates.get("legacy-task")).toMatchObject({
         taskId: "legacy-task",

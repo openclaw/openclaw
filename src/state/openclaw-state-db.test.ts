@@ -423,6 +423,42 @@ describe("openclaw state database", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
+  it("normalizes obsolete task delivery statuses in existing state databases", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    database.db
+      .prepare(
+        `INSERT INTO task_runs (
+          task_id, runtime, requester_session_key, owner_key, scope_kind, task, status,
+          delivery_status, notify_policy, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "legacy-delivery-status",
+        "cron",
+        "",
+        "system:cron:legacy",
+        "system",
+        "Legacy delivery status",
+        "cancelled",
+        "not-requested",
+        "silent",
+        100,
+      );
+    closeOpenClawStateDatabaseForTest();
+
+    const reopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    expect(
+      reopened.db
+        .prepare("SELECT delivery_status FROM task_runs WHERE task_id = ?")
+        .get("legacy-delivery-status"),
+    ).toEqual({ delivery_status: "not_applicable" });
+  });
+
   it("rolls back the requester attribution column when its backfill fails", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({

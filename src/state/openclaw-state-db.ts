@@ -192,6 +192,17 @@ function repairLegacyTaskAgentAttribution(db: DatabaseSync): void {
   `);
 }
 
+function repairLegacyTaskDeliveryStatuses(db: DatabaseSync): void {
+  if (!tableExists(db, "task_runs") || !tableHasColumn(db, "task_runs", "delivery_status")) {
+    return;
+  }
+  db.exec(`
+    UPDATE task_runs
+    SET delivery_status = 'not_applicable'
+    WHERE delivery_status = 'not-requested';
+  `);
+}
+
 function hasCanonicalAgentDatabasesPrimaryKey(db: DatabaseSync): boolean {
   if (!tableExists(db, "agent_databases")) {
     return true;
@@ -925,6 +936,7 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
     if (addedTaskRequesterAgentId) {
       repairLegacyTaskAgentAttribution(db);
     }
+    repairLegacyTaskDeliveryStatuses(db);
   });
   ensureColumn(db, "subagent_runs", "task_name TEXT");
 }
