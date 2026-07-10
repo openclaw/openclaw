@@ -1074,12 +1074,13 @@ for path in media:
     else:
         probe = json.loads(subprocess.check_output([
             'ffprobe', '-v', 'error', '-show_entries',
-            'format=duration:stream=codec_name,width,height', '-of', 'json', str(path),
+            'format=duration:stream=codec_name,width,height,duration', '-of', 'json', str(path),
         ]))
         stream = probe.get('streams', [{}])[0]
+        duration = probe.get('format', {}).get('duration') or stream.get('duration')
         item.update({
             'kind': 'video',
-            'duration_seconds': float(probe['format']['duration']),
+            'duration_seconds': float(duration) if duration is not None else None,
             'codec': stream.get('codec_name'),
             'width': stream.get('width'),
             'height': stream.get('height'),
