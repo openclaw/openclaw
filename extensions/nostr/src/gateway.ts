@@ -197,6 +197,9 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
               if (!outboundText.trim()) {
                 return;
               }
+// The gateway inbound reply path bypasses the outbound adapter, so
+              // strip internal tool-trace scaffolding here too — matching the
+              // sanitizeText hook on nostrOutboundAdapter.
               const sanitizedText = sanitizeAssistantVisibleText(outboundText);
               if (!sanitizedText.trim()) {
                 return;
