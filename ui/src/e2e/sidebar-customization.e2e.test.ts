@@ -397,4 +397,53 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await context.close();
     }
   });
+
+  it("passes failed run outcomes to both desktop and drawer lobsters", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": {
+          count: 1,
+          defaults: {
+            contextTokens: null,
+            model: "gpt-5.5",
+            modelProvider: "openai",
+          },
+          path: "",
+          sessions: [
+            {
+              endedAt: 100,
+              key: "main",
+              kind: "direct",
+              status: "failed",
+              updatedAt: 100,
+            },
+          ],
+          ts: 100,
+        },
+      },
+    });
+
+    const outcome = (locator: Locator) =>
+      locator.evaluate((element) => (element as HTMLElement & { runOutcome: string }).runOutcome);
+
+    try {
+      await page.goto(`${server.baseUrl}overview`);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const desktopPet = sidebar.locator(".sidebar-panel openclaw-lobster-pet");
+      await expect.poll(() => outcome(desktopPet)).toBe("error");
+
+      await page.setViewportSize({ height: 900, width: 900 });
+      await page.locator(".topbar-nav-toggle").click();
+      const drawerPet = sidebar.locator(".sidebar-shell openclaw-lobster-pet");
+      await expect.poll(() => outcome(drawerPet)).toBe("error");
+    } finally {
+      await context.close();
+    }
+  });
 });
