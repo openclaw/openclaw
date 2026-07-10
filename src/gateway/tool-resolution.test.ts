@@ -71,6 +71,34 @@ describe("resolveGatewayScopedTools", () => {
     expect(result.tools.some((tool) => tool.name === "message")).toBe(false);
   });
 
+  it("applies sandbox tool denies to sandboxed loopback turns", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        tools: { sandbox: { tools: { deny: ["sessions_list"] } } },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:main",
+      surface: "loopback",
+    });
+
+    const toolNames = result.tools.map((tool) => tool.name);
+    expect(toolNames).not.toContain("sessions_list");
+    expect(toolNames).toContain("sessions_history");
+  });
+
+  it("does not apply sandbox tool policy to the main session in non-main mode", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "non-main" } } },
+        tools: { sandbox: { tools: { deny: ["sessions_list"] } } },
+      } as OpenClawConfig,
+      sessionKey: "agent:main:main",
+      surface: "loopback",
+    });
+
+    expect(result.tools.some((tool) => tool.name === "sessions_list")).toBe(true);
+  });
+
   it("passes loopback yield context into sessions_yield", async () => {
     const onYield = vi.fn();
     const result = resolveGatewayScopedTools({
