@@ -37,6 +37,38 @@ describe("xai provider thinking policy", () => {
     },
   );
 
+  it("resolves x-ai alias to the same thinking profile as xai", () => {
+    // The x-ai alias must not fall through to off-only.
+    const profile = resolveThinkingProfile({
+      provider: "x-ai",
+      modelId: "grok-4.3",
+    });
+
+    expect(profile.defaultLevel).toBe("low");
+    expect(profile.levels.map((level) => level.id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
+  it.each(["grok-4.5", "grok-4.5-latest"])(
+    "resolves x-ai alias Grok 4.5 thinking levels for %s",
+    (modelId) => {
+      const profile = resolveThinkingProfile({
+        provider: "x-ai",
+        modelId,
+      });
+
+      expect(profile).toEqual({
+        levels: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+        defaultLevel: "high",
+      });
+    },
+  );
+
   it("keeps non-reasoning and non-xai routes off-only", () => {
     expect(
       resolveThinkingProfile({
