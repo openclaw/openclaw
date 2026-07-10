@@ -1,11 +1,20 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createClawHubBootstrapArtifactManifest,
+  downloadClawHubBootstrapArtifact,
   verifyClawHubPackedArtifactIdentity,
   verifyClawHubBootstrapArtifactManifest,
 } from "../../scripts/lib/clawhub-bootstrap-artifact.mjs";
@@ -13,6 +22,10 @@ import {
 const tempDirs: string[] = [];
 const targetSha = "a".repeat(40);
 const workflowSha = "b".repeat(40);
+const clawhubToolchainSha256 = "c".repeat(64);
+const clawhubToolchainVersion = "0.23.1";
+const clawhubToolchainIntegrity =
+  "sha512-YvUImhsVaM90BUAv3uP7lfABziwR5XL3ch2Owa+GvNxwQ2xzZFmZC0yVjAtQbvep+dDDS16nUGRwKx7jqnTOEA==";
 
 afterEach(() => {
   for (const directory of tempDirs.splice(0)) {
@@ -66,6 +79,9 @@ function common(paths: ReturnType<typeof fixture>) {
   return {
     artifactRoot: paths.artifactRoot,
     artifactName: `clawhub-bootstrap-${targetSha.slice(0, 12)}-123-2`,
+    clawhubToolchainIntegrity,
+    clawhubToolchainSha256,
+    clawhubToolchainVersion,
     plugins: "@openclaw/meta,@openclaw/existing",
     repository: "openclaw/openclaw",
     runAttempt: "2",
@@ -158,6 +174,9 @@ describe("ClawHub bootstrap artifact manifest", () => {
       size: 11,
     });
     expect(meta?.sha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(created.clawhubToolchainIntegrity).toBe(clawhubToolchainIntegrity);
+    expect(created.clawhubToolchainSha256).toBe(clawhubToolchainSha256);
+    expect(created.clawhubToolchainVersion).toBe(clawhubToolchainVersion);
 
     await expect(
       verifyClawHubBootstrapArtifactManifest({
@@ -200,6 +219,54 @@ describe("ClawHub bootstrap artifact manifest", () => {
     expect(manifest.entries).toHaveLength(2);
   });
 
+  it("uses one exact fatal-UTF8 manifest schema for local and archive consumers", async () => {
+    const paths = fixture();
+    const created = await createClawHubBootstrapArtifactManifest({
+      ...common(paths),
+      matrixPath: paths.matrixPath,
+      outputPath: paths.manifestPath,
+    });
+
+    writeFileSync(paths.manifestPath, JSON.stringify({ ...created, unexpected: true }));
+    await expect(
+      verifyClawHubBootstrapArtifactManifest({
+        ...common(paths),
+        manifestPath: paths.manifestPath,
+      }),
+    ).rejects.toThrow("keys are invalid");
+
+    writeFileSync(paths.manifestPath, Buffer.from([0xff]));
+    await expect(
+      verifyClawHubBootstrapArtifactManifest({
+        ...common(paths),
+        manifestPath: paths.manifestPath,
+      }),
+    ).rejects.toThrow("not valid UTF-8 JSON");
+
+    writeFileSync(paths.manifestPath, JSON.stringify(created));
+    await expect(
+      verifyClawHubBootstrapArtifactManifest({
+        ...common(paths),
+        clawhubToolchainSha256: "d".repeat(64),
+        manifestPath: paths.manifestPath,
+      }),
+    ).rejects.toThrow("clawhubToolchainSha256 mismatch");
+
+    writeFileSync(
+      paths.manifestPath,
+      JSON.stringify({
+        ...created,
+        entries: [null, ...created.entries.slice(1)],
+      }),
+    );
+    await expect(
+      verifyClawHubBootstrapArtifactManifest({
+        ...common(paths),
+        manifestPath: paths.manifestPath,
+      }),
+    ).rejects.toThrow("manifest.entries[0] must be an object");
+  });
+
   it("binds exact target bytes to configure-only repairs", async () => {
     const paths = fixture();
     const manifest = await createClawHubBootstrapArtifactManifest({
@@ -213,6 +280,48 @@ describe("ClawHub bootstrap artifact manifest", () => {
       size: 15,
     });
     expect(existing?.sha256).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("rejects preexisting and symlinked download output roots before fetching", async () => {
+    const paths = fixture();
+    const downloadOptions = {
+      artifactDigest: "d".repeat(64),
+      artifactId: "456",
+      artifactName: `clawhub-bootstrap-${targetSha.slice(0, 12)}-123-2`,
+      artifactSize: "1",
+      clawhubToolchainIntegrity,
+      clawhubToolchainSha256,
+      clawhubToolchainVersion,
+      repository: "openclaw/openclaw",
+      runAttempt: "2",
+      runId: "123",
+      targetSha,
+      token: "test-token",
+      workflowSha,
+      fetchImpl: (() => {
+        throw new Error("fetch must not run");
+      }) as typeof fetch,
+    };
+
+    const existingRoot = join(paths.artifactRoot, "existing-output");
+    mkdirSync(existingRoot);
+    await expect(
+      downloadClawHubBootstrapArtifact({
+        ...downloadOptions,
+        outputRoot: existingRoot,
+      }),
+    ).rejects.toThrow("output directory must not already exist");
+
+    const symlinkTarget = join(paths.artifactRoot, "symlink-target");
+    const symlinkRoot = join(paths.artifactRoot, "symlink-output");
+    mkdirSync(symlinkTarget);
+    symlinkSync(symlinkTarget, symlinkRoot);
+    await expect(
+      downloadClawHubBootstrapArtifact({
+        ...downloadOptions,
+        outputRoot: symlinkRoot,
+      }),
+    ).rejects.toThrow("output directory must not already exist");
   });
 });
 
@@ -421,6 +530,6 @@ describe("ClawHub packed artifact identity", () => {
         expectedSize: String(pack.bytes.byteLength),
         ...expectedIdentity,
       }),
-    ).rejects.toThrow("more than 10000 TAR entries");
+    ).rejects.toThrow("exceeds the 10000 entry limit");
   });
 });

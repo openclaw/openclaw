@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
+import { readClawHubBootstrapManifest } from "./lib/clawhub-bootstrap-artifact.mjs";
 
 const DEFAULT_ATTEMPTS = 12;
 const DEFAULT_DELAY_MS = 5_000;
@@ -12,6 +13,9 @@ const MAX_ATTEMPTS = 12;
 const MAX_DELAY_MS = 60_000;
 const MAX_ARTIFACT_BYTES = 130 * 1024 * 1024;
 const MAX_JSON_BYTES = 1024 * 1024;
+const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
+const TOOLCHAIN_VERSION_PATTERN = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u;
 
 class PermanentReadbackError extends Error {}
 
@@ -27,11 +31,23 @@ function fail(message) {
 }
 
 function positiveInteger(value, fallback, label, maximum = Number.MAX_SAFE_INTEGER) {
-  const parsed = value === undefined ? fallback : Number.parseInt(String(value), 10);
+  const raw = value === undefined ? fallback : value;
+  const text = raw === undefined ? "" : String(raw);
+  if (!/^[1-9][0-9]*$/u.test(text)) {
+    fail(`${label} must be an integer from 1 through ${maximum}.`);
+  }
+  const parsed = Number(text);
   if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > maximum) {
     fail(`${label} must be an integer from 1 through ${maximum}.`);
   }
   return parsed;
+}
+
+function requiredPattern(value, pattern, label) {
+  if (typeof value !== "string" || !pattern.test(value)) {
+    fail(`${label} is invalid.`);
+  }
+  return value;
 }
 
 function retryAfterMs(headers) {
@@ -138,7 +154,7 @@ async function fetchJson(url, context) {
     );
   }
   try {
-    return JSON.parse(new TextDecoder().decode(bytes));
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch (error) {
     throw new RetryableReadbackError(
       `${url} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}.`,
@@ -324,9 +340,28 @@ async function runBoundedRetry(label, operation, retryOptions = {}) {
 
 export async function verifyPublishedClawHubArtifacts(options) {
   const registry = String(options.registry ?? "https://clawhub.ai").replace(/\/+$/u, "");
-  const manifest = JSON.parse(await readFile(options.manifestPath, "utf8"));
-  if (!Array.isArray(manifest.entries) || manifest.entries.length === 0) {
-    fail("Validated bootstrap manifest has no entries.");
+  const manifest = readClawHubBootstrapManifest(options.manifestPath);
+  const expectedToolchain = {
+    clawhubToolchainIntegrity: requiredPattern(
+      options.clawhubToolchainIntegrity,
+      SHA512_INTEGRITY_PATTERN,
+      "clawhubToolchainIntegrity",
+    ),
+    clawhubToolchainSha256: requiredPattern(
+      options.clawhubToolchainSha256,
+      SHA256_PATTERN,
+      "clawhubToolchainSha256",
+    ),
+    clawhubToolchainVersion: requiredPattern(
+      options.clawhubToolchainVersion,
+      TOOLCHAIN_VERSION_PATTERN,
+      "clawhubToolchainVersion",
+    ),
+  };
+  for (const [key, expected] of Object.entries(expectedToolchain)) {
+    if (manifest[key] !== expected) {
+      fail(`Validated ClawHub bootstrap manifest ${key} mismatch.`);
+    }
   }
   const mode = options.mode ?? "postpublish";
   if (mode !== "postpublish" && mode !== "configure-only-preflight") {
@@ -341,6 +376,8 @@ export async function verifyPublishedClawHubArtifacts(options) {
   if (terminalRunAttempt < producerRunAttempt) {
     fail("terminalRunAttempt must be greater than or equal to the producer run attempt.");
   }
+  const artifactId = String(positiveInteger(options.artifactId, undefined, "artifactId"));
+  const artifactDigest = requiredPattern(options.artifactDigest, SHA256_PATTERN, "artifactDigest");
 
   const entries =
     mode === "configure-only-preflight"
@@ -365,8 +402,11 @@ export async function verifyPublishedClawHubArtifacts(options) {
     producerRunAttempt: String(producerRunAttempt),
     terminalRunAttempt: String(terminalRunAttempt),
     artifactName: manifest.artifactName,
-    artifactId: options.artifactId,
-    artifactDigest: options.artifactDigest,
+    artifactId,
+    artifactDigest,
+    clawhubToolchainIntegrity: manifest.clawhubToolchainIntegrity,
+    clawhubToolchainSha256: manifest.clawhubToolchainSha256,
+    clawhubToolchainVersion: manifest.clawhubToolchainVersion,
     requestedPlugins: manifest.requestedPlugins,
     verificationMode: mode,
     packages: results,
@@ -393,6 +433,9 @@ async function main() {
     manifestPath: args.manifest,
     artifactId: args.artifact_id,
     artifactDigest: args.artifact_digest,
+    clawhubToolchainIntegrity: args.clawhub_toolchain_integrity,
+    clawhubToolchainSha256: args.clawhub_toolchain_sha256,
+    clawhubToolchainVersion: args.clawhub_toolchain_version,
     mode: args.mode,
     terminalRunAttempt: args.terminal_run_attempt,
     retryOptions: {

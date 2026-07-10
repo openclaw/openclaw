@@ -3398,7 +3398,7 @@ describe("package artifact reuse", () => {
     expect(pluginNpmWorkflow).toContain("environment: npm-release");
     expect(clawHubWorkflow.match(/environment: clawhub-plugin-release/g)?.length).toBe(1);
     expect(clawHubNewWorkflow).toContain("name: Plugin ClawHub New");
-    expect(clawHubNewWorkflow).toContain('CLAWHUB_CLI_PACKAGE: "clawhub@0.23.1"');
+    expect(clawHubNewWorkflow).not.toContain("CLAWHUB_CLI_PACKAGE:");
     expect(clawHubNewWorkflow).not.toContain("CLAWHUB_REPOSITORY:");
     expect(clawHubNewWorkflow).not.toContain("CLAWHUB_REF:");
     expect(clawHubNewWorkflow).toContain("environment: clawhub-plugin-bootstrap");
@@ -3408,7 +3408,13 @@ describe("package artifact reuse", () => {
     );
     expect(clawHubNewWorkflow).not.toContain("clawhub_token:");
     expect(clawHubNewWorkflow).toContain("Validate pinned ClawHub trusted publisher CLI support");
-    expect(clawHubNewWorkflow).toContain('npm exec --yes --package "${CLAWHUB_CLI_PACKAGE}"');
+    expect(clawHubNewWorkflow).toContain("Materialize locked ClawHub CLI");
+    expect(clawHubNewWorkflow).toContain("scripts/materialize-clawhub-cli.sh");
+    expect(clawHubNewWorkflow).not.toContain("npm exec");
+    expect(clawHubNewWorkflow).not.toContain("npm install");
+    expect(clawHubNewWorkflow).toContain("--clawhub-toolchain-integrity");
+    expect(clawHubNewWorkflow).toContain("--clawhub-toolchain-sha256");
+    expect(clawHubNewWorkflow).toContain("--clawhub-toolchain-version");
     expect(clawHubNewWorkflow).toContain(
       "CLAW-277 03 - Split OpenClaw plugin ClawHub publishing into OIDC release and token bootstrap workflows",
     );
@@ -3426,8 +3432,10 @@ describe("package artifact reuse", () => {
     expect(clawHubNewWorkflow).toContain("Upload immutable ClawHub bootstrap artifact");
     expect(clawHubNewWorkflow).toContain("Validate immutable bootstrap handoff");
     expect(clawHubNewWorkflow).toContain("Upload immutable bootstrap validation evidence");
-    expect(clawHubNewWorkflow).toContain("Validate immutable ClawHub bootstrap artifact binding");
-    expect(clawHubNewWorkflow).toContain("Download exact ClawHub bootstrap artifact");
+    expect(clawHubNewWorkflow).toContain(
+      "Download and verify immutable ClawHub bootstrap artifact",
+    );
+    expect(clawHubNewWorkflow).toContain("Rehash immutable ClawHub bootstrap artifacts");
     expect(clawHubNewWorkflow).toContain("Require configure-only registry bytes to match target");
     expect(clawHubNewWorkflow).toContain(
       "Reconfirm configure-only registry bytes before credentials",

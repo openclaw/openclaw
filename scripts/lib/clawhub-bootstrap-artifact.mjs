@@ -5,23 +5,30 @@ import { lstat, mkdir, readdir, realpath, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  readBoundedRegularFile,
-  readPublicationArtifactArchive,
-} from "./actions-artifact-archive.mjs";
-import {
   CLAWHUB_PUBLICATION_TAR_LIMITS,
   inspectPackageTarballBytes,
   validatePluginPackageManifest,
 } from "../plugin-publication-artifact.mjs";
+import {
+  describeActionsArtifactFiles,
+  readBoundedRegularFile,
+  readPublicationArtifactArchive,
+} from "./actions-artifact-archive.mjs";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 const POSITIVE_INTEGER_PATTERN = /^[1-9][0-9]*$/u;
+const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const PACKAGE_NAME_PATTERN = /^@openclaw\/[a-z0-9][a-z0-9._-]*$/u;
 const PACKAGE_DIR_PATTERN = /^extensions\/[a-z0-9][a-z0-9._-]*$/u;
 const TAG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/u;
+const VERSION_PATTERN =
+  /^[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:-(?:alpha|beta)\.[1-9][0-9]*|-[1-9][0-9]*)?$/u;
+const TOOLCHAIN_VERSION_PATTERN = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u;
 const MAX_BOOTSTRAP_ARCHIVE_BYTES = 256 * 1024 * 1024;
 const MAX_BOOTSTRAP_ARCHIVE_FILES = 128;
+const MAX_BOOTSTRAP_PACKAGES = MAX_BOOTSTRAP_ARCHIVE_FILES - 1;
 const MAX_BOOTSTRAP_MANIFEST_BYTES = 2 * 1024 * 1024;
 // The compressed and total-payload limits match ClawHub's ClawPack contract.
 // The expanded TAR and entry-count ceilings bound this credential-job parser.
@@ -29,6 +36,10 @@ const MAX_CLAWPACK_BYTES = CLAWHUB_PUBLICATION_TAR_LIMITS.maxArchiveBytes;
 
 function fail(message) {
   throw new Error(message);
+}
+
+function compareCodeUnits(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function requireString(value, label) {
@@ -58,7 +69,7 @@ function parsePlugins(value) {
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
-  const unique = [...new Set(plugins)].toSorted((a, b) => a.localeCompare(b));
+  const unique = [...new Set(plugins)].toSorted(compareCodeUnits);
   if (unique.length !== plugins.length) {
     fail("plugins must not contain duplicates.");
   }
@@ -87,7 +98,7 @@ function normalizePlanEntry(value, index) {
     `matrix[${index}].packageDir`,
   );
   const publishTag = requirePattern(value.publishTag, TAG_PATTERN, `matrix[${index}].publishTag`);
-  const version = requireString(value.version, `matrix[${index}].version`);
+  const version = requirePattern(value.version, VERSION_PATTERN, `matrix[${index}].version`);
   const bootstrapMode = requireString(value.bootstrapMode, `matrix[${index}].bootstrapMode`);
   if (bootstrapMode !== "publish" && bootstrapMode !== "configure-only") {
     fail(`matrix[${index}].bootstrapMode is invalid.`);
@@ -168,28 +179,52 @@ export async function verifyClawHubPackedArtifactIdentity(options) {
   );
   const packageName = inspection.packageManifest.name;
   const packageVersion = inspection.packageManifest.version;
-  return { ...identity, packageName, packageVersion };
+  return {
+    ...identity,
+    inventory: inspection.inventory,
+    packageJsonSha256: inspection.packageManifestSha256,
+    packageName,
+    packageVersion,
+    pluginManifestSha256: inspection.pluginManifestSha256,
+  };
 }
 
 async function listFiles(root) {
   const result = [];
-  async function visit(directory) {
+  let visitedEntries = 0;
+  let totalPathBytes = 0;
+  async function visit(directory, depth) {
+    if (depth > 4) {
+      fail("Artifact inventory exceeds the supported directory depth.");
+    }
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name);
+      visitedEntries += 1;
+      if (visitedEntries > MAX_BOOTSTRAP_ARCHIVE_FILES * 4) {
+        fail("Artifact inventory contains too many filesystem entries.");
+      }
       if (entry.isSymbolicLink()) {
         fail(`Artifact inventory contains a symlink: ${relative(root, path)}`);
       }
       if (entry.isDirectory()) {
-        await visit(path);
+        await visit(path, depth + 1);
       } else if (entry.isFile()) {
-        result.push(relative(root, path).split(sep).join("/"));
+        const artifactPath = relative(root, path).split(sep).join("/");
+        totalPathBytes += Buffer.byteLength(artifactPath, "utf8");
+        if (
+          result.length >= MAX_BOOTSTRAP_ARCHIVE_FILES ||
+          totalPathBytes > MAX_BOOTSTRAP_MANIFEST_BYTES
+        ) {
+          fail("Artifact inventory exceeds its file or path-byte limit.");
+        }
+        result.push(artifactPath);
       } else {
         fail(`Artifact inventory contains a non-regular entry: ${relative(root, path)}`);
       }
     }
   }
-  await visit(root);
-  return result.toSorted((a, b) => a.localeCompare(b));
+  await visit(root, 0);
+  return result.toSorted(compareCodeUnits);
 }
 
 function readPositiveInteger(value, label) {
@@ -201,41 +236,190 @@ function readPositiveInteger(value, label) {
   return result;
 }
 
-function validateBootstrapArchiveInventory(files) {
-  const manifestBytes = files.get("manifest.json");
-  if (!manifestBytes || manifestBytes.byteLength > MAX_BOOTSTRAP_MANIFEST_BYTES) {
-    fail("Bootstrap Actions artifact must contain one bounded manifest.json.");
+function requireExactKeys(value, expected, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    fail(`${label} must be an object.`);
+  }
+  const actual = Object.keys(value).toSorted();
+  if (JSON.stringify(actual) !== JSON.stringify([...expected].toSorted())) {
+    fail(`${label} keys are invalid: ${actual.join(",")}.`);
+  }
+}
+
+function normalizeBootstrapManifestEntry(value, index) {
+  requireExactKeys(
+    value,
+    [
+      "artifactPath",
+      "bootstrapMode",
+      "packageDir",
+      "packageName",
+      "publishTag",
+      "requiresManualOverride",
+      "sha256",
+      "size",
+      "version",
+    ],
+    `manifest.entries[${index}]`,
+  );
+  const entry = normalizePlanEntry(value, index);
+  const expectedPrefix = `packages/${packageSlug(entry.packageName)}/`;
+  const artifactPath = requireString(value.artifactPath, `manifest.entries[${index}].artifactPath`);
+  if (
+    artifactPath !== `${expectedPrefix}${basename(artifactPath)}` ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$/u.test(basename(artifactPath))
+  ) {
+    fail(`Bootstrap Actions artifact path is invalid: ${artifactPath}`);
+  }
+  const sha256 = requirePattern(value.sha256, SHA256_PATTERN, `manifest.entries[${index}].sha256`);
+  if (!Number.isSafeInteger(value.size) || value.size <= 0 || value.size > MAX_CLAWPACK_BYTES) {
+    fail(`manifest.entries[${index}].size is invalid.`);
+  }
+  return { ...entry, artifactPath, sha256, size: value.size };
+}
+
+export function parseClawHubBootstrapManifestBytes(inputBytes) {
+  const manifestBytes = Buffer.isBuffer(inputBytes) ? inputBytes : Buffer.from(inputBytes);
+  if (manifestBytes.byteLength === 0 || manifestBytes.byteLength > MAX_BOOTSTRAP_MANIFEST_BYTES) {
+    fail(`ClawHub bootstrap manifest must be 1-${MAX_BOOTSTRAP_MANIFEST_BYTES} bytes.`);
   }
   let manifest;
   try {
     manifest = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes));
   } catch {
-    fail("Bootstrap Actions artifact manifest.json is invalid JSON.");
+    fail("ClawHub bootstrap manifest is not valid UTF-8 JSON.");
   }
-  if (!manifest || typeof manifest !== "object" || !Array.isArray(manifest.entries)) {
-    fail("Bootstrap Actions artifact manifest.json has an invalid shape.");
+  requireExactKeys(
+    manifest,
+    [
+      "artifactName",
+      "clawhubToolchainIntegrity",
+      "clawhubToolchainSha256",
+      "clawhubToolchainVersion",
+      "entries",
+      "repository",
+      "requestedPlugins",
+      "runAttempt",
+      "runId",
+      "schemaVersion",
+      "targetSha",
+      "workflowSha",
+    ],
+    "ClawHub bootstrap manifest",
+  );
+  if (manifest.schemaVersion !== 1) {
+    fail(`Unsupported ClawHub bootstrap manifest schema: ${String(manifest.schemaVersion)}.`);
   }
-  const expected = new Set(["manifest.json"]);
-  for (const entry of manifest.entries) {
-    const artifactPath =
-      entry && typeof entry === "object" ? requireString(entry.artifactPath, "artifactPath") : "";
-    if (!/^packages\/[a-z0-9][a-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$/u.test(artifactPath)) {
-      fail(`Bootstrap Actions artifact path is invalid: ${artifactPath}`);
+  const repository = requirePattern(manifest.repository, REPOSITORY_PATTERN, "manifest.repository");
+  const targetSha = requirePattern(manifest.targetSha, COMMIT_PATTERN, "manifest.targetSha");
+  const workflowSha = requirePattern(manifest.workflowSha, COMMIT_PATTERN, "manifest.workflowSha");
+  const runId = requirePattern(manifest.runId, POSITIVE_INTEGER_PATTERN, "manifest.runId");
+  const runAttempt = requirePattern(
+    manifest.runAttempt,
+    POSITIVE_INTEGER_PATTERN,
+    "manifest.runAttempt",
+  );
+  const artifactName = requireString(manifest.artifactName, "manifest.artifactName");
+  const clawhubToolchainSha256 = requirePattern(
+    manifest.clawhubToolchainSha256,
+    SHA256_PATTERN,
+    "manifest.clawhubToolchainSha256",
+  );
+  const clawhubToolchainVersion = requirePattern(
+    manifest.clawhubToolchainVersion,
+    TOOLCHAIN_VERSION_PATTERN,
+    "manifest.clawhubToolchainVersion",
+  );
+  const clawhubToolchainIntegrity = requirePattern(
+    manifest.clawhubToolchainIntegrity,
+    SHA512_INTEGRITY_PATTERN,
+    "manifest.clawhubToolchainIntegrity",
+  );
+  if (
+    !Array.isArray(manifest.requestedPlugins) ||
+    manifest.requestedPlugins.length === 0 ||
+    manifest.requestedPlugins.length > MAX_BOOTSTRAP_PACKAGES ||
+    manifest.requestedPlugins.some((entry) => typeof entry !== "string")
+  ) {
+    fail("ClawHub bootstrap manifest requestedPlugins is invalid.");
+  }
+  const requestedPlugins = parsePlugins(manifest.requestedPlugins.join(","));
+  if (JSON.stringify(requestedPlugins) !== JSON.stringify(manifest.requestedPlugins)) {
+    fail("ClawHub bootstrap manifest requestedPlugins is not canonical.");
+  }
+  if (
+    !Array.isArray(manifest.entries) ||
+    manifest.entries.length === 0 ||
+    manifest.entries.length > MAX_BOOTSTRAP_PACKAGES
+  ) {
+    fail("ClawHub bootstrap manifest entries are invalid.");
+  }
+  const entries = manifest.entries.map(normalizeBootstrapManifestEntry);
+  if (new Set(entries.map((entry) => entry.packageName)).size !== entries.length) {
+    fail("ClawHub bootstrap manifest contains duplicate package names.");
+  }
+  assertExactPackageSet(entries, requestedPlugins);
+  const entryNames = entries.map((entry) => entry.packageName);
+  if (JSON.stringify(entryNames) !== JSON.stringify(entryNames.toSorted(compareCodeUnits))) {
+    fail("ClawHub bootstrap manifest entries are not canonical.");
+  }
+  return {
+    artifactName,
+    clawhubToolchainIntegrity,
+    clawhubToolchainSha256,
+    clawhubToolchainVersion,
+    entries,
+    repository,
+    requestedPlugins,
+    runAttempt,
+    runId,
+    schemaVersion: 1,
+    targetSha,
+    workflowSha,
+  };
+}
+
+export function readClawHubBootstrapManifest(path) {
+  return parseClawHubBootstrapManifestBytes(
+    readBoundedRegularFile(path, {
+      label: "ClawHub bootstrap manifest",
+      maxBytes: MAX_BOOTSTRAP_MANIFEST_BYTES,
+    }),
+  );
+}
+
+function validateBootstrapArchiveInventory(files, expectedBinding) {
+  const manifestBytes = files.get("manifest.json");
+  if (!manifestBytes) {
+    fail("Bootstrap Actions artifact must contain manifest.json.");
+  }
+  const manifest = parseClawHubBootstrapManifestBytes(manifestBytes);
+  for (const [key, expected] of Object.entries(expectedBinding)) {
+    if (manifest[key] !== String(expected)) {
+      fail(`Bootstrap Actions artifact manifest ${key} mismatch.`);
     }
+  }
+  const { entries, requestedPlugins } = manifest;
+
+  const expected = new Set(["manifest.json"]);
+  for (const entry of entries) {
+    const artifactPath = entry.artifactPath;
     if (expected.has(artifactPath)) {
       fail(`Bootstrap Actions artifact path is duplicated: ${artifactPath}`);
+    }
+    const bytes = files.get(artifactPath);
+    if (!bytes || bytes.byteLength !== entry.size || hashBytes(bytes).sha256 !== entry.sha256) {
+      fail(`Bootstrap Actions artifact bytes do not match manifest: ${artifactPath}`);
     }
     expected.add(artifactPath);
   }
   const actual = new Set(files.keys());
-  if (
-    actual.size !== expected.size ||
-    [...actual].some((path) => !expected.has(path))
-  ) {
+  if (actual.size !== expected.size || [...actual].some((path) => !expected.has(path))) {
     fail(
       `Bootstrap Actions artifact inventory mismatch: expected ${[...expected].toSorted().join(",")}, found ${[...actual].toSorted().join(",")}.`,
     );
   }
+  return { entries, manifest, requestedPlugins };
 }
 
 export async function downloadClawHubBootstrapArtifact(options) {
@@ -245,22 +429,37 @@ export async function downloadClawHubBootstrapArtifact(options) {
   const runAttempt = readPositiveInteger(options.runAttempt, "runAttempt");
   const targetSha = requirePattern(options.targetSha, COMMIT_PATTERN, "targetSha");
   const workflowSha = requirePattern(options.workflowSha, COMMIT_PATTERN, "workflowSha");
-  const artifactDigest = requirePattern(
-    options.artifactDigest,
-    SHA256_PATTERN,
-    "artifactDigest",
-  );
+  const artifactDigest = requirePattern(options.artifactDigest, SHA256_PATTERN, "artifactDigest");
   const artifactName = requireString(options.artifactName, "artifactName");
+  const repository = requirePattern(options.repository, REPOSITORY_PATTERN, "repository");
+  const clawhubToolchainSha256 = requirePattern(
+    options.clawhubToolchainSha256,
+    SHA256_PATTERN,
+    "clawhubToolchainSha256",
+  );
+  const clawhubToolchainVersion = requirePattern(
+    options.clawhubToolchainVersion,
+    TOOLCHAIN_VERSION_PATTERN,
+    "clawhubToolchainVersion",
+  );
+  const clawhubToolchainIntegrity = requirePattern(
+    options.clawhubToolchainIntegrity,
+    SHA512_INTEGRITY_PATTERN,
+    "clawhubToolchainIntegrity",
+  );
   const expectedName = `clawhub-bootstrap-${targetSha.slice(0, 12)}-${runId}-${runAttempt}`;
   if (artifactName !== expectedName) {
     fail("ClawHub bootstrap artifact name does not bind the target and producer attempt.");
   }
   const outputRoot = resolve(requireString(options.outputRoot, "outputRoot"));
-  await mkdir(outputRoot, { mode: 0o700, recursive: true });
-  if ((await readdir(outputRoot)).length !== 0) {
-    fail("ClawHub bootstrap artifact output directory must be empty.");
+  try {
+    await lstat(outputRoot);
+    fail("ClawHub bootstrap artifact output directory must not already exist.");
+  } catch (error) {
+    if (!error || typeof error !== "object" || error.code !== "ENOENT") {
+      throw error;
+    }
   }
-
   const result = await readPublicationArtifactArchive({
     archivePolicy: {
       minEntries: 2,
@@ -280,7 +479,7 @@ export async function downloadClawHubBootstrapArtifact(options) {
       artifactId,
       artifactName,
       artifactSizeBytes,
-      repository: requireString(options.repository, "repository"),
+      repository,
       runStatePolicy: "same-run-in-progress",
       runAttempt,
       runId,
@@ -290,9 +489,35 @@ export async function downloadClawHubBootstrapArtifact(options) {
       workflowSha,
     },
     maxArchiveBytes: MAX_BOOTSTRAP_ARCHIVE_BYTES,
+    fetchImpl: options.fetchImpl,
+    retryAttempts: options.retryAttempts,
+    retryDelayMs: options.retryDelayMs,
     token: requireString(options.token, "token"),
   });
-  validateBootstrapArchiveInventory(result.files);
+  const validated = validateBootstrapArchiveInventory(result.files, {
+    artifactName,
+    clawhubToolchainIntegrity,
+    clawhubToolchainSha256,
+    clawhubToolchainVersion,
+    repository,
+    runAttempt,
+    runId,
+    targetSha,
+    workflowSha,
+  });
+  await mkdir(dirname(outputRoot), { mode: 0o700, recursive: true });
+  try {
+    await mkdir(outputRoot, { mode: 0o700 });
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "EEXIST") {
+      fail("ClawHub bootstrap artifact output directory must not already exist.");
+    }
+    throw error;
+  }
+  const outputRootStat = await lstat(outputRoot);
+  if (!outputRootStat.isDirectory() || outputRootStat.isSymbolicLink()) {
+    fail("ClawHub bootstrap artifact output directory must be newly created.");
+  }
   for (const [path, bytes] of result.files) {
     const destination = join(outputRoot, path);
     await mkdir(dirname(destination), { mode: 0o700, recursive: true });
@@ -303,7 +528,11 @@ export async function downloadClawHubBootstrapArtifact(options) {
     artifactId,
     artifactName,
     artifactSizeBytes,
-    inventory: [...result.files.keys()].toSorted(),
+    clawhubToolchainIntegrity,
+    clawhubToolchainSha256,
+    clawhubToolchainVersion,
+    inventory: describeActionsArtifactFiles(result.files),
+    packages: validated.entries,
     runAttempt,
     runId,
   };
@@ -332,7 +561,7 @@ async function resolveRegularArtifactFile(root, artifactPath) {
 }
 
 function assertExactPackageSet(entries, expectedPlugins) {
-  const actual = entries.map((entry) => entry.packageName).toSorted((a, b) => a.localeCompare(b));
+  const actual = entries.map((entry) => entry.packageName).toSorted(compareCodeUnits);
   if (JSON.stringify(actual) !== JSON.stringify(expectedPlugins)) {
     fail(
       `Artifact package set does not match requested plugins: expected ${expectedPlugins.join(",")}, found ${actual.join(",")}.`,
@@ -342,8 +571,13 @@ function assertExactPackageSet(entries, expectedPlugins) {
 
 export async function createClawHubBootstrapArtifactManifest(options) {
   const artifactRoot = resolve(options.artifactRoot);
-  const matrix = JSON.parse(await readFile(options.matrixPath, "utf8"));
-  if (!Array.isArray(matrix) || matrix.length === 0) {
+  const matrix = JSON.parse(
+    readBoundedRegularFile(options.matrixPath, {
+      label: "ClawHub bootstrap matrix",
+      maxBytes: MAX_BOOTSTRAP_MANIFEST_BYTES,
+    }).toString("utf8"),
+  );
+  if (!Array.isArray(matrix) || matrix.length === 0 || matrix.length > MAX_BOOTSTRAP_PACKAGES) {
     fail("matrix must be a non-empty array.");
   }
   const entries = matrix.map(normalizePlanEntry);
@@ -354,7 +588,7 @@ export async function createClawHubBootstrapArtifactManifest(options) {
   assertExactPackageSet(entries, expectedPlugins);
 
   const manifestEntries = [];
-  for (const entry of entries.toSorted((a, b) => a.packageName.localeCompare(b.packageName))) {
+  for (const entry of entries.toSorted((a, b) => compareCodeUnits(a.packageName, b.packageName))) {
     const packageDirectory = join(artifactRoot, "packages", packageSlug(entry.packageName));
     const files = (await readdir(packageDirectory)).filter((name) => name.endsWith(".tgz"));
     if (files.length !== 1) {
@@ -368,12 +602,27 @@ export async function createClawHubBootstrapArtifactManifest(options) {
 
   const manifest = {
     schemaVersion: 1,
-    repository: requireString(options.repository, "repository"),
+    repository: requirePattern(options.repository, REPOSITORY_PATTERN, "repository"),
     targetSha: requirePattern(options.targetSha, COMMIT_PATTERN, "targetSha"),
     workflowSha: requirePattern(options.workflowSha, COMMIT_PATTERN, "workflowSha"),
     runId: requirePattern(options.runId, POSITIVE_INTEGER_PATTERN, "runId"),
     runAttempt: requirePattern(options.runAttempt, POSITIVE_INTEGER_PATTERN, "runAttempt"),
     artifactName: requireString(options.artifactName, "artifactName"),
+    clawhubToolchainIntegrity: requirePattern(
+      options.clawhubToolchainIntegrity,
+      SHA512_INTEGRITY_PATTERN,
+      "clawhubToolchainIntegrity",
+    ),
+    clawhubToolchainSha256: requirePattern(
+      options.clawhubToolchainSha256,
+      SHA256_PATTERN,
+      "clawhubToolchainSha256",
+    ),
+    clawhubToolchainVersion: requirePattern(
+      options.clawhubToolchainVersion,
+      TOOLCHAIN_VERSION_PATTERN,
+      "clawhubToolchainVersion",
+    ),
     requestedPlugins: expectedPlugins,
     entries: manifestEntries,
   };
@@ -384,20 +633,29 @@ export async function createClawHubBootstrapArtifactManifest(options) {
 
 export async function verifyClawHubBootstrapArtifactManifest(options) {
   const artifactRoot = resolve(options.artifactRoot);
-  const manifest = JSON.parse(await readFile(options.manifestPath, "utf8"));
-  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
-    fail("Bootstrap artifact manifest must be an object.");
-  }
-  if (manifest.schemaVersion !== 1) {
-    fail(`Unsupported bootstrap artifact manifest schema: ${String(manifest.schemaVersion)}.`);
-  }
+  const manifest = readClawHubBootstrapManifest(options.manifestPath);
   const expected = {
-    repository: requireString(options.repository, "repository"),
+    repository: requirePattern(options.repository, REPOSITORY_PATTERN, "repository"),
     targetSha: requirePattern(options.targetSha, COMMIT_PATTERN, "targetSha"),
     workflowSha: requirePattern(options.workflowSha, COMMIT_PATTERN, "workflowSha"),
     runId: requirePattern(options.runId, POSITIVE_INTEGER_PATTERN, "runId"),
     runAttempt: requirePattern(options.runAttempt, POSITIVE_INTEGER_PATTERN, "runAttempt"),
     artifactName: requireString(options.artifactName, "artifactName"),
+    clawhubToolchainIntegrity: requirePattern(
+      options.clawhubToolchainIntegrity,
+      SHA512_INTEGRITY_PATTERN,
+      "clawhubToolchainIntegrity",
+    ),
+    clawhubToolchainSha256: requirePattern(
+      options.clawhubToolchainSha256,
+      SHA256_PATTERN,
+      "clawhubToolchainSha256",
+    ),
+    clawhubToolchainVersion: requirePattern(
+      options.clawhubToolchainVersion,
+      TOOLCHAIN_VERSION_PATTERN,
+      "clawhubToolchainVersion",
+    ),
   };
   for (const [key, value] of Object.entries(expected)) {
     if (manifest[key] !== value) {
@@ -412,33 +670,22 @@ export async function verifyClawHubBootstrapArtifactManifest(options) {
   if (JSON.stringify(manifest.requestedPlugins) !== JSON.stringify(expectedPlugins)) {
     fail("Bootstrap artifact manifest requestedPlugins mismatch.");
   }
-  if (!Array.isArray(manifest.entries) || manifest.entries.length === 0) {
+  if (
+    !Array.isArray(manifest.entries) ||
+    manifest.entries.length === 0 ||
+    manifest.entries.length > MAX_BOOTSTRAP_PACKAGES
+  ) {
     fail("Bootstrap artifact manifest entries must be a non-empty array.");
   }
 
   const entries = [];
   const allowedFiles = new Set([relative(artifactRoot, options.manifestPath).split(sep).join("/")]);
   for (const [index, rawEntry] of manifest.entries.entries()) {
-    const entry = normalizePlanEntry(rawEntry, index);
-    const artifactPath = requireString(rawEntry.artifactPath, `${entry.packageName}.artifactPath`);
-    const expectedPrefix = `packages/${packageSlug(entry.packageName)}/`;
-    if (
-      artifactPath !== `${expectedPrefix}${basename(artifactPath)}` ||
-      !artifactPath.endsWith(".tgz")
-    ) {
-      fail(`${entry.packageName} artifactPath is invalid.`);
-    }
-    const expectedSha = requirePattern(
-      rawEntry.sha256,
-      SHA256_PATTERN,
-      `${entry.packageName}.sha256`,
-    );
-    if (!Number.isSafeInteger(rawEntry.size) || rawEntry.size <= 0) {
-      fail(`${entry.packageName}.size must be a positive integer.`);
-    }
+    const entry = normalizeBootstrapManifestEntry(rawEntry, index);
+    const { artifactPath } = entry;
     const filePath = await resolveRegularArtifactFile(artifactRoot, artifactPath);
     const identity = await hashFile(filePath);
-    if (identity.sha256 !== expectedSha || identity.size !== rawEntry.size) {
+    if (identity.sha256 !== entry.sha256 || identity.size !== entry.size) {
       fail(`${entry.packageName} packed artifact hash or size mismatch.`);
     }
     allowedFiles.add(artifactPath);
@@ -450,7 +697,7 @@ export async function verifyClawHubBootstrapArtifactManifest(options) {
   assertExactPackageSet(entries, expectedPlugins);
 
   const inventory = await listFiles(artifactRoot);
-  const expectedInventory = [...allowedFiles].toSorted((a, b) => a.localeCompare(b));
+  const expectedInventory = [...allowedFiles].toSorted(compareCodeUnits);
   if (JSON.stringify(inventory) !== JSON.stringify(expectedInventory)) {
     fail(
       `Bootstrap artifact inventory mismatch: expected ${expectedInventory.join(",")}, found ${inventory.join(",")}.`,
@@ -482,6 +729,9 @@ async function main() {
       artifactId: args.artifact_id,
       artifactName: args.artifact_name,
       artifactSize: args.artifact_size,
+      clawhubToolchainIntegrity: args.clawhub_toolchain_integrity,
+      clawhubToolchainSha256: args.clawhub_toolchain_sha256,
+      clawhubToolchainVersion: args.clawhub_toolchain_version,
       outputRoot: args.output_root,
       repository: args.repository,
       runAttempt: args.run_attempt,
@@ -508,6 +758,9 @@ async function main() {
   const common = {
     artifactRoot: args.artifact_root,
     artifactName: args.artifact_name,
+    clawhubToolchainIntegrity: args.clawhub_toolchain_integrity,
+    clawhubToolchainSha256: args.clawhub_toolchain_sha256,
+    clawhubToolchainVersion: args.clawhub_toolchain_version,
     repository: args.repository,
     targetSha: args.target_sha,
     workflowSha: args.workflow_sha,
@@ -536,9 +789,7 @@ async function main() {
     }
     return;
   }
-  fail(
-    "Usage: clawhub-bootstrap-artifact.mjs <create|download|verify|verify-packed> [options]",
-  );
+  fail("Usage: clawhub-bootstrap-artifact.mjs <create|download|verify|verify-packed> [options]");
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

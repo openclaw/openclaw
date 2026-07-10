@@ -1026,6 +1026,40 @@ describe("plugin publication artifact", () => {
     );
   });
 
+  it("rejects concatenated gzip members before trusting combined tar inventory", () => {
+    const root = tempDir();
+    const artifactDir = path.join(root, "artifact");
+    const markerPath = path.join(root, "marker");
+    mkdirSync(artifactDir, { recursive: true });
+    const firstMember = gzipSync(
+      Buffer.concat([
+        tarEntry({ path: "package/", type: "5" }),
+        tarEntry({
+          content: metaPackageJson(markerPath),
+          path: "package/package.json",
+        }),
+        tarEntry({
+          content: '{"id":"meta"}\n',
+          path: "package/openclaw.plugin.json",
+        }),
+      ]),
+    );
+    const secondMember = gzipSync(
+      Buffer.concat([
+        tarEntry({
+          content: "hidden from the pinned ClawHub reader\n",
+          path: "package/second-member.txt",
+        }),
+        Buffer.alloc(1024),
+      ]),
+    );
+    writeFileSync(path.join(artifactDir, TARBALL_NAME), Buffer.concat([firstMember, secondMember]));
+
+    expect(() => createPluginPublicationArtifact(publicationParams(artifactDir))).toThrow(
+      /must contain exactly one gzip member/u,
+    );
+  });
+
   it("rejects a hidden duplicate package.json after a single zero tar block", () => {
     const root = tempDir();
     const artifactDir = path.join(root, "artifact");

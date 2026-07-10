@@ -32,6 +32,15 @@ type Workflow = {
 const source = readFileSync(".github/workflows/plugin-clawhub-new.yml", "utf8");
 const workflow = parse(source) as Workflow;
 const jobs = workflow.jobs ?? {};
+const materializerSource = readFileSync("scripts/materialize-clawhub-cli.sh", "utf8");
+const clawhubCliPackage = JSON.parse(
+  readFileSync(".github/release/clawhub-cli/package.json", "utf8"),
+) as { dependencies?: Record<string, string> };
+const clawhubCliLock = JSON.parse(
+  readFileSync(".github/release/clawhub-cli/package-lock.json", "utf8"),
+) as {
+  packages?: Record<string, { integrity?: string; version?: string }>;
+};
 
 function job(name: string): Job {
   const value = jobs[name];
@@ -70,6 +79,7 @@ describe("Plugin ClawHub New workflow", () => {
       artifact_run_attempt: "${{ github.run_attempt }}",
       artifact_run_id: "${{ github.run_id }}",
       artifact_size: "${{ steps.upload_binding.outputs.size }}",
+      clawhub_toolchain_sha256: "${{ steps.clawhub_cli.outputs.lock_sha256 }}",
     });
     expect(step(pack, "Upload immutable ClawHub bootstrap artifact").with).toMatchObject({
       archive: true,
@@ -79,6 +89,9 @@ describe("Plugin ClawHub New workflow", () => {
     const packRun = step(pack, "Pack immutable ClawHub bootstrap artifacts").run ?? "";
     expect(packRun).not.toContain('mode}" == "configure-only"');
     expect(packRun).toContain("--validate-packed");
+    expect(packRun).toContain("--clawhub-toolchain-integrity");
+    expect(packRun).toContain("--clawhub-toolchain-sha256");
+    expect(packRun).toContain("--clawhub-toolchain-version");
   });
 
   it("always validates the immutable handoff without credentials, including dry runs", () => {
@@ -93,6 +106,9 @@ describe("Plugin ClawHub New workflow", () => {
     expect(binding).toContain("clawhub-bootstrap-artifact.mjs download");
     expect(binding).toContain('--artifact-size "${ARTIFACT_SIZE}"');
     expect(binding).toContain('--run-attempt "${ARTIFACT_RUN_ATTEMPT}"');
+    expect(binding).toContain("--clawhub-toolchain-integrity");
+    expect(binding).toContain("--clawhub-toolchain-sha256");
+    expect(binding).toContain("--clawhub-toolchain-version");
     expect(step(validate, "Validate packed ClawHub package identities").run).toContain(
       "--validate-packed",
     );
@@ -133,6 +149,9 @@ describe("Plugin ClawHub New workflow", () => {
     expect(binding).toContain("clawhub-bootstrap-artifact.mjs download");
     expect(binding).toContain('--artifact-size "${ARTIFACT_SIZE}"');
     expect(binding).toContain('--run-attempt "${ARTIFACT_RUN_ATTEMPT}"');
+    expect(binding).toContain("--clawhub-toolchain-integrity");
+    expect(binding).toContain("--clawhub-toolchain-sha256");
+    expect(binding).toContain("--clawhub-toolchain-version");
   });
 
   it("rehashes and validates tgz identity before exposing the token", () => {
@@ -144,6 +163,9 @@ describe("Plugin ClawHub New workflow", () => {
     expect(
       names.indexOf("Validate packed ClawHub package identities before credentials"),
     ).toBeLessThan(names.indexOf("Write ClawHub token config"));
+    expect(names.indexOf("Materialize locked ClawHub CLI")).toBeLessThan(
+      names.indexOf("Write ClawHub token config"),
+    );
     expect(
       names.indexOf("Reconfirm configure-only registry bytes before credentials"),
     ).toBeLessThan(names.indexOf("Write ClawHub token config"));
@@ -181,6 +203,29 @@ describe("Plugin ClawHub New workflow", () => {
     expect(
       step(publish, "Reconfirm configure-only registry bytes before credentials").run,
     ).toContain("--mode configure-only-preflight");
+  });
+
+  it("uses one lockfile-only ClawHub CLI graph and absolute binary path", () => {
+    expect(clawhubCliPackage.dependencies).toEqual({ clawhub: "0.23.1" });
+    expect(clawhubCliLock.packages?.["node_modules/clawhub"]).toMatchObject({
+      integrity:
+        "sha512-YvUImhsVaM90BUAv3uP7lfABziwR5XL3ch2Owa+GvNxwQ2xzZFmZC0yVjAtQbvep+dDDS16nUGRwKx7jqnTOEA==",
+      version: "0.23.1",
+    });
+    expect(materializerSource).toContain("npm ci");
+    expect(materializerSource).toContain("--ignore-scripts");
+    expect(materializerSource).toContain("--omit=dev");
+    expect(materializerSource).toContain(
+      "f44f670d70f13a8cde566a174cae5be682ad98456ec7a85aafd497f7d8c71816",
+    );
+    expect(materializerSource).toContain("lock_sha256=");
+    expect(materializerSource).toContain("integrity=${clawhub_integrity}");
+    expect(materializerSource).toContain("cli=${clawhub_cli}");
+    expect(source).not.toContain("npm exec");
+    expect(source).not.toContain("npm install");
+    expect(source).not.toContain("CLAWHUB_CLI_PACKAGE");
+    expect(source).toContain("OPENCLAW_CLAWHUB_CLI: ${{ steps.clawhub_cli.outputs.cli }}");
+    expect(source).toContain('"${OPENCLAW_CLAWHUB_CLI}" package trusted-publisher set');
   });
 
   it("bounds every job and keeps secretless validation active in dry-run mode", () => {

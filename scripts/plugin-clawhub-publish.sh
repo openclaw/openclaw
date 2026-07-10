@@ -72,9 +72,18 @@ if [[ "${packed_mode}" == "true" && ! -f "${clawpack_path}" ]]; then
   exit 2
 fi
 
-if ! command -v clawhub >/dev/null 2>&1; then
-  echo "clawhub CLI is required on PATH" >&2
-  exit 1
+clawhub_cli="${OPENCLAW_CLAWHUB_CLI:-}"
+if [[ -n "${clawhub_cli}" ]]; then
+  if [[ "${clawhub_cli}" != /* || ! -x "${clawhub_cli}" ]]; then
+    echo "OPENCLAW_CLAWHUB_CLI must be an absolute executable path" >&2
+    exit 1
+  fi
+else
+  clawhub_cli="$(command -v clawhub 2>/dev/null || true)"
+  if [[ -z "${clawhub_cli}" ]]; then
+    echo "clawhub CLI is required on PATH" >&2
+    exit 1
+  fi
 fi
 
 if [[ "${packed_mode}" == "true" ]]; then
@@ -106,7 +115,7 @@ cleanup() {
 trap cleanup EXIT
 
 pack_cmd=(
-  clawhub
+  "${clawhub_cli}"
   --workdir
   "${clawhub_workdir}"
   package
@@ -247,7 +256,7 @@ clawhub_timeout=(
 validate_packed_publish() {
   local dry_run_json
   dry_run_json="$(
-    CLAWHUB_WORKDIR="${clawhub_workdir}" "${clawhub_timeout[@]}" clawhub \
+    CLAWHUB_WORKDIR="${clawhub_workdir}" "${clawhub_timeout[@]}" "${clawhub_cli}" \
       --workdir "${clawhub_workdir}" \
       package publish "${clawpack_path}" \
       --tags "${publish_tag}" \
@@ -277,7 +286,7 @@ if [[ "${packed_mode}" == "true" ]]; then
 fi
 
 publish_cmd=(
-  clawhub
+  "${clawhub_cli}"
   --workdir
   "${clawhub_workdir}"
   package

@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, inflateRawSync } from "node:zlib";
 import {
   downloadActionsArtifactArchive,
   describeActionsArtifactFiles,
@@ -376,6 +376,53 @@ function parsePackedJson(bytes, label) {
   return value;
 }
 
+function firstGzipMemberEnd(bytes, maxOutputLength) {
+  if (
+    bytes.length < 18 ||
+    bytes[0] !== 0x1f ||
+    bytes[1] !== 0x8b ||
+    bytes[2] !== 0x08 ||
+    (bytes[3] & 0xe0) !== 0
+  ) {
+    throw new Error("Invalid gzip header.");
+  }
+
+  const flags = bytes[3];
+  let offset = 10;
+  if ((flags & 0x04) !== 0) {
+    if (offset + 2 > bytes.length) {
+      throw new Error("Truncated gzip extra-field length.");
+    }
+    const extraLength = bytes.readUInt16LE(offset);
+    offset += 2 + extraLength;
+    if (offset > bytes.length) {
+      throw new Error("Truncated gzip extra field.");
+    }
+  }
+  for (const flag of [0x08, 0x10]) {
+    if ((flags & flag) === 0) {
+      continue;
+    }
+    const terminator = bytes.indexOf(0, offset);
+    if (terminator === -1) {
+      throw new Error("Unterminated gzip header string.");
+    }
+    offset = terminator + 1;
+  }
+  if ((flags & 0x02) !== 0) {
+    offset += 2;
+  }
+  if (offset + 8 > bytes.length) {
+    throw new Error("Truncated gzip member.");
+  }
+
+  const expanded = inflateRawSync(bytes.subarray(offset), {
+    info: true,
+    maxOutputLength,
+  });
+  return offset + expanded.engine.bytesWritten + 8;
+}
+
 export function inspectPackageTarballBytes(inputBytes, options = {}) {
   if (!(inputBytes instanceof Uint8Array)) {
     throw new Error("Plugin tarball bytes must be a Uint8Array.");
@@ -384,6 +431,18 @@ export function inspectPackageTarballBytes(inputBytes, options = {}) {
   const limits = normalizeTarInspectionOptions(options);
   if (tarballBytes.length === 0 || tarballBytes.length > limits.maxArchiveBytes) {
     throw new Error(`Plugin tarball size is outside the allowed range: ${tarballBytes.length}.`);
+  }
+  let memberEnd;
+  try {
+    memberEnd = firstGzipMemberEnd(tarballBytes, limits.maxExpandedBytes);
+  } catch (error) {
+    throw new Error(
+      `Plugin tarball is not canonical gzip or expands beyond ${limits.maxExpandedBytes} bytes.`,
+      { cause: error },
+    );
+  }
+  if (memberEnd !== tarballBytes.length) {
+    throw new Error("Plugin tarball must contain exactly one gzip member.");
   }
   let tarBytes;
   try {

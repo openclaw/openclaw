@@ -33,7 +33,6 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
   CLAWHUB_REGISTRY: "https://clawhub.ai"
-  CLAWHUB_CLI_PACKAGE: "clawhub@0.23.1"
 
 jobs:
   resolve_bootstrap_plan:
@@ -284,23 +283,42 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Checkout trusted workflow tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Setup trusted Node runtime
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Materialize locked ClawHub CLI
+        id: clawhub_cli
+        run: |
+          set -euo pipefail
+          bash scripts/materialize-clawhub-cli.sh \
+            .github/release/clawhub-cli \
+            "${RUNNER_TEMP}/clawhub-cli" \
+            "${GITHUB_OUTPUT}"
+
       - name: Validate pinned ClawHub trusted publisher CLI support
         env:
-          CLAWHUB_CLI_PACKAGE: ${{ env.CLAWHUB_CLI_PACKAGE }}
+          CLAWHUB_CLI: ${{ steps.clawhub_cli.outputs.cli }}
         run: |
           set -euo pipefail
           help_output="$(
-            npm exec --yes --package "${CLAWHUB_CLI_PACKAGE}" -- \
-              clawhub package trusted-publisher set --help 2>&1 || true
+            "${CLAWHUB_CLI}" package trusted-publisher set --help 2>&1 || true
           )"
           printf '%s\n' "${help_output}"
           if ! grep -Fq "Usage: clawhub package trusted-publisher set" <<<"${help_output}"; then
-            echo "::error::CLAW-277 03 - Split OpenClaw plugin ClawHub publishing into OIDC release and token bootstrap workflows requires ${CLAWHUB_CLI_PACKAGE} to expose 'package trusted-publisher set' before token bootstrap publish can run. The pinned CLI returned parent help or no set command, so this workflow is stopping before creating a ClawHub package row."
+            echo "::error::CLAW-277 03 - Split OpenClaw plugin ClawHub publishing into OIDC release and token bootstrap workflows requires locked clawhub@0.23.1 to expose 'package trusted-publisher set' before token bootstrap publish can run. The pinned CLI returned parent help or no set command, so this workflow is stopping before creating a ClawHub package row."
             exit 1
           fi
           for required_flag in --repository --workflow-filename; do
             if ! grep -Fq -- "${required_flag}" <<<"${help_output}"; then
-              echo "::error::CLAW-277 03 - Split OpenClaw plugin ClawHub publishing into OIDC release and token bootstrap workflows requires ${CLAWHUB_CLI_PACKAGE} trusted-publisher set help to include ${required_flag}."
+              echo "::error::CLAW-277 03 - Split OpenClaw plugin ClawHub publishing into OIDC release and token bootstrap workflows requires locked clawhub@0.23.1 trusted-publisher set help to include ${required_flag}."
               exit 1
             fi
           done
@@ -320,6 +338,7 @@ jobs:
       artifact_run_attempt: ${{ github.run_attempt }}
       artifact_run_id: ${{ github.run_id }}
       artifact_size: ${{ steps.upload_binding.outputs.size }}
+      clawhub_toolchain_sha256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -357,24 +376,26 @@ jobs:
           install-bun: "true"
           install-deps: "true"
 
-      - name: Install pinned ClawHub CLI wrapper
+      - name: Materialize locked ClawHub CLI
+        id: clawhub_cli
         run: |
           set -euo pipefail
-          cat > "${RUNNER_TEMP}/clawhub" <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          exec npm exec --yes --package "${CLAWHUB_CLI_PACKAGE}" -- clawhub "$@"
-          EOF
-          chmod +x "${RUNNER_TEMP}/clawhub"
-          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+          bash .release-harness/scripts/materialize-clawhub-cli.sh \
+            .release-harness/.github/release/clawhub-cli \
+            "${RUNNER_TEMP}/clawhub-cli" \
+            "${GITHUB_OUTPUT}"
 
       - name: Pack immutable ClawHub bootstrap artifacts
         id: artifact
         env:
           BOOTSTRAP_MATRIX: ${{ needs.resolve_bootstrap_plan.outputs.matrix }}
+          CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
           RELEASE_PLUGINS: ${{ inputs.plugins }}
           TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
           WORKFLOW_SHA: ${{ github.sha }}
+          CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
+          CLAWHUB_TOOLCHAIN_VERSION: ${{ steps.clawhub_cli.outputs.version }}
+          OPENCLAW_CLAWHUB_CLI: ${{ steps.clawhub_cli.outputs.cli }}
         run: |
           set -euo pipefail
           artifact_root="${RUNNER_TEMP}/clawhub-bootstrap-artifact"
@@ -414,6 +435,9 @@ jobs:
           node "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/clawhub-bootstrap-artifact.mjs" create \
             --artifact-root "${artifact_root}" \
             --artifact-name "${artifact_name}" \
+            --clawhub-toolchain-integrity "${CLAWHUB_TOOLCHAIN_INTEGRITY}" \
+            --clawhub-toolchain-sha256 "${CLAWHUB_TOOLCHAIN_SHA256}" \
+            --clawhub-toolchain-version "${CLAWHUB_TOOLCHAIN_VERSION}" \
             --matrix "${matrix_path}" \
             --output "${artifact_root}/manifest.json" \
             --plugins "${RELEASE_PLUGINS}" \
@@ -499,18 +523,14 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Materialize pinned ClawHub CLI
+      - name: Materialize locked ClawHub CLI
+        id: clawhub_cli
         run: |
           set -euo pipefail
-          cli_root="${RUNNER_TEMP}/clawhub-cli"
-          npm install \
-            --prefix "${cli_root}" \
-            --ignore-scripts \
-            --no-audit \
-            --no-fund \
-            "${CLAWHUB_CLI_PACKAGE}"
-          test -x "${cli_root}/node_modules/.bin/clawhub"
-          echo "${cli_root}/node_modules/.bin" >> "${GITHUB_PATH}"
+          bash .release-harness/scripts/materialize-clawhub-cli.sh \
+            .release-harness/.github/release/clawhub-cli \
+            "${RUNNER_TEMP}/clawhub-cli" \
+            "${GITHUB_OUTPUT}"
 
       - name: Download and verify immutable ClawHub bootstrap artifact
         env:
@@ -523,6 +543,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
           WORKFLOW_SHA: ${{ github.sha }}
+          CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
+          CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
+          CLAWHUB_TOOLCHAIN_VERSION: ${{ steps.clawhub_cli.outputs.version }}
         run: |
           set -euo pipefail
           node .release-harness/scripts/lib/clawhub-bootstrap-artifact.mjs download \
@@ -530,6 +553,9 @@ jobs:
             --artifact-id "${ARTIFACT_ID}" \
             --artifact-name "${ARTIFACT_NAME}" \
             --artifact-size "${ARTIFACT_SIZE}" \
+            --clawhub-toolchain-integrity "${CLAWHUB_TOOLCHAIN_INTEGRITY}" \
+            --clawhub-toolchain-sha256 "${CLAWHUB_TOOLCHAIN_SHA256}" \
+            --clawhub-toolchain-version "${CLAWHUB_TOOLCHAIN_VERSION}" \
             --output-root "${RUNNER_TEMP}/clawhub-bootstrap-artifact" \
             --repository "${GITHUB_REPOSITORY}" \
             --run-attempt "${ARTIFACT_RUN_ATTEMPT}" \
@@ -545,11 +571,17 @@ jobs:
           RELEASE_PLUGINS: ${{ inputs.plugins }}
           TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
           WORKFLOW_SHA: ${{ github.sha }}
+          CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
+          CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
+          CLAWHUB_TOOLCHAIN_VERSION: ${{ steps.clawhub_cli.outputs.version }}
         run: |
           set -euo pipefail
           node .release-harness/scripts/lib/clawhub-bootstrap-artifact.mjs verify \
             --artifact-root "${RUNNER_TEMP}/clawhub-bootstrap-artifact" \
             --artifact-name "${ARTIFACT_NAME}" \
+            --clawhub-toolchain-integrity "${CLAWHUB_TOOLCHAIN_INTEGRITY}" \
+            --clawhub-toolchain-sha256 "${CLAWHUB_TOOLCHAIN_SHA256}" \
+            --clawhub-toolchain-version "${CLAWHUB_TOOLCHAIN_VERSION}" \
             --manifest "${RUNNER_TEMP}/clawhub-bootstrap-artifact/manifest.json" \
             --output "${RUNNER_TEMP}/clawhub-bootstrap-validated.json" \
             --plugins "${RELEASE_PLUGINS}" \
@@ -565,6 +597,7 @@ jobs:
           SOURCE_COMMIT: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
           SOURCE_REF: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
           SOURCE_REPO: ${{ github.repository }}
+          OPENCLAW_CLAWHUB_CLI: ${{ steps.clawhub_cli.outputs.cli }}
         run: |
           set -euo pipefail
           while IFS= read -r plugin; do
@@ -585,11 +618,17 @@ jobs:
           ARTIFACT_DIGEST: ${{ needs.pack_bootstrap_plugins.outputs.artifact_digest }}
           ARTIFACT_ID: ${{ needs.pack_bootstrap_plugins.outputs.artifact_id }}
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
+          CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
+          CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
+          CLAWHUB_TOOLCHAIN_VERSION: ${{ steps.clawhub_cli.outputs.version }}
         run: |
           set -euo pipefail
           node .release-harness/scripts/verify-clawhub-published-artifact.mjs \
             --artifact-digest "${ARTIFACT_DIGEST}" \
             --artifact-id "${ARTIFACT_ID}" \
+            --clawhub-toolchain-integrity "${CLAWHUB_TOOLCHAIN_INTEGRITY}" \
+            --clawhub-toolchain-sha256 "${CLAWHUB_TOOLCHAIN_SHA256}" \
+            --clawhub-toolchain-version "${CLAWHUB_TOOLCHAIN_VERSION}" \
             --manifest "${RUNNER_TEMP}/clawhub-bootstrap-validated.json" \
             --mode configure-only-preflight \
             --output "${RUNNER_TEMP}/clawhub-bootstrap-configure-only-preflight.json" \
@@ -634,18 +673,14 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Materialize pinned ClawHub CLI
+      - name: Materialize locked ClawHub CLI
+        id: clawhub_cli
         run: |
           set -euo pipefail
-          cli_root="${RUNNER_TEMP}/clawhub-cli"
-          npm install \
-            --prefix "${cli_root}" \
-            --ignore-scripts \
-            --no-audit \
-            --no-fund \
-            "${CLAWHUB_CLI_PACKAGE}"
-          test -x "${cli_root}/node_modules/.bin/clawhub"
-          echo "${cli_root}/node_modules/.bin" >> "${GITHUB_PATH}"
+          bash .release-harness/scripts/materialize-clawhub-cli.sh \
+            .release-harness/.github/release/clawhub-cli \
+            "${RUNNER_TEMP}/clawhub-cli" \
+            "${GITHUB_OUTPUT}"
 
       - name: Download and verify immutable ClawHub bootstrap artifact
         env:
@@ -658,6 +693,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
           WORKFLOW_SHA: ${{ github.sha }}
+          CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
+          CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
+          CLAWHUB_TOOLCHAIN_VERSION: ${{ steps.clawhub_cli.outputs.version }}
         run: |
           set -euo pipefail
           node .release-harness/scripts/lib/clawhub-bootstrap-artifact.mjs download \
@@ -665,6 +703,9 @@ jobs:
             --artifact-id "${ARTIFACT_ID}" \
             --artifact-name "${ARTIFACT_NAME}" \
             --artifact-size "${ARTIFACT_SIZE}" \
+            --clawhub-toolchain-integrity "${CLAWHUB_TOOLCHAIN_INTEGRITY}" \
+            --clawhub-toolchain-sha256 "${CLAWHUB_TOOLCHAIN_SHA256}" \
+            --clawhub-toolchain-version "${CLAWHUB_TOOLCHAIN_VERSION}" \
             --output-root "${RUNNER_TEMP}/clawhub-bootstrap-artifact" \
             --repository "${GITHUB_REPOSITORY}" \
             --run-attempt "${ARTIFACT_RUN_ATTEMPT}" \
@@ -680,11 +721,17 @@ jobs:
           RELEASE_PLUGINS: ${{ inputs.plugins }}
           TARGET_SHA: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
           WORKFLOW_SHA: ${{ github.sha }}
+          CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
+          CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
+          CLAWHUB_TOOLCHAIN_VERSION: ${{ steps.clawhub_cli.outputs.version }}
         run: |
           set -euo pipefail
           node .release-harness/scripts/lib/clawhub-bootstrap-artifact.mjs verify \
             --artifact-root "${RUNNER_TEMP}/clawhub-bootstrap-artifact" \
             --artifact-name "${ARTIFACT_NAME}" \
+            --clawhub-toolchain-integrity "${CLAWHUB_TOOLCHAIN_INTEGRITY}" \
+            --clawhub-toolchain-sha256 "${CLAWHUB_TOOLCHAIN_SHA256}" \
+            --clawhub-toolchain-version "${CLAWHUB_TOOLCHAIN_VERSION}" \
             --manifest "${RUNNER_TEMP}/clawhub-bootstrap-artifact/manifest.json" \
             --output "${RUNNER_TEMP}/clawhub-bootstrap-validated.json" \
             --plugins "${RELEASE_PLUGINS}" \
@@ -700,6 +747,7 @@ jobs:
           SOURCE_COMMIT: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
           SOURCE_REF: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
           SOURCE_REPO: ${{ github.repository }}
+          OPENCLAW_CLAWHUB_CLI: ${{ steps.clawhub_cli.outputs.cli }}
         run: |
           set -euo pipefail
           while IFS= read -r plugin; do
@@ -720,11 +768,17 @@ jobs:
           ARTIFACT_DIGEST: ${{ needs.pack_bootstrap_plugins.outputs.artifact_digest }}
           ARTIFACT_ID: ${{ needs.pack_bootstrap_plugins.outputs.artifact_id }}
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
+          CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
+          CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
+          CLAWHUB_TOOLCHAIN_VERSION: ${{ steps.clawhub_cli.outputs.version }}
         run: |
           set -euo pipefail
           node .release-harness/scripts/verify-clawhub-published-artifact.mjs \
             --artifact-digest "${ARTIFACT_DIGEST}" \
             --artifact-id "${ARTIFACT_ID}" \
+            --clawhub-toolchain-integrity "${CLAWHUB_TOOLCHAIN_INTEGRITY}" \
+            --clawhub-toolchain-sha256 "${CLAWHUB_TOOLCHAIN_SHA256}" \
+            --clawhub-toolchain-version "${CLAWHUB_TOOLCHAIN_VERSION}" \
             --manifest "${RUNNER_TEMP}/clawhub-bootstrap-validated.json" \
             --mode configure-only-preflight \
             --registry "${CLAWHUB_REGISTRY}" \
@@ -766,6 +820,7 @@ jobs:
           SOURCE_COMMIT: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
           SOURCE_REF: ${{ needs.resolve_bootstrap_plan.outputs.ref_revision }}
           SOURCE_REPO: ${{ github.repository }}
+          OPENCLAW_CLAWHUB_CLI: ${{ steps.clawhub_cli.outputs.cli }}
         run: |
           set -euo pipefail
           while IFS= read -r plugin; do
@@ -793,7 +848,7 @@ jobs:
               echo "Skipping bootstrap publish because the exact version is already present; configuring trusted publisher only."
             fi
             timeout --signal=TERM --kill-after=10s 300s \
-              clawhub package trusted-publisher set "${package_name}" \
+              "${OPENCLAW_CLAWHUB_CLI}" package trusted-publisher set "${package_name}" \
                 --repository openclaw/openclaw \
                 --workflow-filename plugin-clawhub-release.yml
           done < <(jq -c '.entries[]' "${RUNNER_TEMP}/clawhub-bootstrap-validated.json")
@@ -803,11 +858,17 @@ jobs:
           ARTIFACT_DIGEST: ${{ needs.pack_bootstrap_plugins.outputs.artifact_digest }}
           ARTIFACT_ID: ${{ needs.pack_bootstrap_plugins.outputs.artifact_id }}
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
+          CLAWHUB_TOOLCHAIN_INTEGRITY: ${{ steps.clawhub_cli.outputs.integrity }}
+          CLAWHUB_TOOLCHAIN_SHA256: ${{ steps.clawhub_cli.outputs.lock_sha256 }}
+          CLAWHUB_TOOLCHAIN_VERSION: ${{ steps.clawhub_cli.outputs.version }}
         run: |
           set -euo pipefail
           node .release-harness/scripts/verify-clawhub-published-artifact.mjs \
             --artifact-digest "${ARTIFACT_DIGEST}" \
             --artifact-id "${ARTIFACT_ID}" \
+            --clawhub-toolchain-integrity "${CLAWHUB_TOOLCHAIN_INTEGRITY}" \
+            --clawhub-toolchain-sha256 "${CLAWHUB_TOOLCHAIN_SHA256}" \
+            --clawhub-toolchain-version "${CLAWHUB_TOOLCHAIN_VERSION}" \
             --manifest "${RUNNER_TEMP}/clawhub-bootstrap-validated.json" \
             --output "${RUNNER_TEMP}/clawhub-bootstrap-readback.json" \
             --registry "${CLAWHUB_REGISTRY}" \
