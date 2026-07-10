@@ -7,7 +7,7 @@ import { access } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { CodexAppServerStartOptions } from "./config.js";
+import type { CodexAppServerStartOptions, CodexManagedCommandOrder } from "./config.js";
 import { MANAGED_CODEX_APP_SERVER_PACKAGE } from "./version.js";
 
 const CODEX_APP_SERVER_MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -42,6 +42,7 @@ export async function resolveManagedCodexAppServerStartOptions(
   const paths = resolveManagedCodexAppServerPaths({
     platform,
     pluginRoot: options.pluginRoot,
+    managedCommandOrder: startOptions.managedCommandOrder,
   });
   const pathExists = options.pathExists ?? commandPathExists;
   const commandPaths = await findManagedCodexAppServerCommandPaths({
@@ -64,11 +65,13 @@ export async function resolveManagedCodexAppServerStartOptions(
 export function resolveManagedCodexAppServerPaths(params: {
   platform?: NodeJS.Platform;
   pluginRoot?: string;
+  managedCommandOrder?: CodexManagedCommandOrder;
 }): ManagedCodexAppServerPaths {
   const platform = params.platform ?? process.platform;
   const candidateCommandPaths = resolveManagedCodexAppServerCommandCandidates(
     params.pluginRoot ?? CODEX_PLUGIN_ROOT,
     platform,
+    params.managedCommandOrder ?? "package-first",
   );
   return {
     commandPath: candidateCommandPaths[0] ?? "",
@@ -79,17 +82,23 @@ export function resolveManagedCodexAppServerPaths(params: {
 function resolveManagedCodexAppServerCommandCandidates(
   pluginRoot: string,
   platform: NodeJS.Platform,
+  managedCommandOrder: CodexManagedCommandOrder,
 ): string[] {
   const pathApi = pathForPlatform(platform);
   const commandName = platform === "win32" ? "codex.cmd" : "codex";
   const roots = resolveManagedCodexAppServerCandidateRoots(pluginRoot, platform);
-  return [
-    ...new Set([
-      ...resolveDesktopCodexAppServerCommandCandidates(platform),
-      ...roots.map((root) => pathApi.join(root, "node_modules", ".bin", commandName)),
-      ...resolveManagedCodexPackageBinCandidates(roots, platform),
-    ]),
+  const packageCommandPaths = [
+    ...roots.map((root) => pathApi.join(root, "node_modules", ".bin", commandName)),
+    ...resolveManagedCodexPackageBinCandidates(roots, platform),
   ];
+  const desktopCommandPaths = resolveDesktopCodexAppServerCommandCandidates(platform);
+  // Ordinary turns must honor the pinned package version. Computer Use opts
+  // into the signed desktop owner because its macOS TCC permissions live there.
+  const orderedCommandPaths =
+    managedCommandOrder === "desktop-first"
+      ? [...desktopCommandPaths, ...packageCommandPaths]
+      : [...packageCommandPaths, ...desktopCommandPaths];
+  return [...new Set(orderedCommandPaths)];
 }
 
 function resolveDesktopCodexAppServerCommandCandidates(platform: NodeJS.Platform): string[] {

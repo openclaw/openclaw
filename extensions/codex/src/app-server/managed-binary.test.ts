@@ -12,11 +12,13 @@ import {
 
 function startOptions(
   commandSource: CodexAppServerStartOptions["commandSource"],
+  managedCommandOrder?: CodexAppServerStartOptions["managedCommandOrder"],
 ): CodexAppServerStartOptions {
   return {
     transport: "stdio",
     command: "codex",
     commandSource,
+    ...(managedCommandOrder ? { managedCommandOrder } : {}),
     args: ["app-server", "--listen", "stdio://"],
     headers: {},
   };
@@ -45,7 +47,7 @@ describe("managed Codex app-server binary", () => {
     expect(pathExists).not.toHaveBeenCalled();
   });
 
-  it("prefers ChatGPT.app when both macOS desktop bundles exist", async () => {
+  it("keeps the pinned package ahead of stale desktop bundles for ordinary turns", async () => {
     const pluginRoot = path.join("/tmp", "openclaw", "extensions", "codex");
     const paths = resolveManagedCodexAppServerPaths({ platform: "darwin", pluginRoot });
     const pluginLocalCommand = managedCommandPath(pluginRoot, "darwin");
@@ -64,15 +66,18 @@ describe("managed Codex app-server binary", () => {
       }),
     ).resolves.toEqual({
       ...startOptions("managed"),
-      command: MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND,
+      command: pluginLocalCommand,
       commandSource: "resolved-managed",
-      managedFallbackCommandPaths: [MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND, pluginLocalCommand],
+      managedFallbackCommandPaths: [
+        MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND,
+        MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND,
+      ],
     });
-    expect(paths.commandPath).toBe(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND);
-    expect(paths.candidateCommandPaths).toContain(pluginLocalCommand);
+    expect(paths.commandPath).toBe(pluginLocalCommand);
+    expect(paths.candidateCommandPaths).toContain(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND);
   });
 
-  it("prefers the ChatGPT.app desktop bundle when Codex.app is absent", async () => {
+  it("prefers the ChatGPT.app desktop bundle for Computer Use", async () => {
     const pluginRoot = path.join("/tmp", "openclaw", "extensions", "codex");
     const pluginLocalCommand = managedCommandPath(pluginRoot, "darwin");
     const pathExists = vi.fn(
@@ -81,17 +86,24 @@ describe("managed Codex app-server binary", () => {
     );
 
     await expect(
-      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
+      resolveManagedCodexAppServerStartOptions(startOptions("managed", "desktop-first"), {
         platform: "darwin",
         pluginRoot,
         pathExists,
       }),
     ).resolves.toEqual({
-      ...startOptions("managed"),
+      ...startOptions("managed", "desktop-first"),
       command: MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND,
       commandSource: "resolved-managed",
       managedFallbackCommandPaths: [pluginLocalCommand],
     });
+    expect(
+      resolveManagedCodexAppServerPaths({
+        platform: "darwin",
+        pluginRoot,
+        managedCommandOrder: "desktop-first",
+      }).commandPath,
+    ).toBe(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND);
   });
 
   it("falls back to the legacy Codex.app desktop bundle when ChatGPT.app is absent", async () => {
@@ -103,13 +115,13 @@ describe("managed Codex app-server binary", () => {
     );
 
     await expect(
-      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
+      resolveManagedCodexAppServerStartOptions(startOptions("managed", "desktop-first"), {
         platform: "darwin",
         pluginRoot,
         pathExists,
       }),
     ).resolves.toEqual({
-      ...startOptions("managed"),
+      ...startOptions("managed", "desktop-first"),
       command: MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND,
       commandSource: "resolved-managed",
       managedFallbackCommandPaths: [pluginLocalCommand],
@@ -122,13 +134,13 @@ describe("managed Codex app-server binary", () => {
     const pathExists = vi.fn(async (filePath: string) => filePath === pluginLocalCommand);
 
     await expect(
-      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
+      resolveManagedCodexAppServerStartOptions(startOptions("managed", "desktop-first"), {
         platform: "darwin",
         pluginRoot,
         pathExists,
       }),
     ).resolves.toEqual({
-      ...startOptions("managed"),
+      ...startOptions("managed", "desktop-first"),
       command: pluginLocalCommand,
       commandSource: "resolved-managed",
     });

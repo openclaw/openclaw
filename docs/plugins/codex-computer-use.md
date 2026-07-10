@@ -117,18 +117,17 @@ MCP server available, the turn fails before the thread starts.
 After changing Computer Use config, use `/new` or `/reset` in the affected
 chat before testing if an existing Codex thread has already started.
 
-On macOS managed stdio startup, OpenClaw prefers the signed desktop app
+On macOS, managed startup for Computer Use prefers the signed desktop app
 bundle at `/Applications/ChatGPT.app/Contents/Resources/codex`, then falls
 back to `/Applications/Codex.app/Contents/Resources/codex` for legacy
-standalone installs.
-That keeps Computer Use under the app bundle that owns the local
-desktop-control permissions. If the desktop app is not installed, OpenClaw
-falls back to the managed Codex binary installed beside the plugin. If an
-installed desktop app initializes with an unsupported app-server version,
-OpenClaw closes that child and retries the next managed binary candidate
-instead of letting a stale desktop app shadow the plugin-local fallback.
-Explicit `appServer.command` config or `OPENCLAW_CODEX_APP_SERVER_BIN` still
-overrides this managed selection.
+standalone installs. This also applies to one-off Computer Use status and
+install commands that start their own client. It keeps desktop control under
+the app bundle that owns the local macOS permissions. If the desktop app is
+not installed, OpenClaw falls back to the managed Codex binary installed
+beside the plugin. Ordinary managed Codex turns prefer that pinned package
+first so an older desktop app cannot shadow current model support. Explicit
+`appServer.command` config or `OPENCLAW_CODEX_APP_SERVER_BIN` still overrides
+this managed selection.
 
 ## Commands
 

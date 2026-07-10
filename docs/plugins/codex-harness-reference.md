@@ -59,6 +59,10 @@ codex app-server --listen stdio://
 This keeps the app-server version tied to the bundled `codex` plugin instead of
 whichever separate Codex CLI happens to be installed locally. Set
 `appServer.command` only when you intentionally want a different executable.
+Ordinary managed turns prefer this pinned package even when a macOS desktop
+bundle is installed. When [Computer Use](/plugins/codex-computer-use) is enabled,
+managed startup instead prefers the signed desktop app that owns the required
+macOS permissions.
 
 For an already-running app-server, use WebSocket transport:
 

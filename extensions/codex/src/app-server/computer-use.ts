@@ -677,7 +677,12 @@ function createComputerUseRequest(params: {
         signal: params.signal,
       });
   }
-  const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
+  // One-off install/status overrides may enable Computer Use without persisting
+  // config first, so keep the signed desktop entitlement owner for this client.
+  const runtime = resolveCodexAppServerRuntimeOptions({
+    pluginConfig: params.pluginConfig,
+    managedCommandOrder: "desktop-first",
+  });
   return async <T = JsonValue | undefined>(method: string, requestParams?: unknown) =>
     await requestCodexAppServerJson<T>({
       method,

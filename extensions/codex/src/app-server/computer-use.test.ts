@@ -3,6 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const requestCodexAppServerJsonMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./request.js", () => ({
+  requestCodexAppServerJson: requestCodexAppServerJsonMock,
+}));
+
 import {
   ensureCodexComputerUse,
   installCodexComputerUse,
@@ -57,6 +64,7 @@ describe("Codex Computer Use setup", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    requestCodexAppServerJsonMock.mockReset();
     for (const cleanupPath of cleanupPaths.splice(0)) {
       fs.rmSync(cleanupPath, { recursive: true, force: true });
     }
@@ -70,6 +78,23 @@ describe("Codex Computer Use setup", () => {
       reason: "disabled",
       message: "Computer Use is disabled.",
     });
+  });
+
+  it("starts one-off Computer Use setup with the signed desktop owner", async () => {
+    requestCodexAppServerJsonMock.mockRejectedValueOnce(new Error("captured start options"));
+
+    await expect(installCodexComputerUse({ pluginConfig: {} })).rejects.toThrow(
+      "captured start options",
+    );
+    expect(requestCodexAppServerJsonMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "experimentalFeature/enablement/set",
+        startOptions: expect.objectContaining({
+          commandSource: "managed",
+          managedCommandOrder: "desktop-first",
+        }),
+      }),
+    );
   });
 
   it("reports an installed Computer Use MCP server from a registered marketplace", async () => {

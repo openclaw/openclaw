@@ -70,6 +70,7 @@ export type CodexAppServerEffectiveApprovalPolicy = CodexApprovalPolicy;
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
+export type CodexManagedCommandOrder = "package-first" | "desktop-first";
 export type CodexDynamicToolsLoading = "searchable" | "direct";
 export type CodexPluginDestructivePolicy = boolean | "auto" | "ask";
 export type CodexPluginDestructiveApprovalMode = "allow" | "deny" | "auto" | "ask";
@@ -167,6 +168,8 @@ export type CodexAppServerStartOptions = {
   homeScope?: CodexAppServerHomeScope;
   command: string;
   commandSource?: CodexAppServerCommandSource;
+  /** Desktop-first is reserved for signed macOS Computer Use entitlement ownership. */
+  managedCommandOrder?: CodexManagedCommandOrder;
   managedFallbackCommandPaths?: string[];
   args: string[];
   url?: string;
@@ -533,6 +536,7 @@ export function resolveCodexAppServerRuntimeOptions(
     platform?: NodeJS.Platform;
     hostName?: string;
     openClawSandboxActive?: boolean;
+    managedCommandOrder?: CodexManagedCommandOrder;
   } = {},
 ): CodexAppServerRuntimeOptions {
   const env = params.env ?? process.env;
@@ -679,6 +683,11 @@ export function resolveCodexAppServerRuntimeOptions(
       : defaultPolicy?.approvalPolicy
         ? "requirements"
         : "implicit";
+  const managedCommandOrder =
+    params.managedCommandOrder ??
+    (resolveCodexComputerUseConfig({ pluginConfig: params.pluginConfig, env }).enabled
+      ? "desktop-first"
+      : "package-first");
 
   return {
     start: {
@@ -686,6 +695,9 @@ export function resolveCodexAppServerRuntimeOptions(
       homeScope,
       command,
       commandSource,
+      ...(commandSource === "managed" && managedCommandOrder === "desktop-first"
+        ? { managedCommandOrder }
+        : {}),
       args: args.length > 0 ? args : ["app-server", "--listen", "stdio://"],
       ...(url ? { url } : {}),
       ...(authToken ? { authToken } : {}),
@@ -898,6 +910,7 @@ export function codexAppServerStartOptionsKey(
     transport: options.transport,
     command: options.command,
     commandSource: options.commandSource ?? null,
+    managedCommandOrder: options.managedCommandOrder ?? "package-first",
     managedFallbackCommandPaths: [...(options.managedFallbackCommandPaths ?? [])],
     args: options.args,
     url: options.url ?? null,

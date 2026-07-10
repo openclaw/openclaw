@@ -1454,6 +1454,36 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     );
   });
 
+  it("uses the pinned managed package for ordinary turns and desktop ownership for Computer Use", () => {
+    expect(resolveRuntimeForTest({ pluginConfig: {} }).start.managedCommandOrder).toBeUndefined();
+    expect(
+      resolveRuntimeForTest({
+        pluginConfig: { computerUse: { enabled: true } },
+      }).start.managedCommandOrder,
+    ).toBe("desktop-first");
+    expect(
+      resolveRuntimeForTest({
+        pluginConfig: {},
+        managedCommandOrder: "desktop-first",
+      }).start.managedCommandOrder,
+    ).toBe("desktop-first");
+  });
+
+  it("does not change explicit commands when Computer Use is enabled", () => {
+    const start = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: { command: "/opt/codex/bin/codex" },
+        computerUse: { enabled: true },
+      },
+    }).start;
+
+    expectFields(start, "configured Computer Use start", {
+      command: "/opt/codex/bin/codex",
+      commandSource: "config",
+    });
+    expect(start.managedCommandOrder).toBeUndefined();
+  });
+
   it("rejects Codex app-server command overrides that include inline arguments", () => {
     expect(() =>
       resolveRuntimeForTest({
@@ -2563,6 +2593,26 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     ).toEqual(first);
     expect(first).not.toContain("sk-first");
     expect(second).not.toContain("sk-second");
+  });
+
+  it("derives distinct shared-client keys for managed binary order", () => {
+    const packageFirst = codexAppServerStartOptionsKey({
+      transport: "stdio",
+      command: "codex",
+      commandSource: "managed",
+      args: ["app-server"],
+      headers: {},
+    });
+    const desktopFirst = codexAppServerStartOptionsKey({
+      transport: "stdio",
+      command: "codex",
+      commandSource: "managed",
+      managedCommandOrder: "desktop-first",
+      args: ["app-server"],
+      headers: {},
+    });
+
+    expect(packageFirst).not.toEqual(desktopFirst);
   });
 
   it("derives distinct shared-client keys for distinct headers without exposing them", () => {
