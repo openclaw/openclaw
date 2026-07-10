@@ -24,7 +24,6 @@ import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { appendCronRunLog, resolveCronRunLogPruneOptions } from "../cron/run-log.js";
-import type { CronServiceContract } from "../cron/service-contract.js";
 import { CronService } from "../cron/service.js";
 import {
   resolveCronDeliverySessionKey,
@@ -63,22 +62,7 @@ import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
 } from "./server-cron-notifications.js";
-
-export type GatewayCronServiceContract = CronServiceContract & {
-  /** Temporarily disarm ticks without running startup recovery on resume. */
-  pauseScheduling(): void;
-  resumeScheduling(): void;
-  /** Scheduler-owned work not represented by active cron run markers. */
-  getSuspensionBlockerCount?(): number;
-};
-
-export type GatewayCronState = {
-  cron: GatewayCronServiceContract;
-  storePath: string;
-  cronEnabled: boolean;
-  reconcileExitWatchers?: () => Promise<void>;
-  stopExitWatchers?: () => void;
-};
+import type { GatewayCronState } from "./server-cron.types.js";
 
 function formatOnExitRunSummary(exit: CronExitResult): string {
   const lines = [

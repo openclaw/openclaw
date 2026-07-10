@@ -27,7 +27,7 @@ import type {
   ChatRunEntry,
   ChatRunRegistration,
 } from "../server-chat-state.js";
-import type { GatewayCronServiceContract } from "../server-cron.js";
+import type { GatewayCronServiceContract } from "../server-cron.types.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";

@@ -2,7 +2,7 @@
 // Combines mutable runtime handles with startup-resolved services for request contexts.
 import type { PluginServicesHandle } from "../plugins/services.js";
 import type { HooksConfigResolved } from "./hooks.js";
-import type { GatewayCronState } from "./server-cron.js";
+import type { GatewayCronState } from "./server-cron.types.js";
 import {
   createGatewayServerMutableState,
   type GatewayServerMutableState,
