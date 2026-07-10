@@ -61,7 +61,6 @@ function safeRm(dir) {
 const PID = process.pid;
 const ROOT = path.join(os.tmpdir(), `repro-103190-${PID}`);
 const SYS_SIM = path.join(ROOT, "sys-tmp");   // mimics /tmp  (mode 0o1777)
-const _SUBDIR = path.join(SYS_SIM, "openclaw"); // mimics /tmp/openclaw
 
 function setup() {
   safeRm(ROOT);
@@ -169,7 +168,7 @@ sub("Fix B — resolveTempRoot: detect bare system tmpdir, use subdirectory");
 
 {
   // Simulate the fix: if caller passes os.tmpdir() directly, use subdirectory
-  const systemTmpDirs = [os.tmpdir(), "/tmp", "/var/tmp", "/dev/shm"];
+  const systemTmpDirs = new Set([os.tmpdir(), "/tmp", "/var/tmp", "/dev/shm"]);
 
   // Test 1: caller passes os.tmpdir() → should redirect to subdirectory
   const callerA = os.tmpdir();
