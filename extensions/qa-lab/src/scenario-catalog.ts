@@ -79,7 +79,10 @@ const qaFlowScenarioExecutionSchema = z.object({
   suiteIsolation: z.literal("isolated").optional(),
   isolationReason: z.string().trim().min(1).optional(),
   transportPolicy: qaScenarioTransportPolicySchema.optional(),
+  providerMode: z.enum(["aimock", "live-frontier", "mock-openai"]).optional(),
   config: qaScenarioConfigSchema.optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  retryCount: z.number().int().min(0).max(1).optional(),
 });
 
 const qaTestFileScenarioExecutionBaseSchema = z.object({
@@ -280,6 +283,12 @@ const qaFlowSchema = z.object({
   steps: z.array(qaFlowStepSchema).min(1),
 });
 
+const qaFlowModuleSchema = z.object({
+  module: z.string().trim().min(1),
+  call: z.string().trim().min(1),
+  args: z.array(z.unknown()).optional(),
+});
+
 const qaSeedScenarioBodySchema = z.object({
   id: z.string().trim().min(1),
   surface: z.string().trim().min(1),
@@ -307,11 +316,18 @@ const qaSeedScenarioSchema = qaSeedScenarioBodySchema.extend({
   title: z.string().trim().min(1),
 });
 
+const qaScenarioFileBodySchema = qaSeedScenarioBodySchema
+  .omit({ objective: true, successCriteria: true })
+  .extend({
+    objective: z.string().trim().min(1).optional(),
+    successCriteria: z.array(z.string().trim().min(1)).min(1).optional(),
+  });
+
 const qaScenarioFileSchema = z
   .object({
     title: z.string().trim().min(1),
-    scenario: qaSeedScenarioBodySchema,
-    flow: qaFlowSchema.optional(),
+    scenario: qaScenarioFileBodySchema,
+    flow: z.union([qaFlowSchema, qaFlowModuleSchema]).optional(),
   })
   .superRefine((file, ctx) => {
     if (file.scenario.runtimeParityUsage && !file.scenario.runtimeParityTier) {
@@ -450,13 +466,49 @@ export function readQaScenarioPack(): QaScenarioPack {
       const parsedScenario = {
         ...parsedScenarioFile.scenario,
         title: parsedScenarioFile.title,
+        objective: parsedScenarioFile.scenario.objective ?? parsedScenarioFile.title,
+        successCriteria: parsedScenarioFile.scenario.successCriteria ?? [
+          `${parsedScenarioFile.title} completes successfully.`,
+        ],
       };
       const execution = parseQaYamlWithContext(
         qaScenarioExecutionSchema,
         parsedScenario.execution ?? {},
         relativePath,
       );
-      if (execution.kind === "flow" && !parsedScenarioFile.flow) {
+      const moduleFlow =
+        parsedScenarioFile.flow && "module" in parsedScenarioFile.flow
+          ? {
+              steps: [
+                {
+                  name: parsedScenarioFile.title,
+                  actions: [
+                    {
+                      set: "scenarioModule",
+                      value: {
+                        expr: `await qaImport(${JSON.stringify(parsedScenarioFile.flow.module)})`,
+                      },
+                    },
+                    {
+                      call: `scenarioModule.${parsedScenarioFile.flow.call}`,
+                      ...(parsedScenarioFile.flow.args
+                        ? { args: parsedScenarioFile.flow.args }
+                        : {}),
+                      saveAs: "result",
+                    },
+                  ],
+                  detailsExpr:
+                    "result.details ?? (result.artifacts ? JSON.stringify(result.artifacts, null, 2) : undefined)",
+                },
+              ],
+            }
+          : undefined;
+      const flow =
+        moduleFlow ??
+        (parsedScenarioFile.flow && "steps" in parsedScenarioFile.flow
+          ? parsedScenarioFile.flow
+          : undefined);
+      if (execution.kind === "flow" && !flow) {
         throw new Error(`${relativePath}: flow scenarios must define a top-level flow block`);
       }
       return {
@@ -464,7 +516,7 @@ export function readQaScenarioPack(): QaScenarioPack {
         sourcePath: relativePath,
         execution: {
           ...execution,
-          ...(parsedScenarioFile.flow ? { flow: parsedScenarioFile.flow } : {}),
+          ...(flow ? { flow } : {}),
         },
       } satisfies QaSeedScenarioWithSource;
     })(),

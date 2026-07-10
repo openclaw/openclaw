@@ -1455,6 +1455,9 @@ importers:
 
   extensions/qa-lab:
     dependencies:
+      '@openclaw/matrix':
+        specifier: workspace:*
+        version: link:../matrix
       '@copilotkit/aimock':
         specifier: 1.35.0
         version: 1.35.0(vitest@4.1.9)
@@ -1503,17 +1506,7 @@ importers:
         version: link:../..
 
   extensions/qa-matrix:
-    dependencies:
-      pretty-ms:
-        specifier: 9.3.0
-        version: 9.3.0
-      undici:
-        specifier: 8.5.0
-        version: 8.5.0
     devDependencies:
-      '@openclaw/matrix':
-        specifier: workspace:*
-        version: link:../matrix
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk

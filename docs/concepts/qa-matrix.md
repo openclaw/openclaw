@@ -26,10 +26,13 @@ Plain `pnpm openclaw qa matrix` runs `--profile all` and does not stop on first 
 1. Provisions a disposable Tuwunel homeserver in Docker (default image `ghcr.io/matrix-construct/tuwunel:v1.5.1`, server name `matrix-qa.test`, port `28008`) behind a bounded redacting request/response recorder.
 2. Registers three temporary users: `driver` (sends inbound traffic), `sut` (the OpenClaw Matrix account under test), `observer` (third-party traffic capture).
 3. Seeds rooms required by the selected scenarios (main, threading, media, restart, secondary, allowlist, E2EE, verification DM, etc.).
-4. Runs the substrate-neutral `matrix-qa-v1` protocol probe against the recorded Tuwunel boundary. Unit tests prove the probe contract with the Matrix protocol fixture; the canonical QA transport adapter host in [#99707](https://github.com/openclaw/openclaw/pull/99707) owns real Crabline target wiring.
+4. Records the Tuwunel request/response boundary with the `matrix-qa-v1`
+   redaction profile and attributes traffic to the active QA Lab scenario.
 5. Starts a child OpenClaw gateway with the real Matrix plugin scoped to the SUT account.
-6. Runs scenarios in sequence, observing events through the driver/observer Matrix clients and deriving route/state expectations from the recorded traffic.
-7. Tears down the homeserver, writes report and evidence artifacts, then exits.
+6. Runs the selected YAML scenarios through the shared QA Lab flow host while
+   driver and observer Matrix clients capture transport evidence.
+7. Tears down the homeserver and writes the normal QA Lab suite report,
+   summary, and evidence artifacts.
 
 ## CLI
 
@@ -63,17 +66,19 @@ Matrix QA does not accept `--credential-source` or `--credential-role`. The lane
 
 ## Profiles
 
-| Profile         | Use it for                                                                                                                                                                                                            |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `all` (default) | Full catalog. Slow but exhaustive.                                                                                                                                                                                    |
-| `fast`          | Release-gate subset that exercises the imperative live transport contract: mention gating, allowlist block, reply shape, restart resume, reaction observation, exec approval metadata delivery, and E2EE basic reply. |
-| `transport`     | Transport-level threading, DM, room, autojoin, mention/allowlist, approval, and reaction scenarios.                                                                                                                   |
-| `media`         | Image, audio, video, PDF, EPUB attachment coverage.                                                                                                                                                                   |
-| `e2ee-smoke`    | Minimum E2EE coverage: basic encrypted reply, thread follow-up, bootstrap success.                                                                                                                                    |
-| `e2ee-deep`     | Exhaustive E2EE state-loss, backup, key, and recovery scenarios.                                                                                                                                                      |
-| `e2ee-cli`      | `openclaw matrix encryption setup` and `verify *` CLI scenarios driven through the QA harness.                                                                                                                        |
+| Profile         | Use it for                                                                                                                                 |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `all` (default) | Full catalog. Slow but exhaustive.                                                                                                         |
+| `release`       | Small release-critical pair covering the channel baseline and live allowlist reload.                                                       |
+| `fast`          | Focused transport subset covering thread/reply shape, reactions, approvals, mention and sender policy, bot gating, and an encrypted reply. |
+| `transport`     | Transport-level threading, DM, room, autojoin, mention/allowlist, approval, and reaction scenarios.                                        |
+| `media`         | Image, audio, video, PDF, EPUB attachment coverage.                                                                                        |
+| `e2ee-smoke`    | Minimum E2EE coverage: basic encrypted reply, thread follow-up, bootstrap success.                                                         |
+| `e2ee-deep`     | Exhaustive E2EE state-loss, backup, key, and recovery scenarios.                                                                           |
+| `e2ee-cli`      | `openclaw matrix encryption setup` and `verify *` CLI scenarios driven through the QA harness.                                             |
 
-The exact mapping lives in `extensions/qa-matrix/src/runners/contract/scenario-catalog.ts`.
+The exact mapping lives in
+`extensions/qa-lab/src/live-transports/matrix/profiles.ts`.
 
 ## Scenarios
 
@@ -89,7 +94,9 @@ The shared Matrix adapter exposes these canonical YAML scenarios through `opencl
 `subagent-thread-spawn` remains available through explicit `--scenario subagent-thread-spawn`
 selection, but is not part of the default shared Matrix set until live child-completion proof is stable.
 
-The remaining imperative scenario id list is the `MatrixQaScenarioId` union in `extensions/qa-matrix/src/runners/contract/scenario-catalog.ts`. Categories:
+The Matrix-specific scenarios are declarative files under
+`qa/scenarios/channels/matrix-*.yaml`; their module-backed implementations live
+under `extensions/qa-lab/src/live-transports/matrix/scenarios/`. Categories:
 
 - threading: `matrix-thread-root-preservation`, `matrix-thread-nested-reply-shape`
 - top-level / DM / room: `matrix-top-level-reply-shape`, `matrix-room-*`, `matrix-dm-*`
@@ -103,43 +110,46 @@ The remaining imperative scenario id list is the `MatrixQaScenarioId` union in `
 - E2EE: `matrix-e2ee-*` (basic reply, thread follow-up, bootstrap, recovery key lifecycle, state-loss variants, server backup behavior, device hygiene, SAS / QR / DM verification, restart, artifact redaction)
 - E2EE CLI: `matrix-e2ee-cli-*` (encryption setup, idempotent setup, bootstrap failure, recovery-key lifecycle, multi-account, gateway-reply round-trip, self-verification)
 
-Pass `--scenario <id>` (repeatable) to run a hand-picked set; combine with `--profile all` to ignore profile gating.
+Pass `--scenario <id>` (repeatable) to run a hand-picked set. Explicit scenario
+ids take precedence over profile selection.
 
 ## Environment variables
 
-| Variable                                | Default                                   | Effect                                                                                                                                                                                         |
-| --------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OPENCLAW_QA_MATRIX_TIMEOUT_MS`         | `1800000` (30 min)                        | Hard upper bound on the entire run.                                                                                                                                                            |
-| `OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS`  | `45000`                                   | Bound for the initial canary reply. Release CI raises this on shared runners so a slow first gateway turn does not fail before scenario coverage starts.                                       |
-| `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS` | `8000`                                    | Quiet window for negative no-reply assertions. Clamped to `<=` the run timeout.                                                                                                                |
-| `OPENCLAW_QA_MATRIX_CLEANUP_TIMEOUT_MS` | `90000`                                   | Bound for Docker teardown. Failure surfaces include the recovery `docker compose ... down --remove-orphans` command.                                                                           |
-| `OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE`      | `ghcr.io/matrix-construct/tuwunel:v1.5.1` | Override the homeserver image when validating against a different Tuwunel version.                                                                                                             |
-| `OPENCLAW_QA_MATRIX_PROGRESS`           | on                                        | `0` silences `[matrix-qa] ...` progress lines on stderr. `1` forces them on.                                                                                                                   |
-| `OPENCLAW_QA_MATRIX_CAPTURE_CONTENT`    | redacted                                  | `1` keeps message body and `formatted_body` in `matrix-qa-observed-events.json`. Default redacts to keep CI artifacts safe.                                                                    |
-| `OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT` | off                                       | `1` skips the deterministic `process.exit` after artifact write. The default forces exit because matrix-js-sdk's native crypto handles can keep the event loop alive past artifact completion. |
-| `OPENCLAW_RUN_NODE_OUTPUT_LOG`          | unset                                     | When set by an outer launcher (e.g. `scripts/run-node.mjs`), Matrix QA reuses that log path instead of starting its own tee.                                                                   |
+| Variable                                | Default                                   | Effect                                                                                                                                                                   |
+| --------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS` | `8000`                                    | Quiet window for negative no-reply assertions, clamped to the active scenario timeout.                                                                                   |
+| `OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE`      | `ghcr.io/matrix-construct/tuwunel:v1.5.1` | Override the homeserver image when validating against a different Tuwunel version.                                                                                       |
+| `OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT` | off                                       | `1` skips the compatibility command's deterministic `process.exit`. The default forces exit because matrix-js-sdk native crypto handles can outlive completed artifacts. |
 
 ## Output artifacts
 
-Written to `--output-dir` (default `<repo>/.artifacts/qa-e2e/matrix-<timestamp>` so successive runs do not overwrite each other):
+Written to `--output-dir` (default
+`<repo>/.artifacts/qa-e2e/suite-<run-id>` so successive runs do not overwrite
+each other):
 
-- `matrix-qa-report.md`: Markdown protocol report (what passed, failed, was skipped, and why).
-- `matrix-qa-summary.json`: Structured summary suitable for CI parsing and dashboards.
-- `matrix-qa-route-state-manifest.json`: Dynamic `matrix-qa-v1` inventory keyed by scenario id. It records redacted route/body shapes, request ordering, observed retries, errors, sync-token continuity, and device/key/media/backup state families observed during that run. This is executable evidence, not a checked-in baseline.
-- `matrix-qa-observed-events.json`: Observed Matrix events from the driver and observer clients. Bodies are redacted unless `OPENCLAW_QA_MATRIX_CAPTURE_CONTENT=1`; approval metadata is summarized with selected safe fields and a truncated command preview.
-- `matrix-qa-output.log`: Combined stdout/stderr from the run. If `OPENCLAW_RUN_NODE_OUTPUT_LOG` is set, the outer launcher's log is reused instead.
+- `qa-suite-report.md`: Markdown protocol report showing passed and failed
+  scenarios and step details.
+- `qa-suite-summary.json`: Structured suite and runtime summary for CI and
+  comparison tooling.
+- `qa-evidence.json`: Normalized scenario evidence with Matrix-specific
+  artifacts referenced from scenario details.
+- `matrix-harness-*/matrix-qa-harness.json`: Redacted disposable homeserver
+  manifest for the adapter instance.
 
 ## Triage tips
 
 - **Run hangs near the end:** `matrix-js-sdk` native crypto handles can outlive the harness. The default forces a clean `process.exit` after artifact write; if you set `OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT=1`, expect the process to linger.
 - **Cleanup error:** look for the printed recovery command (a `docker compose ... down --remove-orphans` invocation) and run it manually to release the homeserver port.
 - **Flaky negative-assertion windows in CI:** lower `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS` (default 8 s) when CI is fast; raise it on slow shared runners.
-- **Need redacted bodies for a bug report:** rerun with `OPENCLAW_QA_MATRIX_CAPTURE_CONTENT=1` and attach `matrix-qa-observed-events.json`. Treat the resulting artifact as sensitive.
 - **Different Tuwunel version:** point `OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE` at the version under test. The lane checks in only the pinned default image.
 
 ## Live transport contract
 
-Matrix is one of three live transport lanes (Matrix, Telegram, Discord) that share a single contract checklist defined in [QA overview: Live transport coverage](/concepts/qa-e2e-automation#live-transport-coverage). `qa-channel` remains the broad synthetic suite and is intentionally not part of that matrix.
+Matrix is one of the live transport lanes that share a single contract
+checklist defined in [QA overview: Live transport
+coverage](/concepts/qa-e2e-automation#live-transport-coverage). `qa-channel`
+remains the broad synthetic suite and is intentionally not part of that
+matrix.
 
 ## Related
 

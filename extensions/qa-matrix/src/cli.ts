@@ -1,23 +1,13 @@
 // Qa Matrix plugin module implements cli behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { loadQaRuntimeModule } from "openclaw/plugin-sdk/qa-runner-runtime";
 import {
-  createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration,
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
 } from "./shared/live-transport-cli.js";
 
-type MatrixQaCliRuntime = typeof import("./cli.runtime.js");
-type MatrixQaAdapterRuntime = typeof import("./adapter.runtime.js");
-
 const DISABLE_MATRIX_QA_FORCE_EXIT_ENV = "OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT";
-
-const loadMatrixQaCliRuntime = createLazyCliRuntimeLoader<MatrixQaCliRuntime>(
-  () => import("./cli.runtime.js"),
-);
-const loadMatrixQaAdapterRuntime = createLazyCliRuntimeLoader<MatrixQaAdapterRuntime>(
-  () => import("./adapter.runtime.js"),
-);
 
 async function flushProcessStream(stream: NodeJS.WriteStream) {
   if (stream.destroyed || !stream.writable) {
@@ -41,18 +31,20 @@ async function exitMatrixQaCommand(code: number): Promise<never> {
 }
 
 async function runQaMatrix(opts: LiveTransportQaCommandOptions) {
-  const runtime = await loadMatrixQaCliRuntime();
+  const run = () => loadQaRuntimeModule().runQaMatrixCommand(opts);
   if (process.env[DISABLE_MATRIX_QA_FORCE_EXIT_ENV] === "1") {
-    await runtime.runQaMatrixCommand(opts);
+    await run();
     return;
   }
+  let exitCode: number;
   try {
-    await runtime.runQaMatrixCommand(opts);
-    await exitMatrixQaCommand(0);
+    await run();
+    exitCode = process.exitCode === undefined || process.exitCode === 0 ? 0 : 1;
   } catch (error) {
     process.stderr.write(`${formatErrorMessage(error)}\n`);
-    await exitMatrixQaCommand(1);
+    exitCode = 1;
   }
+  await exitMatrixQaCommand(exitCode);
 }
 
 const matrixQaAdapterFactory: NonNullable<LiveTransportQaCliRegistration["adapterFactory"]> = {
@@ -74,7 +66,7 @@ const matrixQaAdapterFactory: NonNullable<LiveTransportQaCliRegistration["adapte
   ],
   matches: ({ channelId, driver }) => driver === "live" && channelId === "matrix",
   async create(context) {
-    return await (await loadMatrixQaAdapterRuntime()).createMatrixQaTransportAdapter(context);
+    return await loadQaRuntimeModule().createMatrixQaTransportAdapter(context);
   },
 };
 

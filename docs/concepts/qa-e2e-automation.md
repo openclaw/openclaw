@@ -15,10 +15,11 @@ Pieces:
 
 - `extensions/qa-channel`: synthetic message channel with DM, channel, thread,
   reaction, edit, and delete surfaces.
-- `extensions/qa-lab`: debugger UI and QA bus for observing the transcript,
-  injecting inbound messages, and exporting a Markdown report.
-- `extensions/qa-matrix`: live-transport adapter that drives the real Matrix
-  plugin inside a child QA gateway.
+- `extensions/qa-lab`: debugger UI, QA bus, and live Matrix scenario runner for
+  observing the transcript, injecting inbound messages, and exporting a
+  Markdown report.
+- `extensions/qa-matrix`: temporary source-checkout compatibility registration
+  that forwards `qa matrix` to QA Lab.
 - `qa/`: repo-backed seed assets for the kickoff task and baseline QA
   scenarios.
 - [Mantis](/concepts/mantis): before/after live verification for bugs that
@@ -54,8 +55,9 @@ script aliases; both forms work.
 | `qa whatsapp`                                       | Live transport lane against real WhatsApp Web accounts.                                                                                                                                                                                                             |
 | `qa mantis`                                         | Before/after verification runner for live transport bugs, with Discord status-reactions evidence, Crabbox desktop/browser smoke, and Slack-in-VNC smoke. See [Mantis](/concepts/mantis) and [Mantis Slack Desktop Runbook](/concepts/mantis-slack-desktop-runbook). |
 
-`qa matrix` is registered as a runner plugin (`extensions/qa-matrix`); every
-other lane above is built into `qa-lab` directly.
+`qa matrix` is temporarily registered by the `qa-matrix` compatibility plugin;
+its profiles, scenarios, adapter, and runtime live in `qa-lab` with the other
+live transport lanes.
 
 ### Profile-backed `qa run`
 
@@ -187,9 +189,9 @@ The full CLI reference, profile/scenario catalog, env vars, and artifact
 layout for this lane live in [Matrix QA](/concepts/qa-matrix). At a glance: it
 provisions a disposable Tuwunel homeserver in Docker, registers temporary
 driver/SUT/observer users, runs the real Matrix plugin inside a child QA
-gateway scoped to that transport (no `qa-channel`), then writes a Markdown
-report, JSON summary, observed-events artifact, and combined output log under
-`.artifacts/qa-e2e/matrix-<timestamp>/`.
+gateway scoped to that transport (no `qa-channel`), then writes the shared QA
+Lab report, summary, and evidence artifacts under
+`.artifacts/qa-e2e/suite-<run-id>/`.
 
 The scenarios cover transport behavior that unit tests cannot prove end to
 end: mention gating, allow-bot policies, allowlists, top-level and threaded

@@ -23,6 +23,7 @@ type QaRunnerTransportPolicy = {
 
 type QaRunnerAdapterOptions = {
   repoRoot?: string;
+  scenarioIds?: readonly string[];
   sutAccountId?: string;
   credentialSource?: string;
   credentialRole?: string;
@@ -33,6 +34,27 @@ type QaRunnerMessageRecorder = {
   addInboundMessage: (input: QaBusInboundMessageInput) => QaBusMessage | Promise<QaBusMessage>;
   addOutboundMessage: (input: QaBusOutboundMessageInput) => QaBusMessage | Promise<QaBusMessage>;
   editMessage: (input: QaBusEditMessageInput) => QaBusMessage | Promise<QaBusMessage>;
+};
+
+type QaRunnerTransportFlowPreparationInput = {
+  config: Record<string, unknown>;
+  gateway: {
+    baseUrl: string;
+    tempRoot: string;
+    workspaceDir: string;
+    runtimeEnv: NodeJS.ProcessEnv;
+    call: (method: string, params?: unknown, options?: { timeoutMs?: number }) => Promise<unknown>;
+    restartAfterStateMutation?: (
+      mutateState: (context: {
+        configPath: string;
+        runtimeEnv: NodeJS.ProcessEnv;
+        stateDir: string;
+        tempRoot: string;
+      }) => Promise<void>,
+    ) => Promise<void>;
+  };
+  outputDir: string;
+  timeoutMs: number;
 };
 
 type QaRunnerTransportAdapterDefinition = {
@@ -80,6 +102,9 @@ type QaRunnerTransportAdapterDefinition = {
     replyTo: string;
   };
   createRuntimeEnvPatch?: () => NodeJS.ProcessEnv;
+  prepareFlow?: (
+    input: QaRunnerTransportFlowPreparationInput,
+  ) => Promise<Record<string, unknown> | void>;
   handleAction: (params: {
     action: "delete" | "edit" | "react" | "thread-create";
     args: Record<string, unknown>;
@@ -122,6 +147,7 @@ type QaRunnerRuntimeSurface = {
 };
 
 type QaRuntimeSurface = {
+  createMatrixQaTransportAdapter: QaRunnerTransportFactory["create"];
   defaultQaRuntimeModelForMode: (
     mode: string,
     options?: {
@@ -129,6 +155,21 @@ type QaRuntimeSurface = {
       preferredLiveModel?: string;
     },
   ) => string;
+  runQaMatrixCommand: (options: {
+    allowFailures?: boolean;
+    alternateModel?: string;
+    credentialRole?: string;
+    credentialSource?: string;
+    failFast?: boolean;
+    fastMode?: boolean;
+    outputDir?: string;
+    primaryModel?: string;
+    profile?: string;
+    providerMode?: string;
+    repoRoot?: string;
+    scenarioIds?: string[];
+    sutAccountId?: string;
+  }) => Promise<unknown>;
   startQaLiveLaneGateway: (...args: unknown[]) => Promise<unknown>;
 };
 

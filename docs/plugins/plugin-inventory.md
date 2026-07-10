@@ -343,4 +343,4 @@ Each entry lists the package, distribution route, and description.
 
 - **[qa-lab](/plugins/reference/qa-lab)** (`@openclaw/qa-lab`) - source checkout only. OpenClaw QA lab plugin with private debugger UI and scenario runner.
 
-- **[qa-matrix](/plugins/reference/qa-matrix)** (`@openclaw/qa-matrix`) - source checkout only. Matrix QA transport runner and substrate.
+- **[qa-matrix](/plugins/reference/qa-matrix)** (`@openclaw/qa-matrix`) - source checkout only. Compatibility registration for the QA Lab Matrix runner.

@@ -41,6 +41,10 @@ export {
 } from "./src/runtime-api.js";
 export { startQaLiveLaneGateway } from "./src/live-transports/shared/live-gateway.runtime.js";
 export {
+  createMatrixQaTransportAdapter,
+  runQaMatrixCommand,
+} from "./src/live-transports/matrix/facade.runtime.js";
+export {
   createQaChannelDriverLifecycle,
   runQaChannelDriverLifecycleScenarios,
   type QaChannelDriverLifecycle,

@@ -2,14 +2,9 @@
   "name": "@openclaw/qa-matrix",
   "version": "2026.7.2",
   "private": true,
-  "description": "OpenClaw Matrix QA runner plugin",
+  "description": "Compatibility registration for the QA Lab Matrix runner",
   "type": "module",
-  "dependencies": {
-    "pretty-ms": "9.3.0",
-    "undici": "8.5.0"
-  },
   "devDependencies": {
-    "@openclaw/matrix": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },

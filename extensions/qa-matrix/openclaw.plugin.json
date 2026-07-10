@@ -4,7 +4,7 @@
     "onStartup": false
   },
   "name": "QA Matrix",
-  "description": "Matrix QA transport runner and substrate",
+  "description": "Compatibility registration for the QA Lab Matrix runner",
   "qaRunners": [
     {
       "commandName": "matrix",

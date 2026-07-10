@@ -2574,6 +2574,22 @@ describe("qa mock openai server", () => {
     expect(outputText(childPayload)).toBe(childToken);
   });
 
+  it("does not replay a parent sessions_spawn instruction in the child session", async () => {
+    const server = await startMockServer();
+    const childToken = "QA_SUBAGENT_CHILD_WITH_PARENT_CONTEXT";
+
+    const childPayload = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      input: [
+        makeUserInput(explicitSessionsSpawnPrompt(childToken)),
+        makeUserInput(threadSubagentTask(childToken)),
+      ],
+    });
+    expect(outputText(childPayload)).toBe(childToken);
+  });
+
   it("plans memory tools and serves mock image generations", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",

@@ -13,7 +13,7 @@ scenario:
   docsRefs:
     - docs/channels/matrix.md
   codeRefs:
-    - extensions/qa-matrix/src/adapter.runtime.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
     kind: flow
     channel: matrix
@@ -35,24 +35,16 @@ flow:
           args:
             - env: { ref: env }
               patch:
-                channels:
-                  matrix:
-                    accounts:
-                      sut:
-                        groupAllowFrom:
-                          expr: "[env.gateway.runtimeEnv.OPENCLAW_QA_MATRIX_DRIVER_USER_ID, env.gateway.runtimeEnv.OPENCLAW_QA_MATRIX_OBSERVER_USER_ID]"
-                gateway:
-                  reload:
-                    mode: "off"
+                expr: "({ channels: { matrix: { accounts: { [env.gateway.runtimeEnv.OPENCLAW_QA_MATRIX_SUT_ACCOUNT_ID]: { groupAllowFrom: [env.gateway.runtimeEnv.OPENCLAW_QA_MATRIX_DRIVER_USER_ID, env.gateway.runtimeEnv.OPENCLAW_QA_MATRIX_OBSERVER_USER_ID] } } } }, gateway: { reload: { mode: 'off' } } })"
               replacePaths:
-                - channels.matrix.accounts.sut.groupAllowFrom
+                - expr: "`channels.matrix.accounts.${env.gateway.runtimeEnv.OPENCLAW_QA_MATRIX_SUT_ACCOUNT_ID}.groupAllowFrom`"
               restartDelayMs: 300000
         - resetTransport: true
         - set: acceptedMarker
           value:
             expr: "`MATRIX_QA_GROUP_RELOAD_ACCEPTED_${randomUUID().slice(0, 8).toUpperCase()}`"
         - sendInbound:
-            conversation: { id: qa-matrix-room, kind: group }
+            conversation: { id: qa-lab-matrix-room, kind: group }
             senderId: observer
             senderName: QA Observer
             text:
@@ -67,23 +59,15 @@ flow:
           args:
             - env: { ref: env }
               patch:
-                channels:
-                  matrix:
-                    accounts:
-                      sut:
-                        groupAllowFrom:
-                          expr: "[env.gateway.runtimeEnv.OPENCLAW_QA_MATRIX_DRIVER_USER_ID]"
-                gateway:
-                  reload:
-                    mode: "off"
+                expr: "({ channels: { matrix: { accounts: { [env.gateway.runtimeEnv.OPENCLAW_QA_MATRIX_SUT_ACCOUNT_ID]: { groupAllowFrom: [env.gateway.runtimeEnv.OPENCLAW_QA_MATRIX_DRIVER_USER_ID] } } } }, gateway: { reload: { mode: 'off' } } })"
               replacePaths:
-                - channels.matrix.accounts.sut.groupAllowFrom
+                - expr: "`channels.matrix.accounts.${env.gateway.runtimeEnv.OPENCLAW_QA_MATRIX_SUT_ACCOUNT_ID}.groupAllowFrom`"
               restartDelayMs: 300000
         - set: blockedMarker
           value:
             expr: "`MATRIX_QA_GROUP_RELOAD_REMOVED_${randomUUID().slice(0, 8).toUpperCase()}`"
         - sendInbound:
-            conversation: { id: qa-matrix-room, kind: group }
+            conversation: { id: qa-lab-matrix-room, kind: group }
             senderId: observer
             senderName: QA Observer
             text:

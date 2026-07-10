@@ -200,6 +200,7 @@ describe("qa suite runtime flow", () => {
         },
         waitForCondition: vi.fn(),
       },
+      outputDir: "/artifacts",
       repoRoot: "/repo",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.6-luna",

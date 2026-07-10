@@ -1,5 +1,5 @@
 ---
-summary: "Matrix QA transport runner and substrate."
+summary: "Compatibility registration for the QA Lab Matrix runner."
 read_when:
   - You are installing, configuring, or auditing the qa-matrix plugin
 title: "QA Matrix plugin"
@@ -7,7 +7,7 @@ title: "QA Matrix plugin"
 
 # QA Matrix plugin
 
-Matrix QA transport runner and substrate.
+Compatibility registration for the QA Lab Matrix runner.
 
 ## Distribution
 

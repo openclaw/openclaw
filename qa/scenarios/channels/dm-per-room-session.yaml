@@ -23,6 +23,7 @@ scenario:
   codeRefs:
     - extensions/matrix/src/session-route.ts
     - extensions/matrix/src/matrix/monitor/handler.ts
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
     kind: flow
     channel: matrix
