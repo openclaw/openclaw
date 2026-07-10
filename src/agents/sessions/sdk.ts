@@ -77,6 +77,8 @@ export interface CreateAgentSessionOptions {
   cwd?: string;
   /** Global config directory. Default: ~/.openclaw/agents/default */
   agentDir?: string;
+  /** Trusted workspace root for context-file ancestor walk boundary. Default: cwd */
+  workspaceDir?: string;
 
   /** Auth storage for credentials. Default: AuthStorage.create(agentDir/auth.json) */
   authStorage?: AuthStorage;
@@ -255,7 +257,12 @@ export async function createAgentSession(
     options.sessionManager ?? SessionManager.create(cwd, getDefaultSessionDir(cwd, agentDir));
 
   if (!resourceLoader) {
-    resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
+    resourceLoader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      workspaceDir: options.workspaceDir,
+      settingsManager,
+    });
     await resourceLoader.reload();
   }
 

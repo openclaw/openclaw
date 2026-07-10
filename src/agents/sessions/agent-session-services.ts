@@ -45,6 +45,8 @@ export interface AgentSessionRuntimeDiagnostic {
 export interface CreateAgentSessionServicesOptions {
   cwd: string;
   agentDir?: string;
+  /** Trusted workspace root for context-file ancestor walk boundary. */
+  workspaceDir?: string;
   authStorage?: AuthStorage;
   settingsManager?: SettingsManager;
   modelRegistry?: ModelRegistry;
@@ -155,6 +157,7 @@ export async function createAgentSessionServices(
     ...options.resourceLoaderOptions,
     cwd,
     agentDir,
+    workspaceDir: options.workspaceDir,
     settingsManager,
   });
   await resourceLoader.reload();
