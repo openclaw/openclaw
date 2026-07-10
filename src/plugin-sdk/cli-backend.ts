@@ -15,16 +15,6 @@ export type {
   CliBackendSideQuestionToolMode,
   CliBackendThinkingLevel,
 } from "../plugins/types.js";
-export type {
-  CliBackendAuthForwardingDecision,
-  CliBackendAuthProfileCredential,
-  CliBackendAuthProfileForwardingPolicy,
-  CliBackendForwardedCredential,
-  CliBackendForwardedCredentialKind,
-  CliBackendForwardedCredentialResolver,
-  CliBackendResolveForwardedCredentialContext,
-} from "../plugins/cli-backend-auth-forwarding.js";
-export { resolveCliBackendAuthForwarding } from "../plugins/cli-backend-auth-forwarding.js";
 export {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
