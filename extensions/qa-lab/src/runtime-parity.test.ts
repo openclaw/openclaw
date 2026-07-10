@@ -4,6 +4,7 @@ import {
   __testing,
   captureRuntimeParityCell,
   isRuntimeParityResultPass,
+  resolveRuntimeParityUsagePolicy,
   runRuntimeParityScenario,
   type RuntimeId,
   type RuntimeParityCell,
@@ -100,6 +101,37 @@ describe("runtime parity", () => {
     });
 
     expect(result.drift).toBe("none");
+    expect(result.runtimeParityUsage).toEqual({
+      expectation: "assistant-message-required",
+    });
+  });
+
+  it("preserves explicit usage-not-applicable metadata on parity results", async () => {
+    const result = await runRuntimeParityScenario({
+      scenarioId: "local-fixture",
+      runtimeParityUsage: {
+        expectation: "not-applicable",
+        reason: " Local fixture only; no assistant turn runs. ",
+      },
+      runCell: async (runtime) => ({
+        scenarioStatus: "pass",
+        cell: makeRuntimeParityCell(runtime, []),
+      }),
+    });
+
+    expect(result.runtimeParityUsage).toEqual({
+      expectation: "not-applicable",
+      reason: "Local fixture only; no assistant turn runs.",
+    });
+  });
+
+  it("defaults malformed usage metadata to assistant-message-required", () => {
+    expect(resolveRuntimeParityUsagePolicy({ expectation: "not-applicable" })).toEqual({
+      expectation: "assistant-message-required",
+    });
+    expect(
+      resolveRuntimeParityUsagePolicy({ expectation: "not-applicable", reason: "   " }),
+    ).toEqual({ expectation: "assistant-message-required" });
   });
 
   it("classifies planned-only matching tool calls as failure-mode", async () => {
