@@ -112,7 +112,9 @@ describe("progress narration", () => {
     expect(text).not.toContain("\n");
   });
 
-  it("resolves narration on by default only in progress mode", () => {
+  it("resolves the narration toggle with default on", () => {
+    // Mode gating is the caller's job; unset config keeps narration available.
+    expect(resolveChannelStreamingProgressNarration(undefined)).toBe(true);
     expect(resolveChannelStreamingProgressNarration({ streaming: { mode: "progress" } })).toBe(
       true,
     );
@@ -121,8 +123,5 @@ describe("progress narration", () => {
         streaming: { mode: "progress", progress: { narration: false } },
       }),
     ).toBe(false);
-    expect(resolveChannelStreamingProgressNarration({ streaming: { mode: "partial" } })).toBe(
-      false,
-    );
   });
 });

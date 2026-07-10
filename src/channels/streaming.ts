@@ -829,15 +829,13 @@ export function resolveChannelStreamingProgressCommentary(
   return asBoolean(progress?.commentary) ?? defaultValue;
 }
 
+// Pure toggle: progress-mode gating stays with the caller because channels
+// resolve their own default stream mode (Discord defaults to "progress").
 export function resolveChannelStreamingProgressNarration(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue = true,
 ): boolean {
-  const config = getChannelStreamingConfigObject(entry);
-  if (resolveChannelPreviewStreamMode(entry, "partial") !== "progress") {
-    return false;
-  }
-  const progress = asObjectRecord(config?.progress);
+  const progress = asObjectRecord(getChannelStreamingConfigObject(entry)?.progress);
   return asBoolean(progress?.narration) ?? defaultValue;
 }
 
