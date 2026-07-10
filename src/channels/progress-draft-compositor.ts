@@ -294,9 +294,14 @@ export function createChannelProgressDraftCompositor(params: {
         // Narrator stopped (failures/cap): fall back to the raw tool lines
         // instead of pinning stale narration for the rest of the turn.
         narrationText = "";
-        const text = formatDraftText();
-        if (text) {
-          return await render();
+        const hasFallbackLines = lines.some((line) =>
+          Boolean(normalizeChannelProgressDraftLineIdentity(line)),
+        );
+        if (hasFallbackLines) {
+          const text = formatDraftText();
+          if (text) {
+            return await render();
+          }
         }
         if (!lastRenderedText) {
           return false;

@@ -319,7 +319,7 @@ describe("createChannelProgressDraftCompositor", () => {
     const update = vi.fn();
     const deleteCurrent = vi.fn();
     const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: false } } },
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
       mode: "progress",
       active: true,
       seed: "test",
@@ -328,7 +328,10 @@ describe("createChannelProgressDraftCompositor", () => {
     });
 
     await progress.pushNarrationProgress("Looking at the repository.");
-    expect(update).toHaveBeenLastCalledWith("Looking at the repository.", expect.anything());
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\nLooking at the repository.",
+      expect.anything(),
+    );
 
     await progress.pushNarrationProgress("");
 
