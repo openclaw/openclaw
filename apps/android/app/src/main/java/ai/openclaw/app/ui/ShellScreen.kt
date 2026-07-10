@@ -331,7 +331,8 @@ private fun CanvasOverlay(
   onClose: () -> Unit,
 ) {
   BackHandler(enabled = visible, onBack = onClose)
-  Box(modifier = Modifier.fillMaxSize()) {
+  val overlayColor = if (visible) ClawTheme.colors.canvas else Color.Transparent
+  Box(modifier = Modifier.fillMaxSize().background(overlayColor)) {
     // The shell owns system-bar avoidance; arbitrary Canvas pages cannot know Android insets.
     CanvasScreen(
       viewModel = viewModel,
