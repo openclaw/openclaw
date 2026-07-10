@@ -50,7 +50,7 @@ const JUNE_2026_PATCH_FLOOR = 5;
  * @typedef {object} NpmRegistryPackumentResult
  * @property {number} status
  * @property {boolean} ok
- * @property {unknown | null} packument
+ * @property {unknown} packument
  */
 
 /**
@@ -82,7 +82,11 @@ export async function fetchNpmRegistryPackumentWithRetry(params) {
   const timeoutMs = params.timeoutMs ?? 20_000;
   const fetchImpl = params.fetchImpl ?? globalThis.fetch;
   const sleep =
-    params.sleep ?? ((delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)));
+    params.sleep ??
+    ((delayMs) =>
+      new Promise((resolve) => {
+        setTimeout(resolve, delayMs);
+      }));
   const createSignal = params.createSignal ?? ((delayMs) => AbortSignal.timeout(delayMs));
   let lastError;
 
