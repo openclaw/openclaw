@@ -264,14 +264,21 @@ async function processMessageWithPipeline(params: {
     sessionStore: config.session?.store,
   });
 
-  let mediaPath: string | undefined;
-  let mediaType: string | undefined;
-  if (attachments.length > 0) {
-    const first = attachments[0];
-    const attachmentData = await downloadAttachment(first, account, mediaMaxMb, core);
-    if (attachmentData) {
-      mediaPath = attachmentData.path;
-      mediaType = attachmentData.contentType;
+  const media: Array<{ path: string; url: string; contentType?: string }> = [];
+  for (const attachment of attachments) {
+    try {
+      const attachmentData = await downloadAttachment(attachment, account, mediaMaxMb, core);
+      if (attachmentData) {
+        media.push({
+          path: attachmentData.path,
+          url: attachmentData.path,
+          contentType: attachmentData.contentType,
+        });
+      }
+    } catch (err) {
+      runtime.error?.(
+        `[${account.accountId}] Google Chat attachment download failed: ${String(err)}`,
+      );
     }
   }
 
@@ -322,16 +329,7 @@ async function processMessageWithPipeline(params: {
       rawBody,
       commandBody: rawBody,
     },
-    media:
-      mediaPath || mediaType
-        ? [
-            {
-              path: mediaPath,
-              url: mediaPath,
-              contentType: mediaType,
-            },
-          ]
-        : undefined,
+    media: media.length > 0 ? media : undefined,
     supplemental: {
       groupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
     },

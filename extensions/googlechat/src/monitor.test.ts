@@ -38,6 +38,7 @@ function createInboundClassificationHarness() {
   }));
   const buildContext = vi.fn((payload: unknown) => payload);
   const runTurn = vi.fn();
+  const saveMediaBuffer = vi.fn();
   const core = {
     logging: { shouldLogVerbose: () => false },
     channel: {
@@ -52,10 +53,11 @@ function createInboundClassificationHarness() {
         formatAgentEnvelope: ({ body }: { body: string }) => body,
         dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
       },
+      media: { saveMediaBuffer },
       inbound: { buildContext, run: runTurn },
     },
   } as unknown as GoogleChatCoreRuntime;
-  return { buildContext, core, resolveAgentRoute, runTurn };
+  return { buildContext, core, resolveAgentRoute, runTurn, saveMediaBuffer };
 }
 
 describe("googlechat monitor bot loop protection", () => {
@@ -322,6 +324,123 @@ describe("googlechat monitor sender bot status", () => {
     expect(buildContext).toHaveBeenCalledWith(
       expect.objectContaining({ sender: expect.objectContaining({ isBot: undefined }) }),
     );
+  });
+});
+
+describe("googlechat monitor attachments", () => {
+  function allowInboundAccess() {
+    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
+      ok: true,
+      commandAuthorized: undefined,
+      effectiveWasMentioned: undefined,
+      groupBotLoopProtection: undefined,
+      groupSystemPrompt: undefined,
+    });
+  }
+
+  function attachmentEvent(): GoogleChatEvent {
+    return {
+      type: "MESSAGE",
+      space: { name: "spaces/DM", type: "DM" },
+      message: {
+        name: "spaces/DM/messages/attachments",
+        text: "keep this text",
+        sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
+        attachment: [
+          {
+            contentName: "first.png",
+            contentType: "image/png",
+            attachmentDataRef: { resourceName: "media/first" },
+          },
+          {
+            contentName: "second.pdf",
+            contentType: "application/pdf",
+            attachmentDataRef: { resourceName: "media/second" },
+          },
+        ],
+      },
+    };
+  }
+
+  it("preserves every downloaded attachment in the inbound context", async () => {
+    const { buildContext, core, saveMediaBuffer } = createInboundClassificationHarness();
+    apiMocks.downloadGoogleChatMedia
+      .mockResolvedValueOnce({ buffer: Buffer.from("first"), contentType: "image/png" })
+      .mockResolvedValueOnce({ buffer: Buffer.from("second"), contentType: "application/pdf" });
+    saveMediaBuffer
+      .mockResolvedValueOnce({ path: "/tmp/first.png", contentType: "image/png" })
+      .mockResolvedValueOnce({ path: "/tmp/second.pdf", contentType: "application/pdf" });
+    allowInboundAccess();
+
+    await testing.processMessageWithPipeline({
+      event: attachmentEvent(),
+      account: {
+        accountId: "work",
+        config: {},
+        credentialSource: "inline",
+      } as ResolvedGoogleChatAccount,
+      config: {},
+      runtime: { error: vi.fn(), log: vi.fn() },
+      core,
+      mediaMaxMb: 10,
+    });
+
+    expect(apiMocks.downloadGoogleChatMedia).toHaveBeenCalledTimes(2);
+    expect(buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        media: [
+          { path: "/tmp/first.png", url: "/tmp/first.png", contentType: "image/png" },
+          {
+            path: "/tmp/second.pdf",
+            url: "/tmp/second.pdf",
+            contentType: "application/pdf",
+          },
+        ],
+      }),
+    );
+  });
+
+  it("keeps processing text and later attachments after a download failure", async () => {
+    const { buildContext, core, runTurn, saveMediaBuffer } = createInboundClassificationHarness();
+    const runtime = { error: vi.fn(), log: vi.fn() } satisfies GoogleChatRuntimeEnv;
+    apiMocks.downloadGoogleChatMedia
+      .mockRejectedValueOnce(new Error("first attachment unavailable"))
+      .mockResolvedValueOnce({ buffer: Buffer.from("second"), contentType: "application/pdf" });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/second.pdf",
+      contentType: "application/pdf",
+    });
+    allowInboundAccess();
+
+    await testing.processMessageWithPipeline({
+      event: attachmentEvent(),
+      account: {
+        accountId: "work",
+        config: {},
+        credentialSource: "inline",
+      } as ResolvedGoogleChatAccount,
+      config: {},
+      runtime,
+      core,
+      mediaMaxMb: 10,
+    });
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "[work] Google Chat attachment download failed: Error: first attachment unavailable",
+    );
+    expect(buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({ rawBody: "keep this text" }),
+        media: [
+          {
+            path: "/tmp/second.pdf",
+            url: "/tmp/second.pdf",
+            contentType: "application/pdf",
+          },
+        ],
+      }),
+    );
+    expect(runTurn).toHaveBeenCalledOnce();
   });
 });
 
