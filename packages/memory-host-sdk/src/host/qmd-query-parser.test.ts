@@ -35,6 +35,45 @@ complete`,
     expect(results).toEqual([{ docid: "abc", score: 0.5 }]);
   });
 
+  it("skips unmatched bracket fragments before embedded result arrays", () => {
+    const results = parseQmdQueryJson(
+      `${"[native log fragment\n".repeat(1000)}[{"docid":"abc","score":0.5}]`,
+      "",
+    );
+
+    expect(results).toEqual([{ docid: "abc", score: 0.5 }]);
+  });
+
+  it("does not carry quoted malformed log fragments into later result arrays", () => {
+    const results = parseQmdQueryJson(
+      `[native "log fragment
+[{"docid":"abc","score":0.5}]`,
+      "",
+    );
+
+    expect(results).toEqual([{ docid: "abc", score: 0.5 }]);
+  });
+
+  it("keeps result arrays with nested unknown array fields", () => {
+    const results = parseQmdQueryJson(
+      `[INFO] qmd ready
+[{"docid":"abc","score":0.5,"tags":["native","stdout"]}]`,
+      "",
+    );
+
+    expect(results).toEqual([{ docid: "abc", score: 0.5 }]);
+  });
+
+  it("does not return nested array fields before the outer result array", () => {
+    const results = parseQmdQueryJson(
+      `[INFO] qmd ready
+[{"docid":"outer","score":0.9,"matches":[{"docid":"inner","score":0.1}]}]`,
+      "",
+    );
+
+    expect(results).toEqual([{ docid: "outer", score: 0.9 }]);
+  });
+
   it("preserves explicit qmd line metadata when present", () => {
     const results = parseQmdQueryJson(
       '[{"docid":"abc","score":0.5,"start_line":4,"end_line":6,"snippet":"@@ -10,1\\nignored"}]',

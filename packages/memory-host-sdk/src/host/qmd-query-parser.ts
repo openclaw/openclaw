@@ -129,25 +129,21 @@ function parseQmdLineNumber(value: unknown): number | undefined {
 
 /** Extract the first complete qmd result array from noisy stdout. */
 function findFirstQmdResultArrayPayload(raw: string): string | null {
-  for (let start = raw.indexOf("["); start >= 0; start = raw.indexOf("[", start + 1)) {
-    const payload = extractJsonArrayAt(raw, start);
-    if (payload && parseQmdQueryResultArray(payload) !== null) {
-      return payload;
-    }
-  }
-  return null;
-}
-
-function extractJsonArrayAt(raw: string, start: number): string | null {
-  let depth = 0;
+  const starts: number[] = [];
   let inString = false;
   let escaped = false;
-  for (let i = start; i < raw.length; i += 1) {
+  for (let i = 0; i < raw.length; i += 1) {
     const char = raw[i];
     if (char === undefined) {
       break;
     }
-    if (inString) {
+    if (starts.length > 0 && inString) {
+      if (char === "\n" || char === "\r") {
+        starts.pop();
+        inString = false;
+        escaped = false;
+        continue;
+      }
       if (escaped) {
         escaped = false;
         continue;
@@ -159,18 +155,64 @@ function extractJsonArrayAt(raw: string, start: number): string | null {
       }
       continue;
     }
-    if (char === '"') {
+    if (starts.length > 0 && char === '"') {
       inString = true;
       continue;
     }
     if (char === "[") {
-      depth += 1;
-    } else if (char === "]") {
-      depth -= 1;
-      if (depth === 0) {
-        return raw.slice(start, i + 1);
+      if (starts.length === 0 && !isPlausibleQmdResultArrayStart(raw, i)) {
+        continue;
+      }
+      starts.push(i);
+      continue;
+    }
+    if (char === "]" && starts.length > 0) {
+      const start = starts.pop();
+      if (start === undefined) {
+        continue;
+      }
+      if (starts.length > 0) {
+        continue;
+      }
+      const payload = raw.slice(start, i + 1);
+      const parsed = parseQmdQueryResultArray(payload);
+      if (parsed !== null && isLikelyQmdResultArray(parsed)) {
+        return payload;
       }
     }
   }
   return null;
+}
+
+function isPlausibleQmdResultArrayStart(raw: string, start: number): boolean {
+  for (let i = start + 1; i < raw.length; i += 1) {
+    const char = raw[i];
+    if (char === undefined) {
+      return false;
+    }
+    if (/\s/.test(char)) {
+      continue;
+    }
+    return char === "{" || char === "]";
+  }
+  return false;
+}
+
+function isLikelyQmdResultArray(results: QmdQueryResult[]): boolean {
+  return results.every((result) => {
+    if (typeof result !== "object" || result === null || Array.isArray(result)) {
+      return false;
+    }
+    return (
+      result.docid !== undefined ||
+      result.score !== undefined ||
+      result.collection !== undefined ||
+      result.file !== undefined ||
+      result.snippet !== undefined ||
+      result.body !== undefined ||
+      result.startLine !== undefined ||
+      result.endLine !== undefined ||
+      Object.keys(result).length === 0
+    );
+  });
 }
