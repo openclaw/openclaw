@@ -3881,6 +3881,7 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver,
       replyOptions: {
         preserveProgressCallbackStartOrder: true,
+        suppressDefaultToolProgressMessages: true,
         onItemEvent: () => {
           callbackOrder.push("item");
         },

@@ -4,6 +4,7 @@ import { resolveAgentIdentity, resolveEffectiveMessagesConfig } from "../agents/
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import {
   extractShortModelName,
+  resolveResponsePrefixTemplate,
   type ResponsePrefixContext,
 } from "../auto-reply/reply/response-prefix-template.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,6 +18,7 @@ export type ReplyPrefixContextBundle = {
   prefixContext: ResponsePrefixContext;
   responsePrefix?: string;
   responsePrefixContextProvider: () => ResponsePrefixContext;
+  resolveResponsePrefix: () => string | undefined;
   onModelSelected: (ctx: ModelSelectionContext) => void;
 };
 
@@ -25,7 +27,7 @@ export type ReplyPrefixContextBundle = {
  */
 export type ReplyPrefixOptions = Pick<
   ReplyPrefixContextBundle,
-  "responsePrefix" | "responsePrefixContextProvider" | "onModelSelected"
+  "responsePrefix" | "responsePrefixContextProvider" | "resolveResponsePrefix" | "onModelSelected"
 >;
 
 /**
@@ -49,14 +51,16 @@ export function createReplyPrefixContext(params: {
     prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
     prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
   };
+  const responsePrefix = resolveEffectiveMessagesConfig(cfg, agentId, {
+    channel: params.channel,
+    accountId: params.accountId,
+  }).responsePrefix;
 
   return {
     prefixContext,
-    responsePrefix: resolveEffectiveMessagesConfig(cfg, agentId, {
-      channel: params.channel,
-      accountId: params.accountId,
-    }).responsePrefix,
+    responsePrefix,
     responsePrefixContextProvider: () => prefixContext,
+    resolveResponsePrefix: () => resolveResponsePrefixTemplate(responsePrefix, prefixContext),
     onModelSelected,
   };
 }
@@ -70,11 +74,12 @@ export function createReplyPrefixOptions(params: {
   channel?: string;
   accountId?: string;
 }): ReplyPrefixOptions {
-  const { responsePrefix, responsePrefixContextProvider, onModelSelected } =
+  const { responsePrefix, responsePrefixContextProvider, resolveResponsePrefix, onModelSelected } =
     createReplyPrefixContext(params);
   return {
     responsePrefix,
     responsePrefixContextProvider,
+    resolveResponsePrefix,
     onModelSelected,
   };
 }

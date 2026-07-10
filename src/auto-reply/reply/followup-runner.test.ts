@@ -1984,6 +1984,82 @@ describe("createFollowupRunner runtime config", () => {
     );
   });
 
+  it("starts queued CLI tool presentation before later commentary", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: { "claude-cli": { command: "claude" } },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const callbackOrder: string[] = [];
+    const onToolStart = vi.fn(async () => {
+      callbackOrder.push("tool");
+    });
+    const onItemEvent = vi.fn(async () => {
+      callbackOrder.push("commentary");
+    });
+    runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "exec",
+          toolCallId: "tool-1",
+          args: { command: "pwd" },
+        },
+      });
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "item",
+        data: {
+          kind: "preamble",
+          itemId: "commentary-1",
+          progressText: "Checking the result.",
+        },
+      });
+      return {
+        payloads: [{ text: "final" }],
+        meta: { agentMeta: { provider: "claude-cli", model: "claude-opus-4-7" } },
+      };
+    });
+
+    const runner = createFollowupRunner({
+      opts: {
+        onToolStart,
+        onItemEvent,
+        commentaryProgressEnabled: true,
+        preserveProgressCallbackStartOrder: true,
+      },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "mattermost",
+        run: {
+          config: runtimeConfig,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          messageProvider: "mattermost",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "on",
+        },
+      }),
+    );
+
+    expect(callbackOrder).toEqual(["tool", "commentary"]);
+  });
+
   it("defers queued CLI attempt terminal lifecycle events until fallback settles", async () => {
     const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
       "../../infra/agent-events.js",

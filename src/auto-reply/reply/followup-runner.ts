@@ -743,6 +743,8 @@ export function createFollowupRunner(params: {
           chatType: run.chatType ?? activeSessionEntry?.chatType,
         }) === "deny";
       const progressOpts = sendPolicyDenied ? undefined : opts;
+      const preserveProgressCallbackStartOrder =
+        progressOpts?.preserveProgressCallbackStartOrder === true;
       // Carry the admission-time policy through every queued delivery path; direct origin routing
       // bypasses the outer dispatcher that normally enforces sendPolicy.
       const sendRunPayloads: typeof sendFollowupPayloads = async (...args) => {
@@ -1138,16 +1140,35 @@ export function createFollowupRunner(params: {
                   onAgentRunStart: () => opts?.onAgentRunStart?.(runId),
                   suppressAssistantBridge: run.silentExpected,
                   onActivity: () => replyOperation?.recordActivity(),
+                  preserveProgressCallbackStartOrder,
                   onReasoningText: createCliReasoningStreamBridge(progressOpts?.onReasoningStream),
                   onReasoningProgress: async (payload) => {
                     await progressOpts?.onReasoningProgress?.(payload);
                   },
                   onToolEvent: async (payload) => {
-                    await cliToolSummaryTracker.noteToolEvent(payload);
-                    if (payload.phase === "result") {
+                    if (!preserveProgressCallbackStartOrder) {
+                      await cliToolSummaryTracker.noteToolEvent(payload);
+                      if (payload.phase === "result") {
+                        return;
+                      }
+                      await forwardFollowupProgressEvent({
+                        evt: {
+                          stream: "tool",
+                          data: { name: payload.name, phase: payload.phase, args: payload.args },
+                        },
+                        opts: progressOpts,
+                        detailMode: toolProgressDetail,
+                        emitChannelProgress: shouldEmitToolResultProgress(),
+                      });
                       return;
                     }
-                    await forwardFollowupProgressEvent({
+                    if (payload.phase === "result") {
+                      await cliToolSummaryTracker.noteToolEvent(payload);
+                      return;
+                    }
+                    // CLI bridges drain independently. Start channel presentation before
+                    // summary bookkeeping can yield and let later progress overtake this tool.
+                    const presentationPromise = forwardFollowupProgressEvent({
                       evt: {
                         stream: "tool",
                         data: { name: payload.name, phase: payload.phase, args: payload.args },
@@ -1156,6 +1177,10 @@ export function createFollowupRunner(params: {
                       detailMode: toolProgressDetail,
                       emitChannelProgress: shouldEmitToolResultProgress(),
                     });
+                    await Promise.all([
+                      presentationPromise,
+                      cliToolSummaryTracker.noteToolEvent(payload),
+                    ]);
                   },
                   onCommentaryText:
                     progressOpts?.commentaryProgressEnabled === true && progressOpts.onItemEvent

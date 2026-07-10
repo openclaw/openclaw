@@ -87,6 +87,7 @@ const mockState = vi.hoisted(() => ({
   fetchMattermostMe: vi.fn(),
   registerMattermostMonitorSlashCommands: vi.fn(),
   registerPluginHttpRoute: vi.fn(),
+  recordMattermostThreadParticipation: vi.fn(),
   resolveChannelInfo: vi.fn(),
   resolveMattermostMedia: vi.fn(),
   resolveUserInfo: vi.fn(),
@@ -130,6 +131,11 @@ vi.mock("./monitor-slash.js", () => ({
   registerMattermostMonitorSlashCommands: mockState.registerMattermostMonitorSlashCommands,
 }));
 
+vi.mock("./thread-participation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./thread-participation.js")>()),
+  recordMattermostThreadParticipation: mockState.recordMattermostThreadParticipation,
+}));
+
 vi.mock("./runtime-api.js", async () => {
   const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
   return {
@@ -139,9 +145,10 @@ vi.mock("./runtime-api.js", async () => {
       readStoreForDmPolicy: vi.fn(async () => []),
       upsertPairingRequest: vi.fn(async () => ({ code: "123456", created: true })),
     })),
-    createChannelMessageReplyPipeline: vi.fn(() => ({
+    createChannelMessageReplyPipeline: vi.fn((params: { cfg: OpenClawConfig }) => ({
       onModelSelected: vi.fn(),
       typingCallbacks: {},
+      resolveResponsePrefix: () => params.cfg.messages?.responsePrefix,
     })),
     registerPluginHttpRoute: mockState.registerPluginHttpRoute,
     resolveChannelMediaMaxBytes: vi.fn(() => 8 * 1024 * 1024),
@@ -174,6 +181,13 @@ function createRuntimeCore(
     textHasControlCommand?: (text?: string) => boolean;
     createInboundDebouncer?: typeof createInboundDebouncer;
     verboseDebug?: (message: string) => void;
+    chunkMarkdownTextWithMode?: (
+      text: string,
+      limit: number,
+      mode: "length" | "newline",
+    ) => string[];
+    chunkMode?: "length" | "newline";
+    textChunkLimit?: number;
   } = {},
 ) {
   type ReplyDispatcherOptions = {
@@ -347,12 +361,13 @@ function createRuntimeCore(
         run,
       },
       text: {
-        chunkMarkdownTextWithMode: (text: string) => [text],
+        chunkMarkdownTextWithMode:
+          overrides.chunkMarkdownTextWithMode ?? ((text: string) => [text]),
         convertMarkdownTables: (text: string) => text,
         hasControlCommand: overrides.textHasControlCommand ?? (() => false),
-        resolveChunkMode: () => "off",
+        resolveChunkMode: () => overrides.chunkMode ?? "length",
         resolveMarkdownTableMode: () => "off",
-        resolveTextChunkLimit: () => 4000,
+        resolveTextChunkLimit: () => overrides.textChunkLimit ?? 4000,
       },
     },
   };
@@ -418,8 +433,11 @@ describe("mattermost inbound user posts", () => {
     mockState.createMattermostClient.mockReturnValue({});
     mockState.createMattermostDraftStream.mockReturnValue({
       update: vi.fn(),
+      updateAssistantText: vi.fn(),
       flush: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
+      settleBoundaries: vi.fn(async () => {}),
+      resolveFinalText: (text: string) => ({ kind: "full" as const, text }),
     });
     mockState.fetchMattermostMe.mockResolvedValue({
       id: "bot-user",
@@ -1268,7 +1286,12 @@ describe("mattermost inbound user posts", () => {
         },
       },
     };
-    const runtimeCore = createRuntimeCore(blockConfig);
+    const chunkMarkdownTextWithMode = vi.fn((text: string) => [text]);
+    const runtimeCore = createRuntimeCore(blockConfig, undefined, {
+      chunkMarkdownTextWithMode,
+      chunkMode: "newline",
+      textChunkLimit: 1234,
+    });
     mockState.runtimeCore = runtimeCore;
     const draftUpdate = vi.fn();
     const forceNewMessage = vi.fn(async () => {});
@@ -1296,12 +1319,13 @@ describe("mattermost inbound user posts", () => {
         assistantBoundarySettled = true;
         return;
       }
-      if (callNumber === 7) {
+      if (callNumber === 5) {
         await finalBoundaryPending;
       }
     });
     mockState.createMattermostDraftStream.mockReturnValue({
       update: draftUpdate,
+      updateAssistantText: draftUpdate,
       forceNewMessage,
       flush: vi.fn(async () => {}),
       postId: vi.fn(() => undefined),
@@ -1309,6 +1333,8 @@ describe("mattermost inbound user posts", () => {
       discardPending: vi.fn(async () => {}),
       seal: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
+      settleBoundaries: vi.fn(async () => {}),
+      resolveFinalText: (text: string) => ({ kind: "full" as const, text }),
     });
 
     const socket = new FakeWebSocket();
@@ -1436,6 +1462,12 @@ describe("mattermost inbound user posts", () => {
     await monitor;
 
     expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    const draftStreamOptions = mockState.createMattermostDraftStream.mock.calls.at(0)?.[0] as
+      | { chunkText?: (text: string) => string[] }
+      | undefined;
+    chunkMarkdownTextWithMode.mockClear();
+    expect(draftStreamOptions?.chunkText?.("first\n\nsecond")).toEqual(["first\n\nsecond"]);
+    expect(chunkMarkdownTextWithMode).toHaveBeenCalledWith("first\n\nsecond", 1234, "newline");
     const replyOptions = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].replyOptions;
     expect(replyOptions?.disableBlockStreaming).toBe(true);
     expect(replyOptions?.preserveProgressCallbackStartOrder).toBe(true);
@@ -1443,16 +1475,16 @@ describe("mattermost inbound user posts", () => {
     expect(hiddenReasoningBoundaryCount).toBe(1);
     expect(consecutiveToolBoundaryCount).toBe(1);
     expect(reasoningStartBoundaryCount).toBe(3);
-    expect(secondReasoningBoundaryCount).toBe(4);
-    expect(reasoningTextBoundaryCount).toBe(5);
-    expect(toolBeforeFinalBoundaryCount).toBe(6);
+    expect(secondReasoningBoundaryCount).toBe(3);
+    expect(reasoningTextBoundaryCount).toBe(3);
+    expect(toolBeforeFinalBoundaryCount).toBe(4);
     expect(interleavedToolDraft).toContain("pwd");
     expect(interleavedToolDraft).toContain("ls -alh");
     expect(interleavedToolDraft).toContain("whoami");
     expect(reasoningDraft).toBe("Thinking…");
     expect(finalToolDraft).toContain("date");
-    expect(finalOnlyBoundaryCount).toBe(7);
-    expect(forceNewMessage).toHaveBeenCalledTimes(7);
+    expect(finalOnlyBoundaryCount).toBe(5);
+    expect(forceNewMessage).toHaveBeenCalledTimes(5);
     expect(finalDeliveryWaitedForBoundary).toBe(true);
     expect(mockState.sendMessageMattermost).toHaveBeenCalledWith(
       "channel:chan-1",
@@ -1462,5 +1494,162 @@ describe("mattermost inbound user posts", () => {
     expect(secondPartialArrivedBeforeBoundarySettled).toBe(true);
     expect(draftUpdate).toHaveBeenNthCalledWith(1, "A much longer first block");
     expect(draftUpdate).toHaveBeenCalledWith("Done.");
+    expect(draftUpdate).toHaveBeenCalledWith("Answer after reasoning");
+  });
+
+  it("finalizes only the current block when the terminal reply is cumulative", async () => {
+    const blockConfig: OpenClawConfig = {
+      messages: { responsePrefix: "[bot]" },
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "open",
+          streaming: { mode: "block" },
+        },
+      },
+    };
+    const runtimeCore = createRuntimeCore(blockConfig);
+    mockState.runtimeCore = runtimeCore;
+    mockState.updateMattermostPost.mockRejectedValueOnce(new Error("edit failed"));
+    const forceNewMessage = vi.fn(async () => {});
+    const updateAssistantText = vi.fn();
+    const resolveFinalText = vi.fn((text: string) =>
+      text === "[bot] First block\n\nSecond block"
+        ? { kind: "remaining" as const, text: "Second block" }
+        : { kind: "full" as const, text },
+    );
+    mockState.createMattermostDraftStream.mockReturnValue({
+      update: vi.fn(),
+      updateAssistantText,
+      forceNewMessage,
+      flush: vi.fn(async () => {}),
+      postId: vi.fn(() => "preview-current"),
+      clear: vi.fn(async () => {}),
+      discardPending: vi.fn(async () => {}),
+      seal: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      settleBoundaries: vi.fn(async () => {}),
+      resolveFinalText,
+    });
+
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    mockState.dispatchReplyFromConfig.mockImplementation(async (params) => {
+      await params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onPartialReply?.({ text: "First block" });
+      await params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onPartialReply?.({ text: "Second block" });
+      const dispatcherOptions =
+        runtimeCore.channel.reply.createReplyDispatcherWithTyping.mock.results.at(-1)?.value
+          ?.options;
+      await dispatcherOptions?.deliver(
+        { text: "[bot] First block\n\nSecond block" },
+        { kind: "final" },
+      );
+      abortController.abort();
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: blockConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "post-cumulative-final",
+      message: "stream two blocks",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(updateAssistantText).toHaveBeenNthCalledWith(1, "[bot] First block");
+    expect(updateAssistantText).toHaveBeenNthCalledWith(2, "Second block");
+    expect(resolveFinalText).toHaveBeenCalledWith("[bot] First block\n\nSecond block");
+    expect(mockState.updateMattermostPost).toHaveBeenCalledWith({}, "preview-current", {
+      message: "Second block",
+    });
+    expect(mockState.sendMessageMattermost).toHaveBeenCalledWith(
+      "channel:chan-1",
+      "Second block",
+      expect.objectContaining({ accountId: "default" }),
+    );
+  });
+
+  it("records participation when the confirmed preview already contains the final", async () => {
+    const blockConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "open",
+          streaming: { mode: "block" },
+        },
+      },
+    };
+    const runtimeCore = createRuntimeCore(blockConfig);
+    mockState.runtimeCore = runtimeCore;
+    mockState.createMattermostDraftStream.mockReturnValue({
+      update: vi.fn(),
+      updateAssistantText: vi.fn(),
+      forceNewMessage: vi.fn(async () => {}),
+      flush: vi.fn(async () => {}),
+      postId: vi.fn(() => undefined),
+      clear: vi.fn(async () => {}),
+      discardPending: vi.fn(async () => {}),
+      seal: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      settleBoundaries: vi.fn(async () => {}),
+      resolveFinalText: vi.fn(() => ({ kind: "already-delivered" as const })),
+    });
+
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    mockState.dispatchReplyFromConfig.mockImplementation(async (params) => {
+      await params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onPartialReply?.({ text: "Only block" });
+      await params.replyOptions?.onAssistantMessageStart?.();
+      const dispatcherOptions =
+        runtimeCore.channel.reply.createReplyDispatcherWithTyping.mock.results.at(-1)?.value
+          ?.options;
+      await dispatcherOptions?.deliver({ text: "Only block" }, { kind: "final" });
+      abortController.abort();
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: blockConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+    await emitMattermostChannelPost(socket, {
+      id: "post-confirmed-preview-final",
+      message: "stream one block",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.sendMessageMattermost).not.toHaveBeenCalled();
+    expect(mockState.recordMattermostThreadParticipation).toHaveBeenCalledTimes(1);
   });
 });

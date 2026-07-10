@@ -3,6 +3,7 @@ import {
   clearFinalizableDraftMessage,
   createFinalizableDraftLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createMattermostPost,
@@ -14,8 +15,14 @@ import {
 const MATTERMOST_STREAM_MAX_CHARS = 4000;
 const DEFAULT_THROTTLE_MS = 1000;
 
+type MattermostFinalTextResolution =
+  | { kind: "full"; text: string }
+  | { kind: "remaining"; text: string }
+  | { kind: "already-delivered" };
+
 type MattermostDraftStream = {
   update: (text: string) => void;
+  updateAssistantText: (text: string) => void;
   flush: () => Promise<void>;
   postId: () => string | undefined;
   clear: () => Promise<void>;
@@ -23,6 +30,8 @@ type MattermostDraftStream = {
   seal: () => Promise<void>;
   stop: () => Promise<void>;
   forceNewMessage: () => Promise<void>;
+  settleBoundaries: () => Promise<void>;
+  resolveFinalText: (text: string) => MattermostFinalTextResolution;
 };
 
 function normalizeMattermostDraftText(text: string, maxChars: number): string {
@@ -70,6 +79,7 @@ export function createMattermostDraftStream(params: {
   maxChars?: number;
   throttleMs?: number;
   renderText?: (text: string) => string;
+  chunkText?: (text: string) => string[];
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): MattermostDraftStream {
@@ -82,23 +92,29 @@ export function createMattermostDraftStream(params: {
   type DraftGeneration = {
     postId?: string;
     lastSentText: string;
+    // A boundary can arrive after pending text flushed. Keep the full source so sealing can
+    // replace the ellipsized preview with lossless chunks instead of retaining truncation.
+    latestSourceText: string;
+    latestAssistantText?: string;
     ready: Promise<void>;
   };
   let currentGeneration: DraftGeneration = {
     lastSentText: "",
+    latestSourceText: "",
     ready: Promise.resolve(),
   };
+  const sealedAssistantTexts: string[] = [];
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     if (streamState.stopped && !streamState.final) {
       return false;
     }
+    const target = currentGeneration;
     const rendered = params.renderText?.(text) ?? text;
     const normalized = normalizeMattermostDraftText(rendered, maxChars);
     if (!normalized) {
       return false;
     }
-    const target = currentGeneration;
     await target.ready;
     if (streamState.stopped && !streamState.final) {
       return false;
@@ -146,7 +162,7 @@ export function createMattermostDraftStream(params: {
   };
   const {
     loop,
-    update,
+    update: updateLifecycle,
     stop: stopLifecycle,
     stopForClear,
     seal: sealLifecycle,
@@ -168,29 +184,47 @@ export function createMattermostDraftStream(params: {
     }
     // Agent boundary callbacks are fire-and-forget. Swap generations synchronously; the new
     // generation waits for the old send and seal so posts stay in publication order.
-    const sealText = loop.takePending();
+    const pendingText = loop.takePending();
     const inFlightAtBoundary = loop.waitForInFlight();
     const sealed = currentGeneration;
     const boundary = (async () => {
       try {
         await sealed.ready;
         await inFlightAtBoundary;
-        if (!sealText.trim() || (streamState.stopped && !streamState.final)) {
+        if (streamState.stopped && !streamState.final) {
           return;
         }
-        const rendered = params.renderText?.(sealText) ?? sealText;
-        const normalized = normalizeMattermostDraftText(rendered, maxChars);
-        if (!normalized || normalized === sealed.lastSentText) {
+        const sourceText = pendingText.trim() ? pendingText : sealed.latestSourceText;
+        const rendered = params.renderText?.(sourceText) ?? sourceText;
+        const finalizedText = rendered.trim();
+        const chunks =
+          params.chunkText?.(finalizedText) ??
+          chunkMarkdownTextWithMode(finalizedText, maxChars, "length");
+        const firstChunk = chunks[0];
+        if (!firstChunk) {
           return;
         }
         if (sealed.postId) {
-          await updateMattermostPost(params.client, sealed.postId, { message: normalized });
+          if (firstChunk !== sealed.lastSentText) {
+            await updateMattermostPost(params.client, sealed.postId, { message: firstChunk });
+          }
         } else {
           await createMattermostPost(params.client, {
             channelId: params.channelId,
-            message: normalized,
+            message: firstChunk,
             rootId: params.rootId,
           });
+        }
+        for (const chunk of chunks.slice(1)) {
+          await createMattermostPost(params.client, {
+            channelId: params.channelId,
+            message: chunk,
+            rootId: params.rootId,
+          });
+        }
+        const assistantText = sealed.latestAssistantText?.trim();
+        if (assistantText) {
+          sealedAssistantTexts.push(assistantText);
         }
       } catch (err) {
         params.warn?.(
@@ -198,7 +232,11 @@ export function createMattermostDraftStream(params: {
         );
       }
     })();
-    currentGeneration = { lastSentText: "", ready: boundary };
+    currentGeneration = {
+      lastSentText: "",
+      latestSourceText: "",
+      ready: boundary,
+    };
     loop.resetThrottleWindow();
     return boundary;
   };
@@ -230,11 +268,53 @@ export function createMattermostDraftStream(params: {
     await stopLifecycle();
     await currentGeneration.ready;
   };
+  const update = (text: string) => {
+    currentGeneration.latestSourceText = text;
+    currentGeneration.latestAssistantText = undefined;
+    updateLifecycle(text);
+  };
+  const updateAssistantText = (text: string) => {
+    currentGeneration.latestSourceText = text;
+    currentGeneration.latestAssistantText = text;
+    updateLifecycle(text);
+  };
+  const settleBoundaries = async () => {
+    await currentGeneration.ready;
+  };
+  const resolveFinalText = (text: string) => {
+    if (sealedAssistantTexts.length === 0) {
+      return { kind: "full" as const, text };
+    }
+
+    let remainingText = text.trim();
+    for (const sealedText of sealedAssistantTexts) {
+      const completed = sealedText.trim();
+      if (!completed || !remainingText.startsWith(completed)) {
+        return { kind: "full" as const, text };
+      }
+      const suffix = remainingText.slice(completed.length);
+      // Canonical assistant block aggregation uses newline separators. A plain-space
+      // suffix can be a block-local final that merely shares the prior block's prefix.
+      if (suffix && !/^\r?\n/.test(suffix)) {
+        return { kind: "full" as const, text };
+      }
+      remainingText = suffix.replace(/^(?:\r?\n)+/, "");
+    }
+    const currentText = currentGeneration.latestAssistantText?.trim() ?? "";
+    const remaining = remainingText.trim();
+    if (currentText && !remaining.startsWith(currentText)) {
+      return { kind: "full" as const, text };
+    }
+    return remaining
+      ? { kind: "remaining" as const, text: remaining }
+      : { kind: "already-delivered" as const };
+  };
 
   params.log?.(`mattermost stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
 
   return {
     update,
+    updateAssistantText,
     flush,
     postId: () => currentGeneration.postId,
     clear,
@@ -242,5 +322,7 @@ export function createMattermostDraftStream(params: {
     seal,
     stop,
     forceNewMessage,
+    settleBoundaries,
+    resolveFinalText,
   };
 }

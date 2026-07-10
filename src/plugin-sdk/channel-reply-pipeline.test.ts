@@ -97,6 +97,22 @@ describe("createChannelReplyPipeline", () => {
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves the live response prefix from selected-model context", () => {
+    const pipeline = createChannelReplyPipeline({
+      cfg: { messages: { responsePrefix: "[{model} | {thinkingLevel}]" } },
+      agentId: "main",
+      channel: "mattermost",
+    });
+
+    pipeline.onModelSelected({
+      provider: "openai",
+      model: "gpt-5.5",
+      thinkLevel: "high",
+    });
+
+    expect(pipeline.resolveResponsePrefix()).toBe("[gpt-5.5 | high]");
+  });
+
   it("uses an explicit reply transform without resolving the channel plugin", () => {
     const transformReplyPayload = vi.fn((payload) => payload);
     const pipeline = createChannelReplyPipeline({

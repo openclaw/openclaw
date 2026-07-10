@@ -319,6 +319,41 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     expect(stream.postId()).toBe("post-2");
   });
 
+  it("restores and chunks an already-flushed over-limit block before rotating", async () => {
+    const { client, calls } = createMockClient();
+    const firstChunk = "a".repeat(10);
+    const secondChunk = "b".repeat(10);
+    const chunkText = vi.fn(() => [firstChunk, secondChunk]);
+    const configuredStream = createMattermostDraftStream({
+      client,
+      channelId: "channel-1",
+      throttleMs: 0,
+      maxChars: 10,
+      chunkText,
+    });
+
+    configuredStream.update(`${firstChunk}${secondChunk}`);
+    await configuredStream.flush();
+    expect(parseRequestJson(calls[0]?.init)?.message).toBe("aaaaaaa...");
+
+    await configuredStream.forceNewMessage();
+    expect(configuredStream.postId()).toBeUndefined();
+    configuredStream.update("tool");
+    await configuredStream.flush();
+
+    expect(calls.map((call) => call.path)).toEqual(["/posts", "/posts/post-1", "/posts", "/posts"]);
+    expect(calls.map((call) => call.init?.method)).toEqual(["POST", "PUT", "POST", "POST"]);
+    const finalizedChunks = [
+      parseRequestJson(calls[1]?.init)?.message,
+      parseRequestJson(calls[2]?.init)?.message,
+    ];
+    expect(chunkText).toHaveBeenCalledWith(`${firstChunk}${secondChunk}`);
+    expect(finalizedChunks).toEqual([firstChunk, secondChunk]);
+    expect(finalizedChunks.join("")).toBe(`${firstChunk}${secondChunk}`);
+    expect(parseRequestJson(calls[3]?.init)?.message).toBe("tool");
+    expect(configuredStream.postId()).toBe("post-3");
+  });
+
   it("publishes overlapping fire-and-forget boundaries in generation order", async () => {
     const calls: RequestRecord[] = [];
     let nextId = 1;
@@ -470,6 +505,79 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     expect(parseRequestJson(calls[0]?.init)?.message).toBe("block A");
     expect(parseRequestJson(calls[1]?.init)?.message).toBe("block B");
     expect(stream.postId()).toBe("post-2");
+  });
+
+  it("resolves a cumulative terminal reply to the current confirmed generation", async () => {
+    const { client } = createMockClient();
+    const stream = createMattermostDraftStream({
+      client,
+      channelId: "channel-1",
+      throttleMs: 0,
+    });
+
+    stream.updateAssistantText("First block");
+    await stream.flush();
+    await stream.forceNewMessage();
+    stream.updateAssistantText("Second block");
+    await stream.flush();
+
+    expect(stream.resolveFinalText("First block\n\nSecond block complete")).toEqual({
+      kind: "remaining",
+      text: "Second block complete",
+    });
+    expect(stream.resolveFinalText("Second block complete")).toEqual({
+      kind: "full",
+      text: "Second block complete",
+    });
+    expect(stream.resolveFinalText("First block extended")).toEqual({
+      kind: "full",
+      text: "First block extended",
+    });
+  });
+
+  it("strips confirmed assistant blocks but not transient progress generations", async () => {
+    const { client } = createMockClient();
+    const stream = createMattermostDraftStream({
+      client,
+      channelId: "channel-1",
+      throttleMs: 0,
+    });
+
+    stream.updateAssistantText("First block");
+    await stream.flush();
+    await stream.forceNewMessage();
+    stream.update("Running tool…");
+    await stream.flush();
+    await stream.forceNewMessage();
+    await stream.settleBoundaries();
+
+    expect(stream.resolveFinalText("First block\n\nFinal after tool")).toEqual({
+      kind: "remaining",
+      text: "Final after tool",
+    });
+    expect(stream.resolveFinalText("First block extended")).toEqual({
+      kind: "full",
+      text: "First block extended",
+    });
+    expect(stream.resolveFinalText("First block")).toEqual({ kind: "already-delivered" });
+  });
+
+  it("keeps the canonical final when an assistant boundary fails to publish", async () => {
+    const { client, requestMock } = createMockClient();
+    const stream = createMattermostDraftStream({
+      client,
+      channelId: "channel-1",
+      throttleMs: 0,
+    });
+
+    stream.updateAssistantText("First block");
+    await stream.flush();
+    requestMock.mockRejectedValueOnce(new Error("boundary failed"));
+    stream.updateAssistantText("First block complete");
+    await stream.forceNewMessage();
+
+    const finalText = "First block complete\n\nFinal after failure";
+    expect(stream.resolveFinalText(finalText)).toEqual({ kind: "full", text: finalText });
   });
 });
 
