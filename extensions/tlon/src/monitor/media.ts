@@ -14,6 +14,9 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 const MAX_IMAGES_PER_MESSAGE = 8;
 const TLON_MEDIA_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 
+/** Overall request timeout for remote media fetches that are idle before any data. */
+const TLON_MEDIA_DOWNLOAD_TIMEOUT_MS = 120_000;
+
 interface ExtractedImage {
   url: string;
   alt?: string;
@@ -70,6 +73,7 @@ export async function downloadMedia(
     const fetchOptions = {
       url,
       maxBytes: MAX_IMAGE_BYTES,
+      timeoutMs: TLON_MEDIA_DOWNLOAD_TIMEOUT_MS,
       readIdleTimeoutMs: TLON_MEDIA_DOWNLOAD_IDLE_TIMEOUT_MS,
       ssrfPolicy: undefined,
       requestInit: { method: "GET" },

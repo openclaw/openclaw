@@ -6,6 +6,9 @@ import { uploadFile } from "../tlon-api.js";
 
 const TLON_UPLOAD_IMAGE_IDLE_TIMEOUT_MS = 30_000;
 
+/** Overall request timeout for image upload fetches that are idle before any data. */
+const TLON_UPLOAD_IMAGE_TIMEOUT_MS = 120_000;
+
 /**
  * Fetch an image from a URL and upload it to Tlon storage.
  * Returns the uploaded URL, or falls back to the original URL on error.
@@ -24,6 +27,7 @@ export async function uploadImageFromUrl(imageUrl: string): Promise<string> {
     const fetched = await readRemoteMediaBuffer({
       url: imageUrl,
       maxBytes: MAX_IMAGE_BYTES,
+      timeoutMs: TLON_UPLOAD_IMAGE_TIMEOUT_MS,
       readIdleTimeoutMs: TLON_UPLOAD_IMAGE_IDLE_TIMEOUT_MS,
       ssrfPolicy: undefined,
       requestInit: { method: "GET" },
