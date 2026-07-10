@@ -1,6 +1,2 @@
-// Google plugin module exposes OAuth runtime helpers.
+// Google plugin module implements oauth behavior.
 export { loginGeminiCliOAuth, refreshGeminiCliOAuthToken } from "./oauth.js";
-export {
-  importOfficialGeminiCliOAuthCredentials,
-  requireOfficialGeminiCliOAuthCredentials,
-} from "./oauth.official-cache.js";
