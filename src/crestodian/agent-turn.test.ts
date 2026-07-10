@@ -280,6 +280,7 @@ describe("runCrestodianAgentTurn", () => {
             {
               id: "main",
               default: true,
+              agentDir: "/tmp/default-agent",
               model: { primary: "openai/gpt-5.5" },
               models: {
                 "openai/gpt-5.5": { agentRuntime: { id: runtimeId } },
@@ -317,6 +318,7 @@ describe("runCrestodianAgentTurn", () => {
           agentId: "crestodian",
           provider: "openai",
           model: "gpt-5.5",
+          agentDir: "/tmp/default-agent",
           agentHarnessRuntimeOverride: runtimeId,
           config,
         }),

@@ -562,6 +562,29 @@ describe("parseCrestodianOperation", () => {
     );
   });
 
+  it("reports an audit failure without claiming the committed operation failed", async () => {
+    const tempDir = opTempDirs.make("crestodian-audit-warning-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const redirectedAuditDir = path.join(tempDir, "redirected-audit");
+    await fs.mkdir(redirectedAuditDir);
+    await fs.symlink(redirectedAuditDir, path.join(tempDir, "audit"), "dir");
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const runConfigSet = vi.fn(async () => {});
+
+    const result = await executeCrestodianOperation(
+      { kind: "config-set", path: "gateway.port", value: "19001" },
+      runtime,
+      { approved: true, deps: { runConfigSet } },
+    );
+
+    expect(result.applied).toBe(true);
+    expect(runConfigSet).toHaveBeenCalledOnce();
+    expect(lines.join("\n")).toContain(
+      "Set config gateway.port, but OpenClaw could not record its audit entry:",
+    );
+    expect(lines.join("\n")).toContain("[crestodian] done: config.set");
+  });
+
   it("applies SecretRef config set through typed deps and writes an audit entry", async () => {
     const tempDir = opTempDirs.make("crestodian-config-ref-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);

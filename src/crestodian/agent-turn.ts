@@ -151,6 +151,8 @@ type CrestodianAgentTurnPlan =
       modelLabel: string;
       provider?: string;
       model?: string;
+      /** Credential store owned by the agent whose configured model this turn borrows. */
+      agentDir?: string;
       agentHarnessId?: string;
       agentHarnessRuntimeOverride?: string;
       localBackendPreference?: Extract<
@@ -170,12 +172,15 @@ async function planCrestodianAgentTurn(
       deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
     const snapshot = await readSnapshot();
     const runConfig = snapshot.runtimeConfig ?? snapshot.config ?? {};
-    const [{ isCliProvider, resolveDefaultModelForAgent }, { resolveDefaultAgentId }] =
-      await Promise.all([
-        import("../agents/model-selection.js"),
-        import("../agents/agent-scope.js"),
-      ]);
+    const [
+      { isCliProvider, resolveDefaultModelForAgent },
+      { resolveAgentDir, resolveDefaultAgentId },
+    ] = await Promise.all([
+      import("../agents/model-selection.js"),
+      import("../agents/agent-scope.js"),
+    ]);
     const defaultAgentId = resolveDefaultAgentId(runConfig);
+    const agentDir = resolveAgentDir(runConfig, defaultAgentId);
     const ref = resolveDefaultModelForAgent({ cfg: runConfig, agentId: defaultAgentId });
     if (isCliProvider(ref.provider, runConfig)) {
       return {
@@ -200,6 +205,7 @@ async function planCrestodianAgentTurn(
       modelLabel: configuredModel,
       provider: ref.provider,
       model: ref.model,
+      agentDir,
       ...(runtime === "auto" ? {} : { agentHarnessRuntimeOverride: runtime }),
     };
   }
@@ -374,6 +380,7 @@ export async function runCrestodianAgentTurnWithDeps(
         disableMessageTool: true,
         ...(plan.provider ? { provider: plan.provider } : {}),
         ...(plan.model ? { model: plan.model } : {}),
+        ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
         ...(plan.agentHarnessId
           ? { agentHarnessId: plan.agentHarnessId, cleanupBundleMcpOnRunEnd: true }
           : {}),

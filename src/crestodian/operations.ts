@@ -9,6 +9,7 @@ import {
   type InferenceBackendKind,
 } from "../commands/onboard-inference.js";
 import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TuiResult } from "../tui/tui-types.js";
@@ -924,14 +925,22 @@ async function applyPersistentOperation(params: {
   const before = await readConfigFileSnapshot();
   const outcome = await params.run({ runtime, deps: opts.deps });
   const after = await readConfigFileSnapshot();
-  await appendCrestodianAuditEntry({
-    operation: auditOperation,
-    summary: outcome.summary,
-    configPath: outcome.configPath ?? after.path ?? before.path ?? undefined,
-    configHashBefore: before.hash ?? null,
-    configHashAfter: after.hash ?? null,
-    details: { ...opts.auditDetails, ...outcome.details },
-  });
+  try {
+    await appendCrestodianAuditEntry({
+      operation: auditOperation,
+      summary: outcome.summary,
+      configPath: outcome.configPath ?? after.path ?? before.path ?? undefined,
+      configHashBefore: before.hash ?? null,
+      configHashAfter: after.hash ?? null,
+      details: { ...opts.auditDetails, ...outcome.details },
+    });
+  } catch (error) {
+    // The mutation already committed. Keep success truthful while making the
+    // missing audit record visible to every CLI/chat capture surface.
+    runtime.error(
+      `${outcome.summary}, but OpenClaw could not record its audit entry: ${formatErrorMessage(error)}`,
+    );
+  }
   runtime.log(`[crestodian] done: ${auditOperation}`);
   return { applied: true };
 }
