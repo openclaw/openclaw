@@ -25,7 +25,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Codex binding migration:** archive already-imported orphan sidecars after proving they have no current session owner, preventing repeated startup scans and lock contention while retaining ambiguous or indeterminate sources for review. (#103281) Thanks @bdjben.
 - **OpenCode Zen model catalog:** refresh the provider-owned static seed for Claude Sonnet 5, Grok 4.5, Hy3 Free, Kimi K2.7 Code, and MiniMax M3 with verified routing, pricing, limits, and input capabilities, remove retired free-tier rows, and expose the same catalog through unauthenticated model listing. (#103184)
 - **Gateway startup migrations:** release the shared migration lease before exiting when the selected config changes during startup, allowing immediate retries instead of blocking readiness until the five-minute lease expires. (#103145)
 - **Apple timeout recovery:** return promptly from shared operation deadlines and caller cancellation even when platform work ignores cancellation, while isolating late Gateway handshakes and cleaning up location and permission waiters. (#103066) Thanks @NianJiuZst.
