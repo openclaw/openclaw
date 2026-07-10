@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 import JSZip from "jszip";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import * as tar from "tar";
@@ -14,11 +15,11 @@ const {
   runPluginCommandWithTimeoutMock,
   tempDownloadPaths,
 } = vi.hoisted(() => ({
-    fetchWithSsrFGuardMock: vi.fn(),
-    resolveBrewExecutableMock: vi.fn(),
-    runPluginCommandWithTimeoutMock: vi.fn(),
-    tempDownloadPaths: [] as string[],
-  }));
+  fetchWithSsrFGuardMock: vi.fn(),
+  resolveBrewExecutableMock: vi.fn(),
+  runPluginCommandWithTimeoutMock: vi.fn(),
+  tempDownloadPaths: [] as string[],
+}));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
@@ -57,6 +58,7 @@ const {
   installSignalCli,
   installSignalCliFromRelease,
   looksLikeArchive,
+  MAX_SIGNAL_CLI_EXTRACTED_BYTES,
   pickAsset,
 } = await import("./install-signal-cli.js");
 
@@ -595,6 +597,28 @@ describe("extractSignalCliArchive", () => {
 
       await fs.mkdir(extractDir, { recursive: true });
       await expectExtractedSignalCli(archivePath, extractDir);
+    });
+  });
+
+  it("rejects native entries beyond the Signal-specific extraction limit", async () => {
+    await withArchiveWorkspace(async (workDir) => {
+      const archivePath = path.join(workDir, "oversized.tgz");
+      const extractDir = path.join(workDir, "extract");
+      const headerBlock = Buffer.alloc(512);
+      const header = new tar.Header({
+        path: "signal-cli",
+        type: "File",
+        mode: 0o755,
+        size: MAX_SIGNAL_CLI_EXTRACTED_BYTES + 1,
+      });
+      header.encode(headerBlock);
+      await fs.writeFile(archivePath, gzipSync(Buffer.concat([headerBlock, Buffer.alloc(1024)])));
+      await fs.mkdir(extractDir, { recursive: true });
+
+      await expect(extractSignalCliArchive(archivePath, extractDir, 5_000)).rejects.toThrow(
+        "archive entry extracted size exceeds limit",
+      );
+      await expectPathMissing(path.join(extractDir, "signal-cli"));
     });
   });
 });

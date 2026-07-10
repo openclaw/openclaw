@@ -30,6 +30,8 @@ type ReleaseResponse = {
 };
 
 const MAX_SIGNAL_CLI_ARCHIVE_BYTES = 256 * 1024 * 1024;
+/** @internal Exported for testing. */
+export const MAX_SIGNAL_CLI_EXTRACTED_BYTES = 384 * 1024 * 1024;
 const SIGNAL_CLI_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
 const SIGNAL_CLI_RELEASE_INFO_TIMEOUT_MS = 30_000;
 const CONTENT_LENGTH_RE = /^\d+$/;
@@ -47,7 +49,19 @@ export async function extractSignalCliArchive(
   installRoot: string,
   timeoutMs: number,
 ): Promise<void> {
-  await extractArchive({ archivePath, destDir: installRoot, timeoutMs });
+  // v0.14.5 is a 105,553,779-byte archive containing one 354,813,880-byte
+  // native binary. Keep 13% extraction headroom without relaxing global limits.
+  await extractArchive({
+    archivePath,
+    destDir: installRoot,
+    timeoutMs,
+    limits: {
+      maxArchiveBytes: MAX_SIGNAL_CLI_ARCHIVE_BYTES,
+      maxEntries: 32,
+      maxEntryBytes: MAX_SIGNAL_CLI_EXTRACTED_BYTES,
+      maxExtractedBytes: MAX_SIGNAL_CLI_EXTRACTED_BYTES,
+    },
+  });
 }
 
 /** @internal Exported for testing. */
