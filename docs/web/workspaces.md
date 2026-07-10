@@ -1,0 +1,89 @@
+---
+summary: "Agent-composable dashboard workspaces in the Control UI"
+read_when:
+  - Building or rearranging dashboard tabs and widgets
+  - Letting an agent compose a dashboard
+  - Reviewing the custom-widget approval and sandbox model
+title: "Workspaces"
+---
+
+The **Workspaces** tab in the [Control UI](/web/control-ui) is a dashboard you and your
+agents arrange together. Tabs, widgets, their positions on a 12-column grid, and their
+data bindings all live in one document. Anything that can edit that document can compose
+the dashboard: you, the `openclaw workspaces` CLI, or an agent calling `dashboard_*` tools.
+
+Every write goes through the same validated path, so a human's layout and an agent's
+layout cannot diverge. Each accepted write bumps a version and broadcasts
+`plugin.dashboard.changed`, so an agent's edit appears in an already-open browser without
+a reload.
+
+## The default workspace
+
+On first load you get an **Overview** workspace: cost and token cards, instance health,
+sessions, cron status, and an activity feed. It is ordinary workspace content — drag it,
+collapse it, hide it, or delete it.
+
+## Built-in widgets
+
+Nine trusted widgets ship with the plugin and render as first-party UI:
+
+`stat-card`, `markdown`, `table`, `iframe-embed`, `sessions`, `usage`, `cron`,
+`instances`, `activity`.
+
+Widgets declare data through **bindings**, they never fetch on their own:
+
+| Binding  | Resolves to |
+| -------- | ----------- |
+| `static` | A literal value stored in the document (8 KB max). |
+| `file`   | A JSON, Markdown, or CSV file under `<stateDir>/dashboard/data/`, optionally narrowed by a JSON pointer. |
+| `rpc`    | One of a fixed allowlist of read-only gateway methods, resolved by the trusted Control UI. |
+
+The `file` binding is the simplest way to put your own numbers on a dashboard: write a
+JSON file into the data directory and point a `stat-card` at it.
+
+## Provenance
+
+Tabs and widgets carry a `createdBy` stamp — `user`, `system`, or `agent:<id>` — set from
+whoever made the write. It cannot be supplied by the caller, so an agent cannot label its
+work as yours, and the "AI" chip on an agent-authored widget always means what it says.
+
+## Custom widgets
+
+An agent can author a real HTML widget with `dashboard_widget_scaffold` (or you can, with
+`openclaw workspaces widget-scaffold <name>`). Agent-authored code is treated as hostile:
+
+- A scaffolded widget enters the registry as **pending**. No iframe is created, and the
+  asset route returns 404 for its files, until an operator approves it.
+- Approval is a separate decision from editing a layout: `dashboard.widget.approve`
+  requires the `operator.approvals` scope, the same scope that guards exec approvals.
+- An approved widget renders in an `<iframe sandbox="allow-scripts">` — never
+  `allow-same-origin` — so its origin is opaque and it cannot reach the parent's DOM,
+  storage, or cookies.
+- Its assets are served with `connect-src 'none'`, so the widget cannot make network
+  requests at all. It holds no credential and never talks to the gateway.
+- Data reaches it only through a versioned `postMessage` bridge, where the trusted parent
+  resolves the bindings the widget's own manifest declared. A widget cannot ask for data
+  it was not granted.
+
+Sending a prompt into chat from a widget additionally requires a manifest capability, a
+per-invocation confirmation quoting the exact text, and passes a rate limit.
+
+## CLI
+
+```sh
+openclaw workspaces tabs list
+openclaw workspaces tabs create --title Financials
+openclaw workspaces widget-scaffold revenue-chart --title "Revenue Chart"
+openclaw workspaces widget-approve revenue-chart
+```
+
+`widget-approve` needs a device paired with the `operator.approvals` scope; approving from
+the Control UI does not, because the browser already holds it.
+
+## Storage
+
+The workspace document, the custom-widget registry, and a 20-entry undo ring live in
+`<stateDir>/dashboard/dashboard.sqlite`. Agent-authored widget assets stay on disk under
+`<stateDir>/dashboard/widgets/<name>/`, and file-binding data under
+`<stateDir>/dashboard/data/`, because an agent authors those with ordinary file tools and
+the widget route serves their bytes.
