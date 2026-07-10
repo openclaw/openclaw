@@ -66,6 +66,12 @@ export function resolvePreferredOpenClawTmpDir(
     if (typeof st.uid === "number" && st.uid !== uid) {
       return false;
     }
+    // A directory with the sticky bit (e.g., /tmp) is safe for all users
+    // regardless of group/world-writable permissions.  The kernel only lets
+    // the file owner, dir owner, or root unlink/rename entries inside it.
+    if (typeof st.mode === "number" && (st.mode & 0o1000) !== 0) {
+      return true;
+    }
     return typeof st.mode !== "number" || (st.mode & 0o022) === 0;
   };
 
@@ -102,6 +108,11 @@ export function resolvePreferredOpenClawTmpDir(
       }
       if (typeof st.mode !== "number") {
         return false;
+      }
+      // A sticky-bit directory is world-writable by design and must never be
+      // tightened — the kernel's sticky-bit rule already enforces safety.
+      if ((st.mode & 0o1000) !== 0) {
+        return resolveDirState(candidatePath) === "available";
       }
       if ((st.mode & 0o022) === 0) {
         return resolveDirState(candidatePath) === "available";

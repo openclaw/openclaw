@@ -572,4 +572,101 @@ describe("resolvePreferredOpenClawTmpDir", () => {
 
     expect(result).toBe(POSIX_OPENCLAW_TMP_DIR);
   });
+
+  describe("sticky-bit directory handling (#103190)", () => {
+    it("accepts a sticky-bit /tmp as-is without attempting chmod", () => {
+      // /tmp has mode 0o41777 (directory + sticky + world-writable).
+      // The sticky bit makes it safe for multi-user temp use — chmod to 0o700
+      // would break every other process writing to /tmp.
+      const chmodSync = vi.fn();
+      const warn = vi.fn();
+      const accessSync = vi.fn();
+      const lstatSync = vi.fn(() => makeDirStat({ mode: 0o41777 }));
+
+      const result = resolvePreferredOpenClawTmpDir({
+        platform: "linux",
+        accessSync,
+        lstatSync,
+        mkdirSync: vi.fn(),
+        chmodSync,
+        getuid: vi.fn(() => 501),
+        tmpdir: vi.fn(() => "/var/fallback"),
+        warn,
+      });
+
+      expect(result).toBe(POSIX_OPENCLAW_TMP_DIR);
+      // Must NOT chmod a sticky-bit directory.
+      expect(chmodSync).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("does not tighten permissions on a sticky-bit fallback directory", () => {
+      const fallbackPath = fallbackTmp();
+      const chmodSync = vi.fn<(target: string, mode: number) => void>();
+      const warn = vi.fn();
+
+      // Fallback dir with sticky bit + world-writable mode
+      const resolved = resolveWithReadOnlyTmpFallback({
+        fallbackPath,
+        fallbackLstatSync: vi.fn(() => makeDirStat({ mode: 0o41777 })),
+        chmodSync,
+        warn,
+      });
+
+      expect(resolved).toBe(fallbackPath);
+      // Sticky-bit directory must not be tightened.
+      expect(chmodSync).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("creates preferred dir and does not chmod a sticky-bit parent", () => {
+      // /tmp exists with sticky bit; /tmp/openclaw does not yet exist.
+      // After creation, the child /tmp/openclaw may be chmodded (it is not
+      // sticky-bit), but the parent /tmp must never be touched.
+      let created = false;
+      const chmodCalls: Array<{ target: string; mode: number }> = [];
+      const chmodSync = vi.fn<(target: string, mode: number) => void>(
+        (target: string, mode: number) => {
+          chmodCalls.push({ target, mode });
+        },
+      );
+      const warn = vi.fn();
+      const accessSync = vi.fn();
+
+      const mkdirSync = vi.fn((_target: string, _opts: unknown) => {
+        created = true;
+      });
+
+      const lstatSync = vi.fn((target: string) => {
+        if (target === POSIX_OPENCLAW_TMP_DIR) {
+          if (!created) {
+            throw nodeErrorWithCode("ENOENT");
+          }
+          return makeDirStat({ mode: 0o40700 });
+        }
+        if (target === "/tmp") {
+          return makeDirStat({ mode: 0o41777 });
+        }
+        return makeDirStat({ mode: 0o40700 });
+      });
+
+      const result = resolvePreferredOpenClawTmpDir({
+        platform: "linux",
+        accessSync,
+        lstatSync,
+        mkdirSync,
+        chmodSync,
+        getuid: vi.fn(() => 501),
+        tmpdir: vi.fn(() => "/var/fallback"),
+        warn,
+      });
+
+      expect(result).toBe(POSIX_OPENCLAW_TMP_DIR);
+      // /tmp/openclaw may be chmodded (it's owned by us), but /tmp must not.
+      for (const call of chmodCalls) {
+        expect(call.target).not.toBe("/tmp");
+      }
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
 });
