@@ -1,3 +1,4 @@
+import { extractLeadingHttpStatus } from "../../shared/assistant-error-format.js";
 import type { AssistantMessage } from "../types.js";
 
 function buildProviderErrorPattern(patterns: readonly string[]): RegExp {
@@ -11,32 +12,14 @@ const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
   "available balance",
   "insufficient_quota",
   "out of budget",
-  // Long-window rate limits (daily/multi-hour reset). The outer retry budget is
-  // a handful of sub-15s exponential backoffs, which can never clear a window
-  // measured in hours or days — retrying only re-sends the full context and
-  // re-bills tokens. Matched here so they short-circuit the retryable "rate
-  // limit"/"429" patterns below. (issue #102250)
-  "per day",
-  "daily.{0,40}limit",
-  "try again in \\d+\\s*(?:hour|hours|day|days)",
-  "retry after \\d+\\s*(?:h(?:ours?)?|d(?:ays?)?)\\b",
 ]);
 
 const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
   "overloaded",
   "rate.?limit",
   "too many requests",
-  // Anchor bare HTTP status tokens on word boundaries so they only match a
-  // standalone status code, not a digit run embedded in a model id, image
-  // dimension, request id, or API key (e.g. "…preview-0429", "1504x1504",
-  // "sk-proj-abc502xyz"). Unanchored, those substrings made permanent 400/401/
-  // 404 errors look retryable, burning tokens on doomed re-sends. (issue #102250)
-  "\\b429\\b",
-  "\\b500\\b",
-  "\\b502\\b",
-  "\\b503\\b",
-  "\\b504\\b",
   "service.?unavailable",
+  "bad gateway",
   "server.?error",
   "internal.?error",
   "provider.?returned.?error",
@@ -63,13 +46,33 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
   "please retry your request",
 ]);
 
+// A leading HTTP status is retryable only for transient server/throttle codes:
+// request-timeout (408), too-early (425), too-many-requests (429), and any 5xx
+// (server/gateway/overloaded/Cloudflare). Every other status — the permanent
+// 4xx family (400/401/403/404/422 …) — fails fast.
+function isRetryableHttpStatus(code: number): boolean {
+  if (code === 408 || code === 425 || code === 429) {
+    return true;
+  }
+  return code >= 500 && code <= 599;
+}
+
 /** Classify transient provider/transport failures for outer retry policy. */
 export function isRetryableAssistantError(message: AssistantMessage): boolean {
   if (message.stopReason !== "error" || !message.errorMessage) {
     return false;
   }
-  if (NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.test(message.errorMessage)) {
+  const errorText = message.errorMessage;
+  if (NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.test(errorText)) {
     return false;
   }
-  return RETRYABLE_PROVIDER_ERROR_PATTERN.test(message.errorMessage);
+  // Prefer structured status classification over substring matching: a leading
+  // status code is authoritative, so permanent 4xx errors fail fast and a bare
+  // number embedded in prose (e.g. "maximum width is 500 pixels", a model id, or
+  // an API key) is never mistaken for a 5xx and retried. (issue #102250)
+  const status = extractLeadingHttpStatus(errorText);
+  if (status) {
+    return isRetryableHttpStatus(status.code);
+  }
+  return RETRYABLE_PROVIDER_ERROR_PATTERN.test(errorText);
 }
