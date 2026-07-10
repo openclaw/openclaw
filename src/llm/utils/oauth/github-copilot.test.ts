@@ -42,6 +42,7 @@ function stubHangingFetch(timeoutMs: number): void {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -264,88 +265,120 @@ describe("GitHub Copilot OAuth bounded reads", () => {
   });
 });
 
-describe("GitHub Copilot OAuth error body redaction", () => {
-  it("redacts raw JSON response body from non-2xx error messages", async () => {
+describe("GitHub Copilot OAuth error responses", () => {
+  const githubToken = `ghr_${"s".repeat(40)}`;
+
+  function createOversizedOAuthErrorResponse(): {
+    response: Response;
+    cancel: ReturnType<typeof vi.fn>;
+  } {
+    const cancel = vi.fn();
+    const payload =
+      JSON.stringify({
+        error: "invalid_grant",
+        error_description: `refresh_token=${githubToken} was rejected`,
+        refresh_token: githubToken,
+      }) + " ".repeat(32 * 1024);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(payload));
+      },
+      cancel,
+    });
+    return {
+      response: new Response(body, {
+        status: 400,
+        headers: {
+          "Content-Type": "application/json",
+          "x-request-id": "copilot-request-id",
+        },
+      }),
+      cancel,
+    };
+  }
+
+  async function captureError(promise: Promise<unknown>): Promise<Error> {
+    try {
+      await promise;
+    } catch (error) {
+      if (error instanceof Error) {
+        return error;
+      }
+      throw error;
+    }
+    throw new Error("Expected request to fail");
+  }
+
+  function expectBoundedRedactedError(error: Error, label: string): void {
+    expect(error).toMatchObject({
+      name: "ProviderHttpError",
+      status: 400,
+      code: "invalid_grant",
+      requestId: "copilot-request-id",
+    });
+    expect(error.message).toContain(`${label} (400):`);
+    expect(error.message).toContain("[code=invalid_grant]");
+    expect(error.message).toContain("[request_id=copilot-request-id]");
+    expect(error.message).not.toContain("error_description");
+    expect(error.message).not.toContain(githubToken);
+    const errorBody = (error as Error & { errorBody?: string }).errorBody;
+    expect(errorBody).toBeDefined();
+    expect(errorBody).not.toContain(githubToken);
+    expect(errorBody?.length).toBeLessThanOrEqual(500);
+  }
+
+  it("bounds and redacts device-code HTTP failures", async () => {
+    const { response, cancel } = createOversizedOAuthErrorResponse();
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              error: "invalid_grant",
-              error_description: "The authorization code is invalid or expired.",
-            }),
-            { status: 400, headers: { "Content-Type": "application/json" } },
-          ),
-      ),
+      vi.fn(async () => response),
     );
 
-    await expect(refreshGitHubCopilotToken("refresh-token")).rejects.toThrow(
-      "GitHub Copilot token refresh request failed with status 400",
-    );
-    // Raw JSON body keys must not appear in the error message
-    await expect(refreshGitHubCopilotToken("refresh-token")).rejects.not.toThrow(
-      /error_description/,
-    );
+    const error = await captureError(testing.startDeviceFlow("github.com"));
+
+    expectBoundedRedactedError(error, "GitHub Copilot device code request");
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
-  it("includes redacted structured error detail when the body is valid JSON", async () => {
+  it("bounds and redacts device-token HTTP failures", async () => {
+    vi.useFakeTimers();
+    const { response, cancel } = createOversizedOAuthErrorResponse();
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              error: { code: "rate_limited", message: "Too many requests" },
-            }),
-            { status: 429, headers: { "Content-Type": "application/json" } },
-          ),
-      ),
+      vi.fn(async () => response),
     );
 
-    await expect(refreshGitHubCopilotToken("refresh-token")).rejects.toThrow(
-      /GitHub Copilot token refresh request failed with status 429/,
+    const pending = captureError(
+      testing.pollForGitHubAccessToken("github.com", "device-code", 0, Date.now() + 5_000),
     );
-    // Structured code is preserved but raw JSON keys are not leaked
-    await expect(refreshGitHubCopilotToken("refresh-token")).rejects.toThrow(/code=rate_limited/);
+    await vi.advanceTimersByTimeAsync(1_200);
+    const error = await pending;
+
+    expectBoundedRedactedError(error, "GitHub Copilot device token request");
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
-  it("redacts error body via the device code flow", async () => {
+  it("bounds and redacts Copilot-token HTTP failures", async () => {
+    const { response, cancel } = createOversizedOAuthErrorResponse();
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({ error: "invalid_request", error_description: "missing client_id" }),
-            { status: 400, headers: { "Content-Type": "application/json" } },
-          ),
-      ),
+      vi.fn(async () => response),
     );
 
-    await expect(testing.startDeviceFlow("github.com")).rejects.toThrow(
-      "GitHub Copilot device code request failed with status 400",
-    );
-    await expect(testing.startDeviceFlow("github.com")).rejects.not.toThrow(/error_description/);
+    const error = await captureError(refreshGitHubCopilotToken("refresh-token"));
+
+    expectBoundedRedactedError(error, "GitHub Copilot token refresh request");
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
-  it("handles non-JSON error bodies with bounded detail", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response("Internal Server Error", {
-            status: 500,
-            headers: { "Content-Type": "text/plain" },
-          }),
-      ),
-    );
+  it("bounds model-list HTTP failures before treating discovery as optional", async () => {
+    const { response, cancel } = createOversizedOAuthErrorResponse();
+    const fetchMock = vi.fn(async () => response);
+    vi.stubGlobal("fetch", fetchMock);
 
-    // For non-JSON bodies the detail is the body text itself (bounded by readResponseTextLimited).
-    // The error message should include the status code and the bounded body as detail.
-    await expect(refreshGitHubCopilotToken("refresh-token")).rejects.toThrow(
-      /GitHub Copilot token refresh request failed with status 500/,
-    );
-    // Raw JSON syntax like {"error": must never appear for non-JSON responses
-    await expect(refreshGitHubCopilotToken("refresh-token")).rejects.not.toThrow(/\{"error"/);
+    await expect(testing.listGitHubCopilotModelIds("copilot-token")).resolves.toEqual([]);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
   });
 });
