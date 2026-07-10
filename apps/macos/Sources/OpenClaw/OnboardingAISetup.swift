@@ -769,8 +769,10 @@ struct OnboardingAISetupView: View {
         if self.model.exhaustedAutoCandidates, !self.model.connected {
             OnboardingErrorCard(
                 title: "None of the found options worked",
-                message: "The details are listed on each option above. " +
-                    "You can fix the login and retry, or connect with an API key or token below.",
+                message: """
+                The details are listed on each option above. \
+                You can fix the login and retry, or connect with an API key or token below.
+                """,
                 docsSlug: "concepts/model-providers",
                 retryTitle: "Check again")
             {

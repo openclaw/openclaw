@@ -2,23 +2,6 @@ import Foundation
 import OpenClawProtocol
 import OSLog
 
-private final class GatewayRequestCancellationGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var cancelled = false
-
-    var isCancelled: Bool {
-        self.lock.lock()
-        defer { self.lock.unlock() }
-        return self.cancelled
-    }
-
-    func cancel() {
-        self.lock.lock()
-        self.cancelled = true
-        self.lock.unlock()
-    }
-}
-
 /// Avoid ambiguity with the app's own AnyCodable type.
 private typealias ProtoAnyCodable = OpenClawProtocol.AnyCodable
 
@@ -67,34 +50,10 @@ private func gatewayIntValue(_ value: Any?) -> Int? {
     return nil
 }
 
-private enum ConnectChallengeError: Error {
-    case timeout
-}
-
-private let defaultOperatorConnectScopes: [String] = [
-    "operator.admin",
-    "operator.read",
-    "operator.write",
-    "operator.approvals",
-    "operator.pairing",
-]
-
 extension String {
     fileprivate var nilIfEmpty: String? {
         self.isEmpty ? nil : self
     }
-}
-
-private struct SelectedConnectAuth {
-    let authToken: String?
-    let authBootstrapToken: String?
-    let authDeviceToken: String?
-    let authPassword: String?
-    let signatureToken: String?
-    let storedToken: String?
-    let storedScopes: [String]?
-    let authSource: GatewayAuthSource
-    let suppressedDeviceTokenRetry: Bool
 }
 
 public actor GatewayChannelActor {
@@ -477,7 +436,7 @@ public actor GatewayChannelActor {
         let primaryLocale = Locale.preferredLanguages.first ?? Locale.current.identifier
         let options = self.connectOptions ?? GatewayConnectOptions(
             role: "operator",
-            scopes: defaultOperatorConnectScopes,
+            scopes: Self.defaultOperatorConnectScopes,
             caps: [],
             commands: [],
             permissions: [:],
