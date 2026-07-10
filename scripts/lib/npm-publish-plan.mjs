@@ -123,7 +123,7 @@ export async function fetchNpmRegistryPackumentWithRetry(params) {
           } catch (error) {
             await cancelNpmRegistryResponseBody(response);
             const message = error instanceof Error ? error.message : String(error);
-            throw new Error(
+            lastError = new Error(
               `${params.packageName}: npm publication-route probe returned invalid JSON: ${message}.`,
             );
           }

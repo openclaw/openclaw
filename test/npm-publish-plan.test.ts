@@ -98,8 +98,43 @@ describe("fetchNpmRegistryPackumentWithRetry", () => {
     expect(waits).toEqual([1000, 2000]);
   });
 
-  it("rejects stable malformed JSON without spending the retry budget", async () => {
+  it("retries malformed JSON before returning the parsed packument", async () => {
     let fetchCalls = 0;
+    let cancelCalls = 0;
+    const waits: number[] = [];
+    const packument = { versions: { "2026.7.1-beta.3": {} } };
+
+    const result = await fetchNpmRegistryPackumentWithRetry({
+      packageName: "@openclaw/meta-provider",
+      packageUrl: "https://registry.npmjs.org/%40openclaw%2Fmeta-provider",
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return registryResponse(
+          fetchCalls === 1
+            ? {
+                body: "{",
+                cancel: () => {
+                  cancelCalls += 1;
+                },
+              }
+            : { body: JSON.stringify(packument) },
+        );
+      },
+      sleep: async (delayMs) => {
+        waits.push(delayMs);
+      },
+      createSignal: () => new AbortController().signal,
+    });
+
+    expect(result).toEqual({ status: 200, ok: true, packument });
+    expect(fetchCalls).toBe(2);
+    expect(cancelCalls).toBe(1);
+    expect(waits).toEqual([1000]);
+  });
+
+  it("keeps malformed JSON within the bounded retry budget", async () => {
+    let fetchCalls = 0;
+    let cancelCalls = 0;
     const waits: number[] = [];
 
     await expect(
@@ -108,7 +143,12 @@ describe("fetchNpmRegistryPackumentWithRetry", () => {
         packageUrl: "https://registry.npmjs.org/%40openclaw%2Fmeta-provider",
         fetchImpl: async () => {
           fetchCalls += 1;
-          return registryResponse({ body: "{" });
+          return registryResponse({
+            body: "{",
+            cancel: () => {
+              cancelCalls += 1;
+            },
+          });
         },
         sleep: async (delayMs) => {
           waits.push(delayMs);
@@ -117,8 +157,9 @@ describe("fetchNpmRegistryPackumentWithRetry", () => {
       }),
     ).rejects.toThrow("npm publication-route probe returned invalid JSON");
 
-    expect(fetchCalls).toBe(1);
-    expect(waits).toEqual([]);
+    expect(fetchCalls).toBe(3);
+    expect(cancelCalls).toBe(3);
+    expect(waits).toEqual([1000, 2000]);
   });
 
   it("returns a stable missing-package status without retrying", async () => {
