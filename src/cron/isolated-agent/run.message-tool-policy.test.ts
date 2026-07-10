@@ -13,6 +13,7 @@ import {
   isCliProviderMock,
   isHeartbeatOnlyResponseMock,
   loadRunCronIsolatedAgentTurn,
+  loadSessionEntryMock,
   makeCronSession,
   mockRunCronFallbackPassthrough,
   preflightCronModelProviderMock,
@@ -955,8 +956,11 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("releases cron run context references after completion", async () => {
+    const initialSessionEntry = { retained: true };
+    loadSessionEntryMock.mockReturnValue(initialSessionEntry);
     const cronSession = makeCronSession({
-      store: { "agent:default:cron:message-tool-policy": { retained: true } },
+      store: { "agent:default:cron:message-tool-policy": initialSessionEntry },
+      initialSessionEntry,
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
     const { getAgentRunContext, registerAgentRunContext } =
@@ -1037,8 +1041,11 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("keeps shared cron run context references active after completion", async () => {
+    const initialSessionEntry = { retained: true };
+    loadSessionEntryMock.mockReturnValue(initialSessionEntry);
     const cronSession = makeCronSession({
-      store: { "agent:default:cron:message-tool-policy": { retained: true } },
+      store: { "agent:default:cron:message-tool-policy": initialSessionEntry },
+      initialSessionEntry,
     });
     resolveCronSessionMock.mockReturnValue(cronSession);
     const { clearAgentRunContext, getAgentRunContext, registerAgentRunContext } =
