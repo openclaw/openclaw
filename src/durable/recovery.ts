@@ -1,6 +1,6 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 // Recovery reconciliation for durable runtime runs.
-import { isDurableRuntimesEnabled } from "./config.js";
+import { isDurableWorkerEnabled } from "./config.js";
 import { reconcileDurableFanIn, type DurableFanInPolicy } from "./fan-in.js";
 import {
   DURABLE_AGENT_TURN_OPERATION_KIND,
@@ -827,7 +827,7 @@ export function startDurableRecoveryWorker(params: {
   env?: NodeJS.ProcessEnv;
 }): () => void {
   const env = params.env ?? process.env;
-  if (!isDurableRuntimesEnabled(env)) {
+  if (!isDurableWorkerEnabled(env)) {
     return () => {};
   }
   const intervalMs = resolveDurableRecoveryIntervalMs(env);

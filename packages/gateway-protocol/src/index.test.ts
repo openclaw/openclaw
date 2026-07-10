@@ -4,6 +4,7 @@ import { TALK_TEST_PROVIDER_ID } from "../../../src/test-utils/talk-test-provide
 import * as protocol from "./index.js";
 import {
   formatValidationErrors,
+  validateAgentParams,
   validateChatAbortParams,
   validateChatHistoryParams,
   validateChatMetadataParams,
@@ -11,6 +12,8 @@ import {
   validateChatEvent,
   validateCommandsListParams,
   validateConnectParams,
+  validateDurableCoordinationGetParams,
+  validateDurableCoordinationGetResult,
   validateModelsListParams,
   validateNodeEventResult,
   validateNodePairRequestParams,
@@ -803,6 +806,60 @@ describe("validateChatSendParams", () => {
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 2 })).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 0 })).toBe(false);
   });
+
+  it("accepts bounded context references", () => {
+    const base = {
+      sessionKey: "agent:main:main",
+      message: "hello",
+      idempotencyKey: "run-1",
+    };
+
+    expect(
+      validateChatSendParams({
+        ...base,
+        contextRefs: [
+          {
+            type: "work_unit",
+            id: "workboard:default:card-1",
+            label: "Card 1",
+            source: "workboard",
+            metadata: { status: "todo" },
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      validateChatSendParams({
+        ...base,
+        contextRefs: [{ type: "bad type", id: "workboard:default:card-1" }],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("validateAgentParams contextRefs", () => {
+  it("accepts context references on direct agent runs", () => {
+    const base = {
+      message: "hello",
+      idempotencyKey: "run-1",
+    };
+
+    expect(
+      validateAgentParams({
+        ...base,
+        contextRefs: [{ type: "work_unit", id: "workboard:default:card-1" }],
+      }),
+    ).toBe(true);
+    expect(
+      validateAgentParams({
+        ...base,
+        contextRefs: Array.from({ length: 17 }, (_, index) => ({
+          type: "work_unit",
+          id: `wu-${index}`,
+        })),
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("validateModelsListParams", () => {
@@ -835,6 +892,92 @@ describe("validateTasksListParams", () => {
   it("rejects internal task statuses and unknown fields", () => {
     expect(validateTasksListParams({ status: "succeeded" })).toBe(false);
     expect(validateTasksCancelParams({ taskId: "task-1", force: true })).toBe(false);
+  });
+});
+
+describe("validateDurableCoordinationGet", () => {
+  it("accepts coordination inspection params and rejects unknown fields", () => {
+    expect(validateDurableCoordinationGetParams({ runtimeRunId: "rt_123" })).toBe(true);
+    expect(validateDurableCoordinationGetParams({ runtimeRunId: "" })).toBe(false);
+    expect(
+      validateDurableCoordinationGetParams({ runtimeRunId: "rt_123", includeSteps: true }),
+    ).toBe(false);
+  });
+
+  it("accepts the public durable coordination projection result shape", () => {
+    expect(
+      validateDurableCoordinationGetResult({
+        projection: {
+          runtimeRunId: "rt_123",
+          operationKind: "openclaw.agent.turn",
+          operationVersion: "1",
+          status: "waiting_child",
+          recoveryState: "waiting_child",
+          currentStepId: "subagents",
+          waitingReason: "child",
+          updatedAt: 200,
+          refs: {
+            outputRefs: [],
+            errorRefs: [],
+            artifactRefs: [],
+          },
+          external: {
+            sessionKey: "agent:main:main",
+            taskId: "task_123",
+          },
+          children: {
+            total: 1,
+            pending: 0,
+            running: 0,
+            succeeded: 1,
+            failed: 0,
+            cancelled: 0,
+            lost: 0,
+            terminal: 1,
+            open: 0,
+          },
+          controls: {
+            canCancel: false,
+            canRetry: true,
+            canResume: false,
+            canSignal: false,
+            canOpenTimeline: true,
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateDurableCoordinationGetResult({
+        projection: {
+          runtimeRunId: "rt_123",
+          operationKind: "openclaw.agent.turn",
+          operationVersion: "1",
+          status: "paused",
+          recoveryState: "waiting_child",
+          updatedAt: 200,
+          refs: { outputRefs: [], errorRefs: [], artifactRefs: [] },
+          external: {},
+          children: {
+            total: 0,
+            pending: 0,
+            running: 0,
+            succeeded: 0,
+            failed: 0,
+            cancelled: 0,
+            lost: 0,
+            terminal: 0,
+            open: 0,
+          },
+          controls: {
+            canCancel: false,
+            canRetry: false,
+            canResume: false,
+            canSignal: false,
+            canOpenTimeline: true,
+          },
+        },
+      }),
+    ).toBe(false);
   });
 });
 

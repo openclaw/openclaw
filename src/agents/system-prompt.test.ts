@@ -350,7 +350,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
     );
-    expect(prompt).toContain("Larger work: use `sessions_spawn`; completion is push-based.");
     expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
     expect(prompt).not.toContain("use `sessions_yield` when waiting");
     expect(prompt).toContain(
@@ -368,8 +367,8 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["sessions_spawn", "sessions_yield", "subagents"],
     });
 
-    expect(withoutYield).not.toContain("use `sessions_yield` when waiting");
-    expect(withYield).toContain("use `sessions_yield` when waiting");
+    expect(withoutYield).not.toContain("Use `sessions_yield` only when");
+    expect(withYield).toContain("Use `sessions_yield` only when");
   });
 
   it("lists available tools when provided", () => {
@@ -915,14 +914,14 @@ describe("buildAgentSystemPrompt", () => {
     expect(messagingPrompt).not.toContain("subagents(action=list)");
 
     expect(spawnOnlyPrompt).toContain(
-      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; include a clear objective/output/write-scope/verification brief and `taskName` when a stable handle helps; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript.',
+      "- Sub-agent orchestration -> start directly when the current context is enough; use `sessions_spawn(...)` when parallelism, specialist isolation, fault isolation, or long background work makes the run more reliable.",
     );
     expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
 
     expect(orchestrationPrompt).toContain(
-      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; include a clear objective/output/write-scope/verification brief and `taskName` when a stable handle helps; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript; use `subagents(action=list)` only for on-demand status/debugging visibility.',
+      "- Sub-agent orchestration -> start directly when the current context is enough; use `sessions_spawn(...)` when parallelism, specialist isolation, fault isolation, or long background work makes the run more reliable. Use `subagents(action=list)` only for on-demand status/debugging visibility, not wait loops.",
     );
-    expect(orchestrationWaitPrompt).toContain("use `sessions_yield` to wait for completion events");
+    expect(orchestrationWaitPrompt).toContain("Use `sessions_yield` only when");
   });
 
   it("adds stronger sub-agent delegation guidance in prefer mode", () => {
@@ -941,7 +940,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(preferPrompt).toContain("Mode: prefer");
     expect(preferPrompt).toContain("responsive coordinator");
     expect(preferPrompt).toContain(
-      "Anything requiring more work than a direct reply should go through `sessions_spawn`",
+      "For non-trivial work, decide what stays local and what is delegated",
     );
     expect(preferPrompt).toContain("objective, expected output, relevant files/inputs");
     expect(preferPrompt).toContain("keep it lowercase with underscores or hyphens");
@@ -1071,9 +1070,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(telegramPrompt).toContain("pull quotes");
     expect(telegramPrompt).toContain('task lists via `<input type="checkbox"/>` inside `<li>`');
     expect(telegramPrompt).toContain("anchors/in-message links");
-    expect(telegramPrompt).toContain(
-      "formulas (inline `<tg-math>LaTeX</tg-math>`, block `<tg-math-block>LaTeX</tg-math-block>`; not `$...$` or `\\(...\\)`)",
-    );
     expect(telegramPrompt).toContain("maps/collages/slideshows");
     expect(telegramPrompt).toContain("use `<details>`, not legacy `<blockquote expandable>`");
     expect(telegramPrompt).toContain("use `<ul><li>...</li></ul>`, not literal bullet characters");

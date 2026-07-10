@@ -191,6 +191,11 @@ import {
   DeviceTokenRotateParamsSchema,
 } from "./devices.js";
 import {
+  DurableCoordinationGetParamsSchema,
+  DurableCoordinationGetResultSchema,
+  DurableCoordinationProjectionSchema,
+} from "./durable.js";
+import {
   EnvironmentSummarySchema,
   EnvironmentsListParamsSchema,
   EnvironmentsListResultSchema,
@@ -493,6 +498,9 @@ export const ProtocolSchemas = {
   TasksGetResult: TasksGetResultSchema,
   TasksCancelParams: TasksCancelParamsSchema,
   TasksCancelResult: TasksCancelResultSchema,
+  DurableCoordinationGetParams: DurableCoordinationGetParamsSchema,
+  DurableCoordinationProjection: DurableCoordinationProjectionSchema,
+  DurableCoordinationGetResult: DurableCoordinationGetResultSchema,
   ConfigGetParams: ConfigGetParamsSchema,
   ConfigSetParams: ConfigSetParamsSchema,
   ConfigApplyParams: ConfigApplyParamsSchema,

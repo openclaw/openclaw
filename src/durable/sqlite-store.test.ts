@@ -62,6 +62,20 @@ describe("durable runtime sqlite store", () => {
       expect(() => openDurableRuntimeSqliteStore({ path: dbPath })).toThrow(
         /newer than supported version/,
       );
+      const verifyDb = new DatabaseSync(dbPath);
+      try {
+        const runtimeTables = verifyDb
+          .prepare(
+            `SELECT name FROM sqlite_master
+               WHERE type = 'table'
+                 AND name LIKE 'durable_runtime_%'
+               ORDER BY name`,
+          )
+          .all();
+        expect(runtimeTables).toEqual([]);
+      } finally {
+        verifyDb.close();
+      }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -122,6 +122,9 @@ export type TasksGetParams = SchemaType<"TasksGetParams">;
 export type TasksGetResult = SchemaType<"TasksGetResult">;
 export type TasksCancelParams = SchemaType<"TasksCancelParams">;
 export type TasksCancelResult = SchemaType<"TasksCancelResult">;
+export type DurableCoordinationGetParams = SchemaType<"DurableCoordinationGetParams">;
+export type DurableCoordinationProjection = SchemaType<"DurableCoordinationProjection">;
+export type DurableCoordinationGetResult = SchemaType<"DurableCoordinationGetResult">;
 
 /** Config read/write/schema payloads plus update status and run controls. */
 export type ConfigGetParams = SchemaType<"ConfigGetParams">;

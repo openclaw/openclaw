@@ -120,14 +120,17 @@ export function shouldAutoDeliverTaskTerminalUpdate(task: TaskRecord): boolean {
     return false;
   }
   if (task.runtime === "subagent" && task.status !== "cancelled") {
+    if (
+      task.status === "succeeded" &&
+      task.terminalOutcome === "blocked" &&
+      task.deliveryStatus === "pending"
+    ) {
+      return true;
+    }
     // Subagent lifecycle owns provider-result publication.
     return false;
   }
-  if (
-    task.runtime === "subagent" &&
-    task.status === "cancelled" &&
-    task.error === SUBAGENT_KILL_TASK_ERROR
-  ) {
+  if (task.runtime === "subagent" && task.error === SUBAGENT_KILL_TASK_ERROR) {
     // A direct kill is provisional until lifecycle reconciliation settles.
     return false;
   }

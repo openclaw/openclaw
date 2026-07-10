@@ -33,6 +33,22 @@ export const SessionLabelString = Type.String({
   minLength: 1,
   maxLength: SESSION_LABEL_MAX_LENGTH,
 });
+/** Generic runtime context reference attached to a turn without embedding the target object. */
+export const ContextRefSchema = Type.Object(
+  {
+    type: Type.String({
+      minLength: 1,
+      maxLength: 80,
+      pattern: "^[A-Za-z0-9_.:-]+$",
+    }),
+    id: Type.String({ minLength: 1, maxLength: 240 }),
+    label: Type.Optional(Type.String({ maxLength: 240 })),
+    source: Type.Optional(Type.String({ maxLength: 120 })),
+    url: Type.Optional(Type.String({ maxLength: 2000 })),
+    metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  },
+  { additionalProperties: false },
+);
 /** Provenance marker for content copied from another user/session/system source. */
 export const InputProvenanceSchema = Type.Object(
   {

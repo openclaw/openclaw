@@ -341,7 +341,7 @@ describe("gateway tool restart continuation", () => {
       config: {},
     });
 
-    await tool.execute?.("tool-call-1", {
+    const result = await tool.execute?.("tool-call-1", {
       action: "restart",
       delayMs: 250,
       reason: "restart requested",
@@ -352,6 +352,10 @@ describe("gateway tool restart continuation", () => {
     const payload = requireRestartSentinelPayload();
     expect(payload.sessionKey).toBe("agent:main:main");
     expect(payload.continuation).toBeNull();
+    expect(result?.details).toMatchObject({
+      continuationQueued: false,
+      warning: expect.stringContaining("no internal post-restart agent turn was queued"),
+    });
   });
 
   it("removes the prepared sentinel when restart emission is rejected", async () => {

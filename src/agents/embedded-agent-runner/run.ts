@@ -272,8 +272,64 @@ const NO_REAL_CONVERSATION_MESSAGES_REASON = "no real conversation messages";
 const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
 const MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3;
+const YIELD_PAUSED_PROGRESS_KIND = "agent-yield-paused";
+const YIELD_PAUSED_PROGRESS_TEXT =
+  "Still working: I paused this turn to wait for child work or a follow-up event. The session remains resumable.";
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
 type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentParams & { sessionFile: string };
+
+function isSubagentSessionKey(value: string | undefined): boolean {
+  return Boolean(value?.toLowerCase().includes(":subagent:"));
+}
+
+function shouldSurfaceForegroundYieldProgress(params: {
+  attempt: Pick<
+    EmbeddedRunAttemptForRunner,
+    | "yieldDetected"
+    | "didSendViaMessagingTool"
+    | "didDeliverSourceReplyViaMessageTool"
+    | "didSendDeterministicApprovalPrompt"
+  >;
+  payloadCount: number;
+  runParams: RunEmbeddedAgentParamsWithSessionFile;
+}): boolean {
+  if (params.attempt.yieldDetected !== true || params.payloadCount > 0) {
+    return false;
+  }
+  if (
+    params.attempt.didSendViaMessagingTool === true ||
+    params.attempt.didDeliverSourceReplyViaMessageTool === true ||
+    params.attempt.didSendDeterministicApprovalPrompt === true
+  ) {
+    return false;
+  }
+  const runParams = params.runParams;
+  if (
+    runParams.sessionEffects === "internal" ||
+    runParams.disableMessageTool === true ||
+    (runParams.trigger !== undefined &&
+      runParams.trigger !== "user" &&
+      runParams.trigger !== "manual") ||
+    runParams.spawnedBy ||
+    isSubagentSessionKey(runParams.sessionKey ?? runParams.sessionId)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function createForegroundYieldProgressPayload(runId: string | undefined): ReplyPayload {
+  return {
+    text: YIELD_PAUSED_PROGRESS_TEXT,
+    isStatusNotice: true,
+    channelData: {
+      openclawProgressKind: YIELD_PAUSED_PROGRESS_KIND,
+      livenessState: "paused",
+      yielded: true,
+      ...(runId ? { runId } : {}),
+    },
+  };
+}
 
 function isNoRealConversationCompactionNoop(params: {
   ok?: boolean;
@@ -4212,9 +4268,18 @@ async function runEmbeddedAgentInternal(
             : attempt.yieldDetected
               ? "end_turn"
               : (attemptAssistant?.stopReason as string | undefined);
+          const foregroundYieldProgressPayload = shouldSurfaceForegroundYieldProgress({
+            attempt,
+            payloadCount,
+            runParams: params,
+          })
+            ? createForegroundYieldProgressPayload(params.runId)
+            : undefined;
           const terminalPayloads = emptyAssistantReplyIsSilent
             ? [{ text: SILENT_REPLY_TOKEN }]
-            : payloadsForTerminalPath;
+            : foregroundYieldProgressPayload
+              ? [foregroundYieldProgressPayload]
+              : payloadsForTerminalPath;
           setTerminalLifecycleMeta({
             replayInvalid,
             livenessState,
@@ -4240,6 +4305,9 @@ async function runEmbeddedAgentInternal(
               ...(attempt.yieldDetected ? { yielded: true } : {}),
               ...(emptyAssistantReplyIsSilent
                 ? { terminalReplyKind: "silent-empty" as const }
+                : {}),
+              ...(foregroundYieldProgressPayload
+                ? { terminalReplyKind: "yield-progress" as const }
                 : {}),
               // Handle client tool calls (OpenResponses hosted tools)
               // Propagate the LLM stop reason so callers (lifecycle events,

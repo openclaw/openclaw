@@ -1,17 +1,14 @@
 // Durable runtime gateway methods expose coordination projections to operator surfaces.
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  validateDurableCoordinationGetParams,
+  type DurableCoordinationGetResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { isDurableRuntimesEnabled } from "../../durable/config.js";
 import { buildDurableCoordinationProjection } from "../../durable/coordination-projection.js";
 import { openDurableRuntimeStore } from "../../durable/store-factory.js";
 import type { GatewayRequestHandlers } from "./types.js";
-
-function readRuntimeRunId(params: unknown): string | undefined {
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
-    return undefined;
-  }
-  const value = (params as Record<string, unknown>).runtimeRunId;
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 export const durableHandlers: GatewayRequestHandlers = {
   "durable.coordination.get": ({ params, respond }) => {
@@ -23,8 +20,7 @@ export const durableHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const runtimeRunId = readRuntimeRunId(params);
-    if (!runtimeRunId) {
+    if (!validateDurableCoordinationGetParams(params)) {
       respond(
         false,
         undefined,
@@ -32,6 +28,7 @@ export const durableHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const { runtimeRunId } = params;
     const store = openDurableRuntimeStore();
     try {
       const run = store.getRun(runtimeRunId);
@@ -43,14 +40,15 @@ export const durableHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      respond(true, {
+      const result: DurableCoordinationGetResult = {
         projection: buildDurableCoordinationProjection({
           run,
           steps: store.listSteps(runtimeRunId),
           childLinks: store.listChildLinks(runtimeRunId),
           refs: store.listRefs(runtimeRunId),
         }),
-      });
+      };
+      respond(true, result);
     } finally {
       store.close();
     }

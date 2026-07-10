@@ -1,6 +1,11 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
-import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./primitives.js";
+import {
+  ContextRefSchema,
+  InputProvenanceSchema,
+  NonEmptyString,
+  SessionLabelString,
+} from "./primitives.js";
 
 /**
  * Agent and channel-action gateway schemas.
@@ -227,6 +232,7 @@ export const AgentParamsSchema = Type.Object(
     execApprovalFollowupExpectedSessionId: Type.Optional(NonEmptyString),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(InputProvenanceSchema),
+    contextRefs: Type.Optional(Type.Array(ContextRefSchema, { maxItems: 16 })),
     suppressPromptPersistence: Type.Optional(Type.Boolean()),
     sessionEffects: Type.Optional(Type.Union([Type.Literal("visible"), Type.Literal("internal")])),
     sourceReplyDeliveryMode: Type.Optional(

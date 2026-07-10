@@ -31,6 +31,77 @@ is intentionally a local-first, opt-in runtime substrate:
 
 Focused validation observed on the PR2 branch:
 
+- Latest reviewer P1/P2 follow-up validation, rerun on 2026-07-02:
+  - Addressed reviewer P1: gateway startup still records the durable startup
+    marker when `OPENCLAW_DURABLE_RUNTIME=1`, but agent-turn/chat-send/subagent
+    mark-lost reconciliation now runs only when `OPENCLAW_DURABLE_WORKER=1`.
+  - Regression proof: `src/durable/startup.test.ts` seeds an open durable agent
+    turn, runs gateway startup with runtime enabled and no worker flag, and
+    verifies the run/step remain `running`; the paired worker-enabled case
+    verifies the same run/step are marked `lost`.
+  - Addressed reviewer P2: `durable.coordination.get` now has public
+    `packages/gateway-protocol` params/result/projection schemas, inferred
+    exported TypeScript types, lazy validators, and validator tests. The
+    Gateway handler now uses `validateDurableCoordinationGetParams` instead of
+    local ad hoc param parsing and rejects invalid params before opening durable
+    state.
+  - `node scripts/run-vitest.mjs run packages/gateway-protocol/src/index.test.ts`
+    - 1 file, 47 tests passed.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/durable.test.ts`
+    - 2 files, 6 tests passed.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/durable/startup.test.ts`
+    - 1 file, 2 tests passed.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/durable/recovery.test.ts src/durable/sqlite-store.test.ts src/durable/worker.test.ts src/durable/coordination-projection.test.ts`
+    - 4 files, 24 tests passed.
+  - `npm run tsgo:core`
+    - passed.
+  - `git diff --check`
+    - passed.
+- Reviewer follow-up validation, rerun on 2026-07-02 after rebasing onto
+  upstream `origin/main` commit `133ce01e4a`:
+  - Code fix commit: `c6cf9d12c0` (`fix(durable): gate recovery and schema
+upgrades`). Later proof-doc updates are docs-only.
+  - Addressed reviewer P1: `startDurableRecoveryWorker` now uses the documented
+    `OPENCLAW_DURABLE_WORKER` opt-in gate instead of starting reconciliation
+    whenever `OPENCLAW_DURABLE_RUNTIME=1`.
+  - Regression proof: `src/durable/recovery.test.ts` advances fake timers with
+    `OPENCLAW_DURABLE_RUNTIME=1` and no worker flag, then asserts no shared
+    SQLite state file is created.
+  - Addressed reviewer P1: durable future-schema detection now runs immediately
+    after the `durable_schema_migrations` table is available and before any
+    `durable_runtime_*` table DDL or ALTER/backfill work.
+  - Regression proof: `src/durable/sqlite-store.test.ts` opens a DB stamped with
+    a newer durable schema version, expects rejection, and verifies no
+    `durable_runtime_*` tables were created before the throw.
+- Post-rebase validation:
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/durable/recovery.test.ts src/durable/sqlite-store.test.ts src/durable/worker.test.ts src/durable/agent-turn.test.ts src/durable/subagent.test.ts src/durable/fan-in.test.ts`
+    - 6 files, 36 tests passed.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.commands.config.ts src/commands/durable.test.ts`
+    - 1 file, 2 tests passed.
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/durable.test.ts`
+    - 2 files, 4 tests passed.
+  - `node scripts/generate-docs-map.mjs --check`
+    - passed with `docs/docs_map.md is up to date`.
+  - `git diff --check origin/main HEAD`
+    - passed.
+- Latest reviewer recheck proof, rerun on 2026-07-02 against commit
+  `46970927b04906d984e371ea510998ab723ffc7b`:
+  - Disabled CLI inspection:
+    `disabled-cli {"logs":["Durable runtime is disabled. Set OPENCLAW_DURABLE_RUNTIME=1 to inspect durable runtime state."],"errors":[],"exitCode":null,"files":[]}`
+    The empty `files` array proves the disabled CLI path did not create or
+    migrate `state/openclaw.sqlite`, WAL, or SHM files.
+  - Enabled CLI inspection:
+    `enabled-cli {"logs":["Durable runtime store: <temp>/state/openclaw.sqlite\nruns=0 open=0 steps=0 events=0"],"errors":[],"exitCode":null,"files":["state/openclaw.sqlite"]}`
+    This proves enabled inspection creates and opens the shared state DB as the
+    opt-in path.
+  - Disabled Gateway inspection:
+    `disabled-gateway {"ok":false,"code":"INVALID_REQUEST","message":"Durable runtime is disabled.","hasResult":false,"files":[]}`
+    The empty `files` array proves the disabled Gateway path rejects before
+    opening or migrating durable runtime state.
+  - Enabled Gateway inspection:
+    `enabled-gateway {"ok":true,"hasResult":true,"runtimeRunId":"run_gateway_proof_20260702","files":["state/openclaw.sqlite"]}`
+    This proves the enabled Gateway path reads a real durable projection from
+    the opt-in shared state DB.
 - Disabled CLI mutation guard:
   - Command:
     `OPENCLAW_STATE_DIR=<temp> node --import tsx --input-type=module -e 'import { durableCommand } from "./src/commands/durable.ts"; await durableCommand({ action: "stats", env: process.env }, { log: console.log, error: console.error, exit: (code) => { process.exitCode = code; } });'`

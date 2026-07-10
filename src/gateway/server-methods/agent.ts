@@ -15,7 +15,6 @@ import {
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
@@ -88,6 +87,11 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import {
+  durableAgentTurnErrorPayload,
+  startDurableAgentTurnLifecycle,
+  type DurableAgentTurnLifecycle,
+} from "../../durable/agent-turn.js";
+import {
   assertAgentRunLifecycleGenerationCurrent,
   claimAgentRunContext,
   clearAgentRunContext,
@@ -157,6 +161,10 @@ import {
   parseMessageWithAttachments,
   resolveChatAttachmentMaxBytes,
 } from "../chat-attachments.js";
+import {
+  appendContextRefsToExtraSystemPrompt,
+  normalizeGatewayContextRefs,
+} from "../context-refs.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
@@ -193,10 +201,6 @@ import type {
 } from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
-
-function isRecoverableTerminalSessionStatus(status: SessionEntry["status"] | undefined): boolean {
-  return status === "failed" || status === "timeout" || status === "killed";
-}
 
 type AgentSendSessionLifecycleTransition = {
   cfg: OpenClawConfig;
@@ -662,63 +666,13 @@ function resolveGatewayAgentTaskTrackingMode(params: {
   client: GatewayRequestHandlerOptions["client"];
   sessionKey?: string;
   inputProvenance?: InputProvenance;
-  confirmedAcpManualSpawn?: boolean;
 }): GatewayAgentTaskTrackingMode {
   if (!params.sessionKey?.trim() || params.inputProvenance?.kind === "inter_session") {
     return "none";
   }
-  if (params.client?.internal?.agentRunTracking === "plugin_subagent") {
-    return "plugin_subagent";
-  }
-  // A confirmed ACP manual-spawn child turn already owns its requester-visible
-  // `acp` task row from the spawn control plane (src/agents/acp-spawn.ts). The
-  // Gateway CLI path runs that same childRunId, so tracking it here would emit a
-  // duplicate row for one run. Suppress only the CLI branch; plugin-subagent and
-  // normal CLI tracking stay intact.
-  if (params.confirmedAcpManualSpawn) {
-    return "none";
-  }
-  return "cli";
-}
-
-function isTrustedBackendAcpSpawnClient(client: GatewayRequestHandlerOptions["client"]): boolean {
-  // The ACP spawn control plane reaches the gateway through the in-process
-  // backend client (src/gateway/call.ts -> mode "backend", id "gateway-client").
-  // Only that caller creates the replacement `acp` task row, so CLI suppression
-  // is gated to it. An operator-write UI/CLI/mobile or device-token client that
-  // merely sets acpTurnSource owns no such row and must keep CLI tracking.
-  return (
-    client?.connect?.client?.id === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
-    client.connect.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
-    client.isDeviceTokenAuth !== true
-  );
-}
-
-function isConfirmedAcpManualSpawnTaskOwner(params: {
-  acpTurnSource?: string;
-  sessionKey?: string;
-  client: GatewayRequestHandlerOptions["client"];
-  logGateway: Pick<GatewayRequestContext["logGateway"], "warn">;
-}): boolean {
-  const sessionKey = params.sessionKey;
-  if (
-    !isTrustedBackendAcpSpawnClient(params.client) ||
-    params.acpTurnSource !== "manual_spawn" ||
-    sessionKey == null ||
-    !isAcpSessionKey(sessionKey)
-  ) {
-    return false;
-  }
-  try {
-    return readAcpSessionMeta({ sessionKey }) != null;
-  } catch (err) {
-    params.logGateway.warn(
-      `failed to read ACP session metadata for manual-spawn task tracking ${sessionKey}; falling back to cli task tracking: ${formatForLog(
-        err,
-      )}`,
-    );
-    return false;
-  }
+  return params.client?.internal?.agentRunTracking === "plugin_subagent"
+    ? "plugin_subagent"
+    : "cli";
 }
 
 async function registerPluginSubagentRunFromGateway(params: {
@@ -923,6 +877,48 @@ function readAgentRunTimeoutAttribution(meta: unknown) {
   };
 }
 
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readAgentRunYieldState(result: unknown): {
+  yielded?: true;
+  livenessState?: string;
+  openclawProgressKind?: string;
+} {
+  const resultRecord = readRecord(result);
+  const meta = readRecord(resultRecord?.meta);
+  let yielded = meta?.yielded === true;
+  let livenessState = readNonEmptyString(meta?.livenessState);
+  let openclawProgressKind =
+    readNonEmptyString(meta?.openclawProgressKind) ?? readNonEmptyString(meta?.progressKind);
+
+  const payloads = Array.isArray(resultRecord?.payloads) ? resultRecord.payloads : [];
+  for (const payload of payloads) {
+    const channelData = readRecord(readRecord(payload)?.channelData);
+    if (!channelData) {
+      continue;
+    }
+    yielded = yielded || channelData.yielded === true;
+    livenessState ??= readNonEmptyString(channelData.livenessState);
+    openclawProgressKind ??=
+      readNonEmptyString(channelData.openclawProgressKind) ??
+      readNonEmptyString(channelData.progressKind);
+  }
+
+  return {
+    ...(yielded ? { yielded: true as const } : {}),
+    ...(livenessState ? { livenessState } : {}),
+    ...(openclawProgressKind ? { openclawProgressKind } : {}),
+  };
+}
+
 function isGatewayAbortSignalReason(reason: unknown): boolean {
   return reason === undefined || isAbortError(reason) || readErrorName(reason) === "TimeoutError";
 }
@@ -977,6 +973,7 @@ function dispatchAgentRunFromGateway(params: {
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
   taskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
+  durableLifecycle?: DurableAgentTurnLifecycle;
 }) {
   const shouldTrackTask = params.taskTrackingMode === "cli";
   let taskTracked = false;
@@ -1013,7 +1010,8 @@ function dispatchAgentRunFromGateway(params: {
     .then((result) => {
       const aborted = result?.meta?.aborted === true;
       const timeoutAttribution = readAgentRunTimeoutAttribution(result?.meta);
-      if (taskTracked) {
+      const yieldState = readAgentRunYieldState(result);
+      if (taskTracked && yieldState.yielded !== true) {
         tryFinalizeTrackedAgentTask({
           runId: params.runId,
           status: aborted ? "timed_out" : "succeeded",
@@ -1032,6 +1030,7 @@ function dispatchAgentRunFromGateway(params: {
         ...(aborted && timeoutAttribution.providerStarted !== undefined
           ? { providerStarted: timeoutAttribution.providerStarted }
           : {}),
+        ...yieldState,
         result,
       };
       setGatewayDedupeEntries({
@@ -1041,6 +1040,21 @@ function dispatchAgentRunFromGateway(params: {
           ts: Date.now(),
           ok: true,
           payload,
+        },
+      });
+      params.durableLifecycle?.markTerminal({
+        status: aborted ? "cancelled" : "succeeded",
+        eventType: aborted ? "agent.turn.cancelled" : "agent.turn.succeeded",
+        payload: {
+          summary: payload.summary,
+          ...(aborted ? { stopReason: payload.stopReason ?? "rpc" } : {}),
+          ...(timeoutAttribution.timeoutPhase
+            ? { timeoutPhase: timeoutAttribution.timeoutPhase }
+            : {}),
+          ...(timeoutAttribution.providerStarted !== undefined
+            ? { providerStarted: timeoutAttribution.providerStarted }
+            : {}),
+          ...yieldState,
         },
       });
       // Send a second res frame (same id) so TS clients with expectFinal can wait.
@@ -1077,12 +1091,20 @@ function dispatchAgentRunFromGateway(params: {
           ...(aborted ? {} : { error }),
         },
       });
+      params.durableLifecycle?.markTerminal({
+        status: aborted ? "cancelled" : "failed",
+        eventType: aborted ? "agent.turn.cancelled" : "agent.turn.failed",
+        payload: aborted
+          ? { summary: payload.summary, stopReason, timeoutPhase: "gateway_draining" }
+          : durableAgentTurnErrorPayload(err),
+      });
       params.respond(aborted, payload, aborted ? undefined : error, {
         runId: params.runId,
         ...(aborted ? {} : { error: formatForLog(err) }),
       });
     })
     .finally(() => {
+      params.durableLifecycle?.close();
       clearAgentRunContext(params.runId, params.ingressOpts.lifecycleGeneration);
       params.cleanupAbortController();
     });
@@ -1173,6 +1195,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       cleanupBundleMcpOnRunEnd?: boolean;
       label?: string;
       inputProvenance?: InputProvenance;
+      contextRefs?: unknown;
       workspaceDir?: string;
       voiceWakeTrigger?: string;
     };
@@ -1188,6 +1211,12 @@ export const agentHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const contextRefsResult = normalizeGatewayContextRefs(request.contextRefs);
+    if (!contextRefsResult.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, contextRefsResult.error));
+      return;
+    }
+    const contextRefs = contextRefsResult.refs;
     const allowModelOverride = resolveAllowModelOverrideFromClient(client);
     const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(client);
     const requestedModelOverride = Boolean(request.provider || request.model);
@@ -2244,10 +2273,6 @@ export const agentHandlers: GatewayRequestHandlers = {
                 policy: resetPolicy,
               })
           : undefined;
-        const visibleRequest =
-          request.bootstrapContextRunKind !== "cron" &&
-          request.bootstrapContextRunKind !== "heartbeat" &&
-          !request.internalEvents?.length;
         const resolveFailedSessionTranscriptMissingForEntry = (
           candidateEntry: SessionEntry | undefined,
         ) => {
@@ -2315,7 +2340,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           (!canReuseSession && !usableRequestedSessionId) ||
           Boolean(usableRequestedSessionId && entry?.sessionId !== usableRequestedSessionId);
         let rotatedSessionId = Boolean(entry?.sessionId && entry.sessionId !== sessionId);
-        const touchInteraction = visibleRequest;
+        const touchInteraction = !isSystemGatewayRun && !request.internalEvents?.length;
         const sessionAgent = canonicalSessionAgentId;
         type AgentSessionPatchBuild = {
           patch: Partial<SessionEntry>;
@@ -2481,14 +2506,6 @@ export const agentHandlers: GatewayRequestHandlers = {
             ? freshEntry?.sessionId
             : freshSessionId;
           const shouldClearRotatedState = freshRotatedSessionId && !freshSessionRotatedSinceLoad;
-          const freshRecoverTerminalSession =
-            freshCanReuseSession &&
-            visibleRequest &&
-            isRecoverableTerminalSessionStatus(freshEntry?.status);
-          const shouldClearTerminalState =
-            freshRecoverTerminalSession &&
-            !freshSessionRotatedSinceLoad &&
-            patchSessionId === freshEntry?.sessionId;
           const patch: Partial<SessionEntry> = {
             sessionId: patchSessionId,
             updatedAt: now,
@@ -2517,14 +2534,14 @@ export const agentHandlers: GatewayRequestHandlers = {
             groupChannel: nextGroup.groupChannel,
             space: nextGroup.groupSpace,
             ...(pluginOwnerId ? { pluginOwnerId } : {}),
-            ...(shouldClearRotatedState || shouldClearTerminalState
+            ...(shouldClearRotatedState
               ? {
                   status: undefined,
                   startedAt: undefined,
                   endedAt: undefined,
                   runtimeMs: undefined,
                   abortedLastRun: undefined,
-                  ...(shouldClearRotatedState ? { sessionFile: undefined } : {}),
+                  sessionFile: undefined,
                 }
               : {}),
           };
@@ -3128,21 +3145,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
 
       const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
-      // Confirmed only when the caller is the trusted in-process backend ACP
-      // spawn client, the turn is an ACP manual spawn, the canonical session key
-      // is ACP-shaped, and persisted ACP metadata exists for it; the spawn
-      // control plane owns that childRunId's `acp` task row in those cases.
-      const confirmedAcpManualSpawn = isConfirmedAcpManualSpawnTaskOwner({
-        acpTurnSource: request.acpTurnSource,
-        sessionKey: resolvedSessionKey,
-        client,
-        logGateway: context.logGateway,
-      });
       const taskTrackingMode = resolveGatewayAgentTaskTrackingMode({
         client,
         sessionKey: resolvedSessionKey,
         inputProvenance,
-        confirmedAcpManualSpawn,
       });
       let dispatchTaskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent"> =
         taskTrackingMode === "cli" ? "cli" : "none";
@@ -3171,6 +3177,16 @@ export const agentHandlers: GatewayRequestHandlers = {
         }
       }
 
+      const durableLifecycle = startDurableAgentTurnLifecycle({
+        runId,
+        message,
+        agentId: resolvedSessionKey === "global" ? activeSessionAgentId : agentId,
+        sessionKey: resolvedSessionKey,
+        channel: resolvedChannel,
+        transport: "gateway",
+        deliver,
+        contextRefs,
+      });
       const accepted = {
         runId,
         sessionKey: resolvedSessionKey,
@@ -3178,6 +3194,11 @@ export const agentHandlers: GatewayRequestHandlers = {
         status: "accepted" as const,
         acceptedAt: Date.now(),
       };
+      durableLifecycle.markRunning({
+        acceptedAt: accepted.acceptedAt,
+        taskTrackingMode,
+        controlUiVisible: !suppressVisibleSessionEffects,
+      });
       const acceptedDedupePayload = {
         ...accepted,
         controlUiVisible: !suppressVisibleSessionEffects,
@@ -3229,6 +3250,16 @@ export const agentHandlers: GatewayRequestHandlers = {
               undefined,
               { runId },
             );
+            durableLifecycle.markTerminal({
+              status: "cancelled",
+              eventType: "agent.turn.cancelled",
+              payload: {
+                summary: "aborted",
+                stopReason,
+                timeoutPhase: "queue",
+                providerStarted: false,
+              },
+            });
             return;
           }
 
@@ -3332,7 +3363,10 @@ export const agentHandlers: GatewayRequestHandlers = {
               lane: request.lane,
               modelRun: request.modelRun === true,
               promptMode: request.promptMode,
-              extraSystemPrompt: request.extraSystemPrompt,
+              extraSystemPrompt: appendContextRefsToExtraSystemPrompt({
+                extraSystemPrompt: request.extraSystemPrompt,
+                refs: contextRefs,
+              }),
               bootstrapContextMode: request.bootstrapContextMode,
               bootstrapContextRunKind: request.bootstrapContextRunKind,
               acpTurnSource: request.acpTurnSource,
@@ -3388,6 +3422,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             respond,
             context,
             taskTrackingMode: dispatchTaskTrackingMode,
+            durableLifecycle,
           });
           dispatched = true;
         } catch (err) {
@@ -3411,9 +3446,15 @@ export const agentHandlers: GatewayRequestHandlers = {
             runId,
             error: formatForLog(err),
           });
+          durableLifecycle.markTerminal({
+            status: "failed",
+            eventType: "agent.turn.failed",
+            payload: durableAgentTurnErrorPayload(err),
+          });
         } finally {
           if (!dispatched) {
             cleanupAdmittedRun({ force: true });
+            durableLifecycle.close();
           }
         }
       });
