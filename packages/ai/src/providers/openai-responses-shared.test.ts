@@ -1911,9 +1911,16 @@ describe("processResponsesStream", () => {
     const output = createAssistantOutput();
     const stream = new AssistantMessageEventStream();
     const events: Array<Record<string, unknown>> = [];
+    const textBlockSignatures: Array<[string, number, string | undefined]> = [];
     const collect = (async () => {
       for await (const event of stream) {
         events.push(event as unknown as Record<string, unknown>);
+        if (event.type === "text_start" || event.type === "text_end") {
+          const block = Array.isArray(event.partial.content)
+            ? (event.partial.content[event.contentIndex] as { textSignature?: string } | undefined)
+            : undefined;
+          textBlockSignatures.push([event.type, event.contentIndex, block?.textSignature]);
+        }
       }
     })();
 
@@ -1974,6 +1981,12 @@ describe("processResponsesStream", () => {
     expect(
       events.filter((event) => event.type === "text_end").map((event) => event.content),
     ).toEqual([snapshot1, snapshot2, snapshot3]);
+    expect(textBlockSignatures).toEqual([
+      ["text_start", 0, JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" })],
+      ["text_end", 0, JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" })],
+      ["text_end", 0, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
+      ["text_end", 0, JSON.stringify({ v: 1, id: "msg_3", phase: "final_answer" })],
+    ]);
   });
 
   it.each([
@@ -2052,9 +2065,19 @@ describe("processResponsesStream", () => {
     const output = createAssistantOutput();
     const stream = new AssistantMessageEventStream();
     const events: Array<Record<string, unknown>> = [];
+    const liveTextBlockSignatures: Array<[string, number, string | undefined]> = [];
     const collect = (async () => {
       for await (const event of stream) {
         events.push(event as unknown as Record<string, unknown>);
+        if (event.type === "text_start" || event.type === "text_delta") {
+          const block =
+            event.partial && Array.isArray(event.partial.content)
+              ? (event.partial.content[event.contentIndex] as
+                  | { textSignature?: string }
+                  | undefined)
+              : undefined;
+          liveTextBlockSignatures.push([event.type, event.contentIndex, block?.textSignature]);
+        }
       }
     })();
 
@@ -2119,6 +2142,12 @@ describe("processResponsesStream", () => {
       ["text_delta", 1, "Good"],
       ["text_delta", 1, "bye"],
       ["text_end", 1, null],
+    ]);
+    expect(liveTextBlockSignatures).toEqual([
+      ["text_start", 0, JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" })],
+      ["text_start", 1, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
+      ["text_delta", 1, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
+      ["text_delta", 1, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
     ]);
   });
 
@@ -2501,6 +2530,15 @@ describe("Azure OpenAI Responses content type support", () => {
 
     const { stream, events } = createCapturedAssistantMessageEventStream();
     const output = createResponsesAssistantOutput(azureModel, "azure-openai-responses");
+    const liveTextSignatures: Array<string | undefined> = [];
+    const push = stream.push.bind(stream);
+    stream.push = (event) => {
+      if (event.type === "text_start" || event.type === "text_delta") {
+        const block = event.partial?.content[event.contentIndex];
+        liveTextSignatures.push(block?.type === "text" ? block.textSignature : undefined);
+      }
+      push(event);
+    };
 
     await processResponsesStream(streamResponsesEvents(azureEvents), output, stream, azureModel);
 
@@ -2518,5 +2556,8 @@ describe("Azure OpenAI Responses content type support", () => {
       type: "text",
       text: "No explicit part",
     });
+    // Unphased Responses items keep streaming live; replay identity is stamped
+    // only once completion supplies the final block.
+    expect(liveTextSignatures).toEqual([undefined, undefined, undefined]);
   });
 });

@@ -4254,6 +4254,169 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(releaseLate).toHaveBeenCalledTimes(1);
   });
 
+  it("waits for in-flight prompt reacquisition before cleanup adopts its lock", async () => {
+    const sessionFile = await createTempSessionFile();
+    const releaseInitial = vi.fn(async () => {});
+    const releaseReacquired = vi.fn(async () => {});
+    const releaseUnexpected = vi.fn(async () => {});
+    let finishReacquisition!: (lock: { release(): Promise<void> }) => void;
+    const reacquisitionCanFinish = new Promise<{ release(): Promise<void> }>((resolve) => {
+      finishReacquisition = resolve;
+    });
+    let markFenceValidationStarted!: () => void;
+    const fenceValidationStarted = new Promise<void>((resolve) => {
+      markFenceValidationStarted = resolve;
+    });
+    let finishFenceValidation!: () => void;
+    const fenceValidationCanFinish = new Promise<void>((resolve) => {
+      finishFenceValidation = resolve;
+    });
+    const mergePromptReleasedSessionEntries = vi.fn(async () => {
+      markFenceValidationStarted();
+      await fenceValidationCanFinish;
+    });
+    const acquireSessionWriteLockLocal = vi
+      .fn()
+      .mockResolvedValueOnce({ release: releaseInitial })
+      .mockImplementationOnce(async () => await reacquisitionCanFinish)
+      .mockResolvedValueOnce({ release: releaseUnexpected });
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions: { ...lockOptions, sessionFile },
+      mergePromptReleasedSessionEntries,
+    });
+
+    await controller.releaseForPrompt();
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "delivery during prompt" }],
+        provider: "openclaw",
+        model: "delivery-mirror",
+      },
+    });
+    const reacquire = controller.reacquireAfterPrompt();
+    await waitUntil(
+      () => acquireSessionWriteLockLocal.mock.calls.length === 2,
+      "expected prompt reacquisition to start",
+    );
+    let cleanupSettled = false;
+    const cleanupLockPromise = controller.acquireForCleanup().then((lock) => {
+      cleanupSettled = true;
+      return lock;
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(cleanupSettled).toBe(false);
+    expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(2);
+    finishReacquisition({ release: releaseReacquired });
+    await fenceValidationStarted;
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(cleanupSettled).toBe(false);
+    expect(releaseReacquired).not.toHaveBeenCalled();
+    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledTimes(1);
+
+    finishFenceValidation();
+    await reacquire;
+    const cleanupLock = await cleanupLockPromise;
+    expect(releaseReacquired).not.toHaveBeenCalled();
+    await cleanupLock.release();
+
+    expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(2);
+    expect(releaseInitial).toHaveBeenCalledTimes(1);
+    expect(releaseReacquired).toHaveBeenCalledTimes(1);
+    expect(releaseUnexpected).not.toHaveBeenCalled();
+    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledTimes(1);
+    expect(controller.hasSessionTakeover()).toBe(false);
+  });
+
+  it("does not retry cleanup acquisition after prompt reacquire lock contention", async () => {
+    const reacquireError = new SessionWriteLockTimeoutError({
+      timeoutMs: lockOptions.timeoutMs,
+      owner: "pid=test",
+      lockPath: `${lockOptions.sessionFile}.lock`,
+    });
+    const releaseInitial = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal = vi
+      .fn()
+      .mockResolvedValueOnce({ release: releaseInitial })
+      .mockRejectedValueOnce(reacquireError)
+      .mockResolvedValueOnce({ release: vi.fn(async () => {}) });
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions,
+    });
+
+    await controller.releaseForPrompt();
+    const reacquire = controller.reacquireAfterPrompt();
+    const cleanupLockPromise = controller.acquireForCleanup();
+
+    await expect(reacquire).rejects.toBe(reacquireError);
+    const cleanupLock = await cleanupLockPromise;
+    await cleanupLock.release();
+
+    expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(2);
+    expect(releaseInitial).toHaveBeenCalledTimes(1);
+    expect(controller.hasSessionTakeover()).toBe(true);
+  });
+
+  it("makes a late prompt reacquire a no-op after cleanup starts", async () => {
+    const releases: string[] = [];
+    let resolveCleanupLock!: (lock: { release(): Promise<void> }) => void;
+    const pendingCleanupLock = new Promise<{ release(): Promise<void> }>((resolve) => {
+      resolveCleanupLock = resolve;
+    });
+    const acquireSessionWriteLockLocal = vi
+      .fn()
+      .mockResolvedValueOnce({
+        release: vi.fn(async () => {
+          releases.push("prep");
+        }),
+      })
+      .mockImplementationOnce(async () => await pendingCleanupLock)
+      .mockResolvedValueOnce({
+        release: vi.fn(async () => {
+          releases.push("unexpected");
+        }),
+      });
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions,
+    });
+
+    await controller.releaseForPrompt();
+    const cleanupLockPromise = controller.acquireForCleanup();
+    await waitUntil(
+      () => acquireSessionWriteLockLocal.mock.calls.length === 2,
+      "expected cleanup lock acquisition to start",
+    );
+    let lateReacquireSettled = false;
+    const lateReacquire = controller.reacquireAfterPrompt().then(() => {
+      lateReacquireSettled = true;
+    });
+    await Promise.resolve();
+    const settledBeforeCleanupAcquired = lateReacquireSettled;
+
+    resolveCleanupLock({
+      release: vi.fn(async () => {
+        releases.push("cleanup");
+      }),
+    });
+    const cleanupLock = await cleanupLockPromise;
+    await cleanupLock.release();
+    await lateReacquire;
+
+    expect(settledBeforeCleanupAcquired).toBe(true);
+    expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(2);
+    expect(releases).toEqual(["prep", "cleanup"]);
+  });
+
   it("takeHeldLockAfterRetainedIdle does not self-deadlock when called from inside active write scope (#95915)", async () => {
     const events: string[] = [];
     const acquireSessionWriteLockLocal = vi

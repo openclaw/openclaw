@@ -29,6 +29,7 @@ import { requestHeartbeat as requestHeartbeatImpl } from "../../infra/heartbeat-
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
 import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system-events.js";
+import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
@@ -113,6 +114,12 @@ const CLI_LOOPBACK_CORRELATION_MAX_CALLS = 64;
 const CLI_MCP_DELIVERY_DRAIN_GRACE_MS = 5_000;
 const CLI_MCP_REQUEST_ADMISSION_GRACE_MS = 250;
 const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
+
+function normalizeCliBackendThinkingLevel(
+  level: PreparedCliRunContext["params"]["thinkLevel"],
+): CliBackendThinkingLevel | undefined {
+  return level === "ultra" ? "max" : level;
+}
 
 function normalizeCliMessagingToolName(toolName: string): string {
   return toolName.startsWith(OPENCLAW_MCP_TOOL_PREFIX)
@@ -528,7 +535,7 @@ export async function executePreparedCliRun(
       provider: params.provider,
       modelId: context.modelId,
       authProfileId: context.effectiveAuthProfileId,
-      thinkingLevel: params.thinkLevel,
+      thinkingLevel: normalizeCliBackendThinkingLevel(params.thinkLevel),
       executionMode: params.executionMode ?? "agent",
       useResume,
       baseArgs: baseArgsWithSkills,
