@@ -132,13 +132,13 @@ const MAX_BENIGN_SESSION_FENCE_ADVANCE_BYTES = 1024 * 1024;
 const MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES = 8 * 1024 * 1024;
 const MAX_BENIGN_SESSION_FENCE_REWRITE_RESULT_BYTES =
   MAX_BENIGN_SESSION_FENCE_REWRITE_BYTES + MAX_BENIGN_SESSION_FENCE_ADVANCE_BYTES;
-const MAX_BENIGN_SESSION_FENCE_CTIME_DIGEST_BYTES = 32 * 1024 * 1024;
+const MAX_BENIGN_SESSION_FENCE_CONTENT_DIGEST_BYTES = 32 * 1024 * 1024;
 const MAX_SAFE_FILE_OFFSET = BigInt(Number.MAX_SAFE_INTEGER);
 
 type SessionFileFenceSnapshot = {
   fingerprint: SessionFileFingerprint;
+  bytes?: Buffer;
   digest?: string;
-  text?: string;
 };
 
 function sameSessionFileFingerprint(
@@ -167,7 +167,7 @@ function sameSessionFileIdentity(
   return Boolean(left?.exists && right.exists && left.dev === right.dev && left.ino === right.ino);
 }
 
-function sameSessionFileContentMetadata(
+function sameSessionFileIdentityAndSize(
   left: SessionFileFingerprint | undefined,
   right: SessionFileFingerprint,
 ): boolean {
@@ -176,8 +176,7 @@ function sameSessionFileContentMetadata(
     right.exists &&
     left.dev === right.dev &&
     left.ino === right.ino &&
-    left.size === right.size &&
-    left.mtimeNs === right.mtimeNs,
+    left.size === right.size,
   );
 }
 
@@ -614,13 +613,13 @@ async function readSessionFileFenceSnapshot(
     try {
       return {
         fingerprint,
-        text: await fs.readFile(sessionFile, "utf8"),
+        bytes: await fs.readFile(sessionFile),
       };
     } catch {
       return { fingerprint };
     }
   }
-  if (fingerprint.size > BigInt(MAX_BENIGN_SESSION_FENCE_CTIME_DIGEST_BYTES)) {
+  if (fingerprint.size > BigInt(MAX_BENIGN_SESSION_FENCE_CONTENT_DIGEST_BYTES)) {
     return { fingerprint };
   }
   return {
@@ -729,28 +728,30 @@ async function classifyOwnedSessionFileInitialization(params: {
     : resolvedChange;
 }
 
-async function sessionFenceCtimeDriftIsBenign(params: {
+async function sessionFenceByteIdenticalRewriteIsBenign(params: {
   sessionFile: string;
   previous: SessionFileFenceSnapshot | undefined;
   current: SessionFileFingerprint;
 }): Promise<boolean> {
+  const previous = params.previous;
   if (
-    !sameSessionFileContentMetadata(params.previous?.fingerprint, params.current) ||
-    params.previous?.fingerprint.exists !== true ||
+    previous?.fingerprint.exists !== true ||
     !params.current.exists ||
-    params.previous.fingerprint.ctimeNs === params.current.ctimeNs
+    !sameSessionFileIdentityAndSize(previous.fingerprint, params.current)
   ) {
     return false;
   }
-  if (params.previous.text === undefined) {
-    if (params.previous.digest === undefined) {
+  // Truncate-and-rewrite keeps inode and size while advancing timestamps.
+  // Only exact bytes may make that metadata-only fence drift trustworthy.
+  if (previous.bytes === undefined) {
+    if (previous.digest === undefined) {
       return false;
     }
     const currentDigest = await readSessionFileDigest(params.sessionFile);
-    return currentDigest !== undefined && currentDigest === params.previous.digest;
+    return currentDigest !== undefined && currentDigest === previous.digest;
   }
   try {
-    return (await fs.readFile(params.sessionFile, "utf8")) === params.previous.text;
+    return previous.bytes.equals(await fs.readFile(params.sessionFile));
   } catch {
     return false;
   }
@@ -766,7 +767,7 @@ async function classifySessionFenceRewrite(params: {
   if (
     !params.previous?.fingerprint.exists ||
     !params.current.exists ||
-    !params.previous.text ||
+    params.previous.bytes === undefined ||
     !sameSessionFileIdentity(params.previous.fingerprint, params.current) ||
     (!params.allowAnyMessage &&
       params.current.size > BigInt(MAX_BENIGN_SESSION_FENCE_REWRITE_RESULT_BYTES)) ||
@@ -783,7 +784,7 @@ async function classifySessionFenceRewrite(params: {
   if (!currentText.endsWith("\n")) {
     return undefined;
   }
-  const previousLines = splitSessionFileLines(params.previous.text);
+  const previousLines = splitSessionFileLines(params.previous.bytes.toString("utf8"));
   const currentLines = splitSessionFileLines(currentText);
   if (currentLines.length <= previousLines.length) {
     return undefined;
@@ -1492,7 +1493,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
 
     if (
-      await sessionFenceCtimeDriftIsBenign({
+      await sessionFenceByteIdenticalRewriteIsBenign({
         sessionFile: params.lockOptions.sessionFile,
         previous: fenceSnapshot,
         current,
