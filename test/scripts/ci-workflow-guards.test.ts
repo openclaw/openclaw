@@ -8,6 +8,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,6 +31,14 @@ const CONTROL_UI_LOCALE_REFRESH_WORKFLOW = ".github/workflows/control-ui-locale-
 const NATIVE_APP_LOCALE_REFRESH_WORKFLOW = ".github/workflows/native-app-locale-refresh.yml";
 const CREATE_GENERATED_PR_TOKENS_ACTION = ".github/actions/create-generated-pr-tokens/action.yml";
 const PUBLISH_GENERATED_PR_ACTION = ".github/actions/publish-generated-pr/action.yml";
+const MATURITY_SCORECARD_WORKFLOW = ".github/workflows/maturity-scorecard.yml";
+const MATURITY_SCORECARD_WORKFLOW_REF =
+  "openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main";
+const MATURITY_GENERATED_PR_PATHS = [
+  "qa/maturity-scores.yaml",
+  "docs/maturity/scorecard.md",
+  "docs/maturity/taxonomy.md",
+];
 
 function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
@@ -56,7 +65,86 @@ function readRealBehaviorProofWorkflow() {
 }
 
 function readMaturityScorecardWorkflow() {
-  return parse(readFileSync(".github/workflows/maturity-scorecard.yml", "utf8"));
+  return parse(readFileSync(MATURITY_SCORECARD_WORKFLOW, "utf8"));
+}
+
+function runMaturityInvocationScenario(options: {
+  callerEventName: string;
+  callerWorkflowRef: string;
+  jobWorkflowRef?: string;
+  publishPullRequest: boolean;
+}) {
+  const workflow = readMaturityScorecardWorkflow();
+  const authorizeStep = workflow.jobs.validate_selected_ref.steps.find(
+    (step: { name?: string }) => step.name === "Authorize workflow invocation",
+  );
+  const authorizeRun = spawnSync("bash", ["-c", authorizeStep.run], {
+    encoding: "utf8",
+    env: {
+      CALLER_EVENT_NAME: options.callerEventName,
+      CALLER_WORKFLOW_REF: options.callerWorkflowRef,
+      JOB_WORKFLOW_FILE_PATH: MATURITY_SCORECARD_WORKFLOW,
+      JOB_WORKFLOW_REF: options.jobWorkflowRef ?? MATURITY_SCORECARD_WORKFLOW_REF,
+      JOB_WORKFLOW_REPOSITORY: "openclaw/openclaw",
+      PATH: process.env.PATH ?? "",
+      PUBLISH_PULL_REQUEST: String(options.publishPullRequest),
+    },
+  });
+  return {
+    output: `${authorizeRun.stdout}${authorizeRun.stderr}`,
+    status: authorizeRun.status,
+  };
+}
+
+function runMaturityArtifactCopyScenario(
+  options: { destinationSymlink?: boolean; extraFile?: boolean; sourceSymlink?: boolean } = {},
+) {
+  const workflow = readMaturityScorecardWorkflow();
+  const copyStep = workflow.jobs.publish_generated_pr.steps.find(
+    (step: { name?: string }) => step.name === "Validate and copy generated PR files",
+  );
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-maturity-copy-"));
+  const staging = path.join(root, "staging");
+  try {
+    for (const generatedPath of MATURITY_GENERATED_PR_PATHS) {
+      const staged = path.join(staging, generatedPath);
+      const selected = path.join(root, "selected", generatedPath);
+      mkdirSync(path.dirname(staged), { recursive: true });
+      mkdirSync(path.dirname(selected), { recursive: true });
+      writeFileSync(staged, `new ${generatedPath}\n`, "utf8");
+      writeFileSync(selected, `old ${generatedPath}\n`, "utf8");
+    }
+    if (options.extraFile) {
+      writeFileSync(path.join(staging, "unexpected.txt"), "unexpected\n", "utf8");
+    }
+    if (options.sourceSymlink) {
+      const staged = path.join(staging, MATURITY_GENERATED_PR_PATHS[0]);
+      rmSync(staged);
+      symlinkSync("missing-score-source", staged);
+    }
+    const escaped = path.join(root, "escaped.txt");
+    if (options.destinationSymlink) {
+      const selected = path.join(root, "selected", MATURITY_GENERATED_PR_PATHS[0]);
+      writeFileSync(escaped, "outside\n", "utf8");
+      rmSync(selected);
+      symlinkSync(escaped, selected);
+    }
+    const run = spawnSync("bash", ["-c", copyStep.run], {
+      cwd: root,
+      encoding: "utf8",
+      env: { PATH: process.env.PATH ?? "", STAGING_DIR: staging },
+    });
+    return {
+      copied: MATURITY_GENERATED_PR_PATHS.map((generatedPath) =>
+        readFileSync(path.join(root, "selected", generatedPath), "utf8"),
+      ),
+      escaped: existsSync(escaped) ? readFileSync(escaped, "utf8") : "",
+      output: `${run.stdout}${run.stderr}`,
+      status: run.status,
+    };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
 }
 
 function readQaProfileEvidenceWorkflow() {
@@ -129,7 +217,9 @@ function runGeneratedPublisherScenario(
   baseChangePath: "a" | "b" | null,
   options: {
     existingPr?: boolean;
+    expectFailure?: boolean;
     noGeneratedChange?: boolean;
+    overlapPolicy?: string;
     stalePrHeadOnce?: boolean;
     updateSource?: boolean;
   } = {},
@@ -189,9 +279,11 @@ function runGeneratedPublisherScenario(
     if (options.updateSource) {
       writeFileSync(path.join(updater, "source", "input.txt"), "newer-input\n", "utf8");
     }
-    runGit(updater, ["add", "generated", "source"]);
-    runGit(updater, ["commit", "-m", "update base"]);
-    runGit(updater, ["push", "origin", "main"]);
+    if (baseChangePath !== null || options.updateSource) {
+      runGit(updater, ["add", "generated", "source"]);
+      runGit(updater, ["commit", "-m", "update base"]);
+      runGit(updater, ["push", "origin", "main"]);
+    }
     if (!options.noGeneratedChange) {
       writeFileSync(path.join(generatedDir, "a.txt"), "desired-a\n", "utf8");
     }
@@ -237,7 +329,7 @@ function runGeneratedPublisherScenario(
     const publishRun = action.runs.steps.find(
       (step: { name?: string }) => step.name === "Publish generated pull request",
     ).run;
-    execFileSync("bash", ["-c", publishRun], {
+    const publish = spawnSync("bash", ["-c", publishRun], {
       cwd: worktree,
       encoding: "utf8",
       env: {
@@ -249,6 +341,7 @@ function runGeneratedPublisherScenario(
         FAKE_STALE_HEAD_ONCE: stalePrHeadOnce,
         GENERATED_PATHS: "generated",
         INVALIDATION_PATHS: "source",
+        OVERLAP_POLICY: options.overlapPolicy ?? "defer",
         CONTENTS_TOKEN: "contents-token",
         GH_TOKEN: "test-token",
         GITHUB_REPOSITORY: "openclaw/openclaw",
@@ -261,6 +354,12 @@ function runGeneratedPublisherScenario(
         RUNNER_TEMP: runnerTemp,
       },
     });
+    const publishOutput = `${publish.stdout}${publish.stderr}`;
+    if (options.expectFailure ? publish.status === 0 : publish.status !== 0) {
+      throw new Error(
+        `generated publisher exited ${String(publish.status)} (expected ${options.expectFailure ? "failure" : "success"}):\n${publishOutput}`,
+      );
+    }
     const authHeader = spawnSync(
       "git",
       ["config", "--local", "--get-all", "http.https://github.com/.extraheader"],
@@ -286,6 +385,7 @@ function runGeneratedPublisherScenario(
         ? runGit(root, ["--git-dir", origin, "show", `${branchRef}:generated/b.txt`])
         : "",
       mainHead: runGit(root, ["--git-dir", origin, "rev-parse", "refs/heads/main"]),
+      publishOutput,
       summary: readFileSync(summary, "utf8"),
     };
   } finally {
@@ -590,6 +690,20 @@ describe("ci workflow guards", () => {
     expect(actionPublishStep.env.CONTENTS_TOKEN).toBe("${{ steps.tokens.outputs.contents-token }}");
     expect(actionPublishStep.env.GH_TOKEN).toBe("${{ steps.tokens.outputs.pull-request-token }}");
     expect(actionPublishStep.env.INVALIDATION_PATHS).toBe("${{ inputs.invalidation-paths }}");
+    expect(publishAction.inputs["working-directory"]).toEqual({
+      description: "Repository root containing the generated files.",
+      required: false,
+      default: ".",
+    });
+    expect(actionPublishStep["working-directory"]).toBe("${{ inputs.working-directory }}");
+    expect(publishAction.inputs["overlap-policy"]).toEqual({
+      description: "Whether stale inputs or owned-path overlap defer to a successor run or fail.",
+      required: false,
+      default: "defer",
+    });
+    expect(actionPublishStep.env.OVERLAP_POLICY).toBe("${{ inputs.overlap-policy }}");
+    expect(actionPublishStep.run).toContain('case "${OVERLAP_POLICY}" in');
+    expect(actionPublishStep.run).toContain("defer | fail");
     expect(actionPublishStep.run).toContain("GIT_TERMINAL_PROMPT=0");
     expect(actionPublishStep.run).toContain(
       'git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${git_auth}"',
@@ -612,7 +726,7 @@ describe("ci workflow guards", () => {
     );
     expect(actionPublishStep.run).toContain('push_generated_branch ""');
     expect(actionPublishStep.run).toContain(
-      "overlap detection defers to the guaranteed main-triggered full refresh",
+      "overlap policy decides whether stale output defers or fails",
     );
     expect(actionPublishStep.run).toContain(
       'gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls"',
@@ -736,6 +850,7 @@ describe("ci workflow guards", () => {
       expect(publishStep.with["invalidation-paths"]).toContain(
         ".github/actions/publish-generated-pr/action.yml",
       );
+      expect(publishStep.with).not.toHaveProperty("overlap-policy");
       expect(publishStep.with["pr-body"]).toContain("## What Problem This Solves");
       expect(publishStep.with["pr-body"]).toContain("## Evidence");
       expect(publishStep.with["pr-body"]).toContain("${{ needs.resolve-base.outputs.sha }}");
@@ -744,14 +859,14 @@ describe("ci workflow guards", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "replays generated blobs without overwriting a newer non-overlapping base change",
+    "defers a newer owned snapshot even when the desired diff is disjoint",
     () => {
       const result = runGeneratedPublisherScenario("b");
 
-      expect(result.branchExists).toBe(true);
-      expect(result.generatedA).toBe("desired-a");
-      expect(result.generatedB).toBe("newer-b");
-      expect(result.summary).toContain("https://github.com/openclaw/openclaw/pull/1");
+      expect(result.branchExists).toBe(false);
+      expect(result.summary).toContain(
+        "Deferred stale generated output because owned generated paths changed on main.",
+      );
     },
   );
 
@@ -762,7 +877,7 @@ describe("ci workflow guards", () => {
 
       expect(result.branchExists).toBe(false);
       expect(result.summary).toContain(
-        "A newer main-triggered full locale refresh will reconcile the generated output.",
+        "Deferred stale generated output because owned generated paths changed on main.",
       );
     },
   );
@@ -770,7 +885,7 @@ describe("ci workflow guards", () => {
   it.skipIf(process.platform === "win32")(
     "retries a stale pull request head read after the branch push",
     () => {
-      const result = runGeneratedPublisherScenario("b", { stalePrHeadOnce: true });
+      const result = runGeneratedPublisherScenario(null, { stalePrHeadOnce: true });
 
       expect(result.branchExists).toBe(true);
       expect(result.generatedA).toBe("desired-a");
@@ -789,7 +904,7 @@ describe("ci workflow guards", () => {
       expect(result.branchHead).toBe(result.mainHead);
       expect(result.generatedA).toBe("old-a");
       expect(result.summary).toContain(
-        "A newer main-triggered full locale refresh will reconcile changed generator inputs.",
+        "Deferred stale generated output because generator inputs changed on main.",
       );
       expect(result.summary).toContain("Neutralized stale generated pull request");
     },
@@ -806,7 +921,67 @@ describe("ci workflow guards", () => {
       expect(result.branchHead).toBe(result.mainHead);
       expect(result.generatedA).toBe("old-a");
       expect(result.generatedB).toBe("newer-b");
+      expect(result.summary).toContain(
+        "Deferred stale generated output because owned generated paths changed on main.",
+      );
       expect(result.summary).toContain("Neutralized stale generated pull request");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "fails stale generated publication when no successor run is guaranteed",
+    () => {
+      const overlap = runGeneratedPublisherScenario("a", {
+        expectFailure: true,
+        overlapPolicy: "fail",
+      });
+      expect(overlap.branchExists).toBe(false);
+      expect(overlap.publishOutput).toContain(
+        "::error::Refusing stale generated output because owned generated paths changed on main.",
+      );
+
+      const stalePr = runGeneratedPublisherScenario(null, {
+        existingPr: true,
+        expectFailure: true,
+        noGeneratedChange: true,
+        overlapPolicy: "fail",
+        updateSource: true,
+      });
+      expect(stalePr.branchHead).toBe(stalePr.mainHead);
+      expect(stalePr.summary).toContain("Neutralized stale generated pull request");
+      expect(stalePr.publishOutput).toContain(
+        "::error::Refusing stale generated output because generator inputs changed on main.",
+      );
+
+      const noPr = runGeneratedPublisherScenario(null, {
+        expectFailure: true,
+        noGeneratedChange: true,
+        overlapPolicy: "fail",
+        updateSource: true,
+      });
+      expect(noPr.branchExists).toBe(false);
+      expect(noPr.publishOutput).toContain(
+        "::error::Refusing stale generated output because generator inputs changed on main.",
+      );
+
+      const unchangedOverlap = runGeneratedPublisherScenario("b", {
+        expectFailure: true,
+        noGeneratedChange: true,
+        overlapPolicy: "fail",
+      });
+      expect(unchangedOverlap.branchExists).toBe(false);
+      expect(unchangedOverlap.publishOutput).toContain(
+        "::error::Refusing stale generated output because owned generated paths changed on main.",
+      );
+
+      const invalidPolicy = runGeneratedPublisherScenario("b", {
+        expectFailure: true,
+        overlapPolicy: "continue",
+      });
+      expect(invalidPolicy.branchExists).toBe(false);
+      expect(invalidPolicy.publishOutput).toContain(
+        "Generated PR publication overlap policy must be 'defer' or 'fail'.",
+      );
     },
   );
 
@@ -1463,7 +1638,9 @@ describe("ci workflow guards", () => {
     const maturityWorkflow = readMaturityScorecardWorkflow();
     const qaEvidenceWorkflow = readQaProfileEvidenceWorkflow();
     const generateJob = maturityWorkflow.jobs.generate_qa_evidence;
+    const publisherPreflight = maturityWorkflow.jobs.publisher_preflight;
     const publishJob = maturityWorkflow.jobs.publish;
+    const publishPrJob = maturityWorkflow.jobs.publish_generated_pr;
     const qaRunJob = qaEvidenceWorkflow.jobs.run_qa_profile;
 
     expect(maturityWorkflow.on.workflow_call.inputs).toMatchObject({
@@ -1485,15 +1662,32 @@ describe("ci workflow guards", () => {
         type: "string",
       },
     });
+    expect(maturityWorkflow.on.workflow_dispatch.inputs.publish_pull_request).toEqual({
+      description: "Open or update a pull request for generated maturity files",
+      required: false,
+      default: true,
+      type: "boolean",
+    });
+    expect(maturityWorkflow.on.workflow_call.inputs).not.toHaveProperty("publish_pull_request");
     expect(maturityWorkflow.on.workflow_call.secrets.OPENAI_API_KEY.required).toBe(true);
     expect(
       maturityWorkflow.on.workflow_call.secrets.OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY
         .required,
     ).toBe(false);
-    expect(maturityWorkflow.on.workflow_call.secrets.GH_APP_PRIVATE_KEY.required).toBe(false);
-    expect(maturityWorkflow.on.workflow_call.secrets.GH_APP_PRIVATE_KEY_FALLBACK.required).toBe(
-      false,
-    );
+    expect(Object.keys(maturityWorkflow.on.workflow_call.secrets).sort()).toEqual([
+      "CLAWSWEEPER_APP_PRIVATE_KEY",
+      "MANTIS_GITHUB_APP_ID",
+      "MANTIS_GITHUB_APP_PRIVATE_KEY",
+      "OPENAI_API_KEY",
+      "OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY",
+    ]);
+    for (const secret of [
+      "CLAWSWEEPER_APP_PRIVATE_KEY",
+      "MANTIS_GITHUB_APP_ID",
+      "MANTIS_GITHUB_APP_PRIVATE_KEY",
+    ]) {
+      expect(maturityWorkflow.on.workflow_call.secrets[secret].required).toBe(false);
+    }
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
@@ -1510,7 +1704,10 @@ describe("ci workflow guards", () => {
       (step) => step.name === "Ensure Playwright Chromium",
     );
     expect(ensurePlaywrightStep.run).toBe("node scripts/ensure-playwright-chromium.mjs");
-    expect(generateJob.if).toBe("${{ inputs.qa_evidence_run_id == '' }}");
+    expect(generateJob.needs).toEqual(["validate_selected_ref", "publisher_preflight"]);
+    expect(generateJob.if.replace(/\s+/gu, " ")).toBe(
+      "${{ always() && needs.validate_selected_ref.result == 'success' && (!inputs.publish_pull_request || needs.publisher_preflight.result == 'success') && inputs.qa_evidence_run_id == '' }}",
+    );
     expect(generateJob.uses).toBe("./.github/workflows/qa-profile-evidence.yml");
     expect(generateJob.with).toMatchObject({
       // Keep the caller's ref while the callee verifies it against expected_sha.
@@ -1520,12 +1717,110 @@ describe("ci workflow guards", () => {
     });
     expect(generateJob.with).not.toHaveProperty("fail_on_qa_failure");
 
+    const workflowStep = maturityWorkflow.jobs.validate_selected_ref.steps.find(
+      (step) => step.name === "Resolve job workflow identity",
+    );
+    const authorizeStep = maturityWorkflow.jobs.validate_selected_ref.steps.find(
+      (step) => step.name === "Authorize workflow invocation",
+    );
     const validateRefStep = maturityWorkflow.jobs.validate_selected_ref.steps.find(
       (step) => step.name === "Validate selected ref",
     );
+    expect(workflowStep.env.JOB_CONTEXT).toBe("${{ toJSON(job) }}");
+    expect(workflowStep.run).toContain("job.workflow_sha must be a full lowercase commit SHA");
+    expect(authorizeStep.env).toEqual({
+      CALLER_EVENT_NAME: "${{ github.event_name }}",
+      CALLER_WORKFLOW_REF: "${{ github.workflow_ref }}",
+      JOB_WORKFLOW_FILE_PATH: "${{ steps.workflow.outputs.workflow_file_path }}",
+      JOB_WORKFLOW_REF: "${{ steps.workflow.outputs.workflow_ref }}",
+      JOB_WORKFLOW_REPOSITORY: "${{ steps.workflow.outputs.workflow_repository }}",
+      PUBLISH_PULL_REQUEST: "${{ inputs.publish_pull_request || false }}",
+    });
+    expect(authorizeStep.run).toContain(
+      `expected_workflow_ref="${MATURITY_SCORECARD_WORKFLOW_REF}"`,
+    );
+    expect(authorizeStep.run).toContain(
+      '[[ "$PUBLISH_PULL_REQUEST" == "true" && "$canonical_direct" != "true" ]]',
+    );
+    expect(authorizeStep.run).toContain(
+      "Reusable maturity workflows are artifact-only and cannot publish pull requests.",
+    );
     expect(validateRefStep.env.EXPECTED_SHA).toBe("${{ inputs.expected_sha }}");
-    expect(validateRefStep.run).toContain("expected_sha must be a full 40-character SHA");
-    expect(validateRefStep.run).toContain('"${selected_revision,,}" != "$expected_sha"');
+    expect(validateRefStep.env.PUBLISH_PULL_REQUEST).toBe("${{ inputs.publish_pull_request }}");
+    expect(validateRefStep.env).not.toHaveProperty("TRUSTED_WORKFLOW_SHA");
+    expect(validateRefStep.env.EVIDENCE_RUN_ID).toBe(
+      "${{ inputs.qa_evidence_run_id || github.run_id }}",
+    );
+    for (const fragment of [
+      "expected_sha must be a full 40-character SHA",
+      'branch_candidate="${INPUT_REF#refs/heads/}"',
+      'branch_lookup_status="$?"',
+      "2) ;;",
+      "Unable to determine whether '${INPUT_REF}' is a remote branch",
+      'git merge-base --is-ancestor "$selected_revision"',
+      "':(exclude)qa/maturity-scores.yaml'",
+      "':(exclude)docs/maturity/scorecard.md'",
+      "':(exclude)docs/maturity/taxonomy.md'",
+      "qa_evidence_run_id must be a numeric GitHub Actions run id",
+      'publication_head="automation/maturity-scorecard-',
+    ]) {
+      expect(validateRefStep.run).toContain(fragment);
+    }
+    expect(maturityWorkflow.jobs.validate_selected_ref.outputs).toMatchObject({
+      publication_base: "${{ steps.validate.outputs.publication_base }}",
+      publication_head: "${{ steps.validate.outputs.publication_head }}",
+      workflow_file_path: "${{ steps.workflow.outputs.workflow_file_path }}",
+      workflow_ref: "${{ steps.workflow.outputs.workflow_ref }}",
+      workflow_repository: "${{ steps.workflow.outputs.workflow_repository }}",
+      workflow_sha: "${{ steps.workflow.outputs.workflow_sha }}",
+    });
+
+    const trustedPublisherCondition = [
+      "${{ inputs.publish_pull_request &&",
+      "github.event_name == 'workflow_dispatch' &&",
+      `github.workflow_ref == '${MATURITY_SCORECARD_WORKFLOW_REF}' &&`,
+      `needs.validate_selected_ref.outputs.workflow_file_path == '${MATURITY_SCORECARD_WORKFLOW}' &&`,
+      `needs.validate_selected_ref.outputs.workflow_ref == '${MATURITY_SCORECARD_WORKFLOW_REF}' &&`,
+      "needs.validate_selected_ref.outputs.workflow_repository == 'openclaw/openclaw' }}",
+    ].join(" ");
+    expect(publisherPreflight.needs).toBe("validate_selected_ref");
+    expect(publisherPreflight.if).toBe("${{ inputs.publish_pull_request }}");
+    const preflightCheckoutStep = publisherPreflight.steps.find(
+      (step) => step.name === "Checkout trusted workflow source",
+    );
+    const preflightTokensStep = publisherPreflight.steps.find(
+      (step) => step.name === "Create generated PR tokens",
+    );
+    expect(preflightCheckoutStep).toMatchObject({
+      uses: CHECKOUT_V6,
+      with: {
+        repository: "${{ needs.validate_selected_ref.outputs.workflow_repository }}",
+        ref: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+        "persist-credentials": false,
+        submodules: false,
+      },
+    });
+    expect(preflightTokensStep.if.replace(/\s+/gu, " ")).toBe(trustedPublisherCondition);
+    expect(preflightTokensStep).toMatchObject({
+      uses: "./.github/actions/create-generated-pr-tokens",
+      with: {
+        "contents-client-id": "Iv23liOECG0slfuhz093",
+        "contents-private-key": "${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}",
+        "pull-request-app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
+        "pull-request-private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
+      },
+    });
+    expect(publishJob.needs).toEqual([
+      "validate_selected_ref",
+      "publisher_preflight",
+      "generate_qa_evidence",
+    ]);
+    expect(publishJob.if.replace(/\s+/gu, " ")).toBe(
+      "${{ always() && needs.validate_selected_ref.result == 'success' && (!inputs.publish_pull_request || needs.publisher_preflight.result == 'success') && (inputs.qa_evidence_run_id != '' || needs.generate_qa_evidence.result == 'success') }}",
+    );
+    expect(JSON.stringify(publishJob)).not.toMatch(
+      /CLAWSWEEPER_APP_PRIVATE_KEY|MANTIS_GITHUB_APP/u,
+    );
 
     const generatedDownloadStep = publishJob.steps.find(
       (step) => step.name === "Download generated QA evidence artifact",
@@ -1570,19 +1865,179 @@ describe("ci workflow guards", () => {
     const qaFailStep = qaRunJob.steps.find((step) => step.name === "Fail if QA profile failed");
     expect(qaFailStep.if).toBe("always()");
 
-    const createTokenStep = publishJob.steps.find(
-      (step) => step.name === "Create generated docs PR app token",
+    const renderCheckoutStep = publishJob.steps.find(
+      (step) => step.name === "Checkout selected ref",
     );
-    const createFallbackTokenStep = publishJob.steps.find(
-      (step) => step.name === "Create generated docs PR fallback app token",
+    const generatedPrUploadStep = publishJob.steps.find(
+      (step) => step.name === "Upload generated PR files",
     );
-    const openDocsPrStep = publishJob.steps.find((step) => step.name === "Open generated docs PR");
-    expect(createTokenStep.if).toBe("${{ github.event_name == 'workflow_dispatch' }}");
-    expect(createFallbackTokenStep.if).toBe(
-      "${{ github.event_name == 'workflow_dispatch' && steps.app-token.outcome == 'failure' }}",
+    expect(renderCheckoutStep.with["fetch-depth"]).toBe(0);
+    expect(generatedPrUploadStep).toMatchObject({
+      if: "${{ inputs.publish_pull_request }}",
+      uses: UPLOAD_ARTIFACT_V7,
+      with: {
+        name: "maturity-scorecard-pr-${{ github.run_id }}-${{ github.run_attempt }}",
+        "retention-days": 1,
+        "if-no-files-found": "error",
+      },
+    });
+    expect(generatedPrUploadStep.with.path.trim().split("\n")).toEqual(MATURITY_GENERATED_PR_PATHS);
+
+    expect(publishPrJob.needs).toEqual(["validate_selected_ref", "publisher_preflight", "publish"]);
+    expect(publishPrJob["runs-on"]).toBe("ubuntu-24.04");
+    for (const fragment of [
+      "needs.publisher_preflight.result == 'success'",
+      "needs.publish.result == 'success'",
+      `github.workflow_ref == '${MATURITY_SCORECARD_WORKFLOW_REF}'`,
+      `needs.validate_selected_ref.outputs.workflow_ref == '${MATURITY_SCORECARD_WORKFLOW_REF}'`,
+    ]) {
+      expect(publishPrJob.if).toContain(fragment);
+    }
+    const trustedPublishCheckoutStep = publishPrJob.steps.find(
+      (step) => step.name === "Checkout trusted workflow source",
     );
-    expect(openDocsPrStep.if).toBe("${{ github.event_name == 'workflow_dispatch' }}");
+    const selectedCheckoutStep = publishPrJob.steps.find(
+      (step) => step.name === "Checkout selected ref",
+    );
+    const downloadPrFilesStep = publishPrJob.steps.find(
+      (step) => step.name === "Download generated PR files",
+    );
+    const openDocsPrStep = publishPrJob.steps.find(
+      (step) => step.name === "Open or update generated docs PR",
+    );
+    expect(trustedPublishCheckoutStep).toMatchObject({
+      uses: CHECKOUT_V6,
+      with: {
+        repository: "${{ needs.validate_selected_ref.outputs.workflow_repository }}",
+        ref: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+        "persist-credentials": false,
+      },
+    });
+    expect(selectedCheckoutStep).toMatchObject({
+      uses: CHECKOUT_V6,
+      with: {
+        ref: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
+        path: "selected",
+        "fetch-depth": 0,
+        "persist-credentials": false,
+      },
+    });
+    expect(downloadPrFilesStep).toMatchObject({
+      uses: DOWNLOAD_ARTIFACT_V8,
+      with: {
+        name: "maturity-scorecard-pr-${{ github.run_id }}-${{ github.run_attempt }}",
+        path: "${{ steps.staging.outputs.path }}",
+      },
+    });
+    expect(openDocsPrStep.if.replace(/\s+/gu, " ")).toBe(trustedPublisherCondition);
+    expect(openDocsPrStep.uses).toBe("./.github/actions/publish-generated-pr");
+    expect(openDocsPrStep.with).toMatchObject({
+      "contents-client-id": "Iv23liOECG0slfuhz093",
+      "contents-private-key": "${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}",
+      "pull-request-app-id": "${{ secrets.MANTIS_GITHUB_APP_ID }}",
+      "pull-request-private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
+      "base-branch": "${{ needs.validate_selected_ref.outputs.publication_base }}",
+      "head-branch": "${{ needs.validate_selected_ref.outputs.publication_head }}",
+      "working-directory": "selected",
+      "commit-message": "docs: update maturity scorecard",
+      "pr-title": "docs: update maturity scorecard",
+      "overlap-policy": "fail",
+    });
+    expect(openDocsPrStep.with["generated-paths"].trim().split("\n")).toEqual(
+      MATURITY_GENERATED_PR_PATHS,
+    );
+    expect(openDocsPrStep.with["invalidation-paths"].trim().split("\n")).toEqual([
+      ".",
+      ":(exclude)qa/maturity-scores.yaml",
+      ":(exclude)docs/maturity/scorecard.md",
+      ":(exclude)docs/maturity/taxonomy.md",
+    ]);
+    for (const heading of [
+      "## What Problem This Solves",
+      "## Why This Change Was Made",
+      "## User Impact",
+      "## Evidence",
+    ]) {
+      expect(openDocsPrStep.with["pr-body"]).toContain(heading);
+    }
+    expect(publishPrJob.steps).not.toContainEqual(
+      expect.objectContaining({ name: "Create generated docs PR app token" }),
+    );
+    const maturityWorkflowSource = readFileSync(".github/workflows/maturity-scorecard.yml", "utf8");
+    expect(maturityWorkflowSource).not.toContain("permission-pull-requests: write");
+    expect(maturityWorkflowSource).not.toContain("GH_APP_PRIVATE_KEY");
+    expect(maturityWorkflowSource).not.toContain("gh auth setup-git");
+    expect(maturityWorkflowSource).not.toContain("git push --force-with-lease");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "authorizes maturity PR publication only for a canonical direct dispatch",
+    () => {
+      const direct = runMaturityInvocationScenario({
+        callerEventName: "workflow_dispatch",
+        callerWorkflowRef: MATURITY_SCORECARD_WORKFLOW_REF,
+        publishPullRequest: true,
+      });
+
+      expect(direct.status).toBe(0);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "keeps a reusable maturity call artifact-only even when its caller was dispatched",
+    () => {
+      const callerWorkflowRef =
+        "openclaw/openclaw/.github/workflows/openclaw-release-checks.yml@refs/heads/main";
+      const artifactOnly = runMaturityInvocationScenario({
+        callerEventName: "workflow_dispatch",
+        callerWorkflowRef,
+        publishPullRequest: false,
+      });
+
+      expect(artifactOnly.status).toBe(0);
+      for (const identity of [
+        { callerWorkflowRef },
+        { callerWorkflowRef: MATURITY_SCORECARD_WORKFLOW_REF, jobWorkflowRef: callerWorkflowRef },
+      ]) {
+        const rejected = runMaturityInvocationScenario({
+          callerEventName: "workflow_dispatch",
+          publishPullRequest: true,
+          ...identity,
+        });
+        expect(rejected.status).not.toBe(0);
+        expect(rejected.output).toContain(
+          "Reusable maturity workflows are artifact-only and cannot publish pull requests.",
+        );
+      }
+    },
+  );
+
+  // Replay the Ubuntu workflow shell only where its Bash 4 and GNU install contract exists.
+  it.skipIf(process.platform !== "linux")(
+    "copies only regular allowlisted maturity publication files",
+    () => {
+      const valid = runMaturityArtifactCopyScenario();
+      expect(valid.status).toBe(0);
+      expect(valid.copied).toEqual(MATURITY_GENERATED_PR_PATHS.map((path) => `new ${path}\n`));
+
+      const extra = runMaturityArtifactCopyScenario({ extraFile: true });
+      expect(extra.status).not.toBe(0);
+      expect(extra.output).toContain("Generated PR artifact must contain exactly 3 files.");
+
+      const sourceSymlink = runMaturityArtifactCopyScenario({ sourceSymlink: true });
+      expect(sourceSymlink.status).not.toBe(0);
+      expect(sourceSymlink.output).toContain(
+        "Generated PR artifact path must be a regular file: qa/maturity-scores.yaml",
+      );
+
+      const destinationSymlink = runMaturityArtifactCopyScenario({ destinationSymlink: true });
+      expect(destinationSymlink.status).not.toBe(0);
+      expect(destinationSymlink.output).toContain(
+        "Selected worktree destination must be a regular file: qa/maturity-scores.yaml",
+      );
+      expect(destinationSymlink.escaped).toBe("outside\n");
+    },
+  );
 
   it("keeps maturity scorecard release docs opt-in from release checks", () => {
     const releaseWorkflow = readReleaseChecksWorkflow();
@@ -1622,6 +2077,8 @@ describe("ci workflow guards", () => {
       expected_sha: "${{ needs.resolve_target.outputs.revision }}",
     });
     expect(job.with).not.toHaveProperty("qa_profile");
+    expect(job.with).not.toHaveProperty("publish_pull_request");
+    expect(Object.keys(job.secrets)).toEqual(["OPENAI_API_KEY"]);
     expect(summaryJob.needs).toContain("maturity_scorecard_release_checks");
     expect(verifyStep.run).toContain(
       '"maturity_scorecard_release_checks=${{ needs.maturity_scorecard_release_checks.result }}"',

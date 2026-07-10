@@ -1142,11 +1142,25 @@ describe("package artifact reuse", () => {
     expect(mimo.command).not.toContain("opencode-go/mimo-v2-pro");
   });
 
+  it("runs the fresh OpenAI API-key default without hard-coding a model filter", () => {
+    const openaiDefault = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-openai-api-default",
+    );
+
+    expect(openaiDefault).toMatchObject({ profiles: "stable full" });
+    expect(openaiDefault.command).toContain("OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT=1");
+    expect(openaiDefault.command).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai");
+    expect(openaiDefault.command).not.toContain("OPENCLAW_LIVE_GATEWAY_MODELS=");
+  });
+
   it("runs Docker live harnesses from trusted helper scripts", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
     const scenarios = readFileSync("scripts/lib/docker-e2e-scenarios.mjs", "utf8");
     const scheduler = readFileSync("scripts/test-docker-all.mjs", "utf8");
     const harness = readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8");
+    const codexLiveTest = readFileSync("src/gateway/gateway-codex-harness.live.test.ts", "utf8");
     const liveDockerAuth = readFileSync("scripts/lib/live-docker-auth.sh", "utf8");
     const sharedLiveScripts = [
       readFileSync("scripts/test-live-models-docker.sh", "utf8"),
@@ -1176,6 +1190,28 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh',
     );
+    for (const [model, thinking] of [
+      ["sol", "ultra"],
+      ["terra", "ultra"],
+      ["luna", "max"],
+    ]) {
+      expect(workflow).toContain(
+        `OPENCLAW_LIVE_CODEX_HARNESS_TARGETS=openai/gpt-5.6-${model}=${thinking}`,
+      );
+    }
+    expect(workflow.match(/live-codex-harness\*-docker\)/gu)).toHaveLength(2);
+    for (const suiteId of [
+      "native-live-src-gateway-profiles-openai-api-default",
+      "native-live-src-gateway-profiles-openai-gpt56-ultra",
+      "live-codex-harness-gpt56-sol-docker",
+      "live-codex-harness-gpt56-terra-docker",
+      "live-codex-harness-gpt56-luna-docker",
+      "live-codex-harness-gpt56-docker",
+    ]) {
+      expect(workflow).toContain(`add_profile_suite ${suiteId} "stable full"`);
+    }
+    expect(codexLiveTest).toContain("command: `/model ${modelKey} --runtime codex`");
+    expect(codexLiveTest).toContain("thinkingLevel: CODEX_HARNESS_THINKING");
     expect(workflow).toContain(
       'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 20m bash .release-harness/scripts/test-live-subagent-announce-docker.sh',
     );
@@ -1316,7 +1352,7 @@ describe("package artifact reuse", () => {
       "run_setup_command bash -lc 'curl -fsSL https://app.factory.ai/cli | sh'",
     );
     expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
-      "OPENCLAW_LIVE_CODEX_HARNESS_DOCKER_RUN_TIMEOUT:-2100s",
+      "OPENCLAW_LIVE_CODEX_HARNESS_DOCKER_RUN_TIMEOUT:-$((2100 * CODEX_HARNESS_TARGET_COUNT))s",
     );
     expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
       'CODEX_HARNESS_SETUP_TIMEOUT_SECONDS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS 180)"',
