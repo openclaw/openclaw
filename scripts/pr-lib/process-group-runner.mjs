@@ -7,6 +7,7 @@ const SIGNAL_GRACE_MS = 5000;
 const KILL_DRAIN_MS = 5000;
 const POLL_MS = 25;
 const MAX_NOTIFICATION_LINE_BYTES = 4096;
+const FORWARDED_SIGNALS = ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"];
 
 const [repoRootArg, script, ...args] = process.argv.slice(2);
 if (!repoRootArg || !script) {
@@ -24,20 +25,34 @@ const locks = new Map();
 let notificationBuffer = "";
 let discardingOversizedNotificationLine = false;
 let notificationEnded = false;
+/** @type {Error | undefined} */
 let notificationFailure;
 let receivedSignal;
 let escalationTimer;
 let killDeadline;
-let child;
+const operationGroup = { pid: undefined };
 let operationGroupGone = false;
 let hadLingeringGroup = false;
 
 function delay(ms) {
-  return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
+  return new Promise((resolveDelay) => {
+    setTimeout(resolveDelay, ms);
+  });
+}
+
+function toError(value, fallbackMessage) {
+  return value instanceof Error ? value : new Error(fallbackMessage);
+}
+
+function exitCodeForSignal(signal) {
+  const signalNumber = constants.signals[signal];
+  return typeof signalNumber === "number" ? 128 + signalNumber : 1;
 }
 
 function processGroupStatus(pgid) {
-  if (operationGroupGone) return "dead";
+  if (operationGroupGone) {
+    return "dead";
+  }
   if (!Number.isSafeInteger(pgid) || pgid <= 1 || pgid > 0x7fffffff) {
     return "indeterminate";
   }
@@ -56,9 +71,12 @@ function processGroupStatus(pgid) {
 }
 
 function signalProcessGroup(signal) {
-  if (!child?.pid || operationGroupGone) return;
+  const childPid = operationGroup.pid;
+  if (!childPid || operationGroupGone) {
+    return;
+  }
   try {
-    process.kill(-child.pid, signal);
+    process.kill(-childPid, signal);
   } catch (error) {
     if (error?.code === "ESRCH") {
       operationGroupGone = true;
@@ -71,13 +89,15 @@ function signalProcessGroup(signal) {
 }
 
 function escalateSignal() {
-  if (killDeadline) return;
+  if (killDeadline) {
+    return;
+  }
   killDeadline = Date.now() + KILL_DRAIN_MS;
   signalProcessGroup("SIGKILL");
 }
 
 const signalHandlers = new Map();
-for (const signal of ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"]) {
+for (const signal of FORWARDED_SIGNALS) {
   const handler = () => {
     if (receivedSignal) {
       escalateSignal();
@@ -91,7 +111,7 @@ for (const signal of ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"]) {
   process.on(signal, handler);
 }
 
-child = spawn(script, args, {
+const child = spawn(script, args, {
   cwd: process.cwd(),
   detached: true,
   env: {
@@ -102,6 +122,7 @@ child = spawn(script, args, {
   },
   stdio: ["inherit", "inherit", "inherit", "pipe"],
 });
+operationGroup.pid = child.pid;
 if (killDeadline) {
   signalProcessGroup("SIGKILL");
 } else if (receivedSignal) {
@@ -152,7 +173,9 @@ function consumeNotificationLine(line) {
 }
 
 function finishNotifications() {
-  if (notificationEnded) return;
+  if (notificationEnded) {
+    return;
+  }
   if (!discardingOversizedNotificationLine && notificationBuffer.length > 0) {
     consumeNotificationLine(notificationBuffer);
   }
@@ -196,7 +219,7 @@ const notificationStream = child.stdio[3];
 notificationStream.setEncoding("utf8");
 notificationStream.on("data", consumeNotificationChunk);
 notificationStream.once("error", (error) => {
-  notificationFailure ??= error;
+  notificationFailure ??= toError(error, "scripts/pr operation-lock notification stream failed");
 });
 notificationStream.once("end", finishNotifications);
 notificationStream.once("close", finishNotifications);
@@ -204,12 +227,14 @@ notificationStream.once("close", finishNotifications);
 const childResult = await new Promise((resolveResult) => {
   let settled = false;
   const settle = (result) => {
-    if (settled) return;
+    if (settled) {
+      return;
+    }
     settled = true;
     resolveResult(result);
   };
   child.once("error", (error) => {
-    notificationFailure ??= error;
+    notificationFailure ??= toError(error, "Unable to launch scripts/pr");
     settle({ code: 1, signal: null });
   });
   child.once("exit", (code, signal) => settle({ code, signal }));
@@ -295,7 +320,7 @@ try {
   await waitForOperationDrain();
   drained = true;
 } catch (error) {
-  notificationFailure ??= error;
+  notificationFailure ??= toError(error, "scripts/pr operation drain failed");
   // An out-of-group descendant can inherit the write end indefinitely. Once
   // the bounded drain fails, close our read end so that sentinel cannot keep
   // the controller alive; the exact lock remains sticky for manual recovery.
@@ -303,7 +328,9 @@ try {
   notificationStream.destroy();
 }
 
-if (escalationTimer) clearTimeout(escalationTimer);
+if (escalationTimer) {
+  clearTimeout(escalationTimer);
+}
 for (const [signal, handler] of signalHandlers) {
   process.off(signal, handler);
 }
@@ -323,7 +350,7 @@ if (drained && completedCleanly) {
     try {
       releaseLock(lock);
     } catch (error) {
-      notificationFailure ??= error;
+      notificationFailure ??= toError(error, "Unable to release a scripts/pr operation lock");
       retainedLocks.push(lock);
     }
   }
@@ -335,16 +362,15 @@ for (const lock of retainedLocks) {
 }
 
 if (notificationFailure) {
-  console.error(String(notificationFailure));
+  console.error(notificationFailure.message);
 }
 
 if (receivedSignal) {
-  process.exitCode = 128 + constants.signals[receivedSignal];
+  process.exitCode = exitCodeForSignal(receivedSignal);
 } else if (childResult.code !== null) {
   process.exitCode = childResult.code;
 } else {
-  const signalNumber = childResult.signal ? constants.signals[childResult.signal] : undefined;
-  process.exitCode = signalNumber ? 128 + signalNumber : 1;
+  process.exitCode = childResult.signal ? exitCodeForSignal(childResult.signal) : 1;
 }
 if (notificationFailure && process.exitCode === 0) {
   process.exitCode = 1;
