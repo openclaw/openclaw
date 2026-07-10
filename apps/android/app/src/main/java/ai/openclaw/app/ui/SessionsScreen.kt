@@ -24,17 +24,18 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Storage
-import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
@@ -82,6 +83,7 @@ internal fun SessionsScreen(
   var filter by rememberSaveable { mutableStateOf(SessionFilter.Recent) }
   var compactLayout by rememberSaveable { mutableStateOf(false) }
   var recentFirst by rememberSaveable { mutableStateOf(true) }
+  var sortMenuExpanded by remember { mutableStateOf(false) }
   var renameSessionKey by rememberSaveable { mutableStateOf<String?>(null) }
   var groupSessionKey by rememberSaveable { mutableStateOf<String?>(null) }
   var deleteSessionKey by rememberSaveable { mutableStateOf<String?>(null) }
@@ -156,7 +158,6 @@ internal fun SessionsScreen(
         ) {
           Text(text = "Sessions", style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
           ClawPlainIconButton(icon = Icons.Default.Search, contentDescription = "Search sessions", onClick = onOpenCommand)
-          ClawPlainIconButton(icon = Icons.Default.SwapVert, contentDescription = "Reverse session sort", onClick = { recentFirst = !recentFirst })
         }
       }
 
@@ -179,22 +180,55 @@ internal fun SessionsScreen(
       }
 
       item {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
           Surface(
-            onClick = { recentFirst = !recentFirst },
-            modifier = Modifier.heightIn(min = 36.dp),
+            modifier = Modifier.widthIn(min = 140.dp, max = 180.dp).heightIn(min = 36.dp),
             shape = RoundedCornerShape(ClawTheme.radii.row),
             color = Color.Transparent,
             contentColor = ClawTheme.colors.textMuted,
             border = BorderStroke(1.dp, ClawTheme.colors.border),
           ) {
-            Row(
-              modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(5.dp),
-            ) {
-              Text(text = "Sort: ${if (recentFirst) "Newest" else "Oldest"}", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-              Icon(imageVector = Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textMuted)
+            Column {
+              Surface(
+                onClick = { sortMenuExpanded = !sortMenuExpanded },
+                color = Color.Transparent,
+                contentColor = ClawTheme.colors.textMuted,
+              ) {
+                Row(
+                  modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                  Text(text = "Sort: ${if (recentFirst) "Newest first" else "Oldest first"}", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+                  Icon(
+                    imageVector = if (sortMenuExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = null,
+                    modifier = Modifier.size(13.dp),
+                    tint = ClawTheme.colors.textMuted,
+                  )
+                }
+              }
+              if (sortMenuExpanded) {
+                HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+                listOf(true to "Newest first", false to "Oldest first").forEach { (value, label) ->
+                  Surface(
+                    onClick = {
+                      recentFirst = value
+                      sortMenuExpanded = false
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color.Transparent,
+                    contentColor = if (recentFirst == value) ClawTheme.colors.text else ClawTheme.colors.textMuted,
+                  ) {
+                    Text(
+                      text = label,
+                      modifier = Modifier.padding(horizontal = 9.dp, vertical = 8.dp),
+                      style = ClawTheme.type.body,
+                      color = if (recentFirst == value) ClawTheme.colors.text else ClawTheme.colors.textMuted,
+                    )
+                  }
+                }
+              }
             }
           }
           SessionOutlineIconButton(icon = Icons.Default.Storage, contentDescription = "Toggle session layout", onClick = { compactLayout = !compactLayout })
