@@ -626,8 +626,17 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
 ]);
 const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["Dockerfile", ROOT_DOCKERFILE_TEST_TARGETS],
+  [
+    ".agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs",
+    ["test/scripts/release-notes-ledger.test.ts", "test/scripts/verify-release-notes.test.ts"],
+  ],
   [".crabbox.yaml", ["test/scripts/package-acceptance-workflow.test.ts"]],
   [".github/actions/detect-docs-changes/action.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
+  [
+    ".github/actions/create-generated-pr-tokens/action.yml",
+    ["test/scripts/ci-workflow-guards.test.ts"],
+  ],
+  [".github/actions/publish-generated-pr/action.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [
     ".github/actions/docker-e2e-plan/action.yml",
     ["test/scripts/package-acceptance-workflow.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
@@ -755,7 +764,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/ci-docker-pull-retry.sh", ["test/scripts/ci-docker-pull-retry.test.ts"]],
   ["scripts/control-ui-i18n.ts", ["test/scripts/control-ui-i18n.test.ts"]],
   ["scripts/apple-app-i18n.ts", ["test/scripts/apple-app-i18n.test.ts"]],
-  ["scripts/native-app-i18n.ts", ["test/scripts/native-app-i18n.test.ts"]],
+  [
+    "scripts/native-app-i18n.ts",
+    ["test/scripts/native-app-i18n.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
+  ],
   ["scripts/android-app-i18n.ts", ["test/scripts/android-app-i18n.test.ts"]],
   [
     "scripts/copy-bundled-plugin-metadata.mjs",
@@ -1003,6 +1015,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/openclaw-cross-os-release-workflow.test.ts"],
   ],
   ["scripts/mobile-release-ref.ts", ["test/scripts/mobile-release-ref.test.ts"]],
+  ["scripts/apple-release-source-check.sh", ["test/scripts/apple-release-source-check.test.ts"]],
   ["scripts/android-release.sh", ["test/scripts/android-release-wrapper-args.test.ts"]],
   ["scripts/android-release-signing.mjs", ["test/scripts/android-release-signing.test.ts"]],
   ["scripts/android-release-upload.sh", ["test/scripts/android-release-wrapper-args.test.ts"]],
@@ -1012,7 +1025,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["apps/android/fastlane/Fastfile", ["test/scripts/android-release-fastlane-gates.test.ts"]],
   ["scripts/ios-release-archive.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
-  ["scripts/ios-release-prepare.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
+  [
+    "scripts/ios-release-prepare.sh",
+    ["test/scripts/ios-release-prepare.test.ts", "test/scripts/ios-release-wrapper-args.test.ts"],
+  ],
   ["scripts/ios-release-signing.mjs", ["test/scripts/ios-release-signing.test.ts"]],
   ["apps/ios/fastlane/Fastfile", ["test/scripts/ios-release-fastlane-gates.test.ts"]],
   [
@@ -1185,6 +1201,8 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/lib/live-docker-stage.sh", ["test/scripts/live-docker-stage.test.ts"]],
   ["scripts/lib/local-heavy-check-runtime.mjs", ["test/scripts/local-heavy-check-runtime.test.ts"]],
   ["scripts/lib/kova-report-gate.mjs", ["test/scripts/kova-report-gate.test.ts"]],
+  ["scripts/lib/kova-report-publish-files.mjs", ["test/scripts/kova-report-publish-files.test.ts"]],
+  ["scripts/lib/kova-workflow-evidence.mjs", ["test/scripts/kova-workflow-evidence.test.ts"]],
   ["scripts/lib/managed-child-process.mjs", ["test/scripts/managed-child-process.test.ts"]],
   [
     "scripts/lib/windows-taskkill.mjs",
@@ -1235,6 +1253,16 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/scripts/check-openclaw-package-tarball.test.ts",
       "test/scripts/postinstall-bundled-plugins.test.ts",
       "test/release-check.test.ts",
+    ],
+  ],
+  [
+    "scripts/lib/build-metadata.sh",
+    [
+      "src/docker-setup.e2e.test.ts",
+      "test/scripts/apple-release-source-check.test.ts",
+      "test/scripts/ios-version.test.ts",
+      "test/scripts/package-mac-app.test.ts",
+      "test/scripts/test-install-sh-docker.test.ts",
     ],
   ],
   [
@@ -1376,7 +1404,9 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/mobile-reauth.sh", ["test/scripts/auth-monitor.test.ts"]],
   ["scripts/committer", ["test/scripts/committer.test.ts"]],
   ["scripts/gh-read", ["test/scripts/gh-read.test.ts"]],
-  ["scripts/pr", ["test/scripts/pr-wrappers.test.ts"]],
+  ["scripts/pr", ["test/scripts/pr-operation-lock.test.ts", "test/scripts/pr-wrappers.test.ts"]],
+  ["scripts/pr-lib/operation-lock.sh", ["test/scripts/pr-operation-lock.test.ts"]],
+  ["scripts/pr-lib/process-group-runner.mjs", ["test/scripts/pr-operation-lock.test.ts"]],
   ["scripts/pr-merge", ["test/scripts/pr-wrappers.test.ts"]],
   ["scripts/pr-prepare", ["test/scripts/pr-wrappers.test.ts"]],
   ["scripts/pr-review", ["test/scripts/pr-wrappers.test.ts"]],
@@ -1415,6 +1445,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/podman/openclaw.container.in", ["test/scripts/test-install-sh-docker.test.ts"]],
   ["scripts/ios-run.sh", ["test/scripts/ios-run.test.ts"]],
+  ["scripts/ios-write-version-xcconfig.sh", ["test/scripts/ios-version.test.ts"]],
   ["scripts/create-dmg.sh", ["test/scripts/create-dmg.test.ts"]],
   ["scripts/kova-ci-summary.mjs", ["test/scripts/kova-ci-summary.test.ts"]],
   ["scripts/make_appcast.sh", ["test/scripts/make-appcast.test.ts"]],
@@ -1433,6 +1464,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/plugin-npm-runtime-build-args.test.ts"],
   ],
   ["scripts/package-changelog.mjs", ["test/scripts/package-changelog.test.ts"]],
+  ["scripts/render-github-release-notes.mjs", ["test/scripts/render-github-release-notes.test.ts"]],
   ["scripts/package-mac-app.sh", ["test/scripts/package-mac-app.test.ts"]],
   ["scripts/package-mac-dist.sh", ["test/scripts/package-mac-dist.test.ts"]],
   [
@@ -1655,7 +1687,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   [
     "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs",
-    ["test/scripts/docker-build-helper.test.ts"],
+    ["test/scripts/codex-install-assertions.test.ts", "test/scripts/docker-build-helper.test.ts"],
   ],
   ["scripts/e2e/lib/codex-install-utils.mjs", ["test/scripts/codex-install-assertions.test.ts"]],
   [
@@ -2034,6 +2066,7 @@ const TOOLING_TEST_TARGETS = new Map([
     "test/scripts/plugin-prerelease-test-plan.test.ts",
     ["test/scripts/plugin-prerelease-test-plan.test.ts"],
   ],
+  ["test/scripts/pr-operation-lock.test.ts", ["test/scripts/pr-operation-lock.test.ts"]],
   ["test/scripts/pr-wrappers.test.ts", ["test/scripts/pr-wrappers.test.ts"]],
   ["test/scripts/test-projects.test.ts", ["test/scripts/test-projects.test.ts"]],
   [
@@ -3259,7 +3292,11 @@ function resolveDocsI18nGoTargets(changedPath) {
   if (!/^scripts\/docs-i18n\/(?:go\.(?:mod|sum)|[^/]+\.go)$/u.test(changedPath)) {
     return null;
   }
-  return ["test/scripts/docs-i18n.test.ts"];
+  const targets = ["test/scripts/docs-i18n.test.ts"];
+  if (changedPath === "scripts/docs-i18n/go.mod") {
+    targets.push("test/scripts/ci-workflow-guards.test.ts");
+  }
+  return targets;
 }
 
 function resolveK8sManifestTargets(changedPath) {

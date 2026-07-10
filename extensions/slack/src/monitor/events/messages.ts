@@ -154,6 +154,9 @@ function resolveAssistantMessageChangedInbound(params: {
     attachments: Array.isArray(message.attachments)
       ? (message.attachments as SlackMessageEvent["attachments"])
       : undefined,
+    blocks: Array.isArray(message.blocks)
+      ? (message.blocks as SlackMessageEvent["blocks"])
+      : undefined,
   };
 }
 
@@ -202,6 +205,9 @@ export function registerSlackMessageEvents(params: {
       }
 
       const message = event as SlackMessageEvent;
+      // Subtype handlers do not enter the regular message pipeline. Observe any explicit
+      // type here so edits and deletes share the same authoritative conversation cache.
+      ctx.rememberSlackChannelType(message.channel, message.channel_type, eventScope);
       if (eventScope && isBotAuthoredEnterpriseEvent(message)) {
         logVerbose("slack: drop enterprise bot-authored message");
         return;

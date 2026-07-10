@@ -581,6 +581,8 @@ extension SettingsProTab {
 
         if mode == .off {
             _ = await self.appModel.requestLocationPermissions(mode: mode)
+            self.pendingLocationMode = nil
+            self.locationModeRaw = rawValue
             self.previousLocationModeRaw = rawValue
             self.refreshLocationPermissionSummary(desiredMode: mode)
             self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
@@ -590,15 +592,97 @@ extension SettingsProTab {
         let granted = await self.appModel.requestLocationPermissions(mode: mode)
         self.refreshLocationPermissionSummary(desiredMode: mode)
         if granted {
+            self.pendingLocationMode = nil
+            self.locationModeRaw = rawValue
             self.previousLocationModeRaw = rawValue
             self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
         } else {
             self.locationModeRaw = previous
             self.previousLocationModeRaw = previous
-            self.locationStatusText = "Location permission was not granted."
             self.refreshLocationPermissionSummary(
                 desiredMode: OpenClawLocationMode(rawValue: previous) ?? .off)
+            let presentation = self.locationSettingsPresentation(selectedMode: mode)
+            self.locationStatusText = presentation.statusText
         }
+    }
+
+    var selectedLocationMode: OpenClawLocationMode {
+        OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
+    }
+
+    var displayedLocationMode: OpenClawLocationMode {
+        self.pendingLocationMode ?? self.selectedLocationMode
+    }
+
+    var locationSettingsPresentation: LocationSettingsPresentation {
+        self.locationSettingsPresentation(selectedMode: self.displayedLocationMode)
+    }
+
+    func locationSettingsPresentation(selectedMode: OpenClawLocationMode) -> LocationSettingsPresentation {
+        var summary = self.locationPermissionSummary
+        summary.desiredMode = selectedMode
+        return LocationSettingsPresentation(selectedMode: selectedMode, summary: summary)
+    }
+
+    func handleLocationSharingTap() {
+        guard !self.isChangingLocationMode else { return }
+        self.performLocationSettingsAction(self.locationSettingsPresentation.toggleAction())
+    }
+
+    func selectLocationAccessLevel(_ mode: OpenClawLocationMode) {
+        guard mode != .off else { return }
+        guard !self.isChangingLocationMode else { return }
+        let presentation = self.locationSettingsPresentation(selectedMode: mode)
+        self.performLocationSettingsAction(presentation.accessLevelAction(mode: mode))
+    }
+
+    func performLocationSettingsAction(_ action: LocationSettingsAction) {
+        switch action {
+        case let .setMode(mode):
+            self.setLocationMode(mode)
+        case let .openAppSettings(mode):
+            self.pendingLocationMode = mode
+            self.locationStatusText = self.locationSettingsPresentation(selectedMode: mode).statusText
+            self.openLocationSettings()
+        }
+    }
+
+    func setLocationMode(_ mode: OpenClawLocationMode) {
+        let rawValue = mode.rawValue
+        let previous = self.previousLocationModeRaw
+        if self.locationModeRaw != rawValue {
+            self.locationModeRaw = rawValue
+            return
+        }
+        Task {
+            await self.applyLocationMode(mode, rawValue: rawValue, previous: previous)
+        }
+    }
+
+    func applyPendingLocationModeIfAvailable() {
+        guard let mode = self.pendingLocationMode else { return }
+        Task {
+            let locationServicesEnabled = await Self.locationServicesEnabled()
+            let manager = CLLocationManager()
+            let summary = LocationPermissionSummary(
+                desiredMode: mode,
+                locationServicesEnabled: locationServicesEnabled,
+                authorizationStatus: manager.authorizationStatus,
+                accuracyAuthorization: manager.accuracyAuthorization)
+            self.locationPermissionSummary = summary
+            let unavailableStatus = self.locationSettingsPresentation(selectedMode: mode).statusText
+            self.pendingLocationMode = nil
+            guard summary.effectiveMode != .off else {
+                self.locationStatusText = unavailableStatus
+                return
+            }
+            self.setLocationMode(mode)
+        }
+    }
+
+    func openLocationSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
     }
 
     func refreshNotificationSettings() {
@@ -877,7 +961,9 @@ extension SettingsProTab {
     }
 
     var manualPortIsValid: Bool {
-        if self.manualGatewayPortText.isEmpty { return true }
+        if self.manualGatewayPortText.isEmpty {
+            return true
+        }
         return self.manualGatewayPort >= 1 && self.manualGatewayPort <= 65535
     }
 
@@ -894,16 +980,24 @@ extension SettingsProTab {
         }
         let trimmedSetup = self.setupStatusText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let friendly = self.friendlyGatewayMessage(from: gatewayStatus) { return friendly }
-        if let friendly = self.friendlyGatewayMessage(from: trimmedSetup) { return friendly }
+        if let friendly = self.friendlyGatewayMessage(from: gatewayStatus) {
+            return friendly
+        }
+        if let friendly = self.friendlyGatewayMessage(from: trimmedSetup) {
+            return friendly
+        }
         if self.isTransientSetupStatus(trimmedSetup),
            !gatewayStatus.isEmpty,
            gatewayStatus != "Offline"
         {
             return gatewayStatus
         }
-        if !trimmedSetup.isEmpty { return trimmedSetup }
-        if gatewayStatus.isEmpty || gatewayStatus == "Offline" { return nil }
+        if !trimmedSetup.isEmpty {
+            return trimmedSetup
+        }
+        if gatewayStatus.isEmpty || gatewayStatus == "Offline" {
+            return nil
+        }
         return gatewayStatus
     }
 
@@ -990,8 +1084,12 @@ extension SettingsProTab {
         let title = self.appModel.talkMode.gatewayTalkActiveModeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let subtitle = (self.appModel.talkMode.gatewayTalkActiveModeSubtitle ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if title.isEmpty { return "Not active" }
-        if subtitle.isEmpty { return title }
+        if title.isEmpty {
+            return "Not active"
+        }
+        if subtitle.isEmpty {
+            return title
+        }
         return "\(title) • \(subtitle)"
     }
 
@@ -1003,8 +1101,12 @@ extension SettingsProTab {
 
     func gatewayDetailLines(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> [String] {
         var lines: [String] = []
-        if let lanHost = gateway.lanHost { lines.append("LAN: \(lanHost)") }
-        if let tailnet = gateway.tailnetDns { lines.append("Tailnet: \(tailnet)") }
+        if let lanHost = gateway.lanHost {
+            lines.append("LAN: \(lanHost)")
+        }
+        if let tailnet = gateway.tailnetDns {
+            lines.append("Tailnet: \(tailnet)")
+        }
         let gw = gateway.gatewayPort.map(String.init)
         let canvas = gateway.canvasPort.map(String.init)
         if gw != nil || canvas != nil {
@@ -1019,17 +1121,23 @@ extension SettingsProTab {
     }
 
     var gatewayStatusDetail: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "Apple Review demo mode" }
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return "Apple Review demo mode"
+        }
         return self.gatewayConnected ? "Connected" : self.appModel.gatewayDisplayStatusText
     }
 
     var gatewayStatusValue: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return "demo"
+        }
         return self.gatewayConnected ? "online" : "offline"
     }
 
     var gatewayStatusColor: Color {
-        if self.appModel.isAppleReviewDemoModeEnabled { return OpenClawBrand.accent }
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return OpenClawBrand.accent
+        }
         return self.gatewayConnected ? OpenClawBrand.ok : .secondary
     }
 
@@ -1052,17 +1160,23 @@ extension SettingsProTab {
     }
 
     var gatewayTalkConfigDetail: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "Demo mode only" }
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return "Demo mode only"
+        }
         return self.appModel.talkMode.gatewayTalkTransportLabel
     }
 
     var gatewayTalkConfigValue: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return "demo"
+        }
         return self.appModel.talkMode.gatewayTalkConfigLoaded ? "loaded" : "missing"
     }
 
     var gatewayTalkConfigColor: Color {
-        if self.appModel.isAppleReviewDemoModeEnabled { return .secondary }
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return .secondary
+        }
         return self.appModel.talkMode.gatewayTalkConfigLoaded ? OpenClawBrand.ok : .secondary
     }
 
@@ -1103,16 +1217,28 @@ extension SettingsProTab {
     }
 
     var voiceDetail: String {
-        if self.talkEnabled, self.voiceWakeEnabled { return "Talk + Wake" }
-        if self.talkEnabled { return "Talk on" }
-        if self.voiceWakeEnabled { return "Wake on" }
+        if self.talkEnabled, self.voiceWakeEnabled {
+            return "Talk + Wake"
+        }
+        if self.talkEnabled {
+            return "Talk on"
+        }
+        if self.voiceWakeEnabled {
+            return "Wake on"
+        }
         return "Off"
     }
 
     var diagnosticsHealthValue: String {
-        if self.appModel.isAppleReviewDemoModeEnabled { return "demo" }
-        if self.gatewayConnected { return "ready" }
-        if self.gatewayController.gateways.isEmpty { return "check" }
+        if self.appModel.isAppleReviewDemoModeEnabled {
+            return "demo"
+        }
+        if self.gatewayConnected {
+            return "ready"
+        }
+        if self.gatewayController.gateways.isEmpty {
+            return "check"
+        }
         return "partial"
     }
 
@@ -1126,36 +1252,16 @@ extension SettingsProTab {
         return diagnosticsIssueCount == 0 ? OpenClawBrand.ok : OpenClawBrand.warn
     }
 
-    var privacyDetail: String {
-        let location = OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
-        return switch (location, self.locationPermissionSummary.effectiveMode) {
-        case (.off, _):
-            "Location off"
-        case (.whileUsing, .whileUsing):
-            "Location While Using"
-        case (.whileUsing, .off):
-            "Location While Using, effective Off"
-        case (.whileUsing, .always):
-            "Location While Using, effective Always"
-        case (.always, .always):
-            "Location Always"
-        case (.always, .whileUsing):
-            "Location Always, effective While Using"
-        case (.always, .off):
-            "Location Always, effective Off"
-        }
-    }
-
-    var locationPermissionDetailText: String {
+    var locationPermissionDetailText: String? {
         if self.isChangingLocationMode {
             return "Requesting iOS location permission…"
         }
-        return self.locationPermissionSummary.detailText
+        return self.locationSettingsPresentation.statusText
     }
 
     var locationPermissionWarningText: String? {
         guard let locationStatusText else { return nil }
-        guard locationStatusText != self.locationPermissionSummary.detailText else { return nil }
+        guard locationStatusText != self.locationPermissionDetailText else { return nil }
         return locationStatusText
     }
 

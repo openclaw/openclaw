@@ -4,16 +4,27 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
-import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
+import { afterAll, beforeAll, describe, expect, it, type TestFunction } from "vitest";
+import {
+  createOpenClawTestInstance,
+  type OpenClawTestInstance,
+} from "../../test/helpers/openclaw-test-instance.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { sleep, startPty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
 
 type MockModelServer = {
   baseUrl: string;
-  requests: () => MockModelRequest[];
+  requests: (modelId?: string) => MockModelRequest[];
   stop: () => Promise<void>;
+};
+
+type MockModelBehavior = {
+  replyText: string;
+  firstResponseDelayMs?: number;
+  followupReplyText?: string;
+  invalidEditLoop?: boolean;
 };
 
 type MockModelRequest = {
@@ -21,6 +32,66 @@ type MockModelRequest = {
   path: string;
   body: Record<string, unknown>;
 };
+
+type GatewayScenario = MockModelBehavior & {
+  agentId: string;
+  modelId: string;
+  toolsProfile: "minimal" | "coding";
+};
+
+const GATEWAY_SCENARIOS = {
+  validation: {
+    agentId: "tui-pty-validation",
+    modelId: "tui-pty-validation",
+    toolsProfile: "coding",
+    replyText: "FIRST_RUN_ACTIVE",
+    firstResponseDelayMs: 0,
+    followupReplyText: "FOLLOWUP_RUN_COMPLETE",
+    invalidEditLoop: true,
+  },
+  newSession: {
+    agentId: "tui-pty-new-session",
+    modelId: "tui-pty-new-session",
+    toolsProfile: "minimal",
+    replyText: "FIRST_RUN_ACTIVE",
+    firstResponseDelayMs: 0,
+    followupReplyText: "FOLLOWUP_RUN_COMPLETE",
+  },
+  followup: {
+    agentId: "tui-pty-followup",
+    modelId: "tui-pty-followup",
+    toolsProfile: "minimal",
+    replyText: "FIRST_RUN_ACTIVE",
+    firstResponseDelayMs: 1_500,
+    followupReplyText: "FOLLOWUP_RUN_COMPLETE",
+  },
+  emptyReply: {
+    agentId: "tui-pty-empty-reply",
+    modelId: "tui-pty-empty-reply",
+    toolsProfile: "minimal",
+    replyText: "[[reply_to_current]]",
+    firstResponseDelayMs: 0,
+    followupReplyText: "FOLLOWUP_RUN_COMPLETE",
+  },
+  cancel: {
+    agentId: "tui-pty-cancel",
+    modelId: "tui-pty-cancel",
+    toolsProfile: "minimal",
+    replyText: "FIRST_RUN_ACTIVE",
+    firstResponseDelayMs: 1_500,
+    followupReplyText: "FOLLOWUP_RUN_COMPLETE",
+  },
+  collect: {
+    agentId: "tui-pty-collect",
+    modelId: "tui-pty-collect",
+    toolsProfile: "minimal",
+    replyText: "FIRST_RUN_ACTIVE",
+    firstResponseDelayMs: 1_500,
+    followupReplyText: "FOLLOWUP_RUN_COMPLETE",
+  },
+} as const satisfies Record<string, GatewayScenario>;
+
+type GatewayScenarioId = keyof typeof GATEWAY_SCENARIOS;
 
 const LOCAL_STARTUP_TIMEOUT_MS = 60_000;
 const LOCAL_OUTPUT_TIMEOUT_MS = 120_000;
@@ -172,15 +243,11 @@ async function readJsonRequest(req: IncomingMessage): Promise<Record<string, unk
   return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
 }
 
-async function startMockModelServer(
-  replyText: string,
-  opts: {
-    firstResponseDelayMs?: number;
-    followupReplyText?: string;
-    invalidEditLoop?: boolean;
-  } = {},
+async function startRoutedMockModelServer(
+  behaviors: Readonly<Record<string, MockModelBehavior>>,
 ): Promise<MockModelServer> {
   const requests: MockModelRequest[] = [];
+  const requestsByModel = new Map<string, MockModelRequest[]>();
   const server = createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -189,22 +256,38 @@ async function startMockModelServer(
         return;
       }
       if (req.method === "GET" && url.pathname === "/v1/models") {
-        writeJson(res, 200, { data: [{ id: "gpt-5.5", object: "model" }] });
+        writeJson(res, 200, {
+          data: Object.keys(behaviors).map((id) => ({ id, object: "model" })),
+        });
         return;
       }
       if (req.method === "POST") {
         const body = await readJsonRequest(req);
-        const requestIndex = requests.length;
-        requests.push({ method: req.method, path: url.pathname, body });
         if (url.pathname === "/v1/responses" || url.pathname === "/responses") {
-          if (opts.invalidEditLoop) {
+          const modelId = typeof body.model === "string" ? body.model : "";
+          const behavior = behaviors[modelId];
+          if (!behavior) {
+            writeJson(res, 400, { error: `unknown mock model: ${modelId || "missing"}` });
+            return;
+          }
+          const modelRequests = requestsByModel.get(modelId) ?? [];
+          if (!requestsByModel.has(modelId)) {
+            requestsByModel.set(modelId, modelRequests);
+          }
+          const requestIndex = modelRequests.length;
+          const request = { method: req.method, path: url.pathname, body };
+          requests.push(request);
+          modelRequests.push(request);
+          if (behavior.invalidEditLoop) {
             writeInvalidEditCallSse(res, requestIndex);
             return;
           }
           await writeResponsesSse(
             res,
-            requestIndex === 0 ? replyText : (opts.followupReplyText ?? replyText),
-            requestIndex === 0 ? (opts.firstResponseDelayMs ?? 0) : 0,
+            requestIndex === 0
+              ? behavior.replyText
+              : (behavior.followupReplyText ?? behavior.replyText),
+            requestIndex === 0 ? (behavior.firstResponseDelayMs ?? 0) : 0,
           );
           return;
         }
@@ -225,7 +308,7 @@ async function startMockModelServer(
   }
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
-    requests: () => requests,
+    requests: (modelId) => (modelId ? (requestsByModel.get(modelId) ?? []) : requests),
     stop: async () => {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -235,6 +318,15 @@ async function startMockModelServer(
       });
     },
   };
+}
+
+async function startMockModelServer(
+  replyText: string,
+  opts: Omit<MockModelBehavior, "replyText"> = {},
+): Promise<MockModelServer> {
+  return await startRoutedMockModelServer({
+    "gpt-5.5": { replyText, ...opts },
+  });
 }
 
 function buildTuiCliScript(args: string[]) {
@@ -250,6 +342,66 @@ function buildTuiCliScript(args: string[]) {
     `  process.exit(1);`,
     `});`,
   ].join("\n");
+}
+
+function buildLocalValidationTuiScript() {
+  const agentEventsModuleUrl = pathToFileURL(
+    path.join(process.cwd(), "src/infra/agent-events.ts"),
+  ).href;
+  const embeddedBackendModuleUrl = pathToFileURL(
+    path.join(process.cwd(), "src/tui/embedded-backend.ts"),
+  ).href;
+  const tuiModuleUrl = pathToFileURL(path.join(process.cwd(), "src/tui/tui.ts")).href;
+  // A PTY-side abort can race the validation retry into another provider turn.
+  // Abort through the real local backend after its listener records the second
+  // tool error; the Gateway case below still covers keyboard-driven aborts.
+  return [
+    `import { onAgentEvent } from ${JSON.stringify(agentEventsModuleUrl)};`,
+    `import { EmbeddedTuiBackend } from ${JSON.stringify(embeddedBackendModuleUrl)};`,
+    `import { runTui } from ${JSON.stringify(tuiModuleUrl)};`,
+    `const backend = new EmbeddedTuiBackend();`,
+    `const sessionKey = "agent:main:main";`,
+    `let validationErrorCount = 0;`,
+    `onAgentEvent((event) => {`,
+    `  if (event.stream !== "tool" || event.data?.phase !== "result" || typeof event.data?.toolErrorSummary !== "string") return;`,
+    `  validationErrorCount += 1;`,
+    `  if (validationErrorCount !== 2) return;`,
+    `  queueMicrotask(() => {`,
+    `    void backend.abortChat({ sessionKey }).then((result) => {`,
+    `      if (!result.aborted) {`,
+    `        console.error("local validation test failed to abort its active run");`,
+    `        process.exit(1);`,
+    `      }`,
+    `    }).catch((error) => {`,
+    `      console.error(error);`,
+    `      process.exit(1);`,
+    `    });`,
+    `  });`,
+    `});`,
+    `runTui({ local: true, backend, session: sessionKey, deliver: false, historyLimit: 200, forceProcessExitOnReturn: true }).catch((error) => {`,
+    `  console.error(error);`,
+    `  process.exit(1);`,
+    `});`,
+  ].join("\n");
+}
+
+function buildMockModelProvider(baseUrl: string, modelIds: string[]): ModelProviderConfig {
+  return {
+    baseUrl: `${baseUrl}/v1`,
+    apiKey: "test",
+    api: "openai-responses",
+    request: { allowPrivateNetwork: true },
+    models: modelIds.map((id) => ({
+      id,
+      name: id,
+      api: "openai-responses",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    })),
+  };
 }
 
 function buildLocalModeConfig(params: {
@@ -289,24 +441,7 @@ function buildLocalModeConfig(params: {
     models: {
       mode: "replace",
       providers: {
-        "tui-pty-mock": {
-          baseUrl: `${params.providerBaseUrl}/v1`,
-          apiKey: "test",
-          api: "openai-responses",
-          request: { allowPrivateNetwork: true },
-          models: [
-            {
-              id: "gpt-5.5",
-              name: "gpt-5.5",
-              api: "openai-responses",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 128000,
-              maxTokens: 4096,
-            },
-          ],
-        },
+        "tui-pty-mock": buildMockModelProvider(params.providerBaseUrl, ["gpt-5.5"]),
       },
     },
     gateway: {
@@ -338,7 +473,9 @@ async function startLocalModeTui(
     providerBaseUrl: mockModel.baseUrl,
     toolsProfile: opts.invalidEditLoop ? "coding" : "minimal",
   });
-  const script = buildTuiCliScript(["tui", "--local"]);
+  const script = opts.invalidEditLoop
+    ? buildLocalValidationTuiScript()
+    : buildTuiCliScript(["tui", "--local"]);
   await Promise.all([
     mkdir(workspaceDir, { recursive: true }),
     mkdir(homeDir, { recursive: true }),
@@ -381,92 +518,251 @@ async function startLocalModeTui(
   };
 }
 
-async function startGatewayModeTui(
-  params: {
-    queueMode: "followup" | "collect";
-    firstReplyText?: string;
-    firstResponseDelayMs?: number;
-    queueDebounceMs?: number;
-    invalidEditLoop?: boolean;
-  },
-  registerCleanup: CleanupRegistrar,
-) {
-  const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-gateway-"));
-  const workspaceDir = path.join(tempDir, "workspace");
-  const mockModel = await startMockModelServer(params.firstReplyText ?? "FIRST_RUN_ACTIVE", {
-    firstResponseDelayMs: params.firstResponseDelayMs ?? 1_500,
-    followupReplyText: "FOLLOWUP_RUN_COMPLETE",
-    invalidEditLoop: params.invalidEditLoop,
+type SharedGatewayFixture = {
+  gateway: OpenClawTestInstance;
+  controlClient: GatewayChatClient;
+  mockModel: MockModelServer;
+  cleanup: () => Promise<void>;
+};
+
+type SharedGatewayFixtureStartup = {
+  promise: Promise<SharedGatewayFixture>;
+  failureReported: boolean;
+};
+
+let sharedGatewayFixtureStartup: SharedGatewayFixtureStartup | undefined;
+let gatewaySessionSequence = 0;
+
+function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: string }) {
+  const scenarios: GatewayScenario[] = Object.values(GATEWAY_SCENARIOS);
+  const defaultScenario = GATEWAY_SCENARIOS.validation;
+  const defaultModelRef = `tui-pty-mock/${defaultScenario.modelId}`;
+  const modelRefs = scenarios.map((scenario) => `tui-pty-mock/${scenario.modelId}`);
+  const base = buildLocalModeConfig({
+    workspaceDir: path.join(params.tempDir, defaultScenario.agentId),
+    providerBaseUrl: params.providerBaseUrl,
   });
-  const config = {
-    ...buildLocalModeConfig({
-      workspaceDir,
-      providerBaseUrl: mockModel.baseUrl,
-      toolsProfile: params.invalidEditLoop ? "coding" : "minimal",
-    }),
+  return {
+    ...base,
+    agents: {
+      defaults: {
+        workspace: path.join(params.tempDir, defaultScenario.agentId),
+        model: { primary: defaultModelRef },
+        models: Object.fromEntries(
+          modelRefs.map((modelRef) => [modelRef, { agentRuntime: { id: "openclaw" } }]),
+        ),
+        skills: [],
+        skipBootstrap: true,
+      },
+      list: scenarios.map((scenario, index) => ({
+        id: scenario.agentId,
+        ...(index === 0 ? { default: true } : {}),
+        workspace: path.join(params.tempDir, scenario.agentId),
+        skills: [],
+        model: { primary: `tui-pty-mock/${scenario.modelId}` },
+        tools: { profile: scenario.toolsProfile },
+      })),
+    },
+    models: {
+      mode: "replace",
+      providers: {
+        "tui-pty-mock": buildMockModelProvider(
+          params.providerBaseUrl,
+          scenarios.map((scenario) => scenario.modelId),
+        ),
+      },
+    },
     messages: {
       queue: {
-        mode: params.queueMode,
-        debounceMs: params.queueDebounceMs ?? 25,
+        mode: "followup",
+        debounceMs: 25,
       },
     },
   } satisfies OpenClawConfig;
-  const gateway = await createOpenClawTestInstance({
-    name: `tui-pty-gateway-${params.queueMode}`,
-    gatewayToken: "tui-pty-local",
-    config,
-    env: {
-      OPENCLAW_CODEX_DISCOVERY_LIVE: "0",
-      OPENCLAW_SKIP_PROVIDERS: undefined,
-    },
-  });
+}
+
+async function startSharedGatewayFixture(): Promise<SharedGatewayFixture> {
+  const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-gateway-"));
+  let mockModel: MockModelServer | undefined;
+  let gateway: OpenClawTestInstance | undefined;
+  let controlClient: GatewayChatClient | undefined;
   try {
-    await mkdir(workspaceDir, { recursive: true });
-    await gateway.startGateway();
-    const script = buildTuiCliScript([
-      "tui",
-      "--url",
-      gateway.url,
-      "--token",
-      gateway.gatewayToken,
-      "--session",
-      "agent:main:main",
-    ]);
-    const run = startPty(process.execPath, ["--import", "tsx", "--eval", script], {
-      cwd: process.cwd(),
+    const scenarios: GatewayScenario[] = Object.values(GATEWAY_SCENARIOS);
+    await Promise.all(
+      scenarios.map((scenario) => mkdir(path.join(tempDir, scenario.agentId), { recursive: true })),
+    );
+    mockModel = await startRoutedMockModelServer(
+      Object.fromEntries(
+        scenarios.map((scenario) => [
+          scenario.modelId,
+          {
+            replyText: scenario.replyText,
+            firstResponseDelayMs: scenario.firstResponseDelayMs,
+            followupReplyText: scenario.followupReplyText,
+            invalidEditLoop: scenario.invalidEditLoop,
+          },
+        ]),
+      ),
+    );
+    gateway = await createOpenClawTestInstance({
+      name: "tui-pty-shared-gateway",
+      gatewayToken: "tui-pty-local",
+      config: buildGatewayModeConfig({ tempDir, providerBaseUrl: mockModel.baseUrl }),
       env: {
-        ...gateway.env,
-        OPENCLAW_THEME: "dark",
-        NO_COLOR: undefined,
+        OPENCLAW_CODEX_DISCOVERY_LIVE: "0",
+        OPENCLAW_SKIP_PROVIDERS: undefined,
       },
-      exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
-      outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
     });
+    await gateway.startGateway();
+
+    let controlClientConnected = false;
+    controlClient = new GatewayChatClient({
+      url: gateway.url,
+      token: gateway.gatewayToken,
+      allowInsecureLocalOperatorUi: false,
+    });
+    controlClient.onConnected = () => {
+      controlClientConnected = true;
+    };
+    controlClient.start();
+    await waitFor({
+      timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
+      read: () => (controlClientConnected ? true : null),
+      onTimeout: () => new Error("shared Gateway control client did not connect"),
+    });
+
+    const fixtureGateway = gateway;
+    const fixtureMockModel = mockModel;
+    const fixtureControlClient = controlClient;
     const cleanup = createIdempotentCleanup(async () => {
-      run.dispose();
-      await gateway.cleanup();
-      await mockModel.stop();
-      await rm(tempDir, { recursive: true, force: true });
+      fixtureControlClient.stop();
+      try {
+        await fixtureGateway.cleanup();
+      } finally {
+        try {
+          await fixtureMockModel.stop();
+        } finally {
+          await rm(tempDir, { recursive: true, force: true });
+        }
+      }
     });
-    registerCleanup(cleanup);
     return {
-      kind: "gateway" as const,
-      run,
-      gateway,
-      mockModel,
+      gateway: fixtureGateway,
+      controlClient: fixtureControlClient,
+      mockModel: fixtureMockModel,
       cleanup,
     };
   } catch (error) {
-    await gateway.cleanup();
-    await mockModel.stop();
-    await rm(tempDir, { recursive: true, force: true });
+    controlClient?.stop();
+    try {
+      await gateway?.cleanup();
+    } finally {
+      try {
+        await mockModel?.stop();
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    }
     throw error;
   }
 }
 
-// Each case spawns a real Gateway/PTY stack. Keep them serial so constrained
-// release runners do not turn host contention into test-level timeouts.
+async function requireSharedGatewayFixture(): Promise<SharedGatewayFixture> {
+  const startup = sharedGatewayFixtureStartup;
+  if (!startup) {
+    throw new Error("shared Gateway fixture startup was not initialized");
+  }
+  try {
+    return await startup.promise;
+  } catch (error) {
+    startup.failureReported = true;
+    throw error;
+  }
+}
+
+async function startGatewayModeTui(
+  scenarioId: GatewayScenarioId,
+  registerCleanup: CleanupRegistrar,
+) {
+  const shared = await requireSharedGatewayFixture();
+  const scenario = GATEWAY_SCENARIOS[scenarioId];
+  const requestOffset = shared.mockModel.requests(scenario.modelId).length;
+  const sessionKey = `agent:${scenario.agentId}:tui-pty-${++gatewaySessionSequence}`;
+  const sessionKeys = new Set([sessionKey]);
+  const script = buildTuiCliScript([
+    "tui",
+    "--url",
+    shared.gateway.url,
+    "--token",
+    shared.gateway.gatewayToken,
+    "--session",
+    sessionKey,
+  ]);
+  const run = startPty(process.execPath, ["--import", "tsx", "--eval", script], {
+    cwd: process.cwd(),
+    env: {
+      ...shared.gateway.env,
+      OPENCLAW_THEME: "dark",
+      NO_COLOR: undefined,
+    },
+    exitTimeoutMs: LOCAL_EXIT_TIMEOUT_MS,
+    outputTimeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+  });
+  const cleanup = createIdempotentCleanup(async () => {
+    run.dispose();
+    for (const key of sessionKeys) {
+      await shared.controlClient.abortChat({ sessionKey: key });
+    }
+  });
+  registerCleanup(cleanup);
+  return {
+    kind: "gateway" as const,
+    run,
+    gateway: shared.gateway,
+    mockModel: {
+      requests: () => shared.mockModel.requests(scenario.modelId).slice(requestOffset),
+    },
+    agentId: scenario.agentId,
+    sessionKey,
+    trackSessionKey: (key: string) => sessionKeys.add(key),
+    cleanup,
+  };
+}
+
+// Gateway cases share one real server but keep isolated PTYs, models, and sessions.
+// Keep them serial so constrained release runners avoid host contention.
 describe("TUI PTY real backends", () => {
+  beforeAll(() => {
+    const promise = startSharedGatewayFixture();
+    sharedGatewayFixtureStartup = { promise, failureReported: false };
+    // Local cases run while startup continues. Mark an early rejection handled;
+    // the Gateway setup hook awaits the original promise and reports the failure.
+    void promise.catch(() => undefined);
+  });
+
+  afterAll(async () => {
+    const startup = sharedGatewayFixtureStartup;
+    try {
+      if (!startup) {
+        return;
+      }
+      let fixture: SharedGatewayFixture;
+      try {
+        fixture = await startup.promise;
+      } catch (error) {
+        // A filtered local-only run has no Gateway hook to surface startup failure.
+        // Preserve the old beforeAll contract without duplicating an existing failure.
+        if (!startup.failureReported) {
+          throw error;
+        }
+        return;
+      }
+      await fixture.cleanup();
+    } finally {
+      sharedGatewayFixtureStartup = undefined;
+    }
+  }, LOCAL_TEST_TIMEOUT_MS);
+
   it(
     "drives the real local backend with a mocked model endpoint",
     async ({ onTestFinished }) => {
@@ -529,20 +825,16 @@ describe("TUI PTY real backends", () => {
     LOCAL_TEST_TIMEOUT_MS,
   );
 
-  for (const mode of ["gateway", "local"] as const) {
+  function registerValidationLoopTest(mode: "gateway" | "local") {
     it(
       `renders safe validation-loop abort diagnostics through the real ${mode} backend`,
       async ({ onTestFinished }) => {
         const fixture =
           mode === "gateway"
-            ? await startGatewayModeTui(
-                {
-                  queueMode: "followup",
-                  invalidEditLoop: true,
-                },
-                onTestFinished,
-              )
+            ? await startGatewayModeTui("validation", onTestFinished)
             : await startLocalModeTui(onTestFinished, { invalidEditLoop: true });
+        const expectedGatewaySessionKey =
+          fixture.kind === "gateway" ? fixture.sessionKey : undefined;
         let eventProbe: GatewayChatClient | undefined;
         const probedEvents: Array<{ event: string; payload: unknown }> = [];
         try {
@@ -586,8 +878,14 @@ describe("TUI PTY real backends", () => {
                   if (event.event !== "session.tool" || !event.payload) {
                     return false;
                   }
-                  const data = (event.payload as { data?: Record<string, unknown> }).data;
-                  return typeof data?.toolErrorSummary === "string";
+                  const payload = event.payload as {
+                    sessionKey?: unknown;
+                    data?: Record<string, unknown>;
+                  };
+                  return (
+                    payload.sessionKey === expectedGatewaySessionKey &&
+                    typeof payload.data?.toolErrorSummary === "string"
+                  );
                 });
                 return observed ? true : null;
               },
@@ -597,13 +895,15 @@ describe("TUI PTY real backends", () => {
                 ),
             });
           }
-          await fixture.run.write("\u001b", { delay: false });
+          if (mode === "gateway") {
+            await fixture.run.write("\u001b", { delay: false });
+          }
           await fixture.run.waitForOutput(
             "run aborted: edit tool validation failed:",
             LOCAL_OUTPUT_TIMEOUT_MS,
           );
 
-          expect(fixture.mockModel.requests().length).toBeGreaterThan(0);
+          expect(fixture.mockModel.requests().length).toBeGreaterThanOrEqual(2);
           expect(fixture.run.output()).not.toContain("Received arguments");
 
           await fixture.run.write("/exit\r", { delay: false });
@@ -617,16 +917,21 @@ describe("TUI PTY real backends", () => {
     );
   }
 
-  it(
+  registerValidationLoopTest("local");
+
+  // Register every Gateway case inside the nested suite so targeted runs retain
+  // the fixture's separate startup timeout.
+  const gatewayTestRegistrations: Array<() => void> = [];
+  function registerGatewayTest(name: string, run: TestFunction, timeoutMs: number) {
+    gatewayTestRegistrations.push(() => {
+      it(name, run, timeoutMs);
+    });
+  }
+
+  registerGatewayTest(
     "creates and adopts a fresh session through the real Gateway backend",
     async ({ onTestFinished }) => {
-      const fixture = await startGatewayModeTui(
-        {
-          queueMode: "followup",
-          firstResponseDelayMs: 0,
-        },
-        onTestFinished,
-      );
+      const fixture = await startGatewayModeTui("newSession", onTestFinished);
       try {
         await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
         await fixture.run.write("seed gateway session\r");
@@ -636,7 +941,15 @@ describe("TUI PTY real backends", () => {
         await waitForOutputAfter(fixture.run, "| idle", responseOffset);
 
         await fixture.run.write("/new\r", { delay: false });
-        await fixture.run.waitForOutput("new session: agent:main:tui-");
+        const newSessionPrefix = `new session: agent:${fixture.agentId}:tui-`;
+        await fixture.run.waitForOutput(newSessionPrefix);
+        const newSessionKey = fixture.run
+          .output()
+          .match(new RegExp(`new session: (agent:${fixture.agentId}:tui-[a-z0-9-]+)`))?.[1];
+        expect(newSessionKey).toBeDefined();
+        if (newSessionKey) {
+          fixture.trackSessionKey(newSessionKey);
+        }
         await fixture.run.write("send after gateway new\r");
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
@@ -659,10 +972,10 @@ describe("TUI PTY real backends", () => {
     LOCAL_TEST_TIMEOUT_MS,
   );
 
-  it(
+  registerGatewayTest(
     "forwards an active-run prompt through the real Gateway followup queue",
     async ({ onTestFinished }) => {
-      const fixture = await startGatewayModeTui({ queueMode: "followup" }, onTestFinished);
+      const fixture = await startGatewayModeTui("followup", onTestFinished);
       try {
         await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
         await fixture.run.write("slow first turn\r");
@@ -714,17 +1027,10 @@ describe("TUI PTY real backends", () => {
     LOCAL_TEST_TIMEOUT_MS,
   );
 
-  it(
+  registerGatewayTest(
     "renders a non-deliverable direct reply failure through the real Gateway and TUI",
     async ({ onTestFinished }) => {
-      const fixture = await startGatewayModeTui(
-        {
-          queueMode: "followup",
-          firstReplyText: "[[reply_to_current]]",
-          firstResponseDelayMs: 0,
-        },
-        onTestFinished,
-      );
+      const fixture = await startGatewayModeTui("emptyReply", onTestFinished);
       try {
         await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
         await fixture.run.write("non-deliverable first turn\r");
@@ -771,16 +1077,10 @@ describe("TUI PTY real backends", () => {
     LOCAL_TEST_TIMEOUT_MS,
   );
 
-  it(
+  registerGatewayTest(
     "cancels an admitted followup with Esc before it reaches the model",
     async ({ onTestFinished }) => {
-      const fixture = await startGatewayModeTui(
-        {
-          queueMode: "followup",
-          firstResponseDelayMs: 1_500,
-        },
-        onTestFinished,
-      );
+      const fixture = await startGatewayModeTui("cancel", onTestFinished);
       try {
         await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
         await fixture.run.write("slow turn to abort\r");
@@ -808,17 +1108,10 @@ describe("TUI PTY real backends", () => {
     LOCAL_TEST_TIMEOUT_MS,
   );
 
-  it(
+  registerGatewayTest(
     "collects two TUI-client prompts into one real Gateway followup turn",
     async ({ onTestFinished }) => {
-      const fixture = await startGatewayModeTui(
-        {
-          queueMode: "collect",
-          firstResponseDelayMs: 1_500,
-          queueDebounceMs: 250,
-        },
-        onTestFinished,
-      );
+      const fixture = await startGatewayModeTui("collect", onTestFinished);
       const queueClient = new GatewayChatClient({
         url: fixture.gateway.url,
         token: fixture.gateway.gatewayToken,
@@ -846,15 +1139,13 @@ describe("TUI PTY real backends", () => {
             new Error(`first prompt did not reach the model\n${fixture.run.output()}`),
         });
         const alphaSend = queueClient.sendChat({
-          sessionKey: "agent:main:main",
+          sessionKey: fixture.sessionKey,
           message: "collect prompt alpha",
-          runId: "collect-alpha",
         });
         await sleep(50);
         const betaSend = queueClient.sendChat({
-          sessionKey: "agent:main:main",
+          sessionKey: fixture.sessionKey,
           message: "collect prompt beta",
-          runId: "collect-beta",
         });
         const sendResults = await Promise.all([alphaSend, betaSend]);
         expect(sendResults.map((result) => result.status)).toEqual(["started", "started"]);
@@ -890,4 +1181,17 @@ describe("TUI PTY real backends", () => {
     },
     LOCAL_TEST_TIMEOUT_MS,
   );
+
+  describe("with shared Gateway fixture", () => {
+    // Preserve the fixture's original setup budget: overlap startup with local
+    // cases, then join it in a hook before any Gateway PTY starts.
+    beforeAll(async () => {
+      await requireSharedGatewayFixture();
+    }, LOCAL_TEST_TIMEOUT_MS);
+
+    registerValidationLoopTest("gateway");
+    for (const register of gatewayTestRegistrations) {
+      register();
+    }
+  });
 });

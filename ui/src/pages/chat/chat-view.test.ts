@@ -1137,7 +1137,12 @@ describe("chat composer workbench", () => {
         loading: false,
         error: null,
         activeId: "file:/workspace/AGENTS.md",
+        dock: "right",
+        dockDragging: false,
+        dockDragZone: null,
         onToggleCollapsed,
+        onSetDock: () => undefined,
+        onDockDragStart: () => undefined,
         onRefresh,
         onBrowsePath,
         onCopyPath,
@@ -1203,17 +1208,36 @@ describe("chat composer workbench", () => {
     expect(container.querySelector('button[aria-label="Session workspace"]')).toBeNull();
   });
 
-  it("keeps the workspace files rail reachable from the collapsed strip", () => {
+  it("renders no rail strip while collapsed and reopens via the floating toggle", () => {
     const onToggleCollapsed = vi.fn();
     const container = renderChatView({
       sessionWorkspace: {
         collapsed: true,
         sessionKey: "agent:main",
-        list: null,
+        list: {
+          sessionKey: "agent:main",
+          root: "/workspace",
+          files: [
+            {
+              name: "AGENTS.md",
+              path: "/workspace/AGENTS.md",
+              kind: "modified",
+              missing: false,
+              size: 2048,
+            },
+          ],
+          browser: { path: "", entries: [] },
+          artifacts: [],
+        },
         loading: false,
         error: null,
         activeId: null,
+        dock: "right",
+        dockDragging: false,
+        dockDragZone: null,
         onToggleCollapsed,
+        onSetDock: () => undefined,
+        onDockDragStart: () => undefined,
         onRefresh: () => undefined,
         onBrowsePath: () => undefined,
         onCopyPath: () => undefined,
@@ -1223,17 +1247,46 @@ describe("chat composer workbench", () => {
       },
     });
 
-    expect(container.querySelector(".chat-workspace-rail__list")).toBeNull();
-    expect(container.querySelector(".chat-workspace-rail__collapsed-icon")).not.toBeNull();
-    const toggle = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Expand session workspace"]',
-    );
+    // A collapsed rail renders nothing — no icon strip in the layout.
+    expect(container.querySelector(".chat-workspace-rail")).toBeNull();
+    const toggle = container.querySelector<HTMLButtonElement>(".chat-workspace-open");
+    expect(toggle?.getAttribute("aria-label")).toBe("Show session files");
     expect(toggle?.getAttribute("aria-expanded")).toBe("false");
     expect(toggle?.getAttribute("aria-keyshortcuts")).toBe("Meta+Shift+B");
+    expect(toggle?.querySelector(".chat-workspace-toggle__badge")?.textContent?.trim()).toBe("1");
 
     toggle?.click();
 
     expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses the floating workspace toggle when a pane header hosts it", () => {
+    const container = renderChatView({
+      paneHeaderActive: true,
+      sessionWorkspace: {
+        collapsed: true,
+        sessionKey: "agent:main",
+        list: null,
+        loading: false,
+        error: null,
+        activeId: null,
+        dock: "right",
+        dockDragging: false,
+        dockDragZone: null,
+        onToggleCollapsed: () => undefined,
+        onSetDock: () => undefined,
+        onDockDragStart: () => undefined,
+        onRefresh: () => undefined,
+        onBrowsePath: () => undefined,
+        onCopyPath: () => undefined,
+        onOpenFile: () => undefined,
+        onSearch: () => undefined,
+        onOpenArtifact: () => undefined,
+      },
+    });
+
+    expect(container.querySelector(".chat-workspace-open")).toBeNull();
+    expect(container.querySelector(".chat-workspace-rail")).toBeNull();
   });
 
   it("keeps the secondary New session and Export controls suppressed in the composer", () => {
@@ -3429,7 +3482,7 @@ describe("chat model controls", () => {
     ).toContain("GPT-5.5");
   });
 
-  it("shows the canonical OpenAI name when the default option is selected", () => {
+  it("marks the actual default model row and selects it when inherited", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
@@ -3463,15 +3516,19 @@ describe("chat model controls", () => {
     expect(
       container.querySelector(".chat-controls__inline-select-label")?.textContent?.trim(),
     ).toBe("GPT-5.5 · High");
-    const defaultOption = container.querySelector<HTMLButtonElement>('[data-chat-model-option=""]');
+    const defaultOptions = container.querySelectorAll<HTMLButtonElement>(
+      '[data-chat-model-default="true"]',
+    );
+    expect(defaultOptions).toHaveLength(1);
+    const defaultOption = defaultOptions[0];
+    expect(defaultOption?.dataset.chatModelOption).toBe("openai/gpt-5.5");
     expect(defaultOption?.getAttribute("aria-selected")).toBe("true");
-    expect(defaultOption?.textContent).toContain("Default (GPT-5.5)");
-    expect(
-      container.querySelector('[data-chat-model-option="openai/gpt-5.5"]')?.textContent,
-    ).toContain("GPT-5.5");
+    expect(defaultOption?.textContent).toContain("GPT-5.5");
+    expect(defaultOption?.textContent).toContain("Default");
+    expect(container.querySelector('[data-chat-model-option=""]')).toBeNull();
   });
 
-  it("clears the model override from the pinned default option", async () => {
+  it("clears a different model override from the actual default model row", async () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.4",
       modelProvider: "openai",
@@ -3499,9 +3556,48 @@ describe("chat model controls", () => {
       container,
     );
 
-    const defaultOption = container.querySelector<HTMLButtonElement>('[data-chat-model-option=""]');
+    const defaultOption = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="openai/gpt-5.5"][data-chat-model-default="true"]',
+    );
     expect(defaultOption).toBeInstanceOf(HTMLButtonElement);
     expect(defaultOption?.getAttribute("aria-selected")).toBe("false");
+    defaultOption?.click();
+
+    await vi.waitFor(() => {
+      expect(onModelSelect).toHaveBeenCalledWith("", sessionKey);
+    });
+  });
+
+  it("clears an explicit override that matches the default model", async () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+    });
+    state.sessionsResult = createSessionsListResult({
+      defaultsModel: "gpt-5.5",
+      defaultsProvider: "openai",
+      model: "gpt-5.5",
+      modelProvider: "openai",
+    });
+    const onModelSelect = vi.fn(async () => true);
+    const container = document.createElement("div");
+    const sessionKey = "explicit-default";
+    render(
+      renderChatModelControls({
+        ...createChatModelControlsProps(state),
+        sessionKey,
+        modelOverrides: { [sessionKey]: "openai/gpt-5.5" },
+        onModelSelect,
+      }),
+      container,
+    );
+
+    const defaultOption = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="openai/gpt-5.5"][data-chat-model-default="true"]',
+    );
+    expect(defaultOption).toBeInstanceOf(HTMLButtonElement);
+    expect(defaultOption?.getAttribute("aria-selected")).toBe("true");
     defaultOption?.click();
 
     await vi.waitFor(() => {
@@ -3762,7 +3858,16 @@ describe("chat model controls", () => {
       sessions: {
         patch: () =>
           new Promise((resolve, reject) => {
-            pendingPatches.push({ resolve: () => resolve(null), reject });
+            pendingPatches.push({
+              resolve: () =>
+                resolve({
+                  ok: true,
+                  path: "",
+                  key: "main",
+                  entry: { sessionId: "main" },
+                }),
+              reject,
+            });
           }),
         refresh: async () => {},
       },

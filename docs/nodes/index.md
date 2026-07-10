@@ -34,7 +34,7 @@ Pending pairing requests expire 5 minutes after the device's last retry — a de
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
 - The device pairing record is the durable approved-role contract. Token rotation stays inside that contract; it cannot upgrade a paired node into a role that pairing approval never granted.
 - `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) is a separate, gateway-owned node pairing store that tracks the node's approved command/capability surface across reconnects. It does **not** gate transport authentication — device pairing does that.
-- `openclaw nodes remove --node <id|name|ip>` removes a node pairing. For a device-backed node it revokes the device's `node` role in `devices/paired.json` and disconnects that device's node-role sessions: a mixed-role device keeps its row and only loses the `node` role, while a node-only device row is deleted. It also clears any matching entry from the separate node pairing store. `operator.pairing` may remove non-operator node rows on other devices; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
+- `openclaw nodes remove --node <id|name|ip>` removes a node pairing. For a device-backed node it revokes the device's `node` role in the paired-device store and disconnects that device's node-role sessions: a mixed-role device keeps its row and only loses the `node` role, while a node-only device row is deleted. It also clears any matching entry from the separate node pairing store. `operator.pairing` may remove non-operator node rows on other devices; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
 - Approval scope follows the pending request's declared commands:
   - commandless request: `operator.pairing`
   - non-exec node commands: `operator.pairing` + `operator.write`
@@ -226,7 +226,7 @@ Default allowlists by platform (before plugin defaults and `allowCommands`/`deny
 
 Desktop host commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `screen.snapshot` on macOS/Windows) are not part of the static platform-default table above. They become available once the operator approves a pairing request that declares them, after which the node's approved command set carries them forward on reconnect.
 
-Dangerous or privacy-heavy commands still require explicit opt-in with `gateway.nodes.allowCommands`, even if a node declares them: `camera.snap`, `camera.clip`, `screen.record`, `contacts.add`, `calendar.add`, `reminders.add`, `sms.send`, `sms.search`. `gateway.nodes.denyCommands` always wins over defaults and extra allowlist entries.
+Dangerous or privacy-heavy commands still require explicit opt-in with `gateway.nodes.allowCommands`, even if a node declares them: `camera.snap`, `camera.clip`, `screen.record`, `computer.act`, `contacts.add`, `calendar.add`, `reminders.add`, `sms.send`, `sms.search`. `gateway.nodes.denyCommands` always wins over defaults and extra allowlist entries. See [Computer use](/nodes/computer-use) for the additional macOS, tool-policy, and arming gates around desktop input.
 
 Plugin-owned node commands can add a Gateway node-invoke policy. That policy runs after the allowlist check and before forwarding to the node, so raw `node.invoke`, CLI helpers, and dedicated agent tools share the same plugin permission boundary. Dangerous plugin node commands still require explicit `gateway.nodes.allowCommands` opt-in.
 

@@ -684,7 +684,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: With Teams RSC only (app installed, no Graph API permissions)
   - H3: With Teams RSC + Microsoft Graph Application permissions
   - H3: RSC vs Graph API
-  - H2: Graph-enabled media + history (required for channels)
+  - H2: Graph-enabled media + history
+  - H3: Channel/group file recovery (graphMediaFallback)
   - H2: Known limitations
   - H3: Webhook timeouts
   - H3: Teams cloud and service URL support
@@ -860,6 +861,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Voice input
   - H2: Media, chunking, and delivery
   - H2: Commands and slash behavior
+  - H2: Native charts
   - H2: Interactive replies
   - H3: Plugin-owned modal submissions
   - H2: Native approvals in Slack
@@ -920,6 +922,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Quick setup
   - H2: Telegram side settings
+  - H2: Dashboard Mini App
   - H2: Access control and activation
   - H3: Group bot identity
   - H2: Runtime behavior
@@ -1436,6 +1439,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: openclaw devices approve [requestId] [--latest]
   - H3: openclaw devices reject &lt;requestId&gt;
   - H3: openclaw devices remove &lt;deviceId&gt;
+  - H3: openclaw devices rename --device &lt;id&gt; --name &lt;label&gt;
   - H3: openclaw devices clear --yes [--pending]
   - H3: openclaw devices rotate --device &lt;id&gt; --role &lt;role&gt; [--scope &lt;scope...&gt;]
   - H3: openclaw devices revoke --device &lt;id&gt; --role &lt;role&gt;
@@ -2086,6 +2090,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H1: openclaw wiki
   - H2: Common commands
+  - H2: Agent selection
   - H2: Commands
   - H3: wiki status
   - H3: wiki doctor
@@ -2637,6 +2642,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Agent helper
   - H2: Quick start
   - H2: Multiple agents, multiple personas
+  - H2: Per-agent Memory Wiki vaults
   - H2: Cross-agent QMD memory search
   - H2: One WhatsApp number, multiple people (DM split)
   - H2: Routing rules
@@ -2714,6 +2720,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Detail mode
   - H3: Command/exec text
   - H3: Commentary lane
+  - H3: Narrated status
   - H3: Line limits
   - H3: Rich rendering (Slack)
   - H3: Hide tool/task lines
@@ -4209,6 +4216,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Manual flow
   - H3: Upgrading container images
   - H3: Environment variables
+  - H3: Source-built images with selected plugins
   - H3: Observability
   - H3: Health checks
   - H3: LAN vs loopback
@@ -5578,6 +5586,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /plugins/manage-plugins
 - Headings:
+  - H2: Use the Control UI
   - H2: List and search plugins
   - H2: Enable and disable plugins
   - H2: Install plugins
@@ -5596,6 +5605,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Minimal example
   - H2: Rich example
   - H2: Top-level field reference
+  - H2: catalog reference
   - H2: Generation provider metadata reference
   - H2: Tool metadata reference
   - H2: providerAuthChoices reference
@@ -5661,6 +5671,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Agent tools
   - H2: Prompt and context behavior
   - H2: Configuration
+  - H3: Per-agent vaults
   - H3: Example: QMD + bridge mode
   - H2: CLI
   - H2: Obsidian support
@@ -6934,6 +6945,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: When to use a harness
   - H2: What core still owns
+  - H3: Harness-owned auth bootstrap
   - H2: Register a harness
   - H2: Selection policy
   - H2: Provider plus harness pairing
@@ -7379,6 +7391,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /providers/clawrouter
 - Headings:
   - H2: Getting started
+  - H2: Managed non-interactive deployment
+  - H2: Readiness and live proof
   - H2: Model discovery
   - H2: Protocol and provider plugins
   - H2: Quotas and usage
@@ -8030,8 +8044,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: OAuth troubleshooting
   - H2: Built-in catalog
   - H2: Feature coverage
-  - H3: Fast-mode mappings
-  - H3: Legacy compatibility aliases
+  - H3: Legacy fast-mode compatibility
+  - H3: Legacy compatibility and moving aliases
   - H2: Features
   - H2: Live testing
   - H2: Related
@@ -9913,6 +9927,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Gateway host status
   - H2: Language support
   - H2: Appearance themes
+  - H2: Manage plugins
   - H2: Sidebar navigation
   - H2: What it can do (today)
   - H2: MCP page
@@ -9939,6 +9954,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Fast path (recommended)
   - H2: Auth basics (local vs remote)
+  - H2: Open in Telegram
   - H2: If you see "unauthorized" / 1008
   - H2: Related
 
@@ -9952,6 +9968,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Tailscale access
   - H2: Security notes
   - H2: Building the UI
+
+## web/lobster.md
+
+- Route: /web/lobster
+- Headings:
+  - H2: What you are looking at
+  - H2: When it shows up
+  - H2: Things you can do
+  - H2: Turning visits off (or back on)
+  - H2: The Lobsterdex
+  - H2: Field notes
+  - H2: Privacy
 
 ## web/tui.md
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { testApi } from "./audit.js";
 
 describe("audit command parsing", () => {
@@ -7,7 +7,35 @@ describe("audit command parsing", () => {
       Date.parse("2026-07-01T00:00:00Z"),
     );
     expect(testApi.parseAuditTimestamp("1234", "--after")).toBe(1234);
+    expect(testApi.parseAuditTimestamp("2024-02-29T00:00:00Z", "--after")).toBe(
+      Date.parse("2024-02-29T00:00:00Z"),
+    );
     expect(() => testApi.parseAuditTimestamp("not-a-date", "--after")).toThrow("--after");
+  });
+
+  it.each(["--after", "--before"])("rejects impossible calendar dates for %s", (flag) => {
+    expect(() => testApi.parseAuditTimestamp("2026-02-30T00:00:00Z", flag)).toThrow(flag);
+  });
+
+  it("keeps the original local-time result for timezone-less timestamps", () => {
+    const input = "2026-07-01T00:00:00";
+    const localMs = 1_782_878_400_000;
+    const utcMs = 1_782_864_000_000;
+    const parse = vi.spyOn(Date, "parse").mockImplementation((value) => {
+      if (value === input) {
+        return localMs;
+      }
+      if (value === `${input}Z`) {
+        return utcMs;
+      }
+      return Number.NaN;
+    });
+
+    try {
+      expect(testApi.parseAuditTimestamp(input, "--after")).toBe(localMs);
+    } finally {
+      parse.mockRestore();
+    }
   });
 
   it("keeps exports bounded", () => {

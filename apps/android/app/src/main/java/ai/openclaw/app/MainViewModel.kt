@@ -51,6 +51,27 @@ internal fun shouldStartRuntimeOnForeground(
   onboardingCompleted: Boolean,
 ): Boolean = foreground && onboardingCompleted
 
+internal class CronEditorDraftMemory {
+  private var retained: Pair<String, CronEditorDraftState>? = null
+
+  fun get(jobId: String): CronEditorDraftState? = retained?.takeIf { it.first == jobId }?.second
+
+  fun set(
+    jobId: String,
+    state: CronEditorDraftState?,
+  ) {
+    if (state == null) {
+      clear(jobId)
+    } else {
+      retained = jobId to state
+    }
+  }
+
+  fun clear(jobId: String) {
+    if (retained?.first == jobId) retained = null
+  }
+}
+
 /**
  * UI-facing bridge that exposes NodeRuntime and preference state as Compose-friendly StateFlows.
  */
@@ -63,6 +84,10 @@ class MainViewModel(
   private val runtimeRef = MutableStateFlow<NodeRuntime?>(null)
   private val gatewayConfigOperationSeq = AtomicLong()
   private val gatewayConfigOperationMutex = Mutex()
+
+  // One bounded heap-only slot follows the ViewModel across Activity recreation.
+  // Detail disposal clears it; process death drops it with the ViewModel.
+  internal val cronEditorDraftMemory = CronEditorDraftMemory()
 
   @Volatile private var permissionRequester: PermissionRequester? = null
 
@@ -147,6 +172,8 @@ class MainViewModel(
       .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
   val canvasCurrentUrl: StateFlow<String?> = runtimeState(initial = null) { it.canvas.currentUrl }
+  val canvasPresentationState: StateFlow<CanvasController.PresentationState> =
+    runtimeState(initial = CanvasController.PresentationState.Unmounted) { it.canvas.presentationState }
   val canvasA2uiHydrated: StateFlow<Boolean> = runtimeState(initial = false) { it.canvasA2uiHydrated }
   val canvasRehydratePending: StateFlow<Boolean> = runtimeState(initial = false) { it.canvasRehydratePending }
   val canvasRehydrateErrorText: StateFlow<String?> = runtimeState(initial = null) { it.canvasRehydrateErrorText }
@@ -196,6 +223,9 @@ class MainViewModel(
   val cronRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.cronRefreshing }
   val cronErrorText: StateFlow<String?> = runtimeState(initial = null) { it.cronErrorText }
   val cronJobDetailState: StateFlow<GatewayCronJobDetailState> = runtimeState(initial = GatewayCronJobDetailState.Idle) { it.cronJobDetailState }
+  val cronRunHistoryState: StateFlow<GatewayCronRunHistoryState> = runtimeState(initial = GatewayCronRunHistoryState.Idle) { it.cronRunHistoryState }
+  val cronActionState: StateFlow<GatewayCronActionState> = runtimeState(initial = GatewayCronActionState.Idle) { it.cronActionState }
+  val pendingCronRunJobIds: StateFlow<Set<String>> = runtimeState(initial = emptySet()) { it.pendingCronRunJobIds }
   val usageSummary: StateFlow<GatewayUsageSummary> = runtimeState(initial = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())) { it.usageSummary }
   val usageRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.usageRefreshing }
   val usageErrorText: StateFlow<String?> = runtimeState(initial = null) { it.usageErrorText }
@@ -712,6 +742,14 @@ class MainViewModel(
     ensureRuntime().requestCanvasRehydrate(source = source, force = true)
   }
 
+  fun showCanvas() {
+    ensureRuntime().canvas.show()
+  }
+
+  fun hideCanvas() {
+    runtimeRef.value?.canvas?.hide()
+  }
+
   fun refreshHomeCanvasOverviewIfConnected() {
     ensureRuntime().refreshHomeCanvasOverviewIfConnected()
   }
@@ -736,8 +774,38 @@ class MainViewModel(
     ensureRuntime().loadCronJobDetail(id)
   }
 
+  fun refreshCronRunHistory(id: String) {
+    ensureRuntime().refreshCronRunHistory(id)
+  }
+
   fun clearCronJobDetail() {
     ensureRuntime().clearCronJobDetail()
+  }
+
+  fun dismissCronActionNotice(id: String) {
+    ensureRuntime().dismissCronActionNotice(id)
+  }
+
+  fun runCronJob(id: String) {
+    ensureRuntime().runCronJob(id)
+  }
+
+  fun setCronJobEnabled(
+    id: String,
+    enabled: Boolean,
+  ) {
+    ensureRuntime().setCronJobEnabled(id = id, enabled = enabled)
+  }
+
+  fun updateCronJob(
+    original: GatewayCronJobDetail,
+    edit: GatewayCronJobEdit,
+  ) {
+    ensureRuntime().updateCronJob(original = original, edit = edit)
+  }
+
+  fun deleteCronJob(id: String) {
+    ensureRuntime().deleteCronJob(id)
   }
 
   fun refreshUsage() {
