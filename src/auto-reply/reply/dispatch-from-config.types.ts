@@ -28,7 +28,7 @@ export type DispatchFromConfigParams = {
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   fastAbortResolver?: TryFastAbortFromMessage;
   formatAbortReplyTextResolver?: FormatAbortReplyText;
-  /** Optional patch applied to the already loaded config before reply resolution. */
+  /** Optional patch applied to the current runtime config before reply resolution. */
   configOverride?: OpenClawConfig;
 };
 

@@ -44,6 +44,7 @@ import {
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -3288,8 +3289,14 @@ export async function dispatchReplyFromConfig(
       params.replyResolver ??
       (await traceReplyPhase("reply.load_reply_resolver", () => loadGetReplyFromConfigRuntime()))
         .getReplyFromConfig;
+    // Resolve reply config from the live runtime snapshot: the cfg captured at
+    // channel startup goes stale across config hot reloads, and a single turn
+    // must not split config authority between reply resolution and dispatch
+    // callbacks (#103324).
     const replyConfig = withFullRuntimeReplyConfig(
-      params.configOverride ? (applyMergePatch(cfg, params.configOverride) as OpenClawConfig) : cfg,
+      params.configOverride
+        ? (applyMergePatch(getRuntimeConfig(), params.configOverride) as OpenClawConfig)
+        : { ...getRuntimeConfig() },
     );
     recordAgentDispatchStarted();
     const replyResult = await runWithDispatchLifecycleAdmission(

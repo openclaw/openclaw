@@ -66,6 +66,43 @@ describe("getReplyFromConfig configOverride", () => {
     expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
   });
 
+  it("resolves models added to the runtime config after channel startup", async () => {
+    const addedModel = "openai/gpt-5.6-luna";
+    vi.mocked(loadConfigMock).mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {
+            "openai/gpt-5.4": {},
+            [addedModel]: {},
+          },
+        },
+      },
+    } satisfies OpenClawConfig);
+    mocks.resolveReplyDirectives.mockImplementationOnce(
+      async ({ cfg }: { cfg: OpenClawConfig }) => {
+        const { resolveAllowedModelRef } = await import("../../agents/model-selection.js");
+        expect(
+          resolveAllowedModelRef({
+            cfg,
+            catalog: [],
+            raw: addedModel,
+            defaultProvider: "openai",
+            defaultModel: "gpt-5.4",
+          }),
+        ).toMatchObject({
+          ref: { provider: "openai", model: "gpt-5.6-luna" },
+          key: addedModel,
+        });
+        return { kind: "reply", reply: { text: "ok" } };
+      },
+    );
+
+    await getReplyFromConfig(buildGetReplyCtx());
+
+    expect(loadConfigMock).toHaveBeenCalledTimes(1);
+  });
+
   it("uses complete configOverride without reloading config", async () => {
     const { withFullRuntimeReplyConfig } = await import("./get-reply-fast-path.js");
     vi.mocked(loadConfigMock).mockImplementation(() => {

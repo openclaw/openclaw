@@ -399,6 +399,12 @@ function parseGenericThreadSessionInfo(sessionKey: string | undefined) {
   return { baseSessionKey, threadId };
 }
 
+const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({})));
+vi.mock("../../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/config.js")>();
+  return { ...actual, getRuntimeConfig: getRuntimeConfigMock };
+});
+
 vi.mock("./route-reply.runtime.js", () => ({
   isRoutableChannel: (channel: string | undefined) =>
     Boolean(
@@ -5040,14 +5046,15 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "handled" } satisfies ReplyPayload;
     };
 
+    getRuntimeConfigMock.mockReturnValueOnce({
+      agents: { defaults: { verboseDefault: "on" } },
+      messages: {
+        suppressToolErrors: true,
+      },
+    } as OpenClawConfig);
     await dispatchReplyFromConfig({
       ctx,
-      cfg: {
-        agents: { defaults: { verboseDefault: "on" } },
-        messages: {
-          suppressToolErrors: true,
-        },
-      } as OpenClawConfig,
+      cfg: { agents: { defaults: { verboseDefault: "on" } } } as OpenClawConfig,
       dispatcher,
       replyResolver,
       replyOptions: { onToolResult },
@@ -9265,7 +9272,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).toHaveBeenCalledTimes(1);
   });
 
-  it("passes the loaded config plus configOverride patch to replyResolver when provided", async () => {
+  it("applies configOverride as a patch over the runtime config for replyResolver", async () => {
     setNoAbort();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -9293,12 +9300,12 @@ describe("dispatchReplyFromConfig", () => {
       configOverride: overrideCfg,
     });
 
-    expect(receivedCfg).not.toBe(cfg);
+    expect(receivedCfg?.agents?.defaults?.userTimezone).toBe("America/New_York");
     expect(receivedCfg).not.toBe(overrideCfg);
-    expect(receivedCfg).toEqual(overrideCfg);
+    expect(receivedCfg).not.toBe(cfg);
   });
 
-  it("passes the already loaded config to replyResolver when configOverride is not provided", async () => {
+  it("resolves the runtime config instead of the channel startup config for replyResolver", async () => {
     setNoAbort();
     const cfg = { agents: { defaults: { userTimezone: "UTC" } } } as OpenClawConfig;
     const dispatcher = createDispatcher();
@@ -9314,9 +9321,16 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "hi" } satisfies ReplyPayload;
     };
 
+    getRuntimeConfigMock.mockReturnValueOnce({
+      agents: { defaults: { userTimezone: "Asia/Tokyo" } },
+    } as OpenClawConfig);
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(receivedCfg).toBe(cfg);
+    // The startup capture must not reach reply resolution; the dispatch layer
+    // re-resolves the live runtime snapshot so hot-reloaded config applies.
+    expect(receivedCfg).toBeDefined();
+    expect(receivedCfg).not.toBe(cfg);
+    expect(receivedCfg?.agents?.defaults?.userTimezone).toBe("Asia/Tokyo");
   });
 
   it("suppresses isReasoning payloads from final replies (WhatsApp channel)", async () => {
