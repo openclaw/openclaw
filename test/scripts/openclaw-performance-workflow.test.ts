@@ -83,6 +83,19 @@ describe("OpenClaw performance workflow", () => {
     expect(publish.run).toContain('git -C "$reports_root" push origin HEAD:main');
   });
 
+  it("keeps manual release validation artifact-only by default", () => {
+    const workflow = readFileSync(WORKFLOW, "utf8");
+    const prepare = findStep("Prepare clawgrit reports checkout");
+    const publish = findStep("Publish to clawgrit reports");
+    const guard = findStep("Confirm artifact-only report mode");
+
+    expect(workflow).toContain("publish_reports:");
+    expect(workflow).toContain("default: false");
+    expect(prepare.if).toContain("inputs.publish_reports == true");
+    expect(publish.if).toContain("inputs.publish_reports == true");
+    expect(guard.if).toContain("inputs.publish_reports != true");
+  });
+
   it("keeps optional clawgrit report publishing bounded", () => {
     const prepare = findStep("Prepare clawgrit reports checkout");
     const publish = findStep("Publish to clawgrit reports");

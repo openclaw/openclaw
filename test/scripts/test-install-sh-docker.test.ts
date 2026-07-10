@@ -1,13 +1,6 @@
 // Test Install Sh Docker tests cover test install sh docker script behavior.
 import { spawn, spawnSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -1169,6 +1162,48 @@ describe("bun global install smoke", () => {
     expect(releaseChecks).toContain("install_smoke_release_checks:");
     expect(releaseChecks).toContain("uses: ./.github/workflows/install-smoke.yml");
     expect(releaseChecks).toContain("run_bun_global_install_smoke: true");
+  });
+
+  it("runs installer packaging from the trusted workflow revision against a nested candidate", () => {
+    const workflow = parse(readFileSync(INSTALL_SMOKE_WORKFLOW_PATH, "utf8"));
+    const steps = workflow.jobs.installer_smoke.steps as Array<{
+      name?: string;
+      uses?: string;
+      with?: Record<string, unknown>;
+      env?: Record<string, unknown>;
+      run?: string;
+    }>;
+    const step = (name: string) => {
+      const found = steps.find((entry) => entry.name === name);
+      expect(found, name).toBeDefined();
+      return found!;
+    };
+
+    expect(step("Checkout trusted installer harness").with).toMatchObject({
+      repository: "${{ needs.preflight.outputs.workflow_repository }}",
+      ref: "${{ needs.preflight.outputs.workflow_sha }}",
+      "persist-credentials": false,
+    });
+    expect(step("Checkout candidate CLI").with).toMatchObject({
+      ref: "${{ needs.preflight.outputs.target_sha }}",
+      path: "candidate",
+      "persist-credentials": false,
+    });
+    expect(step("Setup Node environment for installer smoke").uses).toBe(
+      "./.github/actions/setup-node-env",
+    );
+    expect(step("Run installer docker tests").env).toMatchObject({
+      OPENCLAW_INSTALL_SMOKE_SOURCE_DIR: "${{ github.workspace }}/candidate",
+    });
+    expect(step("Run installer docker tests").run).toBe("bash scripts/test-install-sh-docker.sh");
+    expect(step("Build installer smoke image").run).toContain(
+      "./scripts/docker/install-sh-smoke/Dockerfile",
+    );
+    expect(step("Build installer smoke image").run).not.toContain("candidate/scripts/docker");
+    expect(step("Build installer non-root image").run).not.toContain("candidate/scripts/docker");
+    expect(step("Run Rocky Linux installer smoke").run).toContain(
+      "$PWD/candidate/scripts/install.sh",
+    );
   });
 
   it("kills Bun global install smoke commands that ignore TERM after timeout", () => {

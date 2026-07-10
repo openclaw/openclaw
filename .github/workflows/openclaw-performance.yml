@@ -42,6 +42,11 @@ on:
         required: false
         default: false
         type: boolean
+      publish_reports:
+        description: Publish completed reports to openclaw/clawgrit-reports
+        required: false
+        default: false
+        type: boolean
       kova_ref:
         description: openclaw/Kova Git ref to install
         required: false
@@ -608,7 +613,7 @@ jobs:
 
       - name: Prepare clawgrit reports checkout
         id: clawgrit_reports
-        if: ${{ steps.kova.outputs.report_json != '' && steps.clawgrit.outputs.present == 'true' }}
+        if: ${{ (github.event_name == 'schedule' || inputs.publish_reports == true) && steps.kova.outputs.report_json != '' && steps.clawgrit.outputs.present == 'true' }}
         env:
           CLAWGRIT_REPORTS_TOKEN: ${{ secrets.CLAWGRIT_REPORTS_TOKEN }}
         shell: bash
@@ -631,7 +636,7 @@ jobs:
           echo "ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Publish to clawgrit reports
-        if: ${{ steps.kova.outputs.report_json != '' && steps.clawgrit.outputs.present == 'true' && steps.clawgrit_reports.outputs.ready == 'true' }}
+        if: ${{ (github.event_name == 'schedule' || inputs.publish_reports == true) && steps.kova.outputs.report_json != '' && steps.clawgrit.outputs.present == 'true' && steps.clawgrit_reports.outputs.ready == 'true' }}
         env:
           CLAWGRIT_REPORTS_TOKEN: ${{ secrets.CLAWGRIT_REPORTS_TOKEN }}
         shell: bash
@@ -710,3 +715,27 @@ jobs:
             }
             git -C "$reports_root" rebase FETCH_HEAD
           done
+
+      - name: Confirm artifact-only report mode
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_reports != true }}
+        run: echo "Clawgrit report publication stayed disabled; Kova evidence is available only as workflow artifacts." >> "$GITHUB_STEP_SUMMARY"
+
+  artifact_only_guard:
+    name: Verify artifact-only report mode
+    needs: [kova]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.publish_reports != true }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Verify report publisher stayed disabled
+        env:
+          KOVA_RESULT: ${{ needs.kova.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$KOVA_RESULT" != "success" ]]; then
+            echo "::error::Artifact-only performance evidence requires the Kova job to succeed; got ${KOVA_RESULT}."
+            exit 1
+          fi
+          echo "Clawgrit report publication stayed disabled; Kova evidence is available only as workflow artifacts." >> "$GITHUB_STEP_SUMMARY"

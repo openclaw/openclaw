@@ -433,19 +433,13 @@ Validation` or from the `main`/release workflow ref so workflow logic and
 
 ## Release test boxes
 
-`Full Release Validation` is how operators kick off all pre-release tests from
-one entrypoint. For a pinned commit proof on a fast-moving branch, use the
-helper so every child workflow runs from a temporary branch fixed at the target
-SHA:
+`Full Release Validation` is how operators kick off all pre-release tests from one entrypoint. For a pinned commit proof on a fast-moving branch, use the helper so every child workflow runs from a temporary branch fixed at one trusted `main` workflow SHA while the requested commit remains the candidate under test:
 
 ```bash
 pnpm ci:full-release --sha <full-sha>
 ```
 
-The helper pushes `release-ci/<sha>-...`, dispatches `Full Release Validation`
-from that branch with `ref=<sha>`, verifies every child workflow `headSha`
-matches the target, then deletes the temporary branch. This avoids proving a
-newer `main` child run by accident.
+The helper fetches current `origin/main`, pushes `release-ci/<workflow-sha>-...` at that trusted workflow commit, dispatches `Full Release Validation` from the temporary branch with `ref=<target-sha>` and `reuse_evidence=false`, verifies every child workflow `headSha` matches the pinned parent workflow SHA, then deletes the temporary branch. Pass `--workflow-sha <trusted-main-sha>` to pin an older commit that is still reachable from current `origin/main`. The workflow itself never writes repository refs. This keeps main-only release tooling available without adding tooling commits to the candidate and avoids proving a newer `main` child run by accident.
 
 For release branch or tag validation, run it from the trusted `main` workflow
 ref and pass the release branch or tag as `ref`:
@@ -473,16 +467,25 @@ published-package rerun with `release_package_spec` or
 `npm_telegram_package_spec`. The final
 verifier summary includes slowest-job tables for each child run, so the release
 manager can see the current critical path without downloading logs.
+
+The product-performance child is artifact-only in this release path. The
+umbrella dispatches it with `publish_reports=false`, and validation is rejected
+unless its artifact-only guard proves that the Clawgrit report publisher stayed
+skipped.
+
 See [Full release validation](/reference/full-release-validation) for the
 complete stage matrix, exact workflow job names, stable versus full profile
 differences, artifacts, and focused rerun handles.
 Child workflows are dispatched from the trusted ref that runs `Full Release
 Validation`, normally `--ref main`, even when the target `ref` points at an
-older release branch or tag. There is no separate Full Release Validation
-workflow-ref input; choose the trusted harness by choosing the workflow run ref.
+older release branch or tag. Every child run must use the exact parent workflow
+SHA; if `main` advances before a child dispatch resolves, the umbrella fails
+closed. There is no separate Full Release Validation workflow-ref input; choose
+the trusted harness by choosing the workflow run ref.
 Do not use `--ref main -f ref=<sha>` for exact commit proof on moving `main`;
 raw commit SHAs cannot be workflow dispatch refs, so use
-`pnpm ci:full-release --sha <sha>` to create the pinned temporary branch.
+`pnpm ci:full-release --sha <target-sha>` to create a temporary branch at trusted
+`origin/main` while keeping the target SHA as the candidate input.
 
 Use `release_profile` to select live/provider breadth:
 
@@ -548,6 +551,13 @@ the fix changed shared release orchestration or made earlier all-box evidence
 stale. The umbrella's final verifier re-checks the recorded child workflow run
 ids, so after a child workflow is rerun successfully, rerun only the failed
 `Verify full validation` parent job.
+
+`rerun_group=all` may reuse a prior green umbrella run only when it validated
+the exact same target SHA, release profile, effective soak setting, and
+validation inputs. This is bounded recovery for rerunning the same candidate,
+not cross-SHA evidence reuse. For a changed candidate, rerun every affected
+package, artifact, install, Docker, and provider gate. Pass
+`reuse_evidence=false` to force a fresh full run.
 
 For bounded recovery, pass `rerun_group` to the umbrella. `all` is the real
 release-candidate run, `ci` runs only the normal CI child, `plugin-prerelease`

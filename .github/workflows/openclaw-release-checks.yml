@@ -168,7 +168,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.sha }}
           path: workflow
           fetch-depth: 1
 
@@ -522,9 +522,14 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-      packages: write
+      packages: read
     outputs:
+      artifact_digest: ${{ steps.release_package_upload.outputs.artifact-digest }}
+      artifact_id: ${{ steps.release_package_upload.outputs.artifact-id }}
       artifact_name: ${{ steps.artifact.outputs.name }}
+      artifact_run_attempt: ${{ steps.artifact.outputs.run_attempt }}
+      artifact_run_id: ${{ steps.artifact.outputs.run_id }}
+      package_file_name: ${{ steps.artifact.outputs.file_name }}
       package_sha256: ${{ steps.package.outputs.sha256 }}
       package_version: ${{ steps.package.outputs.package_version }}
       source_sha: ${{ steps.package.outputs.source_sha }}
@@ -532,13 +537,19 @@ jobs:
       - name: Checkout trusted workflow ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          persist-credentials: true
-          ref: ${{ github.ref_name }}
+          persist-credentials: false
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Set artifact metadata
         id: artifact
-        run: echo "name=release-package-under-test" >> "$GITHUB_OUTPUT"
+        run: |
+          {
+            echo "file_name=openclaw-current.tgz"
+            echo "name=release-package-under-test-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            echo "run_attempt=${GITHUB_RUN_ATTEMPT}"
+            echo "run_id=${GITHUB_RUN_ID}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -570,11 +581,15 @@ jobs:
           digest="$(node -p "JSON.parse(require('fs').readFileSync('.artifacts/docker-e2e-package/package-candidate.json', 'utf8')).sha256")"
           version="$(node -p "JSON.parse(require('fs').readFileSync('.artifacts/docker-e2e-package/package-candidate.json', 'utf8')).version")"
           source_sha="$(node -p "JSON.parse(require('fs').readFileSync('.artifacts/docker-e2e-package/package-candidate.json', 'utf8')).packageSourceSha")"
+          if [[ "$source_sha" != "$PACKAGE_REF" ]]; then
+            echo "Release package source SHA differs from the selected release SHA: expected $PACKAGE_REF, found ${source_sha:-<missing>}." >&2
+            exit 1
+          fi
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
           {
             echo "## Release package artifact"
             echo
-            echo "- Artifact: \`release-package-under-test\`"
+            echo "- Artifact: \`${{ steps.artifact.outputs.name }}\`"
             echo "- Package: \`$package_label\`"
             echo "- SHA-256: \`$digest\`"
             echo "- Version: \`$version\`"
@@ -582,24 +597,65 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload release package artifact
+        id: release_package_upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: release-package-under-test
+          name: ${{ steps.artifact.outputs.name }}
           path: |
-            .artifacts/docker-e2e-package/openclaw-current.tgz
+            .artifacts/docker-e2e-package/${{ steps.artifact.outputs.file_name }}
             .artifacts/docker-e2e-package/package-candidate.json
           retention-days: 14
           if-no-files-found: error
+
+      - name: Validate release package artifact binding
+        env:
+          ARTIFACT_DIGEST: ${{ steps.release_package_upload.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.release_package_upload.outputs.artifact-id }}
+          ARTIFACT_NAME: ${{ steps.artifact.outputs.name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ steps.artifact.outputs.run_attempt }}
+          ARTIFACT_RUN_ID: ${{ steps.artifact.outputs.run_id }}
+          PACKAGE_FILE_NAME: ${{ steps.artifact.outputs.file_name }}
+          PACKAGE_SHA256: ${{ steps.package.outputs.sha256 }}
+          PACKAGE_SOURCE_SHA: ${{ steps.package.outputs.source_sha }}
+          PACKAGE_VERSION: ${{ steps.package.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Release package artifact ID is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ ]] || {
+            echo "Release package artifact digest is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_RUN_ID" == "$GITHUB_RUN_ID" &&
+            "$ARTIFACT_RUN_ATTEMPT" == "$GITHUB_RUN_ATTEMPT" ]] || {
+            echo "Release package artifact run binding is invalid." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_NAME" == "release-package-under-test-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" &&
+            "$PACKAGE_FILE_NAME" == "openclaw-current.tgz" ]] || {
+            echo "Release package artifact name or tarball filename is invalid." >&2
+            exit 1
+          }
+          [[ "$PACKAGE_SHA256" =~ ^[a-f0-9]{64}$ &&
+            "$PACKAGE_SOURCE_SHA" =~ ^[a-f0-9]{40}$ &&
+            -n "${PACKAGE_VERSION// }" ]] || {
+            echo "Release package identity is incomplete." >&2
+            exit 1
+          }
 
   install_smoke_release_checks:
     needs: [resolve_target]
     if: contains(fromJSON('["all","install-smoke"]'), needs.resolve_target.outputs.rerun_group)
     permissions:
+      actions: read
       contents: read
-      packages: write
+      packages: read
     uses: ./.github/workflows/install-smoke.yml
     with:
       ref: ${{ needs.resolve_target.outputs.revision }}
+      root_image_transport: no-push-artifact
       run_bun_global_install_smoke: true
 
   cross_os_release_checks:
@@ -613,8 +669,13 @@ jobs:
       provider: ${{ needs.resolve_target.outputs.provider }}
       mode: ${{ needs.resolve_target.outputs.mode }}
       suite_filter: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}
+      candidate_artifact_digest: ${{ needs.prepare_release_package.outputs.artifact_digest }}
+      candidate_artifact_id: ${{ needs.prepare_release_package.outputs.artifact_id }}
       candidate_artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
-      candidate_file_name: openclaw-current.tgz
+      candidate_artifact_run_attempt: ${{ needs.prepare_release_package.outputs.artifact_run_attempt }}
+      candidate_artifact_run_id: ${{ needs.prepare_release_package.outputs.artifact_run_id }}
+      candidate_file_name: ${{ needs.prepare_release_package.outputs.package_file_name }}
+      candidate_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       candidate_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
       openai_model: openai/gpt-5.5
@@ -636,7 +697,7 @@ jobs:
     permissions:
       actions: read
       contents: read
-      packages: write
+      packages: read
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
@@ -648,6 +709,8 @@ jobs:
       include_live_suites: true
       release_test_profile: ${{ needs.resolve_target.outputs.release_profile }}
       live_suite_filter: ${{ needs.resolve_target.outputs.live_suite_filter }}
+      shared_image_artifact_namespace: release-live
+      shared_image_policy: no-push-artifact
     secrets: &live_e2e_release_secrets
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -703,7 +766,7 @@ jobs:
     permissions:
       actions: read
       contents: read
-      packages: write
+      packages: read
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
@@ -714,8 +777,18 @@ jobs:
       include_openwebui: ${{ needs.resolve_target.outputs.release_profile != 'beta' }}
       include_live_suites: false
       release_test_profile: ${{ needs.resolve_target.outputs.release_profile }}
+      package_artifact_digest: ${{ needs.prepare_release_package.outputs.artifact_digest }}
+      package_artifact_id: ${{ needs.prepare_release_package.outputs.artifact_id }}
       package_artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
+      package_artifact_run_attempt: ${{ needs.prepare_release_package.outputs.artifact_run_attempt }}
+      package_artifact_run_id: ${{ needs.prepare_release_package.outputs.artifact_run_id }}
+      package_file_name: ${{ needs.prepare_release_package.outputs.package_file_name }}
+      package_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
+      package_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
+      package_version: ${{ needs.prepare_release_package.outputs.package_version }}
       codex_plugin_spec: ${{ needs.resolve_target.outputs.codex_plugin_spec }}
+      shared_image_artifact_namespace: release-docker
+      shared_image_policy: no-push-artifact
     secrets: *live_e2e_release_secrets
 
   package_acceptance_release_checks:
@@ -725,21 +798,30 @@ jobs:
     permissions:
       actions: read
       contents: read
-      packages: write
+      packages: read
       pull-requests: read
     uses: ./.github/workflows/package-acceptance.yml
     with:
       advisory: false
-      workflow_ref: ${{ github.ref_name }}
+      workflow_ref: ${{ github.sha }}
       source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.release_package_spec != '') && 'npm' || 'artifact' }}
       package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || needs.resolve_target.outputs.release_package_spec || 'openclaw@beta' }}
+      artifact_digest: ${{ needs.prepare_release_package.outputs.artifact_digest }}
+      artifact_id: ${{ needs.prepare_release_package.outputs.artifact_id }}
       artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
+      artifact_run_attempt: ${{ needs.prepare_release_package.outputs.artifact_run_attempt }}
+      artifact_run_id: ${{ needs.prepare_release_package.outputs.artifact_run_id }}
+      package_file_name: ${{ needs.prepare_release_package.outputs.package_file_name }}
       package_sha256: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.release_package_spec == '') && needs.prepare_release_package.outputs.package_sha256 || '' }}
+      package_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
+      package_version: ${{ needs.prepare_release_package.outputs.package_version }}
       suite_profile: custom
       docker_lanes: doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape
       published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}
       telegram_mode: mock-openai
+      shared_image_artifact_namespace: release-package
+      shared_image_policy: no-push-artifact
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -836,7 +918,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          persist-credentials: true
+          persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -955,7 +1037,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          persist-credentials: true
+          persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -1066,7 +1148,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          persist-credentials: true
+          persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -1230,7 +1312,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          persist-credentials: true
+          persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -1304,7 +1386,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          persist-credentials: true
+          persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -1428,7 +1510,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          persist-credentials: true
+          persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -1568,7 +1650,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          persist-credentials: true
+          persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -1711,7 +1793,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          persist-credentials: true
+          persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -1851,7 +1933,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          persist-credentials: true
+          persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
