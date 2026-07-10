@@ -84,7 +84,7 @@ describe("detectPluginVersionDrift", () => {
     expect(result.drifts).toEqual([]);
   });
 
-  it("ignores ClawHub installs without affirmative official provenance", () => {
+  it("includes legacy ClawHub installs with a catalog-backed spec", () => {
     const result = detectPluginVersionDrift({
       gatewayVersion: "2026.5.4",
       installRecords: {
@@ -92,7 +92,8 @@ describe("detectPluginVersionDrift", () => {
       },
     });
 
-    expect(result.drifts).toEqual([]);
+    expect(result.drifts).toHaveLength(1);
+    expect(result.drifts[0]?.source).toBe("clawhub");
   });
 
   it("includes official ClawHub installs whose catalog entry only declares npm install metadata", () => {
