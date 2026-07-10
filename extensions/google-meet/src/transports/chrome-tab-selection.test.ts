@@ -33,7 +33,7 @@ describe("openMeetWithBrowserRequest tab selection (regression #103385)", () => 
       title: "Google Meet",
     };
 
-    (callBrowser as ReturnType<typeof vi.fn>).mockImplementation((params: BrowserRequestParams) => {
+    callBrowser.mockImplementation((params) => {
       if (params.method === "GET" && params.path === "/tabs") {
         return Promise.resolve({ tabs: [japaneseTab] });
       }
@@ -84,7 +84,7 @@ describe("openMeetWithBrowserRequest tab selection (regression #103385)", () => 
       title: "Google Meet",
     };
 
-    (callBrowser as ReturnType<typeof vi.fn>).mockImplementation((params: BrowserRequestParams) => {
+    callBrowser.mockImplementation((params) => {
       if (params.method === "GET" && params.path === "/tabs") {
         return Promise.resolve({ tabs: [englishTab] });
       }
@@ -138,7 +138,7 @@ describe("openMeetWithBrowserRequest tab selection (regression #103385)", () => 
       title: "Google Meet",
     };
 
-    (callBrowser as ReturnType<typeof vi.fn>).mockImplementation((params: BrowserRequestParams) => {
+    callBrowser.mockImplementation((params) => {
       if (params.method === "GET" && params.path === "/tabs") {
         // Japanese first (should be skipped)
         return Promise.resolve({ tabs: [japaneseTab, englishTab] });
@@ -182,7 +182,7 @@ describe("openMeetWithBrowserRequest tab selection (regression #103385)", () => 
       title: "Google Meet",
     };
 
-    (callBrowser as ReturnType<typeof vi.fn>).mockImplementation((params: BrowserRequestParams) => {
+    callBrowser.mockImplementation((params) => {
       if (params.method === "GET" && params.path === "/tabs") {
         return Promise.resolve({ tabs: [ambiguousTab] });
       }
