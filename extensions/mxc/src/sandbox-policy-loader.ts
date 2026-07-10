@@ -276,6 +276,7 @@ function assertConfiguredPathExists(pathValue: string, source: string): void {
         throw new Error(
           `Sandbox policy path ${pathValue} configured by ${source} does not exist on the host. ` +
             `Create the path or update the policy file.`,
+          { cause: err },
         );
       }
       throw new Error(

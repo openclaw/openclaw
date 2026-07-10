@@ -26,7 +26,7 @@ import { resolveSandboxTempDir, type BaselineHostEnv } from "./sandbox-baseline.
 import { loadSandboxBaselinePolicy } from "./sandbox-policy-loader.js";
 import { createWindowsCommandBridge } from "./windows-command.js";
 import { buildLauncherEnv } from "./windows-env.js";
-import { type MxcWorkspaceAccess } from "./workspace-skill-mounts.js";
+import type { MxcWorkspaceAccess } from "./workspace-skill-mounts.js";
 
 type MxcLauncherOptions = {
   debug: boolean;
