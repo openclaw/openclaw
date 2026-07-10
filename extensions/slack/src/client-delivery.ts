@@ -1,6 +1,7 @@
 // Slack plugin module owns WebClient-scoped message and file delivery primitives.
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
+import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -26,6 +27,7 @@ const SLACK_UPLOAD_SSRF_POLICY = {
   allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
   allowRfc2544BenchmarkRange: true,
 };
+const SLACK_UPLOAD_TOTAL_TIMEOUT_MS = 120_000;
 const SLACK_DNS_RETRY_CODES = new Set(["EAI_AGAIN", "ENOTFOUND", "UND_ERR_DNS_RESOLVE_FAILED"]);
 const SLACK_DNS_RETRY_ATTEMPTS = 2;
 const SLACK_DNS_RETRY_BASE_DELAY_MS = 250;
@@ -72,6 +74,14 @@ function delaySlackDnsRetry(attempt: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, SLACK_DNS_RETRY_BASE_DELAY_MS * Math.max(1, attempt));
   });
+}
+
+function resolveSlackUploadTimeoutLogUrl(url: string): string | undefined {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function withSlackDnsRequestRetry<T>(
@@ -180,24 +190,34 @@ export async function uploadSlackFile(params: {
     throw new Error(`Failed to get upload URL: ${uploadUrlResp.error ?? "unknown error"}`);
   }
   const uploadFileId = uploadUrlResp.file_id;
-  const { response: uploadResp, release } = await fetchWithSsrFGuard(
-    withTrustedEnvProxyGuardedFetchMode({
-      url: uploadUrlResp.upload_url,
-      init: {
-        method: "POST",
-        ...(contentType ? { headers: { "Content-Type": contentType } } : {}),
-        body: new Uint8Array(buffer) as BodyInit,
-      },
-      policy: SLACK_UPLOAD_SSRF_POLICY,
-      auditContext: params.auditContext ?? "slack-upload-file",
-    }),
-  );
+  const { signal: uploadTimeoutSignal, cleanup: cleanupUploadTimeout } = buildTimeoutAbortSignal({
+    timeoutMs: SLACK_UPLOAD_TOTAL_TIMEOUT_MS,
+    operation: "slack-upload-file",
+    url: resolveSlackUploadTimeoutLogUrl(uploadUrlResp.upload_url),
+  });
   try {
-    if (!uploadResp.ok) {
-      throw new Error(`Failed to upload file: HTTP ${uploadResp.status}`);
+    const { response: uploadResp, release } = await fetchWithSsrFGuard(
+      withTrustedEnvProxyGuardedFetchMode({
+        url: uploadUrlResp.upload_url,
+        init: {
+          method: "POST",
+          ...(contentType ? { headers: { "Content-Type": contentType } } : {}),
+          body: new Uint8Array(buffer) as BodyInit,
+        },
+        signal: uploadTimeoutSignal,
+        policy: SLACK_UPLOAD_SSRF_POLICY,
+        auditContext: params.auditContext ?? "slack-upload-file",
+      }),
+    );
+    try {
+      if (!uploadResp.ok) {
+        throw new Error(`Failed to upload file: HTTP ${uploadResp.status}`);
+      }
+    } finally {
+      await release();
     }
   } finally {
-    await release();
+    cleanupUploadTimeout();
   }
 
   await params.onPlatformSendDispatch?.();
