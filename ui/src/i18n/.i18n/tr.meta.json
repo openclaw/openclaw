@@ -1,17 +1,11 @@
 {
-  "fallbackKeys": [
-    "chat.workspaceFiles.dockBottom",
-    "chat.workspaceFiles.dockRight",
-    "chat.workspaceFiles.dragToDock",
-    "chat.workspaceFiles.showFiles",
-    "nav.search"
-  ],
-  "generatedAt": "2026-07-10T04:48:56.733Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-07-10T06:08:26.739Z",
   "locale": "tr",
   "model": "gpt-5.5",
   "provider": "openai",
   "sourceHash": "ce234a9ed648fe39d2f79d2fb5e46f15e54b493c1550f6032ed01d058ed360ac",
   "totalKeys": 1776,
-  "translatedKeys": 1771,
+  "translatedKeys": 1776,
   "workflow": 1
 }
