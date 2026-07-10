@@ -48,7 +48,14 @@ class ChatCacheDatabaseMigrationTest {
         val alreadyFailed = rows.getValue("already-failed")
         assertEquals(ChatOutboxStatus.Failed, alreadyFailed.status)
         assertEquals("original failure", alreadyFailed.lastError)
-        assertEquals("Cached session", database.dao().sessions("gateway-test").single().displayName)
+        assertEquals(
+          "Cached session",
+          database
+            .dao()
+            .sessions("gateway-test")
+            .single()
+            .displayName,
+        )
 
         val json = Json { ignoreUnknownKeys = true }
         val sentKeys = mutableListOf<String>()
@@ -80,7 +87,9 @@ class ChatCacheDatabaseMigrationTest {
         assertEquals(listOf("pristine"), sentKeys)
         assertEquals(
           setOf("legacy-queued-error", "interrupted-send", "already-failed"),
-          controller.outboxItems.value.map { it.id }.toSet(),
+          controller.outboxItems.value
+            .map { it.id }
+            .toSet(),
         )
 
         controller.retryOutboxCommand("legacy-queued-error")
@@ -116,7 +125,7 @@ class ChatCacheDatabaseMigrationTest {
       database.execSQL(
         "INSERT INTO cached_sessions " +
           "(gatewayId, sessionKey, displayName, updatedAtMs, rowOrder) VALUES (?, ?, ?, ?, ?)",
-        arrayOf("gateway-test", "main", "Cached session", 10L, 0),
+        arrayOf<Any?>("gateway-test", "main", "Cached session", 10L, 0),
       )
       insertOutbox(database, id = "pristine", status = "queued", retryCount = 0, lastError = null, createdAtMs = now)
       insertOutbox(
@@ -159,7 +168,7 @@ class ChatCacheDatabaseMigrationTest {
       "INSERT INTO outbox_commands " +
         "(id, gatewayId, sessionKey, text, thinkingLevel, createdAtMs, status, retryCount, lastError) " +
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      arrayOf(id, "gateway-test", "main", id, "off", createdAtMs, status, retryCount, lastError),
+      arrayOf<Any?>(id, "gateway-test", "main", id, "off", createdAtMs, status, retryCount, lastError),
     )
   }
 }
