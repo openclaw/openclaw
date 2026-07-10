@@ -154,15 +154,12 @@ function withSlackPresentationData(
     SlackOutboundChannelData,
     "presentationBlocks" | "presentationFallbackText"
   >,
-  options: { dropBlocks?: boolean } = {},
 ): ReplyPayload {
   const {
     presentationBlocks: _presentationBlocks,
     presentationFallbackText: _presentationFallbackText,
-    ...rest
+    ...preservedSlackData
   } = slackData ?? {};
-  const { blocks: _blocks, ...restWithoutBlocks } = rest;
-  const preservedSlackData = options.dropBlocks ? restWithoutBlocks : rest;
   return {
     ...payload,
     channelData: {
@@ -354,17 +351,14 @@ export const slackOutbound: ChannelOutboundAdapter = {
     const payloadTextBlocks = buildSlackVisiblePayloadTextBlocks(payloadForBudget);
     const presentationOffsets = resolveSlackBlockOffsets(nativeBlocks);
     if (!canRenderSlackPresentationTables(presentation, presentationOffsets)) {
-      return withSlackPresentationData(
-        { ...payloadForBudget, text: undefined },
-        slackData,
-        {
-          presentationFallbackText: renderSlackMessagePresentationFallbackText({
-            text: payloadForBudget.text,
-            presentation,
-          }),
-        },
-        { dropBlocks: true },
-      );
+      // Native and interactive blocks remain authored content during table fallback.
+      // Ordinary Slack validation still rejects them rather than silently dropping them.
+      return withSlackPresentationData({ ...payloadForBudget, text: undefined }, slackData, {
+        presentationFallbackText: renderSlackMessagePresentationFallbackText({
+          text: payloadForBudget.text,
+          presentation,
+        }),
+      });
     }
     if (canRenderSlackPresentation(presentation)) {
       const presentationBlocks = [

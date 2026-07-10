@@ -33,10 +33,12 @@ export function resolveSlackReplyBlockResolution(payload: ReplyPayload): {
   }
   const presentation = normalizeMessagePresentation(payload.presentation);
   const presentationOffsets = resolveSlackBlockOffsets(channelBlocks);
-  if (presentation && !canRenderSlackPresentationTables(presentation, presentationOffsets)) {
-    return { usesTableTextFallback: true };
-  }
-  const presentationBlocks = buildSlackPresentationBlocks(presentation, presentationOffsets);
+  const usesTableTextFallback = Boolean(
+    presentation && !canRenderSlackPresentationTables(presentation, presentationOffsets),
+  );
+  const presentationBlocks = usesTableTextFallback
+    ? []
+    : buildSlackPresentationBlocks(presentation, presentationOffsets);
   const interactiveBlocks = buildSlackInteractiveBlocks(
     payload.interactive,
     resolveSlackBlockOffsets([...channelBlocks, ...presentationBlocks]),
@@ -47,9 +49,11 @@ export function resolveSlackReplyBlockResolution(payload: ReplyPayload): {
       `Slack blocks cannot exceed ${SLACK_MAX_BLOCKS} items after interactive render`,
     );
   }
+  // Table fallback changes presentation rendering, not raw block validity. Keep
+  // ordinary Slack sends fail-closed instead of silently discarding authored blocks.
   return {
     ...(blocks.length > 0 ? { blocks } : {}),
-    usesTableTextFallback: false,
+    usesTableTextFallback,
   };
 }
 

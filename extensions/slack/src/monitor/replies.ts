@@ -18,6 +18,7 @@ import {
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+import { buildSlackBlocksFallbackText } from "../blocks-fallback.js";
 import { hasSlackDataTableBlock } from "../data-table.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
@@ -171,7 +172,7 @@ export async function deliverReplies(params: {
       });
     };
 
-    if (!reply.hasMedia && slackBlocks?.length) {
+    if (!blockResolution.usesTableTextFallback && !reply.hasMedia && slackBlocks?.length) {
       const trimmed = resolveSlackReplyText(payload, reply.trimmedText).trim();
       if (!trimmed && !slackBlocks?.length) {
         continue;
@@ -204,6 +205,11 @@ export async function deliverReplies(params: {
     let lastResult: SlackSendResult | undefined;
     let delivered: Awaited<ReturnType<typeof deliverTextOrMediaReply>>;
     try {
+      if (blockResolution.usesTableTextFallback && !reply.hasMedia && slackBlocks?.length) {
+        // The table fallback must remain visible as text, but unrelated raw blocks and
+        // controls remain a separate native message instead of disappearing.
+        lastResult = await sendReply({ text: "", threadTs, blocks: slackBlocks });
+      }
       delivered = await deliverTextOrMediaReply({
         payload,
         text: deliveryText,
@@ -235,7 +241,9 @@ export async function deliverReplies(params: {
       if (reply.hasMedia && slackBlocks?.length) {
         // Slack file uploads cannot carry blocks. Preserve their ordering and
         // report one terminal outcome only after the trailing block message.
-        const text = resolveSlackReplyText(payload, reply.trimmedText).trim();
+        const text = blockResolution.usesTableTextFallback
+          ? ""
+          : resolveSlackReplyText(payload, reply.trimmedText).trim();
         lastResult = await sendReply({
           text,
           threadTs,
@@ -381,13 +389,18 @@ export async function deliverSlackSlashReplies(params: {
       hasNativeTable && nativeFallbackText && nativeFallbackText.length > chunkLimit,
     );
     const text = tableFallbackText
-      ? tableFallbackText
+      ? appendSlackNativeDataFallbackText(tableFallbackText, slackBlocks)
       : nativeFallbackText
         ? hasNativeTable
           ? nativeFallbackText
           : truncateSlackText(nativeFallbackText, SLACK_TEXT_LIMIT).trim()
         : textRaw;
-    if (slackBlocks?.length && !reply.hasMedia && !requiresChunkedTableFallback) {
+    if (
+      !blockResolution.usesTableTextFallback &&
+      slackBlocks?.length &&
+      !reply.hasMedia &&
+      !requiresChunkedTableFallback
+    ) {
       deliveries.push({
         hookContent: text ?? "",
         messages: [{ text: text ?? "", blocks: slackBlocks }],
@@ -411,9 +424,19 @@ export async function deliverSlackSlashReplies(params: {
     if (!chunks.length && combined) {
       chunks.push(combined);
     }
+    const messages: Array<{
+      text: string;
+      blocks?: ReturnType<typeof readSlackReplyBlocks>;
+    }> = chunks.map((chunk) => ({ text: chunk }));
+    if (blockResolution.usesTableTextFallback && slackBlocks?.length) {
+      messages.unshift({
+        text: truncateSlackText(buildSlackBlocksFallbackText(slackBlocks), SLACK_TEXT_LIMIT),
+        blocks: slackBlocks,
+      });
+    }
     deliveries.push({
       hookContent: text ?? resolveSlackMediaHookSpokenText(payload) ?? combined,
-      messages: chunks.map((chunk) => ({ text: chunk })),
+      messages,
     });
   }
 

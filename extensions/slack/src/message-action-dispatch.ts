@@ -87,10 +87,9 @@ export async function handleSlackMessageAction(params: {
     const presentationBlocks = renderedPresentation.usesTableTextFallback
       ? undefined
       : renderedPresentation.blocks;
-    const interactiveBlocks =
-      interactive && !renderedPresentation.usesTableTextFallback
-        ? buildSlackInteractiveBlocks(interactive, resolveSlackBlockOffsets(presentationBlocks))
-        : undefined;
+    const interactiveBlocks = interactive
+      ? buildSlackInteractiveBlocks(interactive, resolveSlackBlockOffsets(presentationBlocks))
+      : undefined;
     const mergedBlocks = [...(presentationBlocks ?? []), ...(interactiveBlocks ?? [])];
     const blocks = mergedBlocks.length > 0 ? mergedBlocks : undefined;
     if (!accessibleContent && !mediaUrl && !blocks) {
@@ -115,7 +114,9 @@ export async function handleSlackMessageAction(params: {
         ...(topLevel ? { topLevel: true } : {}),
         ...(replyBroadcast ? { replyBroadcast } : {}),
         ...(blocks ? { blocks } : {}),
-        ...(renderedPresentation.usesTableTextFallback ? { textIsSlackMrkdwn: true } : {}),
+        ...(renderedPresentation.usesTableTextFallback
+          ? { separateTextAndBlocks: true, textIsSlackMrkdwn: true }
+          : {}),
       },
       cfg,
       ctx.toolContext,

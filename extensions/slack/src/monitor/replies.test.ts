@@ -136,8 +136,16 @@ describe("deliverReplies identity passthrough", () => {
       }),
     );
 
-    expect(sendMock).toHaveBeenCalledOnce();
-    const [_target, text, options] = requireSendCall();
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    const [_blockTarget, blockText, blockOptions] = requireSendCall(0);
+    expect(blockText).toBe("");
+    expect(blockOptions.blocks).toEqual([
+      expect.objectContaining({
+        type: "actions",
+        elements: [expect.objectContaining({ type: "button", value: "refresh" })],
+      }),
+    ]);
+    const [_target, text, options] = requireSendCall(1);
     expect(text).toContain("- Account: &lt;@U123&gt;");
     expect(text).toContain("- Account: account-99");
     expect(text.length).toBeGreaterThan(8000);
@@ -671,7 +679,7 @@ describe("deliverSlackSlashReplies chunking", () => {
     expect(messages.map((message) => message.text).join("\n")).toContain(`- ${header}: account-99`);
   });
 
-  it("chunks non-native portable tables into Slack-safe text-only slash responses", async () => {
+  it("preserves controls while chunking non-native tables with media links", async () => {
     const respond = vi.fn(
       async (_message: { text: string; blocks?: unknown; response_type?: string }) => undefined,
     );
@@ -680,6 +688,7 @@ describe("deliverSlackSlashReplies chunking", () => {
       replies: [
         {
           presentation: largePortableTablePresentation(),
+          mediaUrls: ["https://example.com/report.png"],
           interactive: {
             blocks: [
               {
@@ -697,10 +706,17 @@ describe("deliverSlackSlashReplies chunking", () => {
 
     expect(respond.mock.calls.length).toBeGreaterThan(1);
     const messages = respond.mock.calls.map(([message]) => message);
-    expect(messages.every((message) => message.blocks === undefined)).toBe(true);
+    expect(messages[0]?.blocks).toEqual([
+      expect.objectContaining({
+        type: "actions",
+        elements: [expect.objectContaining({ type: "button", value: "refresh" })],
+      }),
+    ]);
+    expect(messages.slice(1).every((message) => message.blocks === undefined)).toBe(true);
     const deliveredText = messages.map((message) => message.text).join("\n");
     expect(deliveredText).toContain("- Account: &lt;@U123&gt;");
     expect(deliveredText).toContain("- Account: account-99");
+    expect(deliveredText).toContain("https://example.com/report.png");
     expect(deliveredText).not.toContain("<@U123>");
   });
 

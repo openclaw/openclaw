@@ -246,7 +246,7 @@ describe("handleSlackMessageAction", () => {
     });
   });
 
-  it("routes non-native tables through Slack-safe text-only sends", async () => {
+  it("routes non-native tables through Slack-safe text with native controls", async () => {
     const invoke = createInvokeSpy();
 
     await handleSlackMessageAction({
@@ -271,10 +271,13 @@ describe("handleSlackMessageAction", () => {
     });
 
     const action = firstAction(invoke);
-    expect(action.blocks).toBeUndefined();
+    expect(action.separateTextAndBlocks).toBe(true);
     expect(action.textIsSlackMrkdwn).toBe(true);
     expect(action.content).toContain("- Account: &lt;@U123&gt;");
     expect(action.content).toContain("- Account: account-99");
+    const actionsBlock = blockAt(action, 0);
+    expect(actionsBlock.type).toBe("actions");
+    expect(elementAt(actionsBlock, 0).value).toBe("refresh");
     expect(String(action.content).length).toBeGreaterThan(8000);
   });
 

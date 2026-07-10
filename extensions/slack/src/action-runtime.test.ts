@@ -1389,6 +1389,78 @@ describe("handleSlackAction", () => {
     });
   });
 
+  it("keeps oversized text and native blocks in the same resolved thread", async () => {
+    const cfg = slackConfig({ replyToMode: "first" });
+    const hasRepliedRef = { value: false };
+    const context = createReplyToFirstContext(hasRepliedRef);
+    const content = "x".repeat(8001);
+    const blocks = [{ type: "divider" }];
+    sendSlackMessage.mockResolvedValueOnce({ channelId: "controls" });
+    sendSlackMessage.mockResolvedValueOnce({ channelId: "content" });
+
+    const result = await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        content,
+        blocks,
+        replyBroadcast: true,
+      },
+      cfg,
+      context,
+    );
+
+    expect(sendSlackMessage).toHaveBeenCalledTimes(2);
+    expectSlackSendCall(0, "channel:C123", "", {
+      cfg,
+      blocks,
+      threadTs: "1111111111.111111",
+    });
+    expect(requireRecordArg(sendSlackMessage, "sendSlackMessage", 0, 2)).not.toHaveProperty(
+      "replyBroadcast",
+    );
+    const textOptions = expectSlackSendCall(1, "channel:C123", content, {
+      cfg,
+      replyBroadcast: true,
+      threadTs: "1111111111.111111",
+    });
+    expect(textOptions).not.toHaveProperty("blocks");
+    expect(hasRepliedRef.value).toBe(true);
+    expect(result.details).toEqual({
+      ok: true,
+      result: { channelId: "content" },
+    });
+  });
+
+  it("separates explicitly marked short text from native blocks", async () => {
+    const cfg = slackConfig();
+    const content = "Short portable table fallback";
+    const blocks = [{ type: "divider" }];
+
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        content,
+        blocks,
+        separateTextAndBlocks: true,
+      },
+      cfg,
+    );
+
+    expect(sendSlackMessage).toHaveBeenCalledTimes(2);
+    expectSlackSendCall(0, "channel:C123", "", {
+      cfg,
+      blocks,
+      threadTs: undefined,
+    });
+    const textOptions = expectSlackSendCall(1, "channel:C123", content, {
+      cfg,
+      threadTs: undefined,
+    });
+    expect(textOptions).not.toHaveProperty("blocks");
+  });
+
   it.each([
     {
       name: "JSON blocks",

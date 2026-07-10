@@ -87,7 +87,7 @@ describe("resolveSlackReplyText", () => {
     );
   });
 
-  it("marks non-native portable tables for strict text-only delivery", () => {
+  it("marks non-native portable tables for text fallback while retaining native blocks", () => {
     const payload = {
       channelData: { slack: { blocks: [{ type: "divider" }] } },
       presentation: {
@@ -113,8 +113,53 @@ describe("resolveSlackReplyText", () => {
     };
 
     expect(resolveSlackReplyBlockResolution(payload)).toEqual({
+      blocks: [
+        { type: "divider" },
+        {
+          type: "actions",
+          block_id: "openclaw_reply_buttons_1",
+          elements: [
+            {
+              type: "button",
+              action_id: "openclaw:reply_button:1:1",
+              text: { type: "plain_text", text: "Refresh", emoji: true },
+              value: "refresh",
+            },
+          ],
+        },
+      ],
       usesTableTextFallback: true,
     });
     expect(resolveSlackReplyText(payload)).toContain("- Account: account-99");
+  });
+
+  it("rejects over-limit table fallbacks instead of dropping authored blocks", () => {
+    const payload = {
+      channelData: {
+        slack: { blocks: Array.from({ length: 50 }, () => ({ type: "divider" })) },
+      },
+      presentation: {
+        blocks: [
+          {
+            type: "table" as const,
+            caption: "Accounts",
+            headers: ["Account"],
+            rows: [["Acme"]],
+          },
+        ],
+      },
+      interactive: {
+        blocks: [
+          {
+            type: "buttons" as const,
+            buttons: [{ label: "Refresh", value: "refresh" }],
+          },
+        ],
+      },
+    };
+
+    expect(() => resolveSlackReplyBlockResolution(payload)).toThrow(
+      /Slack blocks cannot exceed 50 items/i,
+    );
   });
 });

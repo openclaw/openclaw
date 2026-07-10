@@ -1,5 +1,4 @@
 // Slack plugin module implements blocks fallback behavior.
-import type { Block, KnownBlock } from "@slack/web-api";
 import { renderSlackDataTableMrkdwnFallbackText } from "./data-table.js";
 import { renderSlackDataVisualizationMrkdwnFallbackText } from "./data-visualization.js";
 
@@ -47,7 +46,7 @@ function readContextText(block: SlackBlockWithFields): string | undefined {
   return textParts.length > 0 ? textParts.join(" ") : undefined;
 }
 
-export function buildSlackBlocksFallbackText(blocks: (Block | KnownBlock)[]): string {
+export function buildSlackBlocksFallbackText(blocks: readonly unknown[]): string {
   for (const raw of blocks) {
     const block = raw as SlackBlockWithFields;
     switch (block.type) {

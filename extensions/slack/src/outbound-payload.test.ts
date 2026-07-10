@@ -182,7 +182,24 @@ describe("slackOutbound sendPayload", () => {
 
   it("posts Slack-safe text when a portable table cannot render natively", async () => {
     const payload: ReplyPayload = {
-      channelData: { slack: { blocks: [{ type: "divider" }] } },
+      channelData: {
+        slack: {
+          blocks: [
+            {
+              type: "section",
+              text: { type: "mrkdwn", text: "Existing raw block only" },
+            },
+          ],
+        },
+      },
+      interactive: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Refresh", value: "refresh" }],
+          },
+        ],
+      },
       presentation: {
         title: "Pipeline <!channel>",
         blocks: [
@@ -229,12 +246,25 @@ describe("slackOutbound sendPayload", () => {
       .map(([raw]) => (raw as { text?: string }).text ?? "")
       .join("\n");
     expect(client.chat.postMessage.mock.calls.length).toBeGreaterThan(1);
+    expect(client.chat.postMessage.mock.calls[0]?.[0]).toMatchObject({
+      blocks: [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: "Existing raw block only" },
+        },
+        {
+          type: "actions",
+          elements: [expect.objectContaining({ type: "button", value: "refresh" })],
+        },
+      ],
+    });
     expect(
-      client.chat.postMessage.mock.calls.every(
-        ([raw]) => (raw as { blocks?: unknown }).blocks === undefined,
-      ),
+      client.chat.postMessage.mock.calls
+        .slice(1)
+        .every(([raw]) => (raw as { blocks?: unknown }).blocks === undefined),
     ).toBe(true);
     expect(postedText).toContain("Pipeline &lt;!channel&gt;");
+    expect(postedText).toContain("Existing raw block only");
     expect(postedText).toContain("- Owner: &lt;@U123&gt;");
     expect(postedText).toContain("- Owner: owner-99");
     expect(postedText).not.toContain("<!channel>");
@@ -542,10 +572,15 @@ describe("slackOutbound sendPayload", () => {
     expect(result.messageId).toBe("sl-controls");
   });
 
-  it("fails when merged Slack blocks exceed the platform limit", async () => {
+  it("rejects over-limit table fallbacks instead of dropping authored blocks", async () => {
     const { run, sendMock } = createHarness({
       payload: {
-        presentation: { blocks: Array.from({ length: 50 }, () => ({ type: "divider" })) },
+        channelData: {
+          slack: { blocks: Array.from({ length: 50 }, () => ({ type: "divider" })) },
+        },
+        presentation: {
+          blocks: [{ type: "table", caption: "Accounts", headers: ["Account"], rows: [["Acme"]] }],
+        },
         interactive: {
           blocks: [
             {
