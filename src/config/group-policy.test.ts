@@ -413,8 +413,15 @@ describe("resolveToolsBySender", () => {
     expect(warningMeta?.code).toBe("OPENCLAW_TOOLS_BY_SENDER_UNTYPED_KEY");
   });
 
-  describe("legacy key warning dedupe eviction", () => {
+  describe("legacy key warning dedupe cache", () => {
     let resolveToolsBySenderFn: typeof resolveToolsBySender;
+
+    const resolveFreshConfig = (legacyKey: string) => {
+      resolveToolsBySenderFn({
+        toolsBySender: { [legacyKey]: { allow: ["read"] }, "*": { deny: ["exec"] } },
+        senderId: "some-id",
+      });
+    };
 
     beforeEach(async () => {
       vi.resetModules();
@@ -422,61 +429,25 @@ describe("resolveToolsBySender", () => {
       resolveToolsBySenderFn = mod.resolveToolsBySender;
     });
 
-    it("evicts old legacy keys when the dedupe cache reaches its cap", () => {
+    it("refreshes recent keys across config snapshots and re-warns evicted keys", () => {
       const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
 
-      // Fill the cache by feeding 4097 distinct legacy keys through resolveToolsBySender.
-      // The 4097th key pushes past the 4096 cap, evicting the oldest entry.
-      for (let i = 1; i <= 4097; i++) {
-        resolveToolsBySenderFn({
-          toolsBySender: { [`legacy-key-${i}`]: { allow: ["read"] }, "*": { deny: ["exec"] } },
-          senderId: "some-id",
-        });
+      for (let i = 0; i < 4096; i++) {
+        resolveFreshConfig(`legacy-key-${i}`);
       }
+      expect(warningSpy).toHaveBeenCalledTimes(4096);
 
-      // "legacy-key-1" was the first key added; it should have been evicted.
-      const callsBefore = warningSpy.mock.calls.length;
-      resolveToolsBySenderFn({
-        toolsBySender: { "legacy-key-1": { allow: ["read"] }, "*": { deny: ["exec"] } },
-        senderId: "some-id",
-      });
-      // Re-resolving the evicted key emits a fresh warning.
-      expect(warningSpy.mock.calls.length).toBeGreaterThan(callsBefore);
-    });
+      resolveFreshConfig("legacy-key-0");
+      expect(warningSpy).toHaveBeenCalledTimes(4096);
 
-    it("keeps frequently accessed legacy keys from being evicted", () => {
-      const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+      resolveFreshConfig("overflow-key");
+      expect(warningSpy).toHaveBeenCalledTimes(4097);
 
-      // Seed the cache with 4095 entries (keys 2..4096).
-      for (let i = 2; i <= 4096; i++) {
-        resolveToolsBySenderFn({
-          toolsBySender: { [`legacy-key-${i}`]: { allow: ["read"] }, "*": { deny: ["exec"] } },
-          senderId: "some-id",
-        });
-      }
+      resolveFreshConfig("legacy-key-0");
+      expect(warningSpy).toHaveBeenCalledTimes(4097);
 
-      // Touch "legacy-key-1" 42 times to promote its recency in the LRU cache.
-      for (let i = 0; i < 42; i++) {
-        resolveToolsBySenderFn({
-          toolsBySender: { "legacy-key-1": { allow: ["read"] }, "*": { deny: ["exec"] } },
-          senderId: "some-id",
-        });
-      }
-      // Cache now at 4096 entries (keys 2..4096 + key-1).
-
-      // Push past the cap — key-1 was recently touched, so it should survive eviction.
-      resolveToolsBySenderFn({
-        toolsBySender: { "extra-key": { allow: ["read"] }, "*": { deny: ["exec"] } },
-        senderId: "some-id",
-      });
-
-      // Re-resolve "legacy-key-1" — should NOT emit a fresh warning (still cached).
-      const callsBefore = warningSpy.mock.calls.length;
-      resolveToolsBySenderFn({
-        toolsBySender: { "legacy-key-1": { allow: ["read"] }, "*": { deny: ["exec"] } },
-        senderId: "some-id",
-      });
-      expect(warningSpy.mock.calls.length).toBe(callsBefore);
+      resolveFreshConfig("legacy-key-1");
+      expect(warningSpy).toHaveBeenCalledTimes(4098);
     });
   });
 });

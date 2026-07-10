@@ -1,9 +1,9 @@
+// Normalizes group-policy config for channel and runtime decisions.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelId } from "../channels/plugins/channel-id.types.js";
-// Normalizes group-policy config for channel and runtime decisions.
 import { createDedupeCache } from "../infra/dedupe.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
@@ -73,8 +73,12 @@ type CompiledSenderPolicy = {
   wildcard?: GroupToolPolicyConfig;
 };
 
-// Bounded dedupe cache for legacy toolsBySender deprecation warnings.
-const legacyKeyDedupe = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
+const MAX_WARNED_LEGACY_TOOLS_BY_SENDER_KEYS = 4096;
+// Warning state spans fresh config snapshots; bounding it means evicted legacy keys can re-warn.
+const warnedLegacyToolsBySenderKeys = createDedupeCache({
+  ttlMs: 0,
+  maxSize: MAX_WARNED_LEGACY_TOOLS_BY_SENDER_KEYS,
+});
 const compiledToolsBySenderCache = new WeakMap<
   GroupToolPolicyBySenderConfig,
   CompiledSenderPolicy
@@ -139,7 +143,7 @@ function normalizeLegacySenderKey(value: string): string {
 
 function warnLegacyToolsBySenderKey(rawKey: string) {
   const trimmed = rawKey.trim();
-  if (!trimmed || legacyKeyDedupe.check(trimmed)) {
+  if (!trimmed || warnedLegacyToolsBySenderKeys.check(trimmed)) {
     return;
   }
   process.emitWarning(
