@@ -119,7 +119,7 @@ describe("grep tool stream errors", () => {
     });
     expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
     controller.abort();
-    expect(child.kill).not.toHaveBeenCalled();
+    expect(child.killed).toBe(false);
   });
 
   it("settles an abort when the spawned child never closes", async () => {
@@ -140,7 +140,7 @@ describe("grep tool stream errors", () => {
     controller.abort();
 
     await expect(result).rejects.toThrow("Operation aborted");
-    expect(child.kill).toHaveBeenCalledOnce();
+    expect(child.killed).toBe(true);
   });
 
   it("preserves abort precedence during async match formatting", async () => {
@@ -178,7 +178,7 @@ describe("grep tool stream errors", () => {
 
     controller.abort();
     await expect(result).rejects.toThrow("Operation aborted");
-    expect(child.kill).not.toHaveBeenCalled();
+    expect(child.killed).toBe(false);
 
     resolveReadFile?.("foo\n");
     await Promise.resolve();

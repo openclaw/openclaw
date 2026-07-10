@@ -436,7 +436,7 @@ export function createGrepToolDefinition(
                     details: Object.keys(details).length > 0 ? details : undefined,
                   }),
                 );
-              })().catch((err) => {
+              })().catch((err: unknown) => {
                 settle(() => reject(err as Error));
               });
             });
