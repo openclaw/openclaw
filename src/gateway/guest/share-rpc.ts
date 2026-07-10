@@ -120,6 +120,7 @@ export function createGuestShareHandlers(
         if (!hasSession(params.sessionKey, context)) {
           throw new Error(`session not found: ${params.sessionKey}`);
         }
+        const joinUrlBase = resolveJoinUrlBase(context, options.joinUrlBase);
         const store = resolveStore();
         const invitedPrincipal = resolveInvitedPrincipal(params);
         const created = store.createGrant({
@@ -130,7 +131,6 @@ export function createGuestShareHandlers(
           ...(params.expiresAtMs === undefined ? {} : { expiresAtMs: params.expiresAtMs }),
           ...(params.replayPolicy === undefined ? {} : { replayPolicy: params.replayPolicy }),
         });
-        const joinUrlBase = resolveJoinUrlBase(context, options.joinUrlBase);
         respond(
           true,
           {

@@ -263,6 +263,18 @@ describe("sessions.share RPCs", () => {
       expect(response.error?.code).toBe(ErrorCodes.INVALID_REQUEST);
     }
 
+    const invalidJoinUrlHandlers = createGuestShareHandlers({
+      ...handlerOptions,
+      joinUrlBase: "file:///tmp/guest-share",
+    });
+    const invalidJoinUrlCreate = await invoke(invalidJoinUrlHandlers, "sessions.share.create", {
+      sessionKey,
+      access: "link",
+    });
+    expect(invalidJoinUrlCreate.ok).toBe(false);
+    expect(invalidJoinUrlCreate.error?.code).toBe(ErrorCodes.INVALID_REQUEST);
+    expect(store.listGrants()).toEqual([]);
+
     const commonGrantParams = {
       sessionKey,
       createdBy: "device:negative-test",
