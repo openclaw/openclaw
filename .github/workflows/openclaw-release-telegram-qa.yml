@@ -3,6 +3,10 @@ name: OpenClaw Release Telegram QA
 on:
   workflow_call:
     inputs:
+      expected_trusted_workflow_sha:
+        description: Resolved main SHA authorized for this trusted reusable workflow
+        required: true
+        type: string
       target_ref:
         description: Trusted release ref whose exact candidate SHA should be validated
         required: true
@@ -23,7 +27,6 @@ jobs:
     name: Resolve trusted reusable workflow identity
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    continue-on-error: true
     permissions:
       contents: read
       id-token: write
@@ -38,6 +41,7 @@ jobs:
         env:
           CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          EXPECTED_TRUSTED_WORKFLOW_SHA: ${{ inputs.expected_trusted_workflow_sha }}
           JOB_CONTEXT: ${{ toJSON(job) }}
           TARGET_REF: ${{ inputs.target_ref }}
           TARGET_SHA: ${{ inputs.target_sha }}
@@ -48,6 +52,7 @@ jobs:
           expected_repository="openclaw/openclaw"
           expected_ref="${expected_repository}/.github/workflows/openclaw-release-telegram-qa.yml@refs/heads/main"
           if [[ "$GITHUB_REPOSITORY" != "$expected_repository" ||
+                ! "$EXPECTED_TRUSTED_WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ||
                 ! "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ||
                 -z "${TARGET_REF// }" ]]; then
             echo "Reusable Telegram QA identity or target is malformed." >&2
@@ -74,6 +79,7 @@ jobs:
             ),
           );
           const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+          const expectedTrustedWorkflowSha = process.env.EXPECTED_TRUSTED_WORKFLOW_SHA;
           const expected = {
             aud: "openclaw-release-telegram-qa",
             iss: "https://token.actions.githubusercontent.com",
@@ -93,7 +99,7 @@ jobs:
           const expectedJob = {
             workflow_ref: payload.job_workflow_ref,
             workflow_repository: payload.repository,
-            workflow_sha: payload.job_workflow_sha,
+            workflow_sha: expectedTrustedWorkflowSha,
           };
           for (const [key, value] of Object.entries(expectedJob)) {
             if (job[key] !== value) {
@@ -102,6 +108,9 @@ jobs:
           }
           if (!/^[a-f0-9]{40}$/.test(payload.job_workflow_sha ?? "")) {
             throw new Error("OIDC job_workflow_sha is malformed");
+          }
+          if (payload.job_workflow_sha !== expectedTrustedWorkflowSha) {
+            throw new Error("OIDC job_workflow_sha does not match the frozen trusted workflow SHA");
           }
           appendFileSync(
             process.env.GITHUB_OUTPUT,
@@ -131,9 +140,9 @@ jobs:
   build_candidate:
     name: Build secretless Telegram candidate
     needs: trusted_identity
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    continue-on-error: true
     permissions:
       actions: read
       contents: read
@@ -489,9 +498,9 @@ jobs:
   attest_candidate:
     name: Attest verified Telegram candidate
     needs: [trusted_identity, build_candidate]
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    continue-on-error: true
     permissions:
       actions: read
       attestations: write
@@ -701,9 +710,9 @@ jobs:
   run_telegram:
     name: Run isolated Telegram candidate
     needs: [trusted_identity, build_candidate, attest_candidate]
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    continue-on-error: true
     environment: qa-live-shared
     permissions:
       actions: read
@@ -2204,8 +2213,22 @@ jobs:
                   "$EVIDENCE_ARTIFACT_NAME" == "release-qa-live-telegram-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${TARGET_SHA}" ]]
           fi
 
-          mkdir -p .artifacts/release-check-status
-          status_file=".artifacts/release-check-status/qa_live_telegram_release_checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          status_dir=".artifacts/release-check-status"
+          status_file="${status_dir}/qa_live_telegram_release_checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.env"
+          evidence_file="${status_dir}/qa_live_telegram_release_checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          mkdir -p "$status_dir"
+          step_outcomes="identity:${IDENTITY_STATUS} build:${BUILD_STATUS} attest:${ATTESTATION_STATUS} execute:${EXECUTION_STATUS}"
+          {
+            printf 'run_id=%s\n' "$GITHUB_RUN_ID"
+            printf 'run_attempt=%s\n' "$GITHUB_RUN_ATTEMPT"
+            printf 'target_sha=%s\n' "$TARGET_SHA"
+            printf 'workflow_sha=%s\n' "$WORKFLOW_SHA"
+            printf 'job=%s\n' "qa_live_telegram_release_checks"
+            printf 'variant=\n'
+            printf 'status=%s\n' "$status"
+            printf 'job_status=%s\n' "$RUN_RESULT"
+            printf 'step_outcomes=%s\n' "$step_outcomes"
+          } >"$status_file"
           jq -n \
             --arg status "$status" \
             --arg jobStatus "$RUN_RESULT" \
@@ -2245,17 +2268,21 @@ jobs:
                 runAttempt: $runAttempt
               },
               candidateArtifact: $candidateArtifact
-            }' >"$status_file"
+            }' >"$evidence_file"
           {
             echo "status=$status"
             echo "status_file=$status_file"
+            echo "evidence_file=$evidence_file"
           } >>"$GITHUB_OUTPUT"
 
       - name: Upload advisory status
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: release-check-status-qa-live-telegram-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.target_sha }}
-          path: ${{ steps.record_status.outputs.status_file }}
+          name: release-check-status-qa-live-telegram-${{ inputs.target_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.record_status.outputs.status_file }}
+            ${{ steps.record_status.outputs.evidence_file }}
           retention-days: 14
           if-no-files-found: error
 

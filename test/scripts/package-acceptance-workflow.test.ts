@@ -26,6 +26,7 @@ const PACKAGE_JSON = "package.json";
 const SETUP_PNPM_STORE_CACHE_ACTION = ".github/actions/setup-pnpm-store-cache/action.yml";
 const DOCKER_E2E_PLAN_ACTION = ".github/actions/docker-e2e-plan/action.yml";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
+const RELEASE_TELEGRAM_QA_WORKFLOW = ".github/workflows/openclaw-release-telegram-qa.yml";
 const RELEASE_PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
 const ANDROID_RELEASE_WORKFLOW = ".github/workflows/android-release.yml";
 const STABLE_MAIN_CLOSEOUT_WORKFLOW = ".github/workflows/openclaw-stable-main-closeout.yml";
@@ -68,10 +69,12 @@ type WorkflowMatrixEntry = {
 };
 
 type WorkflowJob = {
+  "continue-on-error"?: boolean | string;
   concurrency?: {
     group?: string;
     "cancel-in-progress"?: boolean | string;
   };
+  environment?: string;
   env?: Record<string, string>;
   if?: string;
   name?: string;
@@ -85,6 +88,8 @@ type WorkflowJob = {
   };
   "timeout-minutes"?: number | string;
   steps?: WorkflowStep[];
+  uses?: string;
+  with?: Record<string, string>;
 };
 
 type Workflow = {
@@ -198,8 +203,11 @@ function runNpmTelegramInputValidation(overrides: Record<string, string>) {
 
 function runReleaseChecksSummary(params: {
   artifactAttempt?: string;
+  artifactStatus?: "cancelled" | "failure" | "skipped" | "success";
   currentAttempt: string;
   currentResult: "cancelled" | "skipped" | "success";
+  resolveResult?: "failure" | "success";
+  telegramSelected?: boolean;
   workflowRef?: string;
 }) {
   const summary = workflowJob(RELEASE_CHECKS_WORKFLOW, "summary");
@@ -221,7 +229,7 @@ function runReleaseChecksSummary(params: {
         `target_sha=${targetSha}`,
         "job=qa_live_telegram_release_checks",
         "variant=",
-        "status=success",
+        `status=${params.artifactStatus ?? "success"}`,
         "job_status=success",
         "step_outcomes=success success",
         "",
@@ -249,10 +257,12 @@ function runReleaseChecksSummary(params: {
       QA_LIVE_MATRIX_RELEASE_CHECKS_RESULT: "skipped",
       QA_LIVE_SLACK_RELEASE_CHECKS_RESULT: "skipped",
       QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT: params.currentResult,
+      QA_LIVE_TELEGRAM_SELECTED: String(params.telegramSelected ?? true),
       QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT: "skipped",
       RELEASE_CHECK_RUN_ATTEMPT: params.currentAttempt,
       RELEASE_CHECK_RUN_ID: runId,
       RELEASE_CHECK_TARGET_SHA: targetSha,
+      RESOLVE_TARGET_RESULT: params.resolveResult ?? "success",
       RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT: "skipped",
       WORKFLOW_REF: params.workflowRef ?? "refs/heads/release/2026.7.1",
     },
@@ -1875,6 +1885,7 @@ describe("package artifact reuse", () => {
 
   it("detects Matrix fail-fast support for older release refs", () => {
     const releaseWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
+    const releaseTelegramWorkflow = readFileSync(RELEASE_TELEGRAM_QA_WORKFLOW, "utf8");
     const qaWorkflow = readFileSync(".github/workflows/qa-live-transports-convex.yml", "utf8");
 
     expect(releaseWorkflow).toContain("matrix_args=(");
@@ -1888,7 +1899,7 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain(
       'echo "Matrix live lane failed on attempt ${attempt}; retrying once..." >&2',
     );
-    expect(releaseWorkflow).toContain(
+    expect(releaseTelegramWorkflow).toContain(
       'echo "Telegram live lane failed on attempt ${attempt}; retrying once..." >&2',
     );
     expect(qaWorkflow).toContain(
@@ -1958,7 +1969,6 @@ describe("package artifact reuse", () => {
       ["qa_lab_parity_report_release_checks", "Upload parity artifacts"],
       ["qa_lab_runtime_parity_release_checks", "Upload runtime parity artifacts"],
       ["qa_live_matrix_release_checks", "Upload Matrix QA artifacts"],
-      ["qa_live_telegram_release_checks", "Upload Telegram QA artifacts"],
       ["qa_live_discord_release_checks", "Upload Discord QA artifacts"],
       ["qa_live_whatsapp_release_checks", "Upload WhatsApp QA artifacts"],
       ["qa_live_slack_release_checks", "Upload Slack QA artifacts"],
@@ -1971,6 +1981,14 @@ describe("package artifact reuse", () => {
       expect(uploadStep.uses, jobName).toBe(UPLOAD_ARTIFACT_V7);
       expect(uploadStep.with?.["if-no-files-found"], jobName).toBe("error");
     }
+
+    const telegramUpload = workflowStep(
+      workflowJob(RELEASE_TELEGRAM_QA_WORKFLOW, "run_telegram"),
+      "Upload Telegram QA artifacts",
+    );
+    expect(telegramUpload.if).toContain("always()");
+    expect(telegramUpload.uses).toBe(UPLOAD_ARTIFACT_V7);
+    expect(telegramUpload.with?.["if-no-files-found"]).toBe("error");
 
     const runtimeCoverageUpload = workflowStep(
       workflowJob(RELEASE_CHECKS_WORKFLOW, "runtime_tool_coverage_release_checks"),
@@ -2345,7 +2363,7 @@ describe("package artifact reuse", () => {
   it("lets CI Telegram consumers wait on Convex leases instead of GitHub concurrency", () => {
     const telegramJobs = [
       [NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e", "Run package Telegram E2E"],
-      [RELEASE_CHECKS_WORKFLOW, "qa_live_telegram_release_checks", "Run Telegram live lane"],
+      [RELEASE_TELEGRAM_QA_WORKFLOW, "run_telegram", "Run Telegram live lane"],
       [QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_telegram", "Run Telegram live lane"],
       [
         ".github/workflows/mantis-telegram-live.yml",
@@ -2370,11 +2388,19 @@ describe("package artifact reuse", () => {
       "qa_lab_parity_lane_release_checks",
       "qa_lab_parity_report_release_checks",
       "qa_live_matrix_release_checks",
-      "qa_live_telegram_release_checks",
     ]) {
       expect(releaseChecksWorkflow).toMatch(
         new RegExp(`${jobName}:[\\s\\S]*?runs-on: ubuntu-24\\.04`, "u"),
       );
+    }
+    for (const jobName of [
+      "trusted_identity",
+      "build_candidate",
+      "attest_candidate",
+      "run_telegram",
+      "advisory_status",
+    ]) {
+      expect(workflowJob(RELEASE_TELEGRAM_QA_WORKFLOW, jobName)["runs-on"]).toBe("ubuntu-24.04");
     }
 
     for (const jobName of [
@@ -2403,7 +2429,6 @@ describe("package artifact reuse", () => {
       "qa_lab_parity_report_release_checks",
       "qa_lab_runtime_parity_release_checks",
       "qa_live_matrix_release_checks",
-      "qa_live_telegram_release_checks",
       "qa_live_discord_release_checks",
       "qa_live_whatsapp_release_checks",
       "qa_live_slack_release_checks",
@@ -2438,6 +2463,47 @@ describe("package artifact reuse", () => {
       );
       expect(uploadStep.with?.["if-no-files-found"], jobName).toBe("error");
     }
+
+    const telegramCaller = workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_live_telegram_release_checks");
+    expect(telegramCaller.uses).toBe(
+      "openclaw/openclaw/.github/workflows/openclaw-release-telegram-qa.yml@main",
+    );
+    expect(telegramCaller.with?.expected_trusted_workflow_sha).toBe(
+      "${{ needs.resolve_target.outputs.trusted_workflow_sha }}",
+    );
+    expect(telegramCaller["continue-on-error"]).toBeUndefined();
+    expect(telegramCaller.steps).toBeUndefined();
+
+    const telegramStatus = workflowJob(RELEASE_TELEGRAM_QA_WORKFLOW, "advisory_status");
+    expect(telegramStatus["continue-on-error"]).toBeUndefined();
+    const telegramRecord = workflowStep(telegramStatus, "Record advisory status");
+    expectTextToIncludeAll(telegramRecord.run, [
+      "run_id=",
+      "run_attempt=",
+      "target_sha=",
+      "workflow_sha=",
+      "job=",
+      "variant=",
+      "status=",
+      "job_status=",
+      "step_outcomes=",
+    ]);
+    const telegramStatusUpload = workflowStep(telegramStatus, "Upload advisory status");
+    expect(telegramStatusUpload.if).toBe("always()");
+    expect(telegramStatusUpload.uses).toBe(UPLOAD_ARTIFACT_V7);
+    expect(telegramStatusUpload.with?.name).toBe(
+      "release-check-status-qa-live-telegram-${{ inputs.target_sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+    expect(telegramStatusUpload.with?.path).toContain(
+      "${{ steps.record_status.outputs.status_file }}",
+    );
+    expect(telegramStatusUpload.with?.["if-no-files-found"]).toBe("error");
+    const telegramRequire = workflowStep(
+      telegramStatus,
+      "Require successful Telegram release check",
+    );
+    expect(telegramRequire.if).toBe("always()");
+    expect(telegramRequire.run).toContain('[[ "$STATUS" == "success" ]]');
 
     const summary = workflowJob(RELEASE_CHECKS_WORKFLOW, "summary");
     expect(summary.needs).toContain("resolve_target");
@@ -2519,6 +2585,52 @@ describe("package artifact reuse", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
+  });
+
+  it("rejects a skipped selected Telegram reusable call", () => {
+    const result = runReleaseChecksSummary({
+      currentAttempt: "2",
+      currentResult: "skipped",
+      telegramSelected: true,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("::error::qa_live_telegram_release_checks ended with skipped");
+  });
+
+  it("accepts a skipped unselected Telegram reusable call", () => {
+    const result = runReleaseChecksSummary({
+      currentAttempt: "2",
+      currentResult: "skipped",
+      telegramSelected: false,
+    });
+
+    expect(result.status).toBe(0);
+  });
+
+  it("rejects skipped terminal evidence for a selected Telegram call", () => {
+    const result = runReleaseChecksSummary({
+      artifactAttempt: "2",
+      artifactStatus: "skipped",
+      currentAttempt: "2",
+      currentResult: "success",
+      telegramSelected: true,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("::error::qa_live_telegram_release_checks ended with skipped");
+  });
+
+  it("keeps target resolution blocking before release children", () => {
+    const result = runReleaseChecksSummary({
+      currentAttempt: "2",
+      currentResult: "skipped",
+      resolveResult: "failure",
+      telegramSelected: false,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("::error::resolve_target ended with failure");
   });
 
   it("keeps missing current-attempt advisory status non-blocking for Tideclaw alpha", () => {
@@ -3230,6 +3342,7 @@ describe("package artifact reuse", () => {
     const releaseWorkflowPaths = [
       FULL_RELEASE_VALIDATION_WORKFLOW,
       RELEASE_CHECKS_WORKFLOW,
+      RELEASE_TELEGRAM_QA_WORKFLOW,
       ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
       LIVE_E2E_WORKFLOW,
       NPM_TELEGRAM_WORKFLOW,
