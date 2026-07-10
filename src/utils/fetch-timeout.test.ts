@@ -306,6 +306,38 @@ describe("buildTimeoutAbortSignal", () => {
     ).resolves.toBe(response);
   });
 
+  it("cancels the timeout timer when the caller aborts before timeout", async () => {
+    const parent = new AbortController();
+    const fetchFn = vi.fn<typeof fetch>(
+      async (_input, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (!signal) {
+            reject(new Error("missing signal"));
+            return;
+          }
+          signal.addEventListener(
+            "abort",
+            () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+            { once: true },
+          );
+        }),
+    );
+
+    const result = fetchWithTimeout(
+      "https://example.com/v1/audio",
+      { signal: parent.signal },
+      25,
+      fetchFn,
+    );
+    parent.abort(new Error("caller cancelled"));
+
+    await expect(result).rejects.toMatchObject({ message: "caller cancelled" });
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("clamps oversized fetchWithTimeout delays before fetch starts", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const response = new Response("ok");

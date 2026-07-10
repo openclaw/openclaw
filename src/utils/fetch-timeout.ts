@@ -182,14 +182,18 @@ export async function fetchWithTimeout(
   timeoutMs: number,
   fetchFn: typeof fetch = fetch,
 ): Promise<Response> {
+  const callerSignal = init.signal ?? undefined;
   const { signal: timeoutSignal, cleanup } = buildTimeoutAbortSignal({
     timeoutMs: Math.max(1, timeoutMs),
+    signal: callerSignal,
     operation: "fetchWithTimeout",
     url,
   });
-  const callerSignal = init.signal ?? undefined;
-  // The wrapper timeout ends once fetch returns headers, but the response body
-  // must keep following caller cancellation (and its reason) after that point.
+  // AbortSignal.any preserves the caller's abort reason (buildTimeoutAbortSignal
+  // relays parent aborts without forwarding the reason), while passing the
+  // caller signal into buildTimeoutAbortSignal ensures the timeout timer is
+  // cancelled immediately when the caller aborts rather than running until the
+  // finally block.
   const signal =
     callerSignal && timeoutSignal
       ? AbortSignal.any([callerSignal, timeoutSignal])
