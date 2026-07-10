@@ -189,6 +189,25 @@ describe("gateway/node-registry", () => {
     await expect(oldDisconnected).resolves.toBeInstanceOf(Error);
   });
 
+  it("rejects invoke when the node connection changed before dispatch", async () => {
+    const registry = new NodeRegistry();
+    const replacementFrames: string[] = [];
+    registry.register(makeClient("conn-old", "node-1"), {});
+    registry.register(makeClient("conn-new", "node-1", replacementFrames), {});
+
+    await expect(
+      registry.invoke({
+        nodeId: "node-1",
+        expectedConnId: "conn-old",
+        command: "system.run",
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "ROUTE_CHANGED", message: "node connection changed before dispatch" },
+    });
+    expect(replacementFrames).toEqual([]);
+  });
+
   it("matches pending system.run events to the issuing connection", async () => {
     const registry = new NodeRegistry();
     const frames = registerLinuxNode(registry);
@@ -248,13 +267,17 @@ describe("gateway/node-registry", () => {
     const registry = new NodeRegistry();
     try {
       const frames = registerNode(registry);
-      const { invoke } = invokeSystemRun(
+      const { invoke, request } = invokeSystemRun(
         registry,
         frames,
         { runId: "run-timeout", sessionKey: "agent:main:main", timeoutMs: 0 },
         1,
       );
+      const forwarded = JSON.parse(request.payload?.paramsJSON ?? "{}") as {
+        timeoutMs?: number | null;
+      };
 
+      expect(forwarded.timeoutMs).toBeNull();
       await vi.advanceTimersByTimeAsync(1);
       await expect(invoke).resolves.toEqual({
         ok: false,
@@ -270,6 +293,57 @@ describe("gateway/node-registry", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps zero-timeout invokes pending until the node responds", async () => {
+    vi.useFakeTimers();
+    const registry = new NodeRegistry();
+    try {
+      const frames = registerNode(registry);
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command: "debug.ping",
+        timeoutMs: 0,
+      });
+      const request = JSON.parse(frames[0] ?? "{}") as {
+        payload?: { id?: string; timeoutMs?: number };
+      };
+
+      expect(request.payload?.timeoutMs).toBe(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(
+        registry.handleInvokeResult({
+          id: request.payload?.id ?? "",
+          nodeId: "node-1",
+          connId: "conn-1",
+          ok: true,
+        }),
+      ).toBe(true);
+      await expect(invoke).resolves.toEqual({
+        ok: true,
+        payload: undefined,
+        payloadJSON: null,
+        error: null,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects zero-timeout invokes when the node disconnects", async () => {
+    const registry = new NodeRegistry();
+    registerNode(registry);
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "debug.ping",
+      timeoutMs: 0,
+    });
+    const disconnected = invoke.catch((error: unknown) => error);
+
+    expect(registry.unregister("conn-1")).toBe("node-1");
+    const error = await disconnected;
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("node disconnected (debug.ping)");
   });
 
   it("caps oversized invoke and system.run authorization timers", async () => {
@@ -288,7 +362,15 @@ describe("gateway/node-registry", () => {
         },
         Number.MAX_SAFE_INTEGER,
       );
+      const request = JSON.parse(frames[0] ?? "{}") as {
+        payload?: { paramsJSON?: string | null; timeoutMs?: number };
+      };
+      const forwarded = JSON.parse(request.payload?.paramsJSON ?? "{}") as {
+        timeoutMs?: number | null;
+      };
 
+      expect(request.payload?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+      expect(forwarded.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
       await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
       await expect(invoke).resolves.toEqual({
         ok: false,

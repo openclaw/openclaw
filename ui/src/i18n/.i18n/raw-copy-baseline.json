@@ -1146,34 +1146,6 @@
       "count": 1,
       "kind": "object-property",
       "name": "label",
-      "path": "ui/src/lib/chat/model-select-state.ts",
-      "text": "Auto"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/chat/model-select-state.ts",
-      "text": "Default"
-    },
-    {
-      "count": 2,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/chat/model-select-state.ts",
-      "text": "Fast"
-    },
-    {
-      "count": 2,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/chat/model-select-state.ts",
-      "text": "Standard"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
       "path": "ui/src/lib/skills-grouping.ts",
       "text": "Built-in Skills"
     },
@@ -2068,10 +2040,10 @@
     },
     {
       "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
+      "kind": "html-text",
+      "name": "text",
       "path": "ui/src/pages/chat/components/chat-model-controls.ts",
-      "text": "Speed"
+      "text": "Default"
     },
     {
       "count": 1,
@@ -4051,15 +4023,106 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Any node"
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "approval needed"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Approve"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "auto-paired"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "No paired nodes or devices."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Nodes & devices"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "One entry per paired client: roles, tokens, live links."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Paired"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Pending approval"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Reject"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Remove"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Revoke"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Rotate"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Tokens"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/nodes/view-inventory.ts",
+      "text": "Tokens & capabilities"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view.ts",
-      "text": "Approve"
+      "text": "Any node"
     },
     {
       "count": 1,
@@ -4073,13 +4136,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view.ts",
-      "text": "Devices"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
       "text": "No agents found."
     },
     {
@@ -4087,91 +4143,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view.ts",
-      "text": "No nodes found."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
       "text": "No nodes with system.run available."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "No paired devices."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Nodes"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Paired"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Paired devices and live links."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Pairing requests + role tokens."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Pending"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Reject"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Revoke"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Rotate"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Tokens"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view.ts",
-      "text": "Tokens: none"
     },
     {
       "count": 1,

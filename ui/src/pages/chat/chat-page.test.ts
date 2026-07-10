@@ -20,6 +20,9 @@ type RenderedPane = HTMLElement & {
   paneId: string;
   sessionKey: string;
   active: boolean;
+  showPaneHeader: boolean;
+  paneTitle: string;
+  narrow: boolean;
 };
 
 function setLayout(page: ChatPage, layout: ChatSplitLayout | undefined) {
@@ -94,6 +97,7 @@ describe("chat page split layout host", () => {
     expect(panes[0].paneId).toBe("single");
     expect(panes[0].sessionKey).toBe("main");
     expect(panes[0].active).toBe(true);
+    expect(panes[0].showPaneHeader).toBe(false);
     expect(page.querySelector("resizable-divider")).toBeNull();
     expect(page.querySelector(".chat-open-split-view")).toBeInstanceOf(HTMLButtonElement);
   });
@@ -123,9 +127,9 @@ describe("chat page split layout host", () => {
     expect(panes.map((pane) => pane.active)).toEqual([false, true]);
     expect(dividers).toHaveLength(1);
     expect(dividers[0].orientation).toBe("vertical");
-    expect(page.querySelector(".chat-split-view__pane--active")).toBe(panes[1]);
-    expect(page.querySelectorAll(".chat-split-toolbar__pane")).toHaveLength(2);
-    expect(page.querySelector(".chat-split-toolbar__pane--active")).not.toBeNull();
+    expect(page.querySelector(".chat-split-view__cell--active")?.contains(panes[1])).toBe(true);
+    // Panes own their in-flow header row (title + workspace/split/close).
+    expect(panes.map((pane) => pane.showPaneHeader)).toEqual([true, true]);
     expect(page.querySelector(".chat-open-split-view")).toBeNull();
   });
 
@@ -140,14 +144,17 @@ describe("chat page split layout host", () => {
     const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
     expect(panes.map((pane) => pane.paneId)).toEqual(["p2"]);
     expect(panes[0].active).toBe(true);
-    expect(page.querySelectorAll(".chat-split-toolbar__pane")).toHaveLength(1);
+    expect(panes[0].showPaneHeader).toBe(true);
+    expect(panes[0].narrow).toBe(true);
     expect(page.querySelector("resizable-divider")).toBeNull();
   });
 
-  it("refreshes split toolbar sessions after the shared list loads", async () => {
+  it("refreshes split toolbar titles after the shared list loads", async () => {
     const page = new ChatPage();
     const cleanup = vi.fn();
-    const sessionsState: { result: { sessions: Array<{ key: string }> } | null } = {
+    const sessionsState: {
+      result: { sessions: Array<{ key: string; displayName?: string }> } | null;
+    } = {
       result: null,
     };
     let notify = () => {};
@@ -165,16 +172,17 @@ describe("chat page split layout host", () => {
     setLayout(page, createSplitLayout("main"));
     await page.updateComplete;
 
+    const paneTitles = () =>
+      [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].map((pane) => pane.paneTitle);
+    expect(paneTitles()).toEqual(["Main Session", "Main Session"]);
+
     sessionsState.result = {
-      sessions: [{ key: "agent:main:work" }, { key: "main" }],
+      sessions: [{ key: "main", displayName: "Main desk" }],
     };
     notify();
     await page.updateComplete;
 
-    const selects = [...page.querySelectorAll<HTMLSelectElement>(".chat-pane__session-select")];
-    expect(selects).toHaveLength(2);
-    expect(selects.map((select) => select.options.length)).toEqual([2, 2]);
-    expect(selects.map((select) => select.value)).toEqual(["main", "main"]);
+    expect(paneTitles()).toEqual(["Main desk", "Main desk"]);
 
     page.remove();
     expect(cleanup).toHaveBeenCalledOnce();

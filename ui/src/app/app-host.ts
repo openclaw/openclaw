@@ -21,6 +21,7 @@ import {
   type CommandPalette,
   type CommandPaletteTargetDetail,
 } from "../components/command-palette.ts";
+import { icons } from "../components/icons.ts";
 import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
@@ -41,7 +42,7 @@ import {
 import { hasOperatorAdminAccess } from "./operator-access.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
 import { selectRenderedRouteMatch } from "./router-outlet.ts";
-import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
+import { NAV_WIDTH_MAX, NAV_WIDTH_MIN, loadSettings } from "./settings.ts";
 
 type ShellRouteState = {
   routeId?: RouteId;
@@ -360,6 +361,7 @@ class OpenClawShell extends OpenClawLightDomElement {
 
   @state() private navDrawerOpen = false;
   @state() private activeSessionKey = "";
+  @state() private settingsSearchQuery = "";
   @state() private routeState: ShellRouteState = {};
   @query("openclaw-command-palette") private commandPalette?: CommandPalette;
   private commandPaletteTarget?: CommandPaletteTargetDetail;
@@ -463,6 +465,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.navDrawerTrigger = null;
     this.lastWorkspaceLocation = null;
     this.activeSessionKey = "";
+    this.settingsSearchQuery = "";
     this.commandPaletteTarget = undefined;
     this.agentsListClient = null;
     this.agentsListSource = null;
@@ -743,6 +746,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       this.ensureAgentsList(context.gateway.snapshot);
     }
     if (routeState.routeId && !isSettingsNavigationRoute(routeState.routeId)) {
+      this.settingsSearchQuery = "";
       this.lastWorkspaceLocation = {
         routeId: routeState.routeId,
         search: routeState.location?.search ?? "",
@@ -783,6 +787,8 @@ class OpenClawShell extends OpenClawLightDomElement {
     // The settings sidebar has a fixed width, so the collapse state pauses too.
     const navCollapsed = navigationSnapshot.navCollapsed && !navDrawerOpen && !settingsTakeover;
     const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
+    // One storage read per render; theme.refresh() re-renders on pref changes.
+    const uiSettings = loadSettings();
     return html`
       <openclaw-command-palette
         .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
@@ -816,6 +822,21 @@ class OpenClawShell extends OpenClawLightDomElement {
           .onOpenPalette=${this.openPalette}
           .onToggleDrawer=${(trigger: HTMLElement) => this.toggleNavigationSurface(trigger)}
         ></openclaw-app-topbar>
+        ${navCollapsed && !this.onboarding
+          ? html`
+              <openclaw-tooltip .content=${`${t("nav.expand")} (⌘B)`}>
+                <button
+                  type="button"
+                  class="shell-nav-expand"
+                  aria-label=${t("nav.expand")}
+                  aria-expanded="false"
+                  @click=${() => this.toggleNavigationSurface()}
+                >
+                  ${icons.panelLeftOpen}
+                </button>
+              </openclaw-tooltip>
+            `
+          : nothing}
         <div class="shell-nav">
           ${settingsTakeover
             ? renderSettingsSidebar({
@@ -826,9 +847,13 @@ class OpenClawShell extends OpenClawLightDomElement {
                   context.config.current.serverVersion ??
                   gatewaySnapshot.hello?.server?.version ??
                   "",
+                searchQuery: this.settingsSearchQuery,
                 onExit: () => this.exitSettings(),
                 onNavigate: (routeId) => this.navigate(routeId),
                 onPreload: (routeId) => context.preload(routeId),
+                onSearchQueryChange: (nextQuery) => {
+                  this.settingsSearchQuery = nextQuery;
+                },
                 preloadTimers: this.settingsPreloadTimers,
               })
             : html`<openclaw-app-sidebar
@@ -837,13 +862,17 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .activePluginTabId=${activePluginTabId}
                 .enabledRouteIds=${this.enabledRouteIds()}
                 .sessionKey=${this.activeSessionKey}
-                .collapsed=${navCollapsed}
                 .connected=${gatewaySnapshot.connected}
                 .canPairDevice=${gatewaySnapshot.connected &&
                 hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
                 .sidebarPinnedRoutes=${navigationSnapshot.sidebarPinnedRoutes}
                 .sidebarMoreExpanded=${navigationSnapshot.sidebarMoreExpanded}
                 .themeMode=${context.theme.mode}
+                .lobsterPetVisits=${uiSettings.lobsterPetVisits !== false}
+                .lobsterPetSounds=${uiSettings.lobsterPetSounds === true}
+                .gatewayVersion=${context.config.current.serverVersion ??
+                gatewaySnapshot.hello?.server?.version ??
+                null}
                 .onOpenPalette=${this.openPalette}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
                 .onToggleMore=${() =>
