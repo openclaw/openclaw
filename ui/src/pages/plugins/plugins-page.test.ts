@@ -693,6 +693,49 @@ describe("PluginsPage", () => {
     );
   });
 
+  it("removes an MCP server with an explicit merge-patch null", async () => {
+    const { client } = createClient(async () => createResult());
+    const gatewayHarness = createGateway(client);
+    const configHarness = createRuntimeConfigHarness(
+      vi.fn(async () => undefined),
+      {
+        configFormDirty: false,
+        lastError: null,
+        configSnapshot: {
+          sourceConfig: {
+            mcp: { servers: { github: { url: "https://api.githubcopilot.com/mcp/" } } },
+          },
+          hash: "base",
+        },
+      },
+    );
+    const { page } = await mountPage(
+      createContext(
+        gatewayHarness.gateway,
+        configHarness.runtimeConfig.refresh,
+        configHarness.runtimeConfig.state,
+        configHarness,
+      ),
+      {
+        gateway: gatewayHarness.gateway,
+        gatewaySnapshot: gatewayHarness.gateway.snapshot,
+        result: createResult(),
+        error: null,
+      },
+    );
+
+    const mcpRow = page.querySelector<HTMLElement>('[data-mcp-name="github"]');
+    expect(mcpRow).not.toBeNull();
+    mcpRow?.querySelector<HTMLButtonElement>(".plugins-remove")?.click();
+
+    await vi.waitFor(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
+    const patchArgs = configHarness.runtimeConfig.patch.mock.calls[0][0] as {
+      raw: Record<string, unknown>;
+    };
+    // RFC 7396 merge semantics: deletion must be an explicit null, not omission.
+    expect(patchArgs.raw).toEqual({ mcp: { servers: { github: null } } });
+  });
+
   it("rejects invalid MCP server names before touching config", async () => {
     const { client } = createClient(async () => createResult());
     const gatewayHarness = createGateway(client);

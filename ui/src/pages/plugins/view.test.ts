@@ -288,7 +288,12 @@ describe("renderPlugins", () => {
     const container = mount(
       createProps({ activeTab: "discover", result: createResult(plugins), onInstall }),
     );
-    expect(normalizedText(container.querySelector("#plugins-shelf-featured"))).toBe("Featured 1");
+    expect(
+      normalizedText(
+        container.querySelector("#plugins-shelf-featured")?.closest(".plugins-group__heading") ??
+          null,
+      ),
+    ).toBe("Featured 1");
     container
       .querySelector<HTMLButtonElement>('[data-plugin-id="tavily"] .plugins-install')
       ?.click();
@@ -387,7 +392,7 @@ describe("renderPlugins", () => {
     expect(result?.dataset.pluginSource).toBe("clawhub");
     expect(normalizedText(result)).toContain("Official");
     expect(normalizedText(result)).toContain("Verified source");
-    expect(normalizedText(result)).toContain("149K");
+    expect(normalizedText(result)).toContain("149.3K");
     expect(normalizedText(result)).toContain("Code plugin");
     result?.querySelector<HTMLButtonElement>('[aria-label="Install Calendar Plus"]')?.click();
     expect(onInstall).toHaveBeenCalledWith(clawHubRowKey("@openclaw/calendar-plus"), {
