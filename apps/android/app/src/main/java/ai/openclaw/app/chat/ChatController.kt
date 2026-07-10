@@ -1600,7 +1600,7 @@ class ChatController internal constructor(
         "ok" -> OutboxSendResult.Accepted
         "timeout", "error" -> OutboxSendResult.DeliveryUnconfirmed
         "" -> if (hasLegacyRunIdOnlyAck) OutboxSendResult.Accepted else OutboxSendResult.DeliveryUnconfirmed
-        "started", "in_flight" ->
+        "accepted", "started", "in_flight" ->
           if (ack.runId.isNullOrBlank()) OutboxSendResult.DeliveryUnconfirmed else OutboxSendResult.Accepted
         else -> OutboxSendResult.DeliveryUnconfirmed
       }

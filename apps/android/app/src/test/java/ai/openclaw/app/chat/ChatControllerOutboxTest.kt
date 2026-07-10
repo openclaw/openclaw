@@ -267,6 +267,31 @@ class ChatControllerOutboxTest {
     }
 
   @Test
+  fun knownAdmissionAcksWithRunIdsRemoveRows() =
+    runTest {
+      for (status in listOf("accepted", "started", "in_flight")) {
+        val gateway = FakeGateway()
+        val outbox = FakeCommandOutbox()
+        val chat = controller(this, gateway, outbox)
+        chat.load("main")
+        advanceUntilIdle()
+        chat.sendMessageAwaitAcceptance(
+          message = status,
+          thinkingLevel = "off",
+          attachments = emptyList(),
+        )
+
+        gateway.online = true
+        gateway.sendResponse = { key -> """{"runId":"$key","status":"$status"}""" }
+        chat.handleGatewayEvent("health", null)
+        advanceUntilIdle()
+
+        assertEquals(listOf(status), gateway.sentMessages)
+        assertTrue(chat.outboxItems.value.isEmpty())
+      }
+    }
+
+  @Test
   fun reconnectGatesActiveSessionThinkingAndFailsOpenForOtherSessions() =
     runTest {
       val gateway = FakeGateway()
@@ -629,6 +654,7 @@ class ChatControllerOutboxTest {
       val responses =
         listOf<(String) -> String>(
           { key -> """{"runId":"$key","status":"mystery"}""" },
+          { _ -> """{"status":"accepted"}""" },
           { _ -> """{"status":"started"}""" },
           { key -> """{"runId":"$key","status":42}""" },
           { key -> """{"runId":"$key","status":null}""" },

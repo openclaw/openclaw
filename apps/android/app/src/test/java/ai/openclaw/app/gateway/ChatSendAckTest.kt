@@ -11,12 +11,14 @@ class ChatSendAckTest {
   private val json = Json { ignoreUnknownKeys = true }
 
   @Test
-  fun parseChatSendAckPreservesNonTerminalStartedStatus() {
-    val ack = parseChatSendAck(json, """{"runId":"run-1","status":"started"}""")
+  fun parseChatSendAckPreservesNonTerminalAdmissionStatuses() {
+    for (status in listOf("accepted", "started", "in_flight")) {
+      val ack = parseChatSendAck(json, """{"runId":"run-1","status":"$status"}""")
 
-    assertEquals("run-1", ack.runId)
-    assertEquals("started", ack.normalizedStatus)
-    assertFalse(ack.isTerminal)
+      assertEquals("run-1", ack.runId)
+      assertEquals(status, ack.normalizedStatus)
+      assertFalse(ack.isTerminal)
+    }
   }
 
   @Test
