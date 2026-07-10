@@ -133,6 +133,15 @@ export function resolveGatewayCatalogCommandPath(argv: string[]): string[] | nul
   return ["gateway"];
 }
 
+/** Returns whether argv targets bare `gateway` or `gateway run`. */
+export function isGatewayRunInvocationArgv(argv: string[]): boolean {
+  const commandPath = resolveGatewayCatalogCommandPath(argv);
+  return (
+    commandPath?.length === 1 ||
+    (commandPath?.length === 2 && commandPath[0] === "gateway" && commandPath[1] === "run")
+  );
+}
+
 /** Resolve destructive gateway-run flags before Commander registration. */
 export function resolveGatewayRunPreBootstrapOptions(
   argv: string[],

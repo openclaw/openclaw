@@ -2,6 +2,35 @@
 import { describe, expect, it } from "vitest";
 import { tryHandlePrecomputedCommandHelpFastPath, tryHandleRootHelpFastPath } from "./entry.js";
 
+type EntryDeferredActivationModule = {
+  runEntryAfterDeferredGatewayActivation?: <T>(
+    argv: string[],
+    loadAfterGate: () => Promise<T>,
+    deps?: {
+      hasContainerTarget?: boolean;
+      isGatewayRunInvocationArgv?: (argv: string[]) => boolean;
+      isHelpOrVersionInvocation?: (argv: string[]) => boolean;
+      waitForDeferredGatewayActivation?: () => Promise<unknown>;
+    },
+  ) => Promise<T>;
+};
+
+function createDeferred<T>() {
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return {
+    promise,
+    resolve(value: T) {
+      if (!resolve) {
+        throw new Error("deferred resolver was not captured");
+      }
+      resolve(value);
+    },
+  };
+}
+
 describe("entry root help fast path", () => {
   it("prefers precomputed root help text when available", async () => {
     let outputPrecomputedRootHelpTextCalls = 0;
@@ -367,5 +396,87 @@ describe("entry precomputed command help fast path", () => {
 
     expect(handled).toBe(false);
     expect(outputPrecomputedBrowserHelpTextCalls).toBe(0);
+  });
+});
+
+describe("runEntryAfterDeferredGatewayActivation", () => {
+  it("waits for deferred gateway activation before loading downstream gateway code", async () => {
+    const { runEntryAfterDeferredGatewayActivation } =
+      (await import("./entry.js")) as EntryDeferredActivationModule;
+
+    expect(runEntryAfterDeferredGatewayActivation).toBeTypeOf("function");
+
+    const deferred = createDeferred<void>();
+    let waitCalls = 0;
+    let loadAfterGateCalls = 0;
+
+    const runPromise = runEntryAfterDeferredGatewayActivation!(
+      ["node", "openclaw", "--no-color", "gateway", "run", "--force"],
+      async () => {
+        loadAfterGateCalls += 1;
+        return "loaded";
+      },
+      {
+        waitForDeferredGatewayActivation: async () => {
+          waitCalls += 1;
+          await deferred.promise;
+        },
+      },
+    );
+
+    await Promise.resolve();
+
+    expect(waitCalls).toBe(1);
+    expect(loadAfterGateCalls).toBe(0);
+
+    deferred.resolve();
+
+    await expect(runPromise).resolves.toBe("loaded");
+    expect(loadAfterGateCalls).toBe(1);
+  });
+
+  it.each([
+    {
+      name: "gateway help",
+      argv: ["node", "openclaw", "gateway", "--help"],
+    },
+    {
+      name: "gateway version",
+      argv: ["node", "openclaw", "gateway", "--version"],
+    },
+    {
+      name: "non-gateway command",
+      argv: ["node", "openclaw", "status"],
+    },
+    {
+      name: "host-side container delegation",
+      argv: ["node", "openclaw", "--container", "demo", "gateway"],
+    },
+  ])("skips deferred entry activation for $name", async ({ argv }) => {
+    const { runEntryAfterDeferredGatewayActivation } =
+      (await import("./entry.js")) as EntryDeferredActivationModule;
+
+    expect(runEntryAfterDeferredGatewayActivation).toBeTypeOf("function");
+
+    let waitCalls = 0;
+    let loadAfterGateCalls = 0;
+
+    await expect(
+      runEntryAfterDeferredGatewayActivation!(
+        argv,
+        async () => {
+          loadAfterGateCalls += 1;
+          return "loaded";
+        },
+        {
+          waitForDeferredGatewayActivation: async () => {
+            waitCalls += 1;
+          },
+        },
+      ),
+    ).resolves.toBe("loaded");
+
+    expect(waitCalls).toBe(0);
+    expect(loadAfterGateCalls).toBe(1);
   });
 });

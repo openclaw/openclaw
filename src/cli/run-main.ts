@@ -30,6 +30,7 @@ import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-targe
 import {
   consumeGatewayFastPathRootOptionToken,
   consumeGatewayRunOptionToken,
+  isGatewayRunInvocationArgv,
   resolveGatewayCatalogCommandPath,
   resolveGatewayRunPreBootstrapOptions,
 } from "./gateway-run-argv.js";
@@ -134,14 +135,6 @@ export function isGatewayRunFastPathArgv(argv: string[]): boolean {
   }
 
   return sawGateway;
-}
-
-function isGatewayRunInvocationArgv(argv: string[]): boolean {
-  const commandPath = resolveGatewayCatalogCommandPath(argv);
-  return (
-    commandPath?.length === 1 ||
-    (commandPath?.length === 2 && commandPath[0] === "gateway" && commandPath[1] === "run")
-  );
 }
 
 async function tryRunGatewayRunFastPath(

@@ -3,8 +3,16 @@
 // CLI process entrypoint for OpenClaw command execution.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { getCommandPathWithRootOptions, hasFlag, isRootHelpInvocation } from "./cli/argv.js";
+import {
+  getCommandPathWithRootOptions,
+  hasFlag,
+  isHelpOrVersionInvocation,
+  isRootHelpInvocation,
+  normalizeRootHelpTargetArgv,
+  normalizeRootNoColorArgv,
+} from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
+import { isGatewayRunInvocationArgv } from "./cli/gateway-run-argv.js";
 import {
   resolvePrecomputedSubcommandHelpCommand,
   type PrecomputedSubcommandHelpName,
@@ -71,21 +79,7 @@ if (
     process.title = "openclaw";
     ensureOpenClawExecMarkerOnProcess();
     installProcessWarningFilter();
-    normalizeEnv();
-
-    enableOpenClawCompileCache({
-      installRoot,
-    });
-    gatewayEntryStartupTrace.mark("bootstrap");
-
-    if (shouldForceReadOnlyAuthStore(process.argv)) {
-      process.env.OPENCLAW_AUTH_STORE_READONLY = "1";
-    }
-
-    if (process.argv.includes("--no-color")) {
-      process.env.NO_COLOR = "1";
-      process.env.FORCE_COLOR = "0";
-    }
+    process.argv = normalizeWindowsArgv(process.argv);
 
     function ensureCliRespawnReady(): boolean {
       const plan = buildCliRespawnPlan();
@@ -97,8 +91,6 @@ if (
       // Parent must not continue running the CLI.
       return true;
     }
-
-    process.argv = normalizeWindowsArgv(process.argv);
 
     if (!ensureCliRespawnReady()) {
       const parsedContainer = parseCliContainerArgs(process.argv);
@@ -120,6 +112,29 @@ if (
         process.exit(2);
       }
 
+      const normalizedEntryArgv = normalizeRootHelpTargetArgv(
+        normalizeRootNoColorArgv(parsed.argv),
+      );
+      await runEntryAfterDeferredGatewayActivation(normalizedEntryArgv, async () => undefined, {
+        hasContainerTarget: containerTargetName !== null,
+      });
+
+      normalizeEnv();
+
+      enableOpenClawCompileCache({
+        installRoot,
+      });
+      gatewayEntryStartupTrace.mark("bootstrap");
+
+      if (shouldForceReadOnlyAuthStore(process.argv)) {
+        process.env.OPENCLAW_AUTH_STORE_READONLY = "1";
+      }
+
+      if (process.argv.includes("--no-color")) {
+        process.env.NO_COLOR = "1";
+        process.env.FORCE_COLOR = "0";
+      }
+
       if (parsed.profile) {
         applyCliProfileEnv({ profile: parsed.profile });
         // Keep Commander and ad-hoc argv checks consistent.
@@ -132,6 +147,35 @@ if (
       }
     }
   }
+}
+
+export async function runEntryAfterDeferredGatewayActivation<T>(
+  argv: string[],
+  loadAfterGate: () => Promise<T>,
+  deps: {
+    hasContainerTarget?: boolean;
+    isGatewayRunInvocationArgv?: (argv: string[]) => boolean;
+    isHelpOrVersionInvocation?: (argv: string[]) => boolean;
+    waitForDeferredGatewayActivation?: () => Promise<unknown>;
+  } = {},
+): Promise<T> {
+  const hasContainerTarget = deps.hasContainerTarget ?? resolveCliContainerTarget(argv) !== null;
+  if (
+    hasContainerTarget ||
+    (deps.isHelpOrVersionInvocation ?? isHelpOrVersionInvocation)(argv) ||
+    !(deps.isGatewayRunInvocationArgv ?? isGatewayRunInvocationArgv)(argv)
+  ) {
+    return await loadAfterGate();
+  }
+
+  const waitForDeferredGatewayActivation =
+    deps.waitForDeferredGatewayActivation ??
+    (async () =>
+      (
+        await import("./cli/gateway-cli/deferred-activation.js")
+      ).waitForDeferredGatewayActivation());
+  await waitForDeferredGatewayActivation();
+  return await loadAfterGate();
 }
 
 export async function tryHandleRootHelpFastPath(
