@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getLobsterdex } from "./lobster-dex.ts";
 import {
   LOBSTER_PET_ACT_DURATION_MS,
   LOBSTER_PET_MODE_ACTS,
@@ -92,6 +93,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   document.body.innerHTML = "";
+  localStorage.clear();
 });
 
 describe("lobster pet look", () => {
@@ -105,8 +107,9 @@ describe("lobster pet look", () => {
     const builds = new Set<string>();
     const clawSizes = new Set<string>();
     const tailFans = new Set<boolean>();
+    const neutralDate = new Date("2026-07-15T12:00:00");
     for (let seed = 0; seed < 300; seed++) {
-      const look = createLobsterPetLook(seed);
+      const look = createLobsterPetLook(seed, neutralDate);
       palettes.add(look.palette.id);
       personalities.add(look.personality);
       builds.add(look.build);
@@ -133,8 +136,9 @@ describe("lobster pet look", () => {
   it("hatches every rarity tier, with rares staying rare", () => {
     const counts = new Map<string, number>();
     const total = 20_000;
+    const neutralDate = new Date("2026-07-15T12:00:00");
     for (let seed = 0; seed < total; seed++) {
-      const id = createLobsterPetLook(seed).palette.id;
+      const id = createLobsterPetLook(seed, neutralDate).palette.id;
       counts.set(id, (counts.get(id) ?? 0) + 1);
     }
     // Every palette, including the 1% grails, must be reachable.
@@ -172,6 +176,38 @@ describe("lobsterPetName", () => {
       palette: { id: "gold" as const, shell: "#f4b840", claw: "#f9d47a" },
     };
     expect(lobsterPetName(goldLook, 1)).toBe("Goldie");
+  });
+});
+
+describe("seasonal wardrobe", () => {
+  it("adds santa hats in December and pumpkins in late October", () => {
+    const december = new Date("2026-12-10T12:00:00");
+    const october = new Date("2026-10-25T12:00:00");
+    const july = new Date("2026-07-15T12:00:00");
+    const accessoriesOn = (date: Date) =>
+      new Set(Array.from({ length: 400 }, (_, seed) => createLobsterPetLook(seed, date).accessory));
+    const decemberSet = accessoriesOn(december);
+    expect(decemberSet.has("santa")).toBe(true);
+    expect(decemberSet.has("pumpkin")).toBe(false);
+    const octoberSet = accessoriesOn(october);
+    expect(octoberSet.has("pumpkin")).toBe(true);
+    expect(octoberSet.has("santa")).toBe(false);
+    const julySet = accessoriesOn(july);
+    expect(julySet.has("santa")).toBe(false);
+    expect(julySet.has("pumpkin")).toBe(false);
+    expect(julySet.has("party")).toBe(false);
+  });
+
+  it("dresses everyone as the classic logo on the repo anniversary", () => {
+    const anniversary = new Date("2026-11-24T12:00:00");
+    for (let seed = 0; seed < 50; seed++) {
+      const look = createLobsterPetLook(seed, anniversary);
+      expect(look.palette.id).toBe("retro");
+      expect(look.accessory).toBe("party");
+    }
+    // The day after is business as usual.
+    const after = createLobsterPetLook(7, new Date("2026-11-25T12:00:00"));
+    expect(after.accessory).not.toBe("party");
   });
 });
 
@@ -482,6 +518,19 @@ describe("lobster pet element", () => {
         );
       }
     }
+  });
+
+  it("logs arrivals in the lobsterdex", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+    vi.stubGlobal("localStorage", window.localStorage);
+    const element = createPet(42);
+    await element.updateComplete;
+    expect(getLobsterdex().size).toBe(0);
+
+    await arrive(element);
+    const paletteId = createLobsterPetLook(42, new Date("2026-07-09T12:00:00")).palette.id;
+    expect(getLobsterdex().has(paletteId)).toBe(true);
   });
 
   it("stays static when reduced motion is preferred, including visibility resumes", async () => {

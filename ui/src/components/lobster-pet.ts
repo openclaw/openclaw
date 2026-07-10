@@ -6,6 +6,7 @@
 // every new session hatches a slightly different lobster.
 import { html, LitElement, nothing, svg, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
+import { recordLobsterVisit } from "./lobster-dex.ts";
 
 export type LobsterPetAct =
   | "wave"
@@ -44,7 +45,14 @@ export type LobsterPetPalette = {
   claw: string;
 };
 
-export type LobsterPetAccessory = "none" | "crown" | "sprout" | "patch";
+export type LobsterPetAccessory =
+  | "none"
+  | "crown"
+  | "sprout"
+  | "patch"
+  | "santa"
+  | "pumpkin"
+  | "party";
 
 export type LobsterPetAntennae = "perky" | "droopy";
 
@@ -178,12 +186,58 @@ const PALETTES: Array<[LobsterPetPalette, number]> = [
   [{ id: "retro", shell: "#e8262c", claw: "#f04a3e" }, 0.5],
 ];
 
+// Catalog order for collection UIs (Lobsterdex): common to grail.
+export const LOBSTER_PET_PALETTES: readonly LobsterPetPalette[] = PALETTES.map(
+  ([palette]) => palette,
+);
+
+// A neutral look used to render catalog minis outside the pet lifecycle.
+export function canonicalLobsterLook(palette: LobsterPetPalette): LobsterPetLook {
+  return {
+    palette,
+    scale: 2,
+    accessory: "none",
+    antennae: "perky",
+    side: "left",
+    spotPct: 0,
+    facing: 1,
+    personality: "friendly",
+    blinkDelayS: 0,
+    build: "round",
+    clawSize: "regular",
+    tailFan: false,
+  };
+}
+
 const ACCESSORIES: Array<[LobsterPetAccessory, number]> = [
   ["none", 62],
   ["sprout", 14],
   ["patch", 14],
   ["crown", 10],
 ];
+
+// OpenClaw's repository was born 2025-11-24 (GitHub created_at); on the
+// anniversary every visitor dresses as the classic logo and parties.
+const ANNIVERSARY = { month: 10, day: 24 } as const;
+
+function isLobsterAnniversary(now: Date): boolean {
+  return now.getMonth() === ANNIVERSARY.month && now.getDate() === ANNIVERSARY.day;
+}
+
+// Seasonal wardrobe: extra accessory entries join the pool on the right
+// dates. One weighted roll either way, so the rest of the look sequence is
+// unchanged on any given seed.
+function seasonalAccessories(now: Date): Array<[LobsterPetAccessory, number]> {
+  const month = now.getMonth();
+  const day = now.getDate();
+  if (month === 11) {
+    return [["santa", 18]];
+  }
+  if (month === 9 && day >= 20) {
+    return [["pumpkin", 18]];
+  }
+  return [];
+}
 
 const PERSONALITY_IDS: Array<[LobsterPetPersonalityId, number]> = [
   ["sleepy", 25],
@@ -351,11 +405,11 @@ export function lobsterPetSeed(sessionKey: string): number {
   return (fnv1a(sessionKey) ^ LOAD_SALT) >>> 0;
 }
 
-export function createLobsterPetLook(seed: number): LobsterPetLook {
+export function createLobsterPetLook(seed: number, now: Date = new Date()): LobsterPetLook {
   const rng = mulberry32(seed);
   const palette = pickWeighted(rng, PALETTES);
   const scale = pickWeighted(rng, SCALES);
-  const accessory = pickWeighted(rng, ACCESSORIES);
+  const accessory = pickWeighted(rng, [...ACCESSORIES, ...seasonalAccessories(now)]);
   const antennae: LobsterPetAntennae = rng() < 0.6 ? "perky" : "droopy";
   const side = rng() < 0.5 ? "left" : "right";
   const zone = SPOT_ZONES[side];
@@ -368,6 +422,24 @@ export function createLobsterPetLook(seed: number): LobsterPetLook {
   const build = pickWeighted(rng, BUILDS);
   const clawSize = pickWeighted(rng, CLAW_SIZES);
   const tailFan = rng() < 0.3;
+  if (isLobsterAnniversary(now)) {
+    // Birthday dress code: everyone is the classic logo, party hats on.
+    const retro = PALETTES.find(([entry]) => entry.id === "retro")?.[0];
+    return {
+      palette: retro ?? palette,
+      scale,
+      accessory: "party",
+      antennae,
+      side,
+      spotPct,
+      facing,
+      personality,
+      blinkDelayS,
+      build,
+      clawSize,
+      tailFan,
+    };
+  }
   return {
     palette,
     scale,
@@ -419,6 +491,27 @@ const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, TemplateRe
     <g>
       <path d="M28 27 Q60 14 92 22" stroke="#101820" stroke-width="4" stroke-linecap="round" fill="none" />
       <circle cx="75" cy="32" r="9" fill="#101820" />
+    </g>
+  `,
+  santa: svg`
+    <g>
+      <path d="M47 10 Q54 1 68 3 L72 9 Z" fill="#e0312f" />
+      <circle cx="71" cy="3.5" r="3.5" fill="#f5f7fa" />
+      <ellipse cx="59" cy="10.5" rx="15" ry="3.5" fill="#f5f7fa" />
+    </g>
+  `,
+  pumpkin: svg`
+    <g>
+      <ellipse cx="60" cy="6.5" rx="8.5" ry="5.5" fill="#e8871e" />
+      <path d="M56 2.5 Q56 6.5 56 10.5 M64 2.5 Q64 6.5 64 10.5" stroke="#c96a10" stroke-width="1.5" fill="none" />
+      <path d="M60 1.5 Q60.5 0 63 0.5" stroke="#4c9a4c" stroke-width="2.5" stroke-linecap="round" fill="none" />
+    </g>
+  `,
+  party: svg`
+    <g>
+      <path d="M52 11 L60 0.5 L68 11 Z" fill="#7c5cff" />
+      <path d="M55.5 6.5 L64.5 6.5" stroke="#ffd166" stroke-width="2" />
+      <circle cx="60" cy="1" r="2.4" fill="#ff5c8a" />
     </g>
   `,
 };
@@ -513,9 +606,9 @@ const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
 
 // Same species as icons.lobster / the dreams-scene sleeper: smooth dome body
 // with stubby legs, side claws, antennae, and teal-glint eyes.
-function renderLobsterSvg(
+export function renderLobsterSvg(
   look: LobsterPetLook,
-  options: { grumpy?: boolean; shell?: boolean } = {},
+  options: { grumpy?: boolean; shell?: boolean; sleeping?: boolean; standalone?: boolean } = {},
 ) {
   return svg`
     <svg
@@ -551,7 +644,7 @@ function renderLobsterSvg(
       ${look.palette.id === "split" ? SPLIT_HALF : nothing}
       ${look.palette.id === "calico" ? CALICO_SPOTS : nothing}
       <ellipse cx="48" cy="28" rx="20" ry="11" fill="#ffffff" opacity="0.1" />
-      <g class="lob-eye-open" style=${options.shell ? "display:none" : ""}>
+      <g class="lob-eye-open" style=${options.shell || options.sleeping ? "display:none" : ""}>
         <circle cx="45" cy="32" r="5.5" fill="#0a1014" />
         <circle cx="75" cy="32" r="5.5" fill="#0a1014" />
         <circle cx="46.5" cy="30.5" r="2.2" fill="var(--lob-glint, #00e5cc)" />
@@ -563,6 +656,9 @@ function renderLobsterSvg(
         stroke-width="3"
         stroke-linecap="round"
         fill="none"
+        style=${
+          options.shell || options.sleeping ? "opacity:1" : options.standalone ? "display:none" : ""
+        }
       >
         <path d="M39 33 Q45 28 51 33" />
         <path d="M69 33 Q75 28 81 33" />
@@ -692,6 +788,10 @@ export class LobsterPet extends LitElement {
       }
       if (this.presence === "out") {
         this.rollPerch();
+        if (this.look) {
+          // Every genuine arrival (visit or offline summon) logs the palette.
+          recordLobsterVisit(this.look.palette.id);
+        }
       }
       this.presence = "in";
       this.entering = !prefersReducedMotion();
@@ -973,6 +1073,7 @@ export class LobsterPet extends LitElement {
       `lobster-pet--${this.mode}`,
       `lobster-pet--palette-${look.palette.id}`,
       twin ? "lobster-pet--twin" : "",
+      look.accessory === "party" ? "lobster-pet--party" : "",
       this.presence === "leaving" ? "lobster-pet--away" : "",
       this.entering ? "lobster-pet--entering" : "",
       this.grumpy ? "lobster-pet--grumpy" : "",
