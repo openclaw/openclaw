@@ -528,7 +528,7 @@ function scheduleSubagentCompletionRetryAfterRestart(
     if (current !== expectedEntry || current.generation !== expectedGeneration) {
       return;
     }
-    void completeSubagentRunWithRecovery(params, source).catch((error) => {
+    void completeSubagentRunWithRecovery(params, source).catch((error: unknown) => {
       log.warn("failed to retry subagent completion after gateway restart", {
         source,
         runId: params.runId,
@@ -787,7 +787,7 @@ function scheduleSubagentDeliveryResumeRetry(
       }
       resumedRuns.delete(runId);
       resumeSubagentRun(runId);
-    }).catch((error) => {
+    }).catch((error: unknown) => {
       log.warn("failed to resume subagent delivery retry", { runId, error });
       if (
         isGatewayRestartDraining() &&
@@ -815,7 +815,7 @@ function finalizeResumedAnnounceGiveUpInBackground(
 ) {
   void runWithGatewayIndependentRootWorkAdmission(async () => {
     await finalizeResumedAnnounceGiveUp({ runId, entry, reason });
-  }).catch((error) => {
+  }).catch((error: unknown) => {
     log.warn("failed to finalize exhausted subagent delivery", { runId, reason, error });
     if (
       isGatewayRestartDraining() &&
@@ -986,7 +986,7 @@ async function runSubagentSweep() {
 }
 
 function runSubagentSweepCleanupTail(runId: string, label: string, run: () => Promise<unknown>) {
-  void runWithGatewayIndependentRootWorkAdmission(run).catch((error) => {
+  void runWithGatewayIndependentRootWorkAdmission(run).catch((error: unknown) => {
     log.warn(`subagent sweep ${label} failed`, { runId, error });
   });
 }

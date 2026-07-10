@@ -2421,7 +2421,7 @@ describe("task-registry", () => {
               resolve({ channel: "notifychat", to: "notifychat:123", via: "direct" });
           }),
       );
-      const task = createTaskRecord({
+      createTaskRecord({
         runtime: "acp",
         ownerKey: "agent:main:main",
         scopeKind: "session",
