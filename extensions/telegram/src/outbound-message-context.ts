@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { buildTelegramSelfSenderName } from "./group-history-window.js";
 import { createTelegramMessageCache, resolveTelegramMessageCacheScope } from "./message-cache.js";
 
 type TelegramPromptContextChannelData = {
@@ -14,7 +15,14 @@ type TelegramOutboundPromptContextMessage = {
   message_id?: number;
   chat?: { id?: string | number; type?: string; title?: string; username?: string };
   date?: number;
-  from?: { id?: number; is_bot?: boolean; first_name?: string; username?: string };
+  from?: {
+    id?: number;
+    is_bot?: boolean;
+    first_name?: string;
+    last_name?: string;
+    username?: string;
+  };
+  sender_chat?: { id?: number; title?: string; username?: string };
   openclaw_prompt_context_timestamp_ms?: number;
   text?: string;
   caption?: string;
@@ -24,6 +32,7 @@ type TelegramOutboundPromptContextMessage = {
 type TelegramOutboundPromptContextAccount = {
   accountId: string;
   name?: string;
+  bot?: { first_name?: string; username?: string };
 };
 
 export function resolveTelegramPromptContextTimestampMs(
@@ -109,6 +118,12 @@ function buildOutboundCacheMessage(params: {
 }): TelegramOutboundPromptContextMessage {
   const chat = params.message.chat ?? {};
   const text = params.message.text ?? params.message.caption ?? params.text;
+  const rawSender = params.message.from;
+  const stableSender = params.message.sender_chat ? undefined : rawSender;
+  const selfSenderName = buildTelegramSelfSenderName(
+    params.account.name,
+    params.account.bot ?? rawSender,
+  );
   return {
     ...params.message,
     message_id: params.messageId,
@@ -125,10 +140,13 @@ function buildOutboundCacheMessage(params: {
       ...(chat.title ? { title: chat.title } : {}),
       ...(chat.username ? { username: chat.username } : {}),
     },
-    from: params.message.from ?? {
-      id: 0,
+    // Every message entering here came from this bot. Keep only Telegram's real
+    // id/username; sender_chat uses a synthetic compatibility user.
+    from: {
+      id: stableSender?.id ?? 0,
       is_bot: true,
-      first_name: params.account.name ?? "OpenClaw",
+      first_name: selfSenderName,
+      ...(stableSender?.username ? { username: stableSender.username } : {}),
     },
     ...(text ? { text } : {}),
     ...(params.messageThreadId !== undefined ? { message_thread_id: params.messageThreadId } : {}),
