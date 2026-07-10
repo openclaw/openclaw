@@ -62,6 +62,8 @@ import type {
   ThinkingLevel,
 } from "../llm/types.js";
 import "../llm/ai-transport-host.js";
+import { redactSensitiveText } from "../logging/redact.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
@@ -71,6 +73,7 @@ import {
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
+import { truncateErrorDetail } from "./provider-http-errors.js";
 import { unwrapModelHeaderSentinelsForProviderEgress } from "./provider-secret-egress.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import type { StreamFn } from "./runtime/index.js";
@@ -88,6 +91,8 @@ import {
 } from "./transport-stream-shared.js";
 import type { ContextUsage } from "./usage.js";
 
+const log = createSubsystemLogger("agent/anthropic-transport");
+const ANTHROPIC_MESSAGES_LOGGED_ERROR_DETAIL_MAX_CHARS = 500;
 const CLAUDE_CODE_VERSION = "2.1.75";
 const CLAUDE_CODE_BILLING_SYSTEM_BLOCK = `x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}; cc_entrypoint=sdk-cli;`;
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
@@ -809,7 +814,16 @@ async function* parseAnthropicSseBody(
   }
 }
 
+function approxJsonByteLength(value: unknown): number | undefined {
+  try {
+    return JSON.stringify(value)?.length;
+  } catch {
+    return undefined;
+  }
+}
+
 function createAnthropicMessagesClient(params: {
+  provider: string;
   apiKey?: string | null;
   authToken?: string;
   baseURL?: string;
@@ -837,6 +851,20 @@ function createAnthropicMessagesClient(params: {
         });
         if (!response.ok) {
           const detail = await readAnthropicMessagesErrorBodySnippet(response);
+          // Surface the rejection (status + redacted body) here because it is
+          // otherwise thrown as a bare Error and never reaches the logs; the
+          // detail is capped and secret-redacted before it leaves this scope.
+          log.warn("anthropic messages request rejected", {
+            provider: params.provider,
+            model: typeof body.model === "string" ? body.model : undefined,
+            status: response.status,
+            detail: truncateErrorDetail(
+              redactSensitiveText(detail),
+              ANTHROPIC_MESSAGES_LOGGED_ERROR_DETAIL_MAX_CHARS,
+            ),
+            toolCount: Array.isArray(body.tools) ? body.tools.length : undefined,
+            approxPayloadBytes: approxJsonByteLength(body),
+          });
           throw new Error(
             detail || `Anthropic Messages request failed with HTTP ${response.status}`,
           );
@@ -893,6 +921,7 @@ function createAnthropicTransportClient(params: {
     const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
     return {
       client: createAnthropicMessagesClient({
+        provider: model.provider,
         apiKey: null,
         authToken: apiKey,
         baseURL: model.baseUrl,
@@ -922,6 +951,7 @@ function createAnthropicTransportClient(params: {
     const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
     return {
       client: createAnthropicMessagesClient({
+        provider: model.provider,
         apiKey: null,
         authToken: apiKey,
         baseURL: model.baseUrl,
@@ -947,6 +977,7 @@ function createAnthropicTransportClient(params: {
     const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: true });
     return {
       client: createAnthropicMessagesClient({
+        provider: model.provider,
         apiKey: null,
         authToken: apiKey,
         baseURL: model.baseUrl,
@@ -972,6 +1003,7 @@ function createAnthropicTransportClient(params: {
   const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: false });
   return {
     client: createAnthropicMessagesClient({
+      provider: model.provider,
       apiKey,
       baseURL: model.baseUrl,
       defaultHeaders: mergeTransportHeaders(
@@ -1847,6 +1879,18 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         flushPendingTextEnds();
         finalizeTransportStream({ stream, output });
       } catch (error) {
+        // Non-HTTP failures (aborts, malformed SSE, stream-shape errors) never
+        // pass through the non-ok response branch above, so this is the only
+        // place they reach the logs; keep the message redacted like that path.
+        const rawErrorMessage = error instanceof Error ? error.message : String(error);
+        const redactedErrorMessage = truncateErrorDetail(
+          redactSensitiveText(rawErrorMessage),
+          ANTHROPIC_MESSAGES_LOGGED_ERROR_DETAIL_MAX_CHARS,
+        );
+        log.warn(
+          `[messages] error provider=${model.provider} api=${model.api} model=${model.id} ` +
+            `message=${redactedErrorMessage}`,
+        );
         if (refusalBuffer) {
           refusalBuffer.discard();
           output.content = [];

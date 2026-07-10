@@ -5,6 +5,7 @@
  */
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
@@ -868,6 +869,136 @@ describe("anthropic transport stream", () => {
     expect(result.errorMessage).toBe(`${"x".repeat(400)}…`);
     expect(pullCount).toBeGreaterThanOrEqual(2);
     expect(cancelCount).toBe(1);
+  });
+
+  function createFakeSubsystemLogger() {
+    const logger = {
+      subsystem: "agent/anthropic-transport",
+      isEnabled: vi.fn(() => true),
+      trace: vi.fn(),
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+      raw: vi.fn(),
+      child: vi.fn(),
+    };
+    logger.child.mockReturnValue(logger);
+    return logger;
+  }
+
+  // Reimporting the module under an isolated createSubsystemLogger mock is the
+  // established pattern (see openai-transport-stream.test.ts) for asserting log
+  // calls without a broad module-wide mock; every use must doUnmock+resetModules
+  // in a finally so later tests keep using the real logger.
+  async function withIsolatedAnthropicTransport<T>(
+    run: (
+      streamFn: ReturnType<typeof createAnthropicMessagesTransportStreamFn>,
+      logger: ReturnType<typeof createFakeSubsystemLogger>,
+    ) => Promise<T>,
+  ): Promise<T> {
+    const logger = createFakeSubsystemLogger();
+    vi.resetModules();
+    vi.doMock("../logging/subsystem.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+      createSubsystemLogger: vi.fn(() => logger),
+    }));
+    try {
+      const { createAnthropicMessagesTransportStreamFn: isolatedFactory } =
+        await import("./anthropic-transport-stream.js");
+      return await run(isolatedFactory(), logger);
+    } finally {
+      vi.doUnmock("../logging/subsystem.js");
+      vi.resetModules();
+    }
+  }
+
+  it("logs a redacted warning with status/detail/toolCount when Anthropic rejects the request schema", async () => {
+    const secret = "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          type: "error",
+          error: {
+            type: "invalid_request_error",
+            message: `messages.0: unexpected role, credential ${secret} rejected`,
+          },
+        }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    const result = await withIsolatedAnthropicTransport(async (streamFn, logger) => {
+      const stream = await Promise.resolve(
+        streamFn(
+          makeAnthropicTransportModel(),
+          {
+            messages: [{ role: "user", content: "hello" }],
+            tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
+          } as AnthropicStreamContext,
+          { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+        ),
+      );
+      const streamResult = await stream.result();
+
+      // The non-ok branch logs the structured rejection first; the same thrown
+      // error then reaches the outer catch-all, which logs a second summary line.
+      expect(logger.warn).toHaveBeenCalledTimes(2);
+      const [rejectionMessage, rejectionMeta] = logger.warn.mock.calls[0] as [
+        string,
+        Record<string, unknown>,
+      ];
+      expect(rejectionMessage).toBe("anthropic messages request rejected");
+      expect(rejectionMeta).toMatchObject({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        status: 400,
+        toolCount: 1,
+      });
+      expect(rejectionMeta.approxPayloadBytes).toBeGreaterThan(0);
+      expect(typeof rejectionMeta.detail).toBe("string");
+      expect(rejectionMeta.detail as string).toContain("unexpected role");
+      expect(rejectionMeta.detail as string).not.toContain(secret);
+
+      const [catchAllMessage] = logger.warn.mock.calls[1] as [string];
+      expect(catchAllMessage).toContain("provider=anthropic");
+      expect(catchAllMessage).toContain("model=claude-sonnet-4-6");
+      expect(catchAllMessage).not.toContain(secret);
+
+      return streamResult;
+    });
+
+    expect(result.stopReason).toBe("error");
+  });
+
+  it("logs a redacted warning for non-HTTP Anthropic transport failures", async () => {
+    guardedFetchMock.mockResolvedValueOnce(createRawSseResponse("data: {not-valid-json\n\n"));
+
+    const result = await withIsolatedAnthropicTransport(async (streamFn, logger) => {
+      const stream = await Promise.resolve(
+        streamFn(
+          makeAnthropicTransportModel(),
+          { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+          { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+        ),
+      );
+      const streamResult = await stream.result();
+
+      // Status 200 never reaches the non-ok branch, so this proves the
+      // catch-all logs non-HTTP transport failures on its own.
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      const [message] = logger.warn.mock.calls[0] as [string];
+      expect(message).toBe(
+        `[messages] error provider=anthropic api=anthropic-messages model=claude-sonnet-4-6 ` +
+          `message=${MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE}`,
+      );
+
+      return streamResult;
+    });
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
   });
 
   it("aborts stalled streamed Anthropic error responses", async () => {
