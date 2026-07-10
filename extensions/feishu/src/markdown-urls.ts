@@ -195,10 +195,11 @@ export function preserveFeishuBareMarkdownUrls(text: string): string {
     return text;
   }
 
-  const urlPattern = /https?:\/\//g;
-  if (!urlPattern.test(text)) {
+  if (!/https?:\/\//.test(text)) {
     return text;
   }
+
+  const urlPattern = /https?:\/\//g;
 
   const protectedRanges = collectProtectedRanges(text);
   let output = "";
