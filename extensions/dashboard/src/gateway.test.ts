@@ -227,10 +227,12 @@ describe("dashboard gateway methods", () => {
         { name: "custom-chart", decision: "approved" },
         broadcast,
       );
-      expect(approved.response?.[1]?.doc.widgetsRegistry["custom-chart"]).toMatchObject({
-        status: "approved",
-        approvedBy: "user",
+      // Approvals-only callers get the registry entry, never the whole document.
+      expect(approved.response?.[1]).toMatchObject({
+        name: "custom-chart",
+        registry: { status: "approved", approvedBy: "user" },
       });
+      expect(approved.response?.[1]?.doc).toBeUndefined();
       const data = await callMethod(
         methods.get("dashboard.data.read")!,
         { binding: { source: "static", value: { ok: true } } },

@@ -3,6 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { rememberDashboardBroadcast } from "./broadcast.js";
 import { resolveBinding, type ResolveBindingOptions } from "./data-read.js";
+import { loadWidgetManifest } from "./manifest.js";
 import { scaffoldDashboardWidget } from "./scaffold.js";
 import {
   validateWorkspaceDoc,
@@ -678,26 +679,38 @@ export function registerDashboardGatewayMethods(options: DashboardGatewayMethodO
         if (decision !== "approved" && decision !== "rejected") {
           throw new Error("decision must be approved or rejected");
         }
-        await respondWrite(opts, RPC_ACTOR, undefined, async () =>
-          store.mutate(
-            (draft) => {
-              const existing = draft.widgetsRegistry[name];
-              if (!existing) {
-                // Approval decides on a widget an agent already scaffolded; it
-                // must never mint a registry entry for a name that has none.
-                throw new Error(`dashboard widget not found: ${name}`);
-              }
-              draft.widgetsRegistry[name] = {
-                status: decision,
-                createdBy: existing.createdBy,
-                ...(decision === "approved"
-                  ? { approvedBy: RPC_ACTOR, approvedAt: new Date().toISOString() }
-                  : {}),
-              };
-            },
-            { actor: RPC_ACTOR },
-          ),
+        if (
+          decision === "approved" &&
+          !(await loadWidgetManifest(name, { stateDir: store.stateDir }))
+        ) {
+          // Approving a name with no widget on disk would let the code appear after
+          // the operator said yes. The manifest is what they are approving.
+          throw new Error(`dashboard widget not found: ${name}`);
+        }
+        const result = store.mutate(
+          (draft) => {
+            const existing = draft.widgetsRegistry[name];
+            if (!existing) {
+              throw new Error(`dashboard widget not found: ${name}`);
+            }
+            draft.widgetsRegistry[name] = {
+              status: decision,
+              createdBy: existing.createdBy,
+              ...(decision === "approved"
+                ? { approvedBy: RPC_ACTOR, approvedAt: new Date().toISOString() }
+                : {}),
+            };
+          },
+          { actor: RPC_ACTOR },
         );
+        broadcastChange(opts.context.broadcast, { doc: result.doc, actor: RPC_ACTOR });
+        // A connection holding only operator.approvals must not read the workspace
+        // through this method; `dashboard.workspace.get` is the operator.read door.
+        opts.respond(true, {
+          name,
+          registry: result.doc.widgetsRegistry[name],
+          workspaceVersion: result.doc.workspaceVersion,
+        });
       } catch (error) {
         respondError(opts.respond, error);
       }

@@ -63,11 +63,13 @@ function assertWorkspaceSize(serialized: string): void {
  * Reconciles a whole-document replacement against what is already stored, inside
  * the write transaction. Two fields are never taken from the caller:
  *
- * - **approval status.** Otherwise any caller of `workspace.replace` could submit
- *   a document whose `widgetsRegistry` already marks an agent-authored widget
- *   `approved`, and the asset route would serve it — skipping the operator
- *   approval gate that is the entire trust boundary for custom widgets. Status
- *   changes only through `dashboard.widget.approve`.
+ * - **the registry itself.** Entries are minted by `dashboard_widget_scaffold` and
+ *   nowhere else. A replacement document may keep entries that already exist, but
+ *   any name it invents is dropped: otherwise a caller could mint a `pending`
+ *   entry for a name with no widget on disk, have an operator approve it, and only
+ *   then write the code the operator "approved". Status likewise changes only
+ *   through `dashboard.widget.approve` — a document that arrives already marked
+ *   `approved` would skip the gate entirely and the asset route would serve it.
  * - **provenance (`createdBy`).** Otherwise an agent could stamp its own tabs and
  *   widgets `user`, or an operator could stamp `agent:<id>`, and the AI-provenance
  *   chip would be a lie. Existing entities keep their stamp; new ones get `actor`.
@@ -79,10 +81,10 @@ export function reconcileReplace(
 ): WorkspaceDoc {
   const widgetsRegistry: Record<string, DashboardWidgetRegistryEntry> = {};
   for (const name of Object.keys(incoming.widgetsRegistry)) {
-    widgetsRegistry[name] = current.widgetsRegistry[name] ?? {
-      status: "pending",
-      createdBy: actor,
-    };
+    const existing = current.widgetsRegistry[name];
+    if (existing) {
+      widgetsRegistry[name] = existing;
+    }
   }
   const existingTabs = new Map(current.tabs.map((tab) => [tab.slug, tab]));
   const existingWidgets = new Map(

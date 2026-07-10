@@ -53,8 +53,20 @@ export const CURRENT_WORKSPACE_SCHEMA_VERSION = 1;
 const TAB_SLUG_PATTERN = /^[a-z0-9-]{1,40}$/;
 const ACTOR_PATTERN = /^(user|system|agent:[A-Za-z0-9._-]{1,64})$/;
 const WIDGET_ID_PATTERN = /^[A-Za-z0-9_-]{1,48}$/;
-const BUILTIN_KIND_PATTERN =
-  /^builtin:(stat-card|markdown|table|iframe-embed|sessions|usage|cron|instances|activity)$/;
+/** The trusted widget set. Exported so tool schemas can name them for the model. */
+export const BUILTIN_WIDGET_KINDS = [
+  "builtin:stat-card",
+  "builtin:markdown",
+  "builtin:table",
+  "builtin:iframe-embed",
+  "builtin:sessions",
+  "builtin:usage",
+  "builtin:cron",
+  "builtin:instances",
+  "builtin:activity",
+] as const;
+
+const BUILTIN_KINDS = new Set<string>(BUILTIN_WIDGET_KINDS);
 const CUSTOM_KIND_PATTERN = /^custom:[A-Za-z0-9._-]{1,64}$/;
 const CUSTOM_WIDGET_NAME_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
 const MAX_STATIC_BINDING_BYTES = 8 * 1024;
@@ -186,7 +198,9 @@ function validateBinding(value: unknown, path: string): DashboardBinding {
     assertKnownKeys(record, ["source", "method"], path);
     const method = requireString(record, "method", path);
     if (!DATA_READ_RPC_ALLOWLIST.includes(method as (typeof DATA_READ_RPC_ALLOWLIST)[number])) {
-      throw new Error(`${path}.method is not allowlisted`);
+      throw new Error(
+        `${path}.method is not allowlisted; allowed: ${DATA_READ_RPC_ALLOWLIST.join(", ")}`,
+      );
     }
     return { source, method };
   }
@@ -232,8 +246,12 @@ function validateWidget(value: unknown, path: string): DashboardWidget {
     throw new Error(`${path}.id is invalid`);
   }
   const kind = requireString(record, "kind", path);
-  if (!BUILTIN_KIND_PATTERN.test(kind) && !CUSTOM_KIND_PATTERN.test(kind)) {
-    throw new Error(`${path}.kind is invalid`);
+  if (!BUILTIN_KINDS.has(kind) && !CUSTOM_KIND_PATTERN.test(kind)) {
+    // Name the alternatives: a caller that cannot see this file otherwise has to
+    // guess the widget set one rejected write at a time.
+    throw new Error(
+      `${path}.kind is invalid: expected custom:<name> or one of ${BUILTIN_WIDGET_KINDS.join(", ")}`,
+    );
   }
   const title = optionalString(record, "title", path);
   if (title !== undefined && title.length > 80) {

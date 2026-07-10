@@ -237,10 +237,10 @@ describe("dashboard tools", () => {
         approvedBy: "user",
         approvedAt: "2026-01-01T00:00:00.000Z",
       });
-      expect(next.widgetsRegistry["new-card"]).toEqual({
-        status: "pending",
-        createdBy: "agent:main",
-      });
+      // A registry name the agent invented is dropped: only dashboard_widget_scaffold
+      // mints entries, so an operator can never be asked to approve a name whose code
+      // does not exist yet.
+      expect(next.widgetsRegistry["new-card"]).toBeUndefined();
     });
   });
 
@@ -322,6 +322,37 @@ describe("dashboard tools", () => {
         status: "pending",
         createdBy: "agent:main",
       });
+    });
+  });
+
+  it("dashboard_widget_update applies a patch addressed by tab + id", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const store = new DashboardStore({ stateDir });
+      const tools = toolsByName(store);
+
+      // Regression: the tool passed its whole param record to the patch reader,
+      // whose allowlist rejects `tab`/`id` — so no call could ever succeed.
+      await tools.get("dashboard_widget_update")?.execute("call-1", {
+        tab: "main",
+        id: "cost-today",
+        title: "Spend today",
+        collapsed: true,
+      });
+
+      const widget = store.read().tabs[0]?.widgets.find((entry) => entry.id === "cost-today");
+      expect(widget).toMatchObject({ title: "Spend today", collapsed: true });
+    });
+  });
+
+  it("dashboard_data_read reports rpc bindings as client-resolved, not as a failure", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const tools = toolsByName(new DashboardStore({ stateDir }));
+
+      const result = await tools
+        .get("dashboard_data_read")
+        ?.execute("call-1", { binding: { source: "rpc", method: "usage.cost" } });
+
+      expect(result?.content?.[0]?.text).toContain("binding_client_resolved");
     });
   });
 

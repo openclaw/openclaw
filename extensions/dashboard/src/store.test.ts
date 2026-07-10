@@ -174,6 +174,23 @@ describe("DashboardStore", () => {
     });
   });
 
+  it("replace cannot mint a registry entry for a widget that was never scaffolded", async () => {
+    await withStore((store) => {
+      const seeded = store.read();
+      // The attack: invent a registry name, get an operator to approve it, then
+      // write the code afterwards. Names that were never scaffolded are dropped.
+      const forged = validateWorkspaceDoc({
+        ...seeded,
+        widgetsRegistry: { evil: { status: "pending", createdBy: "agent:evil" } },
+      });
+
+      const { doc } = store.replace(forged, { actor: "agent:evil" });
+
+      expect(doc.widgetsRegistry).toEqual({});
+      expect(store.widgetStatus("evil")).toBeNull();
+    });
+  });
+
   it("widgetStatus reports null for an unknown widget", async () => {
     await withStore((store) => {
       store.read();

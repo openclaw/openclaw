@@ -478,13 +478,14 @@ export function registerDashboardCli(options: RegisterDashboardCliOptions): void
       .option("--reject", "Reject instead of approving"),
   ).action(async (name: string, commandOptions: GatewayOptions & { reject?: boolean }) => {
     const decision = commandOptions.reject ? "rejected" : "approved";
+    // Approve responds with the registry entry only: the approvals scope is not a
+    // door onto the workspace document.
     const result = await callDashboardGateway("dashboard.widget.approve", commandOptions, {
       name,
       decision,
     });
-    const next = readWorkspaceResult(result);
     if (commandOptions.json) {
-      writeJson({ name, decision, registry: next.doc.widgetsRegistry[name] });
+      writeJson(result);
     } else {
       writeLine(`${name} ${decision}`);
     }

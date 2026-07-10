@@ -7,9 +7,15 @@ import type {
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { Type } from "typebox";
 import { dashboardBroadcast, type DashboardBroadcast } from "./broadcast.js";
-import { resolveBinding, type ResolveBindingOptions } from "./data-read.js";
+import {
+  DashboardBindingResolutionError,
+  DATA_READ_RPC_ALLOWLIST,
+  resolveBinding,
+  type ResolveBindingOptions,
+} from "./data-read.js";
 import { scaffoldDashboardWidget } from "./scaffold.js";
 import {
+  BUILTIN_WIDGET_KINDS,
   isDashboardActor,
   validateWorkspaceDoc,
   type DashboardActor,
@@ -43,7 +49,25 @@ const WIDGET_ID_PATTERN = /^[A-Za-z0-9_-]{1,48}$/;
 const TOOL_DESCRIPTION_SUFFIX =
   " Call dashboard_workspace_get first when you need the current document.";
 
-const JsonSchema = Type.Unknown({ description: "JSON-compatible value." });
+/**
+ * Both lists below exist because a model can only see tool schemas. An agent that
+ * has to brute-force the valid `kind` values or the rpc allowlist burns dozens of
+ * round-trips against "kind is invalid" / "method is not allowlisted".
+ */
+const WIDGET_KIND_DESCRIPTION = [
+  `Widget kind: custom:<name>, or one of ${BUILTIN_WIDGET_KINDS.join(", ")}.`,
+  "builtin:stat-card (big number; props {label?, format?: usd|percent|int}; binding id `value`),",
+  "builtin:markdown (props {content} or a file binding of a .md file),",
+  "builtin:table (binding id `rows`; props {columns: [{key,label}]}),",
+  "builtin:iframe-embed (props {url}),",
+  "builtin:sessions, builtin:usage, builtin:cron, builtin:instances, builtin:activity",
+  "(each reads its own rpc binding; see dashboard_workspace_get for a worked example).",
+  "Charts are not builtins — author one with dashboard_widget_scaffold and use custom:<name>.",
+].join(" ");
+
+const JsonSchema = Type.Unknown({
+  description: "JSON-compatible value. Per-kind shapes are described on `kind`.",
+});
 const GridSchema = Type.Object(
   {
     x: Type.Integer({ minimum: 0, maximum: 11, description: "Grid x column, 0-11." }),
@@ -57,7 +81,9 @@ const BindingSchema = Type.Union([
   Type.Object(
     {
       source: Type.Literal("rpc"),
-      method: Type.String({ description: "Allowlisted gateway read method." }),
+      method: Type.String({
+        description: `Allowlisted gateway read method, one of: ${DATA_READ_RPC_ALLOWLIST.join(", ")}.`,
+      }),
     },
     { additionalProperties: false },
   ),
@@ -94,7 +120,7 @@ const WidgetPatchSchema = Type.Object(
 const WidgetInputSchema = Type.Object(
   {
     id: Type.Optional(Type.String({ description: "Optional unique widget id." })),
-    kind: Type.String({ description: "builtin:<name> or custom:<name>." }),
+    kind: Type.String({ description: WIDGET_KIND_DESCRIPTION }),
     title: Type.Optional(Type.String({ description: "Widget title." })),
     grid: GridSchema,
     collapsed: Type.Optional(Type.Boolean({ description: "Initial collapsed state." })),
@@ -649,7 +675,11 @@ export function createDashboardTools(params: DashboardToolParams): AnyAgentTool[
         ]);
         const tabSlug = readSlug(record, "tab");
         const id = readWidgetId(record);
-        const patch = readWidgetPatch(record);
+        // `tab` and `id` address the widget; everything else is the patch. Passing
+        // the whole record to readWidgetPatch made this tool uncallable: its reader
+        // rejects `tab`/`id` as unexpected params.
+        const { tab: _tab, id: _id, ...patchInput } = record;
+        const patch = readWidgetPatch(patchInput);
         return await runMutation({
           ...mutationBase,
           changedTabSlug: tabSlug,
@@ -663,7 +693,9 @@ export function createDashboardTools(params: DashboardToolParams): AnyAgentTool[
       name: "dashboard_widget_move",
       label: "Dashboard Widget Move",
       description: toolDescription(
-        "Move a widget by changing its grid or moving it to another tab.",
+        "Move a widget by changing its grid OR moving it to another tab — exactly one of " +
+          "`grid` and `toTab`, never both. A cross-tab move keeps the widget's old grid " +
+          "position, so follow it with a second call to reposition.",
       ),
       parameters: Type.Object(
         {
@@ -792,7 +824,10 @@ export function createDashboardTools(params: DashboardToolParams): AnyAgentTool[
       name: "dashboard_widget_scaffold",
       label: "Dashboard Widget Scaffold",
       description: toolDescription(
-        "Create a custom widget scaffold. Agent-authored scaffolds enter the registry as pending.",
+        "Create a custom widget scaffold and register it as pending. Agent-authored widget code " +
+          "never renders until a human approves it, and there is no tool to approve it — ask the " +
+          "operator to approve from the Workspaces tab, or to run `openclaw workspaces " +
+          "widget-approve <name>`. Edit the scaffolded index.html to build the widget.",
       ),
       parameters: Type.Object(
         {
@@ -841,11 +876,26 @@ export function createDashboardTools(params: DashboardToolParams): AnyAgentTool[
       name: "dashboard_data_read",
       label: "Dashboard Data Read",
       description:
-        "Resolve a dashboard binding exactly as a widget sees it. RPC bindings return binding_client_resolved.",
+        "Resolve a dashboard binding exactly as a widget sees it. `file` and `static` bindings " +
+        'return their data; an `rpc` binding returns { status: "binding_client_resolved" } ' +
+        "because only the trusted Control UI may call the gateway on a widget's behalf.",
       parameters: Type.Object({ binding: BindingSchema }, { additionalProperties: false }),
       execute: async (_toolCallId, rawParams) => {
         const record = readRecord(rawParams, ["binding"]);
-        return jsonResult({ data: await resolveBinding(record.binding, params.dataRead) });
+        try {
+          return jsonResult({ data: await resolveBinding(record.binding, params.dataRead) });
+        } catch (error) {
+          // `rpc` bindings are resolved by the trusted Control UI over its own
+          // authenticated socket. That is the documented answer, not an error, so
+          // return it as a result the model can act on.
+          if (
+            error instanceof DashboardBindingResolutionError &&
+            error.code === "binding_client_resolved"
+          ) {
+            return jsonResult({ status: "binding_client_resolved", message: error.message });
+          }
+          throw error;
+        }
       },
     },
   ];
