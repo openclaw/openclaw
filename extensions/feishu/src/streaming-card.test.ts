@@ -639,7 +639,8 @@ describe("FeishuStreamingSession", () => {
     const settings = JSON.parse(settingsPayload.settings ?? "{}") as {
       config?: { summary?: { content?: string } };
     };
-    expect(settings.config?.summary?.content).toBe(previous);
+    expect(settings.config?.summary?.content).toBe(previous.replaceAll("\n", " ").trim());
+    expect(settings.config?.summary?.content).not.toContain("Thinking two");
     expect(log).toHaveBeenCalledWith(
       "Final replace failed: Error: Replace card content failed: replacement rejected (code=19002)",
     );
