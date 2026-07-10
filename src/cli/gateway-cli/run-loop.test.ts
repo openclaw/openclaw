@@ -412,6 +412,53 @@ function expectRestartHandoffCall(expected: {
 }
 
 describe("runGatewayLoop", () => {
+  it("completes the initial boot once when startup fails before a server handle exists", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async () => {
+      const failure = "b".repeat(600);
+      const startupFailure = new Error(failure);
+      const { runtime } = createRuntimeWithExitSignal();
+      const beginBoot = vi.fn();
+      const completeBoot = vi.fn();
+      let acquiredLock:
+        | {
+            release: ReturnType<typeof vi.fn>;
+          }
+        | undefined;
+      acquireGatewayLock.mockImplementationOnce(async (_opts?: { port?: number }) => {
+        acquiredLock = { release: vi.fn(async () => {}) };
+        return acquiredLock;
+      });
+      const start = vi.fn(async (_params?: { startupStartedAt?: number }) => {
+        throw startupFailure;
+      });
+
+      const { runGatewayLoop } = await import("./run-loop.js");
+      await expect(
+        runGatewayLoop({
+          start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+          runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+          beginBoot,
+          completeBoot,
+        }),
+      ).rejects.toBe(startupFailure);
+
+      expect(beginBoot).toHaveBeenCalledTimes(1);
+      const startedAt = beginBoot.mock.calls[0]?.[0];
+      expect(typeof startedAt).toBe("number");
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(start).toHaveBeenCalledWith({ startupStartedAt: startedAt });
+      expect(completeBoot).toHaveBeenCalledTimes(1);
+      expect(completeBoot).toHaveBeenCalledWith({
+        outcome: "startup_failed",
+        reason: "b".repeat(500),
+      });
+      expect(acquireGatewayLock).toHaveBeenCalledTimes(1);
+      expect(acquiredLock?.release).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("keeps truncated startup failure reasons free of lone surrogates", async () => {
     await withIsolatedSignals(async () => {
       const failure = `${"a".repeat(499)}😀tail`;

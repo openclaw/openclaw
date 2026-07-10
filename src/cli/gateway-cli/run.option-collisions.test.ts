@@ -1375,6 +1375,35 @@ describe("gateway run option collisions", () => {
     expect(options.auth?.token).toBe("tok_run");
   });
 
+  it("records one boot start for one canonical successful iteration", async () => {
+    runGatewayLoop.mockImplementationOnce(
+      async ({
+        beginBoot,
+        start,
+      }: {
+        beginBoot?: (startedAtMs: number) => Promise<void> | void;
+        start: GatewayLoopStart;
+      }) => {
+        await beginBoot?.(1234);
+        await start({ startupStartedAt: 1234 });
+      },
+    );
+
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+
+    expect(bootLifecycle.inspect).toHaveBeenCalledTimes(1);
+    expect(bootLifecycle.inspect.mock.calls[0]?.[1]).toBe(1234);
+    expect(bootLifecycle.record).toHaveBeenCalledTimes(1);
+    expect(bootLifecycle.record.mock.calls[0]?.[1]).toBe(1234);
+    expect(bootLifecycle.record.mock.calls[0]?.[2]).toBeUndefined();
+    expect(startGatewayServer).toHaveBeenCalledTimes(1);
+    expect(gatewayStartOptions().startupStartedAt).toBe(1234);
+    expect(bootLifecycle.complete).not.toHaveBeenCalled();
+    expect(bootLifecycle.record.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
+      startGatewayServer.mock.invocationCallOrder[0] ?? Infinity,
+    );
+  });
+
   it("uses the startup snapshot only for the first in-process gateway start", async () => {
     runGatewayLoop.mockImplementationOnce(async ({ start }: { start: GatewayLoopStart }) => {
       await start({ startupStartedAt: 1000 });
