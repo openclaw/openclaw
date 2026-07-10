@@ -1262,7 +1262,7 @@ describe("slackPlugin outbound", () => {
       mediaLocalRoots: ["/tmp/media"],
     });
     expect(requireMockCallArgValue(sendSlack, 2, 0)).toBe("C999");
-    expect(requireMockCallArgValue(sendSlack, 2, 1)).toBe("hello");
+    expect(requireMockCallArgValue(sendSlack, 2, 1)).toBe("hello\n\nBlock body");
     expect(requireMockCallArg(sendSlack, 2, 2).blocks).toEqual([
       {
         type: "section",
