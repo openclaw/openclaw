@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { sha256HexPrefix } from "./crypto-digest.js";
 import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
 
@@ -40,6 +41,7 @@ const VAPID_KEYS_FILENAME = "push/vapid-keys.json";
 const MAX_ENDPOINT_LENGTH = 2048;
 const MAX_KEY_LENGTH = 512;
 const DEFAULT_VAPID_SUBJECT = "https://openclaw.ai";
+const WEB_PUSH_SEND_CONCURRENCY = 12;
 
 const withLock = createAsyncLock();
 
@@ -209,6 +211,33 @@ export async function clearWebPushSubscriptionByEndpoint(
   });
 }
 
+async function clearExpiredWebPushSubscriptions(
+  subscriptions: WebPushSubscription[],
+  baseDir?: string,
+): Promise<void> {
+  await withLock(async () => {
+    const state = await loadState(baseDir);
+    let changed = false;
+    for (const subscription of subscriptions) {
+      const hash = hashEndpoint(subscription.endpoint);
+      const current = state.subscriptionsByEndpointHash[hash];
+      const stillMatchesAttempt =
+        current?.subscriptionId === subscription.subscriptionId &&
+        current.endpoint === subscription.endpoint &&
+        current.keys.p256dh === subscription.keys.p256dh &&
+        current.keys.auth === subscription.keys.auth &&
+        current.updatedAtMs === subscription.updatedAtMs;
+      if (stillMatchesAttempt) {
+        delete state.subscriptionsByEndpointHash[hash];
+        changed = true;
+      }
+    }
+    if (changed) {
+      await persistState(state, baseDir);
+    }
+  });
+}
+
 // --- Sending ---
 
 type WebPushPayload = {
@@ -218,14 +247,11 @@ type WebPushPayload = {
   url?: string;
 };
 
-function applyVapidDetails(webPush: WebPushRuntime, keys: VapidKeyPair): void {
-  webPush.setVapidDetails(keys.subject, keys.publicKey, keys.privateKey);
-}
-
 async function sendPreparedWebPushNotification(
   webPush: WebPushRuntime,
   subscription: WebPushSubscription,
   payload: WebPushPayload,
+  vapidKeys: VapidKeyPair,
 ): Promise<WebPushSendResult> {
   const pushSubscription = {
     endpoint: subscription.endpoint,
@@ -236,7 +262,13 @@ async function sendPreparedWebPushNotification(
   };
 
   try {
-    const result = await webPush.sendNotification(pushSubscription, JSON.stringify(payload));
+    const result = await webPush.sendNotification(pushSubscription, JSON.stringify(payload), {
+      vapidDetails: {
+        subject: vapidKeys.subject,
+        publicKey: vapidKeys.publicKey,
+        privateKey: vapidKeys.privateKey,
+      },
+    });
     return {
       ok: true,
       subscriptionId: subscription.subscriptionId,
@@ -272,33 +304,28 @@ export async function broadcastWebPush(
   const vapidKeys = await resolveVapidKeys(baseDir);
   const webPush = await loadWebPushRuntime();
 
-  // Set VAPID details once before fanning out concurrent sends.
-  applyVapidDetails(webPush, vapidKeys);
-
-  const results = await Promise.allSettled(
-    subscriptions.map((sub) => sendPreparedWebPushNotification(webPush, sub, payload)),
-  );
-
-  const mapped = results.map((r, i) =>
-    r.status === "fulfilled"
-      ? r.value
-      : {
-          ok: false,
-          subscriptionId: subscriptions[i].subscriptionId,
-          error: r.reason instanceof Error ? r.reason.message : "unknown error",
-        },
-  );
+  const { results: mapped } = await runTasksWithConcurrency({
+    tasks: subscriptions.map(
+      (subscription) => () =>
+        sendPreparedWebPushNotification(webPush, subscription, payload, vapidKeys),
+    ),
+    limit: WEB_PUSH_SEND_CONCURRENCY,
+  });
 
   // Clean up expired subscriptions (HTTP 410 Gone or 404 Not Found) per Web Push spec.
-  const expiredEndpoints = mapped
-    .map((result, i) => ({ result, sub: subscriptions[i] }))
+  const expiredSubscriptions = mapped
+    .map((result, i) => ({ result, subscription: subscriptions[i] }))
     .filter(({ result }) => !result.ok && (result.statusCode === 410 || result.statusCode === 404))
-    .map(({ sub }) => sub.endpoint);
+    .map(({ subscription }) => subscription);
 
-  if (expiredEndpoints.length > 0) {
-    await Promise.allSettled(
-      expiredEndpoints.map((endpoint) => clearWebPushSubscriptionByEndpoint(endpoint, baseDir)),
-    );
+  if (expiredSubscriptions.length > 0) {
+    // Expired subscriptions share one persisted state file. Remove matching
+    // snapshots in one lock without deleting a registration refreshed mid-send.
+    try {
+      await clearExpiredWebPushSubscriptions(expiredSubscriptions, baseDir);
+    } catch {
+      // Delivery results remain useful even when best-effort stale-state cleanup fails.
+    }
   }
 
   return mapped;
