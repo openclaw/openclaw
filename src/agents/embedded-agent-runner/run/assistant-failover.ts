@@ -105,11 +105,8 @@ function resolveShortWindowRateLimitRetry(
   // Providers such as Gemini use quota wording for per-minute RPM/TPM
   // throttles. Treat quota as long-window only when no short-window hint is
   // present; hard daily/usage/subscription limits are filtered above.
-  // Aggregated providers (for example OpenRouter provider pools) surface
-  // transient upstream throttles as a bare leading 429 with a generic body:
-  // no window wording and no Retry-After. Long-window phrasings are filtered
-  // above, so treat the remaining status-prefixed 429s as short-window and
-  // let the default backoff ladder pace the retry.
+  // Some gateways strip throttle details and Retry-After. Preserve the
+  // long-window exclusions above before treating a bare 429 as transient.
   const statusPrefixed429 = extractLeadingHttpStatus(raw)?.code === 429;
   if (!SHORT_WINDOW_RATE_LIMIT_RE.test(raw) && !shortRetryAfter && !statusPrefixed429) {
     return null;
