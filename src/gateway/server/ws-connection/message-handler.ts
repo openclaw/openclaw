@@ -193,6 +193,10 @@ const DEVICE_CREDENTIAL_INVALIDATING_METHODS = new Set([
   "device.token.revoke",
   "node.pair.remove",
 ]);
+/** Maximum time (ms) to wait for a credential-mutation barrier before giving up.
+ *  Prevents a stuck dispatch from blocking all subsequent requests on the
+ *  WebSocket connection indefinitely. */
+const DEVICE_CREDENTIAL_MUTATION_BARRIER_TIMEOUT_MS = 30_000;
 const unauthorizedHandshakeLogLimiter = new HandshakeAuthLogLimiter();
 
 class NodePairingRateLimitError extends Error {
@@ -2357,7 +2361,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         if (!barrier) {
           break;
         }
-        await barrier.catch(() => undefined);
+        await Promise.race([
+          barrier.catch(() => undefined),
+          new Promise<void>((resolve) => {
+            setTimeout(resolve, DEVICE_CREDENTIAL_MUTATION_BARRIER_TIMEOUT_MS);
+          }),
+        ]);
         if (isClosed()) {
           return;
         }
