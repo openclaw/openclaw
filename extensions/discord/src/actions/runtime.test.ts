@@ -841,9 +841,21 @@ describe("handleDiscordMessagingAction", () => {
       cfg: {
         channels: {
           discord: {
-            token: "token",
-            groupPolicy: "open",
-            dm: { enabled: false, policy: "disabled" },
+            defaultAccount: "qa",
+            accounts: {
+              qa: {
+                token: "token",
+                groupPolicy: "open",
+                dm: { enabled: false, policy: "disabled" },
+                guilds: {
+                  "111": {
+                    channels: {
+                      "*": { enabled: true },
+                    },
+                  },
+                },
+              },
+            },
           },
         },
       } as OpenClawConfig,
@@ -893,11 +905,12 @@ describe("handleDiscordMessagingAction", () => {
     },
   ])("keeps $name blocked for direct operators", async ({ cfg, channel }) => {
     fetchChannelInfoDiscord.mockResolvedValueOnce(channel);
+    const accountId = cfg.channels?.discord?.defaultAccount;
 
     await expect(
       handleMessagingAction(
         "reactions",
-        { channelId: "444", messageId: "M1" },
+        { channelId: "444", messageId: "M1", accountId },
         enableAllActions,
         cfg,
         { conversationReadOrigin: "direct-operator" },

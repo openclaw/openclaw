@@ -545,13 +545,18 @@ export function createDiscordMessagingActionContext(params: {
         }
         return;
       }
-      const allowed = Object.values(guilds ?? {}).some((guildInfo) =>
-        isDiscordReadTargetAllowedInGuild({
-          groupPolicy,
-          guildInfo: guildInfo ?? null,
-          target,
-        }),
-      );
+      // Known non-guild targets must never borrow a guild wildcard or channel
+      // allowlist. Unknown metadata may use only the helper's fail-closed,
+      // stable-ID path while every plausible non-guild scope remains enabled.
+      const allowed =
+        !target.metadataKnown &&
+        Object.values(guilds ?? {}).some((guildInfo) =>
+          isDiscordReadTargetAllowedInGuild({
+            groupPolicy,
+            guildInfo: guildInfo ?? null,
+            target,
+          }),
+        );
       if (
         (directOperator && isExpandedReadTargetEnabled(null, target, false)) ||
         (currentConversation && isExpandedReadTargetEnabled(null, target, true))
