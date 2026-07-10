@@ -374,34 +374,6 @@ function findNativeFlowListParams(
   return Array.isArray(messageParams?.sections) ? messageParams : undefined;
 }
 
-function extractNativeFlowButtonRows(
-  interactive: proto.Message.IInteractiveMessage | undefined | null,
-): WhatsAppInteractiveListContext["rows"] {
-  const nativeFlow = interactive?.nativeFlowMessage;
-  const rows: WhatsAppInteractiveListContext["rows"] = [];
-  for (const button of nativeFlow?.buttons ?? []) {
-    const buttonName = nonEmptyString(button?.name);
-    if (buttonName !== "quick_reply") {
-      continue;
-    }
-    const params = parseJsonObject(button?.buttonParamsJson);
-    if (!params || Array.isArray(params.sections)) {
-      continue;
-    }
-    const rowId = nonEmptyString(params.id) ?? nonEmptyString(params.buttonId);
-    if (!rowId) {
-      continue;
-    }
-    const title =
-      nonEmptyString(params.display_text) ??
-      nonEmptyString(params.displayText) ??
-      nonEmptyString(params.title) ??
-      nonEmptyString(params.text);
-    rows.push(title ? { rowId, title } : { rowId });
-  }
-  return rows;
-}
-
 function extractInteractiveListText(message: proto.IMessage): string | undefined {
   const context = extractInteractiveListContext(message);
   if (!context) {
@@ -533,45 +505,11 @@ export function extractInteractiveListContext(
     };
   }
 
-  const buttons = message?.buttonsMessage;
-  if (buttons) {
-    const rows: WhatsAppInteractiveListContext["rows"] = [];
-    for (const button of buttons.buttons ?? []) {
-      const rowId = nonEmptyString(button?.buttonId);
-      if (!rowId) {
-        continue;
-      }
-      const title = nonEmptyString(button?.buttonText?.displayText);
-      rows.push(title ? { rowId, title } : { rowId });
-    }
-    if (rows.length === 0) {
-      return undefined;
-    }
-    const description = nonEmptyString(buttons.contentText);
-    const footerText = nonEmptyString(buttons.footerText);
-    return {
-      kind: "list",
-      ...(description ? { description } : {}),
-      ...(footerText ? { footerText } : {}),
-      rows,
-    };
-  }
-
+  // Button-shaped prompts (buttonsMessage, native-flow quick_reply) are
+  // intentionally excluded: Baileys sends buttonReply and listReply as
+  // separate response types, so steering them into list context would make
+  // the agent answer a button prompt with a native list reply.
   const interactive = message?.interactiveMessage;
-  const nativeFlowButtonRows = extractNativeFlowButtonRows(interactive);
-  if (nativeFlowButtonRows.length > 0) {
-    const title = nonEmptyString(interactive?.header?.title);
-    const description = nonEmptyString(interactive?.body?.text);
-    const footerText = nonEmptyString(interactive?.footer?.text);
-    return {
-      kind: "list",
-      ...(title ? { title } : {}),
-      ...(description ? { description } : {}),
-      ...(footerText ? { footerText } : {}),
-      rows: nativeFlowButtonRows,
-    };
-  }
-
   const nativeFlowList = findNativeFlowListParams(interactive);
   if (!nativeFlowList) {
     return undefined;

@@ -523,7 +523,9 @@ describe("extractInteractiveListContext", () => {
     expect(extractText(message)).toContain("rowId: get-recipe-ideas");
   });
 
-  it("extracts rows from WhatsApp buttons messages", () => {
+  it("keeps buttons messages out of list context but preserves the prompt text", () => {
+    // Baileys replies to buttonsMessage with buttonReply, not listReply, so
+    // exposing these rows would steer the agent to the wrong response type.
     const message = {
       buttonsMessage: {
         contentText: "Welcome to Jasper's Market! What can we help you with today?",
@@ -535,11 +537,6 @@ describe("extractInteractiveListContext", () => {
             type: 1,
           },
           {
-            buttonId: "reply-media-card-carousel",
-            buttonText: { displayText: "Get recipe ideas" },
-            type: 1,
-          },
-          {
             buttonId: "reply-offer",
             buttonText: { displayText: "Current promo" },
             type: 1,
@@ -548,30 +545,14 @@ describe("extractInteractiveListContext", () => {
       },
     } as proto.IMessage;
 
+    expect(extractInteractiveListContext(message)).toBeUndefined();
     expect(hasInboundUserContent(message)).toBe(true);
-    expect(extractInteractiveListContext(message)).toEqual({
-      kind: "list",
-      description: "Welcome to Jasper's Market! What can we help you with today?",
-      rows: [
-        {
-          rowId: "reply-interactive-with-media",
-          title: "Shop online",
-        },
-        {
-          rowId: "reply-media-card-carousel",
-          title: "Get recipe ideas",
-        },
-        {
-          rowId: "reply-offer",
-          title: "Current promo",
-        },
-      ],
-    });
-    expect(extractText(message)).toContain("Get recipe ideas");
-    expect(extractText(message)).toContain("rowId: reply-media-card-carousel");
+    expect(extractText(message)).toBe(
+      "Welcome to Jasper's Market! What can we help you with today?",
+    );
   });
 
-  it("extracts rows from WhatsApp native flow reply button messages", () => {
+  it("keeps native flow reply buttons out of list context", () => {
     const message = {
       interactiveMessage: {
         header: { title: "Jasper's Market" },
@@ -597,23 +578,7 @@ describe("extractInteractiveListContext", () => {
       },
     } as proto.IMessage;
 
-    expect(hasInboundUserContent(message)).toBe(true);
-    expect(extractInteractiveListContext(message)).toEqual({
-      kind: "list",
-      title: "Jasper's Market",
-      description: "What can we help you with today?",
-      rows: [
-        {
-          rowId: "shop-online",
-          title: "Shop online",
-        },
-        {
-          rowId: "get-recipe-ideas",
-          title: "Get recipe ideas",
-        },
-      ],
-    });
-    expect(extractText(message)).toContain("rowId: get-recipe-ideas");
+    expect(extractInteractiveListContext(message)).toBeUndefined();
   });
 
   it("ignores unknown native flow buttons instead of treating payloads as list rows", () => {
