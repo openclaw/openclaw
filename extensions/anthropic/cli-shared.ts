@@ -345,6 +345,8 @@ export function resolveClaudeCliExecutionArgs(
       return stripClaudeEffortArgs(context.baseArgs);
     case "set":
       return [...stripClaudeEffortArgs(context.baseArgs), CLAUDE_EFFORT_ARG, action.effort];
+    default:
+      return action satisfies never;
   }
 }
 
