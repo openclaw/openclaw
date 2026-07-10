@@ -355,7 +355,7 @@ function parseRawConfigOrRespond(
 function sanitizeLookupPathForLog(path: string): string {
   const sanitized = Array.from(path, (char) => {
     const code = char.charCodeAt(0);
-    return code < 0x20 || code === 0x7f ? "?" : char;
+    return code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f) ? "?" : char;
   }).join("");
   return sanitized.length > 120 ? `${truncateUtf16Safe(sanitized, 117)}...` : sanitized;
 }
