@@ -596,6 +596,10 @@ export const hi: TranslationMap = {
     officialGroup: "आधिकारिक प्लगइन्स",
     connectorsGroup: "अपनी दुनिया से कनेक्ट करें",
     connectorsHint: "लोकप्रिय सेवाओं के लिए वन-क्लिक MCP कनेक्टर्स और चुनी हुई ClawHub खोजें।",
+    connectorGroupWork: "काम और उत्पादकता",
+    connectorGroupDev: "कोडिंग और इन्फ्रास्ट्रक्चर",
+    connectorGroupHome: "घर और मीडिया",
+    connectorGroupLife: "रोज़मर्रा का जीवन",
     connectorMcpNote: "वन-क्लिक MCP सर्वर",
     connectorClawHubNote: "ClawHub पर समुदाय प्लगइन्स",
     connectorAdd: "जोड़ें",
@@ -604,6 +608,7 @@ export const hi: TranslationMap = {
     connectorAddedOauth: "{name} जोड़ा गया। “{command}” से प्रमाणित करें, फिर gateway को रीस्टार्ट करें।",
     connectorAddedEndpoint:
       "{name} जोड़ा गया। उपयोग से पहले MCP सेटिंग्स में endpoint और credentials अपडेट करें।",
+    connectorAddedReady: "{name} जोड़ा गया। नए एजेंट सत्र इसे तुरंत उपयोग कर सकते हैं।",
     noInstalledTitle: "कोई वैकल्पिक प्लगइन्स इंस्टॉल नहीं हैं",
     noInstalledBody: "OpenClaw को विस्तारित करने के लिए कोई विशेष प्लगइन खोजें या ClawHub में खोजें।",
     noInstalledMatchTitle: "कोई इंस्टॉल किए गए प्लगइन्स मेल नहीं खाते",

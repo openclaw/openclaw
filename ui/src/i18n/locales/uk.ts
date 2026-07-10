@@ -598,6 +598,10 @@ export const uk: TranslationMap = {
     officialGroup: "Офіційні плагіни",
     connectorsGroup: "Підключіть свій світ",
     connectorsHint: "MCP-конектори в один клік і добірні пошуки ClawHub для популярних сервісів.",
+    connectorGroupWork: "Робота й продуктивність",
+    connectorGroupDev: "Кодування й інфраструктура",
+    connectorGroupHome: "Дім і медіа",
+    connectorGroupLife: "Повсякденне життя",
     connectorMcpNote: "MCP-сервер в один клік",
     connectorClawHubNote: "Плагіни спільноти на ClawHub",
     connectorAdd: "Додати",
@@ -607,6 +611,7 @@ export const uk: TranslationMap = {
       "Додано {name}. Автентифікуйтеся за допомогою “{command}”, а потім перезапустіть gateway.",
     connectorAddedEndpoint:
       "Додано {name}. Перед використанням оновіть endpoint і облікові дані в налаштуваннях MCP.",
+    connectorAddedReady: "Додано {name}. Нові сеанси агента можуть використовувати його відразу.",
     noInstalledTitle: "Не встановлено жодних додаткових плагінів",
     noInstalledBody:
       "Відкрийте для себе рекомендований плагін або шукайте в ClawHub, щоб розширити OpenClaw.",

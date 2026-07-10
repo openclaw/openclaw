@@ -602,6 +602,10 @@ export const ja_JP: TranslationMap = {
     officialGroup: "公式プラグイン",
     connectorsGroup: "あなたの世界を接続",
     connectorsHint: "人気サービス向けのワンクリック MCP コネクタと厳選された ClawHub 検索。",
+    connectorGroupWork: "仕事と生産性",
+    connectorGroupDev: "コーディングとインフラストラクチャ",
+    connectorGroupHome: "ホームとメディア",
+    connectorGroupLife: "日常生活",
     connectorMcpNote: "ワンクリック MCP サーバー",
     connectorClawHubNote: "ClawHub のコミュニティプラグイン",
     connectorAdd: "追加",
@@ -611,6 +615,8 @@ export const ja_JP: TranslationMap = {
       "{name} を追加しました。“{command}” で認証してから、gateway を再起動してください。",
     connectorAddedEndpoint:
       "{name} を追加しました。使用する前に MCP 設定でエンドポイントと認証情報を更新してください。",
+    connectorAddedReady:
+      "{name} を追加しました。新しいエージェントセッションですぐに使用できます。",
     noInstalledTitle: "オプションのプラグインはインストールされていません",
     noInstalledBody: "注目のプラグインを見つけるか、ClawHub を検索して OpenClaw を拡張しましょう。",
     noInstalledMatchTitle: "一致するインストール済みプラグインはありません",

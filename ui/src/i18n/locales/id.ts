@@ -597,6 +597,10 @@ export const id: TranslationMap = {
     officialGroup: "Plugin resmi",
     connectorsGroup: "Hubungkan dunia Anda",
     connectorsHint: "Konektor MCP sekali klik dan pencarian ClawHub pilihan untuk layanan populer.",
+    connectorGroupWork: "Kerja & produktivitas",
+    connectorGroupDev: "Pengodean & infrastruktur",
+    connectorGroupHome: "Rumah & media",
+    connectorGroupLife: "Kehidupan sehari-hari",
     connectorMcpNote: "Server MCP sekali klik",
     connectorClawHubNote: "Plugin komunitas di ClawHub",
     connectorAdd: "Tambah",
@@ -606,6 +610,7 @@ export const id: TranslationMap = {
       "{name} ditambahkan. Autentikasi dengan “{command}”, lalu mulai ulang gateway.",
     connectorAddedEndpoint:
       "{name} ditambahkan. Perbarui endpoint dan kredensial di pengaturan MCP sebelum digunakan.",
+    connectorAddedReady: "{name} ditambahkan. Sesi agen baru dapat langsung menggunakannya.",
     noInstalledTitle: "Tidak ada plugin opsional yang terinstal",
     noInstalledBody: "Temukan plugin unggulan atau cari ClawHub untuk memperluas OpenClaw.",
     noInstalledMatchTitle: "Tidak ada plugin terinstal yang cocok",

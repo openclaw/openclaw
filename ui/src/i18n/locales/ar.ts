@@ -595,6 +595,10 @@ export const ar: TranslationMap = {
     officialGroup: "المكونات الإضافية الرسمية",
     connectorsGroup: "اربط عالمك",
     connectorsHint: "موصلات MCP بنقرة واحدة وعمليات بحث منتقاة بعناية في ClawHub للخدمات الشائعة.",
+    connectorGroupWork: "العمل والإنتاجية",
+    connectorGroupDev: "البرمجة والبنية التحتية",
+    connectorGroupHome: "المنزل والوسائط",
+    connectorGroupLife: "الحياة اليومية",
     connectorMcpNote: "خادم MCP بنقرة واحدة",
     connectorClawHubNote: "مكونات إضافية مجتمعية على ClawHub",
     connectorAdd: "إضافة",
@@ -603,6 +607,7 @@ export const ar: TranslationMap = {
     connectorAddedOauth: "تمت إضافة {name}. صادِق باستخدام “{command}”، ثم أعد تشغيل Gateway.",
     connectorAddedEndpoint:
       "تمت إضافة {name}. حدّث نقطة النهاية وبيانات الاعتماد في إعدادات MCP قبل الاستخدام.",
+    connectorAddedReady: "تمت إضافة {name}. يمكن لجلسات الوكيل الجديدة استخدامه فورًا.",
     noInstalledTitle: "لا توجد مكونات إضافية اختيارية مثبتة",
     noInstalledBody: "اكتشف مكونًا إضافيًا مميزًا أو ابحث في ClawHub لتوسيع OpenClaw.",
     noInstalledMatchTitle: "لا توجد مكونات إضافية مثبتة مطابقة",

@@ -601,6 +601,10 @@ export const nl: TranslationMap = {
     connectorsGroup: "Verbind je wereld",
     connectorsHint:
       "MCP-connectors met één klik en zorgvuldig geselecteerde ClawHub-zoekopdrachten voor populaire services.",
+    connectorGroupWork: "Werk en productiviteit",
+    connectorGroupDev: "Coderen en infrastructuur",
+    connectorGroupHome: "Thuis en media",
+    connectorGroupLife: "Dagelijks leven",
     connectorMcpNote: "MCP-server met één klik",
     connectorClawHubNote: "Communityplugins op ClawHub",
     connectorAdd: "Toevoegen",
@@ -610,6 +614,7 @@ export const nl: TranslationMap = {
       "{name} toegevoegd. Verifieer met “{command}” en start daarna de gateway opnieuw.",
     connectorAddedEndpoint:
       "{name} toegevoegd. Werk het eindpunt en de inloggegevens bij in de MCP-instellingen vóór gebruik.",
+    connectorAddedReady: "{name} toegevoegd. Nieuwe agentsessies kunnen het meteen gebruiken.",
     noInstalledTitle: "Geen optionele plugins geïnstalleerd",
     noInstalledBody: "Ontdek een uitgelichte plugin of zoek in ClawHub om OpenClaw uit te breiden.",
     noInstalledMatchTitle: "Geen geïnstalleerde plugins komen overeen",

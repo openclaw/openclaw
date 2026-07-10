@@ -602,6 +602,10 @@ export const tr: TranslationMap = {
     connectorsGroup: "Dünyanızı bağlayın",
     connectorsHint:
       "Popüler hizmetler için tek tıkla MCP bağlayıcıları ve özenle seçilmiş ClawHub aramaları.",
+    connectorGroupWork: "İş ve üretkenlik",
+    connectorGroupDev: "Kodlama ve altyapı",
+    connectorGroupHome: "Ev ve medya",
+    connectorGroupLife: "Günlük yaşam",
     connectorMcpNote: "Tek tıkla MCP sunucusu",
     connectorClawHubNote: "ClawHub'daki topluluk eklentileri",
     connectorAdd: "Ekle",
@@ -611,6 +615,7 @@ export const tr: TranslationMap = {
       "{name} eklendi. “{command}” ile kimlik doğrulaması yapın, ardından gateway'i yeniden başlatın.",
     connectorAddedEndpoint:
       "{name} eklendi. Kullanmadan önce MCP ayarlarında endpoint'i ve kimlik bilgilerini güncelleyin.",
+    connectorAddedReady: "{name} eklendi. Yeni ajan oturumları bunu hemen kullanabilir.",
     noInstalledTitle: "İsteğe bağlı eklenti yüklü değil",
     noInstalledBody:
       "OpenClaw'ı genişletmek için öne çıkan bir eklenti keşfedin veya ClawHub'da arama yapın.",

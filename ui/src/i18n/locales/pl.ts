@@ -599,6 +599,10 @@ export const pl: TranslationMap = {
     connectorsGroup: "Połącz swój świat",
     connectorsHint:
       "Jednoklikowe konektory MCP i starannie wybrane wyszukiwania w ClawHub dla popularnych usług.",
+    connectorGroupWork: "Praca i produktywność",
+    connectorGroupDev: "Programowanie i infrastruktura",
+    connectorGroupHome: "Dom i multimedia",
+    connectorGroupLife: "Życie codzienne",
     connectorMcpNote: "Jednoklikowy serwer MCP",
     connectorClawHubNote: "Wtyczki społeczności w ClawHub",
     connectorAdd: "Dodaj",
@@ -608,6 +612,7 @@ export const pl: TranslationMap = {
       "Dodano {name}. Uwierzytelnij za pomocą „{command}”, a następnie uruchom ponownie gateway.",
     connectorAddedEndpoint:
       "Dodano {name}. Przed użyciem zaktualizuj punkt końcowy i dane logowania w ustawieniach MCP.",
+    connectorAddedReady: "Dodano {name}. Nowe sesje agentów mogą z niego od razu korzystać.",
     noInstalledTitle: "Nie zainstalowano opcjonalnych wtyczek",
     noInstalledBody: "Odkryj polecaną wtyczkę lub przeszukaj ClawHub, aby rozszerzyć OpenClaw.",
     noInstalledMatchTitle: "Żadne zainstalowane wtyczki nie pasują",

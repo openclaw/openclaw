@@ -598,6 +598,10 @@ export const vi: TranslationMap = {
     connectorsGroup: "Kết nối thế giới của bạn",
     connectorsHint:
       "Trình kết nối MCP một cú nhấp chuột và các tìm kiếm ClawHub được tuyển chọn cho các dịch vụ phổ biến.",
+    connectorGroupWork: "Công việc & năng suất",
+    connectorGroupDev: "Lập trình & hạ tầng",
+    connectorGroupHome: "Nhà cửa & phương tiện",
+    connectorGroupLife: "Cuộc sống hằng ngày",
     connectorMcpNote: "Máy chủ MCP một cú nhấp chuột",
     connectorClawHubNote: "Plugin cộng đồng trên ClawHub",
     connectorAdd: "Thêm",
@@ -606,6 +610,7 @@ export const vi: TranslationMap = {
     connectorAddedOauth: "Đã thêm {name}. Xác thực bằng “{command}”, sau đó khởi động lại gateway.",
     connectorAddedEndpoint:
       "Đã thêm {name}. Cập nhật endpoint và thông tin xác thực trong cài đặt MCP trước khi sử dụng.",
+    connectorAddedReady: "Đã thêm {name}. Các phiên agent mới có thể sử dụng ngay.",
     noInstalledTitle: "Chưa cài đặt plugin tùy chọn nào",
     noInstalledBody: "Khám phá một plugin nổi bật hoặc tìm kiếm trên ClawHub để mở rộng OpenClaw.",
     noInstalledMatchTitle: "Không có plugin đã cài đặt nào khớp",

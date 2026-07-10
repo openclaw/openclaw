@@ -595,6 +595,10 @@ export const ko: TranslationMap = {
     officialGroup: "공식 플러그인",
     connectorsGroup: "내 세상 연결하기",
     connectorsHint: "인기 서비스에 대한 원클릭 MCP 커넥터와 엄선된 ClawHub 검색입니다.",
+    connectorGroupWork: "업무 및 생산성",
+    connectorGroupDev: "코딩 및 인프라",
+    connectorGroupHome: "홈 및 미디어",
+    connectorGroupLife: "일상생활",
     connectorMcpNote: "원클릭 MCP 서버",
     connectorClawHubNote: "ClawHub의 커뮤니티 플러그인",
     connectorAdd: "추가",
@@ -604,6 +608,8 @@ export const ko: TranslationMap = {
       "{name}을(를) 추가했습니다. “{command}”로 인증한 다음 gateway를 다시 시작하세요.",
     connectorAddedEndpoint:
       "{name}을(를) 추가했습니다. 사용하기 전에 MCP 설정에서 엔드포인트와 자격 증명을 업데이트하세요.",
+    connectorAddedReady:
+      "{name}이(가) 추가되었습니다. 새 에이전트 세션에서 바로 사용할 수 있습니다.",
     noInstalledTitle: "설치된 선택적 플러그인이 없습니다",
     noInstalledBody: "추천 플러그인을 살펴보거나 ClawHub를 검색해 OpenClaw를 확장하세요.",
     noInstalledMatchTitle: "일치하는 설치된 플러그인이 없습니다",

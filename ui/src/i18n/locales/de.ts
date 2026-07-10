@@ -602,6 +602,10 @@ export const de: TranslationMap = {
     connectorsGroup: "Verbinde deine Welt",
     connectorsHint:
       "MCP-Connectors mit einem Klick und kuratierte ClawHub-Suchen für beliebte Dienste.",
+    connectorGroupWork: "Arbeit & Produktivität",
+    connectorGroupDev: "Programmierung & Infrastruktur",
+    connectorGroupHome: "Zuhause & Medien",
+    connectorGroupLife: "Alltag",
     connectorMcpNote: "MCP-Server mit einem Klick",
     connectorClawHubNote: "Community-Plugins auf ClawHub",
     connectorAdd: "Hinzufügen",
@@ -611,6 +615,7 @@ export const de: TranslationMap = {
       "{name} hinzugefügt. Authentifiziere dich mit „{command}“ und starte anschließend das Gateway neu.",
     connectorAddedEndpoint:
       "{name} hinzugefügt. Aktualisiere vor der Verwendung den Endpunkt und die Zugangsdaten in den MCP-Einstellungen.",
+    connectorAddedReady: "{name} hinzugefügt. Neue Agent-Sitzungen können es sofort verwenden.",
     noInstalledTitle: "Keine optionalen Plugins installiert",
     noInstalledBody:
       "Entdecke ein empfohlenes Plugin oder durchsuche ClawHub, um OpenClaw zu erweitern.",

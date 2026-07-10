@@ -597,6 +597,10 @@ export const fa: TranslationMap = {
     officialGroup: "افزونه‌های رسمی",
     connectorsGroup: "دنیای خود را متصل کنید",
     connectorsHint: "کانکتورهای MCP با یک کلیک و جستجوهای دست‌چین‌شده ClawHub برای سرویس‌های محبوب.",
+    connectorGroupWork: "کار و بهره‌وری",
+    connectorGroupDev: "کدنویسی و زیرساخت",
+    connectorGroupHome: "خانه و رسانه",
+    connectorGroupLife: "زندگی روزمره",
     connectorMcpNote: "سرور MCP با یک کلیک",
     connectorClawHubNote: "افزونه‌های جامعه در ClawHub",
     connectorAdd: "افزودن",
@@ -606,6 +610,7 @@ export const fa: TranslationMap = {
       "{name} افزوده شد. با «{command}» احراز هویت کنید، سپس gateway را دوباره راه‌اندازی کنید.",
     connectorAddedEndpoint:
       "{name} افزوده شد. پیش از استفاده، endpoint و credentials را در تنظیمات MCP به‌روزرسانی کنید.",
+    connectorAddedReady: "{name} اضافه شد. نشست‌های عامل جدید می‌توانند فوراً از آن استفاده کنند.",
     noInstalledTitle: "هیچ افزونه اختیاری نصب نشده است",
     noInstalledBody: "برای گسترش OpenClaw، یک افزونه ویژه را کشف کنید یا در ClawHub جستجو کنید.",
     noInstalledMatchTitle: "هیچ افزونه نصب‌شده‌ای مطابقت ندارد",

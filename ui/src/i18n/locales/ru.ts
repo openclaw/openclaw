@@ -603,6 +603,10 @@ export const ru: TranslationMap = {
     connectorsGroup: "Подключите свой мир",
     connectorsHint:
       "MCP-коннекторы в один клик и подобранные поисковые запросы ClawHub для популярных сервисов.",
+    connectorGroupWork: "Работа и продуктивность",
+    connectorGroupDev: "Программирование и инфраструктура",
+    connectorGroupHome: "Дом и медиа",
+    connectorGroupLife: "Повседневная жизнь",
     connectorMcpNote: "MCP-сервер в один клик",
     connectorClawHubNote: "Плагины сообщества на ClawHub",
     connectorAdd: "Добавить",
@@ -612,6 +616,7 @@ export const ru: TranslationMap = {
       "Добавлен {name}. Выполните аутентификацию с помощью «{command}», затем перезапустите gateway.",
     connectorAddedEndpoint:
       "Добавлен {name}. Перед использованием обновите конечную точку и учетные данные в настройках MCP.",
+    connectorAddedReady: "{name} добавлен. Новые сеансы агента могут использовать его сразу.",
     noInstalledTitle: "Не установлены дополнительные плагины",
     noInstalledBody:
       "Откройте для себя рекомендуемый плагин или выполните поиск в ClawHub, чтобы расширить OpenClaw.",
