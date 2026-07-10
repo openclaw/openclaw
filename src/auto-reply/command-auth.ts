@@ -51,8 +51,10 @@ type OwnerAuthorizationState = {
   allowAll: boolean;
   ownerAllowAll: boolean;
   ownerCandidatesForCommands: string[];
+  ownerCandidatesForCommandsSet: Set<string>;
   explicitOwners: string[];
   ownerList: string[];
+  ownerListSet: Set<string>;
 };
 
 function resolveProviderFromContext(
@@ -425,8 +427,10 @@ function resolveOwnerAuthorizationState(params: {
     allowAll,
     ownerAllowAll,
     ownerCandidatesForCommands,
+    ownerCandidatesForCommandsSet: new Set(ownerCandidatesForCommands),
     explicitOwners,
     ownerList,
+    ownerListSet: new Set(ownerList),
   };
 }
 
@@ -451,8 +455,11 @@ function resolveCommandSenderAuthorization(params: {
     const commandsAllowAll =
       !params.providerResolutionError &&
       Boolean(commandsAllowFromList && hasWildcardAllowFrom(commandsAllowFromList));
-    const matchedCommandsAllowFrom = commandsAllowFromList?.length
-      ? params.senderCandidates.find((candidate) => commandsAllowFromList.includes(candidate))
+    const commandsAllowFromSet = commandsAllowFromList?.length
+      ? new Set(commandsAllowFromList)
+      : null;
+    const matchedCommandsAllowFrom = commandsAllowFromSet
+      ? params.senderCandidates.find((candidate) => commandsAllowFromSet.has(candidate))
       : undefined;
     return (
       !params.providerResolutionError && (commandsAllowAll || Boolean(matchedCommandsAllowFrom))
@@ -659,11 +666,11 @@ export function resolveCommandAuthorization(params: {
     chatType: ctx.ChatType,
   });
   const matchedSender = ownerState.ownerList.length
-    ? senderCandidates.find((candidate) => ownerState.ownerList.includes(candidate))
+    ? senderCandidates.find((candidate) => ownerState.ownerListSet.has(candidate))
     : undefined;
   const matchedCommandOwner = ownerState.ownerCandidatesForCommands.length
     ? senderCandidates.find((candidate) =>
-        ownerState.ownerCandidatesForCommands.includes(candidate),
+        ownerState.ownerCandidatesForCommandsSet.has(candidate),
       )
     : undefined;
   const senderId = matchedSender ?? senderCandidates[0];
