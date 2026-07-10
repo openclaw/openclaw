@@ -186,7 +186,7 @@ describe("Plugin ClawHub New workflow", () => {
     expect(publishRun).toContain('mode}" == "publish"');
     expect(publishRun).toContain("GitHub Actions immutable bootstrap retry");
     expect(publishRun).toContain("GitHub Actions trusted publisher repair before OIDC migration");
-    expect(publishRun).toContain("clawhub package trusted-publisher set");
+    expect(publishRun).toContain('"${OPENCLAW_CLAWHUB_CLI}" package trusted-publisher set');
     expect(publishRun).toContain("timeout --signal=TERM --kill-after=10s 300s");
     expect(publishRun).toContain("--repository openclaw/openclaw");
     expect(publishRun).toContain("--workflow-filename plugin-clawhub-release.yml");
