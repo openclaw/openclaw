@@ -1,7 +1,5 @@
 // Chutes tests cover oauth plugin behavior.
-import { createServer } from "node:http";
-import type { Socket } from "node:net";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loginChutes } from "./oauth.js";
 
 const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
@@ -57,157 +55,46 @@ function fetchInputUrl(input: RequestInfo | URL): string {
   return input.url;
 }
 
-function timeoutResult<T>(value: T, timeoutMs: number): Promise<T> {
-  return new Promise((resolve) => {
-    setTimeout(() => resolve(value), timeoutMs);
-  });
-}
-
-async function listenOnLoopback(server: ReturnType<typeof createServer>): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const onError = (err: Error) => reject(err);
-    server.once("error", onError);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", onError);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("expected loopback TCP address"));
-        return;
-      }
-      resolve(address.port);
-    });
-  });
-}
-
-async function startHangingLoopbackServer(): Promise<{
-  origin: string;
-  requests: string[];
-  waitForRequestCount: (count: number) => Promise<void>;
-  close: () => Promise<void>;
-}> {
-  type RequestWaiter = {
-    count: number;
-    resolve: () => void;
-    reject: (error: Error) => void;
-    timer?: ReturnType<typeof setTimeout>;
-  };
-
-  const sockets = new Set<Socket>();
-  const requests: string[] = [];
-  const waiters: RequestWaiter[] = [];
-
-  const resolveWaiters = () => {
-    for (let index = waiters.length - 1; index >= 0; index -= 1) {
-      const waiter = waiters[index];
-      if (!waiter || requests.length < waiter.count) {
-        continue;
-      }
-      waiters.splice(index, 1);
-      if (waiter.timer) {
-        clearTimeout(waiter.timer);
-      }
-      waiter.resolve();
+function rejectWhenAborted(init?: RequestInit): Promise<Response> {
+  const signal = init?.signal;
+  if (!signal) {
+    return Promise.reject(new Error("missing OAuth request signal"));
+  }
+  return new Promise((_, reject) => {
+    const rejectWithReason = () => reject(signal.reason);
+    if (signal.aborted) {
+      rejectWithReason();
+      return;
     }
-  };
-
-  const server = createServer((req, _res) => {
-    requests.push(req.url ?? "");
-    req.resume();
-    resolveWaiters();
+    signal.addEventListener("abort", rejectWithReason, { once: true });
   });
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.on("close", () => sockets.delete(socket));
+}
+
+function useImmediateOAuthDeadline() {
+  return vi.spyOn(AbortSignal, "timeout").mockImplementation((delay) => {
+    expect(delay).toBe(30_000);
+    return AbortSignal.abort(new DOMException("OAuth request timed out", "TimeoutError"));
   });
+}
 
-  const port = await listenOnLoopback(server);
-  return {
-    origin: `http://127.0.0.1:${port}`,
-    requests,
-    waitForRequestCount: async (count: number) => {
-      if (requests.length >= count) {
-        return;
-      }
-      await new Promise<void>((resolve, reject) => {
-        const waiter: RequestWaiter = {
-          count,
-          resolve,
-          reject,
-        };
-        waiter.timer = setTimeout(() => {
-          const index = waiters.indexOf(waiter);
-          if (index >= 0) {
-            waiters.splice(index, 1);
-          }
-          reject(new Error(`server received ${requests.length} request(s), expected ${count}`));
-        }, 500);
-        waiters.push(waiter);
-      });
+function loginWithFetch(fetchFn: typeof fetch) {
+  return loginChutes({
+    app: {
+      clientId: "cid_test",
+      redirectUri: REDIRECT_URI,
+      scopes: ["openid"],
     },
-    close: async () => {
-      for (const waiter of waiters.splice(0)) {
-        if (waiter.timer) {
-          clearTimeout(waiter.timer);
-        }
-        waiter.reject(new Error("server closed"));
-      }
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => {
-          if (err) {
-            reject(err);
-            return;
-          }
-          resolve();
-        });
-      });
-    },
-  };
+    manual: true,
+    createState: () => "state_test",
+    onAuth: vi.fn(async () => {}),
+    onPrompt: vi.fn(async () => `${REDIRECT_URI}?code=code_test&state=state_test`),
+    fetchFn,
+  });
 }
 
-async function expectFetchWithoutDeadlineToStayPending(url: string, init?: RequestInit) {
-  const controller = new AbortController();
-  const request = fetch(url, { ...init, signal: controller.signal });
-  request.catch(() => undefined);
-
-  const result = await Promise.race([
-    request.then(
-      () => "settled" as const,
-      () => "settled" as const,
-    ),
-    timeoutResult("pending" as const, 30),
-  ]);
-
-  controller.abort();
-  await request.catch(() => undefined);
-  expect(result).toBe("pending");
-}
-
-async function loginOutcomeWithin(
-  promise: Promise<unknown>,
-  timeoutMs: number,
-): Promise<
-  | { status: "pending" }
-  | { status: "resolved" }
-  | {
-      status: "rejected";
-      error: unknown;
-    }
-> {
-  return await Promise.race([
-    promise.then(
-      () => ({ status: "resolved" as const }),
-      (error: unknown) => ({ status: "rejected" as const, error }),
-    ),
-    timeoutResult({ status: "pending" as const }, timeoutMs),
-  ]);
-}
-
-function expectAbortOrTimeoutError(error: unknown) {
-  expect(error).toHaveProperty("name", expect.stringMatching(/^(AbortError|TimeoutError)$/));
-}
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("chutes plugin OAuth", () => {
   it("rejects unsafe token lifetimes before storing credentials", async () => {
@@ -344,95 +231,37 @@ describe("chutes plugin OAuth", () => {
     expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
   });
 
-  it("times out token exchange HTTP requests against a hanging loopback server", async () => {
-    const server = await startHangingLoopbackServer();
-    let loginPromise: Promise<unknown> | undefined;
+  it("uses the fixed deadline for token exchange requests", async () => {
+    const timeoutSpy = useImmediateOAuthDeadline();
+    const fetchFn = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      return await rejectWhenAborted(init);
+    });
 
-    try {
-      await expectFetchWithoutDeadlineToStayPending(`${server.origin}/control`, {
-        method: "POST",
-        body: "grant_type=authorization_code",
-      });
-      await server.waitForRequestCount(1);
-
-      const fetchFn = vi.fn(
-        async (_input: RequestInfo | URL, init?: RequestInit) =>
-          await fetch(`${server.origin}/token`, init),
-      );
-      loginPromise = loginChutes({
-        app: {
-          clientId: "cid_test",
-          redirectUri: REDIRECT_URI,
-          scopes: ["openid"],
-        },
-        manual: true,
-        createState: () => "state_test",
-        onAuth: vi.fn(async () => {}),
-        onPrompt: vi.fn(async () => `${REDIRECT_URI}?code=code_test&state=state_test`),
-        fetchFn,
-        requestTimeoutMs: 50,
-      });
-      loginPromise.catch(() => undefined);
-
-      await server.waitForRequestCount(2);
-      const result = await loginOutcomeWithin(loginPromise, 500);
-      if (result.status !== "rejected") {
-        throw new Error(`expected token exchange to reject, got ${result.status}`);
-      }
-      expectAbortOrTimeoutError(result.error);
-      expect(server.requests).toContain("/token");
-    } finally {
-      await server.close();
-      await loginPromise?.catch(() => undefined);
-    }
+    await expect(loginWithFetch(fetchFn)).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(timeoutSpy).toHaveBeenCalledOnce();
   });
 
-  it("times out userinfo HTTP requests against a hanging loopback server", async () => {
-    const server = await startHangingLoopbackServer();
-    let loginPromise: Promise<unknown> | undefined;
-
-    try {
-      await expectFetchWithoutDeadlineToStayPending(`${server.origin}/control`);
-      await server.waitForRequestCount(1);
-
-      const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = fetchInputUrl(input);
-        if (url === CHUTES_TOKEN_ENDPOINT) {
-          return new Response(
-            '{"access_token":"at_timeout","refresh_token":"rt_timeout","expires_in":3600}',
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
-        }
-        if (url === CHUTES_USERINFO_ENDPOINT) {
-          return await fetch(`${server.origin}/userinfo`, init);
-        }
-        return new Response("not found", { status: 404 });
-      });
-      loginPromise = loginChutes({
-        app: {
-          clientId: "cid_test",
-          redirectUri: REDIRECT_URI,
-          scopes: ["openid"],
-        },
-        manual: true,
-        createState: () => "state_test",
-        onAuth: vi.fn(async () => {}),
-        onPrompt: vi.fn(async () => `${REDIRECT_URI}?code=code_test&state=state_test`),
-        fetchFn,
-        requestTimeoutMs: 50,
-      });
-      loginPromise.catch(() => undefined);
-
-      await server.waitForRequestCount(2);
-      const result = await loginOutcomeWithin(loginPromise, 500);
-      if (result.status !== "rejected") {
-        throw new Error(`expected userinfo fetch to reject, got ${result.status}`);
+  it("keeps issued tokens when userinfo exceeds the fixed deadline", async () => {
+    const timeoutSpy = useImmediateOAuthDeadline();
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = fetchInputUrl(input);
+      if (url === CHUTES_TOKEN_ENDPOINT) {
+        return new Response(
+          '{"access_token":"at_timeout","refresh_token":"rt_timeout","expires_in":3600}',
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
       }
-      expectAbortOrTimeoutError(result.error);
-      expect(server.requests).toContain("/userinfo");
-    } finally {
-      await server.close();
-      await loginPromise?.catch(() => undefined);
-    }
+      if (url === CHUTES_USERINFO_ENDPOINT) {
+        return await rejectWhenAborted(init);
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    const credentials = await loginWithFetch(fetchFn);
+
+    expect(credentials).toMatchObject({ access: "at_timeout", refresh: "rt_timeout" });
+    expect(credentials.email).toBeUndefined();
+    expect(credentials.accountId).toBeUndefined();
+    expect(timeoutSpy).toHaveBeenCalledTimes(2);
   });
 });

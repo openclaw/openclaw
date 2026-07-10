@@ -2,27 +2,24 @@
  * Chutes OAuth PKCE login flow.
  */
 import { randomBytes } from "node:crypto";
-import {
-  resolveExpiresAtMsFromDurationSeconds,
-  resolveTimerTimeoutMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
 import {
   parseOAuthCallbackInput,
   waitForLocalOAuthCallback,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { buildOAuthRequestSignal } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
+import { buildOAuthRequestSignal } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const CHUTES_AUTHORIZE_ENDPOINT = "https://api.chutes.ai/idp/authorize";
 const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
 const CHUTES_USERINFO_ENDPOINT = "https://api.chutes.ai/idp/userinfo";
 const CHUTES_TOKEN_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
-const CHUTES_OAUTH_FETCH_TIMEOUT_MS = 30_000;
+const CHUTES_OAUTH_REQUEST_TIMEOUT_MS = 30_000;
 
 type OAuthPrompt = {
   message: string;
@@ -119,19 +116,14 @@ function resolveChutesExpiresAt(value: unknown, now: number): number | undefined
   });
 }
 
-function resolveChutesOAuthFetchTimeoutMs(value: unknown): number {
-  return resolveTimerTimeoutMs(value, CHUTES_OAUTH_FETCH_TIMEOUT_MS);
-}
-
 async function fetchChutesUserInfo(params: {
   accessToken: string;
   fetchFn?: typeof fetch;
-  requestTimeoutMs: number;
 }): Promise<ChutesUserInfo | null> {
   const fetchFn = params.fetchFn ?? fetch;
   const response = await fetchFn(CHUTES_USERINFO_ENDPOINT, {
     headers: { Authorization: `Bearer ${params.accessToken}` },
-    signal: buildOAuthRequestSignal({ timeoutMs: params.requestTimeoutMs }),
+    signal: buildOAuthRequestSignal({ timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS }),
   });
   if (!response.ok) {
     return null;
@@ -146,11 +138,9 @@ async function exchangeChutesCodeForTokens(params: {
   codeVerifier: string;
   fetchFn?: typeof fetch;
   now?: number;
-  requestTimeoutMs?: number;
 }): Promise<ChutesStoredOAuth> {
   const fetchFn = params.fetchFn ?? fetch;
   const now = params.now ?? Date.now();
-  const requestTimeoutMs = resolveChutesOAuthFetchTimeoutMs(params.requestTimeoutMs);
   const body = new URLSearchParams(
     toFormUrlEncoded({
       grant_type: "authorization_code",
@@ -168,7 +158,7 @@ async function exchangeChutesCodeForTokens(params: {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
-    signal: buildOAuthRequestSignal({ timeoutMs: requestTimeoutMs }),
+    signal: buildOAuthRequestSignal({ timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS }),
   });
   if (!response.ok) {
     const detail = await readResponseTextLimited(
@@ -196,7 +186,13 @@ async function exchangeChutesCodeForTokens(params: {
     throw new Error("Chutes token exchange returned invalid expires_in");
   }
 
-  const info = await fetchChutesUserInfo({ accessToken: access, fetchFn, requestTimeoutMs });
+  let info: ChutesUserInfo | null = null;
+  try {
+    info = await fetchChutesUserInfo({ accessToken: access, fetchFn });
+  } catch {
+    // Token exchange completes authentication; optional profile enrichment must
+    // not discard issued credentials when userinfo is unavailable or times out.
+  }
   return {
     access,
     refresh,
@@ -217,7 +213,6 @@ export async function loginChutes(params: {
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
   onProgress?: (message: string) => void;
   fetchFn?: typeof fetch;
-  requestTimeoutMs?: number;
 }): Promise<ChutesStoredOAuth> {
   const { verifier, challenge } = generatePkceVerifierChallenge();
   const state = params.createState?.() ?? randomBytes(16).toString("hex");
@@ -273,6 +268,5 @@ export async function loginChutes(params: {
     code: codeAndState.code,
     codeVerifier: verifier,
     fetchFn: params.fetchFn,
-    requestTimeoutMs: params.requestTimeoutMs,
   });
 }
