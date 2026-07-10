@@ -102,6 +102,7 @@ describe("printCronList", () => {
       { name: `${prefix19}表tail`, expected: `${prefix19}表...` },
       { name: `${prefix20}e\u0301tail`, expected: `${prefix20}e\u0301...` },
       { name: `${prefix19}👨‍👩‍👧‍👦tail`, expected: `${prefix19}👨‍👩‍👧‍👦...` },
+      { name: `${prefix20}👨‍👩‍👧‍👦`, expected: `${prefix20}👨‍👩‍👧‍👦` },
       { name: `${prefix20}\u001B[31m🚀\u001B[0mtail`, expected: `${prefix20}...` },
     ];
 
