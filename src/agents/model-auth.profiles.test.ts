@@ -781,7 +781,7 @@ describe("getApiKeyForModel", () => {
     });
   });
 
-  it("prioritizes explicit models.json apiKey over store profiles", async () => {
+  it("prioritizes models.json apiKey when provider auth explicitly opts in", async () => {
     const resolved = await resolveApiKeyForProvider({
       provider: "demo-local",
       store: {
@@ -799,6 +799,7 @@ describe("getApiKeyForModel", () => {
           providers: {
             "demo-local": {
               baseUrl: "https://explicit.example",
+              auth: "api-key",
               apiKey: "explicit-literal-key",
               models: [],
             },

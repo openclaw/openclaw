@@ -4,7 +4,6 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
 import {
   externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
@@ -19,9 +18,9 @@ import {
 } from "./cli-credentials.js";
 import {
   resolveEnvApiKey,
-  resolveProviderConfig,
   resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey,
+  shouldPreferExplicitConfigApiKeyAuth,
 } from "./model-auth.js";
 import { normalizeProviderId } from "./model-selection.js";
 
@@ -102,12 +101,7 @@ export function resolveModelAuthLabel(params: {
     }
   }
 
-  if (providerEntryProfileRef.kind === "literal") {
-    return `api-key (models.json)`;
-  }
-
-  const providerConfig = resolveProviderConfig(params.cfg, providerKey);
-  if (providerConfig && coerceSecretRef(providerConfig.apiKey)) {
+  if (shouldPreferExplicitConfigApiKeyAuth(params.cfg, providerKey)) {
     const customKey = resolveUsableCustomProviderApiKey({
       cfg: params.cfg,
       provider: providerKey,
@@ -116,21 +110,6 @@ export function resolveModelAuthLabel(params: {
       return `api-key (models.json)`;
     }
   }
-  if (providerEntryProfileRef.kind === "profile") {
-    const label = resolveAuthProfileDisplayLabel({
-      cfg: params.cfg,
-      store,
-      profileId: providerEntryProfileRef.profileId,
-    });
-    if (providerEntryProfileRef.mode === "token") {
-      return `token${label ? ` (${label})` : ""}`;
-    }
-    return `api-key${label ? ` (${label})` : ""}`;
-  }
-  if (providerEntryProfileRef.kind === "profile-incompatible") {
-    return "unknown";
-  }
-
   const remainingCandidates = order.filter((id) => id !== profileOverride);
   for (const profileId of remainingCandidates) {
     const profile = store.profiles[profileId];
@@ -158,6 +137,21 @@ export function resolveModelAuthLabel(params: {
       return `token${label ? ` (${label})` : ""}`;
     }
     return `api-key${label ? ` (${label})` : ""}`;
+  }
+
+  if (providerEntryProfileRef.kind === "profile") {
+    const label = resolveAuthProfileDisplayLabel({
+      cfg: params.cfg,
+      store,
+      profileId: providerEntryProfileRef.profileId,
+    });
+    if (providerEntryProfileRef.mode === "token") {
+      return `token${label ? ` (${label})` : ""}`;
+    }
+    return `api-key${label ? ` (${label})` : ""}`;
+  }
+  if (providerEntryProfileRef.kind === "profile-incompatible") {
+    return "unknown";
   }
 
   if (

@@ -1,5 +1,6 @@
 // Verifies safe, user-facing auth labels without exposing credential values.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveModelAuthLabel } from "./model-auth-label.js";
 
 const mocks = vi.hoisted(() => ({
@@ -29,7 +30,8 @@ vi.mock("./model-auth.js", () => ({
   resolveProviderEntryApiKeyProfileReference: mocks.resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey: mocks.resolveUsableCustomProviderApiKey,
   resolveEnvApiKey: mocks.resolveEnvApiKey,
-  resolveProviderConfig: (cfg: any, provider: string) => cfg?.models?.providers?.[provider],
+  shouldPreferExplicitConfigApiKeyAuth: (cfg: OpenClawConfig | undefined, provider: string) =>
+    cfg?.models?.providers?.[provider]?.auth === "api-key",
 }));
 
 vi.mock("./cli-credentials.js", () => ({
@@ -362,7 +364,7 @@ describe("resolveModelAuthLabel", () => {
     expect(mocks.resolveUsableCustomProviderApiKey).not.toHaveBeenCalled();
   });
 
-  it("shows literal api-key label when providerEntryProfileRef is a literal models.json key", () => {
+  it("shows a literal models.json key when api-key auth explicitly opts in", () => {
     mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {},
@@ -376,7 +378,13 @@ describe("resolveModelAuthLabel", () => {
 
     const label = resolveModelAuthLabel({
       provider: "openai",
-      cfg: {},
+      cfg: {
+        models: {
+          providers: {
+            openai: { auth: "api-key", apiKey: "sk-literal-secret-key", models: [] },
+          },
+        },
+      },
     });
 
     expect(label).toBe("api-key (models.json)");

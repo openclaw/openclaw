@@ -1,13 +1,13 @@
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveModelAuthLabel } from "./model-auth-label.js";
 import { resolveApiKeyForProvider } from "./model-auth.js";
 
-describe("repro_1_1_edge: SecretRef apiKey precedence", () => {
+describe("repro_1_1_edge: explicit api-key SecretRef precedence", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
-  it("prioritizes explicit models.json SecretRef apiKey over store profiles", async () => {
+  it("prioritizes models.json SecretRef when auth explicitly opts in", async () => {
     vi.stubEnv("REPRO_1_1_SECRET_ENV", "secret-env-value-12345");
 
     const resolved = await resolveApiKeyForProvider({
@@ -27,8 +27,10 @@ describe("repro_1_1_edge: SecretRef apiKey precedence", () => {
           providers: {
             "demo-local": {
               baseUrl: "https://explicit.example",
+              auth: "api-key",
               apiKey: {
                 source: "env",
+                provider: "default",
                 id: "REPRO_1_1_SECRET_ENV",
               },
               models: [],
@@ -53,8 +55,10 @@ describe("repro_1_1_edge: SecretRef apiKey precedence", () => {
           providers: {
             "demo-local": {
               baseUrl: "https://explicit.example",
+              auth: "api-key",
               apiKey: {
                 source: "env",
+                provider: "default",
                 id: "REPRO_1_1_SECRET_ENV",
               },
               models: [],
@@ -86,8 +90,10 @@ describe("repro_1_1_edge: SecretRef apiKey precedence", () => {
           providers: {
             "demo-local": {
               baseUrl: "https://explicit.example",
+              auth: "api-key",
               apiKey: {
                 source: "env",
+                provider: "default",
                 id: "REPRO_1_1_SECRET_ENV",
               },
               models: [],

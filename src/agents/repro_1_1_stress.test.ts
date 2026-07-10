@@ -1,4 +1,6 @@
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveApiKeyForProvider } from "./model-auth.js";
 
 describe("repro_1_1_stress: concurrent precedence resolution", () => {
@@ -10,7 +12,7 @@ describe("repro_1_1_stress: concurrent precedence resolution", () => {
     vi.stubEnv("CONCURRENT_ENV_1", "concurrent-val-1");
     vi.stubEnv("CONCURRENT_ENV_2", "concurrent-val-2");
 
-    const store = {
+    const store: AuthProfileStore = {
       version: 1,
       profiles: {
         "p1:default": {
@@ -31,18 +33,21 @@ describe("repro_1_1_stress: concurrent precedence resolution", () => {
       },
     };
 
-    const cfg = {
+    const cfg: OpenClawConfig = {
       models: {
         providers: {
           p1: {
             baseUrl: "https://p1.example",
+            auth: "api-key" as const,
             apiKey: "p1-explicit-literal",
             models: [],
           },
           p2: {
             baseUrl: "https://p2.example",
+            auth: "api-key" as const,
             apiKey: {
               source: "env",
+              provider: "default",
               id: "CONCURRENT_ENV_2",
             },
             models: [],
@@ -58,9 +63,9 @@ describe("repro_1_1_stress: concurrent precedence resolution", () => {
 
     // Run 50 concurrent lookups
     const promises = Array.from({ length: 50 }).flatMap(() => [
-      resolveApiKeyForProvider({ provider: "p1", store: store as any, cfg: cfg as any }),
-      resolveApiKeyForProvider({ provider: "p2", store: store as any, cfg: cfg as any }),
-      resolveApiKeyForProvider({ provider: "p3", store: store as any, cfg: cfg as any }),
+      resolveApiKeyForProvider({ provider: "p1", store, cfg }),
+      resolveApiKeyForProvider({ provider: "p2", store, cfg }),
+      resolveApiKeyForProvider({ provider: "p3", store, cfg }),
     ]);
 
     const results = await Promise.all(promises);
