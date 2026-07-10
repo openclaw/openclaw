@@ -552,12 +552,17 @@ pnpm test:install:smoke
   a package newly added to the release is a release-prep blocker, not something
   to discover from the publish job.
 - Bootstrap a new ClawHub package only from the trusted workflow source:
-  `gh workflow run plugin-clawhub-new.yml --ref main -f plugins=@openclaw/name -f ref=<full-release-sha> -f dry_run=true`.
-  The workflow source stays on `main`; `ref` is the exact release target. A dry
-  run must still pack every candidate, upload and download the exact artifact
-  ID, rehash the inventory, reject ambiguous TAR paths locally with the pinned
-  CLI's USTAR canonicalization, and validate each tarball with the pinned CLI
-  publish dry-run. That dry-run returns before registry lookup or auth. For an
+  `gh workflow run plugin-clawhub-new.yml --ref main -f plugins=@openclaw/name -f ref=<full-release-sha> -f pretag_validation=true -f dry_run=true`.
+  The workflow source stays on `main`; `ref` is the exact release target. A
+  pre-tag dry run rejects tag/parent-approval inputs and requires the target to be
+  reachable from `main` or `release/*`. It must still resolve the live registry
+  plan, pack every candidate, upload and download the exact artifact ID, rehash
+  the inventory, reject ambiguous TAR paths locally with the pinned CLI's USTAR
+  canonicalization, and validate each tarball with the pinned CLI publish
+  dry-run. It never loads credentials or changes package/trusted-publisher
+  state. Approve the `clawhub-plugin-bootstrap` environment only after the
+  secretless pack jobs finish; the protected validation job itself has no
+  credentials or mutation commands. For an
   existing version missing trusted-publisher configuration, pack the target
   bytes too and require its tag plus exact registry byte/metadata equality
   before allowing configuration-only repair. The credential-job prefilter
@@ -568,7 +573,11 @@ pnpm test:install:smoke
   byte-identical registry readback. Final release verification must consume the
   unique terminal readback artifact and bind its main-only workflow SHA/attempt,
   target SHA, requested packages, package artifact ID/name/digest, and
-  per-package SHA-256/size/npm integrity metadata.
+  per-package SHA-256/size/npm integrity metadata. The parent approval attests a
+  separate exact trusted-main child workflow SHA; the child run and protected
+  approval must match it. Rerun-failed recovery may reuse a prior package
+  artifact only when the exact producer job succeeded. Final evidence must also
+  preserve the locked ClawHub version, lock SHA-256, and npm integrity.
 - Use `pnpm qa:otel:smoke` when release validation needs telemetry coverage.
   It starts a local OTLP/HTTP trace receiver, runs QA-lab's
   `otel-trace-smoke`, and checks span names plus content/identifier redaction

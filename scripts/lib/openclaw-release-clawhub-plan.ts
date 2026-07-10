@@ -23,6 +23,7 @@ type ClawHubDispatchTarget = {
 };
 
 type OpenClawReleaseClawHubPlanArgs = {
+  bootstrapWorkflowSha: string;
   releaseTag: string;
   releaseSha: string;
   releasePublishBranch: string;
@@ -33,6 +34,7 @@ type OpenClawReleaseClawHubPlanArgs = {
 };
 
 type OpenClawReleaseClawHubPlan = {
+  bootstrapWorkflowSha: string;
   clawHubWorkflowRef: string;
   releasePublishBranch: string;
   normal: ClawHubDispatchTarget;
@@ -128,6 +130,7 @@ function createDispatchTarget(params: {
   releasePublishRunId: string;
   releasePublishBranch: string;
   includePublishScope: boolean;
+  bootstrapWorkflowSha?: string;
   releaseTag?: string;
   releasePublishRunAttempt?: string;
   targetRef?: string;
@@ -151,6 +154,9 @@ function createDispatchTarget(params: {
     inputs: {
       ...(params.includePublishScope ? { publish_scope: "selected" } : {}),
       ...(params.targetRef ? { ref: params.targetRef } : {}),
+      ...(params.bootstrapWorkflowSha
+        ? { bootstrap_workflow_sha: params.bootstrapWorkflowSha }
+        : {}),
       ...(params.releaseTag ? { release_tag: params.releaseTag } : {}),
       ...(params.releasePublishRunAttempt
         ? { release_publish_run_attempt: params.releasePublishRunAttempt }
@@ -221,6 +227,7 @@ export function parseOpenClawReleaseClawHubPlanArgs(
 
   let releaseTag: string | undefined;
   let releaseSha: string | undefined;
+  let bootstrapWorkflowSha: string | undefined;
   let releasePublishBranch: string | undefined;
   let releasePublishRunAttempt: string | undefined;
   let releasePublishRunId: string | undefined;
@@ -240,6 +247,9 @@ export function parseOpenClawReleaseClawHubPlanArgs(
     };
 
     switch (arg) {
+      case "--bootstrap-workflow-sha":
+        bootstrapWorkflowSha = next();
+        break;
       case "--release-tag":
         releaseTag = next();
         break;
@@ -279,6 +289,7 @@ export function parseOpenClawReleaseClawHubPlanArgs(
   }
 
   return {
+    bootstrapWorkflowSha: requireCommitSha(bootstrapWorkflowSha, "--bootstrap-workflow-sha"),
     releaseTag: requireArg(releaseTag, "--release-tag"),
     releaseSha: requireCommitSha(releaseSha, "--release-sha"),
     releasePublishBranch: requireArg(releasePublishBranch, "--release-publish-branch"),
@@ -300,6 +311,7 @@ export async function buildOpenClawReleaseClawHubPlan(
     registryBaseUrl?: string;
   } = {},
 ): Promise<OpenClawReleaseClawHubPlan> {
+  const bootstrapWorkflowSha = requireCommitSha(args.bootstrapWorkflowSha, "bootstrapWorkflowSha");
   const releaseTag = requireArg(args.releaseTag, "releaseTag");
   const releaseSha = requireCommitSha(args.releaseSha, "releaseSha");
   const releasePublishBranch = requireArg(args.releasePublishBranch, "releasePublishBranch");
@@ -325,6 +337,7 @@ export async function buildOpenClawReleaseClawHubPlan(
   assertNoPackageOverlap(normalPackages, bootstrapPackages);
 
   return {
+    bootstrapWorkflowSha,
     clawHubWorkflowRef: releaseTag,
     releasePublishBranch,
     normal: createDispatchTarget({
@@ -342,6 +355,7 @@ export async function buildOpenClawReleaseClawHubPlan(
       releasePublishRunId,
       releasePublishBranch,
       includePublishScope: false,
+      bootstrapWorkflowSha,
       releaseTag,
       releasePublishRunAttempt,
       targetRef: releaseSha,

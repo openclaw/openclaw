@@ -182,6 +182,10 @@ describe("parseReleaseVerifyBetaArgs", () => {
 });
 
 describe("validateClawHubBootstrapEvidence", () => {
+  const clawhubToolchainIntegrity =
+    "sha512-YvUImhsVaM90BUAv3uP7lfABziwR5XL3ch2Owa+GvNxwQ2xzZFmZC0yVjAtQbvep+dDDS16nUGRwKx7jqnTOEA==";
+  const clawhubToolchainSha256 = "f44f670d70f13a8cde566a174cae5be682ad98456ec7a85aafd497f7d8c71816";
+  const clawhubToolchainVersion = "0.23.1";
   const releaseSha = "a".repeat(40);
   const workflowSha = "b".repeat(40);
   const packageSha = "c".repeat(64);
@@ -231,6 +235,9 @@ describe("validateClawHubBootstrapEvidence", () => {
     artifactName: packageArtifact.name,
     artifactId: "46",
     artifactDigest: packageSha,
+    clawhubToolchainIntegrity,
+    clawhubToolchainSha256,
+    clawhubToolchainVersion,
     requestedPlugins: ["@openclaw/meta"],
     verificationMode: "postpublish",
     packages: [
@@ -295,6 +302,9 @@ describe("validateClawHubBootstrapEvidence", () => {
         packageArtifactId: "46",
         packageArtifactDigest: packageSha,
         packageCount: 1,
+        clawhubToolchainIntegrity,
+        clawhubToolchainSha256,
+        clawhubToolchainVersion,
       },
     });
   });
@@ -371,6 +381,14 @@ describe("validateClawHubBootstrapEvidence", () => {
         },
       }),
     ).toThrow("artifact metadata does not match downloaded bytes");
+    expect(() =>
+      validate({
+        evidence: {
+          ...evidence,
+          clawhubToolchainSha256: "e".repeat(64),
+        },
+      }),
+    ).toThrow("clawhubToolchainSha256 mismatch");
   });
 });
 
@@ -397,6 +415,7 @@ describe("downloadClawHubBootstrapReadback", () => {
     status: "completed",
     conclusion: "success",
     repository: { full_name: "openclaw/openclaw" },
+    head_repository: { full_name: "openclaw/openclaw" },
   };
 
   function createFixture(

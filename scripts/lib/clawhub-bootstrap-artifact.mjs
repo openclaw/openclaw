@@ -427,6 +427,8 @@ export async function downloadClawHubBootstrapArtifact(options) {
   const artifactSizeBytes = readPositiveInteger(options.artifactSize, "artifactSize");
   const runId = readPositiveInteger(options.runId, "runId");
   const runAttempt = readPositiveInteger(options.runAttempt, "runAttempt");
+  const consumerRunAttempt = readPositiveInteger(options.consumerRunAttempt, "consumerRunAttempt");
+  const producerJobName = requireString(options.producerJobName, "producerJobName");
   const targetSha = requirePattern(options.targetSha, COMMIT_PATTERN, "targetSha");
   const workflowSha = requirePattern(options.workflowSha, COMMIT_PATTERN, "workflowSha");
   const artifactDigest = requirePattern(options.artifactDigest, SHA256_PATTERN, "artifactDigest");
@@ -479,8 +481,10 @@ export async function downloadClawHubBootstrapArtifact(options) {
       artifactId,
       artifactName,
       artifactSizeBytes,
+      consumerRunAttempt,
+      producerJobName,
       repository,
-      runStatePolicy: "same-run-in-progress",
+      runStatePolicy: "same-run-producer-success",
       runAttempt,
       runId,
       workflowEvent: "workflow_dispatch",
@@ -729,10 +733,12 @@ async function main() {
       artifactId: args.artifact_id,
       artifactName: args.artifact_name,
       artifactSize: args.artifact_size,
+      consumerRunAttempt: args.consumer_run_attempt,
       clawhubToolchainIntegrity: args.clawhub_toolchain_integrity,
       clawhubToolchainSha256: args.clawhub_toolchain_sha256,
       clawhubToolchainVersion: args.clawhub_toolchain_version,
       outputRoot: args.output_root,
+      producerJobName: args.producer_job_name,
       repository: args.repository,
       runAttempt: args.run_attempt,
       runId: args.run_id,

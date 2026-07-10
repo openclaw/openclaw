@@ -1,7 +1,9 @@
-// Release Beta Verifier script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
+// Release Beta Verifier script supports OpenClaw repository automation.
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { readPublicationArtifactArchive, sha256Digest } from "./actions-artifact-archive.mjs";
 import { readBoundedResponseText } from "./bounded-response.ts";
 import { collectClawHubPublishablePluginPackages } from "./plugin-clawhub-release.ts";
@@ -66,6 +68,9 @@ type WorkflowRunSummary = {
     packageArtifactId: string;
     packageArtifactDigest: string;
     packageCount: number;
+    clawhubToolchainIntegrity: string;
+    clawhubToolchainSha256: string;
+    clawhubToolchainVersion: string;
   };
 };
 
@@ -79,6 +84,8 @@ const CLAWHUB_BOOTSTRAP_READBACK_ARCHIVE_MAX_BYTES = 2 * 1024 * 1024;
 const COMMIT_SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const POSITIVE_INTEGER_PATTERN = /^[1-9][0-9]*$/u;
+const SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]+={0,2}$/u;
+const TRUSTED_TOOLING_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 // Trusted publish can finish before npm registry metadata converges. Keep the
 // verifier on the same release train instead of forcing a republish/correction.
 const NPM_VIEW_ATTEMPTS = 30;
@@ -102,6 +109,35 @@ function requireString(value: unknown, label: string): string {
     throw new Error(`${label} is missing.`);
   }
   return stringValue;
+}
+
+function readTrustedClawHubToolchainIdentity(): {
+  clawhubToolchainIntegrity: string;
+  clawhubToolchainSha256: string;
+  clawhubToolchainVersion: string;
+} {
+  const lockPath = resolve(TRUSTED_TOOLING_ROOT, ".github/release/clawhub-cli/package-lock.json");
+  const lockBytes = readFileSync(lockPath);
+  const lock = parseJson(lockBytes.toString("utf8"), "trusted ClawHub CLI package-lock.json");
+  if (!isRecord(lock) || !isRecord(lock.packages)) {
+    throw new Error("Trusted ClawHub CLI package-lock.json is invalid.");
+  }
+  const clawhub = lock.packages["node_modules/clawhub"];
+  if (!isRecord(clawhub)) {
+    throw new Error("Trusted ClawHub CLI package-lock.json is missing clawhub.");
+  }
+  const clawhubToolchainIntegrity = requireString(
+    clawhub.integrity,
+    "trusted ClawHub CLI integrity",
+  );
+  if (!SHA512_INTEGRITY_PATTERN.test(clawhubToolchainIntegrity)) {
+    throw new Error("Trusted ClawHub CLI integrity is invalid.");
+  }
+  return {
+    clawhubToolchainIntegrity,
+    clawhubToolchainSha256: createHash("sha256").update(lockBytes).digest("hex"),
+    clawhubToolchainVersion: requireString(clawhub.version, "trusted ClawHub CLI version"),
+  };
 }
 
 function runCommand(command: string, args: string[], options: { cwd?: string } = {}): string {
@@ -907,6 +943,12 @@ export function validateClawHubBootstrapEvidence(params: {
   if (BigInt(producerRunAttempt) > BigInt(terminalRunAttempt)) {
     throw new Error("Plugin ClawHub New producer attempt is newer than its terminal attempt.");
   }
+  const expectedToolchain = readTrustedClawHubToolchainIdentity();
+  for (const [key, expected] of Object.entries(expectedToolchain)) {
+    if (params.evidence[key] !== expected) {
+      throw new Error(`Plugin ClawHub New ${key} mismatch.`);
+    }
+  }
 
   const expectedPackages = [...new Set(params.expectedPackages)].toSorted(compareCodeUnits);
   if (expectedPackages.length === 0) {
@@ -1009,6 +1051,7 @@ export function validateClawHubBootstrapEvidence(params: {
       packageArtifactId,
       packageArtifactDigest,
       packageCount: expectedPackages.length,
+      ...expectedToolchain,
     },
   };
 }

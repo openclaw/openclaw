@@ -780,6 +780,109 @@ describe("plugin publication artifact", () => {
     );
   });
 
+  it("reuses only an exact successful producer job from the current or a prior attempt", async () => {
+    const zip = createZip([{ bytes: Buffer.from("proof"), name: "proof.txt" }]);
+    const artifactMetadata = {
+      id: ARTIFACT_ID,
+      name: ARTIFACT_NAME,
+      expired: false,
+      digest: `sha256:${sha256(zip)}`,
+      size_in_bytes: zip.length,
+      workflow_run: {
+        id: RUN_ID,
+        head_sha: WORKFLOW_SHA,
+      },
+    };
+    const producerJobName = "Pack immutable ClawHub bootstrap artifacts";
+
+    async function downloadForAttempts(
+      producerAttempt: number,
+      consumerAttempt: number,
+      producerConclusion = "success",
+    ) {
+      const workflowRun = {
+        id: RUN_ID,
+        run_attempt: producerAttempt,
+        head_sha: WORKFLOW_SHA,
+        head_branch: "main",
+        event: "workflow_dispatch",
+        path: WORKFLOW_PATH,
+        status: producerAttempt === consumerAttempt ? "in_progress" : "completed",
+        conclusion: producerAttempt === consumerAttempt ? null : "failure",
+        repository: { full_name: REPOSITORY },
+        head_repository: { full_name: REPOSITORY },
+      };
+      const workflowJobs = {
+        total_count: 1,
+        jobs: [
+          {
+            name: producerJobName,
+            run_id: RUN_ID,
+            run_attempt: producerAttempt,
+            head_sha: WORKFLOW_SHA,
+            status: "completed",
+            conclusion: producerConclusion,
+          },
+        ],
+      };
+      const fetchImpl = (async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.endsWith(`/actions/artifacts/${ARTIFACT_ID}`)) {
+          return Response.json(artifactMetadata);
+        }
+        if (url.endsWith(`/actions/runs/${RUN_ID}/attempts/${producerAttempt}`)) {
+          return Response.json(workflowRun);
+        }
+        if (url.endsWith(`/actions/runs/${RUN_ID}/attempts/${producerAttempt}/jobs?per_page=100`)) {
+          return Response.json(workflowJobs);
+        }
+        if (url.endsWith(`/actions/artifacts/${ARTIFACT_ID}/zip`)) {
+          return new Response(zip, {
+            status: 200,
+            headers: { "content-length": String(zip.length) },
+          });
+        }
+        return new Response("unexpected", { status: 404 });
+      }) as typeof fetch;
+
+      return downloadActionsArtifactArchive({
+        expected: {
+          artifactDigest: `sha256:${sha256(zip)}`,
+          artifactId: ARTIFACT_ID,
+          artifactName: ARTIFACT_NAME,
+          artifactSizeBytes: zip.length,
+          consumerRunAttempt: consumerAttempt,
+          producerJobName,
+          repository: REPOSITORY,
+          runStatePolicy: "same-run-producer-success",
+          runAttempt: producerAttempt,
+          runId: RUN_ID,
+          workflowEvent: "workflow_dispatch",
+          workflowHeadBranch: "main",
+          workflowPath: WORKFLOW_PATH,
+          workflowSha: WORKFLOW_SHA,
+        },
+        fetchImpl,
+        maxArchiveBytes: 1024 * 1024,
+        retryAttempts: 1,
+        token: "test-token",
+      });
+    }
+
+    await expect(downloadForAttempts(2, 2)).resolves.toMatchObject({
+      workflowJobs: { total_count: 1 },
+    });
+    await expect(downloadForAttempts(1, 2)).resolves.toMatchObject({
+      workflowRun: { conclusion: "failure", status: "completed" },
+    });
+    await expect(downloadForAttempts(1, 2, "failure")).rejects.toThrow(
+      "Actions artifact producer job did not complete successfully.",
+    );
+    await expect(downloadForAttempts(3, 2)).rejects.toThrow(
+      "Producer workflow run attempt must not be newer than the consumer attempt.",
+    );
+  });
+
   it("rejects ZIP traversal, additional files, and byte tampering", () => {
     const fixture = createFixture();
     const manifest = readFileSync(fixture.created.manifestPath);

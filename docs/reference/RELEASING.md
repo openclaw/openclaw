@@ -517,13 +517,31 @@ gh workflow run plugin-clawhub-new.yml \
   --ref main \
   -f plugins=@openclaw/name \
   -f ref=<full-40-character-release-sha> \
+  -f pretag_validation=true \
   -f dry_run=true
 ```
 
-The dry run checks out and packs the target only in a secretless job. That job
+Pre-tag validation requires `dry_run=true`, rejects release-tag and parent-run
+inputs, and accepts only an exact target reachable from `main` or `release/*`.
+It does not load ClawHub credentials, publish package bytes, or change trusted
+publisher configuration. The workflow still resolves the live registry plan,
+checks out and packs the target only in a secretless job, materializes the
+locked ClawHub toolchain, and validates the immutable artifact and package
+slug/identity before the release tag exists. Approve the
+`clawhub-plugin-bootstrap` environment only after the secretless pack jobs
+finish; this protected validation job has no credentials or mutation commands.
+
+An approved dry run or real bootstrap after tagging must include the exact
+release tag plus the parent `OpenClaw Release Publish` run id, attempt, and
+branch. The parent attests its own workflow SHA and a separate exact trusted
+`main` SHA for `Plugin ClawHub New`; the child run and every protected
+environment approval must match that approved child SHA. The release tag is
+rechecked before every publish attempt and trusted-publisher mutation.
+
+The pack job
 uploads one immutable artifact whose name, Actions artifact ID/digest,
 producer run/attempt, target SHA, and per-package tarball SHA-256/size are
-carried into the protected job. The protected job checks out trusted `main`
+carried into the validation and protected jobs. The protected job checks out trusted `main`
 tooling only, validates the artifact tuple through the GitHub API, downloads
 by exact artifact ID, rehashes every tarball, and validates local TAR paths and
 package identity with the pinned CLI's USTAR canonicalization rules. Every
@@ -534,7 +552,10 @@ TAR entry count at 10,000. Existing-package trusted-publisher repair remains
 configure-only, but it still packs the target and requires the requested tag
 plus exact registry byte and metadata equality before changing trusted-publisher
 configuration. Post-publish verification downloads the ClawHub artifact and
-requires the same SHA-256 and size. A mismatch requires a new package version.
+requires the same SHA-256 and size. A rerun-failed recovery may reuse an earlier
+attempt's package artifact only when the exact producer job completed
+successfully. Final evidence also binds the locked ClawHub version, lock
+SHA-256, and npm integrity. A mismatch requires a new package version.
 
 ## NPM workflow inputs
 

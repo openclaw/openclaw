@@ -562,13 +562,19 @@ jobs:
         env:
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
         run: |
           set -euo pipefail
           plan_path="${RUNNER_TEMP}/openclaw-release-clawhub-plan.json"
+          bootstrap_workflow_sha="$(
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
+              --jq '.object.sha | select(test("^[a-f0-9]{40}$"))'
+          )"
           plan_args=(
+            --bootstrap-workflow-sha "${bootstrap_workflow_sha}"
             --release-tag "${RELEASE_TAG}"
             --release-sha "${TARGET_SHA}"
             --release-publish-branch "${CHILD_WORKFLOW_REF}"
@@ -594,12 +600,15 @@ jobs:
 
           jq -e \
             --arg branch "${CHILD_WORKFLOW_REF}" \
+            --arg bootstrap_workflow_sha "${bootstrap_workflow_sha}" \
             --arg attempt "${GITHUB_RUN_ATTEMPT}" \
             --arg run_id "${GITHUB_RUN_ID}" \
             --arg tag "${RELEASE_TAG}" \
             --arg target "${TARGET_SHA}" \
-            '.bootstrap.ref == "main" and
+            '.bootstrapWorkflowSha == $bootstrap_workflow_sha and
+             .bootstrap.ref == "main" and
              .bootstrap.inputs.ref == $target and
+             .bootstrap.inputs.bootstrap_workflow_sha == $bootstrap_workflow_sha and
              .bootstrap.inputs.release_tag == $tag and
              .bootstrap.inputs.release_publish_branch == $branch and
              .bootstrap.inputs.release_publish_run_attempt == $attempt and
@@ -617,14 +626,15 @@ jobs:
             a < b ? -1 : a > b ? 1 : 0,
           );
           const approval = {
-            version: 1,
+            version: 2,
             kind: "clawhub-bootstrap",
             repository: process.env.GITHUB_REPOSITORY,
             workflow: "OpenClaw Release Publish",
             parentRunId: process.env.GITHUB_RUN_ID,
             parentRunAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
             workflowBranch: process.env.CHILD_WORKFLOW_REF,
-            workflowSha: process.env.GITHUB_SHA,
+            parentWorkflowSha: process.env.GITHUB_SHA,
+            bootstrapWorkflowSha: plan.bootstrapWorkflowSha,
             releaseTag: process.env.RELEASE_TAG,
             targetSha: process.env.TARGET_SHA,
             packages,
@@ -748,7 +758,8 @@ jobs:
             local workflow="$1"
             shift
 
-            local dispatch_body dispatch_response field key run_id run_url value
+            local dispatch_body dispatch_response expected_head_sha field key run_head_sha run_id run_url value
+            expected_head_sha="${EXPECTED_WORKFLOW_HEAD_SHA:-}"
             local inputs_json='{}'
             while (( $# > 0 )); do
               if [[ "$1" != "-f" && "$1" != "--raw-field" && "$1" != "-F" && "$1" != "--field" ]]; then
@@ -784,6 +795,14 @@ jobs:
               --input -)"
             run_id="$(printf '%s' "$dispatch_response" | jq -er '.workflow_run_id')"
             run_url="$(printf '%s' "$dispatch_response" | jq -er '.html_url')"
+            run_head_sha="$(
+              gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" \
+                --jq '.head_sha | select(test("^[a-f0-9]{40}$"))'
+            )"
+            if [[ -n "${expected_head_sha}" && "${run_head_sha}" != "${expected_head_sha}" ]]; then
+              echo "${workflow}: dispatched run head ${run_head_sha} does not match approved workflow SHA ${expected_head_sha}." >&2
+              exit 1
+            fi
 
             echo "Dispatched ${workflow}: ${run_url}" >&2
             {
@@ -794,6 +813,20 @@ jobs:
 
           dispatch_workflow() {
             dispatch_workflow_at_ref "$CHILD_WORKFLOW_REF" "$@"
+          }
+
+          verify_bootstrap_workflow_sha() {
+            local approved_sha current_sha
+            approved_sha="$(jq -er '.bootstrapWorkflowSha | select(test("^[a-f0-9]{40}$"))' "${CLAWHUB_PLAN_PATH}")"
+            current_sha="$(
+              gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
+                --jq '.object.sha | select(test("^[a-f0-9]{40}$"))'
+            )"
+            [[ "${current_sha}" == "${approved_sha}" ]] || {
+              echo "Trusted main moved from approved ClawHub bootstrap workflow SHA ${approved_sha} to ${current_sha}; rerun release approval." >&2
+              exit 1
+            }
+            printf '%s\n' "${approved_sha}"
           }
 
           print_pending_deployments() {
@@ -813,12 +846,31 @@ jobs:
             done < <(printf '%s' "${pending_json}" | jq -r '.[] | [.environment.id, .environment.name, .current_user_can_approve] | @tsv')
           }
 
+          # Returns 0 after an approval, 1 when no gate is ready yet, and 2 for
+          # identity or mutation failures that must not be retried as "pending".
           approve_pending_deployments() {
             local workflow="$1"
             local run_id="$2"
-            local pending_json approved
+            local expected_head_sha="${3:-}"
+            local pending_json approved run_head_sha
 
-            pending_json="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments" 2>/dev/null || true)"
+            if [[ -n "${expected_head_sha}" ]]; then
+              if ! run_head_sha="$(
+                gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" \
+                  --jq '.head_sha | select(test("^[a-f0-9]{40}$"))'
+              )"; then
+                echo "${workflow}: unable to read the child workflow SHA before environment approval." >&2
+                return 2
+              fi
+              [[ "${run_head_sha}" == "${expected_head_sha}" ]] || {
+                echo "${workflow}: refusing environment approval because run head ${run_head_sha} does not match approved workflow SHA ${expected_head_sha}." >&2
+                return 2
+              }
+            fi
+
+            if ! pending_json="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments" 2>/dev/null)"; then
+              return 1
+            fi
             if [[ -z "${pending_json}" ]] || ! printf '%s' "${pending_json}" | jq -e 'length > 0' >/dev/null 2>&1; then
               return 1
             fi
@@ -829,10 +881,13 @@ jobs:
                 continue
               fi
               echo "${workflow}: approving pending environment ${env_name} (${env_id})"
-              gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments" \
+              if ! gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments" \
                 -F "environment_ids[]=${env_id}" \
                 -f state=approved \
-                -f comment="Approve child release gate after parent release approval" >/dev/null
+                -f comment="Approve child release gate after parent release approval" >/dev/null; then
+                echo "${workflow}: failed to approve pending environment ${env_name} (${env_id})." >&2
+                return 2
+              fi
               approved=1
             done < <(printf '%s' "${pending_json}" | jq -r '.[] | select(.current_user_can_approve == true) | [.environment.id, .environment.name] | @tsv')
 
@@ -868,7 +923,17 @@ jobs:
           wait_for_run() {
             local workflow="$1"
             local run_id="$2"
-            local status conclusion url updated_at created_at duration_seconds duration_label last_state failed_json
+            local status conclusion url updated_at created_at duration_seconds duration_label last_state failed_json expected_head_sha approval_status
+
+            expected_head_sha=""
+            if [[ "${workflow}" == "plugin-clawhub-new.yml" ]]; then
+              if ! expected_head_sha="$(
+                jq -er '.bootstrapWorkflowSha | select(test("^[a-f0-9]{40}$"))' "${CLAWHUB_PLAN_PATH}"
+              )"; then
+                echo "${workflow}: approved bootstrap workflow SHA is missing or invalid." >&2
+                return 1
+              fi
+            fi
 
             last_state=""
             while true; do
@@ -891,7 +956,12 @@ jobs:
               if [[ "$state" != "$last_state" ]]; then
                 echo "${workflow} still ${status} (updated ${updated_at}): ${url}"
                 print_pending_deployments "${workflow}" "${run_id}"
-                approve_pending_deployments "${workflow}" "${run_id}" || true
+                approval_status=0
+                approve_pending_deployments "${workflow}" "${run_id}" "${expected_head_sha}" ||
+                  approval_status=$?
+                if (( approval_status > 1 )); then
+                  return 1
+                fi
                 last_state="$state"
               fi
               sleep 30
@@ -988,17 +1058,38 @@ jobs:
           approve_child_publish_environment() {
             local workflow="$1"
             local run_id="$2"
-            local run_json status conclusion deadline
+            local run_json status conclusion deadline expected_head_sha approval_status
 
             deadline=$((SECONDS + 900))
+            expected_head_sha=""
+            if [[ "${workflow}" == "plugin-clawhub-new.yml" ]]; then
+              if ! expected_head_sha="$(
+                jq -er '.bootstrapWorkflowSha | select(test("^[a-f0-9]{40}$"))' "${CLAWHUB_PLAN_PATH}"
+              )"; then
+                echo "${workflow}: approved bootstrap workflow SHA is missing or invalid." >&2
+                return 2
+              fi
+            fi
             while true; do
-              if approve_pending_deployments "${workflow}" "${run_id}"; then
+              approval_status=0
+              approve_pending_deployments "${workflow}" "${run_id}" "${expected_head_sha}" ||
+                approval_status=$?
+              if (( approval_status == 0 )); then
                 echo "- ${workflow}: child environment gate approved" >> "$GITHUB_STEP_SUMMARY"
                 return 0
               fi
-              run_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json status,conclusion,url)"
-              status="$(printf '%s' "$run_json" | jq -r '.status')"
-              conclusion="$(printf '%s' "$run_json" | jq -r '.conclusion // ""')"
+              if (( approval_status > 1 )); then
+                return "${approval_status}"
+              fi
+              if ! run_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json status,conclusion,url)"; then
+                sleep 10
+                continue
+              fi
+              if ! status="$(printf '%s' "$run_json" | jq -er '.status | select(type == "string" and length > 0)')" ||
+                ! conclusion="$(printf '%s' "$run_json" | jq -er '(.conclusion // "") | select(type == "string")')"; then
+                echo "${workflow}: invalid run state while waiting for environment approval." >&2
+                return 2
+              fi
               if [[ "$status" == "completed" ]]; then
                 if [[ "$conclusion" == "success" ]]; then
                   echo "${workflow}: completed before child environment approval was needed"
@@ -1015,6 +1106,21 @@ jobs:
               fi
               sleep 10
             done
+          }
+
+          approve_clawhub_bootstrap_environments() {
+            local run_id="$1"
+
+            wait_for_job_success \
+              plugin-clawhub-new.yml \
+              "${run_id}" \
+              "Validate release publish approval" || return 1
+            approve_child_publish_environment plugin-clawhub-new.yml "${run_id}" || return 1
+            wait_for_job_success \
+              plugin-clawhub-new.yml \
+              "${run_id}" \
+              "Validate immutable bootstrap handoff" || return 1
+            approve_child_publish_environment plugin-clawhub-new.yml "${run_id}" || return 1
           }
 
           guard_existing_public_release() {
@@ -1819,6 +1925,11 @@ jobs:
           resolve_openclaw_npm_publish_state
           resolve_clawhub_release_plan
 
+          bootstrap_workflow_sha=""
+          if [[ "$(jq -r '.bootstrap.shouldDispatch' "${clawhub_plan_path}")" == "true" ]]; then
+            bootstrap_workflow_sha="$(verify_bootstrap_workflow_sha)"
+          fi
+
           npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}")
           if [[ -n "${PLUGINS}" ]]; then
             npm_args+=(-f plugins="${PLUGINS}")
@@ -1841,7 +1952,7 @@ jobs:
           if [[ "$(jq -r '.bootstrap.shouldDispatch' "${clawhub_plan_path}")" == "true" ]]; then
             clawhub_dispatch_args=()
             append_clawhub_dispatch_args bootstrap
-            plugin_clawhub_bootstrap_run_id="$(dispatch_workflow_at_ref \
+            plugin_clawhub_bootstrap_run_id="$(EXPECTED_WORKFLOW_HEAD_SHA="${bootstrap_workflow_sha}" dispatch_workflow_at_ref \
               "$(jq -r '.bootstrap.ref' "${clawhub_plan_path}")" \
               "$(jq -r '.bootstrap.workflow' "${clawhub_plan_path}")" \
               "${clawhub_dispatch_args[@]}")"
@@ -1937,11 +2048,10 @@ jobs:
               if [[ "${plugin_clawhub_bootstrap_completed}" == "true" ]]; then
                 echo "- plugin-clawhub-new.yml: bootstrap already completed before continuing" >> "$GITHUB_STEP_SUMMARY"
               else
-                wait_for_job_success plugin-clawhub-new.yml "${plugin_clawhub_bootstrap_run_id}" "Validate release publish approval"
-                if approve_child_publish_environment plugin-clawhub-new.yml "${plugin_clawhub_bootstrap_run_id}"; then
+                if approve_clawhub_bootstrap_environments "${plugin_clawhub_bootstrap_run_id}"; then
                   :
                 else
-                  echo "- plugin-clawhub-new.yml: child environment gate not ready; bootstrap was left dispatched (${plugin_clawhub_bootstrap_run_id})" >> "$GITHUB_STEP_SUMMARY"
+                  echo "- plugin-clawhub-new.yml: child environment gates not ready; bootstrap was left dispatched (${plugin_clawhub_bootstrap_run_id})" >> "$GITHUB_STEP_SUMMARY"
                 fi
                 echo "- plugin-clawhub-new.yml: bootstrap not awaited (${plugin_clawhub_bootstrap_run_id})" >> "$GITHUB_STEP_SUMMARY"
               fi

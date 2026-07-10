@@ -10,6 +10,7 @@ const directRecovery = process.env.DIRECT_RELEASE_RECOVERY === "true";
 const approvalPath = process.env.APPROVAL_PATH ?? "";
 const approvalKind = process.env.RELEASE_APPROVAL_KIND ?? "android";
 const expectedRunAttempt = process.env.EXPECTED_RUN_ATTEMPT ?? "";
+const childWorkflowSha = process.env.CHILD_WORKFLOW_SHA ?? "";
 
 function fail(message) {
   console.error(message);
@@ -38,6 +39,10 @@ function positiveRunAttempt(value) {
   return Number(value);
 }
 
+if (approvalKind === "clawhub-bootstrap" && !approvalPath) {
+  fail("ClawHub bootstrap approval requires an attested approval artifact.");
+}
+
 if (approvalPath) {
   const approval = JSON.parse(fs.readFileSync(approvalPath, "utf8"));
   let expectedApproval;
@@ -54,15 +59,19 @@ if (approvalPath) {
     };
     mismatchMessage = "Attested Android release approval does not match this run request.";
   } else if (approvalKind === "clawhub-bootstrap") {
+    if (!/^[a-f0-9]{40}$/u.test(childWorkflowSha)) {
+      fail("Plugin ClawHub New workflow SHA must be a full lowercase commit SHA.");
+    }
     expectedApproval = {
-      version: 1,
+      version: 2,
       kind: "clawhub-bootstrap",
       repository: process.env.GITHUB_REPOSITORY,
       workflow: "OpenClaw Release Publish",
       parentRunId: releasePublishRunId,
       parentRunAttempt: positiveRunAttempt(expectedRunAttempt),
       workflowBranch: expectedBranch,
-      workflowSha: run.headSha,
+      parentWorkflowSha: run.headSha,
+      bootstrapWorkflowSha: childWorkflowSha,
       releaseTag: process.env.RELEASE_TAG,
       targetSha: process.env.RELEASE_TARGET_SHA,
       packages: canonicalPackages(process.env.RELEASE_PACKAGES ?? ""),

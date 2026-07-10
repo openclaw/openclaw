@@ -47,6 +47,10 @@ function writeTarField(header: Buffer, offset: number, length: number, value: st
   bytes.copy(header, offset);
 }
 
+function writeTarOctal(header: Buffer, offset: number, length: number, value: number) {
+  writeTarField(header, offset, length, `${value.toString(8).padStart(length - 2, "0")} \0`);
+}
+
 function createClawPackBytes(
   packageName: string,
   version: string,
@@ -56,21 +60,31 @@ function createClawPackBytes(
     const bytes = Buffer.from(contents);
     const header = Buffer.alloc(512);
     writeTarField(header, 0, 100, name);
-    writeTarField(header, 124, 12, `${bytes.byteLength.toString(8).padStart(11, "0")}\0`);
+    writeTarOctal(header, 100, 8, 0o644);
+    writeTarOctal(header, 108, 8, 0);
+    writeTarOctal(header, 116, 8, 0);
+    writeTarOctal(header, 124, 12, bytes.byteLength);
+    writeTarOctal(header, 136, 12, 0);
     header[156] = "0".charCodeAt(0);
-    writeTarField(header, 257, 6, "ustar");
+    writeTarField(header, 257, 6, "ustar\0");
     writeTarField(header, 263, 2, "00");
+    writeTarOctal(header, 329, 8, 0);
+    writeTarOctal(header, 337, 8, 0);
     writeTarField(header, 345, 155, prefix);
+    header.fill(0x20, 148, 156);
+    const checksum = header.reduce((total, byte) => total + byte, 0);
+    writeTarOctal(header, 148, 8, checksum);
     const padding = Buffer.alloc((512 - (bytes.byteLength % 512)) % 512);
     return Buffer.concat([header, bytes, padding]);
   }
 
-  const packageJson = JSON.stringify({ name: packageName, version });
+  const packageJson = JSON.stringify({
+    name: packageName,
+    version,
+    openclaw: { release: { publishToClawHub: true } },
+  });
   const packageJsonEntries = options.duplicateNormalizedPackageJson
-    ? [
-        entry(" package.json ", packageJson, " package "),
-        entry("package/package.json", packageJson),
-      ]
+    ? [entry("package/package.json", packageJson), entry("package/package.json", packageJson)]
     : [entry("package/package.json", packageJson)];
   return gzipSync(
     Buffer.concat([
@@ -1056,6 +1070,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
 
     const plan = await buildOpenClawReleaseClawHubPlan(
       {
+        bootstrapWorkflowSha: "d".repeat(40),
         releaseTag: "v2026.4.1-beta.1",
         releaseSha: "a".repeat(40),
         releasePublishBranch: "main",
@@ -1072,6 +1087,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
     );
 
     expect(plan.clawHubWorkflowRef).toBe("v2026.4.1-beta.1");
+    expect(plan.bootstrapWorkflowSha).toBe("d".repeat(40));
     expect(plan.releasePublishBranch).toBe("main");
     expect(plan.normal).toEqual({
       workflow: "plugin-clawhub-release.yml",
@@ -1091,6 +1107,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
       shouldDispatch: true,
       packages: ["@openclaw/demo-two", "@openclaw/demo-three"],
       inputs: {
+        bootstrap_workflow_sha: "d".repeat(40),
         ref: "a".repeat(40),
         release_tag: "v2026.4.1-beta.1",
         plugins: "@openclaw/demo-two,@openclaw/demo-three",
@@ -1140,6 +1157,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
 
     const plan = await buildOpenClawReleaseClawHubPlan(
       {
+        bootstrapWorkflowSha: "d".repeat(40),
         releaseTag: "v2026.4.1-beta.1",
         releaseSha: "b".repeat(40),
         releasePublishBranch: "release/2026.4.1",
@@ -1162,6 +1180,7 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
       shouldDispatch: true,
       packages: ["@openclaw/demo-plugin"],
       inputs: {
+        bootstrap_workflow_sha: "d".repeat(40),
         ref: "b".repeat(40),
         release_tag: "v2026.4.1-beta.1",
         plugins: "@openclaw/demo-plugin",
@@ -1182,6 +1201,8 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
   it("rejects incompatible all-publishable plugin selection args", () => {
     expect(() =>
       parseOpenClawReleaseClawHubPlanArgs([
+        "--bootstrap-workflow-sha",
+        "d".repeat(40),
         "--release-tag",
         "v2026.4.1-beta.1",
         "--release-sha",
@@ -1202,6 +1223,8 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
 
   it("requires an exact lowercase release SHA for bootstrap targeting", () => {
     const baseArgs = [
+      "--bootstrap-workflow-sha",
+      "d".repeat(40),
       "--release-tag",
       "v2026.4.1-beta.1",
       "--release-publish-branch",
@@ -1221,6 +1244,8 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
 
   it("requires an exact parent release run attempt for bootstrap approval binding", () => {
     const args = [
+      "--bootstrap-workflow-sha",
+      "d".repeat(40),
       "--release-tag",
       "v2026.4.1-beta.1",
       "--release-sha",
@@ -1681,7 +1706,7 @@ exit 99
           },
         },
       ),
-    ).toThrow("duplicate normalized path: package.json");
+    ).toThrow("Duplicate or aliased plugin tar entry: package/package.json");
     expect(existsSync(markerPath)).toBe(false);
   });
 

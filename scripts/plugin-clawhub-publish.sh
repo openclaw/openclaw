@@ -107,6 +107,25 @@ source_commit="${SOURCE_COMMIT:-$(git -C "${invocation_root}" rev-parse HEAD)}"
 source_ref="${SOURCE_REF:-$(git -C "${invocation_root}" symbolic-ref -q HEAD || true)}"
 clawhub_workdir="${CLAWDHUB_WORKDIR:-${CLAWHUB_WORKDIR:-${invocation_root}}}"
 manual_override_reason="${OPENCLAW_CLAWHUB_MANUAL_OVERRIDE_REASON:-}"
+release_git_dir="${OPENCLAW_CLAWHUB_RELEASE_GIT_DIR:-}"
+release_tag="${OPENCLAW_CLAWHUB_RELEASE_TAG:-}"
+release_target_sha="${OPENCLAW_CLAWHUB_TARGET_SHA:-}"
+release_binding_count=0
+for release_binding_value in "${release_git_dir}" "${release_tag}" "${release_target_sha}"; do
+  if [[ -n "${release_binding_value}" ]]; then
+    release_binding_count=$((release_binding_count + 1))
+  fi
+done
+if [[ "${release_binding_count}" != "0" && "${release_binding_count}" != "3" ]]; then
+  echo "OPENCLAW_CLAWHUB_RELEASE_GIT_DIR, OPENCLAW_CLAWHUB_RELEASE_TAG, and OPENCLAW_CLAWHUB_TARGET_SHA must be provided together." >&2
+  exit 2
+fi
+if [[ "${release_binding_count}" == "3" ]]; then
+  if [[ ! -d "${release_git_dir}" || ! "${release_target_sha}" =~ ^[a-f0-9]{40}$ ]]; then
+    echo "ClawHub release tag binding is invalid." >&2
+    exit 2
+  fi
+fi
 
 pack_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-clawhub-pack.XXXXXX")"
 cleanup() {
@@ -337,7 +356,22 @@ if [[ ! "${publish_retry_delay}" =~ ^[1-9][0-9]*$ || "${publish_retry_delay}" -g
 fi
 
 publish_log="${pack_dir}/publish.log"
+verify_release_tag_target() {
+  if [[ "${release_binding_count}" == "0" ]]; then
+    return 0
+  fi
+  git -C "${release_git_dir}" fetch --force --no-tags origin \
+    "+refs/tags/${release_tag}:refs/tags/${release_tag}"
+  local tag_sha
+  tag_sha="$(git -C "${release_git_dir}" rev-parse "${release_tag}^{commit}")"
+  [[ "${tag_sha}" == "${release_target_sha}" ]] || {
+    echo "ClawHub publish target ${release_target_sha} no longer matches ${release_tag} (${tag_sha})." >&2
+    exit 1
+  }
+}
+
 for attempt in $(seq 1 "${publish_attempts}"); do
+  verify_release_tag_target
   set +e
   CLAWHUB_WORKDIR="${clawhub_workdir}" \
     "${clawhub_timeout[@]}" "${publish_cmd[@]}" 2>&1 | tee "${publish_log}"

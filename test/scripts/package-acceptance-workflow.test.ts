@@ -129,6 +129,20 @@ function workflowStep(job: WorkflowJob, stepName: string): WorkflowStep {
   return step;
 }
 
+function shellFunctionSource(source: string, functionName: string): string {
+  const startMarker = `${functionName}() {`;
+  const endMarker = "\n}\n";
+  const start = source.indexOf(startMarker);
+  if (start < 0) {
+    throw new Error(`Expected shell function ${functionName}`);
+  }
+  const end = source.indexOf(endMarker, start);
+  if (end < 0) {
+    throw new Error(`Expected shell function terminator for ${functionName}`);
+  }
+  return source.slice(start, end + endMarker.length);
+}
+
 function workflowMatrixEntry(path: string, jobName: string, suiteId: string): WorkflowMatrixEntry {
   const entry = workflowJob(path, jobName).strategy?.matrix?.include?.find(
     (candidate) => candidate.suite_id === suiteId,
@@ -2769,7 +2783,9 @@ describe("package artifact reuse", () => {
     );
     expect(publishOrchestration.run).not.toContain("--full-release-validation-workflow-ref");
     expect(publishOrchestration.run).not.toContain("--full-release-validation-run");
-    expect(publishOrchestration.run).toContain('pnpm "${verify_args[@]}"');
+    expect(publishOrchestration.run).toContain(
+      '"${GITHUB_WORKSPACE}/.release-harness/scripts/release-verify-beta.ts"',
+    );
     expect(publishOrchestration.run).toContain(".workflowRuns += [");
     expect(publishOrchestration.run).toContain('label: "Full Release Validation"');
     expect(publishOrchestration.run).toContain('"${validation_target_sha}" != "${TARGET_SHA}"');
@@ -3268,6 +3284,7 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).not.toContain("return_run_details: true");
     expect(releaseWorkflow).toContain("'.workflow_run_id'");
     expect(releaseWorkflow).toContain("'.html_url'");
+    expect(releaseWorkflow).toContain('gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}"');
     expect(releaseWorkflow).not.toContain("BEFORE_IDS=");
     expect(releaseWorkflow).not.toContain("before_json");
     expect(releaseWorkflow).toContain("plugin-clawhub-new.yml");
@@ -3293,12 +3310,20 @@ describe("package artifact reuse", () => {
     expect(trustedClawHubPlan.run).toContain(
       '--release-publish-run-attempt "${GITHUB_RUN_ATTEMPT}"',
     );
+    expect(trustedClawHubPlan.run).toContain(
+      '--bootstrap-workflow-sha "${bootstrap_workflow_sha}"',
+    );
+    expect(trustedClawHubPlan.run).toContain(
+      'gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main"',
+    );
     expect(trustedClawHubPlan.run).not.toContain("cd .release-harness");
     expect(releaseWorkflow).toContain("Attest ClawHub bootstrap approval");
     expect(releaseWorkflow).toContain("Upload ClawHub bootstrap approval");
     expect(releaseWorkflow).toContain(
       "clawhub-bootstrap-approval-${{ github.run_id }}-${{ github.run_attempt }}",
     );
+    expect(releaseWorkflow).toContain("parentWorkflowSha: process.env.GITHUB_SHA");
+    expect(releaseWorkflow).toContain("bootstrapWorkflowSha: plan.bootstrapWorkflowSha");
     expect(releaseWorkflow).toContain(
       '"${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-release-clawhub-runtime-state.ts"',
     );
@@ -3321,6 +3346,17 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain(
       "Waiting for plugin-clawhub-new.yml bootstrap to finish before continuing release publish.",
     );
+    expect(releaseWorkflow).toContain(
+      "refusing environment approval because run head ${run_head_sha} does not match approved workflow SHA ${expected_head_sha}",
+    );
+    const verifyBootstrapWorkflowIndex = releaseWorkflow.indexOf(
+      'bootstrap_workflow_sha="$(verify_bootstrap_workflow_sha)"',
+    );
+    const dispatchPluginNpmIndex = releaseWorkflow.indexOf(
+      'plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml',
+    );
+    expect(verifyBootstrapWorkflowIndex).toBeGreaterThan(-1);
+    expect(dispatchPluginNpmIndex).toBeGreaterThan(verifyBootstrapWorkflowIndex);
     expect(releaseWorkflow).toContain("OpenClaw npm run ID");
     expect(releaseWorkflow).toContain("npm_telegram_run_id");
     expect(releaseWorkflow).toContain('release_publish_run_id="${GITHUB_RUN_ID}"');
@@ -3353,6 +3389,26 @@ describe("package artifact reuse", () => {
     expect(clawHubReleasePlanScript).toContain("not awaited by this proof");
     expect(releaseWorkflow).toContain("wait_for_job_success");
     expect(releaseWorkflow).toContain("Validate release publish approval");
+    expect(releaseWorkflow).toContain("approve_clawhub_bootstrap_environments");
+    expect(releaseWorkflow).toContain('"Validate release publish approval" || return 1');
+    expect(releaseWorkflow).toContain(
+      'approve_child_publish_environment plugin-clawhub-new.yml "${run_id}" || return 1',
+    );
+    expect(releaseWorkflow).toContain('"Validate immutable bootstrap handoff" || return 1');
+    const firstBootstrapApproval = releaseWorkflow.indexOf(
+      'approve_child_publish_environment plugin-clawhub-new.yml "${run_id}"',
+    );
+    const protectedBootstrapValidation = releaseWorkflow.indexOf(
+      '"Validate immutable bootstrap handoff"',
+      firstBootstrapApproval,
+    );
+    const secondBootstrapApproval = releaseWorkflow.indexOf(
+      'approve_child_publish_environment plugin-clawhub-new.yml "${run_id}"',
+      firstBootstrapApproval + 1,
+    );
+    expect(firstBootstrapApproval).toBeGreaterThan(-1);
+    expect(protectedBootstrapValidation).toBeGreaterThan(firstBootstrapApproval);
+    expect(secondBootstrapApproval).toBeGreaterThan(protectedBootstrapValidation);
     expect(releaseWorkflow).toContain('conclusion" == "skipped"');
     expect(releaseWorkflow).toContain("approve_child_publish_environment");
     expect(releaseWorkflow).toContain("Approve child release gate after parent release approval");
@@ -3458,7 +3514,7 @@ describe("package artifact reuse", () => {
     );
     expect(clawHubNewWorkflow).toContain('--source-digest "${EXPECTED_WORKFLOW_SHA}"');
     expect(clawHubNewWorkflow).toContain('git rev-parse "${RELEASE_TAG}^{commit}"');
-    expect(clawHubNewWorkflow).not.toContain("refs/remotes/origin/release");
+    expect(clawHubNewWorkflow).toContain("refs/remotes/origin/release");
     expect(clawHubNewWorkflow).toContain("Require configure-only registry bytes to match target");
     expect(clawHubNewWorkflow).toContain(
       "Reconfirm configure-only registry bytes before credentials",
@@ -3524,6 +3580,86 @@ describe("package artifact reuse", () => {
       releaseWorkflow.lastIndexOf("publish_github_release"),
     );
     expect(releaseWorkflow).toContain("finished with ${conclusion} in ${duration_label}");
+  });
+
+  it("fails closed when child environment identity or approval mutation fails", () => {
+    const publishRun =
+      workflowStep(workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish"), "Dispatch publish workflows")
+        .run ?? "";
+    const approvePending = shellFunctionSource(publishRun, "approve_pending_deployments");
+    const approveChild = shellFunctionSource(publishRun, "approve_child_publish_environment");
+    const waitForRun = shellFunctionSource(publishRun, "wait_for_run");
+    const expectedSha = "a".repeat(40);
+
+    const mutationFailure = spawnSync(
+      "bash",
+      [
+        "-c",
+        `
+set -uo pipefail
+GITHUB_REPOSITORY=openclaw/openclaw
+gh() {
+  if [[ "$1" == "api" && "$2" == "repos/openclaw/openclaw/actions/runs/123" ]]; then
+    printf '%s\\n' "${expectedSha}"
+    return 0
+  fi
+  if [[ "$1" == "api" && "$2" == "-X" && "$3" == "GET" ]]; then
+    printf '%s\\n' '[{"environment":{"id":7,"name":"clawhub-plugin-bootstrap"},"current_user_can_approve":true}]'
+    return 0
+  fi
+  if [[ "$1" == "api" && "$2" == "-X" && "$3" == "POST" ]]; then
+    return 42
+  fi
+  return 99
+}
+${approvePending}
+status=0
+approve_pending_deployments plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
+[[ "$status" -eq 2 ]]
+`,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(mutationFailure.status, mutationFailure.stderr).toBe(0);
+
+    const missingApprovedSha = spawnSync(
+      "bash",
+      [
+        "-c",
+        `
+set -uo pipefail
+CLAWHUB_PLAN_PATH=/dev/null
+GITHUB_REPOSITORY=openclaw/openclaw
+GITHUB_STEP_SUMMARY=/dev/null
+gh() { return 99; }
+print_failed_run_summary() { :; }
+${approvePending}
+${approveChild}
+status=0
+approve_child_publish_environment plugin-clawhub-new.yml 123 || status=$?
+[[ "$status" -eq 2 ]]
+`,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(missingApprovedSha.status, missingApprovedSha.stderr).toBe(0);
+
+    const missingWaitSha = spawnSync(
+      "bash",
+      [
+        "-c",
+        `
+set -uo pipefail
+CLAWHUB_PLAN_PATH=/dev/null
+${waitForRun}
+status=0
+wait_for_run plugin-clawhub-new.yml 123 || status=$?
+[[ "$status" -eq 1 ]]
+`,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(missingWaitSha.status, missingWaitSha.stderr).toBe(0);
   });
 
   it("keeps release workflow setup and timeout budgets bounded", () => {
@@ -3596,6 +3732,7 @@ describe("package artifact reuse", () => {
 
   it("keeps tracked sync metadata and QA Mantis sources visible to remote full syncs", () => {
     for (const path of [
+      ".github/release/clawhub-cli/package-lock.json",
       ".gitignore",
       "apps/android/.gitignore",
       "extensions/qa-lab/src/mantis/cli.ts",

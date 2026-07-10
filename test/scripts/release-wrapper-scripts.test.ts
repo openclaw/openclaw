@@ -62,6 +62,8 @@ describe("release wrapper scripts", () => {
 
   it("loads the OpenClaw ClawHub plan CLI and validates required arguments before planning", () => {
     const result = runTsxScript("scripts/openclaw-release-clawhub-plan.ts", [
+      "--bootstrap-workflow-sha",
+      "b".repeat(40),
       "--release-tag",
       "v2026.6.21-beta.1",
       "--release-sha",
@@ -84,6 +86,8 @@ describe("release wrapper scripts", () => {
     const plan = runTsxScript(
       join(repositoryRoot, "scripts/openclaw-release-clawhub-plan.ts"),
       [
+        "--bootstrap-workflow-sha",
+        "b".repeat(40),
         "--release-tag",
         "v2026.7.1-beta.3",
         "--release-sha",
@@ -101,6 +105,7 @@ describe("release wrapper scripts", () => {
     );
     expect(plan.status).toBe(0);
     expect(JSON.parse(plan.stdout)).toMatchObject({
+      bootstrapWorkflowSha: "b".repeat(40),
       bootstrap: { ref: "main", shouldDispatch: false },
       normal: { ref: "v2026.7.1-beta.3", shouldDispatch: false },
     });

@@ -663,26 +663,35 @@ function requireExpectedBinding(params) {
     "workflow head branch",
   );
   const runStatePolicy = assertTrimmedString(expected.runStatePolicy, "workflow run-state policy");
-  if (runStatePolicy !== "completed-success" && runStatePolicy !== "same-run-in-progress") {
+  if (runStatePolicy !== "completed-success" && runStatePolicy !== "same-run-producer-success") {
     throw new Error(`Unsupported workflow run-state policy: ${runStatePolicy}`);
   }
-  const workflowStatus = runStatePolicy === "completed-success" ? "completed" : "in_progress";
-  const workflowConclusion = runStatePolicy === "completed-success" ? "success" : null;
+  const consumerRunAttempt =
+    runStatePolicy === "same-run-producer-success"
+      ? assertPositiveInteger(expected.consumerRunAttempt, "consumer workflow run attempt")
+      : undefined;
+  const producerJobName =
+    runStatePolicy === "same-run-producer-success"
+      ? assertTrimmedString(expected.producerJobName, "producer job name")
+      : undefined;
+  if (consumerRunAttempt !== undefined && runAttempt > consumerRunAttempt) {
+    throw new Error("Producer workflow run attempt must not be newer than the consumer attempt.");
+  }
   return {
     artifactDigest,
     artifactId,
     artifactName,
     artifactSizeBytes,
+    consumerRunAttempt,
+    producerJobName,
     repository,
     runStatePolicy,
     runAttempt,
     runId,
-    workflowConclusion,
     workflowEvent,
     workflowHeadBranch,
     workflowPath,
     workflowSha,
-    workflowStatus,
   };
 }
 
@@ -714,12 +723,59 @@ export function validateActionsArtifactBinding(params) {
     run.head_branch !== expected.workflowHeadBranch ||
     run.event !== expected.workflowEvent ||
     run.path !== expected.workflowPath ||
-    run.status !== expected.workflowStatus ||
-    run.conclusion !== expected.workflowConclusion ||
     run.repository?.full_name !== expected.repository ||
     run.head_repository?.full_name !== expected.repository
   ) {
     throw new Error("Actions workflow run does not match the immutable publication tuple.");
+  }
+  if (expected.runStatePolicy === "completed-success") {
+    if (run.status !== "completed" || run.conclusion !== "success") {
+      throw new Error("Actions workflow run does not match the immutable publication tuple.");
+    }
+  } else if (expected.runAttempt === expected.consumerRunAttempt) {
+    if (run.status !== "in_progress" || run.conclusion !== null) {
+      throw new Error("Current producer workflow attempt must still be in progress.");
+    }
+  } else if (
+    run.status !== "completed" ||
+    typeof run.conclusion !== "string" ||
+    run.conclusion.length === 0
+  ) {
+    throw new Error("Prior producer workflow attempt must be completed.");
+  }
+  return expected;
+}
+
+export function validateActionsArtifactProducerJob(params) {
+  const expected = requireExpectedBinding(params);
+  if (expected.runStatePolicy !== "same-run-producer-success") {
+    return expected;
+  }
+  const response = params.workflowJobs;
+  if (!response || typeof response !== "object" || Array.isArray(response)) {
+    throw new Error("Actions workflow jobs response must be an object.");
+  }
+  if (
+    !Number.isSafeInteger(response.total_count) ||
+    response.total_count < 0 ||
+    !Array.isArray(response.jobs) ||
+    response.total_count !== response.jobs.length
+  ) {
+    throw new Error("Actions workflow jobs inventory is incomplete.");
+  }
+  const matches = response.jobs.filter((job) => job?.name === expected.producerJobName);
+  if (matches.length !== 1) {
+    throw new Error("Actions artifact producer job must be unique.");
+  }
+  const [producerJob] = matches;
+  if (
+    producerJob.run_id !== expected.runId ||
+    producerJob.run_attempt !== expected.runAttempt ||
+    producerJob.head_sha !== expected.workflowSha ||
+    producerJob.status !== "completed" ||
+    producerJob.conclusion !== "success"
+  ) {
+    throw new Error("Actions artifact producer job did not complete successfully.");
   }
   return expected;
 }
@@ -881,6 +937,23 @@ export async function downloadActionsArtifactArchive(params) {
     retry,
   );
   validateActionsArtifactBinding({ artifactMetadata, expected, workflowRun });
+  let workflowJobs;
+  if (expected.runStatePolicy === "same-run-producer-success") {
+    workflowJobs = await runBoundedRetry(
+      "GitHub Actions producer jobs",
+      () =>
+        fetchBoundedJson(
+          `${apiRoot}/actions/runs/${expected.runId}/attempts/${expected.runAttempt}/jobs?per_page=100`,
+          request,
+          {
+            label: "GitHub Actions producer jobs",
+            maxBytes: DEFAULT_MAX_JSON_BYTES,
+          },
+        ),
+      retry,
+    );
+    validateActionsArtifactProducerJob({ expected, workflowJobs });
+  }
 
   const archiveBytes = await runBoundedRetry(
     "GitHub Actions artifact download",
@@ -905,7 +978,7 @@ export async function downloadActionsArtifactArchive(params) {
     },
     retry,
   );
-  return { archiveBytes, artifactMetadata, binding: expected, workflowRun };
+  return { archiveBytes, artifactMetadata, binding: expected, workflowJobs, workflowRun };
 }
 
 export async function readPublicationArtifactArchive(params) {
