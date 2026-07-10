@@ -812,12 +812,12 @@
     "target": "Parallel 插件"
   },
   {
-    "source": "Mxc plugin",
-    "target": "MXC 插件"
-  },
-  {
     "source": "Parallel search",
     "target": "Parallel 搜索"
+  },
+  {
+    "source": "Mxc plugin",
+    "target": "MXC 插件"
   },
   {
     "source": "CLI reference",

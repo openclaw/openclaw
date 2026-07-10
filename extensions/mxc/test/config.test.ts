@@ -1,126 +1,111 @@
-import { describe, expect, test, vi } from "vitest";
-import { resolveConfig } from "../src/config.js";
+import { MAX_TIMER_TIMEOUT_SECONDS } from "openclaw/plugin-sdk/number-runtime";
+import { describe, expect, test } from "vitest";
+import { createMxcPluginConfigSchema, resolveConfig } from "../src/config.js";
 
 describe("resolveConfig", () => {
-  test("default config from empty/null input", () => {
-    const config = resolveConfig(null);
-    expect(config).toEqual({
+  test("uses defaults only when config is omitted", () => {
+    expect(resolveConfig(undefined)).toEqual({
       mxcBinaryPath: undefined,
       containment: "process",
       network: "none",
       timeoutSeconds: 120,
       debug: false,
     });
-    const config2 = resolveConfig({});
-    expect(config2.containment).toBe("process");
-    expect(config2.network).toBe("none");
-    expect(config2.timeoutSeconds).toBe(120);
-    expect(config2.debug).toBe(false);
-    expect(config2).not.toHaveProperty("sandboxBaseline");
+
+    const config = resolveConfig({});
+    expect(config).toEqual({
+      mxcBinaryPath: undefined,
+      containment: "process",
+      network: "none",
+      timeoutSeconds: 120,
+      debug: false,
+      mxcPolicyPaths: undefined,
+    });
+    expect(config).not.toHaveProperty("timeoutSecondsConfigured");
   });
 
-  test("all config overrides applied correctly", () => {
+  test("applies valid overrides and preserves explicit timeout configuration", () => {
     const config = resolveConfig({
-      mxcBinaryPath: "C:\\custom\\wxc-exec.exe",
+      mxcBinaryPath: "  C:\\custom\\wxc-exec.exe  ",
       containment: "processcontainer",
       network: "default",
       timeoutSeconds: 60,
       debug: true,
       mxcPolicyPaths: [
-        "C:\\ProgramData\\openclaw\\mxc-machine-policy.json",
-        "C:\\Users\\alice\\.openclaw\\mxc-user-policy.json",
+        "  C:\\ProgramData\\openclaw\\mxc-machine-policy.json  ",
+        "  /opt/openclaw/mxc-user-policy.json  ",
       ],
     });
 
-    expect(config.mxcBinaryPath).toBe("C:\\custom\\wxc-exec.exe");
-    expect(config.containment).toBe("processcontainer");
-    expect(config.network).toBe("default");
-    expect(config.timeoutSeconds).toBe(60);
-    expect(config.timeoutSecondsConfigured).toBe(true);
-    expect(config.debug).toBe(true);
-    expect(config.mxcPolicyPaths).toEqual([
-      "C:\\ProgramData\\openclaw\\mxc-machine-policy.json",
-      "C:\\Users\\alice\\.openclaw\\mxc-user-policy.json",
-    ]);
-  });
-
-  test("sandboxBaseline is not part of plugin config", () => {
-    const config = resolveConfig({
-      sandboxBaseline: {
-        process: { timeoutSeconds: 45 },
-      },
+    expect(config).toEqual({
+      mxcBinaryPath: "C:\\custom\\wxc-exec.exe",
+      containment: "processcontainer",
+      network: "default",
+      timeoutSeconds: 60,
+      timeoutSecondsConfigured: true,
+      debug: true,
+      mxcPolicyPaths: [
+        "C:\\ProgramData\\openclaw\\mxc-machine-policy.json",
+        "/opt/openclaw/mxc-user-policy.json",
+      ],
     });
-
-    expect(config).not.toHaveProperty("sandboxBaseline");
   });
 
-  test("removed containment values fall back to process without warning", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    for (const c of [
+  test("rejects invalid root values and unknown keys", () => {
+    expect(() => resolveConfig(null)).toThrow(/Invalid mxc plugin config/u);
+    expect(() => resolveConfig("bad")).toThrow(/Invalid mxc plugin config/u);
+    expect(() => resolveConfig({ sandboxBaseline: {} })).toThrow(/sandboxBaseline/u);
+  });
+
+  test("rejects removed and malformed containment values", () => {
+    for (const containment of [
       "windows_sandbox",
       "wslc",
       "microvm",
       "seatbelt",
       "isolation_session",
       "lxc",
+      "invalid",
     ]) {
-      expect(resolveConfig({ containment: c }).containment).toBe("process");
+      expect(() => resolveConfig({ containment })).toThrow(/containment/u);
     }
-    expect(warn).not.toHaveBeenCalled();
-    warn.mockRestore();
   });
 
-  test("empty strings for paths are treated as undefined", () => {
-    const config = resolveConfig({
-      mxcBinaryPath: "   ",
-    });
-    expect(config.mxcBinaryPath).toBeUndefined();
+  test("rejects malformed enums and types instead of silently falling back", () => {
+    expect(() => resolveConfig({ network: "allow-all" })).toThrow(/network/u);
+    expect(() => resolveConfig({ debug: "true" })).toThrow(/debug/u);
+    expect(() => resolveConfig({ mxcBinaryPath: "   " })).toThrow(/mxcBinaryPath/u);
   });
 
-  test("mxcPolicyPaths preserves configured order", () => {
-    const config = resolveConfig({
-      mxcPolicyPaths: [
-        "C:\\ProgramData\\openclaw\\machine-policy.json",
-        "C:\\Users\\alice\\.openclaw\\user-policy.json",
-      ],
-    });
+  test("enforces timeout bounds and only marks configured timeouts when supplied", () => {
+    expect(() => resolveConfig({ timeoutSeconds: 0 })).toThrow(/>= 1/u);
+    expect(() => resolveConfig({ timeoutSeconds: -5 })).toThrow(/>= 1/u);
+    expect(() => resolveConfig({ timeoutSeconds: "fast" })).toThrow(/timeoutSeconds/u);
+    expect(() => resolveConfig({ timeoutSeconds: MAX_TIMER_TIMEOUT_SECONDS + 1 })).toThrow(
+      new RegExp(`${MAX_TIMER_TIMEOUT_SECONDS}`, "u"),
+    );
 
-    expect(config.mxcPolicyPaths).toEqual([
-      "C:\\ProgramData\\openclaw\\machine-policy.json",
-      "C:\\Users\\alice\\.openclaw\\user-policy.json",
-    ]);
+    const config = resolveConfig({ timeoutSeconds: MAX_TIMER_TIMEOUT_SECONDS });
+    expect(config.timeoutSeconds).toBe(MAX_TIMER_TIMEOUT_SECONDS);
+    expect(config.timeoutSecondsConfigured).toBe(true);
   });
 
-  test("mxcPolicyPaths must be an array of non-empty absolute paths", () => {
+  test("trims and validates mxcPolicyPaths as absolute paths", () => {
     expect(() => resolveConfig({ mxcPolicyPaths: "C:\\policy.json" })).toThrow(/mxcPolicyPaths/u);
     expect(() => resolveConfig({ mxcPolicyPaths: ["relative-policy.json"] })).toThrow(
       /mxcPolicyPaths\[0\]/u,
     );
-    expect(() => resolveConfig({ mxcPolicyPaths: ["   "] })).toThrow(/mxcPolicyPaths\[0\]/u);
-    expect(() => resolveConfig({ mxcPolicyPaths: [42] })).toThrow(/mxcPolicyPaths\[0\]/u);
+    expect(() => resolveConfig({ mxcPolicyPaths: ["   "] })).toThrow(/mxcPolicyPaths/u);
+    expect(() => resolveConfig({ mxcPolicyPaths: [42] })).toThrow(/mxcPolicyPaths/u);
   });
+});
 
-  test("invalid containment value falls back to process", () => {
-    const config = resolveConfig({ containment: "invalid" });
-    expect(config.containment).toBe("process");
-  });
-
-  test("supported containment options are accepted", () => {
-    for (const c of ["process", "processcontainer"]) {
-      const config = resolveConfig({ containment: c });
-      expect(config.containment).toBe(c);
-    }
-  });
-
-  test("invalid network value falls back to none", () => {
-    const config = resolveConfig({ network: "allow-all" });
-    expect(config.network).toBe("none");
-  });
-
-  test("invalid timeoutSeconds falls back to default", () => {
-    expect(resolveConfig({ timeoutSeconds: -5 }).timeoutSeconds).toBe(120);
-    expect(resolveConfig({ timeoutSeconds: 0 }).timeoutSeconds).toBe(120);
-    expect(resolveConfig({ timeoutSeconds: "fast" }).timeoutSeconds).toBe(120);
-    expect(resolveConfig({ timeoutSeconds: -5 })).not.toHaveProperty("timeoutSecondsConfigured");
+describe("createMxcPluginConfigSchema", () => {
+  test("publishes the same timeout cap in the plugin schema", () => {
+    expect(createMxcPluginConfigSchema().jsonSchema.properties?.timeoutSeconds).toEqual({
+      type: "number",
+      minimum: 1,
+      maximum: MAX_TIMER_TIMEOUT_SECONDS,
+    });
   });
 });

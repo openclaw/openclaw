@@ -12,34 +12,30 @@
     "properties": {
       "mxcBinaryPath": {
         "type": "string",
-        "description": "Override auto-discovery of wxc-exec (Windows)"
+        "minLength": 1
       },
       "containment": {
         "type": "string",
-        "enum": ["process", "processcontainer"],
-        "default": "process",
-        "description": "MXC containment backend"
+        "enum": ["process", "processcontainer"]
       },
       "network": {
         "type": "string",
-        "enum": ["none", "default"],
-        "default": "none",
-        "description": "Use none for default-deny networking, or default to allow outbound networking"
+        "enum": ["none", "default"]
       },
       "timeoutSeconds": {
         "type": "number",
         "minimum": 1,
-        "description": "Explicit per-command timeout in seconds. When omitted, the resolved sandbox baseline timeout applies."
+        "maximum": 2147000
       },
       "debug": {
-        "type": "boolean",
-        "default": false,
-        "description": "Pass --debug to the MXC executor"
+        "type": "boolean"
       },
       "mxcPolicyPaths": {
         "type": "array",
-        "items": { "type": "string", "minLength": 1 },
-        "description": "Absolute MXC sandbox policy JSON file paths. Files are loaded in array order."
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     }
   }

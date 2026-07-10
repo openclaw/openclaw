@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
+import { win32 } from "node:path";
 import { z } from "zod";
 import {
   DEFAULT_SANDBOX_BASELINE,
@@ -12,11 +13,36 @@ export type SandboxPolicyLoaderOptions = {
   policyPaths?: readonly string[];
 };
 
-export type SandboxPolicyLayer = SandboxBaselinePolicyInput;
+export type SandboxPolicyPathField =
+  | "filesystem.additionalReadonlyPaths"
+  | "filesystem.additionalReadwritePaths";
+
+export type SandboxConfiguredPathEntry = {
+  path: string;
+  sources: readonly string[];
+};
+
+export type SandboxConfiguredPaths = {
+  readonlyPaths: readonly SandboxConfiguredPathEntry[];
+  readwritePaths: readonly SandboxConfiguredPathEntry[];
+};
+
+export type SandboxPolicyLayer = SandboxBaselinePolicyInput & {
+  configuredPaths: SandboxConfiguredPaths;
+};
+
+export type LoadedSandboxBaselinePolicy = SandboxBaselinePolicy & {
+  configuredPaths: SandboxConfiguredPaths;
+};
 
 export type SandboxPolicySource = {
   label: string;
   policy: SandboxPolicyLayer;
+};
+
+type MutableConfiguredPathMaps = {
+  readonlyPaths: Map<string, SandboxConfiguredPathEntry>;
+  readwritePaths: Map<string, SandboxConfiguredPathEntry>;
 };
 
 const stringArraySchema = z.array(z.string());
@@ -43,37 +69,32 @@ export const SandboxPolicyLayerSchema = z
 
 export function loadSandboxBaselinePolicy(
   options: SandboxPolicyLoaderOptions = {},
-): SandboxBaselinePolicy {
+): LoadedSandboxBaselinePolicy {
   const sources: SandboxPolicySource[] = [];
 
   for (const policyPath of options.policyPaths ?? []) {
-    const policy = readSandboxPolicyFile(policyPath);
-    if (policy) {
-      sources.push({ label: policyPath, policy });
-    }
+    sources.push({ label: policyPath, policy: readSandboxPolicyFile(policyPath) });
   }
 
   const merged = mergeSandboxPolicyLayers(sources);
   const resolved = resolveSandboxBaseline(merged);
-  const timeoutSecondsConfigured = sources.some(
-    ({ policy }) => policy.process?.timeoutSeconds !== undefined,
-  );
-  resolved.process.timeoutSecondsConfigured = timeoutSecondsConfigured;
-  return resolved;
+  return {
+    ...resolved,
+    process: {
+      ...resolved.process,
+      timeoutSecondsConfigured: sources.some(
+        ({ policy }) => policy.process?.timeoutSeconds !== undefined,
+      ),
+    },
+    configuredPaths: merged.configuredPaths,
+  };
 }
 
-export function readSandboxPolicyFile(policyPath: string): SandboxBaselinePolicyInput | undefined {
-  if (!existsSync(policyPath)) {
-    return undefined;
-  }
-
+export function readSandboxPolicyFile(policyPath: string): SandboxPolicyLayer {
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(policyPath, "utf-8"));
   } catch (err) {
-    if (isNodeError(err) && err.code === "ENOENT") {
-      return undefined;
-    }
     throw policyFileError(policyPath, err);
   }
 
@@ -84,30 +105,72 @@ export function readSandboxPolicyFile(policyPath: string): SandboxBaselinePolicy
   }
 }
 
-export function parseSandboxPolicyLayer(
-  value: unknown,
-  sourceLabel: string,
-): SandboxBaselinePolicyInput {
+export function parseSandboxPolicyLayer(value: unknown, sourceLabel: string): SandboxPolicyLayer {
   const parsed = SandboxPolicyLayerSchema.safeParse(value);
   if (!parsed.success) {
     throw new TypeError(formatSandboxPolicyIssue(sourceLabel, parsed.error.issues[0]));
   }
 
-  return parsed.data;
+  const filesystem = parsed.data.filesystem;
+  const readonlyPaths = normalizeConfiguredPaths(
+    filesystem?.additionalReadonlyPaths,
+    sourceLabel,
+    "filesystem.additionalReadonlyPaths",
+  );
+  const readwritePaths = normalizeConfiguredPaths(
+    filesystem?.additionalReadwritePaths,
+    sourceLabel,
+    "filesystem.additionalReadwritePaths",
+  );
+
+  return {
+    ...parsed.data,
+    filesystem: filesystem
+      ? {
+          ...filesystem,
+          ...(readonlyPaths.length > 0
+            ? {
+                additionalReadonlyPaths: readonlyPaths.map((entry) => entry.path),
+              }
+            : {}),
+          ...(readwritePaths.length > 0
+            ? {
+                additionalReadwritePaths: readwritePaths.map((entry) => entry.path),
+              }
+            : {}),
+        }
+      : undefined,
+    configuredPaths: {
+      readonlyPaths,
+      readwritePaths,
+    },
+  };
 }
 
 export function mergeSandboxPolicyLayers(
   sources: readonly SandboxPolicySource[],
-): SandboxBaselinePolicyInput {
+): SandboxPolicyLayer {
   const timeoutCandidates = [DEFAULT_SANDBOX_BASELINE.process.timeoutSeconds];
   const filesystem: BaselineFilesystemPolicyInput = {
     restrictToProjectDir: DEFAULT_SANDBOX_BASELINE.filesystem.restrictToProjectDir,
     additionalReadonlyPaths: [],
     additionalReadwritePaths: [],
   };
+  const configuredPathMaps: MutableConfiguredPathMaps = {
+    readonlyPaths: new Map<string, SandboxConfiguredPathEntry>(),
+    readwritePaths: new Map<string, SandboxConfiguredPathEntry>(),
+  };
 
   for (const { policy, label } of sources) {
     mergeFilesystemPolicy(filesystem, policy.filesystem);
+    mergeConfiguredPathEntries(
+      configuredPathMaps.readonlyPaths,
+      policy.configuredPaths.readonlyPaths,
+    );
+    mergeConfiguredPathEntries(
+      configuredPathMaps.readwritePaths,
+      policy.configuredPaths.readwritePaths,
+    );
     const timeoutSeconds = policy.process?.timeoutSeconds;
     if (timeoutSeconds !== undefined) {
       assertPositiveFiniteNumber(timeoutSeconds, `${label}.process.timeoutSeconds`);
@@ -118,11 +181,19 @@ export function mergeSandboxPolicyLayers(
   return {
     filesystem: {
       ...filesystem,
-      additionalReadonlyPaths: dedupeStable(filesystem.additionalReadonlyPaths ?? []),
-      additionalReadwritePaths: dedupeStable(filesystem.additionalReadwritePaths ?? []),
+      additionalReadonlyPaths: [...configuredPathMaps.readonlyPaths.values()].map(
+        (entry) => entry.path,
+      ),
+      additionalReadwritePaths: [...configuredPathMaps.readwritePaths.values()].map(
+        (entry) => entry.path,
+      ),
     },
     process: {
       timeoutSeconds: Math.min(...timeoutCandidates),
+    },
+    configuredPaths: {
+      readonlyPaths: [...configuredPathMaps.readonlyPaths.values()],
+      readwritePaths: [...configuredPathMaps.readwritePaths.values()],
     },
   };
 }
@@ -140,14 +211,80 @@ function mergeFilesystemPolicy(
     target.restrictToProjectDir,
     layer.restrictToProjectDir,
   );
-  target.additionalReadonlyPaths = [
-    ...(target.additionalReadonlyPaths ?? []),
-    ...(layer.additionalReadonlyPaths ?? []),
-  ];
-  target.additionalReadwritePaths = [
-    ...(target.additionalReadwritePaths ?? []),
-    ...(layer.additionalReadwritePaths ?? []),
-  ];
+}
+
+function mergeConfiguredPathEntries(
+  target: Map<string, SandboxConfiguredPathEntry>,
+  entries: readonly SandboxConfiguredPathEntry[],
+): void {
+  for (const entry of entries) {
+    const existing = target.get(entry.path);
+    if (!existing) {
+      target.set(entry.path, entry);
+      continue;
+    }
+    target.set(entry.path, {
+      path: entry.path,
+      sources: [...new Set([...existing.sources, ...entry.sources])],
+    });
+  }
+}
+
+function normalizeConfiguredPaths(
+  values: readonly string[] | undefined,
+  sourceLabel: string,
+  field: SandboxPolicyPathField,
+): SandboxConfiguredPathEntry[] {
+  if (!values || values.length === 0) {
+    return [];
+  }
+
+  const deduped = new Map<string, SandboxConfiguredPathEntry>();
+  for (const [index, value] of values.entries()) {
+    const source = `${sourceLabel}.${field}[${index}]`;
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+      throw new TypeError(`Sandbox policy field ${source} must not be blank.`);
+    }
+    if (!win32.isAbsolute(trimmed)) {
+      throw new TypeError(`Sandbox policy field ${source} must be an absolute Windows path.`);
+    }
+
+    const normalized = win32.normalize(trimmed);
+    assertConfiguredPathExists(normalized, source);
+
+    const existing = deduped.get(normalized);
+    if (!existing) {
+      deduped.set(normalized, { path: normalized, sources: [source] });
+      continue;
+    }
+    deduped.set(normalized, {
+      path: normalized,
+      sources: [...new Set([...existing.sources, source])],
+    });
+  }
+
+  return [...deduped.values()];
+}
+
+function assertConfiguredPathExists(pathValue: string, source: string): void {
+  try {
+    statSync(pathValue);
+  } catch (err) {
+    if (isNodeError(err)) {
+      if (err.code === "ENOENT") {
+        throw new Error(
+          `Sandbox policy path ${pathValue} configured by ${source} does not exist on the host. ` +
+            `Create the path or update the policy file.`,
+        );
+      }
+      throw new Error(
+        `Sandbox policy path ${pathValue} configured by ${source} is not accessible on the host: ${formatError(err)}`,
+        { cause: err },
+      );
+    }
+    throw err;
+  }
 }
 
 function mostRestrictiveBoolean(
@@ -163,16 +300,16 @@ function assertPositiveFiniteNumber(value: unknown, label: string): asserts valu
   }
 }
 
-function dedupeStable(values: readonly string[]): string[] {
-  const deduped: string[] = [];
-  const seen = new Set<string>();
-  for (const value of values) {
-    if (!seen.has(value)) {
-      seen.add(value);
-      deduped.push(value);
-    }
+function policyFileError(policyPath: string, err: unknown): Error {
+  if (isNodeError(err) && err.code === "ENOENT") {
+    return new Error(
+      `Configured sandbox policy file ${policyPath} does not exist. Remove it from mxcPolicyPaths or create the file.`,
+      { cause: err },
+    );
   }
-  return deduped;
+  return new Error(`Failed to load sandbox policy file at ${policyPath}: ${formatError(err)}`, {
+    cause: err instanceof Error ? err : undefined,
+  });
 }
 
 function formatSandboxPolicyIssue(sourceLabel: string, issue: z.ZodIssue | undefined): string {
@@ -199,18 +336,20 @@ function formatSandboxPolicyIssue(sourceLabel: string, issue: z.ZodIssue | undef
   return `Sandbox policy field ${fieldLabel} ${issue.message}.`;
 }
 
-function formatIssuePath(path: readonly PropertyKey[]): string {
-  if (path.length === 0) {
-    return "";
-  }
-  return path
-    .map((segment) => (typeof segment === "number" ? `[${segment}]` : `.${String(segment)}`))
-    .join("");
+function formatIssuePath(pathSegments: readonly PropertyKey[]): string {
+  return pathSegments.reduce((label, segment) => {
+    if (typeof segment === "number") {
+      return `${label}[${segment}]`;
+    }
+    return `${label}.${String(segment)}`;
+  }, "");
 }
 
-function policyFileError(policyPath: string, err: unknown): Error {
-  const reason = err instanceof Error ? err.message : String(err);
-  return new Error(`Failed to load sandbox policy file at ${policyPath}: ${reason}`);
+function formatError(err: unknown): string {
+  if (err instanceof Error && err.message) {
+    return err.message;
+  }
+  return String(err);
 }
 
 function isNodeError(err: unknown): err is NodeJS.ErrnoException {

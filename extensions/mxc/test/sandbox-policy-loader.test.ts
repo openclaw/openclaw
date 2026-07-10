@@ -1,8 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { loadSandboxBaselinePolicy, readSandboxPolicyFile } from "../src/sandbox-policy-loader.js";
+
+const describeOnWindows = describe.runIf(process.platform === "win32");
 
 const testDirs: string[] = [];
 
@@ -15,6 +17,12 @@ afterEach(() => {
 function makeTestDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "openclaw-mxc-policy-"));
   testDirs.push(dir);
+  return dir;
+}
+
+function makeExistingDir(rootDir: string, name: string): string {
+  const dir = join(rootDir, name);
+  mkdirSync(dir, { recursive: true });
   return dir;
 }
 
@@ -34,7 +42,7 @@ function expectPolicyFileFailure(policyPath: string, action: () => unknown, deta
   throw new Error("Expected policy loader failure.");
 }
 
-describe("loadSandboxBaselinePolicy", () => {
+describeOnWindows("loadSandboxBaselinePolicy", () => {
   test("resolves no configured policy files with the default baseline", () => {
     const policy = loadSandboxBaselinePolicy();
 
@@ -43,32 +51,32 @@ describe("loadSandboxBaselinePolicy", () => {
     expect(policy.filesystem.additionalReadwritePaths).toEqual([]);
     expect(policy.process.timeoutSeconds).toBe(300);
     expect(policy.process.timeoutSecondsConfigured).toBe(false);
+    expect(policy.configuredPaths.readonlyPaths).toEqual([]);
+    expect(policy.configuredPaths.readwritePaths).toEqual([]);
   });
 
-  test("resolves missing configured policy files with the default baseline", () => {
-    const dir = makeTestDir();
-    const policyPaths = [
-      join(dir, "missing-first-policy.json"),
-      join(dir, "missing-second-policy.json"),
-    ];
+  test("fails closed when a configured policy file is missing", () => {
+    const missingPolicyPath = join(makeTestDir(), "missing-policy.json");
 
-    const policy = loadSandboxBaselinePolicy({ policyPaths });
-
-    expect(policy.filesystem.restrictToProjectDir).toBe(true);
-    expect(policy.filesystem.additionalReadonlyPaths).toEqual([]);
-    expect(policy.filesystem.additionalReadwritePaths).toEqual([]);
-    expect(policy.process.timeoutSeconds).toBe(300);
-    expect(policy.process.timeoutSecondsConfigured).toBe(false);
+    expect(() => loadSandboxBaselinePolicy({ policyPaths: [missingPolicyPath] })).toThrow(
+      /does not exist/u,
+    );
   });
 
   test("layers configured policy files in deterministic array order", () => {
     const dir = makeTestDir();
     const firstPolicyPath = join(dir, "first-policy.json");
     const secondPolicyPath = join(dir, "second-policy.json");
+    const firstReadonlyPath = makeExistingDir(dir, "readonly-first");
+    const secondReadonlyPath = makeExistingDir(dir, "readonly-second");
+    const firstReadwritePath = makeExistingDir(dir, "readwrite-first");
+    const sharedReadwritePath = makeExistingDir(dir, "readwrite-shared");
+    const secondReadwritePath = makeExistingDir(dir, "readwrite-second");
+
     writePolicy(firstPolicyPath, {
       filesystem: {
-        additionalReadonlyPaths: ["/first-readonly"],
-        additionalReadwritePaths: ["/first-write", "/shared-write"],
+        additionalReadonlyPaths: [`  ${firstReadonlyPath}  `],
+        additionalReadwritePaths: [firstReadwritePath, sharedReadwritePath],
       },
       process: {
         timeoutSeconds: 90,
@@ -76,8 +84,8 @@ describe("loadSandboxBaselinePolicy", () => {
     });
     writePolicy(secondPolicyPath, {
       filesystem: {
-        additionalReadonlyPaths: ["/second-readonly"],
-        additionalReadwritePaths: ["/second-write", "/shared-write"],
+        additionalReadonlyPaths: [secondReadonlyPath],
+        additionalReadwritePaths: [secondReadwritePath, sharedReadwritePath],
       },
       process: {
         timeoutSeconds: 120,
@@ -87,13 +95,30 @@ describe("loadSandboxBaselinePolicy", () => {
     const policy = loadSandboxBaselinePolicy({ policyPaths: [firstPolicyPath, secondPolicyPath] });
 
     expect(policy.filesystem.additionalReadonlyPaths).toEqual([
-      "/first-readonly",
-      "/second-readonly",
+      firstReadonlyPath,
+      secondReadonlyPath,
     ]);
     expect(policy.filesystem.additionalReadwritePaths).toEqual([
-      "/first-write",
-      "/shared-write",
-      "/second-write",
+      firstReadwritePath,
+      sharedReadwritePath,
+      secondReadwritePath,
+    ]);
+    expect(policy.configuredPaths.readwritePaths).toEqual([
+      {
+        path: firstReadwritePath,
+        sources: [`${firstPolicyPath}.filesystem.additionalReadwritePaths[0]`],
+      },
+      {
+        path: sharedReadwritePath,
+        sources: [
+          `${firstPolicyPath}.filesystem.additionalReadwritePaths[1]`,
+          `${secondPolicyPath}.filesystem.additionalReadwritePaths[1]`,
+        ],
+      },
+      {
+        path: secondReadwritePath,
+        sources: [`${secondPolicyPath}.filesystem.additionalReadwritePaths[0]`],
+      },
     ]);
     expect(policy.process.timeoutSeconds).toBe(90);
     expect(policy.process.timeoutSecondsConfigured).toBe(true);
@@ -114,9 +139,53 @@ describe("loadSandboxBaselinePolicy", () => {
   });
 });
 
-describe("readSandboxPolicyFile", () => {
-  test("returns undefined for missing files", () => {
-    expect(readSandboxPolicyFile(join(makeTestDir(), "missing.json"))).toBeUndefined();
+describeOnWindows("readSandboxPolicyFile", () => {
+  test("fails closed for blank read-only paths", () => {
+    const dir = makeTestDir();
+    const policyPath = join(dir, "blank-path.json");
+    writePolicy(policyPath, {
+      filesystem: {
+        additionalReadonlyPaths: ["   "],
+      },
+    });
+
+    expectPolicyFileFailure(
+      policyPath,
+      () => readSandboxPolicyFile(policyPath),
+      "must not be blank",
+    );
+  });
+
+  test("fails closed for relative read-write paths", () => {
+    const dir = makeTestDir();
+    const policyPath = join(dir, "relative-path.json");
+    writePolicy(policyPath, {
+      filesystem: {
+        additionalReadwritePaths: ["relative\\path"],
+      },
+    });
+
+    expectPolicyFileFailure(
+      policyPath,
+      () => readSandboxPolicyFile(policyPath),
+      "absolute Windows path",
+    );
+  });
+
+  test("fails closed for nonexistent read-only paths", () => {
+    const dir = makeTestDir();
+    const policyPath = join(dir, "missing-path.json");
+    writePolicy(policyPath, {
+      filesystem: {
+        additionalReadonlyPaths: [join(dir, "missing-readonly")],
+      },
+    });
+
+    expectPolicyFileFailure(
+      policyPath,
+      () => readSandboxPolicyFile(policyPath),
+      "does not exist on the host",
+    );
   });
 
   test("fails closed with path-inclusive errors for malformed existing files", () => {

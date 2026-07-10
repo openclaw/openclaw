@@ -1,6 +1,5 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
+import { removePathWithinRoot, root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   createWritableRenameTargetResolver,
   type SandboxBackendHandle,
@@ -18,15 +17,17 @@ type MxcFsBridgeContext = Parameters<
   NonNullable<SandboxBackendHandle["createFsBridge"]>
 >[0]["sandbox"];
 
-type ResolvedMxcPath = SandboxResolvedPath & {
-  hostPath: string;
-  mountRoot: string;
+type MxcFsMount = {
+  hostRoot: string;
+  containerRoot: string;
   writable: boolean;
 };
 
-type MxcProtectedSkillMount = {
-  hostRoot: string;
-  containerRoot: string;
+type ResolvedMxcPath = SandboxResolvedPath & {
+  hostPath: string;
+  mount: MxcFsMount;
+  mountRelativePath: string;
+  writable: boolean;
 };
 
 export function createMxcFsBridge(params: { sandbox: MxcFsBridgeContext }): SandboxFsBridge {
@@ -34,16 +35,18 @@ export function createMxcFsBridge(params: { sandbox: MxcFsBridgeContext }): Sand
 }
 
 class MxcFsBridge implements SandboxFsBridge {
-  private readonly protectedSkillMounts: readonly MxcProtectedSkillMount[];
+  private readonly defaultContainerRoot = path.resolve(this.sandbox.containerWorkdir);
+
+  private readonly protectedSkillMounts = resolveMxcProtectedSkillMounts(this.sandbox);
+
+  private readonly workspaceMounts = resolveWorkspaceMounts(this.sandbox);
 
   private readonly resolveRenameTargets = createWritableRenameTargetResolver(
     (target) => this.resolveTarget(target),
     (target, action) => this.ensureWritable(target, action),
   );
 
-  constructor(private readonly sandbox: MxcFsBridgeContext) {
-    this.protectedSkillMounts = resolveMxcProtectedSkillMounts(sandbox);
-  }
+  constructor(private readonly sandbox: MxcFsBridgeContext) {}
 
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath {
     const target = this.resolveTarget(params);
@@ -56,21 +59,11 @@ class MxcFsBridge implements SandboxFsBridge {
 
   async readFile(params: { filePath: string; cwd?: string }): Promise<Buffer> {
     const target = this.resolveTarget(params);
-    await assertLocalPathSafety({
-      target,
-      root: target.mountRoot,
-      allowMissingLeaf: false,
-      allowFinalSymlinkForUnlink: false,
-    });
-    const root = await fsRoot(target.mountRoot);
-    const opened = await root.open(path.relative(target.mountRoot, target.hostPath), {
+    return (await (
+      await fsRoot(target.mount.hostRoot)
+    ).readBytes(target.mountRelativePath, {
       hardlinks: "reject",
-    });
-    try {
-      return (await opened.handle.readFile()) as Buffer;
-    } finally {
-      await opened.handle.close();
-    }
+    })) as Buffer;
   }
 
   async writeFile(params: {
@@ -82,17 +75,12 @@ class MxcFsBridge implements SandboxFsBridge {
   }): Promise<void> {
     const target = this.resolveTarget(params);
     this.ensureWritable(target, "write files");
-    await assertLocalPathSafety({
-      target,
-      root: target.mountRoot,
-      allowMissingLeaf: true,
-      allowFinalSymlinkForUnlink: false,
-    });
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
-    const root = await fsRoot(target.mountRoot);
-    await root.write(path.relative(target.mountRoot, target.hostPath), buffer, {
+    await (
+      await fsRoot(target.mount.hostRoot)
+    ).write(target.mountRelativePath, buffer, {
       mkdir: params.mkdir !== false,
     });
   }
@@ -100,13 +88,10 @@ class MxcFsBridge implements SandboxFsBridge {
   async mkdirp(params: { filePath: string; cwd?: string }): Promise<void> {
     const target = this.resolveTarget(params);
     this.ensureWritable(target, "create directories");
-    await assertLocalPathSafety({
-      target,
-      root: target.mountRoot,
-      allowMissingLeaf: true,
-      allowFinalSymlinkForUnlink: false,
-    });
-    await fs.mkdir(target.hostPath, { recursive: true });
+    if (target.mountRelativePath.length === 0) {
+      return;
+    }
+    await (await fsRoot(target.mount.hostRoot)).mkdir(target.mountRelativePath);
   }
 
   async remove(params: {
@@ -117,48 +102,38 @@ class MxcFsBridge implements SandboxFsBridge {
   }): Promise<void> {
     const target = this.resolveTarget(params);
     this.ensureWritable(target, "remove files");
-    await assertLocalPathSafety({
-      target,
-      root: target.mountRoot,
-      allowMissingLeaf: params.force === true,
-      allowFinalSymlinkForUnlink: true,
-    });
-    await fs.rm(target.hostPath, {
-      recursive: params.recursive ?? false,
+    await removePathWithinRoot({
+      rootDir: target.mount.hostRoot,
+      relativePath: target.mountRelativePath,
+      recursive: params.recursive,
       force: params.force ?? false,
     });
   }
 
   async rename(params: { from: string; to: string; cwd?: string }): Promise<void> {
     const { from: source, to: target } = this.resolveRenameTargets(params);
-    await assertLocalPathSafety({
-      target: source,
-      root: source.mountRoot,
-      allowMissingLeaf: false,
-      allowFinalSymlinkForUnlink: true,
-    });
-    await assertLocalPathSafety({
-      target,
-      root: target.mountRoot,
-      allowMissingLeaf: true,
-      allowFinalSymlinkForUnlink: false,
-    });
-    await fs.mkdir(path.dirname(target.hostPath), { recursive: true });
-    await fs.rename(source.hostPath, target.hostPath);
+    if (!isSameMountRoot(source.mount.hostRoot, target.mount.hostRoot)) {
+      throw new Error(
+        `Sandbox rename must stay within the same mounted root: ${source.containerPath} -> ${target.containerPath}`,
+      );
+    }
+
+    const root = await fsRoot(source.mount.hostRoot);
+    const targetParent = resolveRelativeParentPath(target.mountRelativePath);
+    if (targetParent) {
+      await root.mkdir(targetParent);
+    }
+    await root.move(source.mountRelativePath, target.mountRelativePath, { overwrite: true });
   }
 
   async stat(params: { filePath: string; cwd?: string }): Promise<SandboxFsStat | null> {
     const target = this.resolveTarget(params);
-    await assertLocalPathSafety({
-      target,
-      root: target.mountRoot,
-      allowMissingLeaf: true,
-      allowFinalSymlinkForUnlink: false,
-    });
-    const stats = await fs.stat(target.hostPath).catch(() => null);
-    if (!stats) {
+    const root = await fsRoot(target.mount.hostRoot);
+    if (!(await root.exists(target.mountRelativePath))) {
       return null;
     }
+
+    const stats = await root.stat(target.mountRelativePath);
     return {
       type: stats.isDirectory() ? "directory" : stats.isFile() ? "file" : "other",
       size: stats.size,
@@ -167,49 +142,46 @@ class MxcFsBridge implements SandboxFsBridge {
   }
 
   private resolveTarget(params: { filePath: string; cwd?: string }): ResolvedMxcPath {
-    const workspaceRoot = path.resolve(this.sandbox.workspaceDir);
     const input = params.filePath.trim();
-    const cwd = params.cwd?.trim() ? path.resolve(params.cwd) : workspaceRoot;
-    const hostPath = path.isAbsolute(input) ? path.resolve(input) : path.resolve(cwd, input);
-    const protectedTarget = this.resolveProtectedSkillTarget(hostPath);
-    if (protectedTarget) {
-      return protectedTarget;
-    }
-    if (!isPathInside(workspaceRoot, hostPath)) {
-      throw new Error(
-        `Path escapes sandbox root (${workspaceRoot}; container root ${this.sandbox.containerWorkdir}): ${params.filePath}. Use a path under ${this.sandbox.containerWorkdir}\\ instead.`,
-      );
-    }
-    const relativePath = path.relative(workspaceRoot, hostPath);
-    return {
-      hostPath,
-      relativePath,
-      containerPath: hostPath,
-      mountRoot: workspaceRoot,
-      writable: this.sandbox.workspaceAccess === "rw",
-    };
+    const cwd = params.cwd?.trim() ? path.resolve(params.cwd) : this.defaultContainerRoot;
+    const containerPath = path.isAbsolute(input) ? path.resolve(input) : path.resolve(cwd, input);
+
+    return (
+      this.resolveMountedTarget(containerPath, this.protectedSkillMounts) ??
+      this.resolveMountedTarget(containerPath, this.workspaceMounts) ??
+      this.throwSandboxRootEscape(params.filePath)
+    );
   }
 
-  private resolveProtectedSkillTarget(candidatePath: string): ResolvedMxcPath | null {
-    const workspaceRoot = path.resolve(this.sandbox.workspaceDir);
-    const mounts = [...this.protectedSkillMounts].toSorted(
-      (a, b) => b.containerRoot.length - a.containerRoot.length,
-    );
+  private resolveMountedTarget(
+    containerPath: string,
+    mounts: readonly MxcFsMount[],
+  ): ResolvedMxcPath | null {
     for (const mount of mounts) {
-      if (!isPathInside(mount.containerRoot, candidatePath)) {
+      if (!isPathInside(mount.containerRoot, containerPath)) {
         continue;
       }
-      const relativePath = path.relative(mount.containerRoot, candidatePath);
-      const hostPath = path.join(mount.hostRoot, relativePath);
+
+      const mountRelativePath = path.relative(mount.containerRoot, containerPath);
       return {
-        hostPath,
-        relativePath: path.relative(workspaceRoot, candidatePath),
-        containerPath: candidatePath,
-        mountRoot: mount.hostRoot,
-        writable: false,
+        hostPath: path.join(mount.hostRoot, mountRelativePath),
+        relativePath: mountRelativePath,
+        containerPath,
+        mount,
+        mountRelativePath,
+        writable: mount.writable,
       };
     }
     return null;
+  }
+
+  private throwSandboxRootEscape(filePath: string): never {
+    const allowedRoots = [
+      ...new Set(this.workspaceMounts.map((mount) => mount.containerRoot)),
+    ].join(", ");
+    throw new Error(
+      `Path escapes sandbox root (${allowedRoots}; container root ${this.sandbox.containerWorkdir}): ${filePath}. Use a path under ${this.sandbox.containerWorkdir}\\ instead.`,
+    );
   }
 
   private ensureWritable(target: ResolvedMxcPath, action: string): void {
@@ -219,76 +191,89 @@ class MxcFsBridge implements SandboxFsBridge {
   }
 }
 
-function resolveMxcProtectedSkillMounts(
-  sandbox: MxcFsBridgeContext,
-): readonly MxcProtectedSkillMount[] {
-  return resolveMxcReadOnlySkillMounts({
-    agentWorkspaceDir: sandbox.agentWorkspaceDir,
-    skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
-    workdir: sandbox.containerWorkdir,
-    workspaceAccess: sandbox.workspaceAccess,
-  }).map(normalizeMxcProtectedSkillMount);
+function resolveWorkspaceMounts(sandbox: MxcFsBridgeContext): readonly MxcFsMount[] {
+  const containerRoot = path.resolve(sandbox.containerWorkdir);
+  const workspaceDir = path.resolve(sandbox.workspaceDir);
+  const agentWorkspaceDir = path.resolve(sandbox.agentWorkspaceDir);
+  const mounts: MxcFsMount[] =
+    sandbox.workspaceAccess === "rw"
+      ? [
+          {
+            hostRoot: agentWorkspaceDir,
+            containerRoot,
+            writable: true,
+          },
+        ]
+      : [
+          {
+            hostRoot: workspaceDir,
+            containerRoot,
+            writable: false,
+          },
+        ];
+
+  if (
+    sandbox.workspaceAccess === "ro" &&
+    normalizePathForComparison(agentWorkspaceDir) !== normalizePathForComparison(workspaceDir)
+  ) {
+    mounts.push({
+      hostRoot: agentWorkspaceDir,
+      containerRoot: agentWorkspaceDir,
+      writable: false,
+    });
+  }
+
+  return dedupeAndSortMounts(mounts);
 }
 
-function normalizeMxcProtectedSkillMount(mount: MxcReadOnlySkillMount): MxcProtectedSkillMount {
+function resolveMxcProtectedSkillMounts(sandbox: MxcFsBridgeContext): readonly MxcFsMount[] {
+  return dedupeAndSortMounts(
+    resolveMxcReadOnlySkillMounts({
+      agentWorkspaceDir: sandbox.agentWorkspaceDir,
+      skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
+      workdir: sandbox.containerWorkdir,
+      workspaceAccess: sandbox.workspaceAccess,
+    }).map(normalizeMxcProtectedSkillMount),
+  );
+}
+
+function normalizeMxcProtectedSkillMount(mount: MxcReadOnlySkillMount): MxcFsMount {
   return {
     hostRoot: path.resolve(mount.hostPath),
     containerRoot: path.resolve(mount.containerPath),
+    writable: false,
   };
 }
 
-async function assertLocalPathSafety(params: {
-  target: ResolvedMxcPath;
-  root: string;
-  allowMissingLeaf: boolean;
-  allowFinalSymlinkForUnlink: boolean;
-}): Promise<void> {
-  const canonicalRoot = await fs.realpath(params.root).catch(() => path.resolve(params.root));
-  const candidate = await resolveCanonicalCandidate(params.target.hostPath);
-  if (!isPathInside(canonicalRoot, candidate)) {
-    throw new Error(
-      `Sandbox path escapes allowed mounts; cannot access: ${params.target.containerPath}`,
-    );
-  }
-
-  const segments = path
-    .relative(params.root, params.target.hostPath)
-    .split(path.sep)
-    .filter(Boolean);
-  let cursor = params.root;
-  for (let index = 0; index < segments.length; index += 1) {
-    cursor = path.join(cursor, segments[index]);
-    const stats = await fs.lstat(cursor).catch(() => null);
-    if (!stats) {
-      if (index === segments.length - 1 && params.allowMissingLeaf) {
-        return;
-      }
-      continue;
-    }
-    const isFinal = index === segments.length - 1;
-    if (stats.isSymbolicLink() && (!isFinal || !params.allowFinalSymlinkForUnlink)) {
-      throw new Error(`Sandbox boundary checks failed: ${params.target.containerPath}`);
+function dedupeAndSortMounts(mounts: readonly MxcFsMount[]): readonly MxcFsMount[] {
+  const deduped = new Map<string, MxcFsMount>();
+  for (const mount of mounts) {
+    const key = `${normalizePathForComparison(mount.hostRoot)}::${normalizePathForComparison(
+      mount.containerRoot,
+    )}`;
+    if (!deduped.has(key)) {
+      deduped.set(key, mount);
     }
   }
+  return [...deduped.values()].toSorted((left, right) => {
+    const lengthDiff = right.containerRoot.length - left.containerRoot.length;
+    if (lengthDiff !== 0) {
+      return lengthDiff;
+    }
+    return right.hostRoot.length - left.hostRoot.length;
+  });
 }
 
-async function resolveCanonicalCandidate(targetPath: string): Promise<string> {
-  const missing: string[] = [];
-  let cursor = path.resolve(targetPath);
-  while (true) {
-    const exists = await fs
-      .lstat(cursor)
-      .then(() => true)
-      .catch(() => false);
-    if (exists) {
-      const canonical = await fs.realpath(cursor).catch(() => cursor);
-      return path.resolve(canonical, ...missing);
-    }
-    const parent = path.dirname(cursor);
-    if (parent === cursor) {
-      return path.resolve(cursor, ...missing);
-    }
-    missing.unshift(path.basename(cursor));
-    cursor = parent;
-  }
+function resolveRelativeParentPath(relativePath: string): string | null {
+  const parent = path.dirname(relativePath);
+  return parent === "." || parent === "" ? null : parent;
+}
+
+function isSameMountRoot(first: string, second: string): boolean {
+  return normalizePathForComparison(first) === normalizePathForComparison(second);
+}
+
+function normalizePathForComparison(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }

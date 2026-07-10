@@ -1,10 +1,27 @@
 import { posix, win32 } from "node:path";
+import { buildPluginConfigSchema, type OpenClawPluginConfigSchema } from "openclaw/plugin-sdk/core";
+import {
+  formatPluginConfigIssue,
+  mapPluginConfigIssues,
+} from "openclaw/plugin-sdk/extension-shared";
+import { MAX_TIMER_TIMEOUT_SECONDS } from "openclaw/plugin-sdk/number-runtime";
+import { z } from "zod";
 
-export type MxcContainment = "process" | "processcontainer";
+const MXC_CONTAINMENTS = ["process", "processcontainer"] as const;
+const MXC_NETWORK_MODES = ["none", "default"] as const;
 
-export type MxcNetworkMode = "none" | "default";
+export type MxcContainment = (typeof MXC_CONTAINMENTS)[number];
 
-const CONTAINMENTS = new Set<MxcContainment>(["process", "processcontainer"]);
+export type MxcNetworkMode = (typeof MXC_NETWORK_MODES)[number];
+
+type MxcPluginConfig = {
+  mxcBinaryPath?: string;
+  containment?: MxcContainment;
+  network?: MxcNetworkMode;
+  timeoutSeconds?: number;
+  debug?: boolean;
+  mxcPolicyPaths?: string[];
+};
 
 export type MxcConfig = {
   mxcBinaryPath?: string;
@@ -16,84 +33,112 @@ export type MxcConfig = {
   mxcPolicyPaths?: string[];
 };
 
+export type ResolvedMxcPluginConfig = MxcConfig;
+
 const DEFAULT_CONTAINMENT: MxcContainment = "process";
 const DEFAULT_NETWORK: MxcNetworkMode = "none";
 const DEFAULT_TIMEOUT_SECONDS = 120;
+const DEFAULT_DEBUG = false;
 
-export function resolveConfig(raw: unknown): MxcConfig {
-  if (raw == null || typeof raw !== "object") {
+const nonEmptyTrimmedString = (message: string) =>
+  z.string({ error: message }).trim().min(1, { error: message });
+
+const MxcPluginConfigSchema = z.strictObject({
+  mxcBinaryPath: nonEmptyTrimmedString("mxcBinaryPath must be a non-empty string").optional(),
+  containment: z
+    .enum(MXC_CONTAINMENTS, {
+      error: `containment must be one of ${MXC_CONTAINMENTS.join(", ")}`,
+    })
+    .optional(),
+  network: z
+    .enum(MXC_NETWORK_MODES, {
+      error: `network must be one of ${MXC_NETWORK_MODES.join(", ")}`,
+    })
+    .optional(),
+  timeoutSeconds: z
+    .number({
+      error: `timeoutSeconds must be a number between 1 and ${MAX_TIMER_TIMEOUT_SECONDS}`,
+    })
+    .min(1, { error: "timeoutSeconds must be a number >= 1" })
+    .max(MAX_TIMER_TIMEOUT_SECONDS, {
+      error: `timeoutSeconds must be a number <= ${MAX_TIMER_TIMEOUT_SECONDS}`,
+    })
+    .optional(),
+  debug: z.boolean({ error: "debug must be a boolean" }).optional(),
+  mxcPolicyPaths: z
+    .array(nonEmptyTrimmedString("mxcPolicyPaths must be an array of non-empty strings"), {
+      error: "mxcPolicyPaths must be an array of non-empty strings",
+    })
+    .optional(),
+});
+
+export function createMxcPluginConfigSchema(): OpenClawPluginConfigSchema {
+  return buildPluginConfigSchema(MxcPluginConfigSchema, {
+    safeParse(value) {
+      if (value === undefined) {
+        return { success: true, data: undefined };
+      }
+      const parsed = MxcPluginConfigSchema.safeParse(value);
+      if (parsed.success) {
+        return { success: true, data: parsed.data };
+      }
+      return {
+        success: false,
+        error: {
+          issues: mapPluginConfigIssues(parsed.error.issues),
+        },
+      };
+    },
+  });
+}
+
+export function resolveMxcPluginConfig(value: unknown): ResolvedMxcPluginConfig {
+  if (value === undefined) {
     return {
+      mxcBinaryPath: undefined,
       containment: DEFAULT_CONTAINMENT,
       network: DEFAULT_NETWORK,
       timeoutSeconds: DEFAULT_TIMEOUT_SECONDS,
-      debug: false,
+      debug: DEFAULT_DEBUG,
     };
   }
-  const input = raw as Record<string, unknown>;
-  const containment = resolveContainment(input);
 
-  const network =
-    input.network === "none" || input.network === "default"
-      ? (input.network as MxcNetworkMode)
-      : DEFAULT_NETWORK;
-
-  const inputTimeoutSeconds = input.timeoutSeconds;
-  let timeoutSecondsConfigured = false;
-  let timeoutSeconds = DEFAULT_TIMEOUT_SECONDS;
-  if (
-    typeof inputTimeoutSeconds === "number" &&
-    Number.isFinite(inputTimeoutSeconds) &&
-    inputTimeoutSeconds >= 1
-  ) {
-    timeoutSecondsConfigured = true;
-    timeoutSeconds = inputTimeoutSeconds;
+  const parsed = MxcPluginConfigSchema.safeParse(value);
+  if (!parsed.success) {
+    const message = formatPluginConfigIssue(parsed.error.issues[0]);
+    throw new Error(`Invalid mxc plugin config: ${message}`);
   }
 
-  const resolved: MxcConfig = {
-    mxcBinaryPath:
-      typeof input.mxcBinaryPath === "string" && input.mxcBinaryPath.trim().length > 0
-        ? input.mxcBinaryPath.trim()
-        : undefined,
-    containment,
-    network,
-    timeoutSeconds,
-    debug: input.debug === true,
-    mxcPolicyPaths: resolveMxcPolicyPaths(input.mxcPolicyPaths),
+  const config = parsed.data as MxcPluginConfig;
+  const resolved: ResolvedMxcPluginConfig = {
+    mxcBinaryPath: config.mxcBinaryPath,
+    containment: config.containment ?? DEFAULT_CONTAINMENT,
+    network: config.network ?? DEFAULT_NETWORK,
+    timeoutSeconds: config.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS,
+    debug: config.debug ?? DEFAULT_DEBUG,
+    mxcPolicyPaths: resolveMxcPolicyPaths(config.mxcPolicyPaths),
   };
 
-  if (timeoutSecondsConfigured) {
+  if (config.timeoutSeconds !== undefined) {
     resolved.timeoutSecondsConfigured = true;
   }
 
   return resolved;
 }
 
-function resolveContainment(input: Record<string, unknown>): MxcContainment {
-  return typeof input.containment === "string" &&
-    CONTAINMENTS.has(input.containment as MxcContainment)
-    ? (input.containment as MxcContainment)
-    : DEFAULT_CONTAINMENT;
-}
+export const resolveConfig = resolveMxcPluginConfig;
 
-function resolveMxcPolicyPaths(value: unknown): string[] | undefined {
+function resolveMxcPolicyPaths(value: string[] | undefined): string[] | undefined {
   if (value === undefined) {
     return undefined;
   }
-  if (!Array.isArray(value)) {
-    throw new TypeError("MXC config field mxcPolicyPaths must be an array of absolute paths.");
-  }
-
   return value.map((entry, index) => {
-    if (typeof entry !== "string") {
-      throw new TypeError(`MXC config field mxcPolicyPaths[${index}] must be a string.`);
-    }
-    const trimmed = entry.trim();
-    if (trimmed.length === 0 || !isAbsolutePath(trimmed)) {
-      throw new TypeError(
-        `MXC config field mxcPolicyPaths[${index}] must be a non-empty absolute path.`,
+    if (!isAbsolutePath(entry)) {
+      throw new Error(
+        `Invalid mxc plugin config: mxcPolicyPaths[${index}] must be an absolute path`,
       );
     }
-    return trimmed;
+    return entry;
   });
 }
 

@@ -17,4 +17,8 @@ describe("mxc plugin entry", () => {
       "OS-level sandboxed tool execution via MXC: runs commands in a Windows ProcessContainer with configured MXC policy files.",
     );
   });
+
+  it("wires the runtime config schema into the plugin entry and manifest", () => {
+    expect(plugin.configSchema?.jsonSchema).toEqual(manifest.configSchema);
+  });
 });

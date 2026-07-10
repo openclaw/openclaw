@@ -40,15 +40,40 @@ readiness behavior to change as MXC host support matures.
 - Package: `@openclaw/mxc-sandbox`
 - Minimum OpenClaw host: `2026.6.11`
 
+## Plugin config
+
+`plugins.entries.mxc.config` is validated with a strict schema: unknown keys
+and out-of-range values fail plugin activation with an actionable error
+(`Invalid mxc plugin config: <reason>`) instead of falling back silently.
+
+| Field            | Type                              | Default                                | Notes                                                                                                                                                         |
+| ---------------- | --------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mxcBinaryPath`  | `string`                          | unset                                  | Non-empty override for the `wxc-exec.exe` executor path; see [SDK-only executor discovery](#supported).                                                       |
+| `containment`    | `"process" \| "processcontainer"` | `"process"`                            | Both currently resolve to Windows ProcessContainer.                                                                                                           |
+| `network`        | `"none" \| "default"`             | `"none"`                               | `"default"` allows outbound network via the `internetClient` capability.                                                                                      |
+| `timeoutSeconds` | `number`                          | unset (baseline default `300` applies) | Must be `>= 1` and `<= 2147000` (the largest Node-safe `setTimeout` delay in whole seconds). Capped to the sandbox policy baseline timeout when both are set. |
+| `debug`          | `boolean`                         | `false`                                | Forwards debug output from the MXC SDK launcher.                                                                                                              |
+| `mxcPolicyPaths` | `string[]`                        | unset (built-in baseline only)         | Every entry must be a non-empty absolute path. See [Sandbox policy files](#sandbox-policy-files).                                                             |
+
+Any other key is rejected. `openclaw.plugin.json` publishes the same schema
+(enums, `minimum`/`maximum` bounds) so `openclaw config` validation and CLI
+help stay in sync with plugin runtime validation.
+
 ## Supported
 
 - Windows hosts with the MXC executor installed through `@microsoft/mxc-sdk`.
 - Explicit opt-in after plugin install with `sandbox.backend: "mxc"`.
 - MXC `process` containment, which resolves to Windows ProcessContainer.
 - `workspaceAccess`:
-  - `none`: sandbox workdir is mounted read-only by default.
-  - `ro`: sandbox workdir is mounted read-only by default.
-  - `rw`: sandbox workdir is mounted read-write by default.
+  - `none`: only the isolated sandbox workdir is mounted, read-only. There is
+    no separate mount for the real agent workspace.
+  - `ro`: the isolated sandbox workdir is mounted read-only, plus a distinct
+    read-only mount of the real agent workspace whenever it differs from the
+    sandbox workdir.
+  - `rw`: the active agent workspace is mounted read-write. Protected
+    OpenClaw skill overlays (`skills`, `.agents/skills`, and the materialized
+    sandbox skills workspace) stay mounted read-only even though the rest of
+    the workspace is writable.
   - Use policy `filesystem.additionalReadwritePaths` for additional explicit
     writable host paths shared by every MXC sandbox.
 - `scope` workspace selection:
@@ -56,6 +81,15 @@ readiness behavior to change as MXC host support matures.
     passed to MXC.
 - SDK-only executor discovery from `@microsoft/mxc-sdk/bin/<arch>` or
   `@microsoft/mxc-sdk/bin`; use `mxcBinaryPath` only for an explicit override.
+- OpenClaw passes per-run command, environment, and filesystem config to the
+  plugin's Node launcher through a short-lived local payload file, and deletes
+  that file and its temp directory when the launcher or run finishes.
+- `@microsoft/mxc-sdk@0.7.0` then carries the full base64 request envelope on
+  the native `wxc-exec` process argv. A host user with process-inspection rights
+  can observe that command, environment, and policy data while the process is
+  running. Do not put secrets in MXC command arguments or environment values
+  until the SDK provides a non-argv transport
+  ([microsoft/mxc#626](https://github.com/microsoft/mxc/issues/626)).
 
 ## Not supported yet
 
@@ -172,14 +206,29 @@ Resulting config shape:
 
 MXC reads optional host policy files listed in
 `plugins.entries.mxc.config.mxcPolicyPaths`. Policy files constrain the
-filesystem and process defaults used by every MXC sandbox run on the host. When
-`mxcPolicyPaths` is omitted or empty, MXC uses the built-in sandbox baseline and
-does not read any implicit user or machine policy path.
+filesystem and process defaults used by every MXC sandbox run on the host.
+Omitting `mxcPolicyPaths` (or configuring an empty array) uses the built-in
+sandbox baseline only; MXC never reads an implicit user or machine policy
+path.
 
-`mxcPolicyPaths` must contain absolute paths. JSON arrays preserve order, and
-MXC treats that order as the policy layering order. Missing files are ignored.
-If a file exists but is malformed or includes an unsupported field, MXC fails
-plugin load with an error that includes the policy file path and invalid field.
+Every `mxcPolicyPaths` entry must be a non-empty absolute path; the plugin
+fails to activate with an actionable error the moment a relative, empty, or
+non-string entry is configured. JSON arrays preserve order, and MXC treats
+that order as the policy layering order.
+
+Once a sandbox backend is created for an agent, MXC reads every configured
+policy file and fails closed instead of silently falling back to the
+baseline:
+
+- A configured policy file that does not exist on the host is an error
+  (`Configured sandbox policy file <path> does not exist. Remove it from
+mxcPolicyPaths or create the file.`), not a silent skip.
+- A policy file that is malformed JSON or includes an unsupported field fails
+  with an error naming the policy file path and the invalid field.
+- Every `filesystem.additionalReadonlyPaths` and
+  `filesystem.additionalReadwritePaths` entry must be an absolute Windows path
+  that exists on the host at the time the sandbox activates; a missing path
+  fails with an error naming the path, the policy file, and the field.
 
 Example policy:
 
@@ -202,10 +251,12 @@ Policy schema:
   The default already restricts the sandbox to the project/workspace directory;
   policy files can assert `true` but cannot loosen this.
 - `filesystem.additionalReadonlyPaths`: `string[]`, default `[]`. Extra host
-  paths to expose read-only.
+  paths to expose read-only. Each path must be absolute and must already
+  exist on the host.
 - `filesystem.additionalReadwritePaths`: `string[]`, default `[]`. Extra host
-  paths to expose read-write. These must not overlap read-only roots or
-  protected skill overlays.
+  paths to expose read-write. Each path must be absolute and must already
+  exist on the host, and must not overlap read-only roots or protected skill
+  overlays.
 - `process.timeoutSeconds`: positive `number`, default `300`. Per-command upper
   bound. Values must be finite and at least `1`.
 
@@ -286,11 +337,13 @@ wxc-host-prep prepare-system-drive
 ## Testing
 
 ```powershell
-pnpm test extensions/mxc
+pnpm test:extension mxc
 ```
+
+`pnpm test extensions/mxc` is equivalent and also works.
 
 For policy-only edits, the focused coverage is in:
 
 ```powershell
-pnpm test extensions/mxc/test/config.test.ts extensions/mxc/test/sandbox-policy-loader.test.ts extensions/mxc/test/mxc-backend.test.ts
+pnpm test:extension mxc extensions/mxc/test/config.test.ts extensions/mxc/test/sandbox-policy-loader.test.ts extensions/mxc/test/mxc-backend.test.ts
 ```

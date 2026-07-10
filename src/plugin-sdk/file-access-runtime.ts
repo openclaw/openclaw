@@ -1,6 +1,7 @@
 // Safe local-file helpers for plugin runtime media and bridge code.
 
 export {
+  removePathWithinRoot,
   readFileWithinRoot,
   readLocalFileFromRoots,
   root,
