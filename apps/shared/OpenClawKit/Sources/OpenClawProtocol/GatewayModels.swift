@@ -8252,37 +8252,37 @@ public struct ExecApprovalResolveParams: Codable, Sendable {
 }
 
 public struct PluginApprovalRequestParams: Codable, Sendable {
-    public let pluginid: String?
+    public let pluginid: AnyCodable?
     public let title: String
     public let description: String
-    public let severity: String?
-    public let toolname: String?
-    public let toolcallid: String?
-    public let alloweddecisions: [String]?
-    public let agentid: String?
-    public let sessionkey: String?
+    public let severity: AnyCodable?
+    public let toolname: AnyCodable?
+    public let toolcallid: AnyCodable?
+    public let alloweddecisions: AnyCodable?
+    public let agentid: AnyCodable?
+    public let sessionkey: AnyCodable?
     public let approvalreviewerdeviceids: [String]?
-    public let turnsourcechannel: String?
-    public let turnsourceto: String?
-    public let turnsourceaccountid: String?
+    public let turnsourcechannel: AnyCodable?
+    public let turnsourceto: AnyCodable?
+    public let turnsourceaccountid: AnyCodable?
     public let turnsourcethreadid: AnyCodable?
     public let timeoutms: Int?
     public let twophase: Bool?
 
     public init(
-        pluginid: String?,
+        pluginid: AnyCodable?,
         title: String,
         description: String,
-        severity: String?,
-        toolname: String?,
-        toolcallid: String?,
-        alloweddecisions: [String]?,
-        agentid: String? = nil,
-        sessionkey: String?,
+        severity: AnyCodable?,
+        toolname: AnyCodable?,
+        toolcallid: AnyCodable?,
+        alloweddecisions: AnyCodable?,
+        agentid: AnyCodable? = nil,
+        sessionkey: AnyCodable?,
         approvalreviewerdeviceids: [String]? = nil,
-        turnsourcechannel: String?,
-        turnsourceto: String?,
-        turnsourceaccountid: String?,
+        turnsourcechannel: AnyCodable?,
+        turnsourceto: AnyCodable?,
+        turnsourceaccountid: AnyCodable?,
         turnsourcethreadid: AnyCodable?,
         timeoutms: Int?,
         twophase: Bool?)
