@@ -1094,6 +1094,7 @@ export function createFollowupRunner(params: {
                   emitLifecycleTerminal: false,
                   onAgentRunStart: () => opts?.onAgentRunStart?.(runId),
                   suppressAssistantBridge: run.silentExpected,
+                  onActivity: () => replyOperation?.recordActivity(),
                   onReasoningText: createCliReasoningStreamBridge(progressOpts?.onReasoningStream),
                   onReasoningProgress: async (payload) => {
                     await progressOpts?.onReasoningProgress?.(payload);
@@ -1194,6 +1195,7 @@ export function createFollowupRunner(params: {
                     runId,
                     extraSystemPrompt: run.extraSystemPrompt,
                     sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
+                    taskSuggestionDeliveryMode: run.taskSuggestionDeliveryMode,
                     silentReplyPromptMode: run.silentReplyPromptMode,
                     allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
                     extraSystemPromptStatic: run.extraSystemPromptStatic,
@@ -1214,6 +1216,7 @@ export function createFollowupRunner(params: {
                       originatingChannel: queued.originatingChannel,
                       provider: run.messageProvider,
                     }),
+                    clientCaps: run.clientCaps,
                     currentChannelId: queued.originatingTo,
                     senderId: run.senderId,
                     chatId: queued.originatingChatId,
@@ -1262,6 +1265,9 @@ export function createFollowupRunner(params: {
                 trigger: "user",
                 messageChannel: queued.originatingChannel ?? undefined,
                 messageProvider: run.messageProvider,
+                // Queued turns must keep the originating client's declared caps or
+                // capability-gated tools vanish between the live turn and its drain.
+                clientCaps: run.clientCaps,
                 chatType: run.chatType,
                 agentAccountId: run.agentAccountId,
                 messageTo: queued.originatingTo,
@@ -1296,6 +1302,7 @@ export function createFollowupRunner(params: {
                 extraSystemPrompt: run.extraSystemPrompt,
                 silentReplyPromptMode: run.silentReplyPromptMode,
                 sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
+                taskSuggestionDeliveryMode: run.taskSuggestionDeliveryMode,
                 forceMessageTool: run.sourceReplyDeliveryMode === "message_tool_only",
                 suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
                 onUserMessagePersisted: notifyUserMessagePersisted,
@@ -1346,6 +1353,7 @@ export function createFollowupRunner(params: {
                 shouldEmitToolOutput: shouldEmitToolOutputProgress,
                 onToolResult: deliverFollowupToolSummary,
                 onAgentEvent: (evt) => {
+                  replyOperation?.recordActivity();
                   lifecycleBackstop.note(evt);
                   return enqueueProgressDelivery(async () => {
                     const visible = await forwardFollowupProgressEvent({

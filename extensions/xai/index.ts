@@ -1,5 +1,6 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Xai plugin entrypoint registers its OpenClaw integration.
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { OPENAI_COMPATIBLE_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
 import { defaultToolStreamExtraParams } from "openclaw/plugin-sdk/provider-stream-shared";
@@ -92,13 +93,30 @@ function isXSearchEnabled(config: unknown, auth?: XaiToolAuthContext): boolean {
   return hasResolvableXaiApiKey(config, auth);
 }
 
-function createLazyCodeExecutionTool(ctx: {
-  config?: Record<string, unknown>;
-  runtimeConfig?: Record<string, unknown>;
-  hasAuthForProvider?: XaiToolAuthContext["hasAuthForProvider"];
-  resolveApiKeyForProvider?: XaiToolAuthContext["resolveApiKeyForProvider"];
-}) {
+function shouldExposeXaiBilledTool(params: {
+  activeProvider?: string;
+  enabled?: unknown;
+}): boolean {
+  const activeProvider = params.activeProvider?.trim();
+  if (!activeProvider || params.enabled === false) {
+    return false;
+  }
+  // Cross-provider billing requires explicit consent; xAI models retain the
+  // credential-backed default. Unknown providers fail closed.
+  return activeProvider === PROVIDER_ID || params.enabled === true;
+}
+
+function createLazyCodeExecutionTool(ctx: OpenClawPluginToolContext) {
   const effectiveConfig = ctx.runtimeConfig ?? ctx.config;
+  const codeExecutionConfig = readPluginCodeExecutionConfig(effectiveConfig);
+  if (
+    !shouldExposeXaiBilledTool({
+      activeProvider: ctx.activeModel?.provider,
+      enabled: codeExecutionConfig?.enabled,
+    })
+  ) {
+    return null;
+  }
   if (!isCodeExecutionEnabled(effectiveConfig, ctx)) {
     return null;
   }
@@ -119,13 +137,17 @@ function createLazyCodeExecutionTool(ctx: {
   );
 }
 
-function createLazyXSearchTool(ctx: {
-  config?: Record<string, unknown>;
-  runtimeConfig?: Record<string, unknown>;
-  hasAuthForProvider?: XaiToolAuthContext["hasAuthForProvider"];
-  resolveApiKeyForProvider?: XaiToolAuthContext["resolveApiKeyForProvider"];
-}) {
+function createLazyXSearchTool(ctx: OpenClawPluginToolContext) {
   const effectiveConfig = ctx.runtimeConfig ?? ctx.config;
+  const xSearchConfig = resolveEffectiveXSearchConfig(effectiveConfig);
+  if (
+    !shouldExposeXaiBilledTool({
+      activeProvider: ctx.activeModel?.provider,
+      enabled: xSearchConfig?.enabled,
+    })
+  ) {
+    return null;
+  }
   if (!isXSearchEnabled(effectiveConfig, ctx)) {
     return null;
   }

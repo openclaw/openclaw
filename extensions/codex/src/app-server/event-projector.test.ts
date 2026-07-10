@@ -941,6 +941,35 @@ describe("CodexAppServerEventProjector", () => {
     ]);
   });
 
+  it("marks every failed tool in a multi-call turn", async () => {
+    const projector = await createProjector();
+    const commandItem = (id: string, status: "completed" | "failed", exitCode: number) => ({
+      type: "commandExecution",
+      id,
+      command: `/bin/bash -lc 'exit ${exitCode}'`,
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status,
+      commandActions: [],
+      aggregatedOutput: "",
+      exitCode,
+      durationMs: 10,
+    });
+
+    await projector.handleNotification(
+      turnCompleted([
+        commandItem("cmd-failed-1", "failed", 1),
+        commandItem("cmd-failed-2", "failed", 2),
+        commandItem("cmd-success", "completed", 0),
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.toolMetas).toHaveLength(3);
+    expect(result.toolMetas.filter((meta) => meta.isError === true)).toHaveLength(2);
+  });
+
   it("keeps explicit cancellation marked aborted for interrupted tool-only turns", async () => {
     const projector = await createProjector();
     projector.markAborted();
@@ -2755,6 +2784,76 @@ describe("CodexAppServerEventProjector", () => {
       name: "bash",
     }).data;
     expect(toolResult.result).toEqual({ status: "completed", exitCode: 0, durationMs: 42 });
+  });
+
+  it("keeps final command output UTF-16 safe at the transcript limit", async () => {
+    const projector = await createProjector();
+    const prefix = "a".repeat(11_999);
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-utf16-final",
+          command: "printf output",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: `${prefix}😀tail`,
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const message = requireRecord(result.messagesSnapshot[2], "tool result message");
+    const content = requireArray(message.content, "tool result content");
+    const item = requireRecord(content[0], "tool result content item");
+    expect(item.content).toBe(`${prefix}\n...(truncated)...`);
+  });
+
+  it("keeps streamed command output UTF-16 safe at the transcript limit", async () => {
+    const projector = await createProjector();
+    const prefix = "a".repeat(11_999);
+
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-utf16-streamed",
+        delta: `${prefix}😀tail`,
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-utf16-streamed",
+        delta: "must not replace discarded output",
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-utf16-streamed",
+          command: "printf output",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const message = requireRecord(result.messagesSnapshot[2], "tool result message");
+    const content = requireArray(message.content, "tool result content");
+    const item = requireRecord(content[0], "tool result content item");
+    expect(item.content).toBe(prefix);
   });
 
   it("uses streamed command output for failed native tool errors", async () => {

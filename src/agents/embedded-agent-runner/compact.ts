@@ -935,6 +935,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           },
           sandbox,
           messageProvider: resolvedMessageProvider,
+          clientCaps: params.clientCaps,
           chatType: params.chatType,
           agentAccountId: params.agentAccountId,
           sessionKey: sandboxSessionKey,
@@ -1097,6 +1098,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
       : undefined;
 
     const runtimeInfo = {
+      agentId: sessionAgentId,
+      sessionKey: params.sessionKey,
       host: machineName,
       os: resolveRuntimeOsLabel(),
       arch: os.arch(),

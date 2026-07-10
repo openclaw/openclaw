@@ -174,10 +174,10 @@ extension SettingsProTab {
                 title: "Privacy",
                 route: .privacy)
             self.settingsListRow(
-                icon: "bell.fill",
-                iconColor: .red,
-                title: "Notifications",
-                route: .notifications)
+                icon: "applewatch",
+                iconColor: .green,
+                title: "Apple Watch",
+                route: .appleWatch)
             self.settingsListRow(
                 icon: "info.circle.fill",
                 iconColor: .gray,
@@ -229,6 +229,8 @@ extension SettingsProTab {
                 switch route {
                 case .gateway:
                     self.gatewayDestination
+                case .appleWatch:
+                    self.appleWatchDestination
                 case .approvals:
                     self.approvalsDestination
                 case .permissions:
@@ -252,6 +254,10 @@ extension SettingsProTab {
             .font(OpenClawType.body)
             .navigationTitle(title(for: route))
             .navigationBarTitleDisplayMode(.inline)
+            .task(id: route) {
+                guard route == .appleWatch else { return }
+                await self.appModel.refreshWatchMessagingStatus()
+            }
             .toolbar {
                 if let headerLeadingAction {
                     ToolbarItem(placement: .topBarLeading) {
@@ -357,6 +363,50 @@ extension SettingsProTab {
             }
 
             self.approvalsReviewCard
+        }
+    }
+
+    var appleWatchDestination: some View {
+        Group {
+            let watchStatus = self.appModel.watchMessagingStatus
+            self.detailStatusCard(
+                icon: "applewatch",
+                title: "Apple Watch",
+                detail: watchStatus.appInstalled
+                    ? "Relay remains available; direct mode adds an independent Gateway node."
+                    : "Install the OpenClaw watch app before enabling direct mode.",
+                value: watchStatus.reachable ? "Reachable" : (watchStatus.appInstalled ? "Installed" : "Unavailable"),
+                color: watchStatus.appInstalled ? OpenClawBrand.ok : OpenClawBrand.warn)
+
+            Section {
+                Button {
+                    Task { await self.sendDirectWatchSetup() }
+                } label: {
+                    Label("Enable Direct Gateway Connection", systemImage: "point.3.connected.trianglepath.dotted")
+                        .font(OpenClawType.body)
+                }
+                .disabled(
+                    self.isSendingWatchDirectSetup
+                        || !self.appModel.isOperatorGatewayConnected
+                        || !self.appModel.hasOperatorAdminScope
+                        || !watchStatus.appInstalled)
+
+                if let statusText = self.watchDirectSetupStatusText {
+                    Text(statusText)
+                        .font(OpenClawType.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } footer: {
+                Text(
+                    "The watch receives a one-time pairing code and stores its own device token. A reachable secure Gateway URL is required away from the iPhone.")
+                    .font(OpenClawType.footnote)
+            }
+
+            Section("Direct node features") {
+                SettingsDetailRow("Device", value: "Info and status")
+                SettingsDetailRow("Notifications", value: "While app is active")
+            }
         }
     }
 
@@ -500,12 +550,7 @@ extension SettingsProTab {
 
     var privacyDestination: some View {
         Group {
-            self.detailStatusCard(
-                icon: "hand.raised",
-                title: "Privacy",
-                detail: "Control what device context OpenClaw can expose to the gateway.",
-                value: self.privacyDetail,
-                color: .secondary)
+            self.notificationsSection
 
             self.toggleCard(
                 title: "Camera Access",
@@ -522,49 +567,42 @@ extension SettingsProTab {
     }
 
     var notificationsDestination: some View {
-        Group {
-            self.detailStatusCard(
-                icon: "bell",
-                title: "Notifications",
-                detail: self.notificationStatusDetail,
-                value: self.notificationStatusText,
-                color: self.notificationStatus.color)
+        self.notificationsSection
+    }
 
-            Section {
-                VStack(alignment: .leading, spacing: 12) {
-                    Button {
-                        self.handleNotificationAction()
-                    } label: {
-                        Label(
-                            self.notificationActionText,
-                            systemImage: self.notificationStatus.actionIcon)
-                            .font(OpenClawType.captionSemiBold)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(self.notificationStatus == .checking || self.isRequestingNotificationAuthorization)
-
+    var notificationsSection: some View {
+        Section("Notifications") {
+            HStack(spacing: 12) {
+                SettingsIcon(systemName: "bell.fill", color: self.notificationStatusColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Notifications")
+                        .font(OpenClawType.subheadSemiBold)
                     Text(self.notificationStatusDetail)
                         .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-
-                    Divider()
-
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "network")
-                            .font(OpenClawType.captionSemiBold)
-                            .foregroundStyle(OpenClawBrand.accent)
-                            .frame(width: 22, height: 22)
-                        Text(self.notificationRelayDetail)
-                            .font(OpenClawType.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                 }
+                Spacer(minLength: 8)
+                Toggle("Notifications", isOn: self.notificationToggleBinding)
+                    .labelsHidden()
+                    .disabled(self.notificationStatus == .checking || self.isRequestingNotificationAuthorization)
+                    .accessibilityIdentifier("settings-notifications-toggle")
+                    .accessibilityValue(self.notificationServingActive ? "On" : "Off")
+                    .accessibilityHint("Turns OpenClaw notification delivery on or off")
+            }
+
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "network")
+                    .font(OpenClawType.captionSemiBold)
+                    .foregroundStyle(OpenClawBrand.accent)
+                    .frame(width: 22, height: 22)
+                Text(self.notificationRelayDetail)
+                    .font(OpenClawType.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .accessibilityIdentifier("settings-privacy-notifications-section")
     }
 
     var gatewayActions: some View {
@@ -733,44 +771,69 @@ extension SettingsProTab {
     var locationModeCard: some View {
         Section {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 12) {
-                    SettingsIcon(
-                        systemName: "location",
-                        color: self.locationModeRaw == OpenClawLocationMode.off.rawValue ? .secondary : OpenClawBrand
-                            .accent)
-                    VStack(alignment: .leading, spacing: 3) {
+                Button {
+                    self.handleLocationSharingTap()
+                } label: {
+                    HStack {
                         Text("Location")
-                            .font(OpenClawType.subheadSemiBold)
-                        Text("Controls whether location can be shared with gateway tools.")
-                            .font(OpenClawType.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
+                            .font(OpenClawType.body)
+                            .foregroundStyle(.primary)
+                        Spacer(minLength: 8)
+                        ZStack {
+                            OpenClawToggleIndicator(isOn: self.locationSettingsPresentation.sharingControlIsOn)
+                                .opacity(self.isChangingLocationMode ? 0 : 1)
+                            if self.isChangingLocationMode {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                        }
                     }
-                    Spacer(minLength: 8)
-                    if self.isChangingLocationMode {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
+                    .contentShape(Rectangle())
                 }
-
-                Picker("Location", selection: self.$locationModeRaw) {
-                    Text("Off")
-                        .font(OpenClawType.captionSemiBold)
-                        .tag(OpenClawLocationMode.off.rawValue)
-                    Text("While Using")
-                        .font(OpenClawType.captionSemiBold)
-                        .tag(OpenClawLocationMode.whileUsing.rawValue)
-                    Text("Always")
-                        .font(OpenClawType.captionSemiBold)
-                        .tag(OpenClawLocationMode.always.rawValue)
-                }
-                .pickerStyle(.segmented)
+                .buttonStyle(.plain)
                 .disabled(self.isChangingLocationMode)
+                .accessibilityIdentifier("settings-location-sharing-toggle")
+                .accessibilityLabel("Location Sharing")
+                .accessibilityValue(self.locationSettingsPresentation.sharingControlIsOn ? "On" : "Off")
 
-                Text(self.locationPermissionDetailText)
-                    .font(OpenClawType.caption2)
-                    .foregroundStyle(
-                        self.locationPermissionSummary.needsAttention ? OpenClawBrand.warn : .secondary)
+                if self.locationSettingsPresentation.showsAccessLevel,
+                   let accessLevelText = self.locationSettingsPresentation.accessLevelText
+                {
+                    Divider()
+                    Button {
+                        self.showLocationAccessDialog = true
+                    } label: {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("Access Level")
+                                .font(OpenClawType.body)
+                                .foregroundStyle(.primary)
+                            Spacer(minLength: 8)
+                            Text(accessLevelText)
+                                .font(OpenClawType.subhead)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.trailing)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(self.isChangingLocationMode)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityIdentifier("settings-location-access-level")
+                    .accessibilityLabel("Access Level")
+                    .accessibilityValue(accessLevelText)
+                    .accessibilityHint("Chooses While Using the App or Always")
+                }
+
+                if let locationPermissionDetailText {
+                    Text(locationPermissionDetailText)
+                        .font(OpenClawType.caption2)
+                        .foregroundStyle(OpenClawBrand.warn)
+                }
 
                 if let locationPermissionWarningText {
                     Text(locationPermissionWarningText)
@@ -929,29 +992,45 @@ extension SettingsProTab {
     }
 
     func discoveredGatewayRow(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(verbatim: gateway.name)
-                    .font(OpenClawType.subheadSemiBold)
-                Text(verbatim: self.gatewayDetailLines(gateway).joined(separator: " • "))
-                    .font(OpenClawType.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 8)
-            Button {
-                Task { await self.connect(gateway) }
-            } label: {
-                if self.connectingGatewayID == gateway.id {
-                    ProgressView().controlSize(.small)
+        let availability = self.gatewayController.discoveredGatewayConnectionAvailability(gateway)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(verbatim: gateway.name)
+                        .font(OpenClawType.subheadSemiBold)
+                    Text(verbatim: self.gatewayDetailLines(gateway).joined(separator: " • "))
+                        .font(OpenClawType.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 8)
+                if availability.canConnect {
+                    Button {
+                        Task { await self.connect(gateway) }
+                    } label: {
+                        if self.connectingGatewayID == gateway.id {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text(availability.actionTitle)
+                                .font(OpenClawType.captionSemiBold)
+                        }
+                    }
+                    .font(OpenClawType.captionSemiBold)
+                    .buttonStyle(.bordered)
+                    .disabled(self.connectingGatewayID != nil)
                 } else {
-                    Text("Connect")
+                    Text(availability.actionTitle)
                         .font(OpenClawType.captionSemiBold)
+                        .foregroundStyle(OpenClawBrand.warn)
                 }
             }
-            .font(OpenClawType.captionSemiBold)
-            .buttonStyle(.bordered)
-            .disabled(self.connectingGatewayID != nil)
+
+            if let guidanceText = availability.guidanceText {
+                Text(guidanceText)
+                    .font(OpenClawType.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 

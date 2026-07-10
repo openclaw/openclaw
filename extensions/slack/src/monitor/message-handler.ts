@@ -14,6 +14,7 @@ import type { SlackSendIdentity } from "../send.js";
 import type { SlackMessageEvent } from "../types.js";
 import { stripSlackMentionsForCommandDetection } from "./commands.js";
 import type { SlackMonitorContext } from "./context.js";
+import type { SlackEventScope } from "./event-scope.js";
 import {
   hasSlackInboundMessageDelivery,
   recordSlackInboundMessageDeliveries,
@@ -34,6 +35,8 @@ export type SlackMessageHandler = (
     source: "message" | "app_mention";
     wasMentioned?: boolean;
     relayIdentity?: SlackSendIdentity;
+    /** Non-serializable listener scope for a validated enterprise event. */
+    eventScope?: SlackEventScope;
     /** Wait until any inbound debounce flush and dispatch has completed. */
     awaitDispatch?: boolean;
   },
@@ -94,11 +97,15 @@ function shouldDebounceSlackMessage(message: SlackMessageEvent, cfg: SlackMonito
   });
 }
 
-function buildSeenMessageKey(channelId: string | undefined, ts: string | undefined): string | null {
+function buildSeenMessageKey(
+  channelId: string | undefined,
+  ts: string | undefined,
+  teamId?: string,
+): string | null {
   if (!channelId || !ts) {
     return null;
   }
-  return `${channelId}:${ts}`;
+  return `${teamId ? `${teamId}:` : ""}${channelId}:${ts}`;
 }
 
 export function createSlackMessageHandler(params: {
@@ -114,11 +121,16 @@ export function createSlackMessageHandler(params: {
   }>({
     cfg: ctx.cfg,
     channel: "slack",
-    buildKey: (entry) => buildSlackDebounceKey(entry.message, ctx.accountId),
-    shouldDebounce: (entry) => shouldDebounceSlackMessage(entry.message, ctx.cfg),
+    buildKey: (entry) =>
+      buildSlackDebounceKey(entry.message, ctx.accountId, entry.opts.eventScope?.teamId),
+    shouldDebounce: (entry) =>
+      !entry.opts.eventScope && shouldDebounceSlackMessage(entry.message, ctx.cfg),
     onFlush: async (entries) => {
       const retryEntries = (sourceError: unknown): boolean => {
-        if (!isRetryableSlackInboundError(sourceError)) {
+        if (
+          !isRetryableSlackInboundError(sourceError) ||
+          entries.some((entry) => entry.opts.eventScope)
+        ) {
           return false;
         }
         const nextEntries = entries
@@ -166,10 +178,12 @@ export function createSlackMessageHandler(params: {
           if (!last) {
             return;
           }
-          const flushedKey = buildSlackDebounceKey(last.message, ctx.accountId);
+          const teamId = last.opts.eventScope?.teamId;
+          const flushedKey = buildSlackDebounceKey(last.message, ctx.accountId, teamId);
           const topLevelConversationKey = buildTopLevelSlackConversationKey(
             last.message,
             ctx.accountId,
+            teamId,
           );
           if (flushedKey && topLevelConversationKey) {
             const pendingKeys = pendingTopLevelDebounceKeys.get(topLevelConversationKey);
@@ -192,7 +206,11 @@ export function createSlackMessageHandler(params: {
             ...last.message,
             text: combinedText,
           };
-          const seenMessageKey = buildSeenMessageKey(last.message.channel, last.message.ts);
+          const seenMessageKey = buildSeenMessageKey(
+            last.message.channel,
+            last.message.ts,
+            last.opts.eventScope?.teamId,
+          );
           try {
             const { prepareSlackMessage, dispatchPreparedSlackMessage } =
               await loadSlackMessagePipeline();
@@ -265,12 +283,14 @@ export function createSlackMessageHandler(params: {
               await dispatchPreparedSlackMessage(prepared);
               await recordSlackInboundMessageDeliveries({
                 accountId: ctx.accountId,
+                ...(last.opts.eventScope ? { teamId: last.opts.eventScope.teamId } : {}),
                 messages: entries.map((entry) => entry.message),
               });
             } catch (error) {
               if (!isRetryableSlackInboundError(error)) {
                 await recordSlackInboundMessageDeliveries({
                   accountId: ctx.accountId,
+                  ...(last.opts.eventScope ? { teamId: last.opts.eventScope.teamId } : {}),
                   messages: entries.map((entry) => entry.message),
                 });
               }
@@ -281,11 +301,19 @@ export function createSlackMessageHandler(params: {
               // Every buffered event passed the seen gate before this combined dispatch.
               // Release all of them so the retry can rebuild the same batch.
               for (const entry of entries) {
-                const entrySeenKey = buildSeenMessageKey(entry.message.channel, entry.message.ts);
+                const entrySeenKey = buildSeenMessageKey(
+                  entry.message.channel,
+                  entry.message.ts,
+                  entry.opts.eventScope?.teamId,
+                );
                 if (entrySeenKey) {
                   appMentionDispatchedKeys.delete(entrySeenKey);
                 }
-                ctx.releaseSeenMessage(entry.message.channel, entry.message.ts);
+                ctx.releaseSeenMessage(
+                  entry.message.channel,
+                  entry.message.ts,
+                  entry.opts.eventScope,
+                );
               }
             }
             throw error;
@@ -375,18 +403,25 @@ export function createSlackMessageHandler(params: {
     ) {
       return undefined;
     }
-    const seenMessageKey = buildSeenMessageKey(message.channel, message.ts);
+    const seenMessageKey = buildSeenMessageKey(
+      message.channel,
+      message.ts,
+      opts.eventScope?.teamId,
+    );
     if (
       seenMessageKey &&
       (await hasSlackInboundMessageDelivery({
         accountId: ctx.accountId,
         channelId: message.channel,
         ts: message.ts,
+        ...(opts.eventScope ? { teamId: opts.eventScope.teamId } : {}),
       }))
     ) {
       return undefined;
     }
-    const wasSeen = seenMessageKey ? ctx.markMessageSeen(message.channel, message.ts) : false;
+    const wasSeen = seenMessageKey
+      ? ctx.markMessageSeen(message.channel, message.ts, opts.eventScope)
+      : false;
     if (seenMessageKey && opts.source === "message" && !wasSeen) {
       // Prime exactly one fallback app_mention allowance immediately so a near-simultaneous
       // app_mention is not dropped while message handling is still in-flight.
@@ -400,10 +435,20 @@ export function createSlackMessageHandler(params: {
       }
     }
     trackEvent?.();
-    const resolvedMessage = await threadTsResolver.resolve({ message, source: opts.source });
-    const debounceKey = buildSlackDebounceKey(resolvedMessage, ctx.accountId);
-    const conversationKey = buildTopLevelSlackConversationKey(resolvedMessage, ctx.accountId);
-    const canDebounce = debounceMs > 0 && shouldDebounceSlackMessage(resolvedMessage, ctx.cfg);
+    const resolvedMessage = await (
+      opts.eventScope
+        ? createSlackThreadTsResolver({ client: opts.eventScope.client })
+        : threadTsResolver
+    ).resolve({ message, source: opts.source });
+    const teamId = opts.eventScope?.teamId;
+    const debounceKey = buildSlackDebounceKey(resolvedMessage, ctx.accountId, teamId);
+    const conversationKey = buildTopLevelSlackConversationKey(
+      resolvedMessage,
+      ctx.accountId,
+      teamId,
+    );
+    const canDebounce =
+      !opts.eventScope && debounceMs > 0 && shouldDebounceSlackMessage(resolvedMessage, ctx.cfg);
     if (!canDebounce && conversationKey) {
       const pendingKeys = pendingTopLevelDebounceKeys.get(conversationKey);
       if (pendingKeys && pendingKeys.size > 0) {
