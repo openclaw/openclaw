@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { QaScenarioPack } from "./scenario-catalog.js";
 
 const {
   runQaManualLane,
@@ -19,6 +20,7 @@ const {
   buildQaDockerHarnessImage,
   runQaDockerUp,
   defaultQaRuntimeModelForMode,
+  readQaScenarioPack,
 } = vi.hoisted(() => ({
   runQaManualLane: vi.fn(),
   runQaFlowSuiteFromRuntime: vi.fn(),
@@ -35,6 +37,7 @@ const {
   runQaDockerUp: vi.fn(),
   defaultQaRuntimeModelForMode:
     vi.fn<(mode: string, options?: { alternate?: boolean }) => string>(),
+  readQaScenarioPack: vi.fn<() => QaScenarioPack>(),
 }));
 
 vi.mock("./manual-lane.runtime.js", () => ({
@@ -88,6 +91,15 @@ vi.mock("./docker-up.runtime.js", () => ({
 vi.mock("./model-selection.runtime.js", () => ({
   defaultQaRuntimeModelForMode,
 }));
+
+vi.mock("./scenario-catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./scenario-catalog.js")>();
+  readQaScenarioPack.mockImplementation(actual.readQaScenarioPack);
+  return {
+    ...actual,
+    readQaScenarioPack,
+  };
+});
 
 import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import {
@@ -251,6 +263,7 @@ describe("qa cli runtime", () => {
       (mode: string, options?: { alternate?: boolean }) =>
         defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
     );
+    readQaScenarioPack.mockClear();
     runQaSuite.mockResolvedValue(
       flowSuiteRuntimeResult({
         reportPath: suiteReportPath,
@@ -1538,6 +1551,67 @@ describe("qa cli runtime", () => {
         "runtime-tool-tts",
       ],
     });
+  });
+
+  it("keeps runtime-pair tier selection on flow scenarios and reports exclusions", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      runtimePair: "openclaw,codex",
+      runtimeParityTier: ["standard", "live-only"],
+    });
+
+    const scenarioIds = mockFirstObjectArg(runQaSuite).scenarioIds as string[];
+    expect(scenarioIds).toContain("runtime-first-hour-20-turn");
+    expect(scenarioIds).toContain("streaming-final-integrity");
+    expect(scenarioIds).not.toContain("hosted-image-generation-providers-live");
+    expect(scenarioIds).not.toContain("hosted-video-generation-providers-live");
+    expectFields(mockFirstObjectArg(runQaSuite), {
+      runtimePair: ["openclaw", "codex"],
+    });
+    expectWriteContains(
+      stderrWrite,
+      "excluded incompatible non-flow scenario(s): hosted-image-generation-providers-live (script), hosted-video-generation-providers-live (script)",
+    );
+  });
+
+  it("rejects explicit runtime-pair scenarios with no compatible flow execution", async () => {
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        runtimePair: "openclaw,codex",
+        scenarioIds: ["hosted-image-generation-providers-live"],
+      }),
+    ).rejects.toThrow(
+      "--runtime-pair requires execution.kind: flow scenarios; unsupported scenario(s): hosted-image-generation-providers-live (script)",
+    );
+
+    expect(runQaSuite).not.toHaveBeenCalled();
+  });
+
+  it("rejects runtime-pair tiers with no compatible flow scenarios", async () => {
+    const catalog = readQaScenarioPack();
+    const hostedImageScenario = catalog.scenarios.find(
+      (scenario) => scenario.id === "hosted-image-generation-providers-live",
+    );
+    if (!hostedImageScenario) {
+      throw new Error("missing hosted image scenario fixture");
+    }
+    readQaScenarioPack.mockReturnValueOnce({
+      ...catalog,
+      scenarios: [hostedImageScenario],
+    });
+
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        runtimePair: "openclaw,codex",
+        runtimeParityTier: ["live-only"],
+      }),
+    ).rejects.toThrow(
+      "--runtime-parity-tier matched no execution.kind: flow scenarios for live-only; incompatible scenario(s): hosted-image-generation-providers-live (script).",
+    );
+
+    expect(runQaSuite).not.toHaveBeenCalled();
   });
 
   it("rejects unknown runtime parity tier filters", async () => {
