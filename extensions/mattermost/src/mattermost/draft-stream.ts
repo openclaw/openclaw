@@ -147,7 +147,9 @@ export function createMattermostDraftStream(params: {
   });
 
   const forceNewMessage = async () => {
-    const sealText = loop.takePending?.() ?? "";
+    // Agent boundary callbacks are fire-and-forget, so detach before awaiting. The generation
+    // map preserves an in-flight create id so queued text can still seal onto the old post.
+    const sealText = loop.takePending();
     const sealedGeneration = postGeneration;
     const sealedPostIdAtEntry = streamPostId;
     const sealedLastSent = lastSentText;

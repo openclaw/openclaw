@@ -245,8 +245,12 @@ Slack-only:
 
 ### Mattermost
 
-- Streams thinking, tool activity, and partial reply text into a single draft
+- In `partial` mode, streams thinking and partial reply text into a single draft
   preview post that finalizes in place when the final answer is safe to send.
+- In `progress` mode, streams thinking and tool activity into a single status
+  preview that finalizes in place when the final answer is safe to send.
+- In `block` mode, starts a fresh post at each completed text or tool boundary;
+  repeated progress updates for the same tool continue editing its current post.
 - Falls back to sending a fresh final post if the preview post was deleted or
   is otherwise unavailable at finalize time.
 - Final media/error payloads cancel pending preview updates before normal

@@ -371,6 +371,32 @@ const testRuntime = (): RuntimeEnv =>
     }) as RuntimeEnv["exit"],
   }) satisfies RuntimeEnv;
 
+async function emitMattermostChannelPost(
+  socket: FakeWebSocket,
+  params: { id: string; message: string },
+) {
+  await socket.emitMessage({
+    event: "posted",
+    data: {
+      channel_id: "chan-1",
+      channel_name: "town-square",
+      channel_display_name: "Town Square",
+      sender_name: "alice",
+      post: JSON.stringify({
+        id: params.id,
+        channel_id: "chan-1",
+        user_id: "user-1",
+        message: params.message,
+        create_at: 1_714_000_000_000,
+      }),
+    },
+    broadcast: {
+      channel_id: "chan-1",
+      user_id: "user-1",
+    },
+  });
+}
+
 describe("mattermost inbound user posts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1168,7 +1194,52 @@ describe("mattermost inbound user posts", () => {
     expect(updateLastRoute?.mainDmOwnerPin).toBeUndefined();
   });
 
-  it("keeps consecutive tool-progress updates on one post in block streaming", async () => {
+  it("keeps core block streaming enabled when preview streaming is off", async () => {
+    const offConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "open",
+          streaming: "off",
+          blockStreaming: true,
+        },
+      },
+    };
+    mockState.runtimeCore = createRuntimeCore(offConfig);
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+
+    const monitor = monitorMattermostProvider({
+      config: offConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "post-streaming-off",
+      message: "stream this in blocks",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(mockState.createMattermostDraftStream).not.toHaveBeenCalled();
+    const replyOptions = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].replyOptions;
+    expect(replyOptions?.disableBlockStreaming).toBe(false);
+  });
+
+  it("preserves text-tool-text boundaries without splitting tool updates", async () => {
     const blockConfig: OpenClawConfig = {
       channels: {
         mattermost: {
@@ -1185,6 +1256,15 @@ describe("mattermost inbound user posts", () => {
     mockState.runtimeCore = createRuntimeCore(blockConfig);
     const draftUpdate = vi.fn();
     const forceNewMessage = vi.fn(async () => {});
+    let releaseAssistantBoundary: (() => void) | undefined;
+    let assistantBoundarySettled = false;
+    const assistantBoundaryPending = new Promise<void>((resolve) => {
+      releaseAssistantBoundary = resolve;
+    });
+    forceNewMessage.mockResolvedValueOnce(undefined).mockImplementationOnce(async () => {
+      await assistantBoundaryPending;
+      assistantBoundarySettled = true;
+    });
     mockState.createMattermostDraftStream.mockReturnValue({
       update: draftUpdate,
       forceNewMessage,
@@ -1194,6 +1274,42 @@ describe("mattermost inbound user posts", () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
     mockState.abortController = abortController;
+    let toolUpdateBoundaryCount = -1;
+    let secondPartialArrivedBeforeBoundarySettled = false;
+    mockState.dispatchReplyFromConfig.mockImplementation(async (params) => {
+      await params.replyOptions?.onAssistantMessageStart?.();
+      params.replyOptions?.onPartialReply?.({ text: "A much longer first block" });
+      await params.replyOptions?.onToolStart?.({
+        toolCallId: "bash-1",
+        name: "bash",
+        phase: "start",
+        detailMode: "raw",
+        args: { command: "ls" },
+      });
+      await params.replyOptions?.onToolStart?.({
+        toolCallId: "bash-1",
+        name: "bash",
+        phase: "update",
+        detailMode: "raw",
+        args: { command: "ls -a" },
+      });
+      await params.replyOptions?.onToolStart?.({
+        toolCallId: "bash-1",
+        name: "bash",
+        phase: "update",
+        detailMode: "raw",
+        args: { command: "ls -al" },
+      });
+      toolUpdateBoundaryCount = forceNewMessage.mock.calls.length;
+
+      const assistantBoundary = params.replyOptions?.onAssistantMessageStart?.();
+      params.replyOptions?.onPartialReply?.({ text: "Done." });
+      secondPartialArrivedBeforeBoundarySettled =
+        !assistantBoundarySettled && draftUpdate.mock.calls.at(-1)?.[0] === "Done.";
+      releaseAssistantBoundary?.();
+      await assistantBoundary;
+      abortController.abort();
+    });
 
     const monitor = monitorMattermostProvider({
       config: blockConfig,
@@ -1207,62 +1323,20 @@ describe("mattermost inbound user posts", () => {
     });
     socket.emitOpen();
 
-    await socket.emitMessage({
-      event: "posted",
-      data: {
-        channel_id: "chan-1",
-        channel_name: "town-square",
-        channel_display_name: "Town Square",
-        sender_name: "alice",
-        post: JSON.stringify({
-          id: "post-tool-progress",
-          channel_id: "chan-1",
-          user_id: "user-1",
-          message: "run a tool",
-          create_at: 1_714_000_000_000,
-        }),
-      },
-      broadcast: {
-        channel_id: "chan-1",
-        user_id: "user-1",
-      },
+    await emitMattermostChannelPost(socket, {
+      id: "post-tool-progress",
+      message: "run a tool",
     });
     socket.emitClose(1000);
     await monitor;
 
     expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
     const replyOptions = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].replyOptions;
-    const onToolStart = replyOptions?.onToolStart as (payload: {
-      name?: string;
-      phase?: string;
-      args?: Record<string, unknown>;
-      detailMode?: "explain" | "raw";
-    }) => Promise<void>;
-    expect(onToolStart).toBeTypeOf("function");
-
-    await onToolStart({ name: "bash", phase: "start", detailMode: "raw", args: { command: "ls" } });
-    await onToolStart({
-      name: "bash",
-      phase: "update",
-      detailMode: "raw",
-      args: { command: "ls -a" },
-    });
-    await onToolStart({
-      name: "bash",
-      phase: "update",
-      detailMode: "raw",
-      args: { command: "ls -al" },
-    });
-
-    expect(draftUpdate).toHaveBeenCalledTimes(3);
-    expect(forceNewMessage).not.toHaveBeenCalled();
-
-    await onToolStart({
-      name: "read",
-      phase: "start",
-      detailMode: "raw",
-      args: { path: "README.md" },
-    });
-    expect(forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(replyOptions?.disableBlockStreaming).toBe(true);
+    expect(toolUpdateBoundaryCount).toBe(1);
+    expect(forceNewMessage).toHaveBeenCalledTimes(2);
+    expect(secondPartialArrivedBeforeBoundarySettled).toBe(true);
+    expect(draftUpdate).toHaveBeenNthCalledWith(1, "A much longer first block");
+    expect(draftUpdate).toHaveBeenLastCalledWith("Done.");
   });
 });
