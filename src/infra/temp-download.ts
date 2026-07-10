@@ -1,6 +1,7 @@
 // Creates private temporary workspaces for downloads.
 import "./fs-safe-defaults.js";
 import crypto from "node:crypto";
+import { tmpdir as getOsTmpDir } from "node:os";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { tempWorkspace, type TempWorkspace } from "./private-temp-workspace.js";
@@ -20,8 +21,21 @@ type TempDownloadTarget = {
   [Symbol.asyncDispose](): Promise<void>;
 };
 
+/** Known shared system temp directories that must never be chmod'd directly. */
+const SHARED_SYSTEM_TMP_DIRS = new Set(["/tmp", "/private/tmp", "/var/tmp", "/dev/shm"]);
+
 function resolveTempRoot(tmpDir?: string): string {
-  return tmpDir ?? resolvePreferredOpenClawTmpDir();
+  if (tmpDir === undefined) {
+    return resolvePreferredOpenClawTmpDir();
+  }
+  // When callers pass the bare system temp directory (e.g. os.tmpdir()),
+  // redirect to a subdirectory to avoid corrupting shared temp permissions.
+  // resolvePreferredOpenClawTmpDir already handles this by preferring
+  // /tmp/openclaw, but callers that pass tmpDir directly bypass it.
+  if (SHARED_SYSTEM_TMP_DIRS.has(tmpDir) || tmpDir === getOsTmpDir()) {
+    return path.join(tmpDir, "openclaw");
+  }
+  return tmpDir;
 }
 
 function sanitizeTempPrefix(prefix: string): string {
