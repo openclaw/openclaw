@@ -132,6 +132,63 @@ async function main() {
 
   const gatewayRestarts: string[] = [];
   const gatewayCommand = makeParams("/crestodian restart gateway", cfg).command;
+  const staleGatewayRestarts: string[] = [];
+  const staleGatewayPlan = await runCrestodianRescueMessage({
+    cfg,
+    command: gatewayCommand,
+    commandBody: "/crestodian restart gateway",
+    agentId: "default",
+    isGroup: false,
+    deps: {
+      runGatewayRestart: async () => {
+        staleGatewayRestarts.push("restart");
+      },
+    },
+  });
+  assert(
+    staleGatewayPlan?.includes("Reply /crestodian yes to apply"),
+    "stale-approval scenario did not create a gateway restart plan",
+  );
+  const pluginList = await runCrestodianRescueMessage({
+    cfg,
+    command: makeParams("/crestodian plugins list", cfg).command,
+    commandBody: "/crestodian plugins list",
+    agentId: "default",
+    isGroup: false,
+    deps: {
+      runPluginsList: async (runtime) => {
+        runtime.log("plugin rows");
+      },
+    },
+  });
+  assert(pluginList?.includes("plugin rows"), "intervening plugin list did not complete");
+  const staleApproval = await runCrestodianRescueMessage({
+    cfg,
+    command: makeParams("/crestodian yes", cfg).command,
+    commandBody: "/crestodian yes",
+    agentId: "default",
+    isGroup: false,
+    deps: {
+      runGatewayRestart: async () => {
+        staleGatewayRestarts.push("restart");
+      },
+    },
+  });
+  assert(
+    staleApproval === "No pending Crestodian rescue change is waiting for approval.",
+    "approval after an intervening command did not report no pending change",
+  );
+  assert(staleGatewayRestarts.length === 0, "stale gateway restart unexpectedly executed");
+  console.log(
+    [
+      "Crestodian stale-approval behavior:",
+      "persistent-plan=approval-required",
+      "intervening-command=plugins-list-completed",
+      "later-approval=no-pending-change",
+      `stale-gateway-restarts=${staleGatewayRestarts.length}`,
+    ].join("\n"),
+  );
+
   const gatewayPlan = await runCrestodianRescueMessage({
     cfg,
     command: gatewayCommand,
