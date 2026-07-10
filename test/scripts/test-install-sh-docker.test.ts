@@ -954,6 +954,10 @@ describe("install-sh smoke runner", () => {
     expect(script).toContain("legacy updater process exited after self-swap");
     expect(script).toContain("parseFirstJsonObject");
     expect(script).toContain("unterminated update JSON object");
+    expect(script).toContain("verify_candidate_ai_runtime");
+    expect(script).toContain("openclaw infer image providers --json");
+    expect(script).toContain('steps.find((step) => step?.name === "openclaw doctor")');
+    expect(script).toContain("openclaw doctor step failed");
   });
 
   it.each([

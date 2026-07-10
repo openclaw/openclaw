@@ -7,11 +7,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { pathToFileURL } from "node:url";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "./lib/local-build-metadata-paths.mjs";
 import {
   collectPackageDistImports,
   collectPackageDistImportErrors,
-  collectPackageDistModuleSpecifiers,
   expandPackageDistImportClosure,
 } from "./lib/package-dist-imports.mjs";
 
@@ -74,6 +74,22 @@ const PACKAGE_DEPENDENCY_SECTIONS = [
   "devDependencies",
 ];
 const REQUIRED_BUNDLED_WORKSPACE_DEPENDENCIES = ["@openclaw/ai"];
+// Strict Docker artifacts bundle this private runtime rather than resolving it
+// from npm. Keep the concrete load-bearing entries explicit instead of
+// reimplementing Node's conditional package-exports resolver here.
+const REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES = new Map([
+  [
+    "@openclaw/ai",
+    [
+      { specifier: "@openclaw/ai", entry: "dist/index.mjs" },
+      { specifier: "@openclaw/ai/providers", entry: "dist/providers.mjs" },
+      {
+        specifier: "@openclaw/ai/internal/runtime",
+        entry: "dist/internal/runtime.mjs",
+      },
+    ],
+  ],
+]);
 
 function collectWorkspaceProtocolDependencyErrors(packageJson, label) {
   const errors = [];
@@ -112,68 +128,36 @@ function listBundleDependencies(packageJson) {
     : [];
 }
 
-function collectRuntimeExportTargets(value) {
-  if (typeof value === "string") {
-    return [value];
+function resolveBundledPackageSpecifiers(packageRoot, specifiers) {
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      `const resolutions = {};
+for (const specifier of JSON.parse(process.argv[1])) {
+  try {
+    resolutions[specifier] = import.meta.resolve(specifier);
+  } catch {
+    resolutions[specifier] = "";
   }
-  if (Array.isArray(value)) {
-    return value.flatMap(collectRuntimeExportTargets);
+}
+process.stdout.write(JSON.stringify(resolutions));`,
+      JSON.stringify(specifiers),
+    ],
+    { cwd: packageRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  if (result.status !== 0) {
+    return null;
   }
-  if (!value || typeof value !== "object") {
-    return [];
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    return null;
   }
-  return Object.entries(value)
-    .filter(([condition]) => condition !== "types")
-    .flatMap(([, target]) => collectRuntimeExportTargets(target));
 }
 
-function listPackageExportEntries(exportsField) {
-  if (
-    exportsField &&
-    typeof exportsField === "object" &&
-    !Array.isArray(exportsField) &&
-    Object.keys(exportsField).some((key) => key.startsWith("."))
-  ) {
-    return Object.entries(exportsField);
-  }
-  return [[".", exportsField]];
-}
-
-function resolvePackageExportTargets(exportEntries, subpath) {
-  const exact = exportEntries.find(([key]) => key === subpath);
-  if (exact) {
-    return collectRuntimeExportTargets(exact[1]);
-  }
-  for (const [key, value] of exportEntries) {
-    const wildcardIndex = key.indexOf("*");
-    if (wildcardIndex === -1) {
-      continue;
-    }
-    const prefix = key.slice(0, wildcardIndex);
-    const suffix = key.slice(wildcardIndex + 1);
-    if (!subpath.startsWith(prefix) || !subpath.endsWith(suffix)) {
-      continue;
-    }
-    const matched = subpath.slice(prefix.length, subpath.length - suffix.length);
-    return collectRuntimeExportTargets(value).map((target) => target.replaceAll("*", matched));
-  }
-  return [];
-}
-
-function normalizeBundledPackageTarget(name, target, errors) {
-  if (!target.startsWith("./")) {
-    errors.push(`bundled ${name} has non-relative runtime export target ${target}`);
-    return "";
-  }
-  const normalized = path.posix.normalize(target.slice(2));
-  if (!normalized || normalized.startsWith("../") || normalized === "..") {
-    errors.push(`bundled ${name} has unsafe runtime export target ${target}`);
-    return "";
-  }
-  return normalized;
-}
-
-function collectBundledPackageRuntimeErrors({ name, entries, files, readText }) {
+function collectBundledPackageRuntimeErrors({ name, entries, files, packageRoot, readText }) {
   const errors = [];
   const packagePrefix = `node_modules/${name}/`;
   const manifestPath = `${packagePrefix}package.json`;
@@ -191,47 +175,30 @@ function collectBundledPackageRuntimeErrors({ name, entries, files, readText }) 
   if (bundledPackageJson.name !== name) {
     errors.push(`bundled ${name} package.json must name ${name}`);
   }
-
-  const exportEntries = listPackageExportEntries(bundledPackageJson.exports);
-  const requiredTargets = new Set();
-  for (const [subpath, value] of exportEntries) {
-    if (subpath.includes("*")) {
+  const runtimeEntries = REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES.get(name) ?? [];
+  const resolutions = resolveBundledPackageSpecifiers(
+    packageRoot,
+    runtimeEntries.map(({ specifier }) => specifier),
+  );
+  if (!resolutions) {
+    errors.push(`bundled ${name} runtime specifier resolution failed`);
+  }
+  for (const { entry, specifier } of runtimeEntries) {
+    if (!entries.has(`${packagePrefix}${entry}`)) {
+      errors.push(`bundled ${name} is missing required runtime entry ${entry}`);
+    }
+    const resolvedUrl = resolutions?.[specifier] ?? "";
+    if (!resolvedUrl) {
+      errors.push(`bundled ${name} runtime specifier ${specifier} is not resolvable`);
       continue;
     }
-    for (const target of collectRuntimeExportTargets(value)) {
-      requiredTargets.add(target);
+    const expectedUrl = pathToFileURL(path.join(packageRoot, packagePrefix, entry)).href;
+    if (resolvedUrl !== expectedUrl) {
+      errors.push(
+        `bundled ${name} runtime specifier ${specifier} resolves to ${resolvedUrl} instead of ${expectedUrl}`,
+      );
     }
   }
-
-  const usedSubpaths = new Set();
-  for (const { specifier } of collectPackageDistModuleSpecifiers({ files, readText })) {
-    if (specifier === name) {
-      usedSubpaths.add(".");
-    } else if (specifier.startsWith(`${name}/`)) {
-      usedSubpaths.add(`./${specifier.slice(name.length + 1)}`);
-    }
-  }
-  for (const subpath of usedSubpaths) {
-    const targets = resolvePackageExportTargets(exportEntries, subpath);
-    if (targets.length === 0) {
-      errors.push(`bundled ${name} does not export runtime subpath ${subpath}`);
-      continue;
-    }
-    for (const target of targets) {
-      requiredTargets.add(target);
-    }
-  }
-
-  for (const target of requiredTargets) {
-    if (target.includes("*")) {
-      continue;
-    }
-    const normalizedTarget = normalizeBundledPackageTarget(name, target, errors);
-    if (normalizedTarget && !entries.has(`${packagePrefix}${normalizedTarget}`)) {
-      errors.push(`bundled ${name} is missing runtime export ${normalizedTarget}`);
-    }
-  }
-
   const bundledFiles = files
     .filter((file) => file.startsWith(packagePrefix))
     .map((file) => file.slice(packagePrefix.length));
@@ -244,7 +211,13 @@ function collectBundledPackageRuntimeErrors({ name, entries, files, readText }) 
   return errors;
 }
 
-function collectRequiredBundledWorkspaceDependencyErrors(packageJson, entrySet, files, readText) {
+function collectRequiredBundledWorkspaceDependencyErrors(
+  packageJson,
+  entrySet,
+  files,
+  packageRoot,
+  readText,
+) {
   const errors = [];
   if (!packageJson || typeof packageJson !== "object") {
     return errors;
@@ -274,6 +247,7 @@ function collectRequiredBundledWorkspaceDependencyErrors(packageJson, entrySet, 
         name,
         entries: entrySet,
         files,
+        packageRoot,
         readText,
       }),
     );
@@ -415,6 +389,12 @@ function readTarEntry(entryPath) {
   return "";
 }
 
+const extractedPackageRoot = fs.realpathSync(
+  fs.existsSync(path.join(extractDir, "package", "package.json"))
+    ? path.join(extractDir, "package")
+    : extractDir,
+);
+
 for (const entry of normalized) {
   if (entry.startsWith("/") || entry.split("/").includes("..")) {
     errors.push(`unsafe tar entry: ${entry}`);
@@ -449,6 +429,7 @@ if (entrySet.has("package.json")) {
           packageJson,
           entrySet,
           normalized,
+          extractedPackageRoot,
           readTarEntry,
         ),
       );

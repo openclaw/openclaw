@@ -117,33 +117,17 @@ function collectImportSpecifiers(source) {
       break;
     }
 
-    const isDistDependency =
-      isImportSpecifierContext(source, index) ||
-      isRequireSpecifierContext(source, index) ||
-      (isImportMetaUrlContext(source, index, cursor) && hasJavaScriptFileExtension(value));
-    if (isDistDependency) {
-      specifiers.push(value);
+    if (value.startsWith(".")) {
+      const isDistDependency =
+        isImportSpecifierContext(source, index) ||
+        isRequireSpecifierContext(source, index) ||
+        (isImportMetaUrlContext(source, index, cursor) && hasJavaScriptFileExtension(value));
+      if (isDistDependency) {
+        specifiers.push(value);
+      }
     }
     index = cursor;
   }
-  return specifiers;
-}
-
-/** Collect static module specifiers from package dist JavaScript files. */
-export function collectPackageDistModuleSpecifiers(params) {
-  const files = [...new Set(params.files.map(normalizePackagePath))];
-  const specifiers = [];
-
-  for (const importerPath of files.toSorted((left, right) => left.localeCompare(right))) {
-    if (!JS_DIST_FILE_RE.test(importerPath) || importerPath.includes("/node_modules/")) {
-      continue;
-    }
-    const source = params.readText(importerPath);
-    for (const specifier of collectImportSpecifiers(source)) {
-      specifiers.push({ importerPath, specifier });
-    }
-  }
-
   return specifiers;
 }
 
@@ -165,14 +149,21 @@ export function collectPackageDistImportErrors(params) {
 
 /** Collect relative dist import edges from package JavaScript files. */
 export function collectPackageDistImports(params) {
+  const files = [...new Set(params.files.map(normalizePackagePath))];
   const imports = [];
 
-  for (const { importerPath, specifier } of collectPackageDistModuleSpecifiers(params)) {
-    const importedPath = resolveDistImportPath(importerPath, specifier);
-    if (!importedPath) {
+  for (const importerPath of files.toSorted((left, right) => left.localeCompare(right))) {
+    if (!JS_DIST_FILE_RE.test(importerPath) || importerPath.includes("/node_modules/")) {
       continue;
     }
-    imports.push({ importerPath, importedPath });
+    const source = params.readText(importerPath);
+    for (const specifier of collectImportSpecifiers(source)) {
+      const importedPath = resolveDistImportPath(importerPath, specifier);
+      if (!importedPath) {
+        continue;
+      }
+      imports.push({ importerPath, importedPath });
+    }
   }
 
   return imports;
