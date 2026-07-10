@@ -20,7 +20,6 @@ type GuardedJsonApiRequestParams = {
   allowedHostnames: string[];
   auditContext: string;
   errorPrefix: string;
-  timeoutMs?: number;
 };
 
 /** Send a provider JSON request through the SSRF guard and parse bounded JSON responses. */
@@ -36,7 +35,7 @@ export async function guardedJsonApiRequest<T = unknown>(
     },
     policy: { allowedHostnames: params.allowedHostnames },
     auditContext: params.auditContext,
-    timeoutMs: params.timeoutMs ?? VOICE_CALL_PROVIDER_API_TIMEOUT_MS,
+    timeoutMs: VOICE_CALL_PROVIDER_API_TIMEOUT_MS,
   });
 
   try {
