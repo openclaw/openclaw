@@ -257,19 +257,16 @@ data class TalkDirectiveParseResult(
 data class TalkDirectiveParsingOptions(
   val discardLeadingBlankLines: Boolean,
   val acceptsDecimalNumbersForIntegers: Boolean,
-  val acceptsCaseInsensitiveAliases: Boolean,
 )
 
 object TalkDirectiveParser {
   val androidOptions = TalkDirectiveParsingOptions(
     discardLeadingBlankLines = false,
     acceptsDecimalNumbersForIntegers = false,
-    acceptsCaseInsensitiveAliases = true,
   )
   val appleOptions = TalkDirectiveParsingOptions(
     discardLeadingBlankLines = true,
     acceptsDecimalNumbersForIntegers = true,
-    acceptsCaseInsensitiveAliases = false,
   )
 
   fun parse(
@@ -292,24 +289,24 @@ object TalkDirectiveParser {
     val objectValue = parseJsonObject(head) ?: return TalkDirectiveParseResult(null, text, emptyList())
 
     val speakerBoost =
-      boolValue(objectValue, listOf("speaker_boost", "speakerBoost"), options)
-        ?: boolValue(objectValue, listOf("no_speaker_boost", "noSpeakerBoost"), options)?.not()
+      boolValue(objectValue, listOf("speaker_boost", "speakerBoost"))
+        ?: boolValue(objectValue, listOf("no_speaker_boost", "noSpeakerBoost"))?.not()
     val directive =
       TalkDirective(
-        voiceId = stringValue(objectValue, listOf("voice", "voice_id", "voiceId"), options),
-        modelId = stringValue(objectValue, listOf("model", "model_id", "modelId"), options),
-        speed = doubleValue(objectValue, listOf("speed"), options),
+        voiceId = stringValue(objectValue, listOf("voice", "voice_id", "voiceId")),
+        modelId = stringValue(objectValue, listOf("model", "model_id", "modelId")),
+        speed = doubleValue(objectValue, listOf("speed")),
         rateWpm = intValue(objectValue, listOf("rate", "wpm"), options),
-        stability = doubleValue(objectValue, listOf("stability"), options),
-        similarity = doubleValue(objectValue, listOf("similarity", "similarity_boost", "similarityBoost"), options),
-        style = doubleValue(objectValue, listOf("style"), options),
+        stability = doubleValue(objectValue, listOf("stability")),
+        similarity = doubleValue(objectValue, listOf("similarity", "similarity_boost", "similarityBoost")),
+        style = doubleValue(objectValue, listOf("style")),
         speakerBoost = speakerBoost,
         seed = longValue(objectValue, listOf("seed"), options),
-        normalize = stringValue(objectValue, listOf("normalize", "apply_text_normalization"), options),
-        language = stringValue(objectValue, listOf("lang", "language_code", "language"), options),
-        outputFormat = stringValue(objectValue, listOf("output_format", "format"), options),
+        normalize = stringValue(objectValue, listOf("normalize", "apply_text_normalization")),
+        language = stringValue(objectValue, listOf("lang", "language_code", "language")),
+        outputFormat = stringValue(objectValue, listOf("output_format", "format")),
         latencyTier = intValue(objectValue, listOf("latency", "latency_tier", "latencyTier"), options),
-        once = boolValue(objectValue, listOf("once"), options),
+        once = boolValue(objectValue, listOf("once")),
       )
     if (!directive.hasValue()) return TalkDirectiveParseResult(null, text, emptyList())
 
@@ -332,29 +329,29 @@ object TalkDirectiveParser {
   private fun parseJsonObject(line: String): JsonObject? =
     runCatching { coreJson.parseToJsonElement(line) as? JsonObject }.getOrNull()
 
-  private fun stringValue(objectValue: JsonObject, keys: List<String>, options: TalkDirectiveParsingOptions): String? =
-    keys.firstNotNullOfOrNull { key -> objectValue.valueForKey(key, options).asStringOrNull()?.trim()?.ifEmpty { null } }
+  private fun stringValue(objectValue: JsonObject, keys: List<String>): String? =
+    keys.firstNotNullOfOrNull { key -> objectValue.valueForKey(key).asStringOrNull()?.trim()?.ifEmpty { null } }
 
-  private fun doubleValue(objectValue: JsonObject, keys: List<String>, options: TalkDirectiveParsingOptions): Double? =
-    keys.firstNotNullOfOrNull { key -> objectValue.valueForKey(key, options).asDoubleOrNull() }
+  private fun doubleValue(objectValue: JsonObject, keys: List<String>): Double? =
+    keys.firstNotNullOfOrNull { key -> objectValue.valueForKey(key).asDoubleOrNull() }
 
   private fun intValue(
     objectValue: JsonObject,
     keys: List<String>,
     options: TalkDirectiveParsingOptions,
-  ): Int? = keys.firstNotNullOfOrNull { key -> objectValue.valueForKey(key, options).asIntOrNull(options) }
+  ): Int? = keys.firstNotNullOfOrNull { key -> objectValue.valueForKey(key).asIntOrNull(options) }
 
   private fun longValue(
     objectValue: JsonObject,
     keys: List<String>,
     options: TalkDirectiveParsingOptions,
-  ): Long? = keys.firstNotNullOfOrNull { key -> objectValue.valueForKey(key, options).asLongOrNull(options) }
+  ): Long? = keys.firstNotNullOfOrNull { key -> objectValue.valueForKey(key).asLongOrNull(options) }
 
-  private fun boolValue(objectValue: JsonObject, keys: List<String>, options: TalkDirectiveParsingOptions): Boolean? =
-    keys.firstNotNullOfOrNull { key -> objectValue.valueForKey(key, options).asBooleanOrNull() }
+  private fun boolValue(objectValue: JsonObject, keys: List<String>): Boolean? =
+    keys.firstNotNullOfOrNull { key -> objectValue.valueForKey(key).asBooleanOrNull() }
 
-  private fun JsonObject.valueForKey(key: String, options: TalkDirectiveParsingOptions): JsonElement? =
-    this[key] ?: entries.firstOrNull { options.acceptsCaseInsensitiveAliases && it.key.equals(key, ignoreCase = true) }?.value
+  private fun JsonObject.valueForKey(key: String): JsonElement? =
+    this[key] ?: entries.firstOrNull { it.key.equals(key, ignoreCase = true) }?.value
 
   private fun TalkDirective.hasValue(): Boolean =
     listOf(
