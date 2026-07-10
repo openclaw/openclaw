@@ -936,7 +936,7 @@ describe("anthropic transport stream", () => {
           {
             messages: [{ role: "user", content: "hello" }],
             tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
-          } as AnthropicStreamContext,
+          } as unknown as AnthropicStreamContext,
           { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
         ),
       );
