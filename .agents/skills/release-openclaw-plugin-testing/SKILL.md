@@ -146,7 +146,10 @@ the tarball and `plugin-npm-package-evidence.json`.
 Record the final artifact name and digest separately. In the v2 evidence,
 `publicationArtifact` binds the staging artifact id, name, digest, source and
 packed `package.json` hashes, and tarball hash. This proof is validation-only;
-it does not authorize or stage publication.
+it does not authorize or stage publication. For an already-published version,
+require npm `dist.integrity` and `dist.shasum` to match the verified tarball.
+Treat only missing or provably older dist-tags as repairable; newer or
+incomparable selectors are a blocker.
 
 ## New Testbox Harness Plan
 

@@ -28,28 +28,52 @@ describe("collectReleaseVersionFloorErrors", () => {
 describe("resolvePublishedNpmVersionRoute", () => {
   it.each([
     {
-      label: "beta",
+      label: "missing beta",
+      version: "2026.7.1-beta.3",
+      distTags: {},
+    },
+    {
+      label: "lagging beta",
       version: "2026.7.1-beta.3",
       distTags: { beta: "2026.7.1-beta.2" },
     },
     {
-      label: "alpha",
+      label: "lagging alpha",
       version: "2026.7.1-alpha.3",
       distTags: { alpha: "2026.7.1-alpha.2" },
     },
     {
-      label: "latest with a current beta mirror",
+      label: "lagging latest with a current beta mirror",
       version: "2026.7.1",
       distTags: { latest: "2026.6.11", beta: "2026.7.1" },
     },
-  ])("requires tag repair when the primary $label selector is stale", ({ version, distTags }) => {
-    expect(
+  ])(
+    "requires tag repair when the primary $label selector is repairable",
+    ({ version, distTags }) => {
+      expect(
+        resolvePublishedNpmVersionRoute({
+          packageVersion: version,
+          publishPlan: resolveNpmPublishPlan(version),
+          distTags,
+        }),
+      ).toBe("npm-tag-repair");
+    },
+  );
+
+  it.each([
+    ["ahead beta", "2026.7.1-beta.3", { beta: "2026.7.1-beta.4" }],
+    ["ahead alpha", "2026.7.1-alpha.3", { alpha: "2026.7.1-alpha.4" }],
+    ["ahead latest", "2026.7.1", { latest: "2026.8.1" }],
+    ["incomparable beta", "2026.7.1-beta.3", { beta: "not-a-version" }],
+    ["conflicting beta", "2026.7.1-beta.3", { beta: " 2026.7.1-beta.3 " }],
+  ])("rejects an unsafe primary %s selector", (_label, version, distTags) => {
+    expect(() =>
       resolvePublishedNpmVersionRoute({
         packageVersion: version,
         publishPlan: resolveNpmPublishPlan(version),
         distTags,
       }),
-    ).toBe("npm-tag-repair");
+    ).toThrow("cannot be safely moved");
   });
 
   it("requires mirror repair only after the primary selector matches", () => {
@@ -61,6 +85,50 @@ describe("resolvePublishedNpmVersionRoute", () => {
         distTags: { latest: version, beta: "2026.7.1-beta.3" },
       }),
     ).toBe("npm-mirror");
+  });
+
+  it("rejects an incomparable mirror instead of advertising repair", () => {
+    const version = "2026.7.1";
+    expect(() =>
+      resolvePublishedNpmVersionRoute({
+        packageVersion: version,
+        publishPlan: resolveNpmPublishPlan(version),
+        distTags: { latest: version, beta: "not-a-version" },
+      }),
+    ).toThrow("cannot be safely moved");
+  });
+
+  it("validates unsafe mirrors before returning primary tag repair", () => {
+    const version = "2026.7.1";
+    expect(() =>
+      resolvePublishedNpmVersionRoute({
+        packageVersion: version,
+        publishPlan: resolveNpmPublishPlan(version),
+        distTags: { latest: "2026.6.11", beta: "not-a-version" },
+      }),
+    ).toThrow("cannot be safely moved");
+  });
+
+  it("rejects an ahead mirror from an inconsistent publish plan", () => {
+    const version = "2026.7.1";
+    expect(() =>
+      resolvePublishedNpmVersionRoute({
+        packageVersion: version,
+        publishPlan: resolveNpmPublishPlan(version),
+        distTags: { latest: version, beta: "2026.8.1-beta.1" },
+      }),
+    ).toThrow("cannot be safely moved");
+  });
+
+  it("preserves an ahead beta selector when the publish plan omits the mirror", () => {
+    const version = "2026.7.1";
+    expect(
+      resolvePublishedNpmVersionRoute({
+        packageVersion: version,
+        publishPlan: resolveNpmPublishPlan(version, "2026.8.1-beta.1"),
+        distTags: { latest: version, beta: "2026.8.1-beta.1" },
+      }),
+    ).toBe("npm-readback");
   });
 
   it.each([

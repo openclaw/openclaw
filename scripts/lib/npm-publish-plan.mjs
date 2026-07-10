@@ -33,6 +33,10 @@ const JUNE_2026_PATCH_FLOOR = 5;
  */
 
 /**
+ * @typedef {"match" | "missing" | "lagging" | "ahead" | "incomparable" | "conflict"} NpmDistTagVersionState
+ */
+
+/**
  * @typedef {object} NpmDistTagMirrorAuth
  * @property {boolean} hasAuth
  * @property {"node-auth-token" | "npm-token" | "none"} source
@@ -273,19 +277,81 @@ export function resolveNpmPublishPlan(version, currentBetaVersion, publishTagOve
  * @param {{
  *   packageVersion: string;
  *   publishPlan: NpmPublishPlan;
- *   distTags: Record<string, string | undefined>;
+ *   distTags: Record<string, unknown>;
  * }} params
  * @returns {PublishedNpmVersionRoute}
  */
 export function resolvePublishedNpmVersionRoute(params) {
-  if (params.distTags[params.publishPlan.publishTag] !== params.packageVersion) {
+  const primaryState = classifyNpmDistTagVersion(
+    params.distTags[params.publishPlan.publishTag],
+    params.packageVersion,
+  );
+  const needsPrimaryRepair = primaryState === "missing" || primaryState === "lagging";
+  if (!needsPrimaryRepair && primaryState !== "match") {
+    throwUnsafeNpmDistTag(
+      params.publishPlan.publishTag,
+      params.distTags[params.publishPlan.publishTag],
+      params.packageVersion,
+      primaryState,
+    );
+  }
+
+  let needsMirrorRepair = false;
+  for (const distTag of params.publishPlan.mirrorDistTags) {
+    const mirrorState = classifyNpmDistTagVersion(params.distTags[distTag], params.packageVersion);
+    if (mirrorState === "missing" || mirrorState === "lagging") {
+      needsMirrorRepair = true;
+      continue;
+    }
+    if (mirrorState !== "match") {
+      throwUnsafeNpmDistTag(distTag, params.distTags[distTag], params.packageVersion, mirrorState);
+    }
+  }
+  if (needsPrimaryRepair) {
     return "npm-tag-repair";
   }
-  return params.publishPlan.mirrorDistTags.some(
-    (distTag) => params.distTags[distTag] !== params.packageVersion,
-  )
-    ? "npm-mirror"
-    : "npm-readback";
+  return needsMirrorRepair ? "npm-mirror" : "npm-readback";
+}
+
+/**
+ * @param {unknown} currentVersion
+ * @param {string} targetVersion
+ * @returns {NpmDistTagVersionState}
+ */
+function classifyNpmDistTagVersion(currentVersion, targetVersion) {
+  if (currentVersion === undefined) {
+    return "missing";
+  }
+  if (typeof currentVersion !== "string") {
+    return "incomparable";
+  }
+  if (currentVersion === targetVersion) {
+    return "match";
+  }
+  const comparison = compareReleaseVersions(currentVersion, targetVersion);
+  if (comparison === null) {
+    return "incomparable";
+  }
+  if (comparison < 0) {
+    return "lagging";
+  }
+  if (comparison > 0) {
+    return "ahead";
+  }
+  return "conflict";
+}
+
+/**
+ * @param {string} distTag
+ * @param {unknown} currentVersion
+ * @param {string} targetVersion
+ * @param {NpmDistTagVersionState} state
+ * @returns {never}
+ */
+function throwUnsafeNpmDistTag(distTag, currentVersion, targetVersion, state) {
+  throw new Error(
+    `npm dist-tag "${distTag}" points to ${JSON.stringify(currentVersion)} and cannot be safely moved to "${targetVersion}" (${state}).`,
+  );
 }
 
 /**

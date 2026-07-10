@@ -209,6 +209,8 @@ describe("plugin npm extended-stable workflow", () => {
     expect(readback.run).toContain('crypto.createHash("sha256")');
     expect(readback.run).toContain('crypto.createHash("sha512")');
     expect(readback.run).toContain('crypto.createHash("sha1")');
+    expect(readback.run).toContain('echo "npm_integrity=${npm_integrity}"');
+    expect(readback.run).toContain('echo "npm_shasum=${npm_shasum}"');
     expect(readback.run).toContain(
       "Packed plugin identity, package hashes, or install route changed",
     );
@@ -218,13 +220,28 @@ describe("plugin npm extended-stable workflow", () => {
     expect(readback.run).not.toContain("target-main-release-or-tideclaw");
 
     const route = step(verify, "Verify npm publication route readiness");
+    expect(route.env).toMatchObject({
+      EXPECTED_NPM_INTEGRITY: "${{ steps.publication_artifact.outputs.npm_integrity }}",
+      EXPECTED_NPM_SHASUM: "${{ steps.publication_artifact.outputs.npm_shasum }}",
+    });
     expect(route.run).toContain("encodeURIComponent(packageName)");
     expect(route.run).toContain("resolvePublishedNpmVersionRoute");
     expect(route.run).toContain('distTags: packument["dist-tags"] ?? {}');
+    expect(route.run).toContain("const requestAttempts = 3");
+    expect(route.run).toContain("const requestTimeoutMs = 20_000");
+    expect(route.run).toContain("AbortSignal.timeout(requestTimeoutMs)");
+    expect(route.run).toContain("response.status !== 429 && response.status < 500");
+    expect(route.run).toContain("await response.body?.cancel().catch(() => undefined)");
+    expect(route.run).toContain("npm publication-route probe did not return a stable response");
+    expect(route.run).toContain("packument.versions?.[packageVersion]?.dist");
+    expect(route.run).toContain("targetDist?.integrity !== expectedIntegrity");
+    expect(route.run).toContain("targetDist?.shasum !== expectedShasum");
+    expect(route.run).toContain("npm registry tarball identity does not match");
     expect(route.run).toContain('observations.push("npm-token-bootstrap")');
     expect(route.run).toContain('observations.push("npm-oidc")');
 
     const evidence = step(verify, "Record validation-only result");
+    expect(evidence.env?.PUBLISH_ROUTE).toBe("${{ steps.publication_route.outputs.route }}");
     expect(evidence.run).toContain('schema: "openclaw.plugin-npm-package-evidence/v2"');
     expect(evidence.run).toContain("schemaVersion: 2");
     expect(evidence.run).toContain("packageJsonSha256: process.env.PACKED_PACKAGE_JSON_SHA256");

@@ -774,6 +774,8 @@ jobs:
           NODE
 
           tarball_name="$(jq -er '.artifact.tarballName' "${ARTIFACT_DIR}/preflight-manifest.json")"
+          npm_integrity="$(jq -er '.artifact.npmIntegrity | strings' "${ARTIFACT_DIR}/preflight-manifest.json")"
+          npm_shasum="$(jq -er '.artifact.npmShasum | strings' "${ARTIFACT_DIR}/preflight-manifest.json")"
           packed_package_json_sha256="$(jq -er '.package.packageJsonSha256' "${ARTIFACT_DIR}/preflight-manifest.json")"
           source_package_json_sha256="$(jq -er '.package.sourcePackageJsonSha256' "${ARTIFACT_DIR}/preflight-manifest.json")"
           tarball_sha256="$(jq -er '.artifact.sha256' "${ARTIFACT_DIR}/preflight-manifest.json")"
@@ -781,6 +783,8 @@ jobs:
             echo "artifact_digest=${artifact_digest}"
             echo "artifact_id=${artifact_id}"
             echo "artifact_name=${ARTIFACT_NAME}"
+            echo "npm_integrity=${npm_integrity}"
+            echo "npm_shasum=${npm_shasum}"
             echo "package_json_sha256=${packed_package_json_sha256}"
             echo "source_package_json_sha256=${source_package_json_sha256}"
             echo "tarball_name=${tarball_name}"
@@ -791,6 +795,8 @@ jobs:
       - name: Verify npm publication route readiness
         id: publication_route
         env:
+          EXPECTED_NPM_INTEGRITY: ${{ steps.publication_artifact.outputs.npm_integrity }}
+          EXPECTED_NPM_SHASUM: ${{ steps.publication_artifact.outputs.npm_shasum }}
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
           PUBLISH_TAG: ${{ matrix.plugin.publishTag }}
@@ -805,13 +811,50 @@ jobs:
           const packageName = process.env.PACKAGE_NAME;
           const packageVersion = process.env.PACKAGE_VERSION;
           const publishTag = process.env.PUBLISH_TAG;
+          const expectedIntegrity = process.env.EXPECTED_NPM_INTEGRITY;
+          const expectedShasum = process.env.EXPECTED_NPM_SHASUM;
+          if (
+            !/^sha512-[A-Za-z0-9+/]{86}==$/u.test(expectedIntegrity ?? "") ||
+            !/^[0-9a-f]{40}$/u.test(expectedShasum ?? "")
+          ) {
+            throw new Error(`${packageName}: verified preflight npm identity is invalid.`);
+          }
           const packageUrl = `https://registry.npmjs.org/${encodeURIComponent(packageName)}`;
+          const requestAttempts = 3;
+          const requestTimeoutMs = 20_000;
+          async function fetchRegistryWithRetry() {
+            let lastError;
+            for (let requestAttempt = 1; requestAttempt <= requestAttempts; requestAttempt += 1) {
+              try {
+                const signal = AbortSignal.timeout(requestTimeoutMs);
+                const response = await fetch(packageUrl, {
+                  headers: { accept: "application/vnd.npm.install-v1+json" },
+                  signal,
+                });
+                if (response.status !== 429 && response.status < 500) {
+                  return { response, signal };
+                }
+                await response.body?.cancel().catch(() => undefined);
+                lastError = new Error(`HTTP ${response.status}`);
+              } catch (error) {
+                lastError = error;
+              }
+              if (requestAttempt < requestAttempts) {
+                await new Promise((resolve) => setTimeout(resolve, requestAttempt * 1000));
+              }
+            }
+            const message = lastError instanceof Error ? lastError.message : String(lastError);
+            throw new Error(
+              `${packageName}: npm publication-route probe did not return a stable response: ${message}.`,
+            );
+          }
+
           const observations = [];
           for (let attempt = 1; attempt <= 3; attempt += 1) {
-            const response = await fetch(packageUrl, {
-              headers: { accept: "application/vnd.npm.install-v1+json" },
-            });
+            const registryFetch = await fetchRegistryWithRetry();
+            const response = registryFetch.response;
             if (response.status === 404) {
+              await response.body?.cancel().catch(() => undefined);
               observations.push("npm-token-bootstrap");
             } else if (response.ok) {
               const packument = await response.json();
@@ -821,6 +864,15 @@ jobs:
               if (!targetPublished && priorVersions.length > 0) {
                 observations.push("npm-oidc");
               } else if (targetPublished) {
+                const targetDist = packument.versions?.[packageVersion]?.dist;
+                if (
+                  targetDist?.integrity !== expectedIntegrity ||
+                  targetDist?.shasum !== expectedShasum
+                ) {
+                  throw new Error(
+                    `${packageName}@${packageVersion}: npm registry tarball identity does not match the verified preflight artifact; refusing published-version route.`,
+                  );
+                }
                 const publishTagOverride =
                   publishTag === "extended-stable" ? "extended-stable" : undefined;
                 const publishPlan = resolveNpmPublishPlan(
@@ -846,6 +898,7 @@ jobs:
                 );
               }
             } else {
+              await response.body?.cancel().catch(() => undefined);
               throw new Error(
                 `${packageName}: npm publication-route probe returned HTTP ${response.status}.`,
               );
