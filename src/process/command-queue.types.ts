@@ -12,6 +12,16 @@ export type CommandQueueEnqueueOptions = {
   /** Ends the task after a caller-owned timeout cleanup grace has already elapsed. */
   taskTimeoutReleaseSignal?: AbortSignal;
   priority?: "foreground" | "normal" | "background";
+  /**
+   * Keep this many lane slots free for entries at or above the given priority.
+   *
+   * Example: `{ slots: 1, priority: "foreground" }` lets foreground work use
+   * the final lane slot while normal/background work waits.
+   */
+  reserveForPriority?: {
+    slots: number;
+    priority: "foreground" | "normal" | "background";
+  };
 };
 
 /** Minimal queue function contract used by code that only needs to schedule work. */

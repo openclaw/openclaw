@@ -286,6 +286,7 @@ export const mockedResolveAuthProfileOrder = vi.fn<(_params?: unknown) => string
 );
 export const mockedMarkAuthProfileSuccess = vi.fn(async () => {});
 export const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
+export const mockedResolveGlobalLane = vi.fn(() => "global-lane");
 
 export const overflowBaseRunParams = {
   sessionId: "test-session",
@@ -364,6 +365,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedRunContextEngineMaintenance.mockResolvedValue(undefined);
   mockedWaitForDeferredTurnMaintenanceForSession.mockReset();
   mockedWaitForDeferredTurnMaintenanceForSession.mockResolvedValue(undefined);
+  mockedResolveGlobalLane.mockReset();
+  mockedResolveGlobalLane.mockReturnValue("global-lane");
   mockedSessionLikelyHasOversizedToolResults.mockReset();
   mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
   mockedResolveLiveToolResultMaxChars.mockReset();
@@ -784,7 +787,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("./lanes.js", () => ({
     resolveSessionLane: vi.fn((key: string) => `session:${key}`),
     resolveEmbeddedSessionLane: vi.fn((key: string) => `session:${key}`),
-    resolveGlobalLane: vi.fn(() => "global-lane"),
+    resolveGlobalLane: mockedResolveGlobalLane,
   }));
 
   vi.doMock("./logger.js", () => ({
