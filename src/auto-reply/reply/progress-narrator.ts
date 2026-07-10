@@ -241,7 +241,7 @@ export function createProgressNarrator(params: {
       return;
     }
     lastText = "";
-    void Promise.resolve(params.onUpdate({ text: "" })).catch((err) => {
+    void Promise.resolve(params.onUpdate({ text: "" })).catch((err: unknown) => {
       logVerbose(`progress-narrator: narration clear failed: ${String(err)}`);
     });
   };

@@ -146,6 +146,8 @@ type DispatchInboundParams = {
       title?: string;
       name?: string;
     }) => Promise<false | void> | false | void;
+    onNarrationUpdate?: (payload: { text: string }) => Promise<void> | void;
+    narrationHideCommandText?: boolean;
     onVerboseProgressVisibility?: (isActive: () => boolean) => void;
     onPlanUpdate?: (payload: {
       phase?: string;
@@ -737,7 +739,7 @@ function expectFinalWithProgressReceipt(answer: string, ...parts: string[]) {
     .find((params) => params.kind === "final");
   expect(finalParams).toBeDefined();
   const replies = (finalParams as { replies?: Array<{ text?: string }> }).replies;
-  const text = String(replies?.[0]?.text ?? "");
+  const text = replies?.[0]?.text ?? "";
   const receiptStart = text.lastIndexOf("\n-# ");
   expect(receiptStart).toBeGreaterThan(-1);
   expect(text.slice(0, receiptStart)).toBe(answer);

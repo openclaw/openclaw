@@ -66,7 +66,7 @@ describe("createProgressNarrator", () => {
   });
 
   it("batches follow-up events until the event threshold", async () => {
-    let nowMs = 0;
+    const nowMs = 0;
     const { narrator, generate } = createNarratorHarness({ now: () => nowMs });
 
     narrator.noteToolStart({ name: "exec", phase: "start" });
