@@ -23,8 +23,8 @@ internal const val OUTBOX_RETRY_BACKOFF_MS = 2_000L
 /** lastError marker for items expired by [OUTBOX_EXPIRY_MS]; also shown in the UI row. */
 internal const val OUTBOX_EXPIRED_ERROR = "expired"
 
-/** Delivery is ambiguous after a process crash, so a retry must require explicit user intent. */
-internal const val OUTBOX_DELIVERY_UNCONFIRMED_ERROR = "delivery unconfirmed after app restart; retry manually"
+/** Delivery is ambiguous after dispatch without an acknowledgement; retry needs explicit intent. */
+internal const val OUTBOX_DELIVERY_UNCONFIRMED_ERROR = "delivery unconfirmed; retry manually"
 
 enum class ChatOutboxStatus(
   internal val dbValue: String,

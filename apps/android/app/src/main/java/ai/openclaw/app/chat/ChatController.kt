@@ -2,6 +2,7 @@ package ai.openclaw.app.chat
 
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.gateway.GatewayRequestDefinitiveFailure
+import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.parseChatSendAck
@@ -191,19 +192,18 @@ class ChatController internal constructor(
 
   private val outboxFlushInFlight = AtomicBoolean(false)
 
-  init {
-    if (commandOutbox != null) {
+  private val outboxRecoveryJob =
+    commandOutbox?.let { outbox ->
       scope.launch {
         // A killed process can lose the local delete after the gateway accepted a command.
         // Keep that delivery ambiguous and user-visible instead of replaying it automatically.
-        runCatching { commandOutbox.failSendingAfterRestart() }
+        runCatching { outbox.failSendingAfterRestart() }
         currentCacheScope()?.let { outboxScope ->
-          runCatching { commandOutbox.expireStale(outboxScope.gatewayId, System.currentTimeMillis()) }
+          runCatching { outbox.expireStale(outboxScope.gatewayId, System.currentTimeMillis()) }
         }
         publishOutbox()
       }
     }
-  }
 
   /** Clears transient chat state when the operator gateway session disconnects. */
   fun onDisconnected(message: String) {
@@ -1465,6 +1465,9 @@ class ChatController internal constructor(
    */
   private suspend fun flushOutbox() {
     val outbox = commandOutbox ?: return
+    // The recovery sweep is unscoped, so it must finish before this process can claim a new row.
+    // Otherwise it could park a live send as failed while the request is still in flight.
+    outboxRecoveryJob?.join()
     if (!outboxFlushInFlight.compareAndSet(false, true)) return
     var flushedAny = false
     try {
@@ -1495,7 +1498,7 @@ class ChatController internal constructor(
   }
 
   // Sent: acked and removed. Failed: parked as failed. Skipped: row vanished (user delete).
-  // Stop: flush must halt (offline or gateway scope changed); the row stays queued.
+  // Stop: flush must halt; the row's queued or failed state is already durable.
   private enum class OutboxSendOutcome { Sent, Failed, Skipped, Stop }
 
   private sealed interface OutboxSendResult {
@@ -1506,10 +1509,13 @@ class ChatController internal constructor(
       val error: String,
     ) : OutboxSendResult
 
-    /** Request never got an ack (socket drop, timeout); delivery state is unknown. */
-    data class TransportFailure(
+    /** The request never entered the socket queue, so reconnect may retry it automatically. */
+    data class NotDispatched(
       val error: String,
     ) : OutboxSendResult
+
+    /** Dispatch may have succeeded, so only explicit user intent may retry the command. */
+    data object DeliveryUnconfirmed : OutboxSendResult
   }
 
   private suspend fun sendOutboxItem(
@@ -1532,11 +1538,24 @@ class ChatController internal constructor(
             publishOutbox()
             return OutboxSendOutcome.Sent
           }
-          is OutboxSendResult.TransportFailure -> {
-            // No ack means the gateway is effectively unreachable even if healthOk has not
-            // flipped yet. Keep the row queued without burning attempts and drop health so
-            // the next successful health poll/event re-triggers the flush.
+          is OutboxSendResult.NotDispatched -> {
+            // This frame never entered the socket queue, so reconnect may retry it safely.
             runCatching { outbox.updateStatus(item.id, ChatOutboxStatus.Queued, attempts, result.error) }
+            publishOutbox()
+            _healthOk.value = false
+            return OutboxSendOutcome.Stop
+          }
+          OutboxSendResult.DeliveryUnconfirmed -> {
+            // The gateway may have accepted this command. Keep it visible, but never replay it
+            // without explicit user intent; gateway dedupe is process-local and time-bounded.
+            runCatching {
+              outbox.updateStatus(
+                item.id,
+                ChatOutboxStatus.Failed,
+                attempts,
+                OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
+              )
+            }
             publishOutbox()
             _healthOk.value = false
             return OutboxSendOutcome.Stop
@@ -1613,17 +1632,27 @@ class ChatController internal constructor(
           put("idempotencyKey", JsonPrimitive(item.id))
         }
       val ack = parseChatSendAck(json, requestGatewayBound(gatewayId, "chat.send", params.toString()))
-      if (ack.isTerminalFailure) {
-        OutboxSendResult.Rejected("Chat failed before the run started")
+      if (ack.runId.isNullOrBlank()) {
+        OutboxSendResult.DeliveryUnconfirmed
       } else {
-        OutboxSendResult.Accepted
+        when (ack.normalizedStatus) {
+          "started", "in_flight", "ok" -> OutboxSendResult.Accepted
+          "timeout", "error" -> OutboxSendResult.Rejected("Chat failed before the run started")
+          else -> OutboxSendResult.DeliveryUnconfirmed
+        }
       }
     } catch (err: CancellationException) {
       // Teardown must not be recorded as a send failure; the row stays 'sending' and the
-      // next startup recovery requeues it.
+      // next startup recovery parks it as delivery-unconfirmed.
       throw err
-    } catch (err: Throwable) {
-      OutboxSendResult.TransportFailure(err.message ?: "send failed")
+    } catch (err: GatewayRequestNotEnqueued) {
+      OutboxSendResult.NotDispatched(err.message ?: "send failed")
+    } catch (err: GatewayRequestDefinitiveFailure) {
+      OutboxSendResult.Rejected(err.message ?: "request rejected")
+    } catch (_: GatewayRequestOutcomeUnknown) {
+      OutboxSendResult.DeliveryUnconfirmed
+    } catch (_: Throwable) {
+      OutboxSendResult.DeliveryUnconfirmed
     }
 
   private fun handleChatEvent(payloadJson: String) {
