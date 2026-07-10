@@ -453,7 +453,9 @@ const ZERO_USAGE: Usage = {
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
 const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 10_000;
 const TOOL_PROGRESS_ECHO_PREFIX_MIN_CHARS = 1_024;
-const TOOL_PROGRESS_ECHO_SIGNATURE_CAP = 8;
+// Cap must cover every shape one item can mechanically emit (stream chunks + summary +
+// final output + aggregate + slack) so early signatures are never FIFO-evicted mid-stream.
+const TOOL_PROGRESS_ECHO_SIGNATURE_CAP = MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM + 4;
 const TOOL_OUTPUT_TRUNCATION_NOTICE_PREFIX = "...(OpenClaw truncated Codex native tool output";
 const MISSING_TOOL_RESULT_ERROR =
   "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";
