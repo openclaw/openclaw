@@ -4,7 +4,7 @@ import { formatTokenCount } from "../../utils/token-format.js";
 import { emitGoalUpdated, goalToUpdatedEvent } from "./goal-events.js";
 import { loadSessionEntry, patchSessionEntry } from "./session-accessor.js";
 import { resolveFreshSessionTotalTokens } from "./types.js";
-import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
+import type { SessionEntry, SessionGoal, SessionGoalContract, SessionGoalStatus } from "./types.js";
 
 export type SessionGoalSnapshot = {
   status: "missing" | "found";
@@ -22,6 +22,7 @@ type SessionGoalStoreOptions = {
 type CreateSessionGoalOptions = SessionGoalStoreOptions & {
   objective: string;
   tokenBudget?: number;
+  contract?: SessionGoalContract;
 };
 
 type UpdateSessionGoalStatusOptions = SessionGoalStoreOptions & {
@@ -62,6 +63,49 @@ function normalizeTokenBudget(value: number | undefined): number | undefined {
 
 function cloneGoal(goal: SessionGoal): SessionGoal {
   return { ...goal };
+}
+
+function normalizeContractText(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeContractList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const items = value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item.length > 0);
+  return items.length > 0 ? items : undefined;
+}
+
+/**
+ * Normalizes a caller-supplied contract into a stored contract, dropping empty
+ * fields. Returns undefined when nothing survives so an all-empty contract is
+ * indistinguishable from a bare free-form goal (the backwards-compatible path).
+ */
+export function normalizeSessionGoalContract(
+  contract: SessionGoalContract | undefined,
+): SessionGoalContract | undefined {
+  if (!contract) {
+    return undefined;
+  }
+  const next: SessionGoalContract = {};
+  const outcome = normalizeContractText(contract.outcome);
+  const verification = normalizeContractText(contract.verification);
+  const constraints = normalizeContractList(contract.constraints);
+  const boundaries = normalizeContractList(contract.boundaries);
+  const stopWhen = normalizeContractText(contract.stopWhen);
+  if (outcome) next.outcome = outcome;
+  if (verification) next.verification = verification;
+  if (constraints) next.constraints = constraints;
+  if (boundaries) next.boundaries = boundaries;
+  if (stopWhen) next.stopWhen = stopWhen;
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 export function resolveSessionGoalDisplayState(
@@ -204,6 +248,7 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
       }
       const tokenBudget = normalizeTokenBudget(options.tokenBudget);
       const tokenStartFresh = resolveEntryFreshTotalTokens(entry) !== undefined;
+      const contract = normalizeSessionGoalContract(options.contract);
       created = {
         schemaVersion: 1,
         id: crypto.randomUUID(),
@@ -216,6 +261,7 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
         tokensUsed: 0,
         ...(tokenBudget ? { tokenBudget } : {}),
         continuationTurns: 0,
+        ...(contract ? { contract } : {}),
       };
       return { goal: created };
     },
@@ -319,6 +365,50 @@ export async function updateSessionGoalObjective(
       };
       return { goal: updated };
     },
+  );
+  if (!result || !updated) {
+    throw new Error(foundSession ? "goal not found" : "session not found");
+  }
+  emitGoalUpdated(goalToUpdatedEvent(options.sessionKey, updated, "host"));
+  return cloneGoal(updated);
+}
+
+/**
+ * Attaches or replaces the completion contract on an existing goal.
+ *
+ * Passing an all-empty (or undefined) contract clears it, returning the goal to
+ * bare free-form behavior. Status and token accounting are untouched; only the
+ * contract slot moves. Rejects terminal (`complete`) goals like the other
+ * mutators so a finished goal is never silently re-decorated.
+ */
+export async function updateSessionGoalContract(
+  options: SessionGoalStoreOptions & { contract: SessionGoalContract | undefined },
+): Promise<SessionGoal> {
+  const now = nowMs(options.now);
+  const contract = normalizeSessionGoalContract(options.contract);
+  let updated: SessionGoal | undefined;
+  let foundSession = false;
+  const result = await patchSessionEntry(
+    { sessionKey: options.sessionKey, storePath: options.storePath },
+    (entry) => {
+      foundSession = true;
+      const accounted = accountGoalUsage(entry, now);
+      if (!accounted) {
+        throw new Error("goal not found");
+      }
+      if (TERMINAL_GOAL_STATUSES.has(accounted.status)) {
+        throw new Error(`goal is already ${accounted.status}`);
+      }
+      const next: SessionGoal = { ...accounted, updatedAt: now };
+      if (contract) {
+        next.contract = contract;
+      } else {
+        delete next.contract;
+      }
+      updated = next;
+      return { goal: updated };
+    },
+    { fallbackEntry: options.fallbackEntry },
   );
   if (!result || !updated) {
     throw new Error(foundSession ? "goal not found" : "session not found");

@@ -26,7 +26,10 @@
  *     re-arm cannot double-fire.
  */
 
-import { GOAL_DRIVER_CONTINUATION_MARKER } from "./continuation-prompt.js";
+import {
+  GOAL_DRIVER_CONTINUATION_MARKER,
+  type GoalContinuationContract,
+} from "./continuation-prompt.js";
 
 export type GoalDriverLogger = {
   debug: (obj: unknown, msg?: string) => void;
@@ -42,6 +45,8 @@ export type GoalDriverGoalSnapshot = {
   tokenBudget?: number;
   /** Consecutive driver-fired continuations with no intervening inbound turn. */
   continuationTurns: number;
+  /** Optional completion contract restated on every continuation turn. */
+  contract?: GoalContinuationContract;
 };
 
 export type GoalDriverEvent =

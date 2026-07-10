@@ -147,10 +147,11 @@ describe("GoalContinuationDriver — integration probe (real gate + enqueue path
   });
 
   it("g3: a real queued chat turn blocks the fire, and completing it unblocks", () => {
+    const queuedController = new AbortController();
     const ok = registerQueuedChatTurn({
       chatQueuedTurns: p.chatQueuedTurns,
       runId: "queued-1",
-      controller: new AbortController(),
+      controller: queuedController,
       sessionId: `${SESSION}#sid`,
       sessionKey: SESSION,
     });
@@ -160,7 +161,7 @@ describe("GoalContinuationDriver — integration probe (real gate + enqueue path
     vi.advanceTimersByTime(DEBOUNCE_MS + 1);
     expect(hasSystemEvents(SESSION)).toBe(false); // blocked by the queued inbound turn
 
-    completeQueuedChatTurn(p.chatQueuedTurns, "queued-1");
+    completeQueuedChatTurn(p.chatQueuedTurns, "queued-1", queuedController);
     vi.advanceTimersByTime(5_000);
     expect(peekSystemEvents(SESSION)).toHaveLength(1);
   });

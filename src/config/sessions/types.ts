@@ -198,6 +198,47 @@ export type SessionGoalStatus =
   | "budget_limited"
   | "complete";
 
+/**
+ * Optional structured completion contract for a goal. Every field is optional;
+ * an absent contract (or one whose fields are all empty) leaves the goal
+ * behaving exactly like a bare free-form objective. When present, the contract
+ * is restated on every driver continuation (and, when the judge is enabled,
+ * decided against) so "done" is measured against `verification`, not vibes.
+ *
+ * Adapted from hermes-agent's GoalContract (hermes_cli/goals.py): outcome names
+ * what done means, verification how to prove it, constraints what must not
+ * regress, boundaries what is in scope, stopWhen when to stop and ask.
+ */
+export type SessionGoalContract = {
+  /** What "done" concretely means. */
+  outcome?: string;
+  /** How completion is proven (e.g. a test command, an observable state). */
+  verification?: string;
+  /** Invariants that must not regress. */
+  constraints?: string[];
+  /** In-scope tools / paths / surfaces. */
+  boundaries?: string[];
+  /** Condition under which to stop and ask the user instead of continuing. */
+  stopWhen?: string;
+};
+
+/**
+ * A parked wait barrier on an active goal. While a barrier is set and not yet
+ * satisfied, the goal driver does not fire a continuation (and does not consume
+ * a no-progress turn). Barriers auto-clear once satisfied: a time barrier when
+ * the deadline passes, a session barrier when the named session's run ends.
+ */
+export type SessionGoalWaitBarrier = {
+  /** Park until this wall-clock epoch (ms) passes. */
+  waitingUntil?: number;
+  /** Park until this session key no longer has an active run. */
+  waitingOnSessionKey?: string;
+  /** Human-readable reason the goal is parked. */
+  waitingReason?: string;
+  /** When the barrier was set (ms), for status rendering. */
+  waitingSince?: number;
+};
+
 export type SessionGoal = {
   schemaVersion: 1;
   id: string;
@@ -216,6 +257,10 @@ export type SessionGoal = {
   completedAt?: number;
   usageLimitedAt?: number;
   budgetLimitedAt?: number;
+  /** Optional structured completion contract; absent = bare free-form goal. */
+  contract?: SessionGoalContract;
+  /** Optional parked wait barrier; absent = not waiting. */
+  wait?: SessionGoalWaitBarrier;
 };
 
 /** Lifecycle status for Codex-parity plan mode. Absence of the slot means `inactive`. */

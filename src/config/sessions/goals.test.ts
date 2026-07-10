@@ -5,9 +5,11 @@ import {
   createSessionGoal,
   formatSessionGoalStatus,
   getSessionGoal,
+  normalizeSessionGoalContract,
   recordSessionGoalContinuation,
   resetSessionGoalContinuations,
   resolveSessionGoalDisplayState,
+  updateSessionGoalContract,
   updateSessionGoalObjective,
   updateSessionGoalStatus,
 } from "./goals.js";
@@ -526,5 +528,69 @@ describe("session goals", () => {
       true,
     );
     expect(getSessionEntry({ storePath: fixture.storePath(), sessionKey })?.goal).toBeUndefined();
+  });
+
+  describe("completion contract", () => {
+    it("normalizes contracts by dropping empty fields and blank list items", () => {
+      expect(normalizeSessionGoalContract(undefined)).toBeUndefined();
+      expect(normalizeSessionGoalContract({ outcome: "   ", constraints: ["  "] })).toBeUndefined();
+      expect(
+        normalizeSessionGoalContract({
+          outcome: "  done  ",
+          verification: "",
+          constraints: ["keep tests green", "  ", ""],
+          boundaries: [],
+          stopWhen: "needs sign-off",
+        }),
+      ).toEqual({
+        outcome: "done",
+        constraints: ["keep tests green"],
+        stopWhen: "needs sign-off",
+      });
+    });
+
+    it("persists a contract supplied at create time", async () => {
+      await writeSession(0);
+      const goal = await createSessionGoal({
+        storePath: fixture.storePath(),
+        sessionKey,
+        objective: "ship",
+        now: 10,
+        contract: { verification: "the suite passes", constraints: ["  ", "no schema change"] },
+      });
+      expect(goal.contract).toEqual({
+        verification: "the suite passes",
+        constraints: ["no schema change"],
+      });
+    });
+
+    it("attaches then clears a contract via updateSessionGoalContract", async () => {
+      await writeSession(0);
+      await createSessionGoal({
+        storePath: fixture.storePath(),
+        sessionKey,
+        objective: "ship",
+        now: 10,
+      });
+
+      const attached = await updateSessionGoalContract({
+        storePath: fixture.storePath(),
+        sessionKey,
+        now: 20,
+        contract: { outcome: "auth uses JWT", boundaries: ["services/auth"] },
+      });
+      expect(attached.contract).toEqual({
+        outcome: "auth uses JWT",
+        boundaries: ["services/auth"],
+      });
+
+      const cleared = await updateSessionGoalContract({
+        storePath: fixture.storePath(),
+        sessionKey,
+        now: 30,
+        contract: undefined,
+      });
+      expect(cleared.contract).toBeUndefined();
+    });
   });
 });

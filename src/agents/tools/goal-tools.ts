@@ -8,9 +8,11 @@ import {
   createSessionGoal,
   getSessionGoal,
   MODEL_UPDATABLE_SESSION_GOAL_STATUSES,
+  updateSessionGoalContract,
   updateSessionGoalStatus,
 } from "../../config/sessions/goals.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
+import type { SessionGoalContract } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { stringEnum } from "../schema/typebox.js";
@@ -34,6 +36,34 @@ type GoalSessionScope = {
   storePath: string;
 };
 
+// Shared optional completion-contract fields. Present on both create_goal and
+// set_goal_contract so a contract can be supplied up front or attached later.
+const ContractToolFields = {
+  outcome: Type.Optional(
+    Type.String({ description: "Completion contract: what 'done' concretely means." }),
+  ),
+  verification: Type.Optional(
+    Type.String({
+      description: "Completion contract: how completion is proven (e.g. a test command / state).",
+    }),
+  ),
+  constraints: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Completion contract: invariants that must not regress.",
+    }),
+  ),
+  boundaries: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Completion contract: in-scope tools / paths / surfaces.",
+    }),
+  ),
+  stop_when: Type.Optional(
+    Type.String({
+      description: "Completion contract: condition to stop and ask the user instead of continuing.",
+    }),
+  ),
+};
+
 const CreateGoalToolSchema = Type.Object({
   objective: Type.String({
     description: "Concrete objective to pursue. Create only when explicitly requested.",
@@ -43,7 +73,10 @@ const CreateGoalToolSchema = Type.Object({
       description: "Optional positive token budget for this goal.",
     }),
   ),
+  ...ContractToolFields,
 });
+
+const SetGoalContractToolSchema = Type.Object({ ...ContractToolFields });
 
 const UpdateGoalToolSchema = Type.Object({
   status: stringEnum(MODEL_UPDATABLE_SESSION_GOAL_STATUSES, {
@@ -51,6 +84,34 @@ const UpdateGoalToolSchema = Type.Object({
   }),
   note: Type.Optional(Type.String({ description: "Short status note." })),
 });
+
+function readStringListParam(params: Record<string, unknown>, key: string): string[] | undefined {
+  const value = params[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new ToolInputError(`${key} must be an array of strings`);
+  }
+  const items = (value as string[]).map((item) => item.trim()).filter((item) => item.length > 0);
+  return items.length > 0 ? items : undefined;
+}
+
+/** Extracts the optional completion-contract fields from tool params. */
+function readContractFromParams(params: Record<string, unknown>): SessionGoalContract {
+  const contract: SessionGoalContract = {};
+  const outcome = readStringParam(params, "outcome");
+  const verification = readStringParam(params, "verification");
+  const stopWhen = readStringParam(params, "stop_when");
+  const constraints = readStringListParam(params, "constraints");
+  const boundaries = readStringListParam(params, "boundaries");
+  if (outcome) contract.outcome = outcome;
+  if (verification) contract.verification = verification;
+  if (constraints) contract.constraints = constraints;
+  if (boundaries) contract.boundaries = boundaries;
+  if (stopWhen) contract.stopWhen = stopWhen;
+  return contract;
+}
 
 function resolveGoalSessionScope(options: GoalToolOptions): GoalSessionScope {
   const sessionKey = options.runSessionKey?.trim() || options.agentSessionKey?.trim();
@@ -106,12 +167,35 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
         // Budgets are positive limits; zero would immediately make accounting ambiguous.
         throw new ToolInputError("token_budget must be positive");
       }
+      const contract = readContractFromParams(params);
       const goal = await createSessionGoal({
         ...resolveGoalSessionScope(options),
         objective,
         ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+        ...(Object.keys(contract).length > 0 ? { contract } : {}),
       });
       return jsonResult({ status: "created", goal });
+    },
+  };
+}
+
+/** Creates the tool that attaches or replaces the completion contract on a goal. */
+export function createSetGoalContractTool(options: GoalToolOptions): AnyAgentTool {
+  return {
+    label: "Set Goal Contract",
+    name: "set_goal_contract",
+    displaySummary: "Set the completion contract for a thread goal",
+    description:
+      "Attach or replace the completion contract (outcome, verification, constraints, boundaries, stop-when) on the current goal so every continuation restates it. Pass no fields to clear the contract. Fails when no goal exists.",
+    parameters: SetGoalContractToolSchema,
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const contract = readContractFromParams(params);
+      const goal = await updateSessionGoalContract({
+        ...resolveGoalSessionScope(options),
+        contract: Object.keys(contract).length > 0 ? contract : undefined,
+      });
+      return jsonResult({ status: "updated", goal });
     },
   };
 }

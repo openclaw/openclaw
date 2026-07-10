@@ -16,16 +16,58 @@
 /** Sentinel prefix marking a driver-generated goal continuation turn. */
 export const GOAL_DRIVER_CONTINUATION_MARKER = "[goal:auto-continue]";
 
+/** Structured completion contract woven into the continuation prompt. */
+export type GoalContinuationContract = {
+  outcome?: string;
+  verification?: string;
+  constraints?: string[];
+  boundaries?: string[];
+  stopWhen?: string;
+};
+
 /** Minimal goal shape the continuation prompt needs; a subset of SessionGoal. */
 export type GoalContinuationPromptInput = {
   objective: string;
   tokensUsed: number;
   tokenBudget?: number;
+  /** Optional completion contract restated on every continuation turn. */
+  contract?: GoalContinuationContract;
 };
 
 /** Returns true for prompts produced by {@link formatGoalDriverContinuationPrompt}. */
 export function isGoalDriverContinuationPrompt(text: string | undefined): boolean {
   return typeof text === "string" && text.trimStart().startsWith(GOAL_DRIVER_CONTINUATION_MARKER);
+}
+
+/**
+ * Renders the non-empty contract fields as a labelled block, or an empty string
+ * when no field is set (callers skip the section entirely). Ordering mirrors
+ * hermes's GoalContract.render_block: outcome, verification, constraints,
+ * boundaries, stop-when.
+ */
+export function formatGoalContractBlock(contract: GoalContinuationContract | undefined): string {
+  if (!contract) {
+    return "";
+  }
+  const lines: string[] = [];
+  if (contract.outcome?.trim()) {
+    lines.push(`- Outcome: ${contract.outcome.trim()}`);
+  }
+  if (contract.verification?.trim()) {
+    lines.push(`- Verification: ${contract.verification.trim()}`);
+  }
+  const constraints = (contract.constraints ?? []).map((c) => c.trim()).filter(Boolean);
+  for (const constraint of constraints) {
+    lines.push(`- Constraint: ${constraint}`);
+  }
+  const boundaries = (contract.boundaries ?? []).map((b) => b.trim()).filter(Boolean);
+  for (const boundary of boundaries) {
+    lines.push(`- Boundary: ${boundary}`);
+  }
+  if (contract.stopWhen?.trim()) {
+    lines.push(`- Stop when blocked: ${contract.stopWhen.trim()}`);
+  }
+  return lines.join("\n");
 }
 
 function formatBudgetLines(input: GoalContinuationPromptInput): string {
@@ -49,6 +91,15 @@ function formatBudgetLines(input: GoalContinuationPromptInput): string {
  */
 export function formatGoalDriverContinuationPrompt(input: GoalContinuationPromptInput): string {
   const objective = input.objective.trim();
+  const contractBlock = formatGoalContractBlock(input.contract);
+  const contractSection = contractBlock
+    ? [
+        "",
+        "Completion contract — target the verification surface and honor every",
+        "constraint and boundary below. Do not report done until verification holds.",
+        contractBlock,
+      ]
+    : [];
   return [
     GOAL_DRIVER_CONTINUATION_MARKER,
     "Continue working toward the active thread goal.",
@@ -59,6 +110,7 @@ export function formatGoalDriverContinuationPrompt(input: GoalContinuationPrompt
     "<objective>",
     objective,
     "</objective>",
+    ...contractSection,
     "",
     "This goal persists across turns. Keep the full objective intact; make concrete",
     "progress toward the requested end state and leave the goal active if it is not",

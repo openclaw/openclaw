@@ -115,6 +115,7 @@ function readGoalSnapshot(
     tokensUsed: goal.tokensUsed,
     ...(goal.tokenBudget !== undefined ? { tokenBudget: goal.tokenBudget } : {}),
     continuationTurns: goal.continuationTurns,
+    ...(goal.contract ? { contract: goal.contract } : {}),
   };
 }
 
